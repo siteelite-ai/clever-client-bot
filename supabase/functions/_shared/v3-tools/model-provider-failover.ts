@@ -141,6 +141,14 @@ export function shouldFailoverChatCompletion(status: number): boolean {
     status >= 500;
 }
 
+/** Some OpenAI-compatible gateways report a provider failure as HTTP 200 with
+ * an unusable choice whose finish_reason is `error`. Treat that envelope as a
+ * transport failure instead of allowing callers to mark an empty completion
+ * as recovered. */
+export function isProviderErrorFinishReason(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "error";
+}
+
 function providerBody(
   body: Record<string, unknown>,
   provider: ChatCompletionProvider,

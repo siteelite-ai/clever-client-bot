@@ -439,6 +439,7 @@ import {
 import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
+  isProviderErrorFinishReason,
 } from "../_shared/v3-tools/model-provider-failover.ts";
 
 const corsHeaders = {
@@ -3065,6 +3066,15 @@ async function callOpenRouter(
     // Таймер держим живым до полного парсинга, иначе один медленный ответ
     // (типичный для reasoning-моделей) съедает весь бюджет хода.
     data = await res.json() as typeof data;
+    if (
+      !data?.choices?.[0] ||
+      isProviderErrorFinishReason(data.choices[0].finish_reason)
+    ) {
+      throw new UpstreamHttpError(
+        502,
+        "completion returned no usable provider choice",
+      );
+    }
   } finally {
     clearTimeout(localTimer);
     signal.removeEventListener("abort", onOuterAbort);
@@ -6808,7 +6818,10 @@ async function runExpertLoop(
               (reasoningError as Error)?.name === "TimeoutError" ||
               String((reasoningError as Error)?.message ?? reasoningError)
                 .includes("llm_call_timeout:");
-            const retryTimeout = timedOut && !turnController.signal.aborted
+            const transientProviderFailure = reasoningError instanceof
+                UpstreamHttpError && reasoningError.status >= 500;
+            const retryTimeout = (timedOut || transientProviderFailure) &&
+                !turnController.signal.aborted
               ? boundedAgentStepTimeout(
                 LLM_TIMEOUT_DERIVED_RETRY_MS,
                 now(),
@@ -6822,7 +6835,7 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 primary_model: ctx.selectionReasoningModel,
-                retry_model: GENERAL_INQUIRY_MODEL,
+                retry_model: MODEL,
                 primary_timeout_ms: primaryReasoningTimeout,
                 retry_timeout_ms: retryTimeout,
               },
@@ -6838,13 +6851,13 @@ async function runExpertLoop(
               0,
               [reasoningToolSchema],
               1200,
-              GENERAL_INQUIRY_MODEL_ROUTING,
+              AGENT_MODEL_ROUTING,
             );
             steps.push({
               step: "v3_derived_selection_reasoning_retry_recovered",
               ms: now(),
               meta: {
-                retry_model: GENERAL_INQUIRY_MODEL,
+                retry_model: MODEL,
                 retry_timeout_ms: retryTimeout,
               },
             });

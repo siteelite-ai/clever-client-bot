@@ -3,6 +3,7 @@ import {
   createProviderQuotaCooldown,
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
+  isProviderErrorFinishReason,
   shouldFailoverChatCompletion,
 } from "./model-provider-failover.ts";
 
@@ -48,6 +49,13 @@ Deno.test("provider failover is limited to quota, capacity and transient failure
   for (const status of [400, 401, 403, 404, 422]) {
     assertEquals(shouldFailoverChatCompletion(status), false);
   }
+});
+
+Deno.test("HTTP 200 completion envelopes still reject an explicit provider error finish", () => {
+  assertEquals(isProviderErrorFinishReason("error"), true);
+  assertEquals(isProviderErrorFinishReason(" ERROR "), true);
+  assertEquals(isProviderErrorFinishReason("stop"), false);
+  assertEquals(isProviderErrorFinishReason(undefined), false);
 });
 
 Deno.test("fallback preserves tools but replaces provider-specific model routing", async () => {
