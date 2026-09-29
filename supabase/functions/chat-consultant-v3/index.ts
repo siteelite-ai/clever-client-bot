@@ -375,12 +375,15 @@ import {
   verifiedOutdoorPoeProducts,
 } from "../_shared/v3-tools/outdoor-poe-policy.ts";
 import {
+  canonicalizeCompoundMarkingForCatalog,
   classifyExactCompoundMarkingRequest,
   compoundRecoveryQueries,
   exactCompoundMarkingEmpty,
   exactCompoundMarkingIntro,
   type ExactCompoundMarkingRequest,
+  type ExplicitCompoundMarking,
   extractExplicitCompoundMarking,
+  extractRecommendedCompoundMarking,
   isExhaustiveCompoundRequest,
   partitionSemanticCompoundSourceByLiveTaxonomy,
   productTitleMatchesExplicitCompoundMarking,
@@ -5718,6 +5721,9 @@ async function runExpertLoop(
     criteria: Criterion[];
   } | null = null;
   let derivedStructuredSearchCallId: string | null = null;
+  let derivedStructuredSearchRecommendedMarking:
+    | ExplicitCompoundMarking
+    | null = null;
   let derivedStructuredSearchPairedCompatibility = false;
   let derivedStructuredSearchGuidedByVisibleReasoning = false;
   let derivedStructuredSearchResult:
@@ -6726,12 +6732,11 @@ async function runExpertLoop(
           ? (() => {
             const productClass = activeSelectionTarget ??
               lastDiscover.category?.pagetitle ?? "";
-            const application =
-              projectUniqueAdjacentApplicationFacetCriteria(
-                productClass,
-                userMessage,
-                lastDiscover.facets ?? [],
-              );
+            const application = projectUniqueAdjacentApplicationFacetCriteria(
+              productClass,
+              userMessage,
+              lastDiscover.facets ?? [],
+            );
             if (!application) return null;
             const criteria = mergeMandatorySelectionCriteria([
               ...userBackedSearchCriteria,
@@ -6836,15 +6841,18 @@ async function runExpertLoop(
           });
         } else if (compiledAdjacentApplicationSearch && lastDiscover) {
           const callId = crypto.randomUUID();
-          for (const phrase of compiledAdjacentApplicationSearch.application.phrases) {
+          for (
+            const phrase of compiledAdjacentApplicationSearch.application
+              .phrases
+          ) {
             semanticallyMappedCustomerPhrases.add(phrase);
           }
           userBackedSearchCriteria = mergeUserBackedCriteria(
             userBackedSearchCriteria,
             compiledAdjacentApplicationSearch.application.criteria,
           );
-          const compiledOptions =
-            compiledAdjacentApplicationSearch.args.options as Record<
+          const compiledOptions = compiledAdjacentApplicationSearch.args
+            .options as Record<
               string,
               string[]
             >;
@@ -6893,10 +6901,11 @@ async function runExpertLoop(
               phrases: compiledAdjacentApplicationSearch.application.phrases,
               criteria: compiledAdjacentApplicationSearch.application.criteria,
               option_keys: Object.keys(
-                (compiledAdjacentApplicationSearch.args.options ?? {}) as Record<
-                  string,
-                  unknown
-                >,
+                (compiledAdjacentApplicationSearch.args.options ??
+                  {}) as Record<
+                    string,
+                    unknown
+                  >,
               ),
             },
           });
@@ -7267,8 +7276,33 @@ async function runExpertLoop(
               : Object.keys(advisoryClassificationProjection.options).length > 0
               ? advisoryClassificationProjection.options
               : derivedFacetProjection.options;
+          const recommendedCompoundMarking =
+            extractExplicitCompoundMarking(userMessage) === null
+              ? extractRecommendedCompoundMarking(visibleDeclarationText)
+              : null;
+          const directCategoryScope = lastDiscover.leaf_categories.length > 0
+            ? {
+              category_in: lastDiscover.leaf_categories.map((
+                { pagetitle },
+              ) => pagetitle),
+            }
+            : { category: lastDiscover.category.pagetitle };
           const directSearchBase: Record<string, unknown> | null =
-            Object.keys(directSearchOptions).length > 0
+            recommendedCompoundMarking
+              ? {
+                mode: "by_query",
+                query: canonicalizeCompoundMarkingForCatalog(
+                  `${recommendedCompoundMarking.first}×${
+                    String(recommendedCompoundMarking.second).replace(".", ",")
+                  }`,
+                ),
+                ...directCategoryScope,
+                ...(Object.keys(directSearchOptions).length > 0
+                  ? { options: directSearchOptions }
+                  : {}),
+                per_page: 50,
+              }
+              : Object.keys(directSearchOptions).length > 0
               ? {
                 mode: "by_filter",
                 options: directSearchOptions,
@@ -7277,38 +7311,20 @@ async function runExpertLoop(
               : declaration.measurementScope === "system_total"
               ? {
                 mode: "by_filter",
-                ...(lastDiscover.leaf_categories.length > 0
-                  ? {
-                    category_in: lastDiscover.leaf_categories.map((
-                      { pagetitle },
-                    ) => pagetitle),
-                  }
-                  : { category: lastDiscover.category.pagetitle }),
+                ...directCategoryScope,
                 per_page: 50,
               }
               : declaration.retrievalQuery
               ? {
                 mode: "by_query",
                 query: declaration.retrievalQuery,
-                ...(lastDiscover.leaf_categories.length > 0
-                  ? {
-                    category_in: lastDiscover.leaf_categories.map((
-                      { pagetitle },
-                    ) => pagetitle),
-                  }
-                  : { category: lastDiscover.category.pagetitle }),
+                ...directCategoryScope,
                 per_page: 50,
               }
               : !derivedScalarProjectionAllowed
               ? {
                 mode: "by_filter",
-                ...(lastDiscover.leaf_categories.length > 0
-                  ? {
-                    category_in: lastDiscover.leaf_categories.map((
-                      { pagetitle },
-                    ) => pagetitle),
-                  }
-                  : { category: lastDiscover.category.pagetitle }),
+                ...directCategoryScope,
                 per_page: 50,
               }
               : null;
@@ -7334,6 +7350,8 @@ async function runExpertLoop(
           }
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
+            derivedStructuredSearchRecommendedMarking =
+              recommendedCompoundMarking;
             derivedStructuredSearchPairedCompatibility =
               pairedCompatibilityOwned;
             derivedStructuredSearchGuidedByVisibleReasoning =
@@ -7370,6 +7388,7 @@ async function runExpertLoop(
                 name === "search_catalog"
               ),
               projected_options: Object.keys(directSearchOptions),
+              recommended_compound_marking: recommendedCompoundMarking,
               projected_criteria: derivedScalarProjectionAllowed
                 ? [
                   ...derivedExactFacetCriteria.filter((criterion) =>
@@ -14825,7 +14844,14 @@ async function runExpertLoop(
     ) {
       const candidateProducts = derivedStructuredSearchResult.results
         .map((product) => ctx.cache.get(String(product.id)))
-        .filter((product): product is ProductFull => Boolean(product));
+        .filter((product): product is ProductFull => Boolean(product))
+        .filter((product) =>
+          !derivedStructuredSearchRecommendedMarking ||
+          productTitleMatchesExplicitCompoundMarking(
+            product.pagetitle,
+            derivedStructuredSearchRecommendedMarking,
+          )
+        );
       const categoryGroundedProducts = terminalGroundedTargets.length > 0
         ? filterProductsByGroundedCategoryTargets(
           candidateProducts,

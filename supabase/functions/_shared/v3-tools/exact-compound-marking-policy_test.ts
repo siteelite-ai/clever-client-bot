@@ -4,6 +4,7 @@ import {
   classifyExactCompoundMarkingRequest,
   compoundRecoveryQueries,
   extractExplicitCompoundMarking,
+  extractRecommendedCompoundMarking,
   isExhaustiveCompoundRequest,
   partitionSemanticCompoundSourceByLiveTaxonomy,
   productTitleMatchesExplicitCompoundMarking,
@@ -38,6 +39,27 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
   );
   assertEquals(
     classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"),
+    null,
+  );
+});
+
+Deno.test("visible recommendation resolves one compound branch but never guesses between peers", () => {
+  assertEquals(
+    extractRecommendedCompoundMarking(
+      "Допустимы варианты 3×2,5 или 3×4. Рекомендую исполнение 3×2,5.",
+    ),
+    { first: 3, second: 2.5 },
+  );
+  assertEquals(
+    extractRecommendedCompoundMarking(
+      "Подходят исполнения 3×2,5 или 3×4.",
+    ),
+    null,
+  );
+  assertEquals(
+    extractRecommendedCompoundMarking(
+      "Расчёт 3000 Вт / 220 В. Точное исполнение не выбрано.",
+    ),
     null,
   );
 });

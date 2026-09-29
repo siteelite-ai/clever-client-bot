@@ -57,6 +57,47 @@ export function extractExplicitCompoundMarking(
 }
 
 /**
+ * Resolve one exact compound marking from the consultant's visible
+ * recommendation. Calculation prose may contain several alternative markings;
+ * only a unique value in the highest-confidence recommendation tier is safe to
+ * compile into retrieval and final-card proof.
+ */
+export function extractRecommendedCompoundMarking(
+  reasoning: string,
+): ExplicitCompoundMarking | null {
+  const sentences = String(reasoning ?? "")
+    .split(/(?<=[.!?…])\s+|\n+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const tiers = [
+    /(?:рекоменд\p{L}*|совет\p{L}*|выбира\p{L}*|предпочт\p{L}*)/iu,
+    /(?:нуж\p{L}*|необходим\p{L}*|долж\p{L}*|треб\p{L}*|подход\p{L}*)/iu,
+  ];
+  for (const tier of tiers) {
+    const resolved: ExplicitCompoundMarking[] = [];
+    for (
+      const sentence of sentences.filter((candidate) => tier.test(candidate))
+    ) {
+      for (
+        const match of sentence.matchAll(new RegExp(COMPOUND.source, "giu"))
+      ) {
+        const first = number(match[1]);
+        const second = number(match[2]);
+        if (first === null || second === null) continue;
+        if (
+          !resolved.some((known) =>
+            known.first === first && known.second === second
+          )
+        ) resolved.push({ first, second });
+      }
+    }
+    if (resolved.length === 1) return resolved[0];
+    if (resolved.length > 1) return null;
+  }
+  return null;
+}
+
+/**
  * Detects when an explicit N×S lookup also contains semantic requirements that
  * cannot be proven by the compound marking alone. The rule is intentionally
  * structural: after request/sort language and the literal marking are removed,
