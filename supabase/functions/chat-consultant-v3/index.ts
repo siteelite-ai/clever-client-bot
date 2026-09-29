@@ -14393,7 +14393,14 @@ async function runExpertLoop(
     const terminalCriteriaBase = preserveFrozenSelectionCriteria(
       latestRenderCriteria,
     );
-    const terminalProjectedRange = terminalDiscover
+    // Keep the terminal gate on the same measurement scope that governed the
+    // structured search. A system-total calculation may mention auxiliary
+    // per-product ranges in its explanation, but the finalizer must not revive
+    // those numbers as hidden mandatory card filters after retrieval.
+    const terminalProjectedRange = terminalDiscover &&
+        derivedMeasurementMayConstrainIndividualProducts(
+          derivedSelectionMeasurementScope,
+        )
       ? projectReasoningRangeCriteria(
         terminalCriteriaBase,
         terminalReasoningEvidence,
