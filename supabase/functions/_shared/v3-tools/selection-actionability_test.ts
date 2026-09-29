@@ -270,6 +270,25 @@ Deno.test("two-sided fit reasoning cannot be projected as one scalar product mea
   );
 });
 
+Deno.test("a declared system total cannot become a scalar product filter", () => {
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужно решение для комнаты 25 м²",
+      "Расчёт даёт световой поток не менее 3750 лм.",
+      "system_total",
+    ),
+    false,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужно изделие",
+      "Каждое изделие должно иметь параметр не менее 3750 лм.",
+      "per_product",
+    ),
+    true,
+  );
+});
+
 Deno.test("an ungrounded execution variant is not offered as an application classification", () => {
   const facets = [{
     caption: "Модель или исполнение",

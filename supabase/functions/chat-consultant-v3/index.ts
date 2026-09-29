@@ -6911,18 +6911,24 @@ async function runExpertLoop(
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
             }
           }
+          const pairedCompatibilityOwned =
+            !shouldProjectDerivedScalarMeasurement(
+              userMessage,
+              declaration.text,
+            );
           const derivedScalarProjectionAllowed =
             shouldProjectDerivedScalarMeasurement(
               userMessage,
               declaration.text,
+              declaration.measurementScope,
             );
           const measuredReference = extractSingleMeasuredReference(userMessage);
           const visibleDeclarationText =
-            !derivedScalarProjectionAllowed && measuredReference
+            pairedCompatibilityOwned && measuredReference
               ? buildPairedCompatibilityReasoning(measuredReference)
               : declaration.text;
           const measurementDeclarationEvidence =
-            !derivedScalarProjectionAllowed && measuredReference
+            pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
               : declaration.measurementEvidence;
           pendingDerivedSelectionMeasurementEvidence =
@@ -7168,7 +7174,7 @@ async function runExpertLoop(
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
             derivedStructuredSearchPairedCompatibility =
-              !derivedScalarProjectionAllowed;
+              pairedCompatibilityOwned;
             derivedStructuredSearchGuidedByVisibleReasoning =
               Object.keys(directSearchOptions).length > 0 ||
               declaration.measurementScope === "system_total" ||
@@ -7211,7 +7217,7 @@ async function runExpertLoop(
                   ...derivedMeasuredContract.projected_criteria,
                 ]
                 : [],
-              paired_compatibility_owned: !derivedScalarProjectionAllowed,
+              paired_compatibility_owned: pairedCompatibilityOwned,
             },
           });
         } else {

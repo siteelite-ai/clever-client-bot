@@ -1043,7 +1043,12 @@ export function shouldQueueDirectCustomerFacetSearch(
 export function shouldProjectDerivedScalarMeasurement(
   userMessage: string,
   reasoningText: string,
+  measurementScope:
+    | "per_product"
+    | "system_total"
+    | "not_applicable" = "per_product",
 ): boolean {
+  if (measurementScope === "system_total") return false;
   const evidence = `${String(userMessage ?? "")}\n${
     String(reasoningText ?? "")
   }`;
