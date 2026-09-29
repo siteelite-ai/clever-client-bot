@@ -7197,6 +7197,8 @@ async function runExpertLoop(
               {
                 allowDerivedNumericFacetInference:
                   declaration.measurementScope !== "system_total",
+                allowProseOnlyFacetInference: false,
+                authoritativeFacetValues: userBackedSearchFacetValues,
               },
             ).args
             : null;
@@ -8423,6 +8425,9 @@ async function runExpertLoop(
             {
               allowDerivedNumericFacetInference:
                 derivedSelectionMeasurementScope !== "system_total",
+              allowProseOnlyFacetInference:
+                tc.id !== derivedStructuredSearchCallId,
+              authoritativeFacetValues: userBackedSearchFacetValues,
             },
           );
           const explicitIdentity =
@@ -13170,6 +13175,19 @@ async function runExpertLoop(
                 directCustomerCriteria,
                 lastDiscover.facets,
               );
+              for (
+                const [key, values] of Object.entries(
+                  directCustomerProjection.options,
+                )
+              ) {
+                for (const value of values) {
+                  if (
+                    !userBackedSearchFacetValues.some((known) =>
+                      known.key === key && known.value === value
+                    )
+                  ) userBackedSearchFacetValues.push({ key, value });
+                }
+              }
               const directOptionCount =
                 Object.keys(directCustomerProjection.options).length;
               const representedCustomerEvidence = [

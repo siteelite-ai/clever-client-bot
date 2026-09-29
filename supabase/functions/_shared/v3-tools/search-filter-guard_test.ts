@@ -1205,6 +1205,76 @@ Deno.test("an explicit unitless number is completed only for its locally named f
   assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
 });
 
+Deno.test("customer-backed value removes a model-owned scalar alternative on the same facet", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        current: ["25", "1"],
+        poles: ["1"],
+      },
+    },
+    [
+      {
+        key: "current",
+        caption: "Номинальный ток",
+        unit: "А",
+        values: [{ value: "1" }, { value: "25" }],
+      },
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }],
+      },
+    ],
+    "Номинальный ток 25. Количество полюсов 1.",
+    "Нужен автомат на 25 А, 1 полюс.",
+    "Номинальный ток 25. Количество полюсов 1.",
+    [],
+    {
+      authoritativeFacetValues: [
+        { key: "current", value: "25" },
+        { key: "poles", value: "1" },
+      ],
+    },
+  );
+
+  assertEquals(result.args.options, { current: ["25"], poles: ["1"] });
+  assertEquals(result.user_backed, [
+    { key: "poles", value: "1" },
+    { key: "current", value: "25" },
+  ]);
+});
+
+Deno.test("structured declaration can disable prose-only hidden facet inference", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { kind: ["офисный"] },
+    },
+    [
+      {
+        key: "kind",
+        caption: "Вид светильника",
+        values: [{ value: "офисный" }, { value: "бытовой" }],
+      },
+      {
+        key: "mount",
+        caption: "Способ монтажа",
+        values: [{ value: "потолочный" }, { value: "настенный" }],
+      },
+    ],
+    "Вид светильника офисный. Обычно возможен потолочный монтаж.",
+    "Нужен офисный светильник.",
+    "Вид светильника офисный. Обычно возможен потолочный монтаж.",
+    [],
+    { allowProseOnlyFacetInference: false },
+  );
+
+  assertEquals(result.args.options, { kind: ["офисный"] });
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("one-letter customer code is projected only beside one unique live facet meaning", () => {
   const result = guardSearchFilters(
     { mode: "by_filter" },

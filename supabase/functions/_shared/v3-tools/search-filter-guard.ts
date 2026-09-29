@@ -50,6 +50,14 @@ export interface SearchFilterGuardResult {
 export interface SearchFilterInferencePolicy {
   /** Keep validated options but do not infer a new per-card numeric facet. */
   allowDerivedNumericFacetInference?: boolean;
+  /**
+   * Structured reasoning already carries a machine-readable declaration.
+   * When it is present, free prose may explain the choice but must not invent
+   * an additional hidden catalog filter that the declaration did not own.
+   */
+  allowProseOnlyFacetInference?: boolean;
+  /** Values already proved from the customer's request before model reasoning. */
+  authoritativeFacetValues?: FacetValueEvidence[];
 }
 
 export interface FacetValueEvidence {
@@ -1234,10 +1242,18 @@ export function guardSearchFilters(
       if (!nextOptions[canonicalKey].includes(canonical)) { nextOptions[canonicalKey].push(canonical);
       }
       kept.push({ key: canonicalKey, value: canonical });
+      const pureNumericValue = /^\d+(?:[.,]\d+)?$/u.test(
+        norm(canonical),
+      );
       if (
         visibleRequirementBacked ||
         (explicitlyAffirmedByUser(canonical, userEvidence) &&
-          facetStateQualifierIsUserBacked(facet, userEvidence)) ||
+          facetStateQualifierIsUserBacked(facet, userEvidence) &&
+          (!pureNumericValue || numericFacetValueIsLocallyEvidenced(
+            canonical,
+            facet,
+            userEvidence,
+          ))) ||
         (isAffirmativeBoolean && labelUserStatus === "affirmed")
       ) userBacked.push({ key: canonicalKey, value: canonical });
     }
@@ -1369,6 +1385,7 @@ export function guardSearchFilters(
     // facet meaning must be present, and candidate-level validation below
     // rejects an ambiguous shared root when sibling axes expose the same value
     // (`цвет корпуса` vs `цвет свечения`).
+    if (inferencePolicy.allowProseOnlyFacetInference === false) continue;
     if (!facetMeaningIsEvidenced(facet, inferenceEvidence)) continue;
     const evidenced = facet. values.filter((candidate) => {
       const value = norm(candidate.value);
@@ -1428,6 +1445,49 @@ export function guardSearchFilters(
     if (!userBacked.some((candidate) =>
       candidate.key === item.key && candidate.value === item.value
     )) userBacked.push(item);
+  }
+
+  // A model can serialize two neighbouring scalar values onto the same live
+  // facet (`25 A, 1 pole` -> current=[25,1]). Once at least one value on that
+  // axis is explicitly customer-backed, unowned alternatives on the same axis
+  // cannot broaden the query. Preserve every customer-backed alternative so
+  // genuine requests such as "red or black" remain an OR search.
+  for (const [key, values] of Object.entries({ ...nextOptions })) {
+    const authoritativeValues = (inferencePolicy.authoritativeFacetValues ?? [])
+      .filter((item) => item.key === key)
+      .map((item) => item.value);
+    const explicitValues = [...new Set(
+      authoritativeValues.length > 0
+        ? authoritativeValues
+        : userBacked.filter((item) => item.key === key).map((item) =>
+          item.value
+        ),
+    )];
+    if (explicitValues.length === 0) continue;
+    const retained = values.filter((value) => explicitValues.includes(value));
+    if (retained.length === 0 || retained.length === values.length) continue;
+    nextOptions[key] = retained;
+    for (let index = kept.length - 1; index >= 0; index--) {
+      if (kept[index].key === key && !retained.includes(kept[index].value)) {
+        dropped.push({
+          key,
+          value: kept[index].value,
+          reason: "not_declared_in_reasoning",
+        });
+        kept.splice(index, 1);
+      }
+    }
+    for (let index = inferred.length - 1; index >= 0; index--) {
+      if (inferred[index].key === key && !retained.includes(inferred[index].value)) {
+        inferred.splice(index, 1);
+      }
+    }
+    for (let index = userBacked.length - 1; index >= 0; index--) {
+      if (
+        userBacked[index].key === key &&
+        !retained.includes(userBacked[index].value)
+      ) userBacked.splice(index, 1);
+    }
   }
 
   // A compound canonical value can already encode another explicit filter
