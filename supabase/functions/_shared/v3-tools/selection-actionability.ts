@@ -1056,6 +1056,15 @@ export function shouldProjectDerivedScalarMeasurement(
     !reasoningNeedsCompatibilityRelations(evidence);
 }
 
+/** The later generic measured-reasoning compiler must obey the same scope as
+ * the structured declaration. A system total may guide prose and ranking but
+ * can never reopen a per-card numeric contract in a subsequent phase. */
+export function derivedMeasurementMayConstrainIndividualProducts(
+  measurementScope: string | null | undefined,
+): boolean {
+  return measurementScope !== "system_total";
+}
+
 export function buildDerivedSelectionReasoningMessages(
   userMessage: string,
   category: string,

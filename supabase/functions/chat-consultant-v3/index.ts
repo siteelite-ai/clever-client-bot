@@ -109,6 +109,7 @@ import {
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
@@ -5316,6 +5317,8 @@ async function runExpertLoop(
   let assistantReasoning = "";
   let derivedSelectionReasoningEvidence = "";
   let pendingDerivedSelectionMeasurementEvidence = "";
+  let derivedSelectionMeasurementScope: string | null = null;
+  let pendingDerivedSelectionMeasurementScope: string | null = null;
   const semanticallyMappedCustomerPhrases = new Set<string>();
   // A compatible family is retrieval guidance, not an exhaustive allow-list.
   // Only values the reasoning explicitly marks incompatible may eliminate a
@@ -6933,6 +6936,8 @@ async function runExpertLoop(
               : declaration.measurementEvidence;
           pendingDerivedSelectionMeasurementEvidence =
             measurementDeclarationEvidence;
+          pendingDerivedSelectionMeasurementScope =
+            declaration.measurementScope;
           // The model's structured declaration is immediately rendered back
           // to visible prose and the internal function call is consumed here.
           // Downstream search therefore reads exactly the same classification
@@ -7854,7 +7859,10 @@ async function runExpertLoop(
             }
             derivedSelectionReasoningEvidence =
               pendingDerivedSelectionMeasurementEvidence || derivedText;
+            derivedSelectionMeasurementScope =
+              pendingDerivedSelectionMeasurementScope;
             pendingDerivedSelectionMeasurementEvidence = "";
+            pendingDerivedSelectionMeasurementScope = null;
             steps.push({
               step: "v3_assistant_text",
               ms: now(),
@@ -8600,7 +8608,10 @@ async function runExpertLoop(
           const ordinaryMeasuredSelection = intentMode === "select" &&
             !replacementIntent &&
             !seriesTurnRequiresGrounding &&
-            !compatibilityShapedSearch;
+            !compatibilityShapedSearch &&
+            derivedMeasurementMayConstrainIndividualProducts(
+              derivedSelectionMeasurementScope,
+            );
           if (ordinaryMeasuredSelection) {
             const measuredContractReasoning = measuredSelectionContractEvidence(
               derivedSelectionReasoningEvidence,

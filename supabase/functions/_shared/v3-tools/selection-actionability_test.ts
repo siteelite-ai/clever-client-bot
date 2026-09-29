@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
@@ -285,6 +286,14 @@ Deno.test("a declared system total cannot become a scalar product filter", () =>
       "Каждое изделие должно иметь параметр не менее 3750 лм.",
       "per_product",
     ),
+    true,
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("system_total"),
+    false,
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("per_product"),
     true,
   );
 });
