@@ -970,6 +970,26 @@ Deno.test("a matching measurement unit proves an exact numeric facet value", () 
   assertEquals(result.args.options, { current: ["16"] });
 });
 
+Deno.test("system totals cannot infer a new per-card number but keep validated options", () => {
+  const facets = [
+    { key: "flux", caption: "Световой поток, лм", unit: "лм", values: [{ value: "3000" }, { value: "5000" }] },
+    { key: "voltage", caption: "Напряжение, В", unit: "В", values: [{ value: "220" }, { value: "230" }] },
+    { key: "protection", caption: "Степень защиты", values: [{ value: "IP44" }, { value: "IP65" }] },
+  ];
+  const reasoning = "Для площади 25 м² общий световой поток = 5000 лм. Напряжение: 220 В. Степень защиты: IP65.";
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { voltage: ["220"], protection: ["IP65"] } },
+    facets,
+    reasoning,
+    "Площадь 25 м²",
+    reasoning,
+    [],
+    { allowDerivedNumericFacetInference: false },
+  );
+  assertEquals(guarded.args.options, { voltage: ["220"], protection: ["IP65"] });
+  assertEquals(guarded.inferred, []);
+});
+
 Deno.test("a range endpoint and a number in another unit cannot become exact facet values", () => {
   const live = [
     {

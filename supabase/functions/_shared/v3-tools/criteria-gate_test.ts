@@ -17,6 +17,7 @@ import {
   mergeUserBackedCriteria,
   missingSelectionCriteria,
   parseNumSpan,
+  preferClosestPassingNumericTier,
   projectCatalogFilterEvidence,
   projectCommonRenderedMarkdownUserCriteria,
   projectCommonRenderedUserCriteria,
@@ -39,6 +40,18 @@ function product(id: string, traits: string[]): ProductRef {
     short_traits: traits,
   };
 }
+
+Deno.test("derived minimum prefers the closest sufficient standard tier", () => {
+  const products = [
+    product("a", ["Размер: 2,5 мм²"]),
+    product("b", ["Размер: 2,5 мм²"]),
+    product("c", ["Размер: 4 мм²"]),
+    product("d", ["Размер: 6 мм²"]),
+  ];
+  const criterion: Criterion = { key: "Размер", op: "min", value: 2.5, unit: "мм²", level: "A" };
+  assertEquals(preferClosestPassingNumericTier(products, [criterion], 1).map(({ id }) => id), ["a", "b"]);
+  assertEquals(preferClosestPassingNumericTier(products, [criterion], 3).map(({ id }) => id), ["a", "b", "c", "d"]);
+});
 
 Deno.test("declared exclusions remove only positively proven incompatible values", () => {
   const products = [

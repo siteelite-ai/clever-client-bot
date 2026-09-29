@@ -59,6 +59,7 @@ import {
   mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
+  preferClosestPassingNumericTier,
   projectAdvisoryCriteriaFacetOptions,
   projectCatalogFilterEvidence,
   projectCommonRenderedMarkdownUserCriteria,
@@ -6493,8 +6494,21 @@ async function runExpertLoop(
     return structurallySafe.filter((id) => eligible.has(id));
   };
 
-  const finalizeTerminalRenderIds = (ids: string[]): string[] =>
-    capResultCandidateIds(guardFinalRenderIds(ids), resultCardinality);
+  const finalizeTerminalRenderIds = (ids: string[]): string[] => {
+    const structurallySafe = guardFinalRenderIds(ids);
+    const products = structurallySafe
+      .map((id) => ctx.cache.get(id))
+      .filter((product): product is ProductFull => Boolean(product));
+    const closestTier = preferClosestPassingNumericTier(
+      products,
+      postFilterOnlyReasoningCriteria,
+      resultCardinality.explicit ? resultCardinality.minimum : 1,
+    );
+    return capResultCandidateIds(
+      closestTier.map(({ id }) => id),
+      resultCardinality,
+    );
+  };
 
   const attemptPortableReplacementTitleRecovery = async (
     runArgs: Record<string, unknown>,
@@ -6731,6 +6745,7 @@ async function runExpertLoop(
       if (!serverCompiledStepAvailable) remoteAgentSteps += 1;
       let resp: ORResponse;
       let serverCompiledGroundedSearch = false;
+      let serverValidatedDerivedReasoning = false;
       try {
         if (queuedServerGroundedSearch) {
           const queued = queuedServerGroundedSearch;
@@ -6909,6 +6924,7 @@ async function runExpertLoop(
             });
             throw new Error("derived_selection_reasoning_contract_invalid");
           }
+          serverValidatedDerivedReasoning = true;
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
@@ -7049,6 +7065,14 @@ async function runExpertLoop(
                   visibleDeclarationText,
                   lastDiscover?.facets ?? [],
                 );
+              if (
+                !customerGrounded &&
+                !modelAssumedSearchFacetValues.some((candidate) =>
+                  normalizeForMatch(candidate.key) === normalizeForMatch(key) &&
+                  normalizeForMatch(candidate.value) ===
+                    normalizeForMatch(value)
+                )
+              ) modelAssumedSearchFacetValues.push({ key, value });
               return {
                 ...proposedCriterion,
                 level: customerGrounded ? "A" as const : "B" as const,
@@ -7170,6 +7194,10 @@ async function runExpertLoop(
               userMessage,
               visibleDeclarationText,
               buildVisibleRequestContract(userMessage),
+              {
+                allowDerivedNumericFacetInference:
+                  declaration.measurementScope !== "system_total",
+              },
             ).args
             : null;
           const directBudgetCap = extractBudgetCap(userMessage);
@@ -7517,12 +7545,13 @@ async function runExpertLoop(
           userMessage,
         )
         : { text: missingAnchorIntroGuard.text, removed: [] as string[] };
-      const introAttributeGuard = introSafetyApplies
-        ? stripUngroundedIntroTechnicalAttributes(
-          introAliasGuard.text,
-          userMessage,
-        )
-        : { text: resp.text, removed: [] as string[] };
+      const introAttributeGuard =
+        introSafetyApplies && !serverValidatedDerivedReasoning
+          ? stripUngroundedIntroTechnicalAttributes(
+            introAliasGuard.text,
+            userMessage,
+          )
+          : { text: resp.text, removed: [] as string[] };
       // Taxonomy discovery proves that a broad category exists, not that the
       // customer's exact subtype is available. Keep catalog assertions closed
       // until an actual product search has run.
@@ -8391,6 +8420,10 @@ async function runExpertLoop(
             userEvidence,
             declaredReasoning,
             buildVisibleRequestContract(userMessage),
+            {
+              allowDerivedNumericFacetInference:
+                derivedSelectionMeasurementScope !== "system_total",
+            },
           );
           const explicitIdentity =
             intentMode === "select" && !replacementIntent &&
@@ -8612,49 +8645,7 @@ async function runExpertLoop(
             derivedMeasurementMayConstrainIndividualProducts(
               derivedSelectionMeasurementScope,
             );
-          const distributedSystemSelection = intentMode === "select" &&
-            !replacementIntent &&
-            !seriesTurnRequiresGrounding &&
-            !compatibilityShapedSearch &&
-            derivedSelectionMeasurementScope === "system_total";
-          if (distributedSystemSelection) {
-            // The structured declaration has already proved that the numeric
-            // result belongs to the whole object/system. A later generic
-            // guard may still rediscover an exact live value from the visible
-            // prose; rebuild the request from the frozen/user-owned criteria
-            // so that aggregate totals cannot re-enter as per-card options.
-            enforcedSearchCriteria = freezeSelectionCriteria(
-              guardedUserBackedCriteria,
-              "guarded_search",
-            );
-            reasoningProjectedSearchCriteria = mergeUserBackedCriteria(
-              reasoningProjectedSearchCriteria,
-              guardedUserBackedCriteria,
-            );
-            latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({
-              ...criterion,
-            }));
-            const systemScopeProjection = projectCriteriaFacetOptions(
-              enforcedSearchCriteria,
-              lastDiscover.facets,
-            );
-            const current = tc.args as Record<string, unknown>;
-            const { options: _options, ...searchControls } = current;
-            tc.args = {
-              ...searchControls,
-              ...(Object.keys(systemScopeProjection.options).length > 0
-                ? { options: systemScopeProjection.options }
-                : {}),
-            };
-            steps.push({
-              step: "v3_system_total_per_card_filters_removed",
-              ms: now(),
-              meta: {
-                kept_criteria: enforcedSearchCriteria.length,
-                option_keys: Object.keys(systemScopeProjection.options),
-              },
-            });
-          } else if (ordinaryMeasuredSelection) {
+          if (ordinaryMeasuredSelection) {
             const measuredContractReasoning = measuredSelectionContractEvidence(
               derivedSelectionReasoningEvidence,
               declaredReasoning,
@@ -13070,6 +13061,7 @@ async function runExpertLoop(
                   directApplicationCriteriaCount:
                     directApplicationCriteriaForReasoning.length +
                     (verifiedApplicationSelection?.criteria.length ?? 0),
+                  productClass: lastDiscover.category?.pagetitle ?? "",
                   userMessage,
                   reasoningText: `${firstAssistantText}\n${assistantReasoning}`,
                 })

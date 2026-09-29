@@ -47,6 +47,11 @@ export interface SearchFilterGuardResult {
   dropped: DroppedSearchFilter[];
 }
 
+export interface SearchFilterInferencePolicy {
+  /** Keep validated options but do not infer a new per-card numeric facet. */
+  allowDerivedNumericFacetInference?: boolean;
+}
+
 export interface FacetValueEvidence {
   key: string;
   value: string;
@@ -1127,6 +1132,7 @@ export function guardSearchFilters(
   userEvidence: string = declaredReasoning,
   inferenceEvidence: string = declaredReasoning,
   explicitVisibleRequirements: ExplicitVisibleRequirement[] = [],
+  inferencePolicy: SearchFilterInferencePolicy = {},
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
     return { args, kept: [], user_backed: [], inferred: [], subsumed: [], dropped: [] };
@@ -1370,6 +1376,10 @@ export function guardSearchFilters(
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
+      if (
+        inferencePolicy.allowDerivedNumericFacetInference === false &&
+        /\d/u.test(value)
+      ) return false;
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }

@@ -888,6 +888,37 @@ export function findTrait(
   return fallback;
 }
 
+/** Prefer the nearest sufficient standard tier for one derived minimum. */
+export function preferClosestPassingNumericTier<T extends ProductRef>(
+  products: T[],
+  criteria: Criterion[],
+  minimumTierSize = 1,
+): T[] {
+  const minima = (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
+    criterion?.op === "min" && !Array.isArray(criterion.value) &&
+    Number.isFinite(Number(criterion.value))
+  );
+  if (minima.length !== 1 || products.length <= 1) return products;
+  const criterion = minima[0];
+  const threshold = Number(criterion.value);
+  const scored = products.flatMap((product) => {
+    const trait = findTrait(product, criterion.key);
+    const span = trait ? parseNumSpan(trait.value) : null;
+    if (!span || checkCriterion(product, criterion).verdict !== "pass") return [];
+    const nearest = span.min <= threshold && span.max >= threshold
+      ? threshold
+      : span.min;
+    return [{ product, distance: Math.max(0, nearest - threshold) }];
+  });
+  if (scored.length === 0) return products;
+  const closest = Math.min(...scored.map(({ distance }) => distance));
+  const closestIds = new Set(scored
+    .filter(({ distance }) => Math.abs(distance - closest) < 1e-9)
+    .map(({ product }) => String(product.id)));
+  if (closestIds.size < Math.max(1, minimumTierSize)) return products;
+  return products.filter((product) => closestIds.has(String(product.id)));
+}
+
 function productEvidenceText(product: ProductRef): string {
   return normalizeKey([
     product.pagetitle,

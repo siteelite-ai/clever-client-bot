@@ -9,6 +9,7 @@ import {
   reasoningNeedsCompatibilityRelations,
 } from "./compatibility-contract.ts";
 import {
+  guardSearchFilters,
   projectExplicitReasoningFacetValues,
   type SearchFacet,
 } from "./search-filter-guard.ts";
@@ -79,8 +80,11 @@ export function reasoningComputesSystemTotalFromSpatialExtent(
  * it cannot, the consultant must make the product-side suitability reasoning
  * visible before a search is allowed to proceed.
  */
-export function hasSelectionSuitabilityContext(text: string): boolean {
-  return extractCustomerApplicationContexts(text).length > 0;
+export function hasSelectionSuitabilityContext(
+  text: string,
+  productClass = "",
+): boolean {
+  return extractCustomerApplicationContexts(text, productClass).length > 0;
 }
 
 export interface DerivedSelectionReasoningInput {
@@ -89,6 +93,7 @@ export interface DerivedSelectionReasoningInput {
   catalogSearchAttempted: boolean;
   directMeasuredCriteriaCount: number;
   directApplicationCriteriaCount?: number;
+  productClass?: string;
   userMessage: string;
   reasoningText: string;
 }
@@ -630,6 +635,37 @@ export function resolveDerivedSelectionReasoning(
         phraseTokens.length > 0 &&
         phraseTokens.every((token) => normalizedProductClass.has(token))
       ) continue;
+      const phraseProjection = [
+        ...projectExplicitReasoningFacetValues(
+          facets as SearchFacet[],
+          phrase,
+          phrase,
+        ).kept,
+        ...guardSearchFilters(
+          { mode: "by_filter" },
+          facets as SearchFacet[],
+          phrase,
+          phrase,
+          "",
+        ).user_backed,
+      ].filter((item, index, all) => all.findIndex((candidate) =>
+        candidate.key === item.key && candidate.value === item.value
+      ) === index);
+      const choiceFacet = facets.find((facet) =>
+        String(facet.caption || facet.key || "").trim() === choice.facet
+      );
+      const choiceFacetIdentities = new Set(
+        [choiceFacet?.key, choiceFacet?.caption, choice.facet]
+          .map(normalizeLiteralEvidence)
+          .filter(Boolean),
+      );
+      if (
+        phraseProjection.length > 0 &&
+        !phraseProjection.some(({ key, value }) =>
+          choiceFacetIdentities.has(normalizeLiteralEvidence(key)) &&
+          normalizeLiteralEvidence(value) === normalizeLiteralEvidence(choice.value)
+        )
+      ) continue;
       const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(
         /\s+/gu,
         " ",
@@ -945,7 +981,7 @@ export function shouldRequireDerivedSelectionReasoning(
     hasSelectionMeasurementContext(input.userMessage);
   const unresolvedSuitability =
     (input.directApplicationCriteriaCount ?? 0) === 0 &&
-    hasSelectionSuitabilityContext(input.userMessage);
+    hasSelectionSuitabilityContext(input.userMessage, input.productClass);
   return input.intentMode === "select" &&
     input.phase === "search_after_discovery" &&
     !input.catalogSearchAttempted &&

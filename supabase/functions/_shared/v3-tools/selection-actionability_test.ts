@@ -89,6 +89,21 @@ Deno.test("an unresolved application context requires suitability reasoning even
   );
 });
 
+Deno.test("an adjacent suitability modifier requires reasoning when no live facet proves it", () => {
+  const message = "Подбери несколько недорогих офисных светильников";
+  assertEquals(hasSelectionSuitabilityContext(message, "Светильники"), true);
+  assertEquals(shouldRequireDerivedSelectionReasoning({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: false,
+    directMeasuredCriteriaCount: 0,
+    directApplicationCriteriaCount: 0,
+    productClass: "Светильники",
+    userMessage: message,
+    reasoningText: "",
+  }), true);
+});
+
 Deno.test("a live application facet or an existing suitability contract avoids a redundant reasoning detour", () => {
   const message = "Подберите светильник для офиса";
   const base = {
@@ -714,6 +729,22 @@ Deno.test("a semantic mapping is rejected unless its phrase is literal customer 
     "Нужен прибор для помещения",
     "прибор",
   );
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.customerGroundedCompatible, []);
+});
+
+Deno.test("an explicit phrase already bound to one live axis cannot be remapped through a shared code", () => {
+  const facets = [
+    { key: "curve", caption: "Характеристика срабатывания", type: "string", values: [{ value: "B" }, { value: "C" }, { value: "D" }] },
+    { key: "voltage_type", caption: "Тип напряжения", type: "string", values: [{ value: "переменный (АС)" }, { value: "постоянный (DC)" }] },
+  ];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Для линии нужен подходящий вариант.",
+    compatible_classifications: ["f1v0"],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [{ customer_phrase: "характеристика C", classification_id: "f1v0" }],
+  }, facets, "Нужен автомат, характеристика C", "автомат");
   assertEquals(resolved?.explicitCustomerMappings, []);
   assertEquals(resolved?.customerGroundedCompatible, []);
 });
