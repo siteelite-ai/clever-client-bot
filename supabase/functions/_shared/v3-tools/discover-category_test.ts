@@ -57,6 +57,20 @@ Deno.test("local live-taxonomy resolver prefers a fully customer-grounded specif
   }, LIVE_TITLES), ["Трубки термоусаживаемые"]);
 });
 
+Deno.test("local live-taxonomy resolver categorizes only the destination of a transformation", () => {
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun:
+      "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+    semantic_query:
+      "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+  }, ["Люстры", "Светильники"]), ["Светильники"]);
+
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "Хочу заменить светильник на люстру для гостиной",
+    semantic_query: "Хочу заменить светильник на люстру для гостиной",
+  }, ["Люстры", "Светильники"]), ["Люстры"]);
+});
+
 Deno.test("local live-taxonomy resolver fails closed on a shared ambiguous class", () => {
   assertEquals(resolveLocalCategoryPagetitles({
     noun: "кабель",

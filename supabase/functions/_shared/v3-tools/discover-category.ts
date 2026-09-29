@@ -10,6 +10,7 @@ import {
   type CompactCodeFacet,
 } from "./compact-facet-code.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import { extractCustomerOwnedDiscoveryTarget } from "./category-reasoning-guard.ts";
 
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
 const MODEL = "google/gemini-2.5-flash";
@@ -360,7 +361,13 @@ export function resolveLocalCategoryPagetitles(
   input: DiscoverCategoryInput,
   pagetitles: string[],
 ): string[] {
-  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const completeQueryText = [input.semantic_query ?? "", input.noun].join(" ");
+  // A transformation names both the source product and the destination.
+  // Only the customer-owned destination is positive category evidence; using
+  // the complete sentence makes two otherwise obvious live classes tie and
+  // needlessly sends the request to the model resolver.
+  const queryText = extractCustomerOwnedDiscoveryTarget(completeQueryText) ??
+    completeQueryText;
   const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const queryTokens = localCategoryTokens(queryText);
   if (queryTokens.length === 0) return [];
@@ -577,7 +584,9 @@ async function resolvePagetitle(
       cache,
     };
   }
-  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const completeQueryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const queryText = extractCustomerOwnedDiscoveryTarget(completeQueryText) ??
+    completeQueryText;
   const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const localCandidates = resolveLocalCategoryPagetitles(input, flat.map((candidate) => candidate.pagetitle));
   if (localCandidates.length > 0) {
