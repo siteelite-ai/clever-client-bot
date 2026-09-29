@@ -301,6 +301,46 @@ function classificationHasOnlyOpaqueDiscriminators(
 }
 
 /**
+ * A literal customer qualifier may own an exact transparent live value only
+ * when it also owns every conjunctive discriminator in that value. This
+ * prevents an umbrella phrase from silently acquiring a narrower mounting,
+ * execution or use subtype. Semicolon/slash-separated live labels are treated
+ * as enumerated aliases: proving one complete segment is sufficient. Opaque
+ * codes remain available to the explicit semantic-mapping contract.
+ */
+function customerOwnsExactTransparentClassification(
+  customerPhrase: string,
+  choice: DerivedClassificationChoice,
+  allChoices: DerivedClassificationChoice[],
+  productClass = "",
+): boolean {
+  if (classificationHasOnlyOpaqueDiscriminators(choice, allChoices)) {
+    return true;
+  }
+  const customerStems = new Set(classificationLexicalTokens(customerPhrase));
+  const productClassStems = new Set(classificationLexicalTokens(productClass));
+  const discriminators = new Set(
+    classificationDiscriminativeStems(choice, allChoices).filter((stem) =>
+      !productClassStems.has(stem)
+    ),
+  );
+  if (discriminators.size === 0) return false;
+
+  const rawSegments = String(choice.value ?? "").split(/[;/]+/u)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (rawSegments.length > 1) {
+    return rawSegments.some((segment) => {
+      const segmentDiscriminators = classificationLexicalTokens(segment)
+        .filter((stem) => discriminators.has(stem));
+      return segmentDiscriminators.length > 0 &&
+        segmentDiscriminators.every((stem) => customerStems.has(stem));
+    });
+  }
+  return [...discriminators].every((stem) => customerStems.has(stem));
+}
+
+/**
  * Preserve an exact class term that the customer already supplied when one
  * live classification value uniquely owns that term. Common words shared by
  * several values in the same facet are ignored, so an umbrella noun cannot
@@ -357,7 +397,16 @@ function customerGroundedClassificationChoices(
         matches.length > 0 && matches.length < choices.length
       )
       .sort((left, right) => left.length - right.length);
-    const mostSelective = selectiveGroups[0] ?? [];
+    const candidateGroup = selectiveGroups[0] ?? [];
+    const mostSelective = candidateGroup.length === 1 &&
+        !customerOwnsExactTransparentClassification(
+          customerEvidence,
+          candidateGroup[0],
+          allChoices,
+          productClass,
+        )
+      ? []
+      : candidateGroup;
     for (const choice of mostSelective) {
       if (!grounded.some(({ id }) => id === choice.id)) grounded.push(choice);
     }
@@ -610,6 +659,7 @@ export function resolveDerivedSelectionReasoning(
     phrase: string;
     choice: DerivedClassificationChoice;
   }> = [];
+  const allLiveChoices = [...byId.values()];
   if (Array.isArray(args.explicit_customer_classifications)) {
     const seenMappingFacets = new Set<string>();
     for (const raw of args.explicit_customer_classifications.slice(0, 6)) {
@@ -620,6 +670,14 @@ export function resolveDerivedSelectionReasoning(
       const normalizedPhrase = normalizeLiteralEvidence(phrase);
       const choice = byId.get(String(record.classification_id ?? ""));
       if (!choice || normalizedPhrase.length < 3) continue;
+      if (
+        !customerOwnsExactTransparentClassification(
+          phrase,
+          choice,
+          allLiveChoices,
+          productClass,
+        )
+      ) continue;
       const phrasePattern = new RegExp(
         `(?:^|\\s)${
           normalizedPhrase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&").replace(
@@ -648,9 +706,11 @@ export function resolveDerivedSelectionReasoning(
           phrase,
           "",
         ).user_backed,
-      ].filter((item, index, all) => all.findIndex((candidate) =>
-        candidate.key === item.key && candidate.value === item.value
-      ) === index);
+      ].filter((item, index, all) =>
+        all.findIndex((candidate) =>
+          candidate.key === item.key && candidate.value === item.value
+        ) === index
+      );
       const choiceFacet = facets.find((facet) =>
         String(facet.caption || facet.key || "").trim() === choice.facet
       );
@@ -663,7 +723,8 @@ export function resolveDerivedSelectionReasoning(
         phraseProjection.length > 0 &&
         !phraseProjection.some(({ key, value }) =>
           choiceFacetIdentities.has(normalizeLiteralEvidence(key)) &&
-          normalizeLiteralEvidence(value) === normalizeLiteralEvidence(choice.value)
+          normalizeLiteralEvidence(value) ===
+            normalizeLiteralEvidence(choice.value)
         )
       ) continue;
       const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(
@@ -757,7 +818,6 @@ export function resolveDerivedSelectionReasoning(
     .filter(([, count]) => count > 1)
     .map(([facetIdentity]) => facetIdentity);
   const compatibleIds = new Set(compatibleChoices.map(({ id }) => id));
-  const allLiveChoices = [...byId.values()];
   const groundedExcludedChoices = customerGroundedExcludedClassificationChoices(
     customerEvidence,
     facets,

@@ -64,6 +64,21 @@ Deno.test("visible recommendation resolves one compound branch but never guesses
   );
 });
 
+Deno.test("one visible recommendation with ordered alternatives selects its primary branch", () => {
+  assertEquals(
+    extractRecommendedCompoundMarking(
+      "Рекомендую медное исполнение 3×2,5 или алюминиевое 3×4.",
+    ),
+    { first: 3, second: 2.5 },
+  );
+  assertEquals(
+    extractRecommendedCompoundMarking(
+      "Рекомендую 3×2,5. Для другого способа монтажа рекомендую 3×4.",
+    ),
+    null,
+  );
+});
+
 Deno.test("exact compound shortcut yields semantic multi-attribute requests to the consultant", () => {
   assertEquals(
     classifyExactCompoundMarkingRequest(

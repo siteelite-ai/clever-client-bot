@@ -716,6 +716,54 @@ export function selectGroundedTokenRecoveryCandidate<
   ) ?? null;
 }
 
+/**
+ * A canonical multiword query may be empty both because the catalog uses AND
+ * semantics and because the discovered leaf scope is narrower than the
+ * consultant's derived product form. Token recovery is already guarded by
+ * exact title evidence and a selectivity ceiling, so carrying the failed leaf
+ * scope into every token retry only makes that proof path unreachable.
+ * Preserve neutral controls such as price/page size, but let the literal token
+ * prove its own live catalog location.
+ */
+export function buildUnscopedTokenRecoverySearchInput(
+  args: Record<string, unknown>,
+  query: string,
+): Record<string, unknown> {
+  const {
+    category: _category,
+    category_in: _categoryIn,
+    ...unscoped
+  } = args;
+  return {
+    ...unscoped,
+    mode: "by_query",
+    query,
+  };
+}
+
+/**
+ * A selective literal-token pool may prove a product form that lives in a
+ * generic/catch-all leaf whose label cannot be lexically grounded in the
+ * customer's wording. Prefer taxonomy-grounded candidates whenever they
+ * exist. Only when taxonomy rejected the entire pool may exact title evidence
+ * restore candidates; the caller must still apply its frozen product-class,
+ * criteria and budget gates before rendering.
+ */
+export function resolveSelectiveLiteralTokenCategoryCandidates<
+  T extends { pagetitle: string },
+>(
+  candidates: T[],
+  taxonomyGrounded: T[],
+  literalTitleToken: string | null | undefined,
+): T[] {
+  if (taxonomyGrounded.length > 0) return [...taxonomyGrounded];
+  const token = String(literalTitleToken ?? "").trim();
+  if (!token) return [];
+  return candidates.filter((candidate) =>
+    titleContainsLiteralToken(candidate.pagetitle, token)
+  );
+}
+
 export function guardCategoryScopeByReasoning(
   args: Record<string, unknown>,
   discovered: DiscoveredCategoryScope | null,

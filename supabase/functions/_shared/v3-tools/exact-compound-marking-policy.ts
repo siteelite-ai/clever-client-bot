@@ -58,9 +58,12 @@ export function extractExplicitCompoundMarking(
 
 /**
  * Resolve one exact compound marking from the consultant's visible
- * recommendation. Calculation prose may contain several alternative markings;
- * only a unique value in the highest-confidence recommendation tier is safe to
- * compile into retrieval and final-card proof.
+ * recommendation. Calculation prose may contain several alternative markings.
+ * A unique value in the highest-confidence tier is preferred. If the provider
+ * violates the one-branch contract by placing several alternatives in one
+ * explicit recommendation joined by «или/либо», the first visibly ordered
+ * alternative becomes the primary branch. Separate recommendations remain
+ * ambiguous and fail closed.
  */
 export function extractRecommendedCompoundMarking(
   reasoning: string,
@@ -73,11 +76,12 @@ export function extractRecommendedCompoundMarking(
     /(?:рекоменд\p{L}*|совет\p{L}*|выбира\p{L}*|предпочт\p{L}*)/iu,
     /(?:нуж\p{L}*|необходим\p{L}*|долж\p{L}*|треб\p{L}*|подход\p{L}*)/iu,
   ];
-  for (const tier of tiers) {
+  for (const [tierIndex, tier] of tiers.entries()) {
     const resolved: ExplicitCompoundMarking[] = [];
-    for (
-      const sentence of sentences.filter((candidate) => tier.test(candidate))
-    ) {
+    const tierSentences = sentences.filter((candidate) => tier.test(candidate));
+    const sentenceMarkings: ExplicitCompoundMarking[][] = [];
+    for (const sentence of tierSentences) {
+      const current: ExplicitCompoundMarking[] = [];
       for (
         const match of sentence.matchAll(new RegExp(COMPOUND.source, "giu"))
       ) {
@@ -89,10 +93,30 @@ export function extractRecommendedCompoundMarking(
             known.first === first && known.second === second
           )
         ) resolved.push({ first, second });
+        if (
+          !current.some((known) =>
+            known.first === first && known.second === second
+          )
+        ) current.push({ first, second });
       }
+      sentenceMarkings.push(current);
     }
     if (resolved.length === 1) return resolved[0];
-    if (resolved.length > 1) return null;
+    if (resolved.length > 1) {
+      const explicitAlternativeSentences = tierSentences
+        .map((sentence, index) => ({
+          sentence,
+          markings: sentenceMarkings[index] ?? [],
+        }))
+        .filter(({ sentence, markings }) =>
+          markings.length > 1 && /(?:^|\s)(?:или|либо)(?:\s|$)/iu.test(sentence)
+        );
+      if (
+        tierIndex === 0 && explicitAlternativeSentences.length === 1 &&
+        sentenceMarkings.filter((markings) => markings.length > 0).length === 1
+      ) return explicitAlternativeSentences[0].markings[0];
+      return null;
+    }
   }
   return null;
 }

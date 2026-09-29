@@ -7,8 +7,8 @@ import {
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
-  resolveDerivedSelectionReasoning,
   reasoningComputesSystemTotalFromSpatialExtent,
+  resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -74,7 +74,10 @@ Deno.test("an unresolved application context requires suitability reasoning even
   const message =
     "Нужен уличный удлинитель 30 м для сварочного аппарата. Подбери варианты";
   assertEquals(hasSelectionSuitabilityContext(message), true);
-  assertEquals(hasSelectionSuitabilityContext("Покажи удлинитель длиной 30 м"), false);
+  assertEquals(
+    hasSelectionSuitabilityContext("Покажи удлинитель длиной 30 м"),
+    false,
+  );
   assertEquals(
     shouldRequireDerivedSelectionReasoning({
       intentMode: "select",
@@ -92,16 +95,19 @@ Deno.test("an unresolved application context requires suitability reasoning even
 Deno.test("an adjacent suitability modifier requires reasoning when no live facet proves it", () => {
   const message = "Подбери несколько недорогих офисных светильников";
   assertEquals(hasSelectionSuitabilityContext(message, "Светильники"), true);
-  assertEquals(shouldRequireDerivedSelectionReasoning({
-    intentMode: "select",
-    phase: "search_after_discovery",
-    catalogSearchAttempted: false,
-    directMeasuredCriteriaCount: 0,
-    directApplicationCriteriaCount: 0,
-    productClass: "Светильники",
-    userMessage: message,
-    reasoningText: "",
-  }), true);
+  assertEquals(
+    shouldRequireDerivedSelectionReasoning({
+      intentMode: "select",
+      phase: "search_after_discovery",
+      catalogSearchAttempted: false,
+      directMeasuredCriteriaCount: 0,
+      directApplicationCriteriaCount: 0,
+      productClass: "Светильники",
+      userMessage: message,
+      reasoningText: "",
+    }),
+    true,
+  );
 });
 
 Deno.test("a live application facet or an existing suitability contract avoids a redundant reasoning detour", () => {
@@ -734,6 +740,79 @@ Deno.test("a literal customer modifier may map to one exact live classification 
   );
 });
 
+Deno.test("an umbrella customer phrase cannot own a narrower compound live subtype", () => {
+  const liveFacets = [{
+    key: "kind",
+    caption: "Вид исполнения",
+    type: "string",
+    values: [
+      { value: "бытовые светильники накладные" },
+      { value: "офисные светильники" },
+      { value: "уличные светильники" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для дома рабочей гипотезой считаю бытовые светильники накладные.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "бытовых светильников",
+        classification_id: "f0v0",
+      }],
+    },
+    liveFacets,
+    "Подбери несколько бытовых светильников",
+    "светильники",
+  );
+
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved?.compatible, [{
+    key: "Вид исполнения",
+    value: "бытовые светильники накладные",
+  }]);
+  assertEquals(
+    resolved?.text.includes("не становится обязательным фильтром"),
+    true,
+  );
+});
+
+Deno.test("a customer may own a complete compound live subtype", () => {
+  const liveFacets = [{
+    key: "kind",
+    caption: "Вид исполнения",
+    type: "string",
+    values: [
+      { value: "бытовые светильники накладные" },
+      { value: "офисные светильники" },
+      { value: "уличные светильники" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Нужен именно бытовой накладной светильник.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "бытовой накладной светильник",
+        classification_id: "f0v0",
+      }],
+    },
+    liveFacets,
+    "Подбери бытовой накладной светильник",
+    "светильник",
+  );
+
+  assertEquals(resolved?.customerGroundedCompatible, [{
+    key: "Вид исполнения",
+    value: "бытовые светильники накладные",
+  }]);
+});
+
 Deno.test("a semantic mapping is rejected unless its phrase is literal customer evidence", () => {
   const facets = [{
     caption: "Вид исполнения",
@@ -761,16 +840,34 @@ Deno.test("a semantic mapping is rejected unless its phrase is literal customer 
 
 Deno.test("an explicit phrase already bound to one live axis cannot be remapped through a shared code", () => {
   const facets = [
-    { key: "curve", caption: "Характеристика срабатывания", type: "string", values: [{ value: "B" }, { value: "C" }, { value: "D" }] },
-    { key: "voltage_type", caption: "Тип напряжения", type: "string", values: [{ value: "переменный (АС)" }, { value: "постоянный (DC)" }] },
+    {
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      type: "string",
+      values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+    },
+    {
+      key: "voltage_type",
+      caption: "Тип напряжения",
+      type: "string",
+      values: [{ value: "переменный (АС)" }, { value: "постоянный (DC)" }],
+    },
   ];
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning: "Для линии нужен подходящий вариант.",
-    compatible_classifications: ["f1v0"],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [{ customer_phrase: "характеристика C", classification_id: "f1v0" }],
-  }, facets, "Нужен автомат, характеристика C", "автомат");
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для линии нужен подходящий вариант.",
+      compatible_classifications: ["f1v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "характеристика C",
+        classification_id: "f1v0",
+      }],
+    },
+    facets,
+    "Нужен автомат, характеристика C",
+    "автомат",
+  );
   assertEquals(resolved?.explicitCustomerMappings, []);
   assertEquals(resolved?.customerGroundedCompatible, []);
 });

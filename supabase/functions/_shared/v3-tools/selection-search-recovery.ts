@@ -13,6 +13,8 @@ import {
 } from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
+  | "relax_model_advisory_facets"
+  | "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
   | "preserve_filters_expand_category_scope"
   | "preserve_scope_verify_sparse_boolean_as_evidence"
   | "verify_compatibility_in_grounded_category"
@@ -60,6 +62,12 @@ export interface SelectionSearchRecoveryPlanInput {
   leaf_categories: string[];
   reasoning_criteria: Criterion[];
   compatibility_shaped: boolean;
+  /**
+   * Live facet values introduced only as model-owned retrieval guidance.
+   * They may be relaxed before customer-owned filters, but never promoted to
+   * product eligibility evidence.
+   */
+  advisory_options?: Record<string, string[]>;
 }
 
 /**
@@ -320,6 +328,67 @@ function pageSize(args: Record<string, unknown>): number {
   return Number.isFinite(value) ? Math.max(50, value) : 50;
 }
 
+function normalizeFacetValue(value: unknown): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function dropModelAdvisoryFacetOptions(
+  args: Record<string, unknown>,
+  advisoryOptions: Record<string, string[]> | undefined,
+): {
+  args: Record<string, unknown>;
+  removed: Array<{ key: string; value: string }>;
+} {
+  const sourceOptions = args.options && typeof args.options === "object"
+    ? args.options as Record<string, unknown>
+    : null;
+  if (!sourceOptions || !advisoryOptions) {
+    return { args: { ...args }, removed: [] };
+  }
+
+  const nextOptions: Record<string, string[]> = {};
+  const removed: Array<{ key: string; value: string }> = [];
+  for (const [key, rawValues] of Object.entries(sourceOptions)) {
+    const values = Array.isArray(rawValues)
+      ? rawValues.map(String)
+      : typeof rawValues === "string"
+      ? [rawValues]
+      : [];
+    const advisory = new Set(
+      (advisoryOptions[key] ?? []).map(normalizeFacetValue).filter(Boolean),
+    );
+    const retained = values.filter((value) => {
+      if (!advisory.has(normalizeFacetValue(value))) return true;
+      removed.push({ key, value });
+      return false;
+    });
+    if (retained.length > 0) nextOptions[key] = retained;
+  }
+  const nextArgs = { ...args };
+  if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+  else delete nextArgs.options;
+  return { args: nextArgs, removed };
+}
+
+function ensureGroundedFilterScope(
+  args: Record<string, unknown>,
+  leafCategories: string[],
+): Record<string, unknown> {
+  const hasOptions = Boolean(
+    args.options && typeof args.options === "object" &&
+      Object.keys(args.options as Record<string, unknown>).length > 0,
+  );
+  const hasScope = typeof args.category === "string" ||
+    Array.isArray(args.category_in);
+  return !hasOptions && !hasScope && leafCategories.length > 0
+    ? { ...args, category_in: [...leafCategories] }
+    : { ...args };
+}
+
 function projectedFilterArgs(
   original: Record<string, unknown>,
   options: Record<string, string[]>,
@@ -364,6 +433,78 @@ export function buildSelectionSearchRecoveryPlan(
   const options = original.options && typeof original.options === "object"
     ? original.options as Record<string, unknown>
     : {};
+  // Model-selected classifications are search hints, not customer-owned
+  // requirements. When their intersection is empty, relax them before live
+  // category scope or explicit user filters. This is data-agnostic: the exact
+  // keys and values come from the current live taxonomy projection.
+  const advisoryFallback = dropModelAdvisoryFacetOptions(
+    original,
+    input.advisory_options,
+  );
+  if (advisoryFallback.removed.length > 0) {
+    const advisoryArgs = ensureGroundedFilterScope(
+      advisoryFallback.args,
+      input.leaf_categories,
+    );
+    add({
+      kind: "relax_model_advisory_facets",
+      args: {
+        ...advisoryArgs,
+        per_page: pageSize(advisoryArgs),
+      },
+      relaxed_inputs: advisoryFallback.removed.map(({ key }) =>
+        `model_advisory:${key}`
+      ),
+      proven_criteria: [],
+      evidence_required_criteria: [],
+      revalidate: [...REVALIDATE],
+    });
+
+    const combinedBooleanFallback = dropAffirmativeBooleanFilters(
+      advisoryArgs,
+      input.facets,
+    );
+    if (combinedBooleanFallback.removed.length > 0) {
+      const groundedCombinedArgs = ensureGroundedFilterScope(
+        combinedBooleanFallback.args,
+        input.leaf_categories,
+      );
+      const args: Record<string, unknown> = {
+        ...groundedCombinedArgs,
+        per_page: pageSize(groundedCombinedArgs),
+        ...(
+          typeof groundedCombinedArgs.max_price === "number" &&
+            groundedCombinedArgs.sort_cheapest !== true &&
+            groundedCombinedArgs.sort_expensive !== true
+            ? { sort_expensive: true }
+            : {}
+        ),
+      };
+      add({
+        kind: "relax_model_advisory_facets_verify_sparse_boolean_as_evidence",
+        args,
+        relaxed_inputs: [
+          ...advisoryFallback.removed.map(({ key }) => `model_advisory:${key}`),
+          ...combinedBooleanFallback.removed.map(({ key }) => `boolean:${key}`),
+        ],
+        proven_criteria: [],
+        evidence_required_criteria: combinedBooleanFallback.removed.map(
+          ({ key, value }) => {
+            const facet = input.facets.find((candidate) =>
+              candidate.key === key
+            );
+            return {
+              key: facet?.caption?.trim() || key,
+              op: "eq" as const,
+              value,
+              level: "A" as const,
+            };
+          },
+        ),
+        revalidate: [...REVALIDATE],
+      });
+    }
+  }
   const hasScope = typeof original.category === "string" ||
     Array.isArray(original.category_in);
   if (hasScope && Object.keys(options).length > 0) {
@@ -382,13 +523,17 @@ export function buildSelectionSearchRecoveryPlan(
 
   const booleanFallback = dropAffirmativeBooleanFilters(original, input.facets);
   if (booleanFallback.removed.length > 0) {
+    const groundedBooleanArgs = ensureGroundedFilterScope(
+      booleanFallback.args,
+      input.leaf_categories,
+    );
     const args: Record<string, unknown> = {
-      ...booleanFallback.args,
-      per_page: pageSize(booleanFallback.args),
+      ...groundedBooleanArgs,
+      per_page: pageSize(groundedBooleanArgs),
       ...(
-        typeof booleanFallback.args.max_price === "number" &&
-          booleanFallback.args.sort_cheapest !== true &&
-          booleanFallback.args.sort_expensive !== true
+        typeof groundedBooleanArgs.max_price === "number" &&
+          groundedBooleanArgs.sort_cheapest !== true &&
+          groundedBooleanArgs.sort_expensive !== true
           ? { sort_expensive: true }
           : {}
       ),

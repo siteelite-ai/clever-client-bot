@@ -649,6 +649,46 @@ Deno.test("guarded exact criterion disambiguates an otherwise ambiguous literal 
   assertEquals(projected.matched, [existing]);
 });
 
+Deno.test("explicit schema unit wins over unrelated unitless facets with the same live value", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Покажи LED-лампы E27 с тёплым светом 3000 K",
+    "Ищу лампы с тёплым светом.",
+    [
+      {
+        key: "colour_temperature",
+        caption: "Цветовая температура, К",
+        type: "string",
+        unit: null,
+        values: [{ value: "2700" }, { value: "3000" }, { value: "4000" }],
+      },
+      {
+        key: "average_lifetime",
+        caption: "Средний номинальный срок службы, ч",
+        type: "string",
+        unit: null,
+        values: [{ value: "3000" }, { value: "15000" }],
+      },
+      {
+        key: "opaque_number",
+        caption: "Внутренний код",
+        type: "string",
+        unit: null,
+        values: [{ value: "3000" }],
+      },
+    ],
+  );
+
+  assertEquals(projected.added, [{
+    key: "Цветовая температура, К",
+    op: "eq",
+    value: "3000",
+    unit: "к",
+    level: "A",
+  }]);
+  assertEquals(projected.matched, projected.added);
+});
+
 Deno.test("visible reasoning may disambiguate but cannot invent a customer-owned exact value", () => {
   const criterion: Criterion = {
     key: "Цветовая температура, К",

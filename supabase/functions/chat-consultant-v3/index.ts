@@ -209,6 +209,7 @@ import {
   unresolvedCompactCodeTokens,
 } from "../_shared/v3-tools/compact-facet-code.ts";
 import {
+  buildUnscopedTokenRecoverySearchInput,
   categoryLabelIsAffirmedAsTarget,
   discoveryNounIsGrounded,
   discoveryResultPreservesCustomerIntent,
@@ -222,6 +223,7 @@ import {
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
   rankGroundedCategoryRecoveryScopes,
+  resolveSelectiveLiteralTokenCategoryCandidates,
   scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
@@ -5339,6 +5341,19 @@ async function runExpertLoop(
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
   const modelAssumedSearchFacetValues: Array<{ key: string; value: string }> =
     [];
+  const currentModelAdvisoryOptions = (
+    facets: DiscoverCategoryOk["facets"],
+  ): Record<string, string[]> =>
+    projectAdvisoryCriteriaFacetOptions(
+      modelAssumedSearchFacetValues.map(({ key, value }) => ({
+        key,
+        op: "eq" as const,
+        value,
+        level: "B" as const,
+        evidence: "model_assumption" as const,
+      })),
+      facets,
+    ).options;
   let reasoningProjectedSearchCriteria: Criterion[] = [];
   // Some derived numeric obligations are reliably verifiable on materialized
   // cards but unsafe as first-pass catalog filters when a high-cardinality
@@ -5777,6 +5792,7 @@ async function runExpertLoop(
     criteria: Criterion[];
     label: string;
     evidenceStrength: number;
+    literalTitleToken?: string;
   } | null = null;
   // A grounded pool recovered after an absent source SKU must survive a bad
   // final model pick (for example, selecting only cards from the source
@@ -10995,6 +11011,9 @@ async function runExpertLoop(
                     ) => category.pagetitle),
                     reasoning_criteria: projection.proven_criteria,
                     compatibility_shaped: compatibilityRequired,
+                    advisory_options: currentModelAdvisoryOptions(
+                      lastDiscover.facets,
+                    ),
                   });
                   for (const attempt of recoveryPlan) {
                     const attempted = await runTool(
@@ -11587,6 +11606,7 @@ async function runExpertLoop(
         let selectedSearchRecoveryAttempt:
           | SelectionSearchRecoveryAttempt
           | null = null;
+        let selectiveLiteralTokenRecovery: string | null = null;
 
         send({
           type: "tool_event",
@@ -12005,10 +12025,15 @@ async function runExpertLoop(
               result: SearchCatalogOk & { tool: "search_catalog" };
             }> = [];
             for (const query of tokenQueries) {
-              const recovered = await runTool("search_catalog", {
-                ...runArgs,
+              const tokenSearchArgs = buildUnscopedTokenRecoverySearchInput(
+                runArgs,
                 query,
-              }, ctx);
+              );
+              const recovered = await runTool(
+                "search_catalog",
+                tokenSearchArgs,
+                ctx,
+              );
               if (!recovered.ok || recovered.tool !== "search_catalog") {
                 continue;
               }
@@ -12027,6 +12052,7 @@ async function runExpertLoop(
               lastDiscover?.category?.total_products ?? 0,
             );
             if (selected) {
+              selectiveLiteralTokenRecovery = selected.query;
               runArgs.query = selected.query;
               result = {
                 ...selected.result,
@@ -12101,6 +12127,9 @@ async function runExpertLoop(
             compatibility_shaped:
               minimumCompatibilityRelationCount(reasoningEvidence) >= 2 ||
               reasoningNeedsCompatibilityRelations(reasoningEvidence),
+            advisory_options: currentModelAdvisoryOptions(
+              lastDiscover?.facets ?? [],
+            ),
           });
           for (const attempt of recoveryPlan) {
             const recovered = await runTool(
@@ -13739,6 +13768,9 @@ async function runExpertLoop(
                   })),
                   label: sourceLabel,
                   evidenceStrength: candidateEvidenceStrength,
+                  ...(selectiveLiteralTokenRecovery
+                    ? { literalTitleToken: selectiveLiteralTokenRecovery }
+                    : {}),
                 };
                 steps.push({
                   step: "v3_semantic_pool_evidence_selected",
@@ -15396,6 +15428,9 @@ async function runExpertLoop(
             ),
             reasoning_criteria: terminalCriteria,
             compatibility_shaped: false,
+            advisory_options: currentModelAdvisoryOptions(
+              terminalDiscover.facets,
+            ),
           });
           for (const attempt of recoveryPlan) {
             const attempted = await runTool(
@@ -16108,7 +16143,7 @@ async function runExpertLoop(
         .filter((product): product is NonNullable<typeof product> =>
           Boolean(product)
         );
-      const categoryGroundedProducts =
+      const taxonomyGroundedProducts =
         terminalDiscover && terminalGroundedTargets.length > 0
           ? filterProductsByGroundedCategoryTargets(
             candidateProducts,
@@ -16117,6 +16152,12 @@ async function runExpertLoop(
             terminalCategoryEvidence,
           )
           : [];
+      const categoryGroundedProducts =
+        resolveSelectiveLiteralTokenCategoryCandidates(
+          candidateProducts,
+          taxonomyGroundedProducts,
+          semanticBackedSearch.literalTitleToken,
+        );
       // A semantic pool is retrieval evidence only. Reconstruct the same full
       // criteria contract used by the rejected render; otherwise a later broad
       // token retry could silently discard a calculated or user-backed bound.

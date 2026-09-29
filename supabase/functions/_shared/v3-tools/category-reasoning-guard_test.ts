@@ -3,6 +3,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildUnscopedTokenRecoverySearchInput,
   categoryLabelIsAffirmedAsTarget,
   discoveryNounIsGrounded,
   discoveryResultPreservesCustomerIntent,
@@ -16,6 +17,7 @@ import {
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
   rankGroundedCategoryRecoveryScopes,
+  resolveSelectiveLiteralTokenCategoryCandidates,
   scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
@@ -559,6 +561,53 @@ Deno.test("token recovery keeps the consultant's selective title token and rejec
       { query: "generic-b", total: 410 },
     ], 703),
     null,
+  );
+});
+
+Deno.test("token recovery drops a failed taxonomy scope but preserves neutral search controls", () => {
+  assertEquals(
+    buildUnscopedTokenRecoverySearchInput({
+      mode: "by_query",
+      query: "distinctive generic",
+      category: "Narrow leaf",
+      category_in: ["Narrow leaf", "Sibling leaf"],
+      max_price: 4000,
+      per_page: 50,
+    }, "distinctive"),
+    {
+      mode: "by_query",
+      query: "distinctive",
+      max_price: 4000,
+      per_page: 50,
+    },
+  );
+});
+
+Deno.test("a selective literal token restores an exact-title pool only after taxonomy is empty", () => {
+  const candidates = [
+    { pagetitle: "Distinctive cable form" },
+    { pagetitle: "Generic sibling" },
+  ];
+  const alreadyGrounded = [{ pagetitle: "Taxonomy grounded item" }];
+  assertEquals(
+    resolveSelectiveLiteralTokenCategoryCandidates(
+      candidates,
+      alreadyGrounded,
+      "distinctive",
+    ),
+    alreadyGrounded,
+  );
+  assertEquals(
+    resolveSelectiveLiteralTokenCategoryCandidates(
+      candidates,
+      [],
+      "distinctive",
+    ),
+    [candidates[0]],
+  );
+  assertEquals(
+    resolveSelectiveLiteralTokenCategoryCandidates(candidates, [], null),
+    [],
   );
 });
 

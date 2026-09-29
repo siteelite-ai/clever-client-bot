@@ -1019,7 +1019,7 @@ export function projectLiteralMeasuredCriteria(
       )
     ) continue;
 
-    const unitFacets = (facets ?? []).filter((facet) => {
+    const exactValueFacets = (facets ?? []).filter((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const publicLabel = String(facet.caption ?? "").trim() || facet.key;
       const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
@@ -1046,6 +1046,21 @@ export function projectLiteralMeasuredCriteria(
           span.max === quantity.value;
       });
     });
+    // Prefer facets whose live schema explicitly declares the customer's
+    // physical unit. Unitless exact-value facets are only a legacy fallback:
+    // the same scalar may also be a lifetime, code, quantity or another
+    // unrelated property. Mixing both tiers makes an exact unit match appear
+    // ambiguous (for example `3000 K` versus a unitless lifetime `3000`).
+    const explicitUnitFacets = exactValueFacets.filter((facet) => {
+      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
+      const publicLabel = String(facet.caption ?? "").trim() || facet.key;
+      const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
+        .some((token) => canonicalMeasurementUnit(token) === unit);
+      return declaredUnit === unit || labelHasUnit;
+    });
+    const unitFacets = explicitUnitFacets.length > 0
+      ? explicitUnitFacets
+      : exactValueFacets;
     if (unitFacets.length === 0) continue;
 
     const sameUnitHints = next.filter((criterion) => {
