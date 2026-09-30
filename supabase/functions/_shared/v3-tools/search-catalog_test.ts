@@ -76,6 +76,34 @@ Deno.test("restricted catalog products never enter search results or the product
   assertEquals([...cache.keys()], ["public-explicit", "public-unmarked"]);
 });
 
+Deno.test("live facet keys stay in the internal cache without inflating tool results", async () => {
+  const cache: ProductCache = new Map();
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "C16",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "c16",
+          pagetitle: "Автоматический выключатель C16",
+          price: 900,
+          url: "https://220volt.kz/catalog/electric/breakers/c16/",
+          options: [{ key: "nominal_current", caption_ru: "Номинальный ток", value_ru: "16" }],
+        }],
+        pagination: { total: 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, cache);
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals("facet_values" in result.results[0], false);
+  assertEquals(cache.get("c16")?.facet_values, { nominal_current: ["16"] });
+});
+
 Deno.test("catalog retries an equivalent compound spelling only after an empty result", async () => {
   const queries: string[] = [];
   const fetchImpl: typeof fetch = (input) => {

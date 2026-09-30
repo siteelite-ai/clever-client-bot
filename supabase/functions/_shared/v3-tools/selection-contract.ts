@@ -1,5 +1,8 @@
 import type { ProductRef } from "./types.ts";
-import type { Criterion } from "./criteria-gate.ts";
+import {
+  type Criterion,
+  criterionCanEnterMandatoryContract,
+} from "./criteria-gate.ts";
 
 export interface SelectionTargetReport {
   target: string;
@@ -34,7 +37,8 @@ export function advanceSelectionTarget(
   if (!declared) return current || null;
   if (!current) return declared;
   return verifiedProductCount > 0 && (
-      selectionTargetPreservesGroundedBase(current, declared) || groundedAliasExpansion
+      selectionTargetPreservesGroundedBase(current, declared) ||
+      groundedAliasExpansion
     )
     ? declared
     : current;
@@ -88,11 +92,17 @@ function formatCriterionValue(criterion: Criterion): string {
   const unit = captionText(criterion.unit ?? "", 16);
   const suffix = unit ? ` ${unit}` : "";
   if (criterion.op === "range" && Array.isArray(criterion.value)) {
-    return `${captionText(criterion.value[0], 24)}–${captionText(criterion.value[1], 24)}${suffix}`;
+    return `${captionText(criterion.value[0], 24)}–${
+      captionText(criterion.value[1], 24)
+    }${suffix}`;
   }
   const value = captionText(criterion.value, 60);
-  if (criterion.op === "min") return `${criterion.exclusive ? "более" : "от"} ${value}${suffix}`;
-  if (criterion.op === "max") return `${criterion.exclusive ? "менее" : "до"} ${value}${suffix}`;
+  if (criterion.op === "min") {
+    return `${criterion.exclusive ? "более" : "от"} ${value}${suffix}`;
+  }
+  if (criterion.op === "max") {
+    return `${criterion.exclusive ? "менее" : "до"} ${value}${suffix}`;
+  }
   return `${value}${suffix}`;
 }
 
@@ -108,17 +118,24 @@ export function buildSelectionEvidenceCaption(
 ): string | null {
   const target = parseSelectionTarget(targetValue);
   const mandatory = (Array.isArray(criteria) ? criteria : [])
-    .filter((criterion) => criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A")
+    .filter((criterion) =>
+      criterion?.key && criterion.value !== undefined &&
+      (criterion.level ?? "A") === "A"
+    )
     .slice(0, 6);
   if (mandatory.length === 0) return null;
-  const context = target.application_context.map((item) => captionText(item, 80)).filter(Boolean).slice(0, 3);
+  const context = target.application_context.map((item) =>
+    captionText(item, 80)
+  ).filter(Boolean).slice(0, 3);
   const clauses = mandatory.map((criterion) =>
     `${captionText(criterion.key, 80)} — ${formatCriterionValue(criterion)}`
   );
   const prefix = context.length > 0
     ? `Для задачи «${context.join(", ")}»`
     : "Для этой задачи";
-  return `${prefix} проверены обязательные параметры товара: ${clauses.join("; ")}. Ниже — варианты, прошедшие эти условия.`;
+  return `${prefix} проверены обязательные параметры товара: ${
+    clauses.join("; ")
+  }. Ниже — варианты, прошедшие эти условия.`;
 }
 
 /**
@@ -145,22 +162,32 @@ export function buildSelectionRenderCaption(
     ? `варианты класса «${productClass}»`
     : "варианты товаров";
   if (context.length > 0) {
-    return `Для задачи «${context.join(", ")}» показываю ${subject}, прошедшие проверку соответствия заявленному типу товара.`;
+    return `Для задачи «${
+      context.join(", ")
+    }» показываю ${subject}, прошедшие проверку соответствия заявленному типу товара.`;
   }
   return `Показываю ${subject}, прошедшие проверку соответствия заявленному типу товара.`;
 }
 
 /** Keeps class identity separate from suitability/application constraints. */
-export function parseSelectionTarget(value: unknown): SelectionTargetProjection {
+export function parseSelectionTarget(
+  value: unknown,
+): SelectionTargetProjection {
   if (typeof value === "string") {
     return { product_class: value.trim(), application_context: [] };
   }
-  if (!value || typeof value !== "object") return { product_class: "", application_context: [] };
+  if (!value || typeof value !== "object") {
+    return { product_class: "", application_context: [] };
+  }
   const raw = value as Record<string, unknown>;
   return {
-    product_class: typeof raw.product_class === "string" ? raw.product_class.trim() : "",
+    product_class: typeof raw.product_class === "string"
+      ? raw.product_class.trim()
+      : "",
     application_context: Array.isArray(raw.application_context)
-      ? raw.application_context.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean).slice(0, 6)
+      ? raw.application_context.filter((item): item is string =>
+        typeof item === "string"
+      ).map((item) => item.trim()).filter(Boolean).slice(0, 6)
       : [],
   };
 }
@@ -184,7 +211,8 @@ export function groundSelectionApplicationContext(
     if (!normalized) return false;
     if (` ${evidence} `.includes(` ${normalized} `)) return true;
     const tokens = meaningfulTokens(item);
-    return tokens.length > 0 && tokens.every((token) => evidenceTokens.has(token));
+    return tokens.length > 0 &&
+      tokens.every((token) => evidenceTokens.has(token));
   });
   return {
     product_class: target.product_class,
@@ -192,11 +220,87 @@ export function groundSelectionApplicationContext(
   };
 }
 
+/**
+ * Extracts customer-owned suitability phrases introduced by the explicit
+ * relation «для …». This is grammatical rather than category-specific and
+ * never translates the phrase into catalog vocabulary by itself.
+ * Price and cardinality commands terminate the phrase; only the later unique
+ * live-facet projection may turn it into a mandatory filter.
+ */
+export function extractCustomerApplicationContexts(
+  userMessage: string,
+  productClass = "",
+  options: { includeAdjacentModifier?: boolean } = {},
+): string[] {
+  const source = String(userMessage ?? "").replace(/\s+/gu, " ").trim();
+  if (!source) return [];
+  const stop =
+    /(?:^|\s)(?:до|не\s+более|не\s+дороже|цено(?:й|ю)|стоимост(?:ь|ью)|сам(?:ый|ая|ое|ые|ого|ой|ых)|покажи|предложи|подбери|найди|дай|нужен|нужна|нужны|вариант(?:ы|ов)?|несколько|все)(?=\s|$)/iu;
+  const contexts: string[] = [];
+  for (const match of source.matchAll(/(?:^|[\s,;])для\s+([^,;.!?]+)/giu)) {
+    const rawTail = String(match[1] ?? "").trim();
+    const boundary = rawTail.search(stop);
+    const candidate = (boundary >= 0 ? rawTail.slice(0, boundary) : rawTail)
+      .replace(/^[\s:–—-]+|[\s:–—-]+$/gu, "").trim();
+    if (!candidate || meaningfulTokens(candidate).length === 0) continue;
+    if (contexts.some((known) => normalize(known) === normalize(candidate))) {
+      continue;
+    }
+    contexts.push(candidate);
+    if (contexts.length >= 4) break;
+  }
+  // A suitability adjective may be attached directly to the requested class
+  // instead of introduced by «для»: «офисные светильники», «уличный шкаф».
+  // Capture only the immediately preceding lexical token. It still becomes a
+  // hard condition only if one unique non-identity live facet value matches;
+  // brands, price words and ambiguous adjectives therefore cannot self-author
+  // a filter here.
+  const classStems = new Set(meaningfulTokens(productClass));
+  if (options.includeAdjacentModifier !== false && classStems.size > 0) {
+    const tokens = normalize(source).split(/\s+/u).filter(Boolean);
+    const ignoredModifier =
+      /^(?:сам\p{L}*|дешев\p{L}*|дорог\p{L}*|недорог\p{L}*|бюджетн\p{L}*|нескольк\p{L}*|все|кажд\p{L}*|подходящ\p{L}*)$/u;
+    for (let index = 1; index < tokens.length; index += 1) {
+      if (!classStems.has(stem(tokens[index]))) continue;
+      const candidate = tokens[index - 1];
+      if (
+        !candidate || ignoredModifier.test(candidate) ||
+        meaningfulTokens(candidate).length === 0
+      ) continue;
+      if (contexts.some((known) => normalize(known) === candidate)) continue;
+      contexts.push(candidate);
+      if (contexts.length >= 4) break;
+    }
+  }
+  return contexts;
+}
+
 const META_WORDS = new Set([
-  "товар", "товары", "товара", "вариант", "варианты", "модель", "модели",
-  "оборудование", "решение", "подходящий", "подходящие", "нужный", "нужные",
-  "каталог", "ассортимент", "сайт", "цена", "бюджет", "для", "или", "под",
-  "with", "from", "product", "products",
+  "товар",
+  "товары",
+  "товара",
+  "вариант",
+  "варианты",
+  "модель",
+  "модели",
+  "оборудование",
+  "решение",
+  "подходящий",
+  "подходящие",
+  "нужный",
+  "нужные",
+  "каталог",
+  "ассортимент",
+  "сайт",
+  "цена",
+  "бюджет",
+  "для",
+  "или",
+  "под",
+  "with",
+  "from",
+  "product",
+  "products",
 ]);
 
 function normalize(value: string): string {
@@ -214,7 +318,8 @@ function normalize(value: string): string {
  * handled by the ordinary user-backed criteria contract instead. */
 function isItemIdentityLabel(value: string): boolean {
   const label = ` ${normalize(value)} `;
-  return /(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\p{L}*|торгов\p{L}* марк\p{L}*|марка|model|series|collection|модел\p{L}*|сери\p{L}*|коллекц\p{L}*|name|title|наименован\p{L}*|назван\p{L}*|article|артикул|sku|код номенклатур\p{L}*|идентификатор|barcode|штрихкод)(?: |$)/u.test(label);
+  return /(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\p{L}*|торгов\p{L}* марк\p{L}*|марка|model|series|collection|модел\p{L}*|сери\p{L}*|коллекц\p{L}*|name|title|наименован\p{L}*|назван\p{L}*|article|артикул|sku|код номенклатур\p{L}*|идентификатор|barcode|штрихкод)(?: |$)/u
+    .test(label);
 }
 
 function stem(token: string): string {
@@ -228,7 +333,10 @@ function meaningfulTokens(value: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const token of normalize(value).split(/\s+/u)) {
-    if (!token || token.length < 3 || META_WORDS.has(token) || /^\d+$/u.test(token)) continue;
+    if (
+      !token || token.length < 3 || META_WORDS.has(token) ||
+      /^\d+$/u.test(token)
+    ) continue;
     const key = stem(token);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -239,7 +347,10 @@ function meaningfulTokens(value: string): string[] {
 
 function meaningfulRawTokens(value: string): string[] {
   return normalize(value).split(/\s+/u)
-    .filter((token) => token && token.length >= 3 && !META_WORDS.has(token) && !/^\d+$/u.test(token));
+    .filter((token) =>
+      token && token.length >= 3 && !META_WORDS.has(token) &&
+      !/^\d+$/u.test(token)
+    );
 }
 
 /**
@@ -260,29 +371,43 @@ export function selectionTargetAliasExpansionIsGrounded(
   const evidence = String(initialEvidence ?? "");
   const taxonomy = String(liveClass ?? "").trim();
   if (!current || !declared || !evidence || !taxonomy) return false;
-  if (!(
-    selectionTargetIsDeclared(declared, taxonomy) ||
-    selectionTargetIsDeclared(taxonomy, declared)
-  )) return false;
+  if (
+    !(
+      selectionTargetIsDeclared(declared, taxonomy) ||
+      selectionTargetIsDeclared(taxonomy, declared)
+    )
+  ) return false;
 
   const currentTokens = meaningfulTokens(current);
   const declaredTokens = meaningfulTokens(declared);
-  const shared = currentTokens.filter((token) => declaredTokens.includes(token));
-  const currentOnly = currentTokens.filter((token) => !declaredTokens.includes(token));
-  const declaredOnly = declaredTokens.filter((token) => !currentTokens.includes(token));
-  if (shared.length === 0 || currentOnly.length === 0 || declaredOnly.length === 0) return false;
+  const shared = currentTokens.filter((token) =>
+    declaredTokens.includes(token)
+  );
+  const currentOnly = currentTokens.filter((token) =>
+    !declaredTokens.includes(token)
+  );
+  const declaredOnly = declaredTokens.filter((token) =>
+    !currentTokens.includes(token)
+  );
+  if (
+    shared.length === 0 || currentOnly.length === 0 || declaredOnly.length === 0
+  ) return false;
 
   const containsAll = (container: string, wanted: string[]) => {
     const tokens = new Set(meaningfulTokens(container));
     return wanted.every((token) => tokens.has(token));
   };
-  const aliasPairs = evidence.matchAll(/([^().!?\n]{1,120})\s*\(([^()\n]{2,50})\)/gu);
+  const aliasPairs = evidence.matchAll(
+    /([^().!?\n]{1,120})\s*\(([^()\n]{2,50})\)/gu,
+  );
   for (const match of aliasPairs) {
     const phrase = match[1];
     const parenthetical = match[2];
     if (
-      containsAll(phrase, declaredTokens) && containsAll(parenthetical, currentOnly) ||
-      containsAll(phrase, currentTokens) && containsAll(parenthetical, declaredOnly)
+      containsAll(phrase, declaredTokens) &&
+        containsAll(parenthetical, currentOnly) ||
+      containsAll(phrase, currentTokens) &&
+        containsAll(parenthetical, declaredOnly)
     ) return true;
   }
   return false;
@@ -303,7 +428,10 @@ function bareClassAlternatives(value: string): string[] | null {
     .split(/\s*(?:[,;/]|(?<!\p{L})(?:и|или|and|or)(?!\p{L}))\s*/iu)
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length < 2 || parts.some((part) => meaningfulRawTokens(part).length !== 1)) return null;
+  if (
+    parts.length < 2 ||
+    parts.some((part) => meaningfulRawTokens(part).length !== 1)
+  ) return null;
   return parts;
 }
 
@@ -314,14 +442,26 @@ function bareClassAlternatives(value: string): string[] | null {
  * substring matching is deliberately forbidden so a broad word cannot prove a
  * different class.
  */
-function productEvidenceMatchesToken(product: ProductRef, rawTargetToken: string): boolean {
-  const evidenceTokens = normalize(productEvidence(product)).split(/\s+/u).filter(Boolean);
+function productEvidenceMatchesToken(
+  product: ProductRef,
+  rawTargetToken: string,
+): boolean {
+  const evidenceTokens = normalize(productEvidence(product)).split(/\s+/u)
+    .filter(Boolean);
   const targetStem = stem(rawTargetToken);
-  if (evidenceTokens.some((token) => token.length >= 3 && stem(token) === targetStem)) return true;
+  if (
+    evidenceTokens.some((token) =>
+      token.length >= 3 && stem(token) === targetStem
+    )
+  ) return true;
   if (rawTargetToken.length > 16 || evidenceTokens.length < 2) return false;
   for (let start = 0; start < evidenceTokens.length - 1; start += 1) {
     let compact = evidenceTokens[start];
-    for (let end = start + 1; end < Math.min(evidenceTokens.length, start + 4); end += 1) {
+    for (
+      let end = start + 1;
+      end < Math.min(evidenceTokens.length, start + 4);
+      end += 1
+    ) {
       compact += evidenceTokens[end];
       if (compact === rawTargetToken) return true;
       if (compact.length >= rawTargetToken.length) break;
@@ -333,7 +473,10 @@ function productEvidenceMatchesToken(product: ProductRef, rawTargetToken: string
 /** A render target must already be present in the customer's request or in the
  * consultant's initial product-class declaration. Later search vocabulary is
  * not allowed to rename the target to a sibling class. */
-export function selectionTargetIsDeclared(target: string, initialEvidence: string): boolean {
+export function selectionTargetIsDeclared(
+  target: string,
+  initialEvidence: string,
+): boolean {
   const targetTokens = meaningfulTokens(target);
   if (targetTokens.length === 0) return false;
   const evidence = new Set(meaningfulTokens(initialEvidence));
@@ -349,7 +492,9 @@ export function selectionTargetIsDeclared(target: string, initialEvidence: strin
  * available while "what I will search" cannot rename the target. */
 export function initialSelectionDeclaration(text: string): string {
   return String(text ?? "")
-    .split(/(?<!\p{L})(?:(?:сейчас|теперь)\s+)?(?:смотрю|посмотрю|проверяю|проверю|искать\s+буду|буду\s+искать|иду\s+(?:смотреть|проверять|искать))(?!\p{L})/iu)[0]
+    .split(
+      /(?<!\p{L})(?:(?:сейчас|теперь)\s+)?(?:смотрю|посмотрю|проверяю|проверю|искать\s+буду|буду\s+искать|иду\s+(?:смотреть|проверять|искать))(?!\p{L})/iu,
+    )[0]
     .trim();
 }
 
@@ -365,7 +510,9 @@ export function bootstrapSelectionTargetFromTaxonomy(
 ): string | null {
   const candidate = String(liveClass ?? "").trim();
   if (!candidate || meaningfulTokens(candidate).length === 0) return null;
-  return selectionTargetIsDeclared(candidate, initialEvidence) ? candidate : null;
+  return selectionTargetIsDeclared(candidate, initialEvidence)
+    ? candidate
+    : null;
 }
 
 /** Prefer the short noun that discovery actually resolved when it was already
@@ -380,8 +527,12 @@ export function bootstrapSelectionTargetFromDiscovery(
 ): string | null {
   const resolved = String(resolvedFrom ?? "").trim();
   const resolvedTokens = meaningfulTokens(resolved);
-  const rawTokenCount = normalize(resolved).split(/\s+/u).filter(Boolean).length;
-  const taxonomyBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  const rawTokenCount =
+    normalize(resolved).split(/\s+/u).filter(Boolean).length;
+  const taxonomyBase = bootstrapSelectionTargetFromTaxonomy(
+    initialEvidence,
+    liveClass,
+  );
   const taxonomyTokens = meaningfulTokens(taxonomyBase ?? "");
   // Discovery may resolve a customer modifier or jargon token to a broader
   // live class that the same customer message independently names. When the
@@ -413,6 +564,24 @@ export function bootstrapSelectionTargetFromDiscovery(
   ) {
     return resolved;
   }
+  // A deterministic discovery call deliberately sends the complete scoped
+  // customer request so the live resolver can use every constraint. In that
+  // mode `resolved_from` is no longer a usable product-class label (it can be
+  // an entire multi-turn sentence). Recover only a short customer-owned class
+  // head whose morphological stem is independently present in the resolved
+  // live taxonomy. This keeps the target grounded on both sides without
+  // teaching the contract product-specific synonyms or letting the taxonomy
+  // declare itself.
+  if (!taxonomyBase && rawTokenCount > 3) {
+    const liveStems = new Set(meaningfulTokens(liveClass));
+    const sharedCustomerHeads = meaningfulRawTokens(initialEvidence)
+      .filter((token) => liveStems.has(stem(token)))
+      .filter((token, index, tokens) =>
+        tokens.findIndex((candidate) => stem(candidate) === stem(token)) ===
+          index
+      );
+    if (sharedCustomerHeads.length === 1) return sharedCustomerHeads[0];
+  }
   return taxonomyBase;
 }
 
@@ -425,7 +594,10 @@ export function selectionTargetDeclarationIsGrounded(
   liveClass: string,
 ): boolean {
   if (selectionTargetIsDeclared(target, initialEvidence)) return true;
-  const groundedLiveClass = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  const groundedLiveClass = bootstrapSelectionTargetFromTaxonomy(
+    initialEvidence,
+    liveClass,
+  );
   if (
     groundedLiveClass &&
     selectionTargetIsDeclared(target, groundedLiveClass)
@@ -439,7 +611,8 @@ export function selectionTargetDeclarationIsGrounded(
   // shared trailing umbrella noun from authorizing a sibling modifier.
   const targetTokens = meaningfulTokens(target);
   const initialTokens = new Set(meaningfulTokens(initialEvidence));
-  const leadingTargetIsGrounded = targetTokens.length >= 2 && initialTokens.has(targetTokens[0]);
+  const leadingTargetIsGrounded = targetTokens.length >= 2 &&
+    initialTokens.has(targetTokens[0]);
   // The complete proposed target must be contained in live taxonomy. The
   // reverse direction is unsafe: a short live base occurring inside a richer
   // model phrase would let the model append an arbitrary class adjective and
@@ -463,33 +636,50 @@ export function projectModelOnlySelectionTargetExtension(
   criteria: Criterion[],
   resolvedFrom = "",
 ): string | null {
-  const groundedLiveBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  const groundedLiveBase = bootstrapSelectionTargetFromTaxonomy(
+    initialEvidence,
+    liveClass,
+  );
   const base = groundedLiveBase ?? String(currentTarget ?? "").trim();
   const declared = String(declaredTarget ?? "").trim();
-  if (!base || !declared || !selectionTargetIsDeclared(base, declared)) return null;
+  if (!base || !declared || !selectionTargetIsDeclared(base, declared)) {
+    return null;
+  }
 
   const baseTokens = new Set(meaningfulTokens(base));
-  const extraTokens = meaningfulTokens(declared).filter((token) => !baseTokens.has(token));
+  const extraTokens = meaningfulTokens(declared).filter((token) =>
+    !baseTokens.has(token)
+  );
   if (extraTokens.length === 0) return null;
-  const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
-    .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
-    .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
+  const mandatoryEvidence = new Set(
+    (Array.isArray(criteria) ? criteria : [])
+      .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
+      .flatMap((criterion) =>
+        meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)
+      ),
+  );
   const discoveryProjectedBase = resolvedFrom
-    ? bootstrapSelectionTargetFromDiscovery(initialEvidence, resolvedFrom, liveClass)
+    ? bootstrapSelectionTargetFromDiscovery(
+      initialEvidence,
+      resolvedFrom,
+      liveClass,
+    )
     : null;
   const declaredMatchesResolvedQuery = Boolean(
     discoveryProjectedBase &&
-    selectionTargetIsDeclared(discoveryProjectedBase, base) &&
-    selectionTargetIsDeclared(base, discoveryProjectedBase) &&
-    selectionTargetIsDeclared(declared, resolvedFrom) &&
-    selectionTargetIsDeclared(resolvedFrom, declared),
+      selectionTargetIsDeclared(discoveryProjectedBase, base) &&
+      selectionTargetIsDeclared(base, discoveryProjectedBase) &&
+      selectionTargetIsDeclared(declared, resolvedFrom) &&
+      selectionTargetIsDeclared(resolvedFrom, declared),
   );
   if (
     declaredMatchesResolvedQuery &&
     extraTokens.every((token) => !mandatoryEvidence.has(token))
   ) return base;
 
-  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
+  if (
+    selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)
+  ) return null;
 
   const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
   const inventedExtras = extraTokens.filter((token) =>
@@ -500,8 +690,12 @@ export function projectModelOnlySelectionTargetExtension(
   // model-only adjective. Falling back to the base is safe only when every
   // genuine modifier is already represented by the mandatory criteria gate;
   // that gate keeps it binding after the invented adjective is discarded.
-  const groundedExtras = extraTokens.filter((token) => declaredEvidence.has(token));
-  if (groundedExtras.some((token) => !mandatoryEvidence.has(token))) return null;
+  const groundedExtras = extraTokens.filter((token) =>
+    declaredEvidence.has(token)
+  );
+  if (groundedExtras.some((token) => !mandatoryEvidence.has(token))) {
+    return null;
+  }
   return base;
 }
 
@@ -524,14 +718,15 @@ export function continuedSelectionTargetIsGrounded(
       liveClass,
     )
     : null;
-  const priorDeclaresTarget = selectionTargetIsDeclared(target, priorDialogueEvidence) || Boolean(
-    priorBase && selectionTargetIsDeclared(priorBase, target),
-  );
+  const priorDeclaresTarget =
+    selectionTargetIsDeclared(target, priorDialogueEvidence) || Boolean(
+      priorBase && selectionTargetIsDeclared(priorBase, target),
+    );
   return Boolean(
     target &&
-    liveClass &&
-    priorDeclaresTarget &&
-    selectionTargetIsDeclared(liveClass, target),
+      liveClass &&
+      priorDeclaresTarget &&
+      selectionTargetIsDeclared(liveClass, target),
   );
 }
 
@@ -549,12 +744,19 @@ export function selectionTargetExtensionIsCriterionBacked(
   criteria: Criterion[],
 ): boolean {
   const baseTokens = new Set(meaningfulTokens(baseTarget));
-  const extraTokens = meaningfulTokens(extendedTarget).filter((token) => !baseTokens.has(token));
+  const extraTokens = meaningfulTokens(extendedTarget).filter((token) =>
+    !baseTokens.has(token)
+  );
   if (baseTokens.size === 0 || extraTokens.length === 0) return false;
-  const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
-    .filter((criterion) => criterion && (criterion.level ?? "A") === "A")
-    .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
-  return mandatoryEvidence.size > 0 && extraTokens.every((token) => mandatoryEvidence.has(token));
+  const mandatoryEvidence = new Set(
+    (Array.isArray(criteria) ? criteria : [])
+      .filter((criterion) => criterion && (criterion.level ?? "A") === "A")
+      .flatMap((criterion) =>
+        meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)
+      ),
+  );
+  return mandatoryEvidence.size > 0 &&
+    extraTokens.every((token) => mandatoryEvidence.has(token));
 }
 
 /**
@@ -579,14 +781,18 @@ export function promoteSelectionTargetBackingCriteria(
     !selectionTargetIsDeclared(base, target.product_class)
   ) {
     return {
-      criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion })),
+      criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+        ...criterion,
+      })),
       promoted: [],
       backing: [],
     };
   }
   const baseTokens = new Set(meaningfulTokens(base));
   const targetTokens = new Set(
-    meaningfulTokens(target.product_class).filter((token) => !baseTokens.has(token)),
+    meaningfulTokens(target.product_class).filter((token) =>
+      !baseTokens.has(token)
+    ),
   );
   const promoted: Criterion[] = [];
   const backing: Criterion[] = [];
@@ -625,7 +831,9 @@ export function promoteSelectionApplicationBackingCriteria(
   criteria: Criterion[],
 ): { criteria: Criterion[]; promoted: Criterion[]; backing: Criterion[] } {
   const target = parseSelectionTarget(targetValue);
-  const contextMeaningfulTokens = target.application_context.flatMap(meaningfulTokens);
+  const contextMeaningfulTokens = target.application_context.flatMap(
+    meaningfulTokens,
+  );
   const contextTokens = new Set(
     target.application_context.flatMap((item) =>
       normalize(item).split(/\s+/u).filter((token) => token.length >= 2)
@@ -633,7 +841,9 @@ export function promoteSelectionApplicationBackingCriteria(
   );
   if (!target.product_class || contextTokens.size === 0) {
     return {
-      criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion })),
+      criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+        ...criterion,
+      })),
       promoted: [],
       backing: [],
     };
@@ -642,7 +852,10 @@ export function promoteSelectionApplicationBackingCriteria(
   const promoted: Criterion[] = [];
   const backing: Criterion[] = [];
   const editDistance = (left: string, right: string) => {
-    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    const previous = Array.from(
+      { length: right.length + 1 },
+      (_, index) => index,
+    );
     for (let row = 1; row <= left.length; row += 1) {
       let diagonal = previous[0];
       previous[0] = row;
@@ -660,23 +873,33 @@ export function promoteSelectionApplicationBackingCriteria(
   };
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     if (isItemIdentityLabel(criterion.key)) return { ...criterion };
-    const rawValues = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
+    const rawValues = Array.isArray(criterion.value)
+      ? criterion.value
+      : [criterion.value];
     const valueTokens = rawValues
       .flatMap((value) => normalize(String(value ?? "")).split(/\s+/u))
       .filter((token) => token.length >= 2 && !META_WORDS.has(token));
-    const meaningfulValueTokens = rawValues.flatMap((value) => meaningfulTokens(String(value ?? "")));
+    const meaningfulValueTokens = rawValues.flatMap((value) =>
+      meaningfulTokens(String(value ?? ""))
+    );
     const exactMeaningfulMatches = meaningfulValueTokens.filter((token) =>
       contextMeaningfulTokens.includes(token)
     ).length;
-    const morphologicallyRepeated = meaningfulValueTokens.length > 0 && meaningfulValueTokens.every((token) =>
-      contextMeaningfulTokens.some((contextToken) => {
-        if (token === contextToken) return true;
-        const allowedDistance = exactMeaningfulMatches > 0 ? 2 : 1;
-        return Math.min(token.length, contextToken.length) >= 4 &&
-          editDistance(token, contextToken) <= allowedDistance;
-      })
-    );
-    const literallyRepeated = valueTokens.length > 0 && valueTokens.every((token) => contextTokens.has(token));
+    const morphologicallyRepeated = meaningfulValueTokens.length > 0 &&
+      meaningfulValueTokens.every((token) =>
+        contextMeaningfulTokens.some((contextToken) => {
+          if (token === contextToken) {
+            return true;
+          }
+          const allowedDistance = exactMeaningfulMatches > 0 ? 2 : 1;
+          return Math.min(token.length, contextToken.length) >= 4 &&
+            editDistance(token, contextToken) <= allowedDistance;
+        })
+      );
+    const literallyRepeated = valueTokens.length > 0 &&
+      valueTokens.every((token) =>
+        contextTokens.has(token)
+      );
     if (!literallyRepeated && !morphologicallyRepeated) {
       return { ...criterion };
     }
@@ -695,18 +918,23 @@ export function restoreSelectionTargetBackingCriteria(
   criteria: Criterion[],
   backing: Criterion[],
 ): Criterion[] {
-  const normalizeKey = (value: string) => String(value ?? "")
-    .toLocaleLowerCase("ru-RU")
-    .replace(/ё/gu, "е")
-    .replace(/[^a-zа-я0-9]+/giu, " ")
-    .trim();
+  const normalizeKey = (value: string) =>
+    String(value ?? "")
+      .toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е")
+      .replace(/[^a-zа-я0-9]+/giu, " ")
+      .trim();
   const restored = (Array.isArray(backing) ? backing : [])
     .filter((criterion) => criterion?.key)
     .map((criterion) => ({ ...criterion, level: "A" as const }));
   if (restored.length === 0) {
-    return (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+    return (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+      ...criterion,
+    }));
   }
-  const restoredKeys = new Set(restored.map((criterion) => normalizeKey(criterion.key)));
+  const restoredKeys = new Set(
+    restored.map((criterion) => normalizeKey(criterion.key)),
+  );
   return [
     ...(Array.isArray(criteria) ? criteria : [])
       .filter((criterion) => !restoredKeys.has(normalizeKey(criterion.key)))
@@ -723,7 +951,9 @@ export function restoreSelectionTargetBackingCriteria(
  * vocabulary comes exclusively from the discovered live facet, so this guard
  * contains no product-specific dictionary.
  */
-export function filterProductsByMandatoryFacetTitleContradictions<T extends ProductRef>(
+export function filterProductsByMandatoryFacetTitleContradictions<
+  T extends ProductRef,
+>(
   products: T[],
   criteria: Criterion[],
   facets: Array<{
@@ -732,7 +962,9 @@ export function filterProductsByMandatoryFacetTitleContradictions<T extends Prod
     values?: Array<{ value: string }>;
   }>,
 ): { products: T[]; rejected_ids: string[] } {
-  const mandatory = (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
+  const mandatory = (Array.isArray(criteria) ? criteria : []).filter((
+    criterion,
+  ) =>
     criterion &&
     (criterion.level ?? "A") === "A" &&
     criterion.op === "eq" &&
@@ -743,13 +975,17 @@ export function filterProductsByMandatoryFacetTitleContradictions<T extends Prod
   }
 
   const constraints = facets.flatMap((facet) => {
-    const facetLabels = [facet.key, facet.caption ?? ""].map(normalize).filter(Boolean);
+    const facetLabels = [facet.key, facet.caption ?? ""].map(normalize).filter(
+      Boolean,
+    );
     const matchingCriteria = mandatory.filter((criterion) =>
       facetLabels.includes(normalize(criterion.key))
     );
     if (matchingCriteria.length === 0) return [];
     const desired = matchingCriteria
-      .flatMap((criterion) => Array.isArray(criterion.value) ? criterion.value : [criterion.value])
+      .flatMap((criterion) =>
+        Array.isArray(criterion.value) ? criterion.value : [criterion.value]
+      )
       .map((value) => normalize(String(value ?? "")))
       .filter(Boolean);
     const liveValues = (Array.isArray(facet.values) ? facet.values : [])
@@ -759,7 +995,9 @@ export function filterProductsByMandatoryFacetTitleContradictions<T extends Prod
     const siblings = liveValues.filter((value) => !desired.includes(value));
     return siblings.length > 0 ? [{ desired, siblings }] : [];
   });
-  if (constraints.length === 0) return { products: [...products], rejected_ids: [] };
+  if (constraints.length === 0) {
+    return { products: [...products], rejected_ids: [] };
+  }
 
   const titleContains = (title: string, value: string) => {
     const haystack = ` ${normalize(title)} `;
@@ -768,8 +1006,16 @@ export function filterProductsByMandatoryFacetTitleContradictions<T extends Prod
   const rejected = new Set<string>();
   const safeProducts = products.filter((product) => {
     for (const constraint of constraints) {
-      if (constraint.desired.some((value) => titleContains(product.pagetitle, value))) continue;
-      if (constraint.siblings.some((value) => titleContains(product.pagetitle, value))) {
+      if (
+        constraint.desired.some((value) =>
+          titleContains(product.pagetitle, value)
+        )
+      ) continue;
+      if (
+        constraint.siblings.some((value) =>
+          titleContains(product.pagetitle, value)
+        )
+      ) {
         rejected.add(product.id);
         return false;
       }
@@ -806,7 +1052,9 @@ export function projectSelectionTargetFacetCriteria(
   ) return [];
   const baseTokens = new Set(meaningfulTokens(base));
   const targetTokens = new Set(
-    meaningfulTokens(target.product_class).filter((token) => !baseTokens.has(token)),
+    meaningfulTokens(target.product_class).filter((token) =>
+      !baseTokens.has(token)
+    ),
   );
   if (targetTokens.size === 0) return [];
 
@@ -817,7 +1065,8 @@ export function projectSelectionTargetFacetCriteria(
       .filter(Boolean)
       .filter((value) => {
         const tokens = meaningfulTokens(value);
-        return tokens.length > 0 && tokens.every((token) => targetTokens.has(token));
+        return tokens.length > 0 &&
+          tokens.every((token) => targetTokens.has(token));
       });
     const unique = [...new Set(matches)];
     if (unique.length !== 1) return [];
@@ -848,7 +1097,9 @@ export function projectSelectionApplicationFacetCriteria(
   }>,
 ): Criterion[] {
   const target = parseSelectionTarget(targetValue);
-  if (!target.product_class || target.application_context.length === 0) return [];
+  if (!target.product_class || target.application_context.length === 0) {
+    return [];
+  }
 
   const productClassTokens = new Set(meaningfulTokens(target.product_class));
   const compactContexts = target.application_context
@@ -862,7 +1113,9 @@ export function projectSelectionApplicationFacetCriteria(
         // suitability constraint. Only the remaining qualifier may project
         // to a live facet; otherwise a broad noun can accidentally select one
         // arbitrary subtype that happens to share that noun.
-        qualifierTokens: tokens.filter((token) => !productClassTokens.has(token)),
+        qualifierTokens: tokens.filter((token) =>
+          !productClassTokens.has(token)
+        ),
       };
     })
     .filter((item) => item.qualifierTokens.length > 0);
@@ -889,7 +1142,34 @@ export function projectSelectionApplicationFacetCriteria(
         rightIndex += 1;
       }
     }
-    return edits + Number(leftIndex < left.length || rightIndex < right.length) <= 1;
+    return edits +
+        Number(leftIndex < left.length || rightIndex < right.length) <= 1;
+  };
+
+  // Application wording is customer evidence, so a short fixed-length stem
+  // is too permissive here. In particular, unrelated Russian compounds such
+  // as «светодиодный» and «светло-серый» share the first four letters. Accept
+  // exact tokens, one-character typos, or a shared lexical root followed only
+  // by ordinary inflectional endings on both sides. This preserves legitimate
+  // pairs such as «офиса» ↔ «офисно-административное» without allowing one
+  // compound word to prove another.
+  const inflectionalSuffix =
+    /^(?:|а|я|ы|и|е|о|у|ю|ов|ев|ам|ям|ах|ях|ой|ей|ый|ий|ое|ее|ая|яя|ые|ие|ого|его|ому|ему|ым|им|ом|ем|ых|их|но)$/u;
+  const applicationTokenMatches = (left: string, right: string) => {
+    if (left === right) return true;
+    if (
+      Math.min(left.length, right.length) >= 4 &&
+      editDistanceAtMostOne(left, right)
+    ) return true;
+    if (!/[а-я]/u.test(left) || !/[а-я]/u.test(right)) return false;
+    let prefixLength = 0;
+    const max = Math.min(left.length, right.length);
+    while (
+      prefixLength < max && left[prefixLength] === right[prefixLength]
+    ) prefixLength += 1;
+    if (prefixLength < 4) return false;
+    return inflectionalSuffix.test(left.slice(prefixLength)) &&
+      inflectionalSuffix.test(right.slice(prefixLength));
   };
 
   return (Array.isArray(facets) ? facets : []).flatMap((facet) => {
@@ -899,17 +1179,16 @@ export function projectSelectionApplicationFacetCriteria(
       .filter(Boolean)
       .filter((value) => {
         const normalizedValue = normalize(value);
-        const valueTokens = meaningfulTokens(value);
+        const valueTokens = meaningfulRawTokens(value);
         if (valueTokens.length === 0) return false;
         return compactContexts.some((context) =>
           context.raw === normalizedValue ||
-          valueTokens.every((valueToken) =>
-            context.qualifierTokens.some((contextToken) =>
-              valueToken === contextToken ||
-              Math.min(valueToken.length, contextToken.length) >= 4 &&
-                editDistanceAtMostOne(valueToken, contextToken)
+          !/(?:^|\s)(?:не|без)(?:\s|$)/iu.test(normalizedValue) &&
+            meaningfulRawTokens(context.raw).every((contextToken) =>
+              valueTokens.some((valueToken) =>
+                applicationTokenMatches(valueToken, contextToken)
+              )
             )
-          )
         );
       });
     const unique = [...new Set(matches)];
@@ -922,6 +1201,85 @@ export function projectSelectionApplicationFacetCriteria(
       level: "A" as const,
     }];
   });
+}
+
+/** Compile explicit customer application wording only through one unique
+ * live non-identity facet value. Ambiguous or absent values produce no filter. */
+export function projectCustomerApplicationFacetCriteria(
+  productClass: string,
+  userMessage: string,
+  facets: Array<{
+    key: string;
+    caption?: string | null;
+    unit?: string | null;
+    values?: Array<{ value: string }>;
+  }>,
+): Criterion[] {
+  const applicationContext = extractCustomerApplicationContexts(
+    userMessage,
+    productClass,
+    { includeAdjacentModifier: false },
+  );
+  if (!String(productClass ?? "").trim() || applicationContext.length === 0) {
+    return [];
+  }
+  return projectSelectionApplicationFacetCriteria({
+    product_class: productClass,
+    application_context: applicationContext,
+  }, facets).map((criterion) => ({
+    ...criterion,
+    evidence: "user_explicit" as const,
+  }));
+}
+
+export interface UniqueAdjacentApplicationFacetProjection {
+  phrases: string[];
+  criteria: Criterion[];
+}
+
+/**
+ * Bounded provider-fallback for an adjective attached directly to the product
+ * class. It is intentionally stricter than ordinary model reasoning: the
+ * adjacent wording must add a real qualifier and the whole live schema must
+ * yield exactly one non-identity facet/value pair. Ambiguous properties such
+ * as a colour shared by body and light axes fail closed.
+ */
+export function projectUniqueAdjacentApplicationFacetCriteria(
+  productClass: string,
+  userMessage: string,
+  facets: Array<{
+    key: string;
+    caption?: string | null;
+    unit?: string | null;
+    values?: Array<{ value: string }>;
+  }>,
+): UniqueAdjacentApplicationFacetProjection | null {
+  const relational = new Set(
+    extractCustomerApplicationContexts(userMessage, productClass, {
+      includeAdjacentModifier: false,
+    }).map(normalize),
+  );
+  if (relational.size > 0) return null;
+  const phrases = extractCustomerApplicationContexts(
+    userMessage,
+    productClass,
+  ).filter((phrase) => !relational.has(normalize(phrase)));
+  if (!String(productClass ?? "").trim() || phrases.length === 0) return null;
+  const criteria = projectSelectionApplicationFacetCriteria({
+    product_class: productClass,
+    application_context: phrases,
+  }, facets).map((criterion) => ({
+    ...criterion,
+    evidence: "user_explicit" as const,
+  }));
+  const unique = criteria.filter((criterion, index, all) =>
+    all.findIndex((candidate) =>
+      normalize(candidate.key) === normalize(criterion.key) &&
+      normalize(String(candidate.value ?? "")) ===
+        normalize(String(criterion.value ?? ""))
+    ) === index
+  );
+  return unique.length === 1 ? { phrases, criteria: unique } : null;
 }
 
 /**
@@ -946,7 +1304,11 @@ export function selectionTargetMayUseGroundedBase(
   return options.replacement ||
     options.exact_named_entity_grounded ||
     options.live_category_grounded ||
-    selectionTargetExtensionIsCriterionBacked(baseTarget, extendedTarget, criteria);
+    selectionTargetExtensionIsCriterionBacked(
+      baseTarget,
+      extendedTarget,
+      criteria,
+    );
 }
 
 function productEvidence(product: ProductRef): string {
@@ -987,15 +1349,23 @@ export function verifySelectionTarget(
     });
     return {
       target: String(target ?? "").trim(),
-      passed_ids: perProduct.filter((item) => item.passes).map((item) => item.id),
-      rejected_ids: perProduct.filter((item) => !item.passes).map((item) => item.id),
+      passed_ids: perProduct.filter((item) => item.passes).map((item) =>
+        item.id
+      ),
+      rejected_ids: perProduct.filter((item) => !item.passes).map((item) =>
+        item.id
+      ),
       per_product: perProduct.map(({ passes: _passes, ...item }) => item),
     };
   }
   const rawTokens = meaningfulRawTokens(target);
-  const tokens = rawTokens.map(stem).filter((token, index, values) => values.indexOf(token) === index);
+  const tokens = rawTokens.map(stem).filter((token, index, values) =>
+    values.indexOf(token) === index
+  );
   const perProduct = products.map((product) => {
-    const rawByStem = new Map(rawTokens.map((token) => [stem(token), token] as const));
+    const rawByStem = new Map(
+      rawTokens.map((token) => [stem(token), token] as const),
+    );
     const matched = tokens.filter((token) => {
       const raw = rawByStem.get(token);
       return Boolean(raw && productEvidenceMatchesToken(product, raw));
@@ -1016,7 +1386,9 @@ export function verifySelectionTarget(
   return {
     target: String(target ?? "").trim(),
     passed_ids: perProduct.filter((item) => item.passes).map((item) => item.id),
-    rejected_ids: perProduct.filter((item) => !item.passes).map((item) => item.id),
+    rejected_ids: perProduct.filter((item) => !item.passes).map((item) =>
+      item.id
+    ),
     per_product: perProduct.map(({ passes: _passes, ...item }) => item),
   };
 }
@@ -1031,11 +1403,80 @@ export function verifySelectionTargetWithVisibleTitle(
   target: string,
   products: ProductRef[],
 ): SelectionTargetReport {
-  if (meaningfulTokens(target).length !== 1) return verifySelectionTarget(target, products);
+  if (meaningfulTokens(target).length !== 1) {
+    return verifySelectionTarget(target, products);
+  }
   return verifySelectionTarget(
     target,
     products.map((product) => ({ ...product, leaf_category: null })),
   );
+}
+
+/**
+ * Some catalog cards use a functional subtype in the title while their exact
+ * live leaf carries the ordinary product class (for example a reel that is
+ * catalogued under extensions). A hidden category may bridge that lexical gap
+ * only after a caller proves a complete mandatory selection contract and the
+ * same card passes every criterion. The ordinary one-token title rule remains
+ * unchanged for every other route.
+ */
+export function verifySelectionTargetWithExactLiveCategoryContract(input: {
+  target: string;
+  products: ProductRef[];
+  live_category: string;
+  mandatory_criteria: Criterion[];
+  criteria_passed_ids: readonly string[];
+  contract_complete: boolean;
+}): SelectionTargetReport {
+  const ordinary = verifySelectionTargetWithVisibleTitle(
+    input.target,
+    input.products,
+  );
+  const mandatory = input.mandatory_criteria.filter((criterion) =>
+    (criterion.level ?? "A") === "A"
+  );
+  if (
+    !input.contract_complete || meaningfulTokens(input.target).length !== 1 ||
+    !input.live_category.trim() || mandatory.length === 0 ||
+    mandatory.length !== input.mandatory_criteria.length ||
+    mandatory.some((criterion) =>
+      !criterion.key?.trim() || criterion.value === undefined ||
+      !criterionCanEnterMandatoryContract(criterion)
+    ) ||
+    !selectionTargetIsDeclared(input.target, input.live_category) ||
+    !selectionTargetIsDeclared(input.live_category, input.target)
+  ) return ordinary;
+
+  const ordinaryPassed = new Set(ordinary.passed_ids);
+  const criteriaPassed = new Set(input.criteria_passed_ids.map(String));
+  const categoryReport = verifySelectionTarget(input.target, input.products);
+  const categoryPassed = new Set(categoryReport.passed_ids);
+  const liveCategory = normalize(input.live_category);
+  const accepted = new Set(
+    input.products.filter((product) =>
+      criteriaPassed.has(product.id) && (
+        ordinaryPassed.has(product.id) || (
+          categoryPassed.has(product.id) &&
+          normalize(product.leaf_category ?? "") === liveCategory
+        )
+      )
+    ).map((product) => product.id),
+  );
+  const categoryRows = new Map(
+    categoryReport.per_product.map((row) => [row.id, row]),
+  );
+  return {
+    target: ordinary.target,
+    passed_ids: input.products.filter((product) => accepted.has(product.id))
+      .map((product) => product.id),
+    rejected_ids: input.products.filter((product) => !accepted.has(product.id))
+      .map((product) => product.id),
+    per_product: ordinary.per_product.map((row) =>
+      accepted.has(row.id) && !ordinaryPassed.has(row.id)
+        ? categoryRows.get(row.id) ?? row
+        : row
+    ),
+  };
 }
 
 /**
@@ -1051,25 +1492,34 @@ export function verifySelectionTargetWithNamedEntityCategory(input: {
   products: ProductRef[];
   named_entity: string;
 }): SelectionTargetReport {
-  const ordinary = verifySelectionTargetWithVisibleTitle(input.target, input.products);
+  const ordinary = verifySelectionTargetWithVisibleTitle(
+    input.target,
+    input.products,
+  );
   const entityTokens = meaningfulRawTokens(input.named_entity);
   if (entityTokens.length === 0) return ordinary;
 
   const categoryReport = verifySelectionTarget(input.target, input.products);
   const ordinaryPassed = new Set(ordinary.passed_ids);
   const categoryPassed = new Set(categoryReport.passed_ids);
-  const accepted = new Set(input.products.filter((product) => {
-    if (ordinaryPassed.has(product.id)) return true;
-    if (!categoryPassed.has(product.id)) return false;
-    const titleOnly = { ...product, leaf_category: null };
-    return entityTokens.every((token) => productEvidenceMatchesToken(titleOnly, token));
-  }).map((product) => product.id));
+  const accepted = new Set(
+    input.products.filter((product) => {
+      if (ordinaryPassed.has(product.id)) return true;
+      if (!categoryPassed.has(product.id)) return false;
+      const titleOnly = { ...product, leaf_category: null };
+      return entityTokens.every((token) =>
+        productEvidenceMatchesToken(titleOnly, token)
+      );
+    }).map((product) => product.id),
+  );
   if (accepted.size === ordinaryPassed.size) return ordinary;
 
   return {
     ...ordinary,
-    passed_ids: input.products.filter((product) => accepted.has(product.id)).map((product) => product.id),
-    rejected_ids: input.products.filter((product) => !accepted.has(product.id)).map((product) => product.id),
+    passed_ids: input.products.filter((product) => accepted.has(product.id))
+      .map((product) => product.id),
+    rejected_ids: input.products.filter((product) => !accepted.has(product.id))
+      .map((product) => product.id),
   };
 }
 
@@ -1087,20 +1537,29 @@ export function verifySelectionTargetWithGroundedSearch(input: {
   grounded_label: string;
   grounded_ids: readonly string[];
 }): SelectionTargetReport {
-  const ordinary = verifySelectionTargetWithVisibleTitle(input.target, input.products);
+  const ordinary = verifySelectionTargetWithVisibleTitle(
+    input.target,
+    input.products,
+  );
   if (ordinary.passed_ids.length > 0) return ordinary;
   if (meaningfulTokens(input.target).length === 1) return ordinary;
-  if (!selectionTargetIsDeclared(input.live_class, input.target)) return ordinary;
+  if (!selectionTargetIsDeclared(input.live_class, input.target)) {
+    return ordinary;
+  }
 
   const liveTokens = new Set(meaningfulTokens(input.live_class));
-  const distinctive = meaningfulTokens(input.grounded_label).filter((token) => !liveTokens.has(token));
+  const distinctive = meaningfulTokens(input.grounded_label).filter((token) =>
+    !liveTokens.has(token)
+  );
   if (distinctive.length === 0) return ordinary;
 
   const liveReport = verifySelectionTarget(input.live_class, input.products);
   const livePassed = new Set(liveReport.passed_ids);
   const groundedIds = new Set(input.grounded_ids.map(String));
   const additionallyPassed = input.products.filter((product) => {
-    if (!livePassed.has(product.id) || !groundedIds.has(product.id)) return false;
+    if (!livePassed.has(product.id) || !groundedIds.has(product.id)) {
+      return false;
+    }
     const evidence = new Set(meaningfulTokens(productEvidence(product)));
     return distinctive.every((token) => evidence.has(token));
   }).map((product) => product.id);
@@ -1109,7 +1568,9 @@ export function verifySelectionTargetWithGroundedSearch(input: {
   const accepted = new Set(additionallyPassed);
   return {
     ...ordinary,
-    passed_ids: input.products.filter((product) => accepted.has(product.id)).map((product) => product.id),
-    rejected_ids: input.products.filter((product) => !accepted.has(product.id)).map((product) => product.id),
+    passed_ids: input.products.filter((product) => accepted.has(product.id))
+      .map((product) => product.id),
+    rejected_ids: input.products.filter((product) => !accepted.has(product.id))
+      .map((product) => product.id),
   };
 }

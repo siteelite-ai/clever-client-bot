@@ -12,6 +12,12 @@
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 import { canonicalMeasurementUnit, extractReasoningBounds } from "./criteria-reasoning.ts";
 import { extractPostNominalCatalogQualifier } from "./declared-alias-contract.ts";
+import {
+  resolveAbbreviatedNumericFacetValueEvidence,
+  resolveCompactFacetCodeEvidence,
+  resolveCompoundFacetValueEvidence,
+} from "./compact-facet-code.ts";
+import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -41,9 +47,76 @@ export interface SearchFilterGuardResult {
   dropped: DroppedSearchFilter[];
 }
 
+export interface SearchFilterInferencePolicy {
+  /** Keep validated options but do not infer a new per-card numeric facet. */
+  allowDerivedNumericFacetInference?: boolean;
+  /**
+   * Structured reasoning already carries a machine-readable declaration.
+   * When it is present, free prose may explain the choice but must not invent
+   * an additional hidden catalog filter that the declaration did not own.
+   */
+  allowProseOnlyFacetInference?: boolean;
+  /** Values already proved from the customer's request before model reasoning. */
+  authoritativeFacetValues?: FacetValueEvidence[];
+}
+
+export interface FacetValueEvidence {
+  key: string;
+  value: string;
+}
+
+/**
+ * Merge a short attribute continuation with the previously proven selection.
+ * A value in the current turn replaces every older value on the same live
+ * facet; values on other facets remain binding. This is category-neutral and
+ * depends only on live facet keys, never on colour/product dictionaries.
+ */
+export function mergeFacetValuesWithCurrentOverrides(
+  inherited: FacetValueEvidence[],
+  current: FacetValueEvidence[],
+): FacetValueEvidence[] {
+  const overriddenKeys = new Set(current.map(({ key }) => key));
+  return [...inherited.filter(({ key }) => !overriddenKeys.has(key)), ...current]
+    .filter((item, index, all) => all.findIndex((candidate) =>
+      candidate.key === item.key && candidate.value === item.value
+    ) === index);
+}
+
 export interface ReasoningFacetProjection {
   kept: Array<{ key: string; value: string }>;
   user_backed: Array<{ key: string; value: string }>;
+}
+
+/**
+ * Compile an explicit compact customer code into canonical live facet values.
+ * The shared resolver requires one unique full-code decomposition across at
+ * least two distinct axes. Conflicting codes for the same axis fail closed;
+ * model prose is deliberately absent from this proof path.
+ */
+export function projectExplicitCompactFacetValues(
+  facets: SearchFacet[],
+  userMessage: string,
+): ReasoningFacetProjection {
+  const resolved = resolveCompactFacetCodeEvidence(userMessage, facets)
+    .flatMap(({ axes }) => axes.map(({ key, value }) => ({ key, value })));
+  resolved.push(...resolveCompoundFacetValueEvidence(userMessage, facets)
+    .map(({ axis }) => ({ key: axis.key, value: axis.value })));
+  resolved.push(...resolveAbbreviatedNumericFacetValueEvidence(userMessage, facets)
+    .map(({ axis }) => ({ key: axis.key, value: axis.value })));
+  const valuesByKey = new Map<string, Set<string>>();
+  for (const { key, value } of resolved) {
+    const values = valuesByKey.get(key) ?? new Set<string>();
+    values.add(value);
+    valuesByKey.set(key, values);
+  }
+  if ([...valuesByKey.values()].some((values) => values.size !== 1)) {
+    return { kept: [], user_backed: [] };
+  }
+  const kept = [...valuesByKey].map(([key, values]) => ({
+    key,
+    value: [...values][0],
+  }));
+  return { kept, user_backed: kept.map((item) => ({ ...item })) };
 }
 
 export interface BooleanFilterFallbackResult {
@@ -294,7 +367,13 @@ export function productMatchesExcludedReplacementIdentity(
 }
 
 function codeNorm(value: string): string {
-  return norm(value).replace(/\s+/g, "");
+  const lookalikes: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  return norm(value)
+    .replace(/[авекмнорстух]/gu, (char) => lookalikes[char] ?? char)
+    .replace(/\s+/g, "");
 }
 
 const RU_SUFFIXES = [
@@ -302,6 +381,11 @@ const RU_SUFFIXES = [
   "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
   "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
   "у", "ю", "а", "я", "о", "е", "ы", "и",
+];
+const RU_ADJECTIVE_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ые", "ие", "ых", "их",
 ];
 
 function stemRu(word: string): string {
@@ -320,15 +404,28 @@ function tokensMatchByStem(left: string, right: string): boolean {
   const rightStem = stemRu(right);
   const sharedLength = Math.min(leftStem.length, rightStem.length);
   if (sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength)) return true;
-  // Common Russian noun→adjective derivation changes one final letter after
-  // the same root (e.g. "медь" ↔ "медные"). Accept a single differing code
-  // point only for equal stems with a stable 3-letter root.
-  if (leftStem.length === rightStem.length && leftStem.length >= 4 && leftStem.slice(0, 3) === rightStem.slice(0, 3)) {
-    let differences = 0;
-    for (let index = 0; index < leftStem.length; index++) {
-      if (leftStem[index] !== rightStem[index]) differences += 1;
-    }
-    if (differences === 1) return true;
+  // Short adjective roots are common in live facet values (`белый` →
+  // `белые`). Accept a three-letter root only when both words have an
+  // explicit adjective ending and reduce to the exact same root. This remains
+  // morphological rather than a product/colour dictionary and cannot match a
+  // neighbouring noun merely because its first three letters coincide.
+  if (
+    leftStem === rightStem &&
+    leftStem.length >= 3 &&
+    RU_ADJECTIVE_SUFFIXES.some((suffix) => left.endsWith(suffix)) &&
+    RU_ADJECTIVE_SUFFIXES.some((suffix) => right.endsWith(suffix))
+  ) return true;
+  // A previous generic "one changed letter" rule treated unrelated neighbours
+  // such as `свет` and `свеча` as the same root. Preserve only the
+  // structurally identifiable soft-sign noun → -н- adjective transition
+  // (`медь` ↔ `медный`); arbitrary substitutions are not evidence.
+  if (
+    leftStem.length === rightStem.length &&
+    leftStem.length >= 4 &&
+    leftStem.slice(0, -1) === rightStem.slice(0, -1)
+  ) {
+    const endings = new Set([leftStem.at(-1), rightStem.at(-1)]);
+    if (endings.has("ь") && endings.has("н")) return true;
   }
   return false;
 }
@@ -468,6 +565,18 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
 
 function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
   if (contradictedByUser(value, userEvidence)) return false;
+  const normalizedValue = norm(value);
+  // Mixed-script technical markings are common in human input (`E27`/`Е27`,
+  // `C16`/`С16`). Treat only values containing both a letter and a digit as
+  // portable codes, then compare their compact visual forms. Ordinary words
+  // continue through the stricter token/morphology path below.
+  if (/\p{L}/u.test(normalizedValue) && /\d/u.test(normalizedValue)) {
+    const wanted = codeNorm(value);
+    const evidenceCodes = String(userEvidence ?? "")
+      .match(/[\p{L}\p{N}][\p{L}\p{N}._/-]*/gu)
+      ?.map(codeNorm) ?? [];
+    if (wanted && evidenceCodes.includes(wanted)) return true;
+  }
   const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]+$/u.test(token);
   const valueTokens = norm(value)
     .split(" ")
@@ -551,6 +660,37 @@ function facetMeaningIsEvidenced(
   );
 }
 
+function explicitShortFacetCodeIsLocallyEvidenced(
+  facet: SearchFacet,
+  value: string,
+  evidence: string,
+): boolean {
+  const canonical = visualSingleLetter(value);
+  if (canonical.length !== 1 || !/[a-z]/u.test(canonical)) return false;
+  const rawTokens = String(evidence ?? "").match(/\d+(?:[.,]\d+)?|\p{L}+/gu) ?? [];
+  const facetTokens = norm(`${facet.key} ${facet.caption ?? ""}`)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+  if (facetTokens.length === 0) return false;
+  return rawTokens.some((raw, index) => {
+    if (raw.length !== 1 || visualSingleLetter(raw) !== canonical) return false;
+    // In `16 А характеристика С`, the first lookalike is the physical unit,
+    // not curve A. Preserve the number in tokenization so a one-letter token
+    // directly following it cannot become a technical facet code merely
+    // because the actual facet label is nearby.
+    if (index > 0 && /^\d+(?:[.,]\d+)?$/u.test(rawTokens[index - 1])) return false;
+    // A lowercase Cyrillic one-letter word is normally a preposition (`с`),
+    // not a technical curve/code. Latin notation remains valid in either case;
+    // Cyrillic lookalikes must be visibly code-shaped (uppercase).
+    const codeShaped = /[a-z]/u.test(raw) || raw === raw.toLocaleUpperCase("ru-RU");
+    if (!codeShaped) return false;
+    const nearby = rawTokens.slice(Math.max(0, index - 3), index + 4).map(norm);
+    return facetTokens.some((facetToken) => nearby.some((token) =>
+      token === facetToken || tokensMatchByStem(facetToken, token)
+    ));
+  });
+}
+
 function facetMeaningIsFullyEvidenced(
   facet: SearchFacet,
   evidence: string,
@@ -562,6 +702,216 @@ function facetMeaningIsFullyEvidenced(
   return facetTokens.length > 0 && facetTokens.every((facetToken) =>
     evidenceTokens.some((token) => token === facetToken || tokensMatchByStem(facetToken, token))
   );
+}
+
+/**
+ * A partial facet label is sufficient only when it cannot refer to a sibling
+ * live axis exposing the same canonical value. For example, `белый свет`
+ * names neither `Цвет корпуса = белый` nor `Цвет свечения = белый` precisely:
+ * the shared word `цвет` must not arbitrarily select one of them. Conversely,
+ * `1 полюс` still proves `Количество полюсов = 1`, even if another count facet
+ * also exposes `1`, because the discriminating noun `полюсов` is present.
+ *
+ * This is deliberately driven by the current live schema and value, not by a
+ * product/category dictionary.
+ */
+function facetMeaningIsDisambiguatedForValue(
+  facet: SearchFacet,
+  value: string,
+  facets: SearchFacet[],
+  evidence: string,
+): boolean {
+  if (!facetMeaningIsEvidenced(facet, evidence)) return false;
+
+  const canonicalValue = norm(value);
+  const siblings = facets.filter((candidate) =>
+    candidate.key !== facet.key &&
+    candidate.values.some((item) => norm(item.value) === canonicalValue)
+  );
+  if (siblings.length === 0) return true;
+
+  const labelTokens = (candidate: SearchFacet) =>
+    norm(candidate.caption || candidate.key)
+      .split(" ")
+      .filter((token) => token.length >= 4);
+  const currentTokens = labelTokens(facet);
+  const siblingTokens = siblings.flatMap(labelTokens);
+  const evidenceTokens = norm(evidence).split(" ").filter((token) => token.length >= 4);
+  const discriminators = currentTokens.filter((token) =>
+    !siblingTokens.some((sibling) =>
+      token === sibling || tokensMatchByStem(token, sibling)
+    )
+  );
+  return discriminators.some((discriminator) =>
+    evidenceTokens.some((token) =>
+      token === discriminator || tokensMatchByStem(discriminator, token)
+    )
+  );
+}
+
+const COMPOUND_COUNT_PREFIXES: ReadonlyArray<readonly [string, number]> = [
+  ["одиннадцати", 11],
+  ["двенадцати", 12],
+  ["четырех", 4],
+  ["восьми", 8],
+  ["девяти", 9],
+  ["десяти", 10],
+  ["двух", 2],
+  ["трех", 3],
+  ["пяти", 5],
+  ["шести", 6],
+  ["семи", 7],
+  ["одно", 1],
+];
+
+const SEPARATED_COUNT_WORDS: ReadonlyMap<string, number> = new Map([
+  ["один", 1], ["одна", 1], ["одно", 1], ["одним", 1], ["одной", 1],
+  ["два", 2], ["две", 2], ["двух", 2], ["двумя", 2],
+  ["три", 3], ["трех", 3], ["тремя", 3],
+  ["четыре", 4], ["четырех", 4], ["четырьмя", 4],
+  ["пять", 5], ["пяти", 5], ["пятью", 5],
+  ["шесть", 6], ["шести", 6], ["шестью", 6],
+  ["семь", 7], ["семи", 7], ["семью", 7],
+  ["восемь", 8], ["восьми", 8], ["восемью", 8],
+  ["девять", 9], ["девяти", 9], ["девятью", 9],
+  ["десять", 10], ["десяти", 10], ["десятью", 10],
+  ["одиннадцать", 11], ["одиннадцати", 11], ["одиннадцатью", 11],
+  ["двенадцать", 12], ["двенадцати", 12], ["двенадцатью", 12],
+]);
+
+const COUNT_FACET_MARKER = /^(?:количеств|числ|number|count)/u;
+const COUNT_ADJECTIVE_ENDINGS = [
+  "овыми", "евыми", "ового", "евого", "овому", "евому",
+  "ьными", "ными", "овый", "евый", "ьный", "ный",
+  "овая", "евая", "ьная", "ная", "овое", "евое", "ьное", "ное",
+  "овые", "евые", "ьные", "ные", "овых", "евых", "ьных", "ных",
+  "овым", "евым", "ьным", "ным", "овой", "евой", "ьной", "ной",
+  "овую", "евую", "ьную", "ную",
+] as const;
+
+function countedNounStem(fragment: string): string {
+  let stem = norm(fragment).replace(/\s+/gu, "");
+  for (const ending of COUNT_ADJECTIVE_ENDINGS) {
+    if (stem.endsWith(ending) && stem.length - ending.length >= 3) {
+      stem = stem.slice(0, -ending.length);
+      break;
+    }
+  }
+  return stem.replace(/ь$/u, "");
+}
+
+function compoundCountClaims(evidence: string): Array<{ count: number; nounStem: string }> {
+  const claims: Array<{ count: number; nounStem: string }> = [];
+  for (const token of norm(evidence).split(" ").filter(Boolean)) {
+    for (const [prefix, count] of COMPOUND_COUNT_PREFIXES) {
+      if (!token.startsWith(prefix) || token.length - prefix.length < 4) continue;
+      const nounStem = countedNounStem(token.slice(prefix.length));
+      if (nounStem.length >= 3) claims.push({ count, nounStem });
+      break;
+    }
+  }
+  return claims;
+}
+
+function separatedCountClaims(
+  evidence: string,
+): Array<{ count: number; nounStem: string }> {
+  const tokens = norm(evidence).split(" ").filter(Boolean);
+  const claims: Array<{ count: number; nounStem: string }> = [];
+  for (let index = 0; index + 1 < tokens.length; index++) {
+    const rawCount = tokens[index];
+    const numeric = rawCount.match(/^\d+$/u)?.[0];
+    const count = numeric ? Number(numeric) : SEPARATED_COUNT_WORDS.get(rawCount);
+    if (!Number.isInteger(count) || Number(count) < 1 || Number(count) > 12) {
+      continue;
+    }
+    const nounStem = countedNounStem(stemRu(tokens[index + 1]));
+    if (nounStem.length >= 3) claims.push({ count: Number(count), nounStem });
+  }
+  return claims;
+}
+
+/**
+ * Resolve morphological cardinality such as `трехжильный`, `двухполюсный`
+ * or `четырехэлементный` against a live count facet. The product noun is not
+ * known here: the remainder of the compound adjective must match a noun in
+ * the facet caption, and the facet itself must explicitly be a count axis.
+ * Therefore unrelated measurements (`3 кВт`, `25 м²`) cannot open this path.
+ */
+function compoundCountFacetValue(
+  facet: SearchFacet,
+  evidence: string,
+): SearchFacetValue | null {
+  const labelTokens = norm(`${facet.caption ?? ""} ${facet.key}`)
+    .split(" ")
+    .filter(Boolean);
+  if (!labelTokens.some((token) => COUNT_FACET_MARKER.test(token))) return null;
+  const nounStems = labelTokens
+    .filter((token) => token.length >= 3 && !COUNT_FACET_MARKER.test(token))
+    .map((token) => countedNounStem(stemRu(token)))
+    .filter((token) => token.length >= 3);
+  if (nounStems.length === 0) return null;
+
+  const claims = [
+    ...compoundCountClaims(evidence),
+    ...separatedCountClaims(evidence),
+  ].filter(({ nounStem }) =>
+    nounStems.some((facetStem) =>
+      facetStem === nounStem ||
+      Math.min(facetStem.length, nounStem.length) >= 3 &&
+        (facetStem.startsWith(nounStem) || nounStem.startsWith(facetStem))
+    )
+  );
+  const claimedCounts = [...new Set(claims.map(({ count }) => count))];
+  if (claimedCounts.length !== 1) return null;
+  const count = claimedCounts[0];
+  const candidates = facet.values.filter(({ value }) => {
+    if (!isAtomicFacetValue(value)) return false;
+    const scalar = norm(value).match(/^(\d+(?:[.,]\d+)?)(?:\s|$)/u)?.[1];
+    return scalar !== undefined && Number(scalar.replace(",", ".")) === count;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * A complete live label immediately followed by one of its exact values is a
+ * stronger local declaration than unrelated numbers in neighbouring clauses.
+ * This is intentionally token-adjacent: a label elsewhere in the paragraph
+ * cannot relabel an application measurement as a product property.
+ */
+function explicitlyLabelledFacetValue(
+  facet: SearchFacet,
+  evidence: string,
+): SearchFacetValue | null {
+  const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+  const labels = [facet.caption ?? "", String(facet.caption ?? "").split(",")[0], facet.key]
+    .map((label) => norm(label).split(" ").filter(Boolean))
+    .filter((tokens) => tokens.length > 0);
+  const matches: SearchFacetValue[] = [];
+  for (const labelTokens of labels) {
+    for (let index = 0; index <= evidenceTokens.length - labelTokens.length; index++) {
+      if (!labelTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
+      const valueStart = index + labelTokens.length;
+      for (const candidate of facet.values) {
+        if (!isAtomicFacetValue(candidate.value)) continue;
+        const valueTokens = norm(candidate.value).split(" ").filter(Boolean);
+        if (valueTokens.length === 0) continue;
+        if (valueTokens.every((token, offset) => evidenceTokens[valueStart + offset] === token)) {
+          // Normalization removes the dash in `label 4000–5000 K`. The first
+          // endpoint is adjacent to the label but it is not an exact enum
+          // declaration. Leave both endpoints to the range compiler.
+          const numericValue = valueTokens.every((token) => /^\d+(?:[.,]\d+)?$/u.test(token));
+          const followingToken = evidenceTokens[valueStart + valueTokens.length] ?? "";
+          if (numericValue && /^\d+(?:[.,]\d+)?$/u.test(followingToken)) continue;
+          matches.push(candidate);
+        }
+      }
+    }
+  }
+  const unique = matches.filter((candidate, index, all) =>
+    all.findIndex(({ value }) => norm(value) === norm(candidate.value)) === index
+  );
+  return unique.length === 1 ? unique[0] : null;
 }
 
 /**
@@ -582,6 +932,24 @@ export function projectExplicitReasoningFacetValues(
 
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
+    const compoundCount = compoundCountFacetValue(facet, declaredReasoning);
+    if (compoundCount && !contradictedByUser(compoundCount.value, userEvidence)) {
+      const item = { key: facet.key, value: compoundCount.value };
+      kept.push(item);
+      if (compoundCountFacetValue(facet, userEvidence)?.value === compoundCount.value) {
+        userBacked.push(item);
+      }
+      continue;
+    }
+    const labelledValue = explicitlyLabelledFacetValue(facet, declaredReasoning);
+    if (labelledValue && !contradictedByUser(labelledValue.value, userEvidence)) {
+      const item = { key: facet.key, value: labelledValue.value };
+      kept.push(item);
+      if (explicitlyLabelledFacetValue(facet, userEvidence)?.value === labelledValue.value) {
+        userBacked.push(item);
+      }
+      continue;
+    }
     const publicCaption = facet.caption ?? "";
     const labels = [publicCaption, publicCaption.split(",")[0], facet.key]
       .map(norm)
@@ -615,16 +983,48 @@ function numericFacetValueIsLocallyEvidenced(
   evidence: string,
 ): boolean {
   const normalizedValue = norm(value);
-  if (!/\d/u.test(normalizedValue) || /[a-zа-я]/iu.test(normalizedValue)) return true;
+  if (!/\d/u.test(normalizedValue)) return true;
+  if (/[a-zа-я]/iu.test(normalizedValue)) {
+    // Compound numeric enums (`от -20 до +50 °C`, `220–240 V`, `IP65`) are
+    // categorical strings in the catalog, but their numbers remain part of
+    // the claim. A matching caption or shared word cannot authorize a value
+    // whose actual numbers were never stated in the reasoning.
+    const valueNumbers = normalizedValue.match(/\d+(?:[.,]\d+)?/gu) ?? [];
+    if (valueNumbers.length === 0) return false;
+    const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+    const labels = [
+      String(facet.caption ?? "").split(",")[0],
+      facet.caption ?? "",
+      facet.key,
+    ].map((label) => norm(label).split(" ").filter(Boolean))
+      .filter((tokens) => tokens.length > 0);
+    return labels.some((labelTokens) => {
+      for (
+        let index = 0;
+        index <= evidenceTokens.length - labelTokens.length;
+        index++
+      ) {
+        if (!labelTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
+        const localNumbers = new Set(
+          evidenceTokens.slice(index, index + labelTokens.length + 14)
+            .flatMap((token) => token.match(/\d+(?:[.,]\d+)?/gu) ?? [])
+            .map((number) => number.replace(",", ".")),
+        );
+        if (valueNumbers.every((number) => localNumbers.has(number.replace(",", ".")))) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
   const publicLabel = String(facet.caption ?? "").trim() || facet.key;
   const labelBase = publicLabel.split(",")[0];
   const labelTokens = norm(labelBase).split(" ").filter((token) => token.length >= 3);
   if (labelTokens.length === 0) return false;
-  // Captions often start with a generic qualifier ("nominal", "quantity")
-  // and then name the measured property. The first non-generic token is a
-  // stronger local anchor than a trailing product noun (for example the noun
-  // after "power" must not authorize a room-area number as wattage).
-  const anchor = labelTokens.find((token) =>
+  // Captions often start with a generic qualifier and end with the measured
+  // property. Prefer the last meaningful token: in `Световой поток` the word
+  // `поток`, not a nearby generic mention of `свет`, must anchor the number.
+  const anchor = [...labelTokens].reverse().find((token) =>
     !/^(?:номинал|максимал|минимал|рабоч|общ|количеств|числ)/u.test(token)
   ) ?? labelTokens.at(-1)!;
   const expectedUnits = new Set([
@@ -650,8 +1050,22 @@ function numericFacetValueIsLocallyEvidenced(
       "giu",
     );
     for (let match; (match = measurement.exec(String(evidence ?? ""))) !== null;) {
-      if (expectedUnits.has(normalizeUnit(match[1]))) return true;
+      if (!expectedUnits.has(normalizeUnit(match[1]))) continue;
+      const before = String(evidence ?? "").slice(Math.max(0, match.index - 48), match.index);
+      // An endpoint of a declared interval is not an exact product value.
+      // The range compiler owns `4000–5000 K`; the exact-facet projector must
+      // not independently freeze the upper endpoint as `= 5000 K`.
+      if (
+        /\d+(?:[.,]\d+)?\s*[–—-]\s*$/u.test(before) ||
+        /от\s+\d+(?:[.,]\d+)?\s+до\s*$/iu.test(before)
+      ) continue;
+      return true;
     }
+    // When the live facet declares a physical unit, a nearby word or a number
+    // measured in another unit is never enough. Explicit label-adjacent enum
+    // values were already handled above; falling through here caused a colour
+    // temperature such as 4000 K to become `Световой поток = 4000 лм`.
+    return false;
   }
   const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
   const valueTokens = normalizedValue.split(" ").filter(Boolean);
@@ -762,6 +1176,7 @@ export function guardSearchFilters(
   userEvidence: string = declaredReasoning,
   inferenceEvidence: string = declaredReasoning,
   explicitVisibleRequirements: ExplicitVisibleRequirement[] = [],
+  inferencePolicy: SearchFilterInferencePolicy = {},
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
     return { args, kept: [], user_backed: [], inferred: [], subsumed: [], dropped: [] };
@@ -785,6 +1200,12 @@ export function guardSearchFilters(
     );
     if (!facet) {
       for (const value of values) { dropped.push({ key, value, reason: "unknown_facet" });
+      }
+      continue;
+    }
+    if (isAdministrativeCatalogField(facet)) {
+      for (const value of values) {
+        dropped.push({ key, value, reason: "unknown_facet" });
       }
       continue;
     }
@@ -857,10 +1278,18 @@ export function guardSearchFilters(
       if (!nextOptions[canonicalKey].includes(canonical)) { nextOptions[canonicalKey].push(canonical);
       }
       kept.push({ key: canonicalKey, value: canonical });
+      const pureNumericValue = /^\d+(?:[.,]\d+)?$/u.test(
+        norm(canonical),
+      );
       if (
         visibleRequirementBacked ||
         (explicitlyAffirmedByUser(canonical, userEvidence) &&
-          facetStateQualifierIsUserBacked(facet, userEvidence)) ||
+          facetStateQualifierIsUserBacked(facet, userEvidence) &&
+          (!pureNumericValue || numericFacetValueIsLocallyEvidenced(
+            canonical,
+            facet,
+            userEvidence,
+          ))) ||
         (isAffirmativeBoolean && labelUserStatus === "affirmed")
       ) userBacked.push({ key: canonicalKey, value: canonical });
     }
@@ -875,7 +1304,10 @@ export function guardSearchFilters(
   for (const requirement of explicitVisibleRequirements) {
     if (requirement?.op !== "eq" || requirement.value === undefined) continue;
     const matches = facets.flatMap((facet) => {
-      if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) return [];
+      if (
+        nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet) ||
+        isAdministrativeCatalogField(facet)
+      ) return [];
       return facet.values.flatMap(({ value }) =>
         isAtomicFacetValue(value) &&
           !numericFacetValueConflictsWithUserMeasurement(value, facet, userEvidence, declaredReasoning) &&
@@ -899,7 +1331,10 @@ export function guardSearchFilters(
   // cannot activate unrelated booleans because the facet label, not the stored
   // value, must be customer-backed.
   for (const facet of facets) {
-    if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) continue;
+    if (
+      nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) continue;
     const affirmative = facet.values.filter((candidate) =>
       isAtomicFacetValue(candidate.value) && AFFIRMATIVE_VALUES.has(norm(candidate.value))
     );
@@ -934,13 +1369,20 @@ export function guardSearchFilters(
     // a broad valid request into a permanently empty catalog intersection.
     // An identity option is still accepted when the model explicitly supplies
     // it and the normal evidence checks above confirm it.
-    if (isReplacementIdentityFacet(facet)) continue;
+    if (
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) continue;
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, declaredReasoning)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
       if (facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)) return false;
+      // One-letter values need a unique live-axis proof below. Letting the
+      // generic token matcher handle them would apply the same `C` to every
+      // facet that happened to expose that code.
+      if (/^[a-zа-я]$/u.test(normalized)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) {
         return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
           numericFacetValueIsLocallyEvidenced(candidate.value, facet, userEvidence) &&
@@ -963,7 +1405,11 @@ export function guardSearchFilters(
   // intersection. Keep the richer value and remove only a strictly subsumed
   // option; the richer value remains an enforced render criterion.
   for (const facet of facets) {
-    if (nextOptions [facet.key]?.length || unitConflictKeys.has(facet.key) || isReplacementIdentityFacet(facet)) {
+    if (
+      nextOptions[facet.key]?.length || unitConflictKeys.has(facet.key) ||
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) {
       continue;
     }
     // Missing numeric/options may be completed only from actual consultant
@@ -971,6 +1417,11 @@ export function guardSearchFilters(
     // the customer's application measurement (for example cable diameter),
     // which must not be copied into several product-state facets before the
     // consultant has expressed the directed compatibility relation.
+    // This is model-reasoning completion, not customer-owned projection. The
+    // facet meaning must be present, and candidate-level validation below
+    // rejects an ambiguous shared root when sibling axes expose the same value
+    // (`цвет корпуса` vs `цвет свечения`).
+    if (inferencePolicy.allowProseOnlyFacetInference === false) continue;
     if (!facetMeaningIsEvidenced(facet, inferenceEvidence)) continue;
     const evidenced = facet. values.filter((candidate) => {
       const value = norm(candidate.value);
@@ -978,9 +1429,19 @@ export function guardSearchFilters(
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
+      if (
+        inferencePolicy.allowDerivedNumericFacetInference === false &&
+        /\d/u.test(value)
+      ) return false;
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }
+      if (!facetMeaningIsDisambiguatedForValue(
+        facet,
+        candidate.value,
+        facets,
+        inferenceEvidence,
+      )) return false;
       if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, inferenceEvidence)) return false;
       return explicitlyAffirmedByFacetReasoning(candidate.value, inferenceEvidence);
     });
@@ -990,6 +1451,79 @@ export function guardSearchFilters(
     const item = { key: facet.key, value };
     kept.push(item);
     inferred.push(item);
+  }
+
+  // One-letter technical values are too short for ordinary free-text
+  // projection. Admit them only when the customer writes a code-shaped token
+  // next to the meaning of one unique live facet (`характеристика C`). This
+  // is live-schema driven and a lowercase Cyrillic preposition cannot open it.
+  // Run after reasoning projection so an already selected option keeps its
+  // stable order while gaining customer-owned provenance.
+  const shortCodeMatches = facets.flatMap((facet) => {
+    if (
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) return [];
+    return facet.values.flatMap(({ value }) =>
+      explicitShortFacetCodeIsLocallyEvidenced(facet, value, userEvidence)
+        ? [{ key: facet.key, value }]
+        : []
+    );
+  });
+  if (shortCodeMatches.length === 1) {
+    const item = shortCodeMatches[0];
+    const alreadySelected = nextOptions[item.key]?.includes(item.value) ?? false;
+    if (!alreadySelected) {
+      nextOptions[item.key] = [item.value];
+      kept.push(item);
+      inferred.push(item);
+    }
+    if (!userBacked.some((candidate) =>
+      candidate.key === item.key && candidate.value === item.value
+    )) userBacked.push(item);
+  }
+
+  // A model can serialize two neighbouring scalar values onto the same live
+  // facet (`25 A, 1 pole` -> current=[25,1]). Once at least one value on that
+  // axis is explicitly customer-backed, unowned alternatives on the same axis
+  // cannot broaden the query. Preserve every customer-backed alternative so
+  // genuine requests such as "red or black" remain an OR search.
+  for (const [key, values] of Object.entries({ ...nextOptions })) {
+    const authoritativeValues = (inferencePolicy.authoritativeFacetValues ?? [])
+      .filter((item) => item.key === key)
+      .map((item) => item.value);
+    const explicitValues = [...new Set(
+      authoritativeValues.length > 0
+        ? authoritativeValues
+        : userBacked.filter((item) => item.key === key).map((item) =>
+          item.value
+        ),
+    )];
+    if (explicitValues.length === 0) continue;
+    const retained = values.filter((value) => explicitValues.includes(value));
+    if (retained.length === 0 || retained.length === values.length) continue;
+    nextOptions[key] = retained;
+    for (let index = kept.length - 1; index >= 0; index--) {
+      if (kept[index].key === key && !retained.includes(kept[index].value)) {
+        dropped.push({
+          key,
+          value: kept[index].value,
+          reason: "not_declared_in_reasoning",
+        });
+        kept.splice(index, 1);
+      }
+    }
+    for (let index = inferred.length - 1; index >= 0; index--) {
+      if (inferred[index].key === key && !retained.includes(inferred[index].value)) {
+        inferred.splice(index, 1);
+      }
+    }
+    for (let index = userBacked.length - 1; index >= 0; index--) {
+      if (
+        userBacked[index].key === key &&
+        !retained.includes(userBacked[index].value)
+      ) userBacked.splice(index, 1);
+    }
   }
 
   // A compound canonical value can already encode another explicit filter

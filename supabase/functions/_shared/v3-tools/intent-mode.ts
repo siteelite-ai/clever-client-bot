@@ -48,6 +48,12 @@ export function detectUserIntentMode(message: string): UserIntentMode {
   if (selection.test(normalized)) return "select";
   const inquiry = /(указан[аы]?|за упаковк|за штук|за шт\.?|сколько штук|сколько в упаковк|что входит|входит ли|комплектац|характеристик|состав|совместим|подойдет(?:\s+ли|\s+или\s+нет)|подходит(?:\s+ли|\s+или\s+нет)|подходят ли|точно\s+подход|годится ли|хватит|можно ли|нужно ли|почему|нельзя|чем отличает|в чем разниц|разница между|отличие|отличия|какая мощност|какое напряжен|какой цвет|какой размер|какие размеры|какой диаметр|для чего|как работает|как пользоват|инструкц|гарант|срок служб|расход|потребл|расшифров)/u;
   if (inquiry.test(normalized)) return "inquire";
+  // Availability questions are catalog selections, even when a compact
+  // product code makes the sentence look SKU-like. Explicit factual and
+  // suitability questions above still win, so "есть ли гарантия/разница" is
+  // not converted into a product browse.
+  const availability = /(?:есть\s+ли|у\s+(?:вас|тебя)\s+есть|име(?:ется|ются)|прода(?:е(?:те|шь)|ются)|быва(?:ет|ют)\s+ли)/u;
+  if (availability.test(normalized)) return "select";
   const hasQuestion = /\?/.test(normalized);
   const hasSkuLike = /(\b\d{4,}\b|\b[a-zа-я]+[-\s]?\d{2,}[a-zа-я0-9-]*\b|«[^»]+»|"[^"]+")/iu.test(normalized);
   return hasQuestion && hasSkuLike ? "inquire" : "select";

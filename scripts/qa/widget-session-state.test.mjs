@@ -67,7 +67,7 @@ test('an existing in-progress request is accepted before the backend waits for r
     existingBranch,
   );
   const replayWait = chatV3Source.indexOf(
-    'const replay = await waitForReplayCompletion(supabase, body.messageId, claim.row);',
+    'const replay = await waitForReplayCompletion(',
     existingBranch,
   );
 

@@ -9,6 +9,8 @@ const casesFileArg = process.argv.find((arg) => arg.startsWith('--cases-file='))
 const casesPath = casesFileArg
   ? path.resolve(process.cwd(), casesFileArg)
   : path.join(here, 'customer-acceptance-cases.json');
+const variantsFileArg = process.argv.find((arg) => arg.startsWith('--variants-file='))?.slice('--variants-file='.length).trim();
+const variantsPath = variantsFileArg ? path.resolve(process.cwd(), variantsFileArg) : null;
 export const DEFAULT_ENDPOINT = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3';
 
 export function resolveEndpoint(argv = process.argv) {
@@ -39,8 +41,15 @@ const apiKey = widget.match(/supabaseKey:\s*'([^']+)'/)?.[1];
 if (!apiKey) throw new Error('Public widget key was not found');
 
 const suite = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
+const variationSuite = variantsPath ? JSON.parse(fs.readFileSync(variantsPath, 'utf8')) : null;
+const configuredVariants = variationSuite?.variants ?? [];
 const onlyIds = process.argv.find((arg) => arg.startsWith('--case='))
   ?.slice('--case='.length)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const onlyVariantIds = process.argv.find((arg) => arg.startsWith('--variant='))
+  ?.slice('--variant='.length)
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
@@ -53,6 +62,54 @@ const stopOnFailure = process.argv.includes('--stop-on-failure');
 const selected = onlyIds?.length ? suite.cases.filter((item) => onlyIds.includes(item.id)) : suite.cases;
 const missingIds = onlyIds?.filter((id) => !selected.some((item) => item.id === id)) ?? [];
 if (missingIds.length > 0) throw new Error(`Unknown case: ${missingIds.join(', ')}`);
+
+const knownCaseIds = new Set(suite.cases.map((item) => item.id));
+const unknownVariantCases = [...new Set(configuredVariants.map((item) => item.case_id).filter((id) => !knownCaseIds.has(id)))];
+if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${unknownVariantCases.join(', ')}`);
+
+export function resolveCaseExecutions(testCase, variants = []) {
+  const executions = [{ id: 'base', messages: testCase.turns.map((turn) => turn.message) }];
+  const relevant = variants.filter((item) => item.case_id === testCase.id);
+  const seen = new Set(['base']);
+  for (const variant of relevant) {
+    if (typeof variant.id !== 'string' || !variant.id.trim() || seen.has(variant.id)) {
+      throw new Error(`${testCase.id}: variation ids must be non-empty and unique`);
+    }
+    if (!Array.isArray(variant.messages) || variant.messages.length !== testCase.turns.length) {
+      throw new Error(`${testCase.id}/${variant.id}: variation must provide one message per turn`);
+    }
+    if (variant.messages.some((message) => typeof message !== 'string' || !message.trim())) {
+      throw new Error(`${testCase.id}/${variant.id}: variation messages must be non-empty strings`);
+    }
+    if (
+      variant.expect_overrides !== undefined &&
+      (!Array.isArray(variant.expect_overrides) || variant.expect_overrides.length !== testCase.turns.length ||
+        variant.expect_overrides.some((value) => value !== null && (typeof value !== 'object' || Array.isArray(value))))
+    ) {
+      throw new Error(`${testCase.id}/${variant.id}: expect_overrides must provide one object or null per turn`);
+    }
+    seen.add(variant.id);
+    executions.push({
+      id: variant.id,
+      messages: variant.messages,
+      ...(variant.expect_overrides ? { expect_overrides: variant.expect_overrides } : {}),
+    });
+  }
+  return executions;
+}
+
+export function selectCaseExecutions(testCase, variants = [], selectedVariantIds = null) {
+  const executions = resolveCaseExecutions(testCase, variants);
+  if (!selectedVariantIds?.length) return executions;
+  const selectedExecutions = executions.filter((execution) => selectedVariantIds.includes(execution.id));
+  const missing = selectedVariantIds.filter((id) => !executions.some((execution) => execution.id === id));
+  if (missing.length > 0) throw new Error(`${testCase.id}: unknown variation ${missing.join(', ')}`);
+  return selectedExecutions;
+}
+
+export function resolveExpectations(defaults = {}, expect = {}) {
+  return { ...defaults, ...expect };
+}
 
 export function parseSse(body) {
   let text = '';
@@ -197,6 +254,9 @@ export function evaluate(expect = {}, response) {
   if (Number.isFinite(expect.max_products) && response.links.length > expect.max_products) {
     failures.push(`products ${response.links.length} > ${expect.max_products}`);
   }
+  if (Number.isFinite(expect.max_duration_ms) && Number.isFinite(response.durationMs) && response.durationMs > expect.max_duration_ms) {
+    failures.push(`duration ${response.durationMs}ms > ${expect.max_duration_ms}ms`);
+  }
   for (const phrase of expect.forbid_text ?? []) {
     if (includesAny(allOutput, [phrase])) failures.push(`forbidden text: ${phrase}`);
   }
@@ -241,6 +301,39 @@ export function evaluate(expect = {}, response) {
     const criteriaText = JSON.stringify(response.selectionContract ?? {});
     if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
       failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+    }
+  }
+  if (Array.isArray(expect.forbid_selection_criteria_any)) {
+    const criteriaText = JSON.stringify(response.selectionContract ?? {});
+    for (const phrase of expect.forbid_selection_criteria_any) {
+      if (includesAny(criteriaText, [phrase])) failures.push(`forbidden selection criterion: ${phrase}`);
+    }
+  }
+  if (expect.require_selection_criteria_evidence === true && response.links.length > 0) {
+    const criteria = response.selectionContract?.mandatory_criteria;
+    if (!Array.isArray(criteria)) {
+      failures.push('rendered products have no machine-readable selection contract');
+    } else {
+      const invalid = criteria.filter((criterion) =>
+        !['user_explicit', 'derived_required'].includes(criterion?.evidence)
+      );
+      if (invalid.length > 0) {
+        failures.push(`mandatory selection criteria have invalid evidence: ${invalid.map((criterion) =>
+          `${criterion?.key ?? 'unknown'}=${criterion?.evidence ?? 'missing'}`
+        ).join(' | ')}`);
+      }
+    }
+  }
+  if (expect.require_result_cardinality && typeof expect.require_result_cardinality === 'object') {
+    const actual = response.selectionContract?.result_cardinality;
+    if (!actual || typeof actual !== 'object') {
+      failures.push('rendered products have no machine-readable result cardinality contract');
+    } else {
+      for (const key of ['target', 'minimum', 'mode', 'explicit']) {
+        if (key in expect.require_result_cardinality && actual[key] !== expect.require_result_cardinality[key]) {
+          failures.push(`result cardinality ${key}=${JSON.stringify(actual[key])} != ${JSON.stringify(expect.require_result_cardinality[key])}`);
+        }
+      }
     }
   }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
@@ -387,6 +480,7 @@ async function runTurn({ message, expect }, state) {
     retryDelayMs: 500,
   });
   const parsed = parseSse(raw);
+  parsed.durationMs = Date.now() - startedAt;
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
   if (parsed.conversationBoundary?.sessionId) {
@@ -399,7 +493,7 @@ async function runTurn({ message, expect }, state) {
   return {
     message,
     status: response.status,
-    duration_ms: Date.now() - startedAt,
+    duration_ms: parsed.durationMs,
     network_attempts: attempts,
     log_id: parsed.logId,
     diagnostic_error: parsed.diagnosticError,
@@ -426,15 +520,29 @@ export async function main() {
   for (const testCase of selected) {
     const repeat = Number.isFinite(repeatOverride) && repeatOverride > 0 ? repeatOverride : testCase.repeat ?? 1;
     const caseResult = { id: testCase.id, title: testCase.title, repeats: [] };
-    for (let run = 1; run <= repeat; run++) {
-      const state = {
-        sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
-        history: [],
-        dialogSlots: {},
-      };
-      const turns = [];
-      for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
-      caseResult.repeats.push({ run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
+    for (const execution of selectCaseExecutions(testCase, configuredVariants, onlyVariantIds)) {
+      for (let run = 1; run <= repeat; run++) {
+        const state = {
+          sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${execution.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
+          history: [],
+          dialogSlots: {},
+        };
+        const turns = [];
+        for (let turnIndex = 0; turnIndex < testCase.turns.length; turnIndex++) {
+          const turn = testCase.turns[turnIndex];
+          const variantExpectation = execution.expect_overrides?.[turnIndex] ?? {};
+          turns.push(await runTurn({
+            ...turn,
+            message: execution.messages[turnIndex],
+            expect: resolveExpectations(
+              suite.default_expectations,
+              resolveExpectations(turn.expect, variantExpectation),
+            ),
+          }, state));
+        }
+        caseResult.repeats.push({ variant: execution.id, run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
+        if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;
+      }
       if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;
     }
     caseResult.passed = caseResult.repeats.every((run) => run.passed);
@@ -453,6 +561,7 @@ export async function main() {
           id: testCase.id,
           passed: testCase.passed,
           repeats: testCase.repeats.map((repeat) => ({
+            variant: repeat.variant,
             run: repeat.run,
             passed: repeat.passed,
             duration_ms: repeat.turns.reduce((total, turn) => total + turn.duration_ms, 0),
@@ -470,6 +579,7 @@ export async function main() {
           id: testCase.id,
           passed: testCase.passed,
           repeats: testCase.repeats.map((repeat) => ({
+            variant: repeat.variant,
             run: repeat.run,
             passed: repeat.passed,
             turns: repeat.turns.map((turn) => ({

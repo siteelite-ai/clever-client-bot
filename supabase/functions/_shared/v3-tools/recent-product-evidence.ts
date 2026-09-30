@@ -56,6 +56,32 @@ export function extractRenderedProductTitles(
 }
 
 /**
+ * Return the customer request that produced the newest rendered product batch.
+ * The association is structural: a controlled 220volt product link proves the
+ * assistant message is a catalog render, and the closest preceding user turn
+ * owns that batch. Product names and attribute dictionaries are never used.
+ *
+ * Callers may use this only as dialogue scope. Every inherited category and
+ * facet still has to be rediscovered and verified against the live catalog.
+ */
+export function latestRenderedSelectionRequest(
+  history: EvidenceHistoryMessage[],
+): string | null {
+  for (let assistantIndex = history.length - 1; assistantIndex >= 0; assistantIndex--) {
+    const message = history[assistantIndex];
+    if (message.role !== "assistant") continue;
+    if (extractRenderedProductTitles([message], 1).length === 0) continue;
+    for (let userIndex = assistantIndex - 1; userIndex >= 0; userIndex--) {
+      const candidate = history[userIndex];
+      if (candidate.role !== "user") continue;
+      const request = cleanText(candidate.content, 2_000);
+      return request || null;
+    }
+  }
+  return null;
+}
+
+/**
  * Keep prior consultant reasoning separate from rendered catalog data. The
  * client stores both in one assistant history message; feeding card titles,
  * prices and stock lines back into a reasoning compiler can manufacture new
@@ -80,7 +106,15 @@ export function extractPriorAssistantProse(
 export function isEvidenceOnlyFollowup(message: string): boolean {
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;
-  if (/(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь)(?:\s|$)/u.test(normalized)) return false;
+  // Evidence follow-ups must depend on the previous cards. A complete request
+  // remains a new catalog task even when it happens to contain words such as
+  // «вариант» or «подходит». Keep this structural: request frames,
+  // not product/category dictionaries, establish self-contained intent.
+  if (
+    /(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь|дай|дайте)(?:\s|$)/u.test(normalized) ||
+    /(?:^|\s)(?:мне|нам)\s+нуж(?:ен|на|но|ны)(?:\s|$)/u.test(normalized) ||
+    /(?:^|\s)(?:хочу|ищу|есть\s+ли|у\s+(?:вас|тебя)\s+есть)(?:\s|$)/u.test(normalized)
+  ) return false;
   return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
 }
 

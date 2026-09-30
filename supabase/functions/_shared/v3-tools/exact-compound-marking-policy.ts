@@ -6,6 +6,7 @@ export interface ExactCompoundMarkingRequest {
   first: number;
   second: number;
   priceDirection: "cheapest" | "expensive" | null;
+  exhaustive: boolean;
 }
 
 export interface ExplicitCompoundMarking {
@@ -22,8 +23,10 @@ function number(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-const SELECT_INTENT = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|нуж\p{L}*|хоч\p{L}*)(?=$|[^\p{L}])/u;
-const INQUIRY_ONLY = /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можно\s+ли|совместим\p{L}*)(?=$|[^\p{L}])/u;
+const SELECT_INTENT =
+  /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|нуж\p{L}*|хоч\p{L}*)(?=$|[^\p{L}])/u;
+const INQUIRY_ONLY =
+  /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можно\s+ли|совместим\p{L}*)(?=$|[^\p{L}])/u;
 const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 
 /**
@@ -31,8 +34,10 @@ const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
  * Product words and their order remain exactly as the consultant supplied them.
  */
 export function canonicalizeCompoundMarkingForCatalog(query: string): string {
-  return query.replace(new RegExp(COMPOUND.source, "giu"), (_match, first: string, second: string) =>
-    `${first}*${second.replace(".", ",")}`
+  return query.replace(
+    new RegExp(COMPOUND.source, "giu"),
+    (_match, first: string, second: string) =>
+      `${first}*${second.replace(".", ",")}`,
   );
 }
 
@@ -41,12 +46,79 @@ export function canonicalizeCompoundMarkingForCatalog(query: string): string {
  * independent of product vocabulary and selection intent so the same literal
  * constraint can protect every final-render path, including semantic requests.
  */
-export function extractExplicitCompoundMarking(message: string): ExplicitCompoundMarking | null {
+export function extractExplicitCompoundMarking(
+  message: string,
+): ExplicitCompoundMarking | null {
   const match = norm(message).match(COMPOUND);
   if (!match) return null;
   const first = number(match[1]);
   const second = number(match[2]);
   return first === null || second === null ? null : { first, second };
+}
+
+/**
+ * Resolve one exact compound marking from the consultant's visible
+ * recommendation. Calculation prose may contain several alternative markings.
+ * A unique value in the highest-confidence tier is preferred. If the provider
+ * violates the one-branch contract by placing several alternatives in one
+ * explicit recommendation joined by «или/либо», the first visibly ordered
+ * alternative becomes the primary branch. Separate recommendations remain
+ * ambiguous and fail closed.
+ */
+export function extractRecommendedCompoundMarking(
+  reasoning: string,
+): ExplicitCompoundMarking | null {
+  const sentences = String(reasoning ?? "")
+    .split(/(?<=[.!?…])\s+|\n+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const tiers = [
+    /(?:рекоменд\p{L}*|совет\p{L}*|выбира\p{L}*|предпочт\p{L}*)/iu,
+    /(?:нуж\p{L}*|необходим\p{L}*|долж\p{L}*|треб\p{L}*|подход\p{L}*)/iu,
+  ];
+  for (const [tierIndex, tier] of tiers.entries()) {
+    const resolved: ExplicitCompoundMarking[] = [];
+    const tierSentences = sentences.filter((candidate) => tier.test(candidate));
+    const sentenceMarkings: ExplicitCompoundMarking[][] = [];
+    for (const sentence of tierSentences) {
+      const current: ExplicitCompoundMarking[] = [];
+      for (
+        const match of sentence.matchAll(new RegExp(COMPOUND.source, "giu"))
+      ) {
+        const first = number(match[1]);
+        const second = number(match[2]);
+        if (first === null || second === null) continue;
+        if (
+          !resolved.some((known) =>
+            known.first === first && known.second === second
+          )
+        ) resolved.push({ first, second });
+        if (
+          !current.some((known) =>
+            known.first === first && known.second === second
+          )
+        ) current.push({ first, second });
+      }
+      sentenceMarkings.push(current);
+    }
+    if (resolved.length === 1) return resolved[0];
+    if (resolved.length > 1) {
+      const explicitAlternativeSentences = tierSentences
+        .map((sentence, index) => ({
+          sentence,
+          markings: sentenceMarkings[index] ?? [],
+        }))
+        .filter(({ sentence, markings }) =>
+          markings.length > 1 && /(?:^|\s)(?:или|либо)(?:\s|$)/iu.test(sentence)
+        );
+      if (
+        tierIndex === 0 && explicitAlternativeSentences.length === 1 &&
+        sentenceMarkings.filter((markings) => markings.length > 0).length === 1
+      ) return explicitAlternativeSentences[0].markings[0];
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -59,7 +131,8 @@ export function extractExplicitCompoundMarking(message: string): ExplicitCompoun
  */
 export function requiresSemanticCompoundEvidence(message: string): boolean {
   if (!extractExplicitCompoundMarking(message)) return false;
-  return (semanticCompoundSourceQuery(message).match(/\p{L}+/gu) ?? []).length > 2;
+  return (semanticCompoundSourceQuery(message).match(/\p{L}+/gu) ?? []).length >
+    2;
 }
 
 /** Model-owned lexical source for semantic recovery, with only request/sort
@@ -67,9 +140,26 @@ export function requiresSemanticCompoundEvidence(message: string): boolean {
 export function semanticCompoundSourceQuery(message: string): string {
   return norm(message)
     .replace(/[?!]/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:како\p{L}*\s+есть|что\s+есть|все\s+позици\p{L}*|все\s+товар\p{L}*|все\s+вариант\p{L}*|весь\s+ассортимент)(?=$|[^\p{L}])/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
+    // Relative availability clauses describe request/cardinality semantics,
+    // not an additional product property. Keeping them here makes an exact
+    // N×S request look like a semantic multi-attribute lookup and wrongly
+    // routes it through jargon recovery.
+    .replace(
+      /(?:^|[^\p{L}])котор\p{L}*\s+(?:есть|име\p{L}*|доступн\p{L}*|в\s+наличи\p{L}*)(?=$|[^\p{L}])/gu,
+      " ",
+    )
+    .replace(
+      /(?:^|[^\p{L}])(?:како\p{L}*\s+есть|что\s+есть|все\s+позици\p{L}*|все\s+товар\p{L}*|все\s+вариант\p{L}*|весь\s+ассортимент|все)(?=$|[^\p{L}])/gu,
+      " ",
+    )
+    .replace(
+      /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu,
+      " ",
+    )
+    .replace(
+      /(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu,
+      " ",
+    )
     .replace(new RegExp(COMPOUND.source, "giu"), " ")
     .replace(/\s+/gu, " ")
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
@@ -99,19 +189,31 @@ export function partitionSemanticCompoundSourceByLiveTaxonomy(
   liveCategoryLabels: string[],
 ): { query: string; semanticModifiers: string[] } {
   const sourceTokens = sourceQuery.match(/[\p{L}\p{N}-]{3,}/gu) ?? [];
-  if (sourceTokens.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  if (sourceTokens.length === 0) {
+    return { query: sourceQuery.trim(), semanticModifiers: [] };
+  }
   const categoryStems = new Set(
     liveCategoryLabels
       .flatMap((label) => norm(label).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])
       .map(semanticTokenStem)
       .filter(Boolean),
   );
-  if (categoryStems.size === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  if (categoryStems.size === 0) {
+    return { query: sourceQuery.trim(), semanticModifiers: [] };
+  }
 
-  const classTokens = sourceTokens.filter((token) => categoryStems.has(semanticTokenStem(token)));
-  if (classTokens.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
-  const semanticModifiers = sourceTokens.filter((token) => !categoryStems.has(semanticTokenStem(token)));
-  if (semanticModifiers.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  const classTokens = sourceTokens.filter((token) =>
+    categoryStems.has(semanticTokenStem(token))
+  );
+  if (classTokens.length === 0) {
+    return { query: sourceQuery.trim(), semanticModifiers: [] };
+  }
+  const semanticModifiers = sourceTokens.filter((token) =>
+    !categoryStems.has(semanticTokenStem(token))
+  );
+  if (semanticModifiers.length === 0) {
+    return { query: sourceQuery.trim(), semanticModifiers: [] };
+  }
   return {
     query: classTokens.join(" "),
     semanticModifiers,
@@ -144,10 +246,15 @@ export function selectBestMatchingSemanticCompoundCategories(
   });
   const best = Math.max(0, ...scored.map((item) => item.overlap));
   if (best <= 0) return [];
-  return scored.filter((item) => item.overlap === best).map((item) => item.category);
+  return scored.filter((item) => item.overlap === best).map((item) =>
+    item.category
+  );
 }
 
-function textHasExactCompoundMarking(evidence: string, marking: ExplicitCompoundMarking): boolean {
+function textHasExactCompoundMarking(
+  evidence: string,
+  marking: ExplicitCompoundMarking,
+): boolean {
   for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
     const first = number(match[1]);
     const second = number(match[2]);
@@ -175,13 +282,24 @@ export function compoundRecoveryQueries(
   modelHints: string[],
   limit = 8,
 ): string[] {
-  const literal = `${marking.first}*${String(marking.second).replace(".", ",")}`;
+  const literal = `${marking.first}*${
+    String(marking.second).replace(".", ",")
+  }`;
   const cleanedHints = modelHints
-    .map((hint) => norm(hint).replace(new RegExp(COMPOUND.source, "giu"), " ").replace(/\s+/gu, " ").trim())
+    .map((hint) =>
+      norm(hint).replace(new RegExp(COMPOUND.source, "giu"), " ").replace(
+        /\s+/gu,
+        " ",
+      ).trim()
+    )
     .filter(Boolean);
-  const singleWord = cleanedHints.filter((hint) => /^\p{L}[\p{L}\p{N}-]*$/u.test(hint));
+  const singleWord = cleanedHints.filter((hint) =>
+    /^\p{L}[\p{L}\p{N}-]*$/u.test(hint)
+  );
   const phrases = cleanedHints.filter((hint) => !singleWord.includes(hint));
-  const tokens = cleanedHints.flatMap((hint) => hint.match(/[\p{L}\p{N}-]{3,}/gu) ?? []);
+  const tokens = cleanedHints.flatMap((hint) =>
+    hint.match(/[\p{L}\p{N}-]{3,}/gu) ?? []
+  );
   const leadingTokens = phrases
     .map((hint) => hint.match(/^[\p{L}\p{N}-]{3,}/u)?.[0] ?? "")
     .filter(Boolean);
@@ -201,7 +319,8 @@ export function compoundRecoveryQueries(
 /** A bounded direct selector must not pretend to satisfy an exhaustive request. */
 export function isExhaustiveCompoundRequest(message: string): boolean {
   const normalized = norm(message).replace(/\s+/gu, " ");
-  return /(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u.test(normalized);
+  return /(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u
+    .test(normalized);
 }
 
 /**
@@ -217,12 +336,16 @@ export function shouldTerminateAfterGroundedCompoundSearch(
 ): boolean {
   if (pagetitles.length === 0) return false;
   if (isExhaustiveCompoundRequest(message)) return false;
-  return pagetitles.every((title) => productTitleMatchesExplicitCompoundMarking(title, marking));
+  return pagetitles.every((title) =>
+    productTitleMatchesExplicitCompoundMarking(title, marking)
+  );
 }
 
 function scalarCriterionNumber(criterion: Criterion): number | null {
   if (criterion.op !== "eq" || Array.isArray(criterion.value)) return null;
-  if (typeof criterion.value === "number") return Number.isFinite(criterion.value) ? criterion.value : null;
+  if (typeof criterion.value === "number") {
+    return Number.isFinite(criterion.value) ? criterion.value : null;
+  }
   const raw = criterion.value.trim().replace(",", ".");
   if (!/^\d+(?:\.\d+)?$/u.test(raw)) return null;
   const parsed = Number(raw);
@@ -260,19 +383,35 @@ export function subsumeCriteriaProvenByExplicitCompound(
   });
 
   const firstCandidates = criteria
-    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
-    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.first);
+    .map((criterion, index) => ({
+      criterion,
+      index,
+      value: scalarCriterionNumber(criterion),
+    }))
+    .filter((item) =>
+      !subsumedIndexes.has(item.index) && item.value === marking.first
+    );
   const secondCandidates = criteria
-    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
-    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.second);
+    .map((criterion, index) => ({
+      criterion,
+      index,
+      value: scalarCriterionNumber(criterion),
+    }))
+    .filter((item) =>
+      !subsumedIndexes.has(item.index) && item.value === marking.second
+    );
 
   outer: for (const first of firstCandidates) {
     const firstTokens = keyTokens(first.criterion.key);
     for (const second of secondCandidates) {
       if (first.index === second.index) continue;
       const secondTokens = keyTokens(second.criterion.key);
-      const sharedLabelToken = [...firstTokens].some((token) => secondTokens.has(token));
-      const squareMillimetreAxis = /мм\s*(?:2|²)/iu.test(String(second.criterion.unit ?? ""));
+      const sharedLabelToken = [...firstTokens].some((token) =>
+        secondTokens.has(token)
+      );
+      const squareMillimetreAxis = /мм\s*(?:2|²)/iu.test(
+        String(second.criterion.unit ?? ""),
+      );
       if (!sharedLabelToken && !squareMillimetreAxis) continue;
       subsumedIndexes.add(first.index);
       subsumedIndexes.add(second.index);
@@ -281,8 +420,12 @@ export function subsumeCriteriaProvenByExplicitCompound(
   }
 
   return {
-    criteria: criteria.filter((_criterion, index) => !subsumedIndexes.has(index)),
-    subsumed: criteria.filter((_criterion, index) => subsumedIndexes.has(index)),
+    criteria: criteria.filter((_criterion, index) =>
+      !subsumedIndexes.has(index)
+    ),
+    subsumed: criteria.filter((_criterion, index) =>
+      subsumedIndexes.has(index)
+    ),
   };
 }
 
@@ -291,25 +434,25 @@ export function subsumeCriteriaProvenByExplicitCompound(
  * (for example 2×1.5, with x/х/×/* spellings used by the catalog)
  * without asking the model to recreate those exact numbers as facet values.
  */
-export function classifyExactCompoundMarkingRequest(message: string): ExactCompoundMarkingRequest | null {
+export function classifyExactCompoundMarkingRequest(
+  message: string,
+): ExactCompoundMarkingRequest | null {
   const input = norm(message);
   if (!SELECT_INTENT.test(input) || INQUIRY_ONLY.test(input)) return null;
   const marking = extractExplicitCompoundMarking(input);
   if (!marking) return null;
   const { first, second } = marking;
 
-  const priceDirection = /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u.test(input)
-    ? "cheapest"
-    : /(?:сам\p{L}*\s+)?(?:дорог\p{L}*|премиум\p{L}*)/u.test(input)
+  const priceDirection =
+    /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u.test(input)
+      ? "cheapest"
+      : /(?:сам\p{L}*\s+)?(?:дорог\p{L}*|премиум\p{L}*)/u.test(input)
       ? "expensive"
       : null;
 
-  const query = input
-    .replace(/[?!]/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
+  const sourceQuery = semanticCompoundSourceQuery(input);
+  const literal = `${first}*${String(second).replace(".", ",")}`;
+  const query = `${sourceQuery} ${literal}`.replace(/\s+/gu, " ").trim();
   if (!/\p{L}/u.test(query)) return null;
   // This shortcut is intentionally narrow. The catalog full-text endpoint has
   // AND semantics; three or more lexical terms usually mean the request also
@@ -318,17 +461,26 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
   // that conversational phrase directly would turn a valid request into a
   // deterministic false empty. No product vocabulary is used here.
   if (requiresSemanticCompoundEvidence(message)) return null;
-  return { query, first, second, priceDirection };
+  return {
+    query,
+    first,
+    second,
+    priceDirection,
+    exhaustive: isExhaustiveCompoundRequest(message),
+  };
 }
 
-function hasExactCompound(evidence: string, request: ExactCompoundMarkingRequest): boolean {
+function hasExactCompound(
+  evidence: string,
+  request: ExactCompoundMarkingRequest,
+): boolean {
   return textHasExactCompoundMarking(evidence, request);
 }
 
 export function selectExactCompoundMarkedProducts(
   products: ProductRef[],
   request: ExactCompoundMarkingRequest,
-  limit = request.priceDirection ? 1 : 4,
+  limit = request.priceDirection ? 1 : request.exhaustive ? 8 : 4,
 ): ProductRef[] {
   const byId = new Map<string, ProductRef>();
   for (const product of products) {
@@ -343,15 +495,21 @@ export function selectExactCompoundMarkedProducts(
     .slice(0, Math.max(1, Math.min(limit, 8)));
 }
 
-export function exactCompoundMarkingIntro(request: ExactCompoundMarkingRequest): string {
+export function exactCompoundMarkingIntro(
+  request: ExactCompoundMarkingRequest,
+): string {
   const price = request.priceDirection === "cheapest"
     ? " и сортирую точные совпадения от самой низкой цены"
     : request.priceDirection === "expensive"
-      ? " и сортирую точные совпадения от самой высокой цены"
-      : "";
+    ? " и сортирую точные совпадения от самой высокой цены"
+    : "";
   return `Ищу в каталоге точную маркировку «${request.query}»${price}; товары с другим составным размером не показываю.`;
 }
 
-export function exactCompoundMarkingEmpty(request: ExactCompoundMarkingRequest): string {
-  return `По точной маркировке «${request.query}» товар с размером ${request.first}×${String(request.second).replace(".", ",")} в текущей выдаче каталога не подтвердился. Другой размер под видом подходящего показывать не буду.`;
+export function exactCompoundMarkingEmpty(
+  request: ExactCompoundMarkingRequest,
+): string {
+  return `По точной маркировке «${request.query}» товар с размером ${request.first}×${
+    String(request.second).replace(".", ",")
+  } в текущей выдаче каталога не подтвердился. Другой размер под видом подходящего показывать не буду.`;
 }

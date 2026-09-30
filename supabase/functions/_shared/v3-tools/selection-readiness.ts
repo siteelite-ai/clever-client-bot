@@ -2,6 +2,10 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
+export function selectionReadinessScope(token: string): { kind: string; token: string } {
+  return { kind: SELECTION_READINESS_SCOPE, token: String(token ?? "").trim().slice(0, 500) };
+}
+
 export interface SelectionReadinessClarification extends ProposeClarificationInput {
   profile: string;
 }
@@ -10,6 +14,19 @@ interface ReadinessProfile {
   id: string;
   applies: RegExp;
   required: RegExp[];
+  /** Human-readable counterparts of `required`, in the same order. */
+  missing_labels: string[];
+  /**
+   * Follow-up controls keyed by a still-missing requirement.  This lets one
+   * generic readiness engine advance a multi-turn clarification instead of
+   * repeating the profile's opening question or prematurely starting search.
+   */
+  follow_ups?: Array<{
+    requirement_index: number;
+    question: string;
+    facet_key: string;
+    options: ProposeClarificationInput["options"];
+  }>;
   /** Resolve overlapping profiles without relying on declaration order. */
   priority?: number;
   question: string;
@@ -17,10 +34,96 @@ interface ReadinessProfile {
   options: ProposeClarificationInput["options"];
 }
 
+export function selectionReadinessEvidenceFromHistory(
+  history: Array<{ role: string; content: string }>,
+): string {
+  return history
+    .filter((message) => message.role === "user")
+    .map((message) => String(message.content ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function explicitCompactSpecificationTokens(value: string): string[] {
+  const source = String(value ?? "");
+  const matches = [
+    ...(source.match(/(?<![\p{L}\p{N}])[\p{L}]{1,8}\s*\d{1,8}(?:[.,-]\d{1,8})*(?![\p{L}\p{N}])/gu) ?? []),
+    ...(source.match(/(?<![\p{L}\p{N}])\d{1,8}(?:[.,-]\d{1,8})*\s*[\p{L}]{1,8}(?![\p{L}\p{N}])/gu) ?? []),
+  ];
+  const visual: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  return [...new Set(matches.map((token) =>
+    token.toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е")
+      .replace(/[авекмнорстух]/gu, (char) => visual[char] ?? char)
+      .replace(/\s+/gu, "")
+  ).filter(Boolean))];
+}
+
+/**
+ * A plain availability browse that already names several independently
+ * checkable product specifications must not be blocked by optional preference
+ * questions. Compatibility selections (`for/under/to another object`) remain
+ * protected by their readiness profile because missing data there can change
+ * safety or fit. This is grammatical and works for every product category.
+ */
+export function specifiedAvailabilityBrowseIsActionable(message: string): boolean {
+  const source = String(message ?? "").trim();
+  const availability = /(?:есть\s+ли|у\s+(?:вас|тебя)\s+есть|име(?:ется|ются)|прода(?:е(?:те|шь)|ются)|быва(?:ет|ют)\s+ли)/iu.test(source);
+  if (!availability) return false;
+  if (/(?:^|[\s,;])(?:для|под|к|ко)\s+\p{L}/iu.test(source)) return false;
+  return explicitCompactSpecificationTokens(source).length >= 2;
+}
+
+/**
+ * A measured engineering question is not the same interaction as an order to
+ * select a purchasable SKU. When the customer explicitly supplies a load and
+ * asks what is needed, the consultant must first expose the calculation and
+ * its assumptions; demanding every final catalog attribute before that
+ * reasoning hides useful information and can even ask for a value that the
+ * supplied load is meant to derive. Explicit catalog imperatives remain under
+ * the strict readiness profiles below.
+ */
+export function measuredLoadGuidanceCanProceed(message: string): boolean {
+  const source = String(message ?? "").trim();
+  if (!source) return false;
+  const asksGuidance = /(?:какой|какая|какое|какие)[^.!?\n]{0,120}(?:нужен|нужна|нужно|нужны|подойдет|подойдут)/iu.test(source);
+  const measuredLoad = /нагрузк\p{L}*[^.!?\n]{0,40}\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])|\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])[^.!?\n]{0,40}нагрузк\p{L}*/iu.test(source);
+  const catalogImperative = /(?:^|[^\p{L}])(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/iu.test(source);
+  return asksGuidance && measuredLoad && !catalogImperative;
+}
+
 // These are reusable engineering-selection profiles, not catalog aliases or
 // product values. A profile only decides whether the request contains enough
 // input data to start a safe search; live discovery still owns all filters.
 const PROFILES: ReadinessProfile[] = [
+  {
+    id: "electrical_distribution_plan",
+    priority: 20,
+    // A request for the quantity/composition of protection devices in a
+    // distribution board is a project-sizing task, not a SKU search. Area by
+    // itself cannot determine circuit topology, so collect the three inputs
+    // that change the answer before any catalogue branch is allowed to run.
+    applies: /(?:скольк\p{L}*|количеств\p{L}*|состав\p{L}*)[^.!?\n]{0,90}(?:автомат\p{L}*|дифавтомат\p{L}*|узо)[^.!?\n]{0,90}(?:щит\p{L}*|дом\p{L}*)|(?:щит\p{L}*|дом\p{L}*)[^.!?\n]{0,90}(?:скольк\p{L}*|количеств\p{L}*)[^.!?\n]{0,90}(?:автомат\p{L}*|дифавтомат\p{L}*|узо)/iu,
+    required: [
+      /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
+      /(?:мощн\p{L}*|выделен\p{L}*[^.!?\n]{0,20}\d+(?:[.,]\d+)?\s*к?вт|\d+(?:[.,]\d+)?\s*к?вт)/iu,
+      /(?:плит\p{L}*|бойлер\p{L}*|котел\p{L}*|котёл\p{L}*|тепл\p{L}*\s+пол\p{L}*|тёпл\p{L}*\s+пол\p{L}*|кондиционер\p{L}*|насос\p{L}*|саун\p{L}*|электромобил\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "однофазный или трёхфазный ввод (220/380 В)",
+      "выделенную/расчётную мощность",
+      "перечень мощных нагрузок и отдельных линий",
+    ],
+    question: "Площадь дома сама по себе не определяет количество автоматов. Для расчёта щита уточните: ввод однофазный 220 В или трёхфазный 380 В; какая выделенная/расчётная мощность; какие мощные нагрузки нужны отдельными линиями — плита, бойлер/котёл, тёплый пол, кондиционеры, насос, сауна или зарядка электромобиля?",
+    facet_key: "supply_phase",
+    options: [
+      { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+      { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+    ],
+  },
   {
     id: "pump_cable",
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
@@ -29,6 +132,33 @@ const PROFILES: ReadinessProfile[] = [
       /(?:длин\p{L}*|расстоян\p{L}*|\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?)/iu,
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:улиц\p{L}*|помещен\p{L}*|перенос\p{L}*|стационар\p{L}*|проклад\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "мощность или рабочий ток насоса",
+      "длину линии/расстояние",
+      "напряжение и число фаз",
+      "способ прокладки",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question: "Какое питание у насоса?",
+        facet_key: "supply_phase",
+        options: [
+          { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+          { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+        ],
+      },
+      {
+        requirement_index: 1,
+        question: "Какая длина линии от источника питания до насоса?",
+        facet_key: "line_length",
+        options: [
+          { value: "До 25 м", label: "До 25 м" },
+          { value: "25–50 м", label: "25–50 м" },
+          { value: "Более 50 м", label: "Более 50 м" },
+        ],
+      },
     ],
     question: "Чтобы безопасно подобрать кабель для насоса, уточните, пожалуйста: мощность или рабочий ток насоса; длину линии/расстояние; напряжение и число фаз; способ прокладки — в помещении, на улице, стационарно или как переносное подключение. С чего начнём?",
     facet_key: "supply_phase",
@@ -46,6 +176,12 @@ const PROFILES: ReadinessProfile[] = [
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:жил\p{L}*|заземл\p{L}*)/iu,
     ],
+    missing_labels: [
+      "способ прокладки — в трубе/ПНД или прямо в земле",
+      "мощность или ток нагрузки",
+      "напряжение и число фаз",
+      "число жил и наличие заземления",
+    ],
     question: "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил и наличие заземления. Как планируется прокладка?",
     facet_key: "installation_method",
     options: [
@@ -61,6 +197,22 @@ const PROFILES: ReadinessProfile[] = [
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:пуск\p{L}*|характерист\p{L}*|крив\p{L}*)/iu,
     ],
+    missing_labels: [
+      "мощность либо номинальный рабочий ток по шильдику",
+      "напряжение и число фаз",
+      "условия пуска и требуемую характеристику срабатывания",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question: "Как запускается двигатель? Если известен номинальный рабочий ток по шильдику, укажите и его.",
+        facet_key: "motor_start_method",
+        options: [
+          { value: "Прямой пуск", label: "Прямой пуск" },
+          { value: "Через частотник/софтстартер", label: "Частотник/софтстартер" },
+        ],
+      },
+    ],
     question: "Для выбора автомата двигателя нужны мощность или рабочий ток, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
     facet_key: "supply_phase",
     options: [
@@ -74,9 +226,12 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:полюс\p{L}*|\b[1234]\s*[pрп]\b|фаз\p{L}*)/iu,
       /(?:характерист\p{L}*|крив\p{L}*|(?:^|\s)[bcdвсд](?:\s|$))/iu,
-      /(?:отключ\p{L}*|\d+(?:[.,]\d+)?\s*к?а\b)/iu,
     ],
-    question: "Номинал тока понятен. До подбора уточните полюсность/число фаз, характеристику (кривую B, C или D) и требуемую отключающую способность в кА. Какая полюсность нужна?",
+    missing_labels: [
+      "полюсность или число фаз",
+      "характеристику B, C или D",
+    ],
+    question: "Номинал тока понятен. До подбора уточните полюсность/число фаз и характеристику (кривую B, C или D). Если проект задаёт отключающую способность в кА, также укажите её. Какая полюсность нужна?",
     facet_key: "pole_count",
     options: [
       { value: "1P", label: "1P" },
@@ -92,6 +247,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:сечен\p{L}*|\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?|жил\p{L}*)/iu,
       /(?:гибк\p{L}*|стационар\p{L}*|подвиж\p{L}*)/iu,
     ],
+    missing_labels: [
+      "назначение и условия применения",
+      "сечение и число жил",
+      "подвижное или стационарное подключение",
+    ],
     question: "Замена КГ зависит от условий применения и назначения подключения. Уточните сечение и число жил, а также нужна ли гибкость для подвижного подключения или кабель будет проложен стационарно. Как он используется?",
     facet_key: "installation_mode",
     options: [
@@ -106,6 +266,10 @@ const PROFILES: ReadinessProfile[] = [
       /(?:мед\p{L}*|алюмин\p{L}*)/iu,
       /(?:болт\p{L}*|клемм\p{L}*|отверст\p{L}*|тип\p{L}*)/iu,
     ],
+    missing_labels: [
+      "материал жилы — медь или алюминий",
+      "тип присоединения и размер болта/отверстия",
+    ],
     question: "Сечение кабеля понятно. Для выбора наконечника уточните материал жилы — медь или алюминий — и тип присоединения: под болт/размер отверстия либо в клемму. Какой материал жилы?",
     facet_key: "conductor_material",
     options: [
@@ -119,7 +283,12 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:цифров\p{L}*|аналог\p{L}*|ip[- ]?камер)/iu,
       /(?:улиц\p{L}*|помещен\p{L}*)/iu,
-      /(?:poe|питан\p{L}*|расстоян\p{L}*)/iu,
+      /(?:poe|питан\p{L}*|расстоян\p{L}*|длин\p{L}*|трасс\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "тип системы — цифровая/IP или аналоговая",
+      "место прокладки — улица или помещение",
+      "PoE/способ питания и длину линии",
     ],
     question: "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
     facet_key: "camera_system",
@@ -136,6 +305,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:форм\p{L}*|колб\p{L}*)/iu,
       /(?:мощн\p{L}*|\d+(?:[.,]\d+)?\s*(?:вт|w)\b)/iu,
     ],
+    missing_labels: [
+      "тип цоколя",
+      "форму колбы",
+      "желаемую мощность",
+    ],
     question: "Тёплый свет 3000 К понятен. Чтобы выбрать лампу, уточните цоколь, форму колбы и желаемую мощность в ваттах. Какой цоколь нужен?",
     facet_key: "socket_type",
     options: [
@@ -146,10 +320,14 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "outdoor_floodlight",
-    applies: /прожектор\p{L}*[^.!?\n]{0,80}(?:улиц\p{L}*|наруж\p{L}*)|(?:улиц\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
+    applies: /прожектор\p{L}*[^.!?\n]{0,80}(?:ули[цч]\p{L}*|наруж\p{L}*)|(?:ули[цч]\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
-      /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*)/iu,
-      /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*)/iu,
+      /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*|\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м))/iu,
+      /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*|\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²]))/iu,
+    ],
+    missing_labels: [
+      "площадь или размеры территории",
+      "высоту установки",
     ],
     question: "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
     facet_key: "mounting_height",
@@ -164,9 +342,12 @@ const PROFILES: ReadinessProfile[] = [
     priority: 10,
     applies: /прожектор\p{L}*[^.!?\n]{0,80}парковк\p{L}*|парковк\p{L}*[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
-      /\bip\s*6[56]\b/iu,
-      /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*)/iu,
-      /(?:высот\p{L}*|установ\p{L}*)/iu,
+      /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*|\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м))/iu,
+      /(?:высот\p{L}*|установ\p{L}*|\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²]))/iu,
+    ],
+    missing_labels: [
+      "площадь или размеры парковки",
+      "высоту установки",
     ],
     question: "Для парковки сначала нужны площадь территории и высота установки. Для улицы также уточним требуемую защиту, обычно рассматривают IP65/IP66. Какая площадь и высота монтажа?",
     facet_key: "mounting_height",
@@ -181,6 +362,7 @@ const PROFILES: ReadinessProfile[] = [
 export function selectReadinessClarification(
   currentMessage: string,
   dialogueEvidence = "",
+  options: { progressive?: boolean } = {},
 ): SelectionReadinessClarification | null {
   const current = String(currentMessage ?? "").trim();
   if (!current) return null;
@@ -192,13 +374,27 @@ export function selectReadinessClarification(
       (right.candidate.priority ?? 0) - (left.candidate.priority ?? 0) || left.index - right.index
     )[0]?.candidate;
   if (!profile) return null;
-  if (profile.required.every((requirement) => requirement.test(evidence))) return null;
+  if (specifiedAvailabilityBrowseIsActionable(current)) return null;
+  if (measuredLoadGuidanceCanProceed(current)) return null;
+  const missing = profile.required
+    .map((requirement, index) => requirement.test(evidence) ? -1 : index)
+    .filter((index) => index >= 0);
+  if (missing.length === 0) return null;
+  const followUp = options.progressive
+    ? profile.follow_ups?.find((candidate) => missing.includes(candidate.requirement_index))
+    : undefined;
+  const missingSummary = missing
+    .map((index) => profile.missing_labels[index])
+    .filter(Boolean)
+    .join("; ");
   return {
     profile: profile.id,
-    question: profile.question,
-    facet_key: profile.facet_key,
-    options: profile.options,
-    scope: { kind: SELECTION_READINESS_SCOPE, token: current.slice(0, 500) },
+    question: followUp
+      ? `Осталось уточнить: ${missingSummary}. ${followUp.question}`
+      : profile.question,
+    facet_key: followUp?.facet_key ?? profile.facet_key,
+    options: followUp?.options ?? profile.options,
+    scope: selectionReadinessScope(current),
   };
 }
 

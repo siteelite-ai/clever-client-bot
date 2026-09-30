@@ -48,7 +48,62 @@ const facets = [
     unit: "лм",
     values: [{ value: "4000" }, { value: "5000" }],
   },
+  {
+    key: "kind",
+    caption: "Вид",
+    type: "string",
+    unit: null,
+    values: [{ value: "Модельный подтип" }],
+  },
 ];
+
+Deno.test("model advisory facets relax before customer-owned boolean filters", () => {
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      options: {
+        feature: ["Да"],
+        kind: ["Модельный подтип"],
+      },
+      max_price: 4000,
+      per_page: 20,
+    },
+    facets,
+    leaf_categories: ["Live leaf"],
+    reasoning_criteria: [{
+      key: "Функция",
+      op: "eq",
+      value: "Да",
+      level: "A",
+    }],
+    compatibility_shaped: false,
+    advisory_options: { kind: ["Модельный подтип"] },
+  });
+
+  assertEquals(plan.slice(0, 2).map(({ kind }) => kind), [
+    "relax_model_advisory_facets",
+    "relax_model_advisory_facets_verify_sparse_boolean_as_evidence",
+  ]);
+  assertEquals(plan[0].args, {
+    mode: "by_filter",
+    options: { feature: ["Да"] },
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(plan[1].args, {
+    mode: "by_filter",
+    category_in: ["Live leaf"],
+    max_price: 4000,
+    per_page: 50,
+    sort_expensive: true,
+  });
+  assertEquals(plan[1].evidence_required_criteria, [{
+    key: "Функция",
+    op: "eq",
+    value: "Да",
+    level: "A",
+  }]);
+});
 
 Deno.test("recovery plan first preserves exact filters and removes only category scope", () => {
   const plan = buildSelectionSearchRecoveryPlan({

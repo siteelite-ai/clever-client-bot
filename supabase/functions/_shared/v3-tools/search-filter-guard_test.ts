@@ -9,6 +9,8 @@ import {
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
+  mergeFacetValuesWithCurrentOverrides,
+  projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
@@ -18,6 +20,97 @@ const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
   { key: "brand", values: [{ value: "Gauss" }] },
 ];
+
+Deno.test("explicit compact codes project only through one unique live multi-axis proof", () => {
+  const live = [
+    { key: "curve", caption: "Характеристика", values: [{ value: "B" }, { value: "C" }] },
+    { key: "current", caption: "Номинальный ток", unit: "А", values: [{ value: "10" }, { value: "16" }] },
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "1" }, { value: "3" }] },
+  ];
+  assertEquals(projectExplicitCompactFacetValues(live, "Найди однополюсный автомат C16"), {
+    kept: [{ key: "curve", value: "C" }, { key: "current", value: "16" }, { key: "poles", value: "1" }],
+    user_backed: [{ key: "curve", value: "C" }, { key: "current", value: "16" }, { key: "poles", value: "1" }],
+  });
+  assertEquals(projectExplicitCompactFacetValues([
+    ...live,
+    { key: "reserve_current", caption: "Резервный ток", values: [{ value: "16" }] },
+  ], "изделие C16"), { kept: [], user_backed: [] });
+});
+
+Deno.test("a unique numeric axis abbreviation remains customer-backed", () => {
+  const facets = [{
+    key: "kolichestvo_polyusov",
+    caption: "Количество полюсов",
+    values: [{ value: "1" }, { value: "2" }],
+  }, {
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    values: [{ value: "C" }],
+  }];
+  assertEquals(projectExplicitCompactFacetValues(
+    facets,
+    "Нужен 1P, характеристика C",
+  ), {
+    kept: [{ key: "kolichestvo_polyusov", value: "1" }],
+    user_backed: [{ key: "kolichestvo_polyusov", value: "1" }],
+  });
+});
+
+Deno.test("current continuation facet replaces only the same inherited facet", () => {
+  assertEquals(mergeFacetValuesWithCurrentOverrides(
+    [
+      { key: "mount", value: "Скрытый" },
+      { key: "color", value: "Чёрный" },
+      { key: "ground", value: "Да" },
+    ],
+    [{ key: "color", value: "Белый" }],
+  ), [
+    { key: "mount", value: "Скрытый" },
+    { key: "ground", value: "Да" },
+    { key: "color", value: "Белый" },
+  ]);
+});
+
+Deno.test("elliptical attribute evidence keeps mounting and replaces colour through live facets", () => {
+  const live = [
+    {
+      key: "mount",
+      caption: "Тип монтажа",
+      values: [{ value: "Скрытый" }, { value: "Открытый" }],
+    },
+    {
+      key: "color",
+      caption: "Цвет",
+      values: [{ value: "Чёрный" }, { value: "Белый" }],
+    },
+  ];
+  const base = "Есть ли у вас розетки скрытого монтажа черного цвета?";
+  const current = "а есть белые?";
+  const inherited = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    base,
+    base,
+    base,
+  ).user_backed;
+  const override = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    current,
+    current,
+    current,
+  ).user_backed;
+
+  assertEquals(inherited, [
+    { key: "mount", value: "Скрытый" },
+    { key: "color", value: "Чёрный" },
+  ]);
+  assertEquals(override, [{ key: "color", value: "Белый" }]);
+  assertEquals(mergeFacetValuesWithCurrentOverrides(inherited, override), [
+    { key: "mount", value: "Скрытый" },
+    { key: "color", value: "Белый" },
+  ]);
+});
 
 Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   const result = guardSearchFilters(
@@ -35,6 +128,33 @@ Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
 });
 
+Deno.test("administrative media facets never become customer filters", () => {
+  const live = [{
+    key: "videofayly",
+    caption: "Видеофайлы",
+    values: [{ value: "30" }],
+  }, {
+    key: "length",
+    caption: "Длина кабеля, м",
+    unit: "м",
+    values: [{ value: "30" }],
+  }];
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { videofayly: ["30"], length: ["30"] },
+    },
+    live,
+    "Длина кабеля — 30 м",
+    "Нужен кабель длиной 30 м",
+  );
+  assertEquals(result.kept, [{ key: "length", value: "30" }]);
+  assertEquals(result.args, {
+    mode: "by_filter",
+    options: { length: ["30"] },
+  });
+});
+
 Deno.test("explicit reasoning is projected onto one exact live facet axis", () => {
   const result = projectExplicitReasoningFacetValues(
     [
@@ -50,6 +170,92 @@ Deno.test("explicit reasoning is projected onto one exact live facet axis", () =
     { key: "color", value: "чёрный" },
   ]);
   assertEquals(result.user_backed, []);
+});
+
+Deno.test("a compound counted adjective projects onto the matching live count facet", () => {
+  const facets = [
+    { key: "core_count", caption: "Количество жил", values: [{ value: "2" }, { value: "3" }, { value: "4" }] },
+    { key: "pole_count", caption: "Количество полюсов", values: [{ value: "2" }, { value: "3" }] },
+  ];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Для подключения нужен медный трехжильный вариант.",
+      "Нужно подключить оборудование мощностью 3 кВт.",
+    ),
+    { kept: [{ key: "core_count", value: "3" }], user_backed: [] },
+  );
+});
+
+Deno.test("a customer-owned compound count retains user provenance", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Выбираю трехэлементный вариант.",
+      "Покажи трехэлементный вариант.",
+    ),
+    {
+      kept: [{ key: "element_count", value: "3" }],
+      user_backed: [{ key: "element_count", value: "3" }],
+    },
+  );
+});
+
+Deno.test("separated numeric and inflected count phrases project onto the same live count facet", () => {
+  const facets = [
+    { key: "core_count", caption: "Количество жил", values: [{ value: "2" }, { value: "3" }, { value: "4" }] },
+    { key: "pole_count", caption: "Количество полюсов", values: [{ value: "2" }, { value: "3" }] },
+  ];
+  for (const reasoning of [
+    "Для подключения необходимы 3 жилы: фаза, ноль и заземление.",
+    "Для подключения нужен вариант с тремя жилами.",
+  ]) {
+    assertEquals(
+      projectExplicitReasoningFacetValues(
+        facets,
+        reasoning,
+        "Нужно подключить оборудование мощностью 3 кВт.",
+      ),
+      { kept: [{ key: "core_count", value: "3" }], user_backed: [] },
+    );
+  }
+});
+
+Deno.test("an application measurement cannot become an unrelated count facet", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Оборудование имеет мощность 3 кВт.",
+      "Нужно подключить оборудование мощностью 3 кВт.",
+    ),
+    { kept: [], user_backed: [] },
+  );
+});
+
+Deno.test("an explicitly labelled count in visible reasoning outranks the same application scalar", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Для другого параметра нужно не менее 2,5 мм. Расчетная нагрузка 3 кВт. Количество элементов: 3.",
+      "Оборудование мощностью 3 кВт.",
+    ),
+    { kept: [{ key: "element_count", value: "3" }], user_backed: [] },
+  );
 });
 
 Deno.test("a normalized visible count authorizes exactly one matching live facet", () => {
@@ -174,7 +380,7 @@ Deno.test("list-like catalog metadata cannot become a product filter", () => {
   );
 
   assertEquals(result.args, { mode: "by_filter" });
-  assertEquals(result.dropped.map((item) => item.reason), ["non_atomic_value"]);
+  assertEquals(result.dropped.map((item) => item.reason), ["unknown_facet"]);
   assertEquals(result.inferred, []);
 });
 
@@ -340,6 +546,40 @@ Deno.test("filter guard accepts a noun value declared through its adjective form
   );
   assertEquals(result.args.options, { material: ["медь"] });
   assertEquals(result.dropped, []);
+});
+
+Deno.test("a neighbouring root word cannot invent a different categorical value", () => {
+  const user = "Есть ли светодиодные изделия с теплым светом?";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "shape",
+      caption: "Форма изделия",
+      values: [{ value: "свеча" }, { value: "таблетка" }],
+    }],
+    user,
+    user,
+  );
+
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.user_backed, []);
+});
+
+Deno.test("mixed Cyrillic and Latin lookalikes preserve an explicit technical code", () => {
+  const user = "Есть ли изделия на цоколь Е27?";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "connector",
+      caption: "Тип цоколя",
+      values: [{ value: "E14" }, { value: "E27" }, { value: "E40" }],
+    }],
+    user,
+    user,
+  );
+
+  assertEquals(result.args.options, { connector: ["E27"] });
+  assertEquals(result.user_backed, [{ key: "connector", value: "E27" }]);
 });
 
 Deno.test("filter guard completes an explicit user facet omitted by the model", () => {
@@ -645,9 +885,9 @@ Deno.test("explicit reasoning completes omitted live technical filters but not i
     curve: ["C"],
   });
   assertEquals(result.inferred, [
-    { key: "curve", value: "C" },
     { key: "poles", value: "1" },
     { key: "current", value: "16" },
+    { key: "curve", value: "C" },
   ]);
 });
 
@@ -748,6 +988,101 @@ Deno.test("a matching measurement unit proves an exact numeric facet value", () 
     "Нужно 16 А.",
   );
   assertEquals(result.args.options, { current: ["16"] });
+});
+
+Deno.test("system totals cannot infer a new per-card number but keep validated options", () => {
+  const facets = [
+    { key: "flux", caption: "Световой поток, лм", unit: "лм", values: [{ value: "3000" }, { value: "5000" }] },
+    { key: "voltage", caption: "Напряжение, В", unit: "В", values: [{ value: "220" }, { value: "230" }] },
+    { key: "protection", caption: "Степень защиты", values: [{ value: "IP44" }, { value: "IP65" }] },
+  ];
+  const reasoning = "Для площади 25 м² общий световой поток = 5000 лм. Напряжение: 220 В. Степень защиты: IP65.";
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { voltage: ["220"], protection: ["IP65"] } },
+    facets,
+    reasoning,
+    "Площадь 25 м²",
+    reasoning,
+    [],
+    { allowDerivedNumericFacetInference: false },
+  );
+  assertEquals(guarded.args.options, { voltage: ["220"], protection: ["IP65"] });
+  assertEquals(guarded.inferred, []);
+});
+
+Deno.test("a range endpoint and a number in another unit cannot become exact facet values", () => {
+  const live = [
+    {
+      key: "flux",
+      caption: "Световой поток, Лм",
+      unit: "лм",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+    {
+      key: "temperature",
+      caption: "Цветовая температура, K",
+      unit: "K",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+  ];
+  const reasoning =
+    "Для парковки нужен суммарный поток 20000–25000 лм, распределённый между несколькими приборами. Цветовая температура — 4000–5000 K.";
+
+  assertEquals(projectExplicitReasoningFacetValues(
+    live,
+    reasoning,
+    "Парковка 500 м², высота 3 м.",
+  ).kept, []);
+});
+
+Deno.test("a compound numeric enum requires every declared number in visible reasoning", () => {
+  const live = [{
+    key: "temperature_range",
+    caption: "Диапазон рабочих температур",
+    values: [
+      { value: "от -20 до +50 °C" },
+      { value: "от -40 до +50 °C" },
+    ],
+  }, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }],
+  }];
+  const reasoning =
+    "Для площадки ориентир освещённости 20–50 лк. Критичны диапазон рабочих температур от −25 °C и ниже и степень защиты IP65.";
+
+  assertEquals(projectExplicitReasoningFacetValues(
+    live,
+    reasoning,
+    "Нужен уличный прибор",
+  ).kept, [{ key: "protection", value: "IP65" }]);
+});
+
+Deno.test("a shared property root cannot bind a value to a sibling facet", () => {
+  const guarded = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { protection: ["IP65"] },
+    },
+    [{
+      key: "body_color",
+      caption: "Цвет корпуса",
+      values: [{ value: "белый" }, { value: "чёрный" }],
+    }, {
+      key: "light_color",
+      caption: "Цвет свечения",
+      values: [{ value: "белый" }, { value: "жёлтый" }],
+    }, {
+      key: "protection",
+      caption: "Степень защиты",
+      values: [{ value: "IP65" }],
+    }],
+    "Критичны степень защиты IP65 и холодный белый или дневной свет.",
+    "Нужны варианты для парковки.",
+    "Критичны степень защиты IP65 и холодный белый или дневной свет.",
+  );
+
+  assertEquals(guarded.args.options, { protection: ["IP65"] });
 });
 
 Deno.test("a user measurement cannot be relabelled as another physical unit", () => {
@@ -888,6 +1223,131 @@ Deno.test("an explicit unitless number is completed only for its locally named f
   assertEquals(result.args.options, { poles: ["1"] });
   assertEquals(result.user_backed, [{ key: "poles", value: "1" }]);
   assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
+});
+
+Deno.test("customer-backed value removes a model-owned scalar alternative on the same facet", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        current: ["25", "1"],
+        poles: ["1"],
+      },
+    },
+    [
+      {
+        key: "current",
+        caption: "Номинальный ток",
+        unit: "А",
+        values: [{ value: "1" }, { value: "25" }],
+      },
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }],
+      },
+    ],
+    "Номинальный ток 25. Количество полюсов 1.",
+    "Нужен автомат на 25 А, 1 полюс.",
+    "Номинальный ток 25. Количество полюсов 1.",
+    [],
+    {
+      authoritativeFacetValues: [
+        { key: "current", value: "25" },
+        { key: "poles", value: "1" },
+      ],
+    },
+  );
+
+  assertEquals(result.args.options, { current: ["25"], poles: ["1"] });
+  assertEquals(result.user_backed, [
+    { key: "poles", value: "1" },
+    { key: "current", value: "25" },
+  ]);
+});
+
+Deno.test("structured declaration can disable prose-only hidden facet inference", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { kind: ["офисный"] },
+    },
+    [
+      {
+        key: "kind",
+        caption: "Вид светильника",
+        values: [{ value: "офисный" }, { value: "бытовой" }],
+      },
+      {
+        key: "mount",
+        caption: "Способ монтажа",
+        values: [{ value: "потолочный" }, { value: "настенный" }],
+      },
+    ],
+    "Вид светильника офисный. Обычно возможен потолочный монтаж.",
+    "Нужен офисный светильник.",
+    "Вид светильника офисный. Обычно возможен потолочный монтаж.",
+    [],
+    { allowProseOnlyFacetInference: false },
+  );
+
+  assertEquals(result.args.options, { kind: ["офисный"] });
+  assertEquals(result.inferred, []);
+});
+
+Deno.test("one-letter customer code is projected only beside one unique live facet meaning", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "характеристика С, 1 полюс",
+    "характеристика С, 1 полюс",
+    "",
+  );
+  assertEquals(result.args.options, { curve: ["C"] });
+  assertEquals(result.user_backed, [{ key: "curve", value: "C" }]);
+
+  const withPhysicalUnit = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "A" }, { value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "16 А характеристика С, 1 полюс",
+    "16 А характеристика С, 1 полюс",
+    "",
+  );
+  assertEquals(withPhysicalUnit.args.options, { curve: ["C"] });
+  assertEquals(withPhysicalUnit.user_backed, [{ key: "curve", value: "C" }]);
+});
+
+Deno.test("lowercase Cyrillic preposition and ambiguous axes cannot become a short code", () => {
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "характеристика с задержкой",
+    "характеристика с задержкой",
+    "",
+  ).args.options, undefined);
+
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      { key: "curve_a", caption: "Характеристика A", values: [{ value: "C" }] },
+      { key: "curve_b", caption: "Характеристика B", values: [{ value: "C" }] },
+    ],
+    "характеристика C",
+    "характеристика C",
+    "",
+  ).args.options, undefined);
 });
 
 Deno.test("a measurement noun cannot silently become a categorical shape", () => {

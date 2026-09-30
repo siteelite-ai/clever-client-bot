@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveCaseExecutions, resolveEndpoint, resolveExpectations, selectCaseExecutions } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -23,6 +23,74 @@ test('resolveEndpoint rejects unsafe or non-function targets', () => {
   assert.throws(
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
+  );
+});
+
+test('suite defaults are inherited and explicit turn expectations win', () => {
+  assert.deepEqual(
+    resolveExpectations({ max_duration_ms: 30_000, max_products: 5 }, { max_products: 1 }),
+    { max_duration_ms: 30_000, max_products: 1 },
+  );
+});
+
+test('case variations reuse turn contracts without changing the base execution', () => {
+  const testCase = {
+    id: 'audit-example',
+    turns: [
+      { message: 'base first', expect: { max_products: 0 } },
+      { message: 'base second', expect: { min_products: 1 } },
+    ],
+  };
+  const executions = resolveCaseExecutions(testCase, [{
+    case_id: 'audit-example',
+    id: 'rephrased',
+    messages: ['variant first', 'variant second'],
+  }]);
+  assert.deepEqual(executions, [
+    { id: 'base', messages: ['base first', 'base second'] },
+    { id: 'rephrased', messages: ['variant first', 'variant second'] },
+  ]);
+});
+
+test('case variation must preserve the source turn count', () => {
+  assert.throws(
+    () => resolveCaseExecutions(
+      { id: 'audit-example', turns: [{ message: 'first' }, { message: 'second' }] },
+      [{ case_id: 'audit-example', id: 'broken', messages: ['only one'] }],
+    ),
+    /one message per turn/,
+  );
+});
+
+test('case variation may override only the expectations changed by its meaning', () => {
+  const testCase = {
+    id: 'audit-example',
+    turns: [{ message: 'show products', expect: { min_products: 1, require_result_cardinality: { target: 4 } } }],
+  };
+  assert.deepEqual(resolveCaseExecutions(testCase, [{
+    case_id: 'audit-example',
+    id: 'explicit-many',
+    messages: ['show several products'],
+    expect_overrides: [{ require_result_cardinality: { target: 5, explicit: true } }],
+  }]), [
+    { id: 'base', messages: ['show products'] },
+    {
+      id: 'explicit-many',
+      messages: ['show several products'],
+      expect_overrides: [{ require_result_cardinality: { target: 5, explicit: true } }],
+    },
+  ]);
+});
+
+test('one variation can be selected without rerunning the base case', () => {
+  const testCase = { id: 'audit-example', turns: [{ message: 'base' }] };
+  const variants = [{ case_id: 'audit-example', id: 'compact', messages: ['compact'] }];
+  assert.deepEqual(selectCaseExecutions(testCase, variants, ['compact']), [
+    { id: 'compact', messages: ['compact'] },
+  ]);
+  assert.throws(
+    () => selectCaseExecutions(testCase, variants, ['missing']),
+    /unknown variation missing/,
   );
 });
 
@@ -179,12 +247,18 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   const contract = {
     hash: 'selection-test',
     mandatory_criteria: [
-      { key: 'Количество разъемов', op: 'eq', value: '2' },
-      { key: 'Цвет', op: 'eq', value: 'чёрный' },
+      { key: 'Количество разъемов', op: 'eq', value: '2', evidence: 'user_explicit' },
+      { key: 'Цвет', op: 'eq', value: 'чёрный', evidence: 'derived_required' },
     ],
     visible_requirements: [
       { kind: 'count', label: 'двойная розетка', op: 'eq', value: 2 },
     ],
+    result_cardinality: {
+      target: 5,
+      minimum: 3,
+      mode: 'alternatives',
+      explicit: true,
+    },
   };
   const parsed = parseSse([
     data({ v3_event: {
@@ -199,6 +273,7 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   assert.deepEqual(evaluate({
     require_selection_criteria_groups: [
       ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черн'],
+      ['user_explicit'], ['derived_required'],
     ],
   }, parsed), []);
   assert.deepEqual(evaluate({
@@ -206,6 +281,24 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   }, parsed), []);
   assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
     .some((failure) => failure.startsWith('selection contract misses required groups')));
+  assert.deepEqual(evaluate({ require_selection_criteria_evidence: true }, parsed), []);
+  assert.deepEqual(evaluate({
+    require_result_cardinality: {
+      target: 5,
+      minimum: 3,
+      mode: 'alternatives',
+      explicit: true,
+    },
+  }, parsed), []);
+  assert(evaluate({ require_result_cardinality: { target: 1 } }, parsed)
+    .includes('result cardinality target=5 != 1'));
+  assert(evaluate({ require_selection_criteria_evidence: true }, {
+    ...parsed,
+    selectionContract: {
+      ...contract,
+      mandatory_criteria: [{ key: 'Случайное поле', op: 'eq', value: '1', evidence: 'catalog_verified' }],
+    },
+  }).some((failure) => failure.startsWith('mandatory selection criteria have invalid evidence')));
 });
 
 test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {
@@ -400,4 +493,42 @@ test('evaluate accepts an honest non-catalog answer without cards', () => {
   });
 
   assert.deepEqual(failures, []);
+});
+
+test('evaluate enforces a production response-time budget', () => {
+  const response = {
+    text: 'Готово',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    durationMs: 30_001,
+  };
+
+  assert.deepEqual(evaluate({ max_duration_ms: 30_000 }, response), [
+    'duration 30001ms > 30000ms',
+  ]);
+  assert.deepEqual(evaluate({ max_duration_ms: 35_000 }, response), []);
+});
+
+test('evaluate rejects inferred selection criteria that the customer did not request', () => {
+  const response = {
+    text: 'Нашёл варианты.',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    selectionContract: {
+      mandatory_criteria: [
+        { key: 'С датчиком движения', op: 'eq', value: 'да' },
+        { key: 'Вид светильника', op: 'eq', value: 'светильники для ЖКХ' },
+      ],
+    },
+  };
+
+  assert(evaluate({ forbid_selection_criteria_any: ['ЖКХ'] }, response)
+    .includes('forbidden selection criterion: ЖКХ'));
+  assert.deepEqual(evaluate({ forbid_selection_criteria_any: ['уличный'] }, response), []);
 });
