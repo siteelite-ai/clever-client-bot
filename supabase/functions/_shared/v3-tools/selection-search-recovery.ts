@@ -68,6 +68,13 @@ export interface SelectionSearchRecoveryPlanInput {
    * product eligibility evidence.
    */
   advisory_options?: Record<string, string[]>;
+  /**
+   * A cardinality recovery may remove advisory options from the remote query
+   * only to widen retrieval. The returned cards must still prove those exact
+   * live values locally, otherwise the recovery would change the semantic
+   * product class merely to reach the requested number of cards.
+   */
+  require_advisory_evidence?: boolean;
 }
 
 /**
@@ -399,6 +406,27 @@ function dropModelAdvisoryFacetOptions(
   return { args: nextArgs, removed };
 }
 
+function removedFacetEvidenceCriteria(
+  removed: Array<{ key: string; value: string }>,
+  facets: Facet[],
+): Criterion[] {
+  return removed.map(({ key, value }) => {
+    const facet = facets.find((candidate) =>
+      candidate.key === key || candidate.caption === key
+    );
+    return {
+      key: facet?.caption?.trim() || key,
+      op: "eq" as const,
+      value,
+      // This is mandatory only inside the recovered pool. It is deliberately
+      // not merged into the customer's selection contract, but CriteriaGate
+      // must treat it as a positive per-card proof obligation.
+      level: "A" as const,
+      evidence: "model_assumption" as const,
+    };
+  });
+}
+
 function ensureGroundedFilterScope(
   args: Record<string, unknown>,
   leafCategories: string[],
@@ -467,6 +495,9 @@ export function buildSelectionSearchRecoveryPlan(
     input.advisory_options,
   );
   if (advisoryFallback.removed.length > 0) {
+    const advisoryEvidenceRequired = input.require_advisory_evidence
+      ? removedFacetEvidenceCriteria(advisoryFallback.removed, input.facets)
+      : [];
     const advisoryArgs = ensureGroundedFilterScope(
       advisoryFallback.args,
       input.leaf_categories,
@@ -481,7 +512,7 @@ export function buildSelectionSearchRecoveryPlan(
         `model_advisory:${key}`
       ),
       proven_criteria: [],
-      evidence_required_criteria: [],
+      evidence_required_criteria: advisoryEvidenceRequired,
       revalidate: [...REVALIDATE],
     });
 
@@ -513,8 +544,9 @@ export function buildSelectionSearchRecoveryPlan(
           ...combinedBooleanFallback.removed.map(({ key }) => `boolean:${key}`),
         ],
         proven_criteria: [],
-        evidence_required_criteria: combinedBooleanFallback.removed.map(
-          ({ key, value }) => {
+        evidence_required_criteria: [
+          ...advisoryEvidenceRequired,
+          ...combinedBooleanFallback.removed.map(({ key, value }) => {
             const facet = input.facets.find((candidate) =>
               candidate.key === key
             );
@@ -524,8 +556,8 @@ export function buildSelectionSearchRecoveryPlan(
               value,
               level: "A" as const,
             };
-          },
-        ),
+          }),
+        ],
         revalidate: [...REVALIDATE],
       });
     }
@@ -643,5 +675,18 @@ export function buildSelectionSearchRecoveryPlan(
     }
   }
 
+  if (input.require_advisory_evidence) {
+    // A successful search with too few cards is not a serialization failure.
+    // Range/category recovery paths are intended for an empty or invalid
+    // request and may omit the visible advisory class altogether. During a
+    // cardinality shortfall only the evidence-preserving advisory relaxation
+    // is eligible; if it cannot prove more cards, keep the smaller correct
+    // pool instead of crossing into a sibling class.
+    return attempts.filter(({ kind }) =>
+      kind === "relax_model_advisory_facets" ||
+      kind ===
+        "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
+    ).slice(0, 2);
+  }
   return attempts.slice(0, 4);
 }

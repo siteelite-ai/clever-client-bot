@@ -144,6 +144,62 @@ Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
   );
 });
 
+Deno.test("cardinality recovery widens retrieval without changing advisory eligibility", () => {
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      options: { kind: ["Кабели радиочастотные"] },
+      per_page: 20,
+    },
+    facets: [{
+      key: "kind",
+      caption: "Назначение",
+      type: "string",
+      unit: null,
+      values: [{ value: "Кабели радиочастотные" }],
+    }],
+    leaf_categories: ["Кабель и провод"],
+    reasoning_criteria: [],
+    compatibility_shaped: false,
+    advisory_options: { kind: ["Кабели радиочастотные"] },
+    require_advisory_evidence: true,
+  });
+
+  assertEquals(plan[0].kind, "relax_model_advisory_facets");
+  assertEquals(plan[0].args, {
+    mode: "by_filter",
+    category_in: ["Кабель и провод"],
+    per_page: 50,
+  });
+  assertEquals(plan[0].evidence_required_criteria, [{
+    key: "Назначение",
+    op: "eq",
+    value: "Кабели радиочастотные",
+    level: "A",
+    evidence: "model_assumption",
+  }]);
+  assertEquals(
+    plan.every(({ kind }) => kind.startsWith("relax_model_advisory_facets")),
+    true,
+  );
+  const product = (id: string, trait: string): ProductRef => ({
+    id,
+    pagetitle: id === "radio" ? "Кабель РК-75" : "Кабель U/UTP cat.5e",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: [trait],
+    description_excerpt: null,
+  });
+  assertEquals(
+    filterSelectionRecoveryPool([
+      product("radio", "Назначение: Кабели радиочастотные"),
+      product("utp", "Назначение: Кабели структурированной связи"),
+    ], plan[0]).map(({ id }) => id),
+    ["radio"],
+  );
+});
+
 Deno.test("recovery plan first preserves exact filters and removes only category scope", () => {
   const plan = buildSelectionSearchRecoveryPlan({
     failed_args: {
