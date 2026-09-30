@@ -85,11 +85,30 @@ const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
 
 function schemaMeasurementUnitTokens(value: string): string[] {
+  const source = String(value ?? "");
   const pattern = new RegExp(
     String.raw`(?<![a-zа-я])(${SIMPLE_UNIT})(?![a-zа-я])`,
     "giu",
   );
-  return [...String(value ?? "").matchAll(pattern)].map((match) => match[1]);
+  return [...source.matchAll(pattern)].flatMap((match) => {
+    const token = match[1];
+    const index = match.index ?? 0;
+    // A one-letter lowercase token in the middle of a caption is usually a
+    // grammatical word, not a physical unit (`Количество в упаковке`). Keep
+    // such unit symbols only when typography proves a measurement position:
+    // after punctuation, at the end, or in uppercase (`Напряжение, В`).
+    const ambiguousLowercaseWord = token.length === 1 &&
+      token === token.toLocaleLowerCase("ru-RU") &&
+      /[авикосу]/u.test(token);
+    if (ambiguousLowercaseWord) {
+      const left = source.slice(0, index);
+      const right = source.slice(index + token.length);
+      const measurementPosition = /[,;:(/]\s*$/u.test(left) ||
+        /^\s*$/u.test(right);
+      if (!measurementPosition) return [];
+    }
+    return [token];
+  });
 }
 
 function normalizeEvidence(value: unknown): string {
@@ -671,10 +690,34 @@ export function projectReasoningRangeCriteria(
         states.add("maximum");
       } else if (/^(?:мин|миним|minimum|min)/u.test(token)) {
         states.add("minimum");
+      } else if (/^(?:изоляц|insulat)/u.test(token)) {
+        states.add("insulation");
+      } else if (/^(?:рабоч|operat|working)/u.test(token)) {
+        states.add("working");
+      } else if (/^(?:переменн|alternating)/u.test(token)) {
+        states.add("alternating");
+      } else if (/^(?:постоянн|direct)/u.test(token)) {
+        states.add("direct");
       }
     }
     return states;
   };
+  const measurementStateGroups = [
+    ["before", "after", "initial", "final"],
+    ["input", "output"],
+    ["minimum", "maximum"],
+    ["insulation", "working"],
+    ["alternating", "direct"],
+  ] as const;
+  const measurementStatesAreCompatible = (
+    evidenceStates: Set<string>,
+    facetStates: Set<string>,
+  ): boolean =>
+    measurementStateGroups.every((group) => {
+      const declaredByFacet = group.filter((state) => facetStates.has(state));
+      return declaredByFacet.length === 0 ||
+        declaredByFacet.some((state) => evidenceStates.has(state));
+    });
   const rangePatterns = [
     new RegExp(
       String
@@ -822,21 +865,23 @@ export function projectReasoningRangeCriteria(
         (declaredUnit === range.unit || labelHasUnit);
     });
     const rangeStates = measurementStates(range.context);
-    // A schema caption may describe a capability boundary rather than the
-    // product's actual scalar (for example, "maximum connected cable
-    // section"). Unit equality alone must not map an ordinary engineering
-    // recommendation onto such a qualified facet. If the reasoning does not
-    // declare the same state, only unqualified scalar facets are eligible.
-    const stateCompatibleFacets = rangeStates.size === 0
-      ? unitFacets.filter((facet) => {
-        const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
-        return !facetStates.has("maximum") && !facetStates.has("minimum");
-      })
-      : unitFacets.filter((facet) => {
-        const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
-        return facetStates.size === 0 ||
-          [...facetStates].some((state) => rangeStates.has(state));
-      });
+    // A result on the right side of a verified arithmetic expression is the
+    // output quantity even when prose omits the word "output". This preserves
+    // calculated per-product ranges without relaxing semantic-role matching.
+    if (/[×xх*][^=≈\n]{0,80}[=≈][^=≈\n]{0,80}\d/iu.test(range.context)) {
+      rangeStates.add("output");
+    }
+    // Unit equality is only dimensional evidence. A live field may describe
+    // another role of that dimension (working vs insulation voltage, input vs
+    // output, before vs after, minimum vs maximum). Every role group declared
+    // by the facet must also be declared or structurally proved in the local
+    // reasoning; otherwise the derived range remains advisory.
+    const stateCompatibleFacets = unitFacets.filter((facet) =>
+      measurementStatesAreCompatible(
+        rangeStates,
+        measurementStates(`${facet.key} ${facet.caption}`),
+      )
+    );
     const sameUnitHints = next.filter((criterion) =>
       canonicalMeasurementUnit(criterion.unit ?? "") === range.unit
     );

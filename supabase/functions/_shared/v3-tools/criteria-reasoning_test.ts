@@ -698,6 +698,13 @@ Deno.test("visible reasoning may disambiguate but cannot invent a customer-owned
   };
   const facets = [
     {
+      key: "group_pack_quantity",
+      caption: "Количество в групповой упаковке",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "12" }, { value: "220" }, { value: "230" }],
+    },
+    {
       key: "colour_temperature",
       caption: "Цветовая температура, К",
       type: "string",
@@ -811,6 +818,47 @@ Deno.test("an unqualified engineering range cannot bind a qualified capability f
   assertEquals(contract.projected_criteria, []);
   assertEquals(contract.mandatory_criteria, []);
   assertEquals(contract.options, {});
+});
+
+Deno.test("a supply-voltage range cannot bind working or insulation roles by unit alone", () => {
+  const facets = [
+    {
+      key: "working_voltage",
+      caption: "Номинальное рабочее напряжение, В",
+      type: "checkbox",
+      unit: "В",
+      values: [{ value: "220" }, { value: "230" }, { value: "400" }],
+    },
+    {
+      key: "insulation_voltage",
+      caption: "Номинальное напряжение изоляции, В",
+      type: "checkbox",
+      unit: "В",
+      values: [{ value: "250" }, { value: "500" }],
+    },
+  ];
+  const unqualified = compileMeasuredReasoningSearchContract(
+    [],
+    "Для квартирной сети подходит переменное напряжение 220–230 В.",
+    [],
+    facets,
+  );
+  assertEquals(unqualified.projected_criteria, []);
+  assertEquals(unqualified.mandatory_criteria, []);
+
+  const working = compileMeasuredReasoningSearchContract(
+    [],
+    "Требуется рабочее напряжение 220–230 В.",
+    [],
+    facets,
+  );
+  assertEquals(working.projected_criteria, [{
+    key: "Номинальное рабочее напряжение, В",
+    op: "range",
+    value: [220, 230],
+    unit: "В",
+    level: "A",
+  }]);
 });
 
 Deno.test("direct product measurement can bind one otherwise unitless live facet", () => {
