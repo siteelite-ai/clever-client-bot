@@ -91,6 +91,13 @@ Deno.test("model advisory facets relax before customer-owned boolean filters", (
     max_price: 4000,
     per_page: 50,
   });
+  assertEquals(plan[0].evidence_required_criteria, [{
+    key: "Вид",
+    op: "eq",
+    value: "Модельный подтип",
+    level: "A",
+    evidence: "model_assumption",
+  }]);
   assertEquals(plan[1].args, {
     mode: "by_filter",
     category_in: ["Live leaf"],
@@ -98,12 +105,21 @@ Deno.test("model advisory facets relax before customer-owned boolean filters", (
     per_page: 50,
     sort_expensive: true,
   });
-  assertEquals(plan[1].evidence_required_criteria, [{
-    key: "Функция",
-    op: "eq",
-    value: "Да",
-    level: "A",
-  }]);
+  assertEquals(plan[1].evidence_required_criteria, [
+    {
+      key: "Вид",
+      op: "eq",
+      value: "Модельный подтип",
+      level: "A",
+      evidence: "model_assumption",
+    },
+    {
+      key: "Функция",
+      op: "eq",
+      value: "Да",
+      level: "A",
+    },
+  ]);
 });
 
 Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
@@ -144,7 +160,7 @@ Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
   );
 });
 
-Deno.test("cardinality recovery widens retrieval without changing advisory eligibility", () => {
+Deno.test("every advisory recovery widens retrieval without changing eligibility", () => {
   const plan = buildSelectionSearchRecoveryPlan({
     failed_args: {
       mode: "by_filter",
@@ -162,7 +178,6 @@ Deno.test("cardinality recovery widens retrieval without changing advisory eligi
     reasoning_criteria: [],
     compatibility_shaped: false,
     advisory_options: { kind: ["Кабели радиочастотные"] },
-    require_advisory_evidence: true,
   });
 
   assertEquals(plan[0].kind, "relax_model_advisory_facets");
@@ -198,6 +213,50 @@ Deno.test("cardinality recovery widens retrieval without changing advisory eligi
     ], plan[0]).map(({ id }) => id),
     ["radio"],
   );
+});
+
+Deno.test("an empty filtered search cannot recover into a sibling class", () => {
+  assertEquals(
+    isRecoverableSelectionSearchFailure(
+      {
+        mode: "by_filter",
+        options: { kind: ["Кабели радиочастотные"] },
+      },
+      { ok: true, total: 0, results_count: 0 },
+    ),
+    true,
+  );
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      options: { kind: ["Кабели радиочастотные"] },
+      per_page: 20,
+    },
+    facets: [{
+      key: "kind",
+      caption: "Назначение",
+      type: "string",
+      unit: null,
+      values: [{ value: "Кабели радиочастотные" }],
+    }],
+    leaf_categories: ["Кабель и провод"],
+    reasoning_criteria: [],
+    compatibility_shaped: false,
+    advisory_options: { kind: ["Кабели радиочастотные"] },
+  });
+  assertEquals(plan.length, 1);
+  assertEquals(plan[0].kind, "relax_model_advisory_facets");
+  assertEquals(plan[0].evidence_required_criteria.length, 1);
+  const products: ProductRef[] = [{
+    id: "utp",
+    pagetitle: "Кабель витая пара U/UTP cat.5e",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: ["Назначение: Кабели структурированной связи"],
+    description_excerpt: null,
+  }];
+  assertEquals(filterSelectionRecoveryPool(products, plan[0]), []);
 });
 
 Deno.test("recovery plan first preserves exact filters and removes only category scope", () => {

@@ -12181,7 +12181,6 @@ async function runExpertLoop(
               minimumCompatibilityRelationCount(reasoningEvidence) >= 2 ||
               reasoningNeedsCompatibilityRelations(reasoningEvidence),
             advisory_options: advisoryRecoveryOptions,
-            require_advisory_evidence: recoverableCardinalityShortfall,
           });
           let bestRecovery: {
             attempt: SelectionSearchRecoveryAttempt;

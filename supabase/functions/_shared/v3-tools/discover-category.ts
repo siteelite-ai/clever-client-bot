@@ -288,6 +288,43 @@ function resolveUniqueHeadCategory(
   return candidates.length === 1 ? candidates : [];
 }
 
+/**
+ * Resolve a shared customer-grounded head only when the live taxonomy itself
+ * proves one candidate to be the umbrella of every other candidate. This is
+ * stronger than ranking titles by wording or length: the catalogue hierarchy,
+ * rather than a product dictionary or heuristic, supplies the relationship.
+ */
+export function resolveHeadCategoryByLiveHierarchy(
+  queryText: string,
+  pagetitles: string[],
+  nodes: Iterable<CategoryTreeNode>,
+): string | null {
+  const nodeList = [...nodes];
+  const byId = new Map(nodeList.map((node) => [node.id, node]));
+  const byPagetitle = new Map(nodeList.map((node) => [normalize(node.pagetitle), node]));
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const candidates = collectHeadCategoryCandidates(rawQueryTokens, pagetitles)
+    .map((pagetitle) => byPagetitle.get(normalize(pagetitle)))
+    .filter((node): node is CategoryTreeNode => Boolean(node));
+  if (candidates.length < 2) return null;
+
+  const isAncestorOrSelf = (ancestorId: number, descendantId: number): boolean => {
+    let currentId: number | null = descendantId;
+    const visited = new Set<number>();
+    while (currentId !== null && !visited.has(currentId)) {
+      if (currentId === ancestorId) return true;
+      visited.add(currentId);
+      currentId = byId.get(currentId)?.parentId ?? null;
+    }
+    return false;
+  };
+  const umbrellas = candidates.filter((candidate) =>
+    candidate.childrenIds.length > 0 &&
+    candidates.every((other) => isAncestorOrSelf(candidate.id, other.id))
+  );
+  return umbrellas.length === 1 ? umbrellas[0].pagetitle : null;
+}
+
 interface CategoryFacetEvidence extends CompactCodeFacet {
   caption: string;
 }
@@ -602,6 +639,20 @@ async function resolvePagetitle(
     rawQueryTokens,
     flat.map((candidate) => candidate.pagetitle),
   );
+  const hierarchyWinner = resolveHeadCategoryByLiveHierarchy(
+    queryText,
+    headCandidates,
+    cache.byId.values(),
+  );
+  if (hierarchyWinner) {
+    return {
+      pagetitle: hierarchyWinner,
+      resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, hierarchyWinner) ?? noun,
+      resolutionMethod: "live_taxonomy",
+      candidates: [hierarchyWinner],
+      cache,
+    };
+  }
   if (headCandidates.length > 1 && headCandidates.length <= 6) {
     const prefetched = new Map<string, DiscoverCategoryOk>();
     await Promise.all(headCandidates.map(async (pagetitle) => {

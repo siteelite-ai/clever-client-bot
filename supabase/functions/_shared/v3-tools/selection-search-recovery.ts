@@ -68,13 +68,6 @@ export interface SelectionSearchRecoveryPlanInput {
    * product eligibility evidence.
    */
   advisory_options?: Record<string, string[]>;
-  /**
-   * A cardinality recovery may remove advisory options from the remote query
-   * only to widen retrieval. The returned cards must still prove those exact
-   * live values locally, otherwise the recovery would change the semantic
-   * product class merely to reach the requested number of cards.
-   */
-  require_advisory_evidence?: boolean;
 }
 
 /**
@@ -495,9 +488,16 @@ export function buildSelectionSearchRecoveryPlan(
     input.advisory_options,
   );
   if (advisoryFallback.removed.length > 0) {
-    const advisoryEvidenceRequired = input.require_advisory_evidence
-      ? removedFacetEvidenceCriteria(advisoryFallback.removed, input.facets)
-      : [];
+    // A model-owned option may be removed from the upstream request only to
+    // compensate for a sparse or inconsistent facet index. It still defines
+    // which products are eligible. Require every recovered card to prove the
+    // removed live value locally for both an empty search and a short one;
+    // otherwise the same request could cross into a sibling product class
+    // solely because the first catalog response happened to contain zero.
+    const advisoryEvidenceRequired = removedFacetEvidenceCriteria(
+      advisoryFallback.removed,
+      input.facets,
+    );
     const advisoryArgs = ensureGroundedFilterScope(
       advisoryFallback.args,
       input.leaf_categories,
@@ -675,13 +675,12 @@ export function buildSelectionSearchRecoveryPlan(
     }
   }
 
-  if (input.require_advisory_evidence) {
-    // A successful search with too few cards is not a serialization failure.
-    // Range/category recovery paths are intended for an empty or invalid
-    // request and may omit the visible advisory class altogether. During a
-    // cardinality shortfall only the evidence-preserving advisory relaxation
-    // is eligible; if it cannot prove more cards, keep the smaller correct
-    // pool instead of crossing into a sibling class.
+  if (advisoryFallback.removed.length > 0) {
+    // Once a recovery relaxes a visible semantic class, no later range or
+    // category fallback may omit that class. This is true for empty, invalid
+    // and merely short searches alike: if local evidence cannot prove more
+    // cards, keep the smaller correct pool (or an honest empty result) instead
+    // of crossing into a sibling class.
     return attempts.filter(({ kind }) =>
       kind === "relax_model_advisory_facets" ||
       kind ===

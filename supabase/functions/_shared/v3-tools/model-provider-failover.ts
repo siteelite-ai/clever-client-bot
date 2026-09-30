@@ -25,7 +25,11 @@ export interface ChatCompletionResponse {
 
 export interface ProviderQuotaCooldown {
   blockedStatus(provider: ChatCompletionProvider): number | null;
-  record(provider: ChatCompletionProvider, response: Response): void;
+  record(
+    provider: ChatCompletionProvider,
+    response: Response,
+    quotaLimitedForbidden?: boolean,
+  ): void;
   clear(provider: ChatCompletionProvider): void;
 }
 
@@ -108,8 +112,11 @@ export function createProviderQuotaCooldown(
       }
       return state.status;
     },
-    record(provider, response) {
-      if (response.status !== 402 && response.status !== 429) return;
+    record(provider, response, quotaLimitedForbidden = false) {
+      if (
+        response.status !== 402 && response.status !== 429 &&
+        !(response.status === 403 && quotaLimitedForbidden)
+      ) return;
       const current = now();
       const fallbackMs = response.status === 402
         ? quotaCooldownMs
@@ -139,6 +146,23 @@ const SHARED_PROVIDER_QUOTA_COOLDOWN = createProviderQuotaCooldown();
 export function shouldFailoverChatCompletion(status: number): boolean {
   return status === 402 || status === 408 || status === 409 || status === 429 ||
     status >= 500;
+}
+
+/** OpenRouter reports an exhausted per-key total limit as HTTP 403, although
+ * it is a capacity condition rather than an authorization failure. Recognize
+ * only that explicit provider message; an ordinary 403 must remain visible
+ * and must never be hidden by a second provider. */
+export async function isQuotaLimitedForbiddenResponse(
+  response: Response,
+): Promise<boolean> {
+  if (response.status !== 403) return false;
+  try {
+    const body = (await response.clone().text()).slice(0, 4_096);
+    return /\bkey\s+limit\s+exceeded\b/iu.test(body) &&
+      /\b(?:total|credit|quota)\s+limit\b/iu.test(body);
+  } catch {
+    return false;
+  }
 }
 
 /** Some OpenAI-compatible gateways report a provider failure as HTTP 200 with
@@ -228,12 +252,15 @@ export async function fetchChatCompletionWithFailover(
     input.signal,
     fetchImpl,
   );
+  const quotaLimitedForbidden = await isQuotaLimitedForbiddenResponse(primary);
+  const failoverEligible = shouldFailoverChatCompletion(primary.status) ||
+    quotaLimitedForbidden;
   if (primary.ok) cooldown?.clear(input.primary);
-  else cooldown?.record(input.primary, primary);
+  else cooldown?.record(input.primary, primary, quotaLimitedForbidden);
   if (
     primary.ok ||
     !input.fallback?.apiKey ||
-    !shouldFailoverChatCompletion(primary.status)
+    !failoverEligible
   ) {
     return {
       response: primary,

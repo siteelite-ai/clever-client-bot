@@ -4,6 +4,7 @@ import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
   isProviderErrorFinishReason,
+  isQuotaLimitedForbiddenResponse,
   shouldFailoverChatCompletion,
 } from "./model-provider-failover.ts";
 
@@ -112,6 +113,54 @@ Deno.test("authentication failures do not change provider", async () => {
   assertEquals(result.provider, "primary");
   assertEquals(result.response.status, 401);
   assertEquals(calls, 1);
+});
+
+Deno.test("only an explicit per-key quota 403 may use the fallback", async () => {
+  assertEquals(
+    await isQuotaLimitedForbiddenResponse(
+      Response.json({
+        error: { message: "Key limit exceeded (total limit)", code: 403 },
+      }, { status: 403 }),
+    ),
+    true,
+  );
+  assertEquals(
+    await isQuotaLimitedForbiddenResponse(
+      Response.json({ error: { message: "Forbidden", code: 403 } }, {
+        status: 403,
+      }),
+    ),
+    false,
+  );
+
+  const urls: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    urls.push(url);
+    return url.includes("primary")
+      ? Response.json({
+        error: { message: "Key limit exceeded (total limit)", code: 403 },
+      }, { status: 403 })
+      : Response.json({ choices: [] });
+  }) as typeof fetch;
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [] },
+    fetchImpl,
+    quotaCooldown: createProviderQuotaCooldown(),
+  });
+  assertEquals(result.provider, "fallback");
+  assertEquals(result.failedOver, true);
+  assertEquals(result.primaryStatus, 403);
+  assertEquals(urls, [
+    "https://primary.test/chat",
+    "https://fallback.test/chat",
+  ]);
 });
 
 Deno.test("confirmed quota failure opens a bounded cooldown without another primary call", async () => {

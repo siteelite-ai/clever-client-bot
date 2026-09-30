@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   liftUngroundedLeafToCustomerHeadAncestor,
   resolveGroundedCategoryHeadToken,
+  resolveHeadCategoryByLiveHierarchy,
   resolveHeadCategoryByFacetEvidence,
   resolveLocalCategoryPagetitles,
 } from "./discover-category.ts";
@@ -44,6 +45,40 @@ Deno.test("standalone class head does not match a longer compound category prefi
     semantic_query:
       "Подберите кабель для камер видеонаблюдения Уточнение клиента: Система аналоговая, улица, длина трассы 30 м",
   }, ["Кабеленесущие системы", "Кабель и провод"]), ["Кабель и провод"]);
+});
+
+Deno.test("a shared grounded head resolves only through a proven live hierarchy umbrella", () => {
+  const tree = [
+    { id: 1, pagetitle: "Кабель и провод", parentId: null, childrenIds: [2, 3] },
+    { id: 2, pagetitle: "Кабели связи телефонные", parentId: 1, childrenIds: [] },
+    { id: 3, pagetitle: "Кабель коаксиальный", parentId: 1, childrenIds: [] },
+    { id: 4, pagetitle: "Светильники", parentId: null, childrenIds: [] },
+  ];
+  assertEquals(resolveHeadCategoryByLiveHierarchy(
+    "кабель для видеонаблюдения, аналоговая система, улица, 30 метров",
+    tree.map((node) => node.pagetitle),
+    tree,
+  ), "Кабель и провод");
+
+  assertEquals(resolveHeadCategoryByLiveHierarchy(
+    "нужен держатель для кабеля",
+    tree.map((node) => node.pagetitle),
+    tree,
+  ), null);
+});
+
+Deno.test("live hierarchy recovery stays fail-closed without one common umbrella", () => {
+  const tree = [
+    { id: 1, pagetitle: "Первая группа", parentId: null, childrenIds: [2] },
+    { id: 2, pagetitle: "Кабель КГ", parentId: 1, childrenIds: [] },
+    { id: 3, pagetitle: "Вторая группа", parentId: null, childrenIds: [4] },
+    { id: 4, pagetitle: "Кабель ВВГ", parentId: 3, childrenIds: [] },
+  ];
+  assertEquals(resolveHeadCategoryByLiveHierarchy(
+    "нужен кабель для оборудования",
+    tree.map((node) => node.pagetitle),
+    tree,
+  ), null);
 });
 
 Deno.test("local live-taxonomy resolver prefers a fully customer-grounded specific class", () => {
