@@ -453,13 +453,102 @@ Deno.test("customer-scoped reasoning schema omits unrelated exact technical valu
       items?: { enum?: string[]; maxLength?: number };
     }
   >;
-  assertEquals(properties.required_facet_values.items?.enum, ["f0v2", "f1v1"]);
+  assertEquals(properties.required_facet_values.items?.enum, [
+    "f0v2",
+    "f1v0",
+    "f1v1",
+  ]);
   assertEquals(
     (schema.function.parameters.required as string[]).includes(
       "measurement_scope",
     ),
     true,
   );
+});
+
+Deno.test("a currency ceiling cannot expose the same bare technical scalar", () => {
+  const schema = buildDerivedSelectionReasoningToolSchema([{
+    key: "insulation_voltage",
+    caption: "Номинальное напряжение изоляции, В",
+    type: "checkbox",
+    unit: null,
+    values: [{ value: "500" }, { value: "1000" }],
+  }], "Найди аппарат до 1000 тенге");
+  const properties = (schema.function.parameters.properties ?? {}) as Record<
+    string,
+    { items?: { enum?: string[]; maxLength?: number } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum, undefined);
+  assertEquals(properties.required_facet_values.items?.maxLength, 0);
+});
+
+Deno.test("a spatial value cannot own an equal scalar from another unit axis", () => {
+  const schema = buildDerivedSelectionReasoningToolSchema([
+    {
+      key: "length",
+      caption: "Длина, мм",
+      values: [{ value: "25" }, { value: "35" }, { value: "50" }],
+    },
+    {
+      key: "temperature",
+      caption: "Диапазон рабочих температур",
+      values: [
+        { value: "от -35 до +40 °С" },
+        { value: "от -20 до +30 °С" },
+      ],
+    },
+  ], "Площадь 35 м², высота установки 1,5 м");
+  const properties = (schema.function.parameters.properties ?? {}) as Record<
+    string,
+    { items?: { enum?: string[]; maxLength?: number } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum, undefined);
+  assertEquals(properties.required_facet_values.items?.maxLength, 0);
+});
+
+Deno.test("a model-derived exact value requires visible facet context", () => {
+  const facets = [{
+    key: "body_colour",
+    caption: "Цвет корпуса",
+    values: [{ value: "белый" }, { value: "черный" }],
+  }];
+  const unrelated = resolveDerivedSelectionReasoning({
+    reasoning: "Для задачи подходит холодный белый свет.",
+    measurement_scope: "not_applicable",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v0"],
+    explicit_customer_classifications: [],
+  }, facets, "Нужен вариант для улицы");
+  assertEquals(unrelated?.requiredFacetValues, []);
+
+  const grounded = resolveDerivedSelectionReasoning({
+    reasoning: "Цвет корпуса должен быть белый.",
+    measurement_scope: "not_applicable",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v0"],
+    explicit_customer_classifications: [],
+  }, facets, "Нужен вариант для улицы");
+  assertEquals(grounded?.requiredFacetValues, [{
+    key: "Цвет корпуса",
+    value: "белый",
+  }]);
+});
+
+Deno.test("opaque live-schema IDs are removed from customer-visible reasoning", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Нужны количество полюсов = 1 (f5v2), номинальный ток = 16 А f9v2.",
+    measurement_scope: "per_product",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [],
+  }, [], "Нужен автомат 1 полюс, 16 А");
+  assertEquals(resolved?.text.includes("f5v2"), false);
+  assertEquals(resolved?.text.includes("f9v2"), false);
+  assertEquals(resolved?.text.includes("количество полюсов = 1"), true);
 });
 
 Deno.test("system-total reasoning is visibly marked and cannot masquerade as one-product evidence", () => {
@@ -485,6 +574,71 @@ Deno.test("system-total reasoning is visibly marked and cannot masquerade as one
   assertEquals(
     resolved?.measurementEvidence.includes(
       "распределить между несколькими товарами",
+    ),
+    true,
+  );
+});
+
+Deno.test("system total drops a derived per-card measurement", () => {
+  const facets = [
+    {
+      key: "flux",
+      caption: "Световой поток",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "5250 Лм" }, { value: "7000 Лм" }],
+    },
+    {
+      key: "protection",
+      caption: "Степень защиты IP",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "IP44" }, { value: "IP65" }],
+    },
+  ];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для объекта нужен суммарный световой поток 7000 лм, а каждое изделие должно иметь степень защиты IP65.",
+      measurement_scope: "system_total",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1", "f1v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужно несколько изделий для объекта площадью 35 м²",
+  );
+
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(
+    resolved?.requiredFacetValues.some(({ key }) =>
+      key === "Световой поток"
+    ),
+    false,
+  );
+  assertEquals(
+    resolved?.requiredFacetValues.some(({ key, value }) =>
+      key === "Степень защиты IP" && value === "IP65"
+    ),
+    true,
+  );
+  const perProduct = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для объекта нужен световой поток каждого изделия 7000 лм, а каждое изделие должно иметь степень защиты IP65.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1", "f1v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужно несколько изделий для объекта площадью 35 м²",
+  );
+  assertEquals(
+    perProduct?.requiredFacetValues.some(({ key, value }) =>
+      key === "Световой поток" && value === "7000 Лм"
     ),
     true,
   );
@@ -645,7 +799,7 @@ Deno.test("visible reasoning compiles several exact values from a live-like sche
         "Для нагрузки необходимо сечение не менее 2,5 мм². Количество жил: 3. Материал проводника — медь.",
       compatible_classifications: [],
       excluded_classifications: [],
-      required_facet_values: [],
+      required_facet_values: ["f1v1"],
     },
     facets,
     "Оборудование мощностью 3 кВт",

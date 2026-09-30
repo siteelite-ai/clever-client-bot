@@ -10,6 +10,7 @@ import {
   buildSelectionSearchRecoveryPlan,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
+  isRecoverableSelectionSearchShortfall,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
   shouldAppendCatalogEmpty,
@@ -103,6 +104,44 @@ Deno.test("model advisory facets relax before customer-owned boolean filters", (
     value: "Да",
     level: "A",
   }]);
+});
+
+Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
+  const args = {
+    mode: "by_filter",
+    options: {
+      feature: ["Да"],
+      kind: ["Модельный подтип"],
+    },
+    max_price: 1000,
+  };
+  assertEquals(
+    isRecoverableSelectionSearchShortfall(
+      args,
+      { ok: true, total: 1, results_count: 1 },
+      3,
+      { kind: ["Модельный подтип"] },
+    ),
+    true,
+  );
+  assertEquals(
+    isRecoverableSelectionSearchShortfall(
+      args,
+      { ok: true, total: 3, results_count: 3 },
+      3,
+      { kind: ["Модельный подтип"] },
+    ),
+    false,
+  );
+  assertEquals(
+    isRecoverableSelectionSearchShortfall(
+      args,
+      { ok: true, total: 1, results_count: 1 },
+      3,
+      undefined,
+    ),
+    false,
+  );
 });
 
 Deno.test("recovery plan first preserves exact filters and removes only category scope", () => {

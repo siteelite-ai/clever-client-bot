@@ -14,8 +14,8 @@ import {
   projectCustomerApplicationFacetCriteria,
   projectModelOnlySelectionTargetExtension,
   projectSelectionApplicationFacetCriteria,
-  projectUniqueAdjacentApplicationFacetCriteria,
   projectSelectionTargetFacetCriteria,
+  projectUniqueAdjacentApplicationFacetCriteria,
   promoteSelectionApplicationBackingCriteria,
   promoteSelectionTargetBackingCriteria,
   resolveTerminalSelectionTarget,
@@ -1372,6 +1372,21 @@ Deno.test("a single-token class must be visible in the final card title", () => 
     verifySelectionTargetWithVisibleTitle("прожектор", products).passed_ids,
     ["visible"],
   );
+});
+
+Deno.test("a class word inside a relational accessory phrase does not prove product identity", () => {
+  const products = [
+    product("cable", "Кабель коаксиальный RG6", "Кабель и провод"),
+    product(
+      "connector",
+      "Разъем антенный на кабель, гнездо-TV",
+      "Кабель и провод",
+    ),
+    product("holder", "Крепление для кабеля", "Кабель и провод"),
+  ];
+  const report = verifySelectionTargetWithVisibleTitle("кабель", products);
+  assertEquals(report.passed_ids, ["cable"]);
+  assertEquals(report.rejected_ids, ["connector", "holder"]);
 });
 
 Deno.test("an exact live leaf can prove a one-token class only behind a complete passed criteria contract", () => {

@@ -136,6 +136,39 @@ export function mergeFacetOptionConstraints(
 }
 
 /**
+ * Adds advisory catalog guidance without allowing it to weaken or erase a
+ * mandatory constraint. Independent advisory axes stay useful for retrieval
+ * (for example a product-class facet alongside mandatory safety facets), while
+ * a conflict on the same facet is resolved in favour of the mandatory value.
+ */
+export function overlayMandatoryFacetOptions(
+  mandatory: Record<string, string[]>,
+  advisory: Record<string, string[]>,
+): Record<string, string[]> {
+  const merged = mergeFacetOptionConstraints(mandatory, advisory);
+  if (merged.conflicting_keys.length === 0) return merged.options;
+
+  const conflicting = new Set(merged.conflicting_keys);
+  return {
+    ...Object.fromEntries(
+      Object.entries(advisory ?? {}).filter(([key, values]) =>
+        !conflicting.has(key) &&
+        !(key in (mandatory ?? {})) &&
+        (values ?? []).length > 0
+      ),
+    ),
+    ...Object.fromEntries(
+      Object.entries(merged.options).filter(([key]) => !conflicting.has(key)),
+    ),
+    ...Object.fromEntries(
+      Object.entries(mandatory ?? {}).filter(([, values]) =>
+        (values ?? []).length > 0
+      ),
+    ),
+  };
+}
+
+/**
  * User-backed criteria are turn invariants. A later fallback may contribute
  * more explicit constraints, but it must never erase constraints proved by an
  * earlier strict search. Equality values for one facet are kept as separate
@@ -904,7 +937,9 @@ export function preferClosestPassingNumericTier<T extends ProductRef>(
   const scored = products.flatMap((product) => {
     const trait = findTrait(product, criterion.key);
     const span = trait ? parseNumSpan(trait.value) : null;
-    if (!span || checkCriterion(product, criterion).verdict !== "pass") return [];
+    if (!span || checkCriterion(product, criterion).verdict !== "pass") {
+      return [];
+    }
     const nearest = span.min <= threshold && span.max >= threshold
       ? threshold
       : span.min;
@@ -912,9 +947,11 @@ export function preferClosestPassingNumericTier<T extends ProductRef>(
   });
   if (scored.length === 0) return products;
   const closest = Math.min(...scored.map(({ distance }) => distance));
-  const closestIds = new Set(scored
-    .filter(({ distance }) => Math.abs(distance - closest) < 1e-9)
-    .map(({ product }) => String(product.id)));
+  const closestIds = new Set(
+    scored
+      .filter(({ distance }) => Math.abs(distance - closest) < 1e-9)
+      .map(({ product }) => String(product.id)),
+  );
   if (closestIds.size < Math.max(1, minimumTierSize)) return products;
   return products.filter((product) => closestIds.has(String(product.id)));
 }
@@ -1340,41 +1377,45 @@ export function projectCriteriaFacetOptions(
     }
     const facet = matches[0];
     const acceptedByCriterion = items.map((criterion) =>
-      new Set((() => {
-        // When the live schema offers the customer's exact scalar, equality
-        // must not be broadened to adjustable/range values that merely contain
-        // it. This keeps an exact nominal such as 25 A distinct from 20–25 A;
-        // range compatibility remains available only when no exact canonical
-        // value exists or the criterion itself is directional/ranged.
-        if (criterion.op === "eq" && !Array.isArray(criterion.value)) {
-          const wanted = Number(criterion.value);
-          if (Number.isFinite(wanted)) {
-            const exactValues = facet.values.filter(({ value }) => {
-              const match = String(value).trim().match(/^(\d+(?:[.,]\d+)?)$/u)?.[1];
-              return match !== undefined && Number(match.replace(",", ".")) === wanted;
-            });
-            if (exactValues.length > 0) return exactValues;
+      new Set(
+        (() => {
+          // When the live schema offers the customer's exact scalar, equality
+          // must not be broadened to adjustable/range values that merely contain
+          // it. This keeps an exact nominal such as 25 A distinct from 20–25 A;
+          // range compatibility remains available only when no exact canonical
+          // value exists or the criterion itself is directional/ranged.
+          if (criterion.op === "eq" && !Array.isArray(criterion.value)) {
+            const wanted = Number(criterion.value);
+            if (Number.isFinite(wanted)) {
+              const exactValues = facet.values.filter(({ value }) => {
+                const match = String(value).trim().match(/^(\d+(?:[.,]\d+)?)$/u)
+                  ?.[1];
+                return match !== undefined &&
+                  Number(match.replace(",", ".")) === wanted;
+              });
+              if (exactValues.length > 0) return exactValues;
+            }
           }
-        }
-        return facet.values;
-      })().flatMap(({ value }) => {
-        const pseudo = {
-          id: "facet",
-          pagetitle: "",
-          vendor: null,
-          price: 1,
-          stock: "unknown" as const,
-          // The resolved live facet may be referenced by either its public
-          // caption or its machine key. Expose both aliases to the pure checker.
-          short_traits: [
-            `${facet.caption || facet.key}: ${value}`,
-            `${facet.key}: ${value}`,
-          ],
-        };
-        return checkCriterion(pseudo, criterion).verdict === "pass"
-          ? [String(value)]
-          : [];
-      }))
+          return facet.values;
+        })().flatMap(({ value }) => {
+          const pseudo = {
+            id: "facet",
+            pagetitle: "",
+            vendor: null,
+            price: 1,
+            stock: "unknown" as const,
+            // The resolved live facet may be referenced by either its public
+            // caption or its machine key. Expose both aliases to the pure checker.
+            short_traits: [
+              `${facet.caption || facet.key}: ${value}`,
+              `${facet.key}: ${value}`,
+            ],
+          };
+          return checkCriterion(pseudo, criterion).verdict === "pass"
+            ? [String(value)]
+            : [];
+        }),
+      )
     );
     const equalitySets = acceptedByCriterion.filter((_, index) =>
       items[index].op === "eq"

@@ -16,13 +16,14 @@ import {
   mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
+  overlayMandatoryFacetOptions,
   parseNumSpan,
   preferClosestPassingNumericTier,
+  projectAdvisoryCriteriaFacetOptions,
   projectCatalogFilterEvidence,
   projectCommonRenderedMarkdownUserCriteria,
   projectCommonRenderedUserCriteria,
   projectCriteriaFacetOptions,
-  projectAdvisoryCriteriaFacetOptions,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
   titleContradictsExactCountCriterion,
@@ -48,9 +49,25 @@ Deno.test("derived minimum prefers the closest sufficient standard tier", () => 
     product("c", ["Размер: 4 мм²"]),
     product("d", ["Размер: 6 мм²"]),
   ];
-  const criterion: Criterion = { key: "Размер", op: "min", value: 2.5, unit: "мм²", level: "A" };
-  assertEquals(preferClosestPassingNumericTier(products, [criterion], 1).map(({ id }) => id), ["a", "b"]);
-  assertEquals(preferClosestPassingNumericTier(products, [criterion], 3).map(({ id }) => id), ["a", "b", "c", "d"]);
+  const criterion: Criterion = {
+    key: "Размер",
+    op: "min",
+    value: 2.5,
+    unit: "мм²",
+    level: "A",
+  };
+  assertEquals(
+    preferClosestPassingNumericTier(products, [criterion], 1).map(({ id }) =>
+      id
+    ),
+    ["a", "b"],
+  );
+  assertEquals(
+    preferClosestPassingNumericTier(products, [criterion], 3).map(({ id }) =>
+      id
+    ),
+    ["a", "b", "c", "d"],
+  );
 });
 
 Deno.test("declared exclusions remove only positively proven incompatible values", () => {
@@ -1156,6 +1173,33 @@ Deno.test("contradictory projections fail closed", () => {
     options: {},
     conflicting_keys: ["axis"],
   });
+});
+
+Deno.test("advisory retrieval axes remain alongside mandatory constraints", () => {
+  assertEquals(
+    overlayMandatoryFacetOptions(
+      { protection: ["IP65"], sheath: ["PVC"] },
+      { purpose: ["Radio-frequency cables"] },
+    ),
+    {
+      protection: ["IP65"],
+      sheath: ["PVC"],
+      purpose: ["Radio-frequency cables"],
+    },
+  );
+});
+
+Deno.test("mandatory option wins a same-facet advisory conflict", () => {
+  assertEquals(
+    overlayMandatoryFacetOptions(
+      { purpose: ["Radio-frequency cables"] },
+      { purpose: ["Power cables"], sheath: ["PVC"] },
+    ),
+    {
+      sheath: ["PVC"],
+      purpose: ["Radio-frequency cables"],
+    },
+  );
 });
 
 Deno.test("numeric bounds intersect before the live facet result is bounded", () => {

@@ -59,6 +59,7 @@ import {
   mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
+  overlayMandatoryFacetOptions,
   preferClosestPassingNumericTier,
   projectAdvisoryCriteriaFacetOptions,
   projectCatalogFilterEvidence,
@@ -100,6 +101,7 @@ import {
   buildSelectionSearchRecoveryPlan,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
+  isRecoverableSelectionSearchShortfall,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
   type SelectionSearchRecoveryAttempt,
@@ -6525,7 +6527,7 @@ async function runExpertLoop(
     const closestTier = preferClosestPassingNumericTier(
       products,
       postFilterOnlyReasoningCriteria,
-      resultCardinality.explicit ? resultCardinality.minimum : 1,
+      resultCardinality.minimum,
     );
     return capResultCandidateIds(
       closestTier.map(({ id }) => id),
@@ -7193,7 +7195,7 @@ async function runExpertLoop(
               [],
               lastDiscover.facets ?? [],
             );
-          const derivedExactFacetCriteria: Criterion[] = declaration
+          const proposedDerivedExactFacetCriteria: Criterion[] = declaration
             .requiredFacetValues.map(({ key, value }) => {
               const proposedCriterion: Criterion = {
                 key,
@@ -7226,12 +7228,29 @@ async function runExpertLoop(
               ) modelAssumedSearchFacetValues.push({ key, value });
               return {
                 ...proposedCriterion,
-                level: customerGrounded ? "A" as const : "B" as const,
+                level: "A" as const,
                 evidence: customerGrounded
                   ? "user_explicit" as const
-                  : "model_assumption" as const,
+                  : "derived_required" as const,
               };
             });
+          const customerGroundedExactFacetCriteria =
+            proposedDerivedExactFacetCriteria.filter((criterion) =>
+              criterion.evidence === "user_explicit"
+            );
+          const derivedExactImportance = alignCriteriaImportanceWithReasoning(
+            proposedDerivedExactFacetCriteria,
+            declaration.measurementEvidence,
+            customerGroundedExactFacetCriteria,
+          );
+          const derivedExactFacetCriteria = derivedExactImportance.criteria;
+          if (derivedExactImportance.demoted.length > 0) {
+            steps.push({
+              step: "v3_derived_exact_advice_demoted",
+              ms: now(),
+              meta: { keys: derivedExactImportance.demoted },
+            });
+          }
           // Schema-ID classifications have already been validated against the
           // live facet and rendered back into the visible declaration. Do not
           // send them through prose importance parsing: a live compound value
@@ -7286,12 +7305,14 @@ async function runExpertLoop(
           // paying for a second model call whose only useful outcome would be
           // the same `search_catalog` command. If nothing is projectable we
           // retain the ordinary agent continuation and fail closed there.
-          const directSearchOptions =
-            Object.keys(declaredClassificationProjection.options).length > 0
-              ? declaredClassificationProjection.options
-              : Object.keys(advisoryClassificationProjection.options).length > 0
-              ? advisoryClassificationProjection.options
-              : derivedFacetProjection.options;
+          const mandatoryDirectProjection = mergeFacetOptionConstraints(
+            declaredClassificationProjection.options,
+            derivedFacetProjection.options,
+          );
+          const directSearchOptions = overlayMandatoryFacetOptions(
+            mandatoryDirectProjection.options,
+            advisoryClassificationProjection.options,
+          );
           const recommendedCompoundMarking =
             extractExplicitCompoundMarking(userMessage) === null
               ? extractRecommendedCompoundMarking(visibleDeclarationText)
@@ -8847,7 +8868,18 @@ async function runExpertLoop(
                 options: _options,
                 ...searchControls
               } = current;
-              const retainedOptions = measuredRetrievalProjection.options;
+              // Recompiling measured constraints must not erase an
+              // independent, visibly declared product-class hypothesis. The
+              // frozen plan below restores hard criteria, but advisory class
+              // guidance intentionally stays outside that plan; losing it
+              // here broadens a precise search back to the whole umbrella
+              // category. Measured mandatory values win any same-facet
+              // conflict, while independent advisory axes remain available
+              // for the bounded recovery controller to relax if necessary.
+              const retainedOptions = overlayMandatoryFacetOptions(
+                measuredRetrievalProjection.options,
+                currentModelAdvisoryOptions(lastDiscover.facets),
+              );
               const hasRetainedOptions = Object.keys(retainedOptions).length >
                 0;
               const hasRetainedCategory =
@@ -12083,9 +12115,30 @@ async function runExpertLoop(
         // choose a different relaxation order. Every recovered pool is still
         // revalidated by target, mandatory criteria, compatibility and budget
         // before a card can be rendered.
+        const advisoryRecoveryOptions = currentModelAdvisoryOptions(
+          lastDiscover?.facets ?? [],
+        );
+        const originalSelectionResultCount = result.ok &&
+            result.tool === "search_catalog"
+          ? result.results.length
+          : 0;
+        const recoverableCardinalityShortfall = tc.name === "search_catalog" &&
+          isRecoverableSelectionSearchShortfall(
+            runArgs,
+            {
+              ok: result.ok,
+              total: result.ok && result.tool === "search_catalog"
+                ? result.total
+                : 0,
+              results_count: originalSelectionResultCount,
+              error_code: result.ok ? undefined : result.error_code,
+            },
+            resultCardinality.minimum,
+            advisoryRecoveryOptions,
+          );
         if (
           tc.name === "search_catalog" &&
-          isRecoverableSelectionSearchFailure(
+          (isRecoverableSelectionSearchFailure(
             runArgs,
             result as unknown as {
               ok: boolean;
@@ -12093,7 +12146,7 @@ async function runExpertLoop(
               error_code?: string;
               message?: string;
             },
-          )
+          ) || recoverableCardinalityShortfall)
         ) {
           const reasoningEvidence =
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
@@ -12127,10 +12180,13 @@ async function runExpertLoop(
             compatibility_shaped:
               minimumCompatibilityRelationCount(reasoningEvidence) >= 2 ||
               reasoningNeedsCompatibilityRelations(reasoningEvidence),
-            advisory_options: currentModelAdvisoryOptions(
-              lastDiscover?.facets ?? [],
-            ),
+            advisory_options: advisoryRecoveryOptions,
           });
+          let bestRecovery: {
+            attempt: SelectionSearchRecoveryAttempt;
+            result: SearchCatalogOk & { tool: "search_catalog" };
+            evidenceSafeResults: ProductRef[];
+          } | null = null;
           for (const attempt of recoveryPlan) {
             const recovered = await runTool(
               "search_catalog",
@@ -12168,41 +12224,64 @@ async function runExpertLoop(
             });
             if (
               recovered.ok && recovered.tool === "search_catalog" &&
-              evidenceSafeResults.length > 0
+              evidenceSafeResults.length >
+                (bestRecovery?.evidenceSafeResults.length ??
+                  originalSelectionResultCount)
             ) {
-              for (const key of Object.keys(runArgs)) delete runArgs[key];
-              Object.assign(runArgs, attempt.args);
-              selectedSearchRecoveryAttempt = attempt;
-              if (
-                attempt.kind === "verify_compatibility_in_grounded_category"
-              ) {
-                // The failed model options were only a serialization attempt,
-                // not evidence. Preserve explicit customer constraints, then
-                // let the compatibility controller rebuild directional proof
-                // from reasoning and live facets before render.
-                enforcedSearchCriteria = userBackedSearchCriteria.map((
-                  criterion,
-                ) => ({ ...criterion }));
-                reasoningProjectedSearchCriteria = [];
-              }
-              result = {
-                ...recovered,
-                results: evidenceSafeResults,
-                // Once a relaxed input needs per-card proof, the upstream
-                // total no longer describes the eligible result set.
-                total: attempt.evidence_required_criteria.length > 0
-                  ? evidenceSafeResults.length
-                  : recovered.total,
-                warnings: [
-                  ...(recovered.warnings ?? []),
-                  ...(attempt.evidence_required_criteria.length > 0
-                    ? [
-                      `recovery_evidence_filtered:${evidenceSafeResults.length}/${recovered.results.length}`,
-                    ]
-                    : []),
-                ],
+              bestRecovery = {
+                attempt,
+                result: recovered,
+                evidenceSafeResults,
               };
-              break;
+              if (evidenceSafeResults.length >= resultCardinality.minimum) {
+                break;
+              }
+            }
+          }
+          if (bestRecovery) {
+            const { attempt, result: recovered, evidenceSafeResults } =
+              bestRecovery;
+            for (const key of Object.keys(runArgs)) delete runArgs[key];
+            Object.assign(runArgs, attempt.args);
+            selectedSearchRecoveryAttempt = attempt;
+            if (attempt.kind === "verify_compatibility_in_grounded_category") {
+              // The failed model options were only a serialization attempt,
+              // not evidence. Preserve explicit customer constraints, then
+              // let the compatibility controller rebuild directional proof
+              // from reasoning and live facets before render.
+              enforcedSearchCriteria = userBackedSearchCriteria.map((
+                criterion,
+              ) => ({ ...criterion }));
+              reasoningProjectedSearchCriteria = [];
+            }
+            result = {
+              ...recovered,
+              results: evidenceSafeResults,
+              // Once a relaxed input needs per-card proof, the upstream total
+              // no longer describes the eligible result set.
+              total: attempt.evidence_required_criteria.length > 0
+                ? evidenceSafeResults.length
+                : recovered.total,
+              warnings: [
+                ...(recovered.warnings ?? []),
+                ...(attempt.evidence_required_criteria.length > 0
+                  ? [
+                    `recovery_evidence_filtered:${evidenceSafeResults.length}/${recovered.results.length}`,
+                  ]
+                  : []),
+              ],
+            };
+            if (recoverableCardinalityShortfall) {
+              steps.push({
+                step: "v3_result_cardinality_advisory_recovery",
+                ms: now(),
+                meta: {
+                  before: originalSelectionResultCount,
+                  after: evidenceSafeResults.length,
+                  minimum: resultCardinality.minimum,
+                  relaxed_inputs: attempt.relaxed_inputs,
+                },
+              });
             }
           }
         }
