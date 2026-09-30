@@ -88,6 +88,7 @@ export function resolveSelectionSearchEvidence(
 export interface SelectionSearchFailure {
   ok: boolean;
   total?: number;
+  results_count?: number;
   error_code?: string;
   message?: string;
 }
@@ -307,6 +308,30 @@ export function isRecoverableSelectionSearchFailure(
   if (args.mode !== "by_filter") return false;
   if (result.ok) return Number(result.total ?? 0) === 0;
   return result.error_code === "incomplete_filter";
+}
+
+/**
+ * Advisory facets are useful ranking/retrieval hints, but they must not turn a
+ * normal multi-card selection into a single arbitrary result. A bounded
+ * recovery is warranted only when the current live intersection is below the
+ * cardinality contract and at least one actually applied option is known to be
+ * model-owned. Customer-owned and mandatory facets remain in the request and
+ * are revalidated per card by the caller.
+ */
+export function isRecoverableSelectionSearchShortfall(
+  args: Record<string, unknown>,
+  result: SelectionSearchFailure,
+  minimumResults: number,
+  advisoryOptions: Record<string, string[]> | undefined,
+): boolean {
+  if (args.mode !== "by_filter" || !result.ok) return false;
+  const minimum = Math.max(1, Math.floor(Number(minimumResults) || 1));
+  const actual = Number.isFinite(Number(result.results_count))
+    ? Math.max(0, Number(result.results_count))
+    : Math.max(0, Number(result.total ?? 0));
+  if (actual === 0 || actual >= minimum) return false;
+  return dropModelAdvisoryFacetOptions(args, advisoryOptions).removed.length >
+    0;
 }
 
 const REVALIDATE: SelectionSearchRecoveryAttempt["revalidate"] = [

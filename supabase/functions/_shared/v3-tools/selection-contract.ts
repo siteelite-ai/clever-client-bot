@@ -470,6 +470,38 @@ function productEvidenceMatchesToken(
   return false;
 }
 
+/**
+ * A class word governed by a relation preposition describes what an item is
+ * used with, not what the item is (`connector for cable`, `holder for lamp`).
+ * For a one-word customer-visible class promise, that occurrence cannot prove
+ * product identity. This is grammatical and independent of catalog domains.
+ */
+function titleHasUngovernedClassToken(
+  title: string,
+  rawTargetToken: string,
+): boolean {
+  const tokens = normalize(title).split(/\s+/u).filter(Boolean);
+  const targetStem = stem(rawTargetToken);
+  const relationalPrepositions = new Set([
+    "для",
+    "на",
+    "к",
+    "ко",
+    "под",
+    "с",
+    "со",
+    "без",
+    "for",
+    "to",
+    "with",
+    "without",
+  ]);
+  return tokens.some((token, index) =>
+    token.length >= 3 && stem(token) === targetStem &&
+    (index === 0 || !relationalPrepositions.has(tokens[index - 1]))
+  );
+}
+
 /** A render target must already be present in the customer's request or in the
  * consultant's initial product-class declaration. Later search vocabulary is
  * not allowed to rename the target to a sibling class. */
@@ -1406,10 +1438,37 @@ export function verifySelectionTargetWithVisibleTitle(
   if (meaningfulTokens(target).length !== 1) {
     return verifySelectionTarget(target, products);
   }
-  return verifySelectionTarget(
-    target,
-    products.map((product) => ({ ...product, leaf_category: null })),
+  const rawTargetToken = meaningfulRawTokens(target)[0] ?? "";
+  const visiblyClassed = products.filter((product) =>
+    rawTargetToken &&
+    titleHasUngovernedClassToken(product.pagetitle, rawTargetToken)
   );
+  const rejectedByGrammar = products.filter((product) =>
+    !visiblyClassed.some((candidate) => candidate.id === product.id)
+  );
+  const report = verifySelectionTarget(
+    target,
+    visiblyClassed.map((product) => ({ ...product, leaf_category: null })),
+  );
+  if (rejectedByGrammar.length === 0) return report;
+  const targetTokens = meaningfulTokens(target);
+  const reportRows = new Map(report.per_product.map((row) => [row.id, row]));
+  const perProduct = products.map((product) =>
+    reportRows.get(product.id) ?? {
+      id: product.id,
+      matched: [],
+      missing: targetTokens,
+      coverage: 0,
+    }
+  );
+  const passed = new Set(report.passed_ids);
+  return {
+    ...report,
+    rejected_ids: products.filter((product) => !passed.has(product.id)).map(
+      (product) => product.id,
+    ),
+    per_product: perProduct,
+  };
 }
 
 /**
