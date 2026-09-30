@@ -23,6 +23,33 @@ import {
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
 
+Deno.test("an independently proven live schema may validate one model-discovered class", () => {
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "formal device class",
+      "Formal device class",
+      "Need an analogue of ZX16",
+      false,
+      false,
+      "",
+      true,
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "formal device class",
+      "Unrelated sibling class",
+      "Need an analogue of ZX16",
+      false,
+      false,
+      "",
+      true,
+    ),
+    false,
+  );
+});
+
 Deno.test("a class-equivalent free-text search is scoped to positively grounded live leaves", () => {
   const result = scopeGroundedClassQueryToLiveLeaves(
     { mode: "by_query", query: "электрический удлинитель", per_page: 15 },

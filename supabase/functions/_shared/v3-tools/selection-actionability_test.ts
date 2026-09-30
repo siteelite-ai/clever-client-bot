@@ -4,6 +4,7 @@ import {
   buildDerivedSelectionReasoningToolSchema,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
+  hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
@@ -14,7 +15,48 @@ import {
   shouldProjectDerivedScalarMeasurement,
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
+  systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("a system total may separately declare one per-product range", () => {
+  const reasoning =
+    "Суммарно нужно не менее 5000 лм. Рекомендуется несколько изделий мощностью 20–50 Вт каждый.";
+  assertEquals(
+    systemTotalReasoningDeclaresPerProductMeasurement(reasoning),
+    true,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 500 м²",
+      reasoning,
+      "system_total",
+    ),
+    true,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 500 м²",
+      "Суммарно нужно не менее 5000 лм, распределить между несколькими изделиями.",
+      "system_total",
+    ),
+    false,
+  );
+});
+
+Deno.test("one sentence cannot leave minimum and recommended measured tiers unresolved", () => {
+  assertEquals(
+    hasCompetingMeasuredSelectionTiers(
+      "Требуется сечение не менее 1,5 мм², однако для запаса рекомендуется 2,5 мм².",
+    ),
+    true,
+  );
+  assertEquals(
+    hasCompetingMeasuredSelectionTiers(
+      "Требуется сечение не менее 2,5 мм². Рекомендуется кабель с защитной оболочкой.",
+    ),
+    false,
+  );
+});
 
 Deno.test("two independent measured axes make a selection actionable", () => {
   assertEquals(
@@ -1085,6 +1127,32 @@ Deno.test("a semantic mapping is rejected unless its phrase is literal customer 
   );
   assertEquals(resolved?.explicitCustomerMappings, []);
   assertEquals(resolved?.customerGroundedCompatible, []);
+});
+
+Deno.test("an inflected product noun cannot be remapped to an opaque live value", () => {
+  const facets = [{
+    caption: "Тип режима",
+    type: "string",
+    values: [{ value: "AC" }, { value: "DC" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для задачи нужен подходящий автоматический выключатель.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "автомат",
+        classification_id: "f0v0",
+      }],
+    },
+    facets,
+    "Нужен автомат с заданными параметрами",
+    "Автоматические выключатели",
+  );
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved?.compatible, [{ key: "Тип режима", value: "AC" }]);
 });
 
 Deno.test("an explicit phrase already bound to one live axis cannot be remapped through a shared code", () => {

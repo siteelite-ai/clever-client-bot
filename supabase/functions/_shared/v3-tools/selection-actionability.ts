@@ -41,6 +41,34 @@ export function hasSelectionMeasurementContext(text: string): boolean {
 }
 
 /**
+ * Detects one reasoning sentence that leaves two different same-unit product
+ * tiers active: a stated minimum and a higher/lower recommended choice. Such a
+ * draft is not an executable selection contract—the retriever cannot know
+ * whether to show the bare minimum or the consultant's recommendation. The
+ * caller should request one final product-side threshold before searching.
+ */
+export function hasCompetingMeasuredSelectionTiers(text: string): boolean {
+  const sentences = String(text ?? "").split(/(?<!\d)[.!?]+(?!\d)|\n+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const mandatory =
+    /(?:треб(?:уется|уем)|необходим|нуж(?:ен|на|но|ны)|не\s+менее|минимум|долж(?:ен|на|но|ны))/iu;
+  const recommended =
+    /(?:рекоменду(?:ется|ем|ю)|предпочтител|лучше\s+(?:взять|выбрать|использовать))/iu;
+  return sentences.some((sentence) => {
+    if (!mandatory.test(sentence) || !recommended.test(sentence)) return false;
+    const byUnit = new Map<string, Set<number>>();
+    for (const quantity of extractClientQuantities(sentence)) {
+      if (!isPhysicalMeasurementUnit(quantity.unit)) continue;
+      const values = byUnit.get(quantity.unit) ?? new Set<number>();
+      values.add(quantity.value);
+      byUnit.set(quantity.unit, values);
+    }
+    return [...byUnit.values()].some((values) => values.size > 1);
+  });
+}
+
+/**
  * A visible dimensional calculation from the customer's spatial extent
  * (area/volume) into another physical unit describes the demand of the whole
  * object. It must not silently become an exact scalar of every individual
@@ -799,7 +827,7 @@ export function resolveDerivedSelectionReasoning(
   };
   const normalizedCustomerEvidence = normalizeLiteralEvidence(customerEvidence);
   const normalizedProductClass = new Set(
-    normalizeLiteralEvidence(productClass).split(" ").filter(Boolean),
+    classificationLexicalTokens(productClass),
   );
   const explicitCustomerMappings: Array<{
     phrase: string;
@@ -834,7 +862,7 @@ export function resolveDerivedSelectionReasoning(
         "u",
       );
       if (!phrasePattern.test(normalizedCustomerEvidence)) continue;
-      const phraseTokens = normalizedPhrase.split(" ").filter(Boolean);
+      const phraseTokens = classificationLexicalTokens(phrase);
       if (
         phraseTokens.length > 0 &&
         phraseTokens.every((token) => normalizedProductClass.has(token))
@@ -1417,12 +1445,33 @@ export function shouldProjectDerivedScalarMeasurement(
     | "system_total"
     | "not_applicable" = "per_product",
 ): boolean {
-  if (measurementScope === "system_total") return false;
+  if (
+    measurementScope === "system_total" &&
+    !systemTotalReasoningDeclaresPerProductMeasurement(reasoningText)
+  ) return false;
   const evidence = `${String(userMessage ?? "")}\n${
     String(reasoningText ?? "")
   }`;
   return minimumCompatibilityRelationCount(evidence) < 2 &&
     !reasoningNeedsCompatibilityRelations(evidence);
+}
+
+/** A declaration may contain both a system total and a separately stated
+ * range for every individual item. Keep those scopes separate: aggregate
+ * values remain non-projectable, while the live range compiler may own the
+ * explicitly per-item clause. */
+export function systemTotalReasoningDeclaresPerProductMeasurement(
+  reasoningText: string,
+): boolean {
+  const clauses = String(reasoningText ?? "").split(
+    /(?<!\d)[.!?]+(?!\d)|\n+/u,
+  );
+  return clauses.some((clause) =>
+    /(?:кажд\p{L}*|на\s+(?:один|одно|одну|единиц\p{L}*)|per\s+(?:item|unit))/iu
+      .test(clause) &&
+    /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,8}[²³]?/iu
+      .test(clause)
+  );
 }
 
 /** The later generic measured-reasoning compiler must obey the same scope as

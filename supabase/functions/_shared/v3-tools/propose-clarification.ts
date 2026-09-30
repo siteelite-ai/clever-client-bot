@@ -14,12 +14,19 @@ export interface ProposeClarificationInput {
   question: string;
   facet_key: string;
   options: Array<{ value: string; label?: string; count?: number }>;
-  scope?: { kind: string; token: string };
+  scope?: {
+    kind: string;
+    token: string;
+    /** Server-proven taxonomy context for the next dialogue turn. */
+    resolved_category?: string;
+  };
 }
 
 export function executeProposeClarification(
   input: ProposeClarificationInput,
-): (ProposeClarificationOk & { tool: "propose_clarification" }) | (ToolError & { tool: "propose_clarification" }) {
+):
+  | (ProposeClarificationOk & { tool: "propose_clarification" })
+  | (ToolError & { tool: "propose_clarification" }) {
   const question = (input.question ?? "").trim();
   const facet_key = (input.facet_key ?? "").trim();
   const opts = Array.isArray(input.options) ? input.options : [];
@@ -61,7 +68,9 @@ export function executeProposeClarification(
           facet_key,
           question,
           options: replies,
-          ...(input.scope?.kind && input.scope?.token ? { scope: input.scope } : {}),
+          ...(input.scope?.kind && input.scope?.token
+            ? { scope: input.scope }
+            : {}),
         },
       },
     },

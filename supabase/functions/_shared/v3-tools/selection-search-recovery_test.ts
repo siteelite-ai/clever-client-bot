@@ -215,6 +215,79 @@ Deno.test("every advisory recovery widens retrieval without changing eligibility
   );
 });
 
+Deno.test("recovery preserves class proof while disclosing sparse model-only suitability", () => {
+  const localFacets = [
+    {
+      key: "kind",
+      caption: "Назначение",
+      type: "string",
+      unit: null,
+      values: [{ value: "Класс A" }],
+    },
+    {
+      key: "shell",
+      caption: "Оболочка",
+      type: "string",
+      unit: null,
+      values: [{ value: "Материал B" }],
+    },
+  ];
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      options: { kind: ["Класс A"], shell: ["Материал B"] },
+      per_page: 20,
+    },
+    facets: localFacets,
+    leaf_categories: ["Live leaf"],
+    reasoning_criteria: [],
+    compatibility_shaped: false,
+    advisory_options: { kind: ["Класс A"], shell: ["Материал B"] },
+    advisory_evidence_options: { kind: ["Класс A"] },
+  });
+  assertEquals(plan[0].args, {
+    mode: "by_filter",
+    options: { kind: ["Класс A"] },
+    per_page: 50,
+  });
+  assertEquals(plan[0].proven_criteria, [{
+    key: "Назначение",
+    op: "eq",
+    value: "Класс A",
+    level: "A",
+    evidence: "catalog_verified",
+  }]);
+  assertEquals(plan[0].evidence_required_criteria, []);
+  assertEquals(plan[0].unverified_criteria, [{
+    key: "Оболочка",
+    op: "eq",
+    value: "Материал B",
+    level: "A",
+    evidence: "model_assumption",
+  }]);
+  const products: ProductRef[] = [{
+    id: "class-a",
+    pagetitle: "Товар класса A",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: ["Назначение: Класс A"],
+    description_excerpt: null,
+  }, {
+    id: "class-c",
+    pagetitle: "Товар класса C",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: ["Назначение: Класс C"],
+    description_excerpt: null,
+  }];
+  assertEquals(
+    filterSelectionRecoveryPool(products, plan[0]).map(({ id }) => id),
+    ["class-a", "class-c"],
+  );
+});
+
 Deno.test("an empty filtered search cannot recover into a sibling class", () => {
   assertEquals(
     isRecoverableSelectionSearchFailure(

@@ -295,6 +295,14 @@ Deno.test("compact replacement continuation compiles only live product-proved an
   );
   assertEquals(
     compileLiveCompactReplacementContract(
+      "Есть ли аналог серии ZX C16?\nУточнение клиента: однополюсный",
+      liveFacets,
+      products,
+    )?.axes.at(-1),
+    { key: "poles", caption: "Количество полюсов", value: "1" },
+  );
+  assertEquals(
+    compileLiveCompactReplacementContract(
       "Есть ли аналог серии ZX C16?",
       liveFacets,
       products,
