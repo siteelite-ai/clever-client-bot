@@ -698,6 +698,13 @@ Deno.test("visible reasoning may disambiguate but cannot invent a customer-owned
   };
   const facets = [
     {
+      key: "group_pack_quantity",
+      caption: "Количество в групповой упаковке",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "12" }, { value: "220" }, { value: "230" }],
+    },
+    {
       key: "colour_temperature",
       caption: "Цветовая температура, К",
       type: "string",

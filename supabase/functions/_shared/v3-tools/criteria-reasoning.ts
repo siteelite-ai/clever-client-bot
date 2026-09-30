@@ -85,11 +85,30 @@ const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
 
 function schemaMeasurementUnitTokens(value: string): string[] {
+  const source = String(value ?? "");
   const pattern = new RegExp(
     String.raw`(?<![a-zа-я])(${SIMPLE_UNIT})(?![a-zа-я])`,
     "giu",
   );
-  return [...String(value ?? "").matchAll(pattern)].map((match) => match[1]);
+  return [...source.matchAll(pattern)].flatMap((match) => {
+    const token = match[1];
+    const index = match.index ?? 0;
+    // A one-letter lowercase token in the middle of a caption is usually a
+    // grammatical word, not a physical unit (`Количество в упаковке`). Keep
+    // such unit symbols only when typography proves a measurement position:
+    // after punctuation, at the end, or in uppercase (`Напряжение, В`).
+    const ambiguousLowercaseWord = token.length === 1 &&
+      token === token.toLocaleLowerCase("ru-RU") &&
+      /[авикосу]/u.test(token);
+    if (ambiguousLowercaseWord) {
+      const left = source.slice(0, index);
+      const right = source.slice(index + token.length);
+      const measurementPosition = /[,;:(/]\s*$/u.test(left) ||
+        /^\s*$/u.test(right);
+      if (!measurementPosition) return [];
+    }
+    return [token];
+  });
 }
 
 function normalizeEvidence(value: unknown): string {
