@@ -12,6 +12,7 @@ import {
   hasMeasuredSelectionRequirement,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
+  projectSingleRecommendedMeasuredCriterion,
   promoteMeasuredReasoningCriteria,
   promoteProjectableMeasuredFallbackCriteria,
 } from "./criteria-reasoning.ts";
@@ -28,6 +29,103 @@ function product(id: string, traits: string[]): ProductRef {
     short_traits: traits,
   };
 }
+
+Deno.test("one visible recommended measurement projects to one exact live facet", () => {
+  const projected = projectSingleRecommendedMeasuredCriterion(
+    "Расчетная нагрузка составляет 3 кВт. Рекомендуется изделие с площадью поверхности 20 см².",
+    [{
+      key: "surface_area",
+      caption: "Площадь поверхности, см2",
+      unit: "см²",
+      values: [{ value: "10" }, { value: "20" }, { value: "30" }],
+    }],
+  );
+  assertEquals(projected, {
+    criterion: {
+      key: "Площадь поверхности, см2",
+      op: "eq",
+      value: "20",
+      unit: "см²",
+      level: "A",
+      evidence: "derived_required",
+    },
+    reason: "projected",
+  });
+});
+
+Deno.test("recommended exact measurement is schema-driven across inflection and decimal spelling", () => {
+  const projected = projectSingleRecommendedMeasuredCriterion(
+    "Для расчетной нагрузки рекомендуется силовой вариант сечением 2.5 мм².",
+    [{
+      key: "section",
+      caption: "Сечение изделия, мм2",
+      unit: "мм²",
+      values: [{ value: "1.5" }, { value: "2.5" }, { value: "4" }],
+    }],
+  );
+  assertEquals(projected.criterion, {
+    key: "Сечение изделия, мм2",
+    op: "eq",
+    value: "2.5",
+    unit: "мм²",
+    level: "A",
+    evidence: "derived_required",
+  });
+});
+
+Deno.test("recommended measurement fails closed without a unique local facet meaning", () => {
+  const facets = [
+    {
+      key: "before_size",
+      caption: "Диаметр до преобразования, мм",
+      unit: "мм",
+      values: [{ value: "12" }, { value: "14" }],
+    },
+    {
+      key: "after_size",
+      caption: "Диаметр после преобразования, мм",
+      unit: "мм",
+      values: [{ value: "8" }, { value: "12" }],
+    },
+  ];
+  assertEquals(
+    projectSingleRecommendedMeasuredCriterion(
+      "Рекомендуется диаметр 12 мм.",
+      facets,
+    ),
+    { criterion: null, reason: "ambiguous_schema_match" },
+  );
+  assertEquals(
+    projectSingleRecommendedMeasuredCriterion(
+      "Рекомендуется значение 12 мм.",
+      facets,
+    ),
+    { criterion: null, reason: "no_schema_match" },
+  );
+});
+
+Deno.test("directional and competing recommended tiers stay outside exact projection", () => {
+  const facets = [{
+    key: "dimension",
+    caption: "Рабочий размер, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }, { value: "14" }],
+  }];
+  assertEquals(
+    projectSingleRecommendedMeasuredCriterion(
+      "Рекомендуется рабочий размер не менее 12 мм.",
+      facets,
+    ).reason,
+    "directional_or_range",
+  );
+  assertEquals(
+    projectSingleRecommendedMeasuredCriterion(
+      "Минимальный рабочий размер 10 мм. Рекомендуется рабочий размер 12 мм.",
+      facets,
+    ).reason,
+    "competing_values",
+  );
+});
 
 Deno.test("extractReasoningBounds: направления и строгость", () => {
   assertEquals(extractReasoningBounds("нужен диаметр больше 12 мм"), [
@@ -255,6 +353,28 @@ Deno.test("явная нижняя граница побеждает комфо�
   );
   assertEquals(projected.added, [
     { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("направление перед диапазоном не превращает верхний ориентир в запрет", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Сечение жилы должно быть не менее 0,5–0,75 мм² для предотвращения падения напряжения.",
+    [{
+      key: "section",
+      caption: "Сечение кабеля, мм2",
+      type: "number",
+      unit: "мм²",
+    }],
+  );
+  assertEquals(projected.added, [
+    {
+      key: "Сечение кабеля, мм2",
+      op: "min",
+      value: 0.5,
+      unit: "мм²",
+      level: "A",
+    },
   ]);
 });
 

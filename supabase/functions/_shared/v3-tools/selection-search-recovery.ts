@@ -33,6 +33,13 @@ export interface SelectionSearchRecoveryAttempt {
    * own title, traits or description before the pool can reach the model.
    */
   evidence_required_criteria: Criterion[];
+  /**
+   * Model-derived suitability details removed from retrieval because the live
+   * catalog cannot prove them consistently. They may be disclosed as
+   * unverified, but may never include a customer-owned requirement or replace
+   * the positively proved product-class criteria above.
+   */
+  unverified_criteria: Criterion[];
   /** Every recovery pool must be rechecked by these contracts before render. */
   revalidate: Array<
     "selection_target" | "mandatory_criteria" | "compatibility" | "budget"
@@ -69,12 +76,12 @@ export interface SelectionSearchRecoveryPlanInput {
    */
   advisory_options?: Record<string, string[]>;
   /**
-   * A cardinality recovery may remove advisory options from the remote query
-   * only to widen retrieval. The returned cards must still prove those exact
-   * live values locally, otherwise the recovery would change the semantic
-   * product class merely to reach the requested number of cards.
+   * Subset of advisory options that defines product identity/class. A relaxed
+   * recovery must still prove these values on every card. Other model-only
+   * advisory values may be surfaced as unverified suitability details when
+   * sparse catalog metadata would otherwise force a false empty result.
    */
-  require_advisory_evidence?: boolean;
+  advisory_evidence_options?: Record<string, string[]>;
 }
 
 /**
@@ -490,14 +497,88 @@ export function buildSelectionSearchRecoveryPlan(
   // requirements. When their intersection is empty, relax them before live
   // category scope or explicit user filters. This is data-agnostic: the exact
   // keys and values come from the current live taxonomy projection.
+  const classAdvisoryOptions = input.advisory_evidence_options ?? {};
+  const sparseSuitabilityOptions = Object.fromEntries(
+    Object.entries(input.advisory_options ?? {}).flatMap(([key, values]) => {
+      const classValues = new Set(
+        (classAdvisoryOptions[key] ?? []).map(normalizeFacetValue),
+      );
+      const relaxable = values.filter((value) =>
+        !classValues.has(normalizeFacetValue(value))
+      );
+      return relaxable.length > 0 ? [[key, relaxable]] : [];
+    }),
+  );
+  const preservesClassFilter = Object.keys(classAdvisoryOptions).length > 0 &&
+    Object.keys(sparseSuitabilityOptions).length > 0;
   const advisoryFallback = dropModelAdvisoryFacetOptions(
     original,
-    input.advisory_options,
+    preservesClassFilter ? sparseSuitabilityOptions : input.advisory_options,
   );
   if (advisoryFallback.removed.length > 0) {
-    const advisoryEvidenceRequired = input.require_advisory_evidence
-      ? removedFacetEvidenceCriteria(advisoryFallback.removed, input.facets)
+    // A model-owned option may be removed from the upstream request only to
+    // compensate for a sparse or inconsistent facet index. It still defines
+    // which products are eligible. Require every recovered card to prove the
+    // removed live value locally for both an empty search and a short one;
+    // otherwise the same request could cross into a sibling product class
+    // solely because the first catalog response happened to contain zero.
+    const classEvidenceRemoved = Object.keys(classAdvisoryOptions).length > 0
+      ? advisoryFallback.removed.filter(({ key, value }) =>
+        (classAdvisoryOptions[key] ?? []).some((candidate) =>
+          normalizeFacetValue(candidate) === normalizeFacetValue(value)
+        )
+      )
       : [];
+    const retainedClassValues = preservesClassFilter
+      ? Object.entries(original.options as Record<string, unknown>).flatMap(
+        ([key, rawValues]) => {
+          const values = Array.isArray(rawValues)
+            ? rawValues.map(String)
+            : typeof rawValues === "string"
+            ? [rawValues]
+            : [];
+          const allowed = new Set(
+            (classAdvisoryOptions[key] ?? []).map(normalizeFacetValue),
+          );
+          return values.filter((value) =>
+            allowed.has(normalizeFacetValue(value))
+          ).map((value) => ({ key, value }));
+        },
+      )
+      : [];
+    // The split is enabled only when at least one removed live option remains
+    // positively class-defining. Without that anchor we preserve the previous
+    // fail-closed behavior and require proof for every relaxed option.
+    const mayDiscloseSparseSuitability = retainedClassValues.length > 0 ||
+      classEvidenceRemoved.length > 0;
+    const advisoryEvidenceRequired = removedFacetEvidenceCriteria(
+      retainedClassValues.length > 0
+        ? []
+        : mayDiscloseSparseSuitability
+        ? classEvidenceRemoved
+        : advisoryFallback.removed,
+      input.facets,
+    );
+    const advisoryUnverified = mayDiscloseSparseSuitability
+      ? removedFacetEvidenceCriteria(
+        advisoryFallback.removed.filter(({ key, value }) =>
+          !classEvidenceRemoved.some((candidate) =>
+            candidate.key === key && candidate.value === value
+          )
+        ),
+        input.facets,
+      ).map((criterion) => ({
+        ...criterion,
+        evidence: "model_assumption" as const,
+      }))
+      : [];
+    const retainedClassProof = removedFacetEvidenceCriteria(
+      retainedClassValues,
+      input.facets,
+    ).map((criterion) => ({
+      ...criterion,
+      evidence: "catalog_verified" as const,
+    }));
     const advisoryArgs = ensureGroundedFilterScope(
       advisoryFallback.args,
       input.leaf_categories,
@@ -511,8 +592,9 @@ export function buildSelectionSearchRecoveryPlan(
       relaxed_inputs: advisoryFallback.removed.map(({ key }) =>
         `model_advisory:${key}`
       ),
-      proven_criteria: [],
+      proven_criteria: retainedClassProof,
       evidence_required_criteria: advisoryEvidenceRequired,
+      unverified_criteria: advisoryUnverified,
       revalidate: [...REVALIDATE],
     });
 
@@ -543,7 +625,7 @@ export function buildSelectionSearchRecoveryPlan(
           ...advisoryFallback.removed.map(({ key }) => `model_advisory:${key}`),
           ...combinedBooleanFallback.removed.map(({ key }) => `boolean:${key}`),
         ],
-        proven_criteria: [],
+        proven_criteria: retainedClassProof,
         evidence_required_criteria: [
           ...advisoryEvidenceRequired,
           ...combinedBooleanFallback.removed.map(({ key, value }) => {
@@ -558,6 +640,7 @@ export function buildSelectionSearchRecoveryPlan(
             };
           }),
         ],
+        unverified_criteria: advisoryUnverified,
         revalidate: [...REVALIDATE],
       });
     }
@@ -574,6 +657,7 @@ export function buildSelectionSearchRecoveryPlan(
       relaxed_inputs: ["category_scope"],
       proven_criteria: [],
       evidence_required_criteria: [],
+      unverified_criteria: [],
       revalidate: [...REVALIDATE],
     });
   }
@@ -613,6 +697,7 @@ export function buildSelectionSearchRecoveryPlan(
           };
         },
       ),
+      unverified_criteria: [],
       revalidate: [...REVALIDATE],
     });
   }
@@ -631,6 +716,7 @@ export function buildSelectionSearchRecoveryPlan(
         relaxed_inputs: ["model_filter_serialization"],
         proven_criteria: [],
         evidence_required_criteria: [],
+        unverified_criteria: [],
         revalidate: [...REVALIDATE],
       });
     }
@@ -658,6 +744,7 @@ export function buildSelectionSearchRecoveryPlan(
         relaxed_inputs: ["model_filter_serialization"],
         proven_criteria: projection.proven_criteria,
         evidence_required_criteria: [],
+        unverified_criteria: [],
         revalidate: [...REVALIDATE],
       });
       if (Array.isArray(scoped.category_in)) {
@@ -669,19 +756,19 @@ export function buildSelectionSearchRecoveryPlan(
           relaxed_inputs: ["model_filter_serialization", "category_scope"],
           proven_criteria: projection.proven_criteria,
           evidence_required_criteria: [],
+          unverified_criteria: [],
           revalidate: [...REVALIDATE],
         });
       }
     }
   }
 
-  if (input.require_advisory_evidence) {
-    // A successful search with too few cards is not a serialization failure.
-    // Range/category recovery paths are intended for an empty or invalid
-    // request and may omit the visible advisory class altogether. During a
-    // cardinality shortfall only the evidence-preserving advisory relaxation
-    // is eligible; if it cannot prove more cards, keep the smaller correct
-    // pool instead of crossing into a sibling class.
+  if (advisoryFallback.removed.length > 0) {
+    // Once a recovery relaxes a visible semantic class, no later range or
+    // category fallback may omit that class. This is true for empty, invalid
+    // and merely short searches alike: if local evidence cannot prove more
+    // cards, keep the smaller correct pool (or an honest empty result) instead
+    // of crossing into a sibling class.
     return attempts.filter(({ kind }) =>
       kind === "relax_model_advisory_facets" ||
       kind ===

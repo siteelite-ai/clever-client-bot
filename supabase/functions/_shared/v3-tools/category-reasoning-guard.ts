@@ -308,6 +308,7 @@ export function discoveryResultPreservesCustomerIntent(
   customerOwnedSemanticResolution: boolean,
   liveFacetSchemaResolution = false,
   resolverGroundedFrom = "",
+  independentSchemaResolution = false,
 ): boolean {
   // Server-compiled discovery sends the complete customer sentence so the
   // live resolver can distinguish product class from application. When that
@@ -337,7 +338,8 @@ export function discoveryResultPreservesCustomerIntent(
       (requestedGrounded || customerOwnedSemanticResolution) ||
     sharesRequestedBase &&
       (requestedGrounded || customerOwnedSemanticResolution) ||
-    liveFacetSchemaResolution && sharesRequestedBase;
+    liveFacetSchemaResolution && sharesRequestedBase ||
+    independentSchemaResolution && preservesRequested;
 }
 
 function leafSupported(

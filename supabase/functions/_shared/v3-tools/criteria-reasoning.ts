@@ -76,6 +76,17 @@ export interface MeasuredReasoningSearchContract {
   unmatched_keys: string[];
 }
 
+export interface RecommendedMeasuredCriterionProjection {
+  criterion: Criterion | null;
+  reason:
+    | "projected"
+    | "not_recommended"
+    | "directional_or_range"
+    | "competing_values"
+    | "no_schema_match"
+    | "ambiguous_schema_match";
+}
+
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 // Preserve a rate/density unit as one scale (`лм/м²`, `м/с`, `Вт/м`).
@@ -627,6 +638,140 @@ export function promoteProjectableMeasuredFallbackCriteria(
   return { criteria: next, promoted };
 }
 
+/**
+ * Project one disclosed engineering recommendation onto one exact live
+ * numeric facet. This is intentionally narrower than the ordinary prose
+ * projector: it is for the derived-selection stage where an application
+ * measurement has already been identified as needing a product-side answer.
+ *
+ * Safety properties:
+ * - the recommendation and exact physical quantity must be visible;
+ * - a directional limit/range stays owned by the range compiler;
+ * - the same unit cannot carry competing numeric tiers anywhere in the
+ *   reasoning;
+ * - a live facet must expose the same unit and exact value;
+ * - the facet meaning must be locally named, and the best match must be
+ *   unique. No product/category vocabulary or aliases are used.
+ */
+export function projectSingleRecommendedMeasuredCriterion(
+  reasoningText: string,
+  facets: Array<CriteriaFacet & { type?: string }>,
+): RecommendedMeasuredCriterionProjection {
+  const reasoning = String(reasoningText ?? "");
+  const recommendation =
+    /(?:рекоменду(?:ется|ем|ю)|предпочтител|оптимальн|лучше\s+(?:взять|выбрать|использовать))/iu;
+  const directional =
+    /(?:не\s+(?:менее|более|меньше|больше|ниже|выше)|минимум|максимум|(?:^|\s)(?:от|до)\s+\d|[<>≤≥]|\d+(?:[.,]\d+)?\s*[–—-]\s*\d)/iu;
+  const clauses = reasoning.split(/(?<!\d)[.!?]+(?!\d)|\n+/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  const recommendedClauses = clauses.filter((clause) =>
+    recommendation.test(clause)
+  );
+  if (recommendedClauses.length === 0) {
+    return { criterion: null, reason: "not_recommended" };
+  }
+  if (recommendedClauses.some((clause) => directional.test(clause))) {
+    return { criterion: null, reason: "directional_or_range" };
+  }
+
+  const allQuantities = extractClientQuantities(reasoning)
+    .map((quantity) => ({
+      ...quantity,
+      unit: canonicalMeasurementUnit(quantity.unit),
+    }))
+    .filter(({ unit }) => Boolean(unit));
+  const valuesByUnit = new Map<string, Set<number>>();
+  for (const quantity of allQuantities) {
+    const values = valuesByUnit.get(quantity.unit) ?? new Set<number>();
+    values.add(quantity.value);
+    valuesByUnit.set(quantity.unit, values);
+  }
+
+  const normalizeTokens = (value: string): string[] =>
+    normalizeEvidence(value).split(" ").filter((token) =>
+      token.length >= 4 && !/^\d/u.test(token)
+    );
+  const tokensMatch = (left: string, right: string): boolean =>
+    left === right || left.length >= 5 && right.length >= 5 &&
+      left.slice(0, 4) === right.slice(0, 4);
+  const candidates: Array<{
+    criterion: Criterion;
+    score: number;
+  }> = [];
+
+  for (const clause of recommendedClauses) {
+    const contextTokens = normalizeTokens(clause);
+    for (
+      const quantity of extractClientQuantities(clause).map((item) => ({
+        ...item,
+        unit: canonicalMeasurementUnit(item.unit),
+      }))
+    ) {
+      if (!quantity.unit) continue;
+      if ((valuesByUnit.get(quantity.unit)?.size ?? 0) > 1) {
+        continue;
+      }
+      for (const facet of facets ?? []) {
+        const publicLabel = String(facet.caption || facet.key || "");
+        const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
+        const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
+          .some((token) => canonicalMeasurementUnit(token) === quantity.unit);
+        if (declaredUnit !== quantity.unit && !labelHasUnit) continue;
+        const liveValue = (facet.values ?? []).find(({ value }) => {
+          const span = parseNumericFacetValue(value);
+          return span !== null && span.min === quantity.value &&
+            span.max === quantity.value;
+        })?.value;
+        if (liveValue === undefined) continue;
+        const labelTokens = normalizeTokens(`${facet.key} ${facet.caption}`);
+        const score = labelTokens.filter((labelToken) =>
+          contextTokens.some((contextToken) =>
+            tokensMatch(labelToken, contextToken)
+          )
+        ).length;
+        if (score === 0) {
+          continue;
+        }
+        candidates.push({
+          criterion: {
+            key: facet.caption || facet.key,
+            op: "eq",
+            value: liveValue,
+            unit: facet.unit ?? quantity.unit,
+            level: "A",
+            evidence: "derived_required",
+          },
+          score,
+        });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    const hasCompetingValues = [...valuesByUnit.values()].some((values) =>
+      values.size > 1
+    );
+    return {
+      criterion: null,
+      reason: hasCompetingValues ? "competing_values" : "no_schema_match",
+    };
+  }
+  const bestScore = Math.max(...candidates.map(({ score }) => score));
+  const best = candidates.filter(({ score }) => score === bestScore)
+    .filter(({ criterion }, index, all) =>
+      all.findIndex((candidate) =>
+        normalizeEvidence(candidate.criterion.key) ===
+          normalizeEvidence(criterion.key) &&
+        String(candidate.criterion.value) === String(criterion.value)
+      ) === index
+    );
+  if (best.length !== 1) {
+    return { criterion: null, reason: "ambiguous_schema_match" };
+  }
+  return { criterion: best[0].criterion, reason: "projected" };
+}
+
 /** Projects explicit numeric ranges from the consultant's own prose onto a
  * unique live numeric facet with the same unit. This is the server-side bridge
  * from reasoning to criteria; no product/category vocabulary is embedded. */
@@ -804,9 +949,49 @@ export function projectReasoningRangeCriteria(
       ranges.push(candidate);
     }
   }
-  const directionalBounds = collapseBounds(
-    extractReasoningBounds(reasoningText),
+  // A directional phrase can govern a displayed recommendation band itself:
+  // `не менее 0,5–0,75 мм²`.  Treating that typography as a closed interval
+  // invents an upper incompatibility and rejects every stronger product.  The
+  // direction owns only the outer admissibility boundary (low for minimum,
+  // high for maximum); the other endpoint remains an orientation target.
+  const directionalRangeBounds: ReasoningBound[] = ranges.flatMap(
+    (range): ReasoningBound[] => {
+      const low = String(range.low).replace(".", "[.,]");
+      const high = String(range.high).replace(".", "[.,]");
+      const interval = `${low}\\s*[–—-]\\s*${high}(?![\\d.,])`;
+      if (
+        new RegExp(
+          `(?:не\\s+менее|как\\s+минимум|at\\s+least)\\s*${interval}`,
+          "iu",
+        ).test(range.context)
+      ) {
+        return [{
+          op: "min" as const,
+          value: range.low,
+          unit: range.unit,
+          strict: false,
+        }];
+      }
+      if (
+        new RegExp(
+          `(?:не\\s+более|не\\s+выше|at\\s+most)\\s*${interval}`,
+          "iu",
+        ).test(range.context)
+      ) {
+        return [{
+          op: "max" as const,
+          value: range.high,
+          unit: range.unit,
+          strict: false,
+        }];
+      }
+      return [];
+    },
   );
+  const directionalBounds = collapseBounds([
+    ...extractReasoningBounds(reasoningText),
+    ...directionalRangeBounds,
+  ]);
   const projectedClosedRanges: typeof ranges = [];
   const distributedAggregate = isDistributedAggregateMeasurement(text);
   for (const range of ranges) {

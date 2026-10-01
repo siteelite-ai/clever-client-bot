@@ -623,6 +623,68 @@ export function extendSelectionCriteriaPlan(
   });
 }
 
+export interface RelaxModelDerivedSelectionCriteriaResult {
+  plan: SelectionCriteriaPlan | null;
+  relaxed: Criterion[];
+  refused: Criterion[];
+}
+
+/**
+ * Removes only explicitly identified model-derived suitability details after
+ * a recovery has positively preserved a separate product-class criterion.
+ * Customer-owned and catalog-verified obligations remain immutable. This is
+ * deliberately not part of the ordinary plan extension path: it is a narrow,
+ * auditable escape hatch for sparse upstream metadata, not a generic way to
+ * weaken a failed selection.
+ */
+export function relaxModelDerivedSelectionCriteriaPlan(
+  current: SelectionCriteriaPlan | null,
+  unverified: Criterion[],
+  preservedClassCriteria: Criterion[],
+): RelaxModelDerivedSelectionCriteriaResult {
+  if (
+    !current || unverified.length === 0 || preservedClassCriteria.length === 0
+  ) {
+    return { plan: current, relaxed: [], refused: [] };
+  }
+  const requested = new Set(unverified.map(mandatoryCriterionSignature));
+  const relaxed: Criterion[] = [];
+  const refused: Criterion[] = [];
+  const mandatory = current.mandatory_criteria.flatMap((criterion) => {
+    if (!requested.has(mandatoryCriterionSignature(criterion))) {
+      return [{ ...criterion }];
+    }
+    if (criterion.evidence !== "derived_required") {
+      refused.push({ ...criterion });
+      return [{ ...criterion }];
+    }
+    relaxed.push({ ...criterion });
+    return [];
+  });
+  if (relaxed.length === 0) {
+    return { plan: current, relaxed, refused };
+  }
+  const retainedSignatures = new Set(
+    mandatory.map(mandatoryCriterionSignature),
+  );
+  const criterionSources = Object.fromEntries(
+    Object.entries(current.criterion_sources)
+      .filter(([signature]) => retainedSignatures.has(signature))
+      .map(([signature, sources]) => [signature, [...sources]]),
+  );
+  return {
+    plan: Object.freeze({
+      mandatory_criteria: Object.freeze(
+        mandatory.map((criterion) => Object.freeze({ ...criterion })),
+      ),
+      criterion_sources: Object.freeze(criterionSources),
+      hash: selectionCriteriaPlanHash(mandatory),
+    }),
+    relaxed,
+    refused,
+  };
+}
+
 /** Returns obligations from the frozen plan that a later contract omitted. */
 export function missingSelectionCriteria(
   plan: SelectionCriteriaPlan | null,

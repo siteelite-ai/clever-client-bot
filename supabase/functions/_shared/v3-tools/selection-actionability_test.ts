@@ -4,6 +4,7 @@ import {
   buildDerivedSelectionReasoningToolSchema,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
+  hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
@@ -14,7 +15,48 @@ import {
   shouldProjectDerivedScalarMeasurement,
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
+  systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("a system total may separately declare one per-product range", () => {
+  const reasoning =
+    "Суммарно нужно не менее 5000 лм. Рекомендуется несколько изделий мощностью 20–50 Вт каждый.";
+  assertEquals(
+    systemTotalReasoningDeclaresPerProductMeasurement(reasoning),
+    true,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 500 м²",
+      reasoning,
+      "system_total",
+    ),
+    true,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 500 м²",
+      "Суммарно нужно не менее 5000 лм, распределить между несколькими изделиями.",
+      "system_total",
+    ),
+    false,
+  );
+});
+
+Deno.test("one sentence cannot leave minimum and recommended measured tiers unresolved", () => {
+  assertEquals(
+    hasCompetingMeasuredSelectionTiers(
+      "Требуется сечение не менее 1,5 мм², однако для запаса рекомендуется 2,5 мм².",
+    ),
+    true,
+  );
+  assertEquals(
+    hasCompetingMeasuredSelectionTiers(
+      "Требуется сечение не менее 2,5 мм². Рекомендуется кабель с защитной оболочкой.",
+    ),
+    false,
+  );
+});
 
 Deno.test("two independent measured axes make a selection actionable", () => {
   assertEquals(
@@ -518,40 +560,131 @@ Deno.test("a model-derived exact value requires visible facet context", () => {
     caption: "Цвет корпуса",
     values: [{ value: "белый" }, { value: "черный" }],
   }];
-  const unrelated = resolveDerivedSelectionReasoning({
-    reasoning: "Для задачи подходит холодный белый свет.",
-    measurement_scope: "not_applicable",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f0v0"],
-    explicit_customer_classifications: [],
-  }, facets, "Нужен вариант для улицы");
+  const unrelated = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для задачи подходит холодный белый свет.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужен вариант для улицы",
+  );
   assertEquals(unrelated?.requiredFacetValues, []);
 
-  const grounded = resolveDerivedSelectionReasoning({
-    reasoning: "Цвет корпуса должен быть белый.",
-    measurement_scope: "not_applicable",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f0v0"],
-    explicit_customer_classifications: [],
-  }, facets, "Нужен вариант для улицы");
+  const grounded = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Цвет корпуса должен быть белый.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужен вариант для улицы",
+  );
   assertEquals(grounded?.requiredFacetValues, [{
     key: "Цвет корпуса",
     value: "белый",
   }]);
 });
 
+Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {
+  const facets = [{
+    key: "shell",
+    caption: "Оболочка",
+    values: [{ value: "ПВХ" }, { value: "полиэтилен" }],
+  }];
+  const alternative = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для среды нужна стойкая оболочка: подходят ПВХ или полиэтилен.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужен вариант для наружной установки",
+  );
+  assertEquals(alternative?.requiredFacetValues, []);
+  assertEquals(alternative?.text.includes("Обязательные параметры"), false);
+
+  const unique = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для среды обязательна оболочка из полиэтилена.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужен вариант для наружной установки",
+  );
+  assertEquals(unique?.requiredFacetValues, [{
+    key: "Оболочка",
+    value: "полиэтилен",
+  }]);
+});
+
+Deno.test("a structured ID cannot collapse a derived numeric range to one exact value", () => {
+  const facets = [{
+    key: "section",
+    caption: "Сечение кабеля, мм2",
+    unit: "мм²",
+    values: [{ value: "0.5" }, { value: "0.75" }, { value: "1" }],
+  }];
+  const derived = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для задачи подходит сечение кабеля от 0,5 до 1 мм².",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Длина линии 30 метров",
+  );
+  assertEquals(derived?.requiredFacetValues, []);
+
+  const customerExact = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Требуется сечение кабеля 0,5 мм².",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужно сечение кабеля 0,5 мм²",
+  );
+  assertEquals(customerExact?.requiredFacetValues, [{
+    key: "Сечение кабеля, мм2",
+    value: "0.5",
+  }]);
+});
+
 Deno.test("opaque live-schema IDs are removed from customer-visible reasoning", () => {
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Нужны количество полюсов = 1 (f5v2), номинальный ток = 16 А f9v2.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [],
-  }, [], "Нужен автомат 1 полюс, 16 А");
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Нужны количество полюсов = 1 (f5v2), номинальный ток = 16 А f9v2.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Нужен автомат 1 полюс, 16 А",
+  );
   assertEquals(resolved?.text.includes("f5v2"), false);
   assertEquals(resolved?.text.includes("f9v2"), false);
   assertEquals(resolved?.text.includes("количество полюсов = 1"), true);
@@ -618,9 +751,7 @@ Deno.test("system total drops a derived per-card measurement", () => {
 
   assertEquals(resolved?.measurementScope, "system_total");
   assertEquals(
-    resolved?.requiredFacetValues.some(({ key }) =>
-      key === "Световой поток"
-    ),
+    resolved?.requiredFacetValues.some(({ key }) => key === "Световой поток"),
     false,
   );
   assertEquals(
@@ -996,6 +1127,32 @@ Deno.test("a semantic mapping is rejected unless its phrase is literal customer 
   );
   assertEquals(resolved?.explicitCustomerMappings, []);
   assertEquals(resolved?.customerGroundedCompatible, []);
+});
+
+Deno.test("an inflected product noun cannot be remapped to an opaque live value", () => {
+  const facets = [{
+    caption: "Тип режима",
+    type: "string",
+    values: [{ value: "AC" }, { value: "DC" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для задачи нужен подходящий автоматический выключатель.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "автомат",
+        classification_id: "f0v0",
+      }],
+    },
+    facets,
+    "Нужен автомат с заданными параметрами",
+    "Автоматические выключатели",
+  );
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved?.compatible, [{ key: "Тип режима", value: "AC" }]);
 });
 
 Deno.test("an explicit phrase already bound to one live axis cannot be remapped through a shared code", () => {

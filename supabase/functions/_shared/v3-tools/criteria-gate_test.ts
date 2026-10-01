@@ -24,6 +24,7 @@ import {
   projectCommonRenderedMarkdownUserCriteria,
   projectCommonRenderedUserCriteria,
   projectCriteriaFacetOptions,
+  relaxModelDerivedSelectionCriteriaPlan,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
   titleContradictsExactCountCriterion,
@@ -41,6 +42,60 @@ function product(id: string, traits: string[]): ProductRef {
     short_traits: traits,
   };
 }
+
+Deno.test("sparse-metadata recovery relaxes only model-derived suitability", () => {
+  const derived: Criterion = {
+    key: "Материал",
+    op: "eq",
+    value: "Вариант A",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const explicit: Criterion = {
+    key: "Цвет",
+    op: "eq",
+    value: "Черный",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const plan = extendSelectionCriteriaPlan(
+    extendSelectionCriteriaPlan(null, [derived], "reasoning_projection"),
+    [explicit],
+    "guarded_search",
+  );
+  const result = relaxModelDerivedSelectionCriteriaPlan(
+    plan,
+    [derived, explicit],
+    [{
+      key: "Класс",
+      op: "eq",
+      value: "Тип A",
+      level: "A",
+      evidence: "model_assumption",
+    }],
+  );
+  assertEquals(result.relaxed, [derived]);
+  assertEquals(result.refused, [explicit]);
+  assertEquals(result.plan?.mandatory_criteria, [explicit]);
+});
+
+Deno.test("model-derived criteria cannot relax without a preserved class proof", () => {
+  const derived: Criterion = {
+    key: "Материал",
+    op: "eq",
+    value: "Вариант A",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const plan = extendSelectionCriteriaPlan(
+    null,
+    [derived],
+    "reasoning_projection",
+  );
+  const result = relaxModelDerivedSelectionCriteriaPlan(plan, [derived], []);
+  assertEquals(result.plan, plan);
+  assertEquals(result.relaxed, []);
+});
 
 Deno.test("derived minimum prefers the closest sufficient standard tier", () => {
   const products = [

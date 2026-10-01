@@ -1,14 +1,19 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  resolveSelectionReadinessRequest,
   measuredLoadGuidanceCanProceed,
+  resolveScopedCatalogSelectionContinuation,
+  resolveSelectionReadinessRequest,
   selectionReadinessEvidenceFromHistory,
+  selectionReadinessScope,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
 
 const cases = [
-  ["Сколько автоматов нужно поставить в щит для дома?", "electrical_distribution_plan"],
+  [
+    "Сколько автоматов нужно поставить в щит для дома?",
+    "electrical_distribution_plan",
+  ],
   ["Мне нужен кабель для насоса", "pump_cable"],
   ["Какой кабель подойдет для прокладки в земле?", "underground_cable"],
   ["Подберите автомат для двигателя", "motor_breaker"],
@@ -38,24 +43,35 @@ Deno.test("selection readiness allows a completed pump-cable context", () => {
 });
 
 Deno.test("distribution-board sizing always asks for topology, power and major loads", () => {
-  for (const message of [
-    "Сколько автоматов нужно поставить в щит для частного дома площадью 180 квадратов?",
-    "Для коттеджа 240 м² какое количество автоматов должно быть в электрощите?",
-    "Щит дома: сколько УЗО и автоматов предусмотреть?",
-  ]) {
+  for (
+    const message of [
+      "Сколько автоматов нужно поставить в щит для частного дома площадью 180 квадратов?",
+      "Для коттеджа 240 м² какое количество автоматов должно быть в электрощите?",
+      "Щит дома: сколько УЗО и автоматов предусмотреть?",
+    ]
+  ) {
     const clarification = selectReadinessClarification(message);
     assertEquals(clarification?.profile, "electrical_distribution_plan");
-    assertEquals(/однофаз|трёхфаз|220|380/iu.test(clarification?.question ?? ""), true);
+    assertEquals(
+      /однофаз|трёхфаз|220|380/iu.test(clarification?.question ?? ""),
+      true,
+    );
     assertEquals(/мощн/iu.test(clarification?.question ?? ""), true);
-    assertEquals(/плит|бойлер|кот[её]л|насос|саун/iu.test(clarification?.question ?? ""), true);
+    assertEquals(
+      /плит|бойлер|кот[её]л|насос|саун/iu.test(clarification?.question ?? ""),
+      true,
+    );
   }
 });
 
 Deno.test("distribution-board sizing can proceed only after all three input groups", () => {
-  assertEquals(selectReadinessClarification(
-    "Сколько автоматов нужно поставить в щит для дома?",
-    "Ввод 380 В трёхфазный, выделено 25 кВт, есть плита, бойлер и насос",
-  ), null);
+  assertEquals(
+    selectReadinessClarification(
+      "Сколько автоматов нужно поставить в щит для дома?",
+      "Ввод 380 В трёхфазный, выделено 25 кВт, есть плита, бойлер и насос",
+    ),
+    null,
+  );
 });
 
 Deno.test("selection readiness evidence never treats assistant prompts as customer facts", () => {
@@ -64,7 +80,8 @@ Deno.test("selection readiness evidence never treats assistant prompts as custom
       { role: "user", content: "Мне нужен кабель для насоса" },
       {
         role: "assistant",
-        content: "Уточните мощность, длину, напряжение, число фаз и способ прокладки",
+        content:
+          "Уточните мощность, длину, напряжение, число фаз и способ прокладки",
       },
       { role: "user", content: "7 кВт, стационарно на улице" },
     ]),
@@ -92,12 +109,16 @@ Deno.test("progressive motor clarification advances from phase to nameplate curr
   );
   assertEquals(clarification?.profile, "motor_breaker");
   assertEquals(clarification?.facet_key, "motor_start_method");
-  assertEquals(/номинальн|шильдик|рабоч/iu.test(clarification?.question ?? ""), true);
+  assertEquals(
+    /номинальн|шильдик|рабоч/iu.test(clarification?.question ?? ""),
+    true,
+  );
   assertEquals(/пуск/iu.test(clarification?.question ?? ""), true);
 });
 
 Deno.test("a measured load guidance question reaches visible reasoning before catalog readiness", () => {
-  const message = "Какой автоматический выключатель мне нужен для квартиры с нагрузкой 7 кВт?";
+  const message =
+    "Какой автоматический выключатель мне нужен для квартиры с нагрузкой 7 кВт?";
   assertEquals(measuredLoadGuidanceCanProceed(message), true);
   assertEquals(selectReadinessClarification(message), null);
 });
@@ -105,17 +126,24 @@ Deno.test("a measured load guidance question reaches visible reasoning before ca
 Deno.test("a direct catalog order with the same load remains readiness-protected", () => {
   const message = "Подбери автомат для квартиры с нагрузкой 7 кВт";
   assertEquals(measuredLoadGuidanceCanProceed(message), false);
-  assertEquals(selectReadinessClarification(message)?.profile, "apartment_breaker");
+  assertEquals(
+    selectReadinessClarification(message)?.profile,
+    "apartment_breaker",
+  );
 });
 
 Deno.test("a question without a measured load still receives an essential clarification", () => {
   const message = "Какой кабель подойдет для прокладки в земле?";
   assertEquals(measuredLoadGuidanceCanProceed(message), false);
-  assertEquals(selectReadinessClarification(message)?.profile, "underground_cable");
+  assertEquals(
+    selectReadinessClarification(message)?.profile,
+    "underground_cable",
+  );
 });
 
 Deno.test("specified availability browse proceeds without optional preference questions", () => {
-  const message = "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27";
+  const message =
+    "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27";
   assertEquals(specifiedAvailabilityBrowseIsActionable(message), true);
   assertEquals(selectReadinessClarification(message), null);
 });
@@ -128,7 +156,9 @@ Deno.test("compatibility browse remains blocked despite several measurements", (
 
 Deno.test("selection readiness does not block a precise floodlight search", () => {
   assertEquals(
-    selectReadinessClarification("Покажите светодиодные прожекторы мощностью от 100 Вт"),
+    selectReadinessClarification(
+      "Покажите светодиодные прожекторы мощностью от 100 Вт",
+    ),
     null,
   );
 });
@@ -149,7 +179,8 @@ Deno.test("asking for variants does not bypass missing selection parameters", ()
 
 Deno.test("variant wording does not bypass readiness in another product domain", () => {
   assertEquals(
-    selectReadinessClarification("Предложи варианты кабеля для насоса")?.profile,
+    selectReadinessClarification("Предложи варианты кабеля для насоса")
+      ?.profile,
     "pump_cable",
   );
 });
@@ -196,7 +227,8 @@ Deno.test("outdoor protection is derived after the customer supplies parking geo
 });
 
 Deno.test("free-form clarification answer retains the original selection request", () => {
-  const original = "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома";
+  const original =
+    "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома";
   const resolved = resolveSelectionReadinessRequest(
     "Площадь около 120 м², высота установки 4 м",
     {
@@ -206,9 +238,43 @@ Deno.test("free-form clarification answer retains the original selection request
     },
   );
   assertEquals(resolved, {
-    message: `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
+    message:
+      `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
     scoped: true,
   });
+});
+
+Deno.test("catalog clarification preserves its server-proven category for a terse continuation", () => {
+  const original = "Подберите аналог Schneider Electric Acti9 C16";
+  const slots = {
+    pending_clarification: {
+      question: "Уточните количество полюсов",
+      facet_key: "poles",
+      options: ["1", "2", "3"],
+      scope: selectionReadinessScope(original, {
+        resolved_category: "Автоматические выключатели",
+      }),
+    },
+  };
+  assertEquals(
+    resolveScopedCatalogSelectionContinuation(
+      "Однополюсный, покажи варианты из каталога",
+      slots,
+    ),
+    {
+      message:
+        `${original}\nУточнение клиента: Однополюсный, покажи варианты из каталога`,
+      category: "Автоматические выключатели",
+    },
+  );
+  assertEquals(
+    resolveScopedCatalogSelectionContinuation("Однополюсный", {
+      pending_clarification: {
+        scope: selectionReadinessScope(original),
+      },
+    }),
+    null,
+  );
 });
 
 Deno.test("surveillance route length satisfies the distance requirement", () => {
@@ -224,7 +290,8 @@ Deno.test("surveillance route length satisfies the distance requirement", () => 
 
 Deno.test("specific readiness profile wins over an overlapping generic profile", () => {
   assertEquals(
-    selectReadinessClarification("Нужен уличный прожектор для парковки")?.profile,
+    selectReadinessClarification("Нужен уличный прожектор для парковки")
+      ?.profile,
     "parking_floodlight",
   );
 });

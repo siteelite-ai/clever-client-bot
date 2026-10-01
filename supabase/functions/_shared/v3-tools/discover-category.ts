@@ -5,9 +5,9 @@
 
 import type { CatalogClientDeps } from "./search-catalog.ts";
 import {
+  type CompactCodeFacet,
   compactFacetCodeSupportScore,
   resolveCompoundFacetValueEvidence,
-  type CompactCodeFacet,
 } from "./compact-facet-code.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import { extractCustomerOwnedDiscoveryTarget } from "./category-reasoning-guard.ts";
@@ -30,10 +30,10 @@ export interface CategoryTreeNode {
 }
 
 interface CategoriesCache {
-  flat: CategoryCandidate[];           // для exact/LLM-резолвера по pagetitle
-  byId: Map<number, CategoryNode>;     // для обхода поддерева (родитель → дети)
-  byPagetitle: Map<string, number>;    // pagetitle (нормализованный) → id
-  isLeaf: Map<string, boolean>;        // нормализованный pagetitle → лист ли (childrenIds.length === 0)
+  flat: CategoryCandidate[]; // для exact/LLM-резолвера по pagetitle
+  byId: Map<number, CategoryNode>; // для обхода поддерева (родитель → дети)
+  byPagetitle: Map<string, number>; // pagetitle (нормализованный) → id
+  isLeaf: Map<string, boolean>; // нормализованный pagetitle → лист ли (childrenIds.length === 0)
   ts: number;
 }
 
@@ -59,10 +59,10 @@ export interface FacetValue {
 }
 
 export interface Facet {
-  key: string;          // машинный ключ для options[key][]=value
-  caption: string;      // человеко-читаемое имя
-  type: string;         // "string" | "number" | ...
-  unit: string | null;  // "мм²", "В", "Вт" — если есть
+  key: string; // машинный ключ для options[key][]=value
+  caption: string; // человеко-читаемое имя
+  type: string; // "string" | "number" | ...
+  unit: string | null; // "мм²", "В", "Вт" — если есть
   min?: number | null;
   max?: number | null;
   values: FacetValue[]; // только реально встречающиеся значения
@@ -91,35 +91,130 @@ export interface DiscoverCategoryOk {
 
 export interface DiscoverCategoryErr {
   ok: false;
-  error_code: "category_not_found" | "catalog_timeout" | "transport_5xx" | "bad_input" | "internal";
+  error_code:
+    | "category_not_found"
+    | "catalog_timeout"
+    | "transport_5xx"
+    | "bad_input"
+    | "internal";
   message: string;
+  /** Bounded, non-secret taxonomy evidence for operational logs only. */
+  resolution_diagnostics?: {
+    head_candidates: Array<{
+      pagetitle: string;
+      parent: string | null;
+      children_count: number;
+    }>;
+  };
+}
+
+interface UnresolvedPagetitle {
+  unresolved: true;
+  diagnostics: NonNullable<DiscoverCategoryErr["resolution_diagnostics"]>;
 }
 
 function normalize(s: string): string {
-  return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 const LOCAL_CATEGORY_GRAMMAR_WORDS = new Set([
-  "без", "для", "или", "над", "под", "при", "про", "через",
+  "без",
+  "для",
+  "или",
+  "над",
+  "под",
+  "при",
+  "про",
+  "через",
 ]);
 
 const LOCAL_CATEGORY_MODIFIER_PREPOSITIONS = new Set([
-  "без", "в", "во", "для", "до", "из", "к", "ко", "на", "над", "от", "под", "при", "про", "с", "со", "через",
+  "без",
+  "в",
+  "во",
+  "для",
+  "до",
+  "из",
+  "к",
+  "ко",
+  "на",
+  "над",
+  "от",
+  "под",
+  "при",
+  "про",
+  "с",
+  "со",
+  "через",
 ]);
 
 const LOCAL_CATEGORY_NEGATION_WORDS = new Set(["не", "ни"]);
 
 const LOCAL_CATEGORY_RU_SUFFIXES = [
-  "ыми", "ими", "ого", "его", "ому", "ему",
-  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
-  "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
-  "у", "ю", "а", "я", "о", "е", "ы", "и",
+  "ыми",
+  "ими",
+  "ого",
+  "его",
+  "ому",
+  "ему",
+  "ая",
+  "яя",
+  "ое",
+  "ее",
+  "ой",
+  "ей",
+  "ом",
+  "ем",
+  "ую",
+  "юю",
+  "ый",
+  "ий",
+  "ые",
+  "ие",
+  "ых",
+  "их",
+  "ам",
+  "ям",
+  "ах",
+  "ях",
+  "ов",
+  "ев",
+  "у",
+  "ю",
+  "а",
+  "я",
+  "о",
+  "е",
+  "ы",
+  "и",
 ];
 
 const LOCAL_CATEGORY_RU_ADJECTIVE_SUFFIXES = [
-  "ыми", "ими", "ого", "его", "ому", "ему",
-  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
-  "ый", "ий", "ые", "ие", "ых", "их", "ым", "им",
+  "ыми",
+  "ими",
+  "ого",
+  "его",
+  "ому",
+  "ему",
+  "ая",
+  "яя",
+  "ое",
+  "ее",
+  "ой",
+  "ей",
+  "ом",
+  "ем",
+  "ую",
+  "юю",
+  "ый",
+  "ий",
+  "ые",
+  "ие",
+  "ых",
+  "их",
+  "ым",
+  "им",
 ];
 
 function localCategoryStem(token: string): string {
@@ -139,7 +234,9 @@ function localCategoryTokenMatches(left: string, right: string): boolean {
   const b = localCategoryStem(right);
   if (a === b) return true;
   let shared = 0;
-  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) {
+    shared += 1;
+  }
   const shorter = Math.min(a.length, b.length);
   const longer = Math.max(a.length, b.length);
   // Inflectional forms stay close in total stem length. A short standalone
@@ -167,9 +264,10 @@ function categoryDiscriminatorTokens(value: string): string[] {
 }
 
 function isLikelyRussianAdjective(token: string): boolean {
-  return /^[а-я]+$/u.test(token) && LOCAL_CATEGORY_RU_ADJECTIVE_SUFFIXES.some((suffix) =>
-    token.endsWith(suffix) && token.length - suffix.length >= 4
-  );
+  return /^[а-я]+$/u.test(token) &&
+    LOCAL_CATEGORY_RU_ADJECTIVE_SUFFIXES.some((suffix) =>
+      token.endsWith(suffix) && token.length - suffix.length >= 4
+    );
 }
 
 /**
@@ -187,16 +285,24 @@ function groundedHeadTokenForCategory(
   const categoryTokens = localCategoryTokens(pagetitle);
   if (categoryTokens.length < 2) return null;
   const categoryHead = categoryTokens[0];
+  const browseCollectionCarrier = (token: string): boolean =>
+    /^(?:предлож|покаж|подбер|выбер|ассорт|вариант)/iu.test(token);
   return rawQueryTokens.find((queryToken, index) =>
-      queryToken.length >= 5 &&
-      !isLikelyRussianAdjective(queryToken) &&
-      localCategoryTokenMatches(categoryHead, queryToken) &&
-      (index === 0 || (
-        !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[index - 1]) &&
-        !rawQueryTokens.slice(Math.max(0, index - 3), index)
-          .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
-      ))
-    ) ?? null;
+    queryToken.length >= 5 &&
+    !isLikelyRussianAdjective(queryToken) &&
+    localCategoryTokenMatches(categoryHead, queryToken) &&
+    (index === 0 || (
+      (
+        !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(
+          rawQueryTokens[index - 1],
+        ) ||
+        rawQueryTokens[index - 1] === "из" &&
+          browseCollectionCarrier(rawQueryTokens[index - 2] ?? "")
+      ) &&
+      !rawQueryTokens.slice(Math.max(0, index - 3), index)
+        .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
+    ))
+  ) ?? null;
 }
 
 export function resolveGroundedCategoryHeadToken(
@@ -229,32 +335,40 @@ export function liftUngroundedLeafToCustomerHeadAncestor(
 ): string {
   const nodeList = [...nodes];
   const byId = new Map(nodeList.map((node) => [node.id, node]));
-  const winner = nodeList.find((node) => normalize(node.pagetitle) === normalize(winnerPagetitle));
+  const winner = nodeList.find((node) =>
+    normalize(node.pagetitle) === normalize(winnerPagetitle)
+  );
   if (!winner || winner.childrenIds.length > 0) return winnerPagetitle;
 
   const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const winnerTokens = categoryDiscriminatorTokens(winner.pagetitle);
-  const groundedHead = groundedHeadTokenForCategory(rawQueryTokens, winner.pagetitle) ?? (
-    winnerTokens.length >= 2
-      ? rawQueryTokens.find((queryToken, index) =>
-        queryToken.length >= 4 &&
-        !isLikelyRussianAdjective(queryToken) &&
-        localCategoryTokenMatches(winnerTokens[0], queryToken) &&
-        (index === 0 || (
-          !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[index - 1]) &&
-          !rawQueryTokens.slice(Math.max(0, index - 3), index)
-            .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
-        ))
-      ) ?? null
-      : null
-  );
+  const groundedHead =
+    groundedHeadTokenForCategory(rawQueryTokens, winner.pagetitle) ?? (
+      winnerTokens.length >= 2
+        ? rawQueryTokens.find((queryToken, index) =>
+          queryToken.length >= 4 &&
+          !isLikelyRussianAdjective(queryToken) &&
+          localCategoryTokenMatches(winnerTokens[0], queryToken) &&
+          (index === 0 || (
+            !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(
+              rawQueryTokens[index - 1],
+            ) &&
+            !rawQueryTokens.slice(Math.max(0, index - 3), index)
+              .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
+          ))
+        ) ?? null
+        : null
+    );
   if (!groundedHead) return winnerPagetitle;
 
   const discriminators = winnerTokens
     .filter((token) => !localCategoryTokenMatches(token, groundedHead));
-  const discriminatorsGrounded = discriminators.length > 0 && discriminators.every((token) =>
-    rawQueryTokens.some((candidate) => localCategoryTokenMatches(token, candidate))
-  );
+  const discriminatorsGrounded = discriminators.length > 0 &&
+    discriminators.every((token) =>
+      rawQueryTokens.some((candidate) =>
+        localCategoryTokenMatches(token, candidate)
+      )
+    );
   if (discriminatorsGrounded) return winnerPagetitle;
 
   let parentId = winner.parentId;
@@ -288,6 +402,114 @@ function resolveUniqueHeadCategory(
   return candidates.length === 1 ? candidates : [];
 }
 
+/**
+ * Resolve a shared customer-grounded head only when the live taxonomy itself
+ * proves one candidate to be the umbrella of every other candidate. This is
+ * stronger than ranking titles by wording or length: the catalogue hierarchy,
+ * rather than a product dictionary or heuristic, supplies the relationship.
+ */
+export function resolveHeadCategoryByLiveHierarchy(
+  queryText: string,
+  pagetitles: string[],
+  nodes: Iterable<CategoryTreeNode>,
+): string | null {
+  const nodeList = [...nodes];
+  const byId = new Map(nodeList.map((node) => [node.id, node]));
+  const byPagetitle = new Map(
+    nodeList.map((node) => [normalize(node.pagetitle), node]),
+  );
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const candidates = collectHeadCategoryCandidates(rawQueryTokens, pagetitles)
+    .map((pagetitle) => byPagetitle.get(normalize(pagetitle)))
+    .filter((node): node is CategoryTreeNode => Boolean(node));
+  if (candidates.length < 2) return null;
+
+  // When the live tree contains both noun-headed product branches and
+  // adjective-headed related branches, only the noun-headed set can define
+  // the requested product hierarchy (`кабель` must not be pulled toward
+  // `кабельная арматура`). Keep the original set when that distinction is not
+  // sufficiently supported, so valid colloquial mappings such as `автомат` →
+  // `Автоматические выключатели` remain available to the unique-head path.
+  const nounHeaded = candidates.filter((candidate) => {
+    const head = localCategoryTokens(candidate.pagetitle)[0] ?? "";
+    return !isLikelyRussianAdjective(head);
+  });
+  const structuralCandidates = nounHeaded.length >= 2 ? nounHeaded : candidates;
+
+  const isAncestorOrSelf = (
+    ancestorId: number,
+    descendantId: number,
+  ): boolean => {
+    let currentId: number | null = descendantId;
+    const visited = new Set<number>();
+    while (currentId !== null && !visited.has(currentId)) {
+      if (currentId === ancestorId) return true;
+      visited.add(currentId);
+      currentId = byId.get(currentId)?.parentId ?? null;
+    }
+    return false;
+  };
+  const terminals = structuralCandidates.filter((candidate) =>
+    !structuralCandidates.some((other) =>
+      other.id !== candidate.id && isAncestorOrSelf(candidate.id, other.id)
+    )
+  );
+  const umbrellas = structuralCandidates.filter((candidate) =>
+    candidate.childrenIds.length > 0 &&
+    terminals.every((other) => isAncestorOrSelf(candidate.id, other.id))
+  );
+  // More than one nested umbrella can cover the same candidates. Keep the
+  // deepest one so a catalogue root that mixes the requested class with
+  // accessories cannot override its dedicated product subtree.
+  const mostSpecific = umbrellas.filter((candidate) =>
+    !umbrellas.some((other) =>
+      other.id !== candidate.id && isAncestorOrSelf(candidate.id, other.id)
+    )
+  );
+  return mostSpecific.length === 1 ? mostSpecific[0].pagetitle : null;
+}
+
+/**
+ * Resolve a generic shared head to the least-specialized sibling only when
+ * the live taxonomy makes that choice unique. This covers catalogs where the
+ * ordinary product branch and a narrower application branch are siblings
+ * rather than ancestor/descendant nodes. The winner must share the same live
+ * parent and introduce strictly fewer customer-ungrounded discriminator words
+ * than every alternative; ties remain unresolved.
+ */
+export function resolveHeadCategoryByLeastSpecializedSibling(
+  queryText: string,
+  pagetitles: string[],
+  nodes: Iterable<CategoryTreeNode>,
+): string | null {
+  const nodeList = [...nodes];
+  const byPagetitle = new Map(
+    nodeList.map((node) => [normalize(node.pagetitle), node]),
+  );
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const candidates = collectHeadCategoryCandidates(rawQueryTokens, pagetitles)
+    .map((pagetitle) => byPagetitle.get(normalize(pagetitle)))
+    .filter((node): node is CategoryTreeNode => Boolean(node));
+  if (candidates.length < 2) return null;
+  const parentIds = new Set(candidates.map((candidate) => candidate.parentId));
+  if (parentIds.size !== 1 || candidates[0].parentId === null) return null;
+
+  const scored = candidates.map((candidate) => {
+    const discriminators = categoryDiscriminatorTokens(candidate.pagetitle)
+      .filter((token) =>
+        !rawQueryTokens.some((queryToken) =>
+          localCategoryTokenMatches(token, queryToken)
+        )
+      );
+    return { candidate, ungrounded: discriminators.length };
+  }).sort((left, right) =>
+    left.ungrounded - right.ungrounded ||
+    left.candidate.pagetitle.localeCompare(right.candidate.pagetitle)
+  );
+  if (!scored[0] || scored[0].ungrounded >= scored[1].ungrounded) return null;
+  return scored[0].candidate.pagetitle;
+}
+
 interface CategoryFacetEvidence extends CompactCodeFacet {
   caption: string;
 }
@@ -312,7 +534,11 @@ export function resolveHeadCategoryByFacetEvidence(
   queryText: string,
   candidates: Array<{ pagetitle: string; facets: CategoryFacetEvidence[] }>,
 ): string | null {
-  const queryTokens = Array.from(new Set(localCategoryTokens(queryText).filter((token) => token.length >= 5)));
+  const queryTokens = Array.from(
+    new Set(
+      localCategoryTokens(queryText).filter((token) => token.length >= 5),
+    ),
+  );
   const scored = candidates.map((candidate) => {
     const matchedAxes = queryTokens.filter((queryToken) =>
       candidate.facets.some((facet) =>
@@ -321,21 +547,31 @@ export function resolveHeadCategoryByFacetEvidence(
         )
       )
     );
-    const compactScore = compactFacetCodeSupportScore(queryText, candidate.facets);
-    const compoundScore = resolveCompoundFacetValueEvidence(queryText, candidate.facets).length * 2;
+    const compactScore = compactFacetCodeSupportScore(
+      queryText,
+      candidate.facets,
+    );
+    const compoundScore =
+      resolveCompoundFacetValueEvidence(queryText, candidate.facets).length * 2;
     return {
       pagetitle: candidate.pagetitle,
       score: matchedAxes.length + compactScore + compoundScore,
     };
-  }).sort((left, right) => right.score - left.score || left.pagetitle.localeCompare(right.pagetitle));
+  }).sort((left, right) =>
+    right.score - left.score || left.pagetitle.localeCompare(right.pagetitle)
+  );
   const best = scored[0];
   if (!best || best.score < 2) return null;
-  return scored.filter((candidate) => candidate.score === best.score).length === 1
+  return scored.filter((candidate) => candidate.score === best.score).length ===
+      1
     ? best.pagetitle
     : null;
 }
 
-function orderedTokenStart(categoryTokens: string[], queryTokens: string[]): number | null {
+function orderedTokenStart(
+  categoryTokens: string[],
+  queryTokens: string[],
+): number | null {
   let queryIndex = 0;
   let start = -1;
   for (const categoryToken of categoryTokens) {
@@ -376,13 +612,17 @@ export function resolveLocalCategoryPagetitles(
     const categoryTokens = localCategoryTokens(pagetitle);
     if (
       categoryTokens.length === 0 ||
-      !categoryTokens.every((token) => queryTokens.some((queryToken) =>
-        localCategoryTokenMatches(token, queryToken)
-      ))
+      !categoryTokens.every((token) =>
+        queryTokens.some((queryToken) =>
+          localCategoryTokenMatches(token, queryToken)
+        )
+      )
     ) return null;
     const orderedStart = orderedTokenStart(categoryTokens, rawQueryTokens);
     const relationRole = orderedStart !== null && orderedStart > 0 &&
-        LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[orderedStart - 1])
+        LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(
+          rawQueryTokens[orderedStart - 1],
+        )
       ? 0
       : 1;
     return {
@@ -425,15 +665,23 @@ function isUsefulDiscovery(x: DiscoverCategoryOk): boolean {
 function collectCategories(
   nodes: unknown,
   parentId: number | null,
-  acc: { flat: CategoryCandidate[]; byId: Map<number, CategoryNode>; byPagetitle: Map<string, number> },
+  acc: {
+    flat: CategoryCandidate[];
+    byId: Map<number, CategoryNode>;
+    byPagetitle: Map<string, number>;
+  },
 ): void {
   if (!Array.isArray(nodes)) return;
   for (const node of nodes as Array<Record<string, unknown>>) {
-    const pagetitle = typeof node?.pagetitle === "string" ? node.pagetitle.trim() : "";
+    const pagetitle = typeof node?.pagetitle === "string"
+      ? node.pagetitle.trim()
+      : "";
     const id = typeof node.id === "number" ? node.id : null;
     if (pagetitle) acc.flat.push({ id, pagetitle });
     if (id !== null && pagetitle) {
-      const children = Array.isArray(node.children) ? node.children as Array<Record<string, unknown>> : [];
+      const children = Array.isArray(node.children)
+        ? node.children as Array<Record<string, unknown>>
+        : [];
       const childrenIds = children
         .map((c) => (typeof c.id === "number" ? c.id : null))
         .filter((x): x is number => x !== null);
@@ -444,12 +692,20 @@ function collectCategories(
   }
 }
 
-async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoriesCache> {
-  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) return categoriesCache;
+async function fetchCategories(
+  deps: DiscoverCategoryDeps,
+): Promise<CategoriesCache> {
+  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) {
+    return categoriesCache;
+  }
 
   const fetchImpl = deps.fetchImpl ?? fetch;
   const first = await fetchCategoriesPage(fetchImpl, deps, 1);
-  const acc = { flat: [] as CategoryCandidate[], byId: new Map<number, CategoryNode>(), byPagetitle: new Map<string, number>() };
+  const acc = {
+    flat: [] as CategoryCandidate[],
+    byId: new Map<number, CategoryNode>(),
+    byPagetitle: new Map<string, number>(),
+  };
   collectCategories(first.results, null, acc);
 
   const pages = Math.max(1, Number(first.pagination?.pages) || 1);
@@ -458,14 +714,22 @@ async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoriesCa
     collectCategories(next.results, null, acc);
   }
 
-  const flatDeduped = Array.from(new Map(acc.flat.map((c) => [c.pagetitle, c])).values())
+  const flatDeduped = Array.from(
+    new Map(acc.flat.map((c) => [c.pagetitle, c])).values(),
+  )
     .sort((a, b) => a.pagetitle.localeCompare(b.pagetitle));
   // Build isLeaf map: листом считается узел без детей в дереве /categories.
   const isLeaf = new Map<string, boolean>();
   for (const node of acc.byId.values()) {
     isLeaf.set(normalize(node.pagetitle), node.childrenIds.length === 0);
   }
-  categoriesCache = { flat: flatDeduped, byId: acc.byId, byPagetitle: acc.byPagetitle, isLeaf, ts: Date.now() };
+  categoriesCache = {
+    flat: flatDeduped,
+    byId: acc.byId,
+    byPagetitle: acc.byPagetitle,
+    isLeaf,
+    ts: Date.now(),
+  };
   return categoriesCache;
 }
 
@@ -473,7 +737,10 @@ async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoriesCa
  * Собирает все листовые pagetitle (children=[]) в поддереве с корнем `rootId`.
  * Если сам root уже лист — возвращает только его.
  */
-function collectLeafDescendants(rootId: number, byId: Map<number, CategoryNode>): LeafCategory[] {
+function collectLeafDescendants(
+  rootId: number,
+  byId: Map<number, CategoryNode>,
+): LeafCategory[] {
   const root = byId.get(rootId);
   if (!root) return [];
   const leaves: LeafCategory[] = [];
@@ -494,16 +761,28 @@ function collectLeafDescendants(rootId: number, byId: Map<number, CategoryNode>)
   return leaves;
 }
 
-function parseResolverCandidates(raw: string, valid: Set<string>): Array<{ pagetitle: string; confidence: number }> {
-  let txt = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
+function parseResolverCandidates(
+  raw: string,
+  valid: Set<string>,
+): Array<{ pagetitle: string; confidence: number }> {
+  let txt = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "")
+    .trim();
   const first = txt.indexOf("{");
   const last = txt.lastIndexOf("}");
   if (first >= 0 && last > first) txt = txt.slice(first, last + 1);
   try {
-    const parsed = JSON.parse(txt) as { candidates?: Array<{ pagetitle?: unknown; confidence?: unknown }> };
+    const parsed = JSON.parse(txt) as {
+      candidates?: Array<{ pagetitle?: unknown; confidence?: unknown }>;
+    };
     return (parsed.candidates ?? [])
-      .filter((c) => typeof c.pagetitle === "string" && valid.has(c.pagetitle) && typeof c.confidence === "number")
-      .map((c) => ({ pagetitle: c.pagetitle as string, confidence: Math.max(0, Math.min(1, c.confidence as number)) }))
+      .filter((c) =>
+        typeof c.pagetitle === "string" && valid.has(c.pagetitle) &&
+        typeof c.confidence === "number"
+      )
+      .map((c) => ({
+        pagetitle: c.pagetitle as string,
+        confidence: Math.max(0, Math.min(1, c.confidence as number)),
+      }))
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, 3);
   } catch {
@@ -516,15 +795,30 @@ async function fetchCategoriesPage(
   deps: DiscoverCategoryDeps,
   page: number,
 ): Promise<{ results: unknown[]; pagination?: { pages?: number } }> {
-  const params = new URLSearchParams({ parent: "0", depth: "10", per_page: "200", page: String(page) });
+  const params = new URLSearchParams({
+    parent: "0",
+    depth: "10",
+    per_page: "200",
+    page: String(page),
+  });
   const res = await fetchImpl(`${deps.baseUrl}/categories?${params}`, {
     method: "GET",
-    headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${deps.apiToken}`,
+      "Content-Type": "application/json",
+    },
   });
   if (!res.ok) throw new Error(`categories ${res.status}`);
-  const raw = await res.json() as { data?: { results?: unknown[]; pagination?: { pages?: number } }; results?: unknown[]; pagination?: { pages?: number } };
+  const raw = await res.json() as {
+    data?: { results?: unknown[]; pagination?: { pages?: number } };
+    results?: unknown[];
+    pagination?: { pages?: number };
+  };
   const data = raw.data ?? raw;
-  return { results: Array.isArray(data.results) ? data.results : [], pagination: data.pagination };
+  return {
+    results: Array.isArray(data.results) ? data.results : [],
+    pagination: data.pagination,
+  };
 }
 
 /** Токены строки для overlap-сравнения (lowercase, ё→е, без пунктуации, длиннее 1 символа). */
@@ -556,7 +850,9 @@ function preferLeafWithinGroup(
     let extra = 0;
     for (const t of lt) if (queryTokens.has(t) && !winnerTokens.has(t)) extra++;
     if (extra <= 0) continue;
-    if (!best || extra > best.score) best = { pagetitle: leaf.pagetitle, score: extra };
+    if (!best || extra > best.score) {
+      best = { pagetitle: leaf.pagetitle, score: extra };
+    }
   }
   return best ? best.pagetitle : winnerPagetitle;
 }
@@ -564,14 +860,16 @@ function preferLeafWithinGroup(
 async function resolvePagetitle(
   input: DiscoverCategoryInput,
   deps: DiscoverCategoryDeps,
-): Promise<{
-  pagetitle: string;
-  resolvedFrom?: string;
-  resolutionMethod: NonNullable<DiscoverCategoryOk["resolution_method"]>;
-  candidates: string[];
-  cache: CategoriesCache;
-  prefetched?: Map<string, DiscoverCategoryOk>;
-} | null> {
+): Promise<
+  {
+    pagetitle: string;
+    resolvedFrom?: string;
+    resolutionMethod: NonNullable<DiscoverCategoryOk["resolution_method"]>;
+    candidates: string[];
+    cache: CategoriesCache;
+    prefetched?: Map<string, DiscoverCategoryOk>;
+  } | UnresolvedPagetitle
+> {
   const noun = input.noun.trim();
   const cache = await fetchCategories(deps);
   const flat = cache.flat;
@@ -588,11 +886,16 @@ async function resolvePagetitle(
   const queryText = extractCustomerOwnedDiscoveryTarget(completeQueryText) ??
     completeQueryText;
   const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
-  const localCandidates = resolveLocalCategoryPagetitles(input, flat.map((candidate) => candidate.pagetitle));
+  const localCandidates = resolveLocalCategoryPagetitles(
+    input,
+    flat.map((candidate) => candidate.pagetitle),
+  );
   if (localCandidates.length > 0) {
     return {
       pagetitle: localCandidates[0],
-      resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, localCandidates[0]) ?? noun,
+      resolvedFrom:
+        groundedHeadTokenForCategory(rawQueryTokens, localCandidates[0]) ??
+          noun,
       resolutionMethod: "live_taxonomy",
       candidates: localCandidates,
       cache,
@@ -602,63 +905,135 @@ async function resolvePagetitle(
     rawQueryTokens,
     flat.map((candidate) => candidate.pagetitle),
   );
+  const diagnostics: UnresolvedPagetitle["diagnostics"] = {
+    head_candidates: headCandidates.slice(0, 20).map((pagetitle) => {
+      const id = cache.byPagetitle.get(normalize(pagetitle));
+      const node = typeof id === "number" ? cache.byId.get(id) : undefined;
+      const parent = node?.parentId === null || node?.parentId === undefined
+        ? null
+        : cache.byId.get(node.parentId)?.pagetitle ?? null;
+      return {
+        pagetitle,
+        parent,
+        children_count: node?.childrenIds.length ?? 0,
+      };
+    }),
+  };
+  const hierarchyWinner = resolveHeadCategoryByLiveHierarchy(
+    queryText,
+    headCandidates,
+    cache.byId.values(),
+  );
+  if (hierarchyWinner) {
+    return {
+      pagetitle: hierarchyWinner,
+      resolvedFrom:
+        groundedHeadTokenForCategory(rawQueryTokens, hierarchyWinner) ?? noun,
+      resolutionMethod: "live_taxonomy",
+      candidates: [hierarchyWinner],
+      cache,
+    };
+  }
   if (headCandidates.length > 1 && headCandidates.length <= 6) {
     const prefetched = new Map<string, DiscoverCategoryOk>();
     await Promise.all(headCandidates.map(async (pagetitle) => {
       const facets = await fetchFacetsForPagetitle(pagetitle, deps);
-      if (facets.ok && isUsefulDiscovery(facets.data)) prefetched.set(pagetitle, facets.data);
+      if (facets.ok && isUsefulDiscovery(facets.data)) {
+        prefetched.set(pagetitle, facets.data);
+      }
     }));
-    const schemaWinner = resolveHeadCategoryByFacetEvidence(queryText, headCandidates
-      .map((pagetitle) => ({ pagetitle, facets: prefetched.get(pagetitle)?.facets ?? [] })));
+    const schemaWinner = resolveHeadCategoryByFacetEvidence(
+      queryText,
+      headCandidates
+        .map((pagetitle) => ({
+          pagetitle,
+          facets: prefetched.get(pagetitle)?.facets ?? [],
+        })),
+    );
     if (schemaWinner) {
       return {
         pagetitle: schemaWinner,
-        resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, schemaWinner) ?? noun,
+        resolvedFrom:
+          groundedHeadTokenForCategory(rawQueryTokens, schemaWinner) ?? noun,
         resolutionMethod: "live_facet_schema",
         candidates: [schemaWinner],
         cache,
         prefetched,
       };
     }
+    const leastSpecializedWinner = resolveHeadCategoryByLeastSpecializedSibling(
+      queryText,
+      headCandidates,
+      cache.byId.values(),
+    );
+    if (leastSpecializedWinner) {
+      return {
+        pagetitle: leastSpecializedWinner,
+        resolvedFrom: groundedHeadTokenForCategory(
+          rawQueryTokens,
+          leastSpecializedWinner,
+        ) ?? noun,
+        resolutionMethod: "live_taxonomy",
+        candidates: [leastSpecializedWinner],
+        cache,
+        prefetched,
+      };
+    }
   }
-  if (!deps.openrouterApiKey) return null;
+  if (!deps.openrouterApiKey) return { unresolved: true, diagnostics };
 
   const list = flat
     .map((c, i) => {
-      const tag = cache.isLeaf.get(normalize(c.pagetitle)) ? "[LEAF]" : "[GROUP]";
+      const tag = cache.isLeaf.get(normalize(c.pagetitle))
+        ? "[LEAF]"
+        : "[GROUP]";
       return `${i + 1}. ${tag} ${c.pagetitle}`;
     })
     .join("\n");
-  const query = [input.semantic_query?.trim(), noun].filter(Boolean).join("\nNOUN: ");
-  const res = await (deps.fetchImpl ?? fetch)("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${deps.openrouterApiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://chat-volt.testdevops.ru",
-      "X-Title": "220volt-v3-category-resolver",
+  const query = [input.semantic_query?.trim(), noun].filter(Boolean).join(
+    "\nNOUN: ",
+  );
+  const res = await (deps.fetchImpl ?? fetch)(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${deps.openrouterApiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://chat-volt.testdevops.ru",
+        "X-Title": "220volt-v3-category-resolver",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0,
+        max_tokens: 400,
+        messages: [
+          {
+            role: "system",
+            content:
+              `You are a CATEGORY MATCHER for an e-commerce catalog. Pick exact pagetitle values only from the provided live list. Each item is tagged [LEAF] (no children) or [GROUP] (umbrella with children). PREFER [LEAF] when the query specifies a subtype (e.g. modifier like material/form/technology); pick [GROUP] only when the query is generic and no leaf matches the subtype. If nothing is related, return {"candidates":[]}. Output strict JSON: {"candidates":[{"pagetitle":"<exact list item>","confidence":0.0}]}. No prose.`,
+          },
+          {
+            role: "user",
+            content:
+              `USER QUERY / NOUN:\n${query}\n\nCATALOG CATEGORIES (${flat.length}, choose exact pagetitle):\n${list}\n\nReturn JSON now.`,
+          },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0,
-      max_tokens: 400,
-      messages: [
-        {
-          role: "system",
-          content: `You are a CATEGORY MATCHER for an e-commerce catalog. Pick exact pagetitle values only from the provided live list. Each item is tagged [LEAF] (no children) or [GROUP] (umbrella with children). PREFER [LEAF] when the query specifies a subtype (e.g. modifier like material/form/technology); pick [GROUP] only when the query is generic and no leaf matches the subtype. If nothing is related, return {"candidates":[]}. Output strict JSON: {"candidates":[{"pagetitle":"<exact list item>","confidence":0.0}]}. No prose.`,
-        },
-        {
-          role: "user",
-          content: `USER QUERY / NOUN:\n${query}\n\nCATALOG CATEGORIES (${flat.length}, choose exact pagetitle):\n${list}\n\nReturn JSON now.`,
-        },
-      ],
-    }),
-  });
-  if (!res.ok) return null;
-  const json = await res.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-  const candidates = parseResolverCandidates(json.choices?.[0]?.message?.content ?? "", new Set(flat.map((c) => c.pagetitle)));
-  const usable = candidates.filter((c) => c.confidence >= 0.45).map((c) => c.pagetitle);
-  if (usable.length === 0) return null;
+  );
+  if (!res.ok) return { unresolved: true, diagnostics };
+  const json = await res.json() as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+  };
+  const candidates = parseResolverCandidates(
+    json.choices?.[0]?.message?.content ?? "",
+    new Set(flat.map((c) => c.pagetitle)),
+  );
+  const usable = candidates.filter((c) => c.confidence >= 0.45).map((c) =>
+    c.pagetitle
+  );
+  if (usable.length === 0) return { unresolved: true, diagnostics };
   // Страховка: если победитель — GROUP, и среди его листьев есть более конкретный по токенам запроса — берём лист.
   const qTokens = tokensOf([input.semantic_query ?? "", noun].join(" "));
   const refined = usable.map((p) => {
@@ -672,10 +1047,16 @@ async function resolvePagetitle(
   // Дедупликация с сохранением порядка.
   const seen = new Set<string>();
   const finalList: string[] = [];
-  for (const p of refined) if (!seen.has(p)) { seen.add(p); finalList.push(p); }
+  for (const p of refined) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      finalList.push(p);
+    }
+  }
   return {
     pagetitle: finalList[0],
-    resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, finalList[0]) ?? noun,
+    resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, finalList[0]) ??
+      noun,
     resolutionMethod: "model",
     candidates: finalList,
     cache,
@@ -685,7 +1066,13 @@ async function resolvePagetitle(
 async function fetchFacetsForPagetitle(
   pagetitle: string,
   deps: DiscoverCategoryDeps,
-): Promise<{ ok: true; data: DiscoverCategoryOk } | { ok: false; status: number; message: string }> {
+): Promise<
+  { ok: true; data: DiscoverCategoryOk } | {
+    ok: false;
+    status: number;
+    message: string;
+  }
+> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 10000;
 
@@ -708,7 +1095,11 @@ async function fetchFacetsForPagetitle(
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return { ok: false, status: res.status, message: text.slice(0, 200) || String(res.status) };
+      return {
+        ok: false,
+        status: res.status,
+        message: text.slice(0, 200) || String(res.status),
+      };
     }
 
     const json = await res.json() as {
@@ -726,7 +1117,10 @@ async function fetchFacetsForPagetitle(
         }>;
       };
     };
-    const envelope = json?.data && "data" in json.data && !("options" in json.data) ? json.data.data as typeof json.data : json.data;
+    const envelope =
+      json?.data && "data" in json.data && !("options" in json.data)
+        ? json.data.data as typeof json.data
+        : json.data;
     const cat = envelope?.category ?? {};
     const rawOptions = Array.isArray(envelope?.options) ? envelope.options : [];
 
@@ -741,7 +1135,12 @@ async function fetchFacetsForPagetitle(
         for (const v of o.values) {
           const vv = cleanText(v?.value_ru);
           if (!vv) continue;
-          values.push({ value: vv, products_count: typeof v.products_count === "number" ? v.products_count : undefined });
+          values.push({
+            value: vv,
+            products_count: typeof v.products_count === "number"
+              ? v.products_count
+              : undefined,
+          });
         }
       }
       facets.push({
@@ -762,7 +1161,9 @@ async function fetchFacetsForPagetitle(
         category: {
           id: typeof cat.id === "number" ? cat.id : null,
           pagetitle: cleanText(cat.pagetitle) || pagetitle,
-          total_products: typeof cat.total_products === "number" ? cat.total_products : 0,
+          total_products: typeof cat.total_products === "number"
+            ? cat.total_products
+            : 0,
         },
         facets,
         leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
@@ -801,10 +1202,18 @@ function resolveLeafCategories(
 export async function executeDiscoverCategory(
   input: DiscoverCategoryInput,
   deps: DiscoverCategoryDeps,
-): Promise<(DiscoverCategoryOk & { tool: "discover_category" }) | (DiscoverCategoryErr & { tool: "discover_category" })> {
+): Promise<
+  | (DiscoverCategoryOk & { tool: "discover_category" })
+  | (DiscoverCategoryErr & { tool: "discover_category" })
+> {
   const noun = (input.noun ?? "").trim();
   if (!noun) {
-    return { tool: "discover_category", ok: false, error_code: "bad_input", message: "noun required" };
+    return {
+      tool: "discover_category",
+      ok: false,
+      error_code: "bad_input",
+      message: "noun required",
+    };
   }
 
   try {
@@ -812,8 +1221,14 @@ export async function executeDiscoverCategory(
     // Calling /categories/options with an arbitrary noun (e.g. "кабель") can hang the upstream API,
     // so we never hit /options without a validated pagetitle from the real catalog.
     const resolved = await resolvePagetitle(input, deps);
-    if (!resolved) {
-      return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category for "${noun}"` };
+    if ("unresolved" in resolved) {
+      return {
+        tool: "discover_category",
+        ok: false,
+        error_code: "category_not_found",
+        message: `no category for "${noun}"`,
+        resolution_diagnostics: resolved.diagnostics,
+      };
     }
 
     for (const pagetitle of resolved.candidates) {
@@ -822,7 +1237,11 @@ export async function executeDiscoverCategory(
         ? { ok: true as const, data: prefetched }
         : await fetchFacetsForPagetitle(pagetitle, deps);
       if (facets.ok && isUsefulDiscovery(facets.data)) {
-        const leaves = resolveLeafCategories(facets.data.category.pagetitle, facets.data.category.id, resolved.cache);
+        const leaves = resolveLeafCategories(
+          facets.data.category.pagetitle,
+          facets.data.category.id,
+          resolved.cache,
+        );
         return {
           tool: "discover_category",
           ...facets.data,
@@ -832,7 +1251,12 @@ export async function executeDiscoverCategory(
         };
       }
     }
-    return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category facets for "${noun}"` };
+    return {
+      tool: "discover_category",
+      ok: false,
+      error_code: "category_not_found",
+      message: `no category facets for "${noun}"`,
+    };
   } catch (e) {
     const isAbort = (e as { name?: string })?.name === "AbortError";
     return {
