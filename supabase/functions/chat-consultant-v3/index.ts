@@ -411,6 +411,7 @@ import {
   resolveSelectionReadinessRequest,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
+  selectReadinessAssistance,
   selectReadinessClarification,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
@@ -17642,6 +17643,10 @@ Deno.serve(async (req) => {
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8)) ??
             extractBroadAssortmentScope(userMessage)
           : null;
+        const readinessAssistance = selectReadinessAssistance(
+          userMessage,
+          effectiveSlots,
+        );
         const readinessClarification = selectReadinessClarification(
           scopedSelectionRequest.message,
           selectionReadinessEvidenceFromHistory(effectiveHistory.slice(-8)),
@@ -17651,7 +17656,22 @@ Deno.serve(async (req) => {
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
         // Так утечка внутреннего устройства невозможна в принципе.
-        if (readinessClarification) {
+        if (readinessAssistance) {
+          const { assistance_level, ...clarificationInput } =
+            readinessAssistance;
+          send({ type: "delta", content: clarificationInput.question });
+          const clarification = executeProposeClarification(clarificationInput);
+          emitSideEffects(clarification, send);
+          steps.push({
+            step: "v3_selection_readiness_assistance",
+            ms: Date.now() - t0,
+            meta: {
+              assistance_level,
+              facet_key: clarificationInput.facet_key,
+            },
+          });
+          productsCount = 0;
+        } else if (readinessClarification) {
           const { profile, ...clarificationInput } = readinessClarification;
           send({ type: "delta", content: clarificationInput.question });
           const clarification = executeProposeClarification(clarificationInput);

@@ -19,6 +19,8 @@ export interface ProposeClarificationInput {
     token: string;
     /** Server-proven taxonomy context for the next dialogue turn. */
     resolved_category?: string;
+    /** Number of plain-language help turns already shown for this question. */
+    assistance_level?: number;
   };
 }
 
