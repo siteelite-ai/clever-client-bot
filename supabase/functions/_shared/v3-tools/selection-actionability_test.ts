@@ -910,6 +910,49 @@ Deno.test("a separated inflected count in visible reasoning becomes one exact re
   );
 });
 
+Deno.test("a derived compound count does not depend on a coincident customer scalar", () => {
+  const facets = [{
+    key: "core_count",
+    caption: "Количество жил",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Подберите подходящий вариант для нового подключения",
+  );
+  const properties = (schema.function.parameters.properties ?? {}) as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum, [
+    "f0v0",
+    "f0v1",
+    "f0v2",
+  ]);
+
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для стационарного подключения необходим трёхжильный вариант: фаза, ноль и защитное заземление.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Подберите подходящий вариант для нового подключения",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Количество жил",
+    value: "3",
+  }]);
+  assertEquals(
+    resolved?.text.includes("Обязательные параметры: «Количество жил: 3»"),
+    true,
+  );
+});
+
 Deno.test("visible reasoning compiles several exact values from a live-like schema", () => {
   const facets = [
     {

@@ -275,6 +275,11 @@ function derivedRequiredFacetChoices(
 function requiredChoiceMeasuresPhysicalQuantity(
   choice: DerivedRequiredFacetChoice,
 ): boolean {
+  // Captions such as `Количество жил` end in a short noun. The generic unit
+  // parser must not mistake that noun for a physical unit: the live axis
+  // already declares that this is a count, and the morphology-aware projector
+  // is responsible for proving its exact scalar.
+  if (requiredChoiceIsCountAxis(choice)) return false;
   const captionUnit = choice.facet.match(
     /(?:[,;:(/]|\s)\s*([a-zа-я°]{1,8}(?:[²³]|\d)?(?:\/[a-zа-я°]{1,8})?)\s*\)?$/iu,
   )?.[1] ?? "";
@@ -299,6 +304,20 @@ function requiredChoiceIsBareScalar(
   return /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
 }
 
+/** A scalar on an explicitly named count axis is a qualitative product
+ * property, not a free physical measurement. It may therefore be derived
+ * from a schema-grounded phrase such as `трёхжильный` or `двухполюсный`.
+ * The visible-reasoning projector still has to prove both the count and the
+ * counted noun, so an unrelated application number (`3 кВт`, `25 м²`) cannot
+ * open this path. */
+function requiredChoiceIsCountAxis(
+  choice: DerivedRequiredFacetChoice,
+): boolean {
+  return /^(?:количеств|числ|number|count)/u.test(
+    normalizeLiteralEvidence(choice.facet),
+  );
+}
+
 /** The reasoning model may choose a derived qualitative technical value (for
  * example a protection code) because it is a per-product requirement. A bare
  * scalar or physical measurement remains available only when the customer
@@ -310,7 +329,8 @@ function requiredChoiceAvailableToReasoning(
 ): boolean {
   return customerOwnedIds.has(choice.id) ||
     (!requiredChoiceMeasuresPhysicalQuantity(choice) &&
-      !requiredChoiceIsBareScalar(choice));
+      (!requiredChoiceIsBareScalar(choice) ||
+        requiredChoiceIsCountAxis(choice)));
 }
 
 function derivedClassificationChoices(
@@ -1092,9 +1112,12 @@ export function resolveDerivedSelectionReasoning(
     // A model-derived exact value must be stated together with the meaning of
     // its facet. The same word can occur on several axes (`белый` корпус vs
     // `белый` свет); a value-only match is not enough to bind the wrong axis.
+    const schemaGroundedCountVisible = !customerOwned &&
+      requiredChoiceIsCountAxis(choice) && projectedChoiceVisible;
     const statedInVisibleReasoning = customerOwned
       ? projectedChoiceVisible || literalChoiceVisible
-      : facetContextVisible && (projectedChoiceVisible || literalChoiceVisible);
+      : schemaGroundedCountVisible ||
+        facetContextVisible && (projectedChoiceVisible || literalChoiceVisible);
     // Visible reasoning is the canonical declaration. The structured ID is
     // still useful as an audit signal, but a probabilistic serializer may omit
     // it after the model already made an exact, schema-projectable statement.
