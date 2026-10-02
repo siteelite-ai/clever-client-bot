@@ -188,6 +188,51 @@
       ]
     },
     {
+      "id": "audit-09b-breaker-25a-novice-guidance",
+      "title": "Неопытный покупатель получает объяснение вместо цикла уточнений",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Мне нужен автоматический выключатель на 25 А для квартиры. Что можете предложить?",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["полюс", "фаз", "характерист"],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "Какие есть варианты, я не очень разбираюсь",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_text_groups": [["разбираться", "термин"], ["1P", "однофаз"], ["2P", "фазу и ноль"], ["3P", "трёхфаз"]],
+            "forbid_assistant_text": ["Номинал тока понятен. До подбора уточните полюсность/число фаз"],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "1P",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["характерист", "B", "C", "D"],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "C",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 2,
+            "max_products": 5,
+            "require_every_product_title_groups": [["1P", "1Р", "1П", "1 полюс"], ["25A", "25А", "25 А"], ["C", "С"]],
+            "forbid_product_title": ["1P+N", "1Р+N", "1П+Н"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
       "id": "audit-10-pump-cable-7kw",
       "title": "Кабель для поверхностного насоса 7 кВт — безопасное продолжение",
       "repeat": 1,

@@ -4,14 +4,24 @@ const SELECTION_READINESS_SCOPE = "selection_readiness";
 
 export function selectionReadinessScope(
   token: string,
-  context: { resolved_category?: string } = {},
-): { kind: string; token: string; resolved_category?: string } {
+  context: { resolved_category?: string; assistance_level?: number } = {},
+): {
+  kind: string;
+  token: string;
+  resolved_category?: string;
+  assistance_level?: number;
+} {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
+  const assistanceLevel = Number.isInteger(context.assistance_level) &&
+      Number(context.assistance_level) > 0
+    ? Math.min(Number(context.assistance_level), 2)
+    : 0;
   return {
     kind: SELECTION_READINESS_SCOPE,
     token: String(token ?? "").trim().slice(0, 500),
     ...(resolvedCategory ? { resolved_category: resolvedCategory } : {}),
+    ...(assistanceLevel ? { assistance_level: assistanceLevel } : {}),
   };
 }
 
@@ -51,6 +61,153 @@ export function resolveScopedCatalogSelectionContinuation(
 export interface SelectionReadinessClarification
   extends ProposeClarificationInput {
   profile: string;
+}
+
+export interface SelectionReadinessAssistance
+  extends ProposeClarificationInput {
+  assistance_level: number;
+}
+
+interface PendingClarificationRecord {
+  status?: unknown;
+  question?: unknown;
+  facet_key?: unknown;
+  options?: unknown;
+  scope?: unknown;
+}
+
+const UNCERTAIN_CLARIFICATION_REPLY =
+  /(?:не\s+(?:знаю|понимаю|разбираюсь|уверен\p{L}*)|без\s+понятия|затрудняюсь|какие\s+(?:есть\s+)?варианты|что\s+лучше|посовет\p{L}*|подскаж\p{L}*|выбер\p{L}*\s+(?:сам\p{L}*|за\s+меня))/iu;
+
+const FACET_PLAIN_LANGUAGE: Record<string, string> = {
+  supply_phase:
+    "Посмотрите на паспорт оборудования или вводной щит: 220–230 В обычно означает одну фазу, 380–400 В — три фазы.",
+  line_length:
+    "Нужна примерная длина трассы от источника питания до оборудования; точность до метра не обязательна.",
+  installation_method:
+    "Важно только, будет ли кабель защищён трубой/ПНД или ляжет непосредственно в грунт.",
+  motor_start_method:
+    "Прямой пуск — двигатель подключается без частотника; частотник или софтстартер обычно указан в схеме или стоит рядом с двигателем.",
+  pole_count:
+    "1P применяют для обычной однофазной линии; 2P одновременно отключает фазу и ноль; 3P предназначен для трёхфазной линии.",
+  trip_curve:
+    "B выбирают для нагрузок с небольшими пусковыми токами, C — наиболее распространённый бытовой вариант, D — для больших пусковых токов. Если проекта нет, окончательный выбор лучше сверить с электриком.",
+  installation_mode:
+    "Подвижное подключение требует гибкого кабеля; для неподвижно закреплённой линии выбирают стационарную прокладку.",
+  conductor_material:
+    "Материал жилы обычно виден на срезе или указан в маркировке кабеля: медь имеет красноватый цвет, алюминий — серебристый.",
+  camera_system:
+    "IP-камера подключается к компьютерной сети (часто по Ethernet/PoE), аналоговая — коаксиальным или комбинированным кабелем к регистратору.",
+  socket_type:
+    "Маркировка цоколя обычно напечатана на старой лампе или патроне — например E27, E14 или GU10.",
+  mounting_height:
+    "Достаточно примерной высоты от земли до места крепления; точность до сантиметра не нужна.",
+};
+
+const FACET_OPTION_LABELS: Record<string, Record<string, string>> = {
+  supply_phase: {
+    "220 в, 1 фаза": "220 В — обычная однофазная сеть",
+    "380 в, 3 фазы": "380 В — трёхфазная сеть",
+  },
+  pole_count: {
+    "1p": "1P — обычная однофазная линия",
+    "2p": "2P — отключать фазу и ноль",
+    "3p": "3P — трёхфазная линия",
+  },
+  trip_curve: {
+    b: "B — небольшие пусковые токи",
+    c: "C — типичный бытовой вариант",
+    d: "D — большие пусковые токи",
+  },
+};
+
+function normalizedClarificationOptions(
+  value: unknown,
+): ProposeClarificationInput["options"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [{ value: entry.trim(), label: entry.trim() }];
+    }
+    if (!entry || typeof entry !== "object") return [];
+    const option = entry as { value?: unknown; label?: unknown };
+    const optionValue = typeof option.value === "string"
+      ? option.value.trim()
+      : "";
+    if (!optionValue) return [];
+    return [{
+      value: optionValue,
+      label: typeof option.label === "string" && option.label.trim()
+        ? option.label.trim()
+        : optionValue,
+    }];
+  }).slice(0, 5);
+}
+
+/**
+ * Turns an explicit "I do not know" reply into guided, observable choices.
+ * The rule is scoped to any server-issued readiness clarification, so it does
+ * not depend on a product category and cannot hijack an ordinary request for
+ * more products.  The original selection scope is preserved for the next
+ * turn, while a bounded assistance level prevents verbatim question loops.
+ */
+export function selectReadinessAssistance(
+  currentMessage: string,
+  slots: Record<string, unknown>,
+): SelectionReadinessAssistance | null {
+  const current = String(currentMessage ?? "").trim();
+  if (!current || !UNCERTAIN_CLARIFICATION_REPLY.test(current)) return null;
+  const pending = slots?.pending_clarification as
+    | PendingClarificationRecord
+    | undefined;
+  if (!pending || typeof pending !== "object") return null;
+  if (pending.status != null && pending.status !== "pending") return null;
+  const scope = pending.scope;
+  if (!scope || typeof scope !== "object") return null;
+  const scoped = scope as {
+    kind?: unknown;
+    token?: unknown;
+    resolved_category?: unknown;
+    assistance_level?: unknown;
+  };
+  if (
+    scoped.kind !== SELECTION_READINESS_SCOPE ||
+    typeof scoped.token !== "string" ||
+    !scoped.token.trim()
+  ) return null;
+  const facetKey = typeof pending.facet_key === "string"
+    ? pending.facet_key.trim()
+    : "";
+  const options = normalizedClarificationOptions(pending.options);
+  if (!facetKey || options.length < 2) return null;
+
+  const currentLevel = Number.isInteger(scoped.assistance_level)
+    ? Number(scoped.assistance_level)
+    : 0;
+  const assistanceLevel = Math.min(currentLevel + 1, 2);
+  const explanation = FACET_PLAIN_LANGUAGE[facetKey] ??
+    "Ориентируйтесь на надпись на оборудовании, упаковке или проекте — специальная терминология не требуется.";
+  const labels = FACET_OPTION_LABELS[facetKey] ?? {};
+  const guidedOptions = options.map((option) => ({
+    value: option.value,
+    label: labels[option.value.toLocaleLowerCase("ru-RU")] ?? option.label,
+  }));
+  const question = assistanceLevel === 1
+    ? `Разбираться в терминах не обязательно. ${explanation} Выберите ближайший вариант ниже; если ни один не подходит, напишите, что указано на оборудовании или в проекте.`
+    : `Не буду повторять прежний вопрос. ${explanation} Если определить параметр не получается, безопаснее уточнить маркировку или проект у электрика/монтажника. Пока можно выбрать ближайший вариант ниже.`;
+
+  return {
+    assistance_level: assistanceLevel,
+    question,
+    facet_key: facetKey,
+    options: guidedOptions,
+    scope: selectionReadinessScope(scoped.token, {
+      resolved_category: typeof scoped.resolved_category === "string"
+        ? scoped.resolved_category
+        : undefined,
+      assistance_level: assistanceLevel,
+    }),
+  };
 }
 
 interface ReadinessProfile {
@@ -312,6 +469,28 @@ const PROFILES: ReadinessProfile[] = [
     missing_labels: [
       "полюсность или число фаз",
       "характеристику B, C или D",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 0,
+        question: "Какая полюсность нужна?",
+        facet_key: "pole_count",
+        options: [
+          { value: "1P", label: "1P" },
+          { value: "2P", label: "2P" },
+          { value: "3P", label: "3P" },
+        ],
+      },
+      {
+        requirement_index: 1,
+        question: "Какая характеристика срабатывания указана в проекте?",
+        facet_key: "trip_curve",
+        options: [
+          { value: "B", label: "B" },
+          { value: "C", label: "C" },
+          { value: "D", label: "D" },
+        ],
+      },
     ],
     question:
       "Номинал тока понятен. До подбора уточните полюсность/число фаз и характеристику (кривую B, C или D). Если проект задаёт отключающую способность в кА, также укажите её. Какая полюсность нужна?",

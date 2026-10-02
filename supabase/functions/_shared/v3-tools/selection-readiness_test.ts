@@ -5,6 +5,7 @@ import {
   resolveSelectionReadinessRequest,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
+  selectReadinessAssistance,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
@@ -214,6 +215,97 @@ Deno.test("apartment breaker proceeds after current, pole count and curve are cu
     ),
     null,
   );
+});
+
+Deno.test("a novice reply receives guided choices instead of the same readiness question", () => {
+  const original =
+    "Мне нужен автоматический выключатель на 25 А для квартиры. Что можете предложить?";
+  const originalQuestion =
+    "Номинал тока понятен. До подбора уточните полюсность/число фаз и характеристику (кривую B, C или D). Какая полюсность нужна?";
+  const assistance = selectReadinessAssistance(
+    "Какие есть варианты, я не очень разбираюсь",
+    {
+      pending_clarification: {
+        status: "pending",
+        question: originalQuestion,
+        facet_key: "pole_count",
+        options: [
+          { value: "1P", label: "1P" },
+          { value: "2P", label: "2P" },
+          { value: "3P", label: "3P" },
+        ],
+        scope: selectionReadinessScope(original),
+      },
+    },
+  );
+  assertEquals(assistance?.assistance_level, 1);
+  assertEquals(assistance?.facet_key, "pole_count");
+  assertEquals(assistance?.question === originalQuestion, false);
+  assertEquals(/1P|однофаз/iu.test(assistance?.question ?? ""), true);
+  assertEquals(
+    assistance?.options.map((option) => option.label),
+    [
+      "1P — обычная однофазная линия",
+      "2P — отключать фазу и ноль",
+      "3P — трёхфазная линия",
+    ],
+  );
+});
+
+Deno.test("readiness help is generic across product profiles and remains scoped", () => {
+  const original = "Мне нужен кабель для насоса";
+  const assistance = selectReadinessAssistance("Не знаю, подскажите", {
+    pending_clarification: {
+      status: "pending",
+      question: "Какое питание у насоса?",
+      facet_key: "supply_phase",
+      options: [
+        { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+        { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+      ],
+      scope: selectionReadinessScope(original),
+    },
+  });
+  assertEquals(assistance?.facet_key, "supply_phase");
+  assertEquals(/паспорт|щит/iu.test(assistance?.question ?? ""), true);
+  assertEquals(assistance?.scope?.token, original);
+});
+
+Deno.test("readiness assistance does not hijack an ordinary variants request", () => {
+  assertEquals(
+    selectReadinessAssistance("Какие есть варианты?", {}),
+    null,
+  );
+});
+
+Deno.test("a second novice reply advances the bounded help ladder", () => {
+  const original = "Подбери автомат 25 А для квартиры";
+  const assistance = selectReadinessAssistance("Все равно не понимаю", {
+    pending_clarification: {
+      status: "pending",
+      question: "Какая полюсность нужна?",
+      facet_key: "pole_count",
+      options: ["1P", "2P", "3P"],
+      scope: selectionReadinessScope(original, { assistance_level: 1 }),
+    },
+  });
+  assertEquals(assistance?.assistance_level, 2);
+  assertEquals(/Не буду повторять/iu.test(assistance?.question ?? ""), true);
+});
+
+Deno.test("apartment breaker clarification advances from poles to curve", () => {
+  const clarification = selectReadinessClarification(
+    "Подбери автомат 25 А для квартиры\nУточнение клиента: 1P",
+    "Подбери автомат 25 А для квартиры\n1P",
+    { progressive: true },
+  );
+  assertEquals(clarification?.profile, "apartment_breaker");
+  assertEquals(clarification?.facet_key, "trip_curve");
+  assertEquals(clarification?.options.map((option) => option.value), [
+    "B",
+    "C",
+    "D",
+  ]);
 });
 
 Deno.test("outdoor protection is derived after the customer supplies parking geometry", () => {
