@@ -766,7 +766,7 @@ export interface ResolvedDerivedSelectionReasoning {
     question: string;
     facet_key: string;
     freeform: true;
-    options: [];
+    options: Array<{ value: string; label: string }>;
   };
   measurementEvidence: string;
   measurementScope: "per_product" | "system_total" | "not_applicable";
@@ -924,16 +924,6 @@ export function resolveDerivedSelectionReasoning(
   const declaredMeasurementScope = String(
     args.measurement_scope ?? "per_product",
   );
-  const propertyResolution = resolveReasoningObligations(
-    args.mandatory_properties ?? [],
-    originalReasoning,
-    facets,
-    customerEvidence,
-  );
-  if (propertyResolution.unresolved.length > 0) {
-    onRejected?.({ stage: "original_properties", reasoning: originalReasoning, errors: propertyResolution.unresolved });
-    return null;
-  }
   const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
     customerEvidence,
     originalReasoning,
@@ -950,6 +940,44 @@ export function resolveDerivedSelectionReasoning(
         declaredMeasurementScope === "not_applicable"
     ? declaredMeasurementScope
     : "per_product";
+  const propertyResolution = resolveReasoningObligations(
+    args.mandatory_properties ?? [],
+    originalReasoning,
+    facets,
+    customerEvidence,
+  );
+  if (propertyResolution.unresolved.length > 0) {
+    const configuration = aggregateSelectionClarification(
+      measurementScope,
+      validatedPerProductMeasurementEvidence(
+        originalReasoning, args.per_product_measurement_evidence,
+      ),
+    );
+    const visibleAggregateDemand = /(?:суммарн\p{L}*|всей\s+систем\p{L}*|всего\s+объект\p{L}*)/iu
+      .test(originalReasoning);
+    if (configuration && (computedSystemTotal || visibleAggregateDemand)) {
+      // Configuration is a prerequisite, not a search with weaker validation.
+      // Freeze no provisional properties or IDs. The next turn must derive and
+      // validate the actual per-item plan from the customer's configuration.
+      return {
+        text: originalReasoning,
+        clarification: { ...configuration, freeform: true },
+        measurementEvidence: "",
+        measurementScope,
+        propertyObligations: [],
+        retrievalQuery: null,
+        compatible: [],
+        customerGroundedCompatible: [],
+        customerGroundedExcluded: [],
+        familyCompatibleFacetKeys: [],
+        excluded: [],
+        requiredFacetValues: [],
+        explicitCustomerMappings: [],
+      };
+    }
+    onRejected?.({ stage: "original_properties", reasoning: originalReasoning, errors: propertyResolution.unresolved });
+    return null;
+  }
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);

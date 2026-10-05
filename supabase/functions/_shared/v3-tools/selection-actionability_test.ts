@@ -1,6 +1,32 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { compileMeasuredReasoningSearchContract } from "./criteria-reasoning.ts";
 import { applyCriteriaGate } from "./criteria-gate.ts";
+// Captured preview678 failures: aggregate demand was declared as per-item.
+Deno.test("aggregate obligations ask configuration before attempting per-product validation", () => {
+  for (const [area, total] of [[25, 3750], [500, 10000]]) {
+    const reasoning = `Для площади ${area} м² требуется суммарный световой поток не менее ${total} Лм.`;
+    const resolved = resolveDerivedSelectionReasoning({
+      reasoning,
+      measurement_scope: "system_total",
+      mandatory_properties: [{ key: "Световой поток, Лм", op: "min", value: total,
+        unit: "Лм", scope: "per_product", source_span: reasoning }],
+    }, [], `Площадь ${area} м²`);
+    assertEquals(resolved?.clarification?.facet_key, "system_configuration");
+    assertEquals(resolved?.propertyObligations ?? [], []);
+    assertEquals(resolved?.measurementEvidence, "");
+    assertEquals(resolved?.requiredFacetValues, []);
+  }
+});
+
+Deno.test("configuration recovery never excuses invalid actual per-item obligations", () => {
+  const reasoning = "Для каждого прибора необходим световой поток не менее 3000 лм.";
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning, measurement_scope: "per_product",
+    mandatory_properties: [{ key: "Световой поток", op: "min", value: 9000,
+      unit: "лм", scope: "per_product", source_span: reasoning }],
+  }, []);
+  assertEquals(resolved, null);
+});
 import {
   aggregateSelectionClarification,
   buildDerivedReasoningSearch,
