@@ -844,7 +844,13 @@ export function resolveDerivedSelectionReasoning(
     customerEvidence,
     originalReasoning,
   );
-  const measurementScope = computedSystemTotal
+  const singleItemOwnsTotal = customerEvidence.split(/\n/u).some((line) =>
+    line.replace(/^Уточнение клиента:\s*/u, "").trim() ===
+      SINGLE_ITEM_TOTAL_CHOICE
+  );
+  const measurementScope = singleItemOwnsTotal
+    ? "per_product"
+    : computedSystemTotal
     ? "system_total"
     : declaredMeasurementScope === "system_total" ||
         declaredMeasurementScope === "not_applicable"
@@ -1582,6 +1588,33 @@ export function validatedPerProductMeasurementEvidence(
     )
     ? span
     : "";
+}
+
+const SINGLE_ITEM_TOTAL_CHOICE = "Одно изделие для всей задачи";
+
+/** A total demand cannot certify individual alternatives until the intended
+ * configuration or an explicit per-item requirement is known. */
+export function aggregateSelectionClarification(
+  scope: ResolvedDerivedSelectionReasoning["measurementScope"],
+  evidence: string,
+): {
+  question: string;
+  facet_key: string;
+  options: Array<{ value: string; label: string }>;
+} | null {
+  if (
+    scope !== "system_total" ||
+    derivedMeasurementMayConstrainIndividualProducts(scope, evidence)
+  ) return null;
+  return {
+    question:
+      "Чтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+    facet_key: "system_configuration",
+    options: [
+      { value: SINGLE_ITEM_TOTAL_CHOICE, label: SINGLE_ITEM_TOTAL_CHOICE },
+      { value: "Несколько изделий вместе", label: "Несколько изделий вместе" },
+    ],
+  };
 }
 
 export function buildDerivedSelectionReasoningMessages(

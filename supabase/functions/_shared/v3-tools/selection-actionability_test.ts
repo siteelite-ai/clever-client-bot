@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { compileMeasuredReasoningSearchContract } from "./criteria-reasoning.ts";
 import { applyCriteriaGate } from "./criteria-gate.ts";
 import {
+  aggregateSelectionClarification,
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
@@ -21,6 +22,47 @@ import {
   systemTotalReasoningDeclaresPerProductMeasurement,
   validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("aggregate-only selection clarifies configuration and preserves a single-item choice", () => {
+  const question = aggregateSelectionClarification("system_total", "");
+  assertEquals(question?.options.length, 2);
+  assertEquals(aggregateSelectionClarification("per_product", ""), null);
+  assertEquals(
+    aggregateSelectionClarification(
+      "system_total",
+      "Каждое изделие должно иметь не менее 4000 лм.",
+    ),
+    null,
+  );
+  const args = {
+    reasoning: "Для площади 120 м² расчёт: 120 м² × 25 лк = 3000 лм.",
+    measurement_scope: "system_total",
+  };
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      "Площадь 120 м². Несколько вариантов.",
+    )?.measurementScope,
+    "system_total",
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      `Площадь 120 м²\nУточнение клиента: ${question!.options[0].value}`,
+    )?.measurementScope,
+    "per_product",
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      "Площадь 120 м²\nУточнение клиента: Не нужно одно изделие для всей задачи",
+    )?.measurementScope,
+    "system_total",
+  );
+});
 
 Deno.test("per-item evidence is a visible bounded span, never the aggregate calculation", () => {
   const perItem =

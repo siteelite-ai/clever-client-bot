@@ -113,6 +113,7 @@ import {
   shouldFinalizePendingSelection,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
+  aggregateSelectionClarification,
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
@@ -7325,6 +7326,37 @@ async function runExpertLoop(
               userMessage,
               declaration.text,
             );
+          const aggregateClarification = aggregateSelectionClarification(
+            declaration.measurementScope,
+            declaration.measurementEvidence,
+          );
+          if (aggregateClarification && !pairedCompatibilityOwned) {
+            finalText =
+              `${declaration.text}\n\n${aggregateClarification.question}`;
+            send({ type: "delta", content: finalText });
+            emitSideEffects(
+              executeProposeClarification({
+                ...aggregateClarification,
+                scope: selectionReadinessScope(userMessage, {
+                  resolved_category: lastDiscover.category.pagetitle,
+                }),
+              }),
+              send,
+            );
+            steps.push({
+              step: "v3_aggregate_selection_configuration_required",
+              ms: now(),
+              meta: {
+                measurement_scope: declaration.measurementScope,
+                category: lastDiscover.category.pagetitle,
+              },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          }
           const derivedScalarProjectionAllowed =
             shouldProjectDerivedScalarMeasurement(
               userMessage,
