@@ -1,6 +1,23 @@
 # Preview audit — 2026-10-05
 
-## Current checkpoint — preview 663 (still not ready)
+## Latest checkpoint — scope policy and evidence capitalization (not ready)
+
+- `c30c122e` preview: living-room selection passed 3/3 (three cards each).
+  Yard selection returned three cards twice; once it repeated the one-item
+  clarification. CCTV asked video-only versus combined power, 3/3: this is
+  not completed selection; the original scenario remains FAIL.
+- Read-only evidence: `preview664-target-log-evidence-20261005.json`.
+  Terminal JSON was truncated; this is database evidence, not a runner report.
+- Yard failure `d2b1f54e-c91e-42e9-af30-fcd660b0ba09`: copied evidence began
+  with “На”, but visible text used “на”. Case-sensitive validation discarded it.
+- Shared validator now ignores capitalization only and returns the actual
+  visible substring. Changed numbers, reversed inequalities and aggregate
+  claims remain rejected. No category exception or weaker numeric gates.
+- Local verification: **867 shared tests pass**, Edge typecheck passes.
+  Capitalization fix still needs live replay and broader regression testing.
+  Production has not been deployed in this checkpoint.
+
+## Historical checkpoint — preview 663 (still not ready)
 
 - `be95ed1d`: generic relational-adjective evidence in catalog titles.
   A complete noun root directly adjacent to the established product head can

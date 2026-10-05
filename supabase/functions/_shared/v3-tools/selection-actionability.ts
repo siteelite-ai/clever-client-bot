@@ -1644,7 +1644,8 @@ export function validatedPerProductMeasurementEvidence(
   if (typeof proposed !== "string") return "";
   const span = proposed.replace(/\s+/gu, " ").trim();
   const visible = visibleReasoning.replace(/\s+/gu, " ").trim();
-  if (!span || span.length > 600 || !visible.includes(span)) return "";
+  const visibleOffset = visible.toLowerCase().indexOf(span.toLowerCase());
+  if (!span || span.length > 600 || visibleOffset < 0) return "";
   if (
     !/(?:кажд\p{L}*|на\s+(?:один|одно|одну|единиц\p{L}*)|per\s+(?:item|unit))/iu
       .test(span)
@@ -1656,7 +1657,7 @@ export function validatedPerProductMeasurementEvidence(
   return extractClientQuantities(span).some(({ unit }) =>
       isPhysicalMeasurementUnit(normalizeUnit(unit))
     )
-    ? span
+    ? visible.slice(visibleOffset, visibleOffset + span.length)
     : "";
 }
 

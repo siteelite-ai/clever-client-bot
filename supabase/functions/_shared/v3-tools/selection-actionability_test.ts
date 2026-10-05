@@ -245,6 +245,15 @@ Deno.test("aggregate-only selection clarifies configuration and preserves a sing
   );
 });
 
+Deno.test("per-item evidence tolerates capitalization but preserves visible wording and quantities", () => {
+  const visible = "Суммарная потребность 3500 Лм. При установке одного прибора на одно изделие необходимо не менее 3500 Лм.";
+  const proposed = "На одно изделие необходимо не менее 3500 Лм.";
+  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed), "на одно изделие необходимо не менее 3500 Лм.");
+  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed.replace("3500", "350")), "");
+  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed.replace("не менее", "не более")), "");
+  assertEquals(validatedPerProductMeasurementEvidence("Всего на одно изделие 3500 Лм.", "ВСЕГО на одно изделие 3500 Лм."), "");
+});
+
 Deno.test("per-item evidence is a visible bounded span, never the aggregate calculation", () => {
   const perItem =
     "Каждое изделие должно иметь световой поток не менее 4000 лм.";
