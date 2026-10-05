@@ -425,6 +425,9 @@ function classificationDiscriminativeStems(
       facetIdentity
   );
   const frequency = new Map<string, number>();
+  // The axis name is shared context, never a discriminator of a value.
+  // Otherwise "base" in "without base" falsely matches "base E27".
+  const facetStems = new Set(classificationLexicalTokens(choice.facet));
   for (const sibling of siblings) {
     for (const token of new Set(classificationLexicalTokens(sibling.value))) {
       frequency.set(token, (frequency.get(token) ?? 0) + 1);
@@ -433,6 +436,7 @@ function classificationDiscriminativeStems(
   return [...new Set(classificationLexicalTokens(choice.value))]
     .filter((token) =>
       !CLASSIFICATION_GLUE_STEMS.has(token) &&
+      !facetStems.has(token) &&
       (frequency.get(token) ?? 0) === 1
     );
 }

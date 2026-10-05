@@ -1179,6 +1179,17 @@ Deno.test("classification cleanup cannot erase a separately validated required f
   assertEquals(resolved?.text.includes(sentence), true);
 });
 
+Deno.test("a facet label inside a negated sibling cannot erase an explicitly selected value", () => {
+  const sentence = "Для установки в ваш светильник необходим Тип цоколя E27.";
+  const result = resolveDerivedSelectionReasoning({
+    reasoning: sentence + " Проверяю соответствие условиям применения.",
+    measurement_scope: "not_applicable", compatible_classifications: ["f0v0"], excluded_classifications: ["f0v2"], required_facet_values: [], explicit_customer_classifications: [],
+    mandatory_properties: [{ key: "Тип цоколя", value: "E27", unit: "", op: "eq", scope: "per_product", source_span: sentence }],
+  }, [{ key: "base", caption: "Тип цоколя", values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }] }], "Нужны лампы E27.", "Лампы");
+  assertEquals(result?.propertyObligations?.length, 1);
+  assertEquals(result?.text.includes(sentence), true);
+});
+
 Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {
   const facets = [{
     key: "shell",
