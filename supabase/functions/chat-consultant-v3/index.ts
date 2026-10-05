@@ -15399,6 +15399,18 @@ async function runExpertLoop(
         evidenced,
         terminalSelectionCriteria,
       );
+      steps.push({
+        step: "v3_terminal_criteria_evidence_audit",
+        ms: now(),
+        meta: {
+          criteria: terminalSelectionCriteria,
+          proven_filter_criteria: provenTerminalCriteria,
+          checked: criteriaGate.per_product.length,
+          rejected_sample: criteriaGate.per_product.filter(({ verdict }) =>
+            verdict !== "pass"
+          ).slice(0, 5),
+        },
+      });
       const criteriaIds = new Set(criteriaGate.passed_ids);
       let safeIds = categoryGroundedProducts
         .filter((product) =>
