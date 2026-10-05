@@ -205,3 +205,26 @@ Deno.test("partial quotes cannot hide negation or use substrings as property evi
     1,
   );
 });
+
+Deno.test("source attribution expands only a unique exact sentence prefix", () => {
+  const source = "Для уличной прокладки обязательна светостабилизированная оболочка из полиэтилена (ПЭ) черного цвета, устойчивая к ультрафиолету и осадкам.";
+  const item = { ...environmental, key: "Оболочка", value: "ПЭ (полиэтилен)", source_span: source.replace(", устойчивая к ультрафиолету и осадкам", "") };
+  const result = resolveReasoningObligations([item], source);
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations[0].sourceSpan, source);
+  assertEquals(resolveReasoningObligations([{ ...item, source_span: item.source_span.replace("черного", "белого") }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([item], source + " " + source.replace("осадкам", "нагреву")).unresolved.length, 1);
+});
+
+Deno.test("expanded attribution preserves trailing conditions, negation and numeric bounds", () => {
+  for (const tail of [", если прокладка снаружи.", ", но это не обязательное требование."]) {
+    const source = environmental.source_span.replace(/\.$/u, tail);
+    assertEquals(resolveReasoningObligations([environmental], source).unresolved.length, 1);
+  }
+  const source = "Необходим диаметр больше 12,5 мм, это обязательный минимум.";
+  const item = { ...numeric, key: "диаметр", value: 12.5, op: "min", unit: "мм", source_span: "Необходим диаметр больше 12,5 мм." };
+  const result = resolveReasoningObligations([item], source);
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations[0].criterion.exclusive, true);
+  assertEquals(result.obligations[0].sourceSpan, source);
+});

@@ -105,6 +105,23 @@ export const reasoningObligationsSchema = {
 
 const normalized = (value: string) =>
   value.replace(/\s+/gu, " ").trim().toLowerCase();
+
+/** Attribution may expand an exact sentence prefix to its complete source,
+ * never shorten the source or invent/replace words. All semantic checks run
+ * on the expanded sentence, including trailing conditions and negations. */
+function completeVisibleSource(quote: string, reasoning: string): string | null {
+  const prefix = normalized(quote).replace(/[.!?]+$/u, "").trim();
+  if (prefix.length < 8) return null;
+  const sentences = reasoning.match(/[\s\S]+?(?:[.!?](?=\s|$)|$)/gu) ?? [];
+  const matches = sentences.map((sentence) => sentence.trim()).filter((sentence) => {
+    if (sentence.length > 600) return false;
+    const source = normalized(sentence);
+    if (!source.startsWith(prefix)) return false;
+    const next = source.slice(prefix.length, prefix.length + 1);
+    return !next || /[\s,;:.!?—()]/u.test(next);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
 const containsPhrase = (text: string, phrase: string) => {
   const escaped = normalized(phrase).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u")
@@ -155,7 +172,12 @@ export function resolveReasoningObligations(
       reject("invalid_shape_or_scope");
       continue;
     }
-    const span = normalized(sourceSpan);
+    const completeSource = completeVisibleSource(sourceSpan, visibleReasoning);
+    if (!completeSource) {
+      reject("source_not_visible");
+      continue;
+    }
+    const span = normalized(completeSource);
     const offset = visible.indexOf(span);
     const before = offset < 0 ? "" : visible.slice(0, offset).trim();
     if (offset < 0) {
@@ -244,7 +266,7 @@ export function resolveReasoningObligations(
       reject("value_not_grounded");
       continue;
     }
-    obligations.push({ criterion, sourceSpan });
+    obligations.push({ criterion, sourceSpan: completeSource });
   }
   return { obligations, unresolved };
 }
