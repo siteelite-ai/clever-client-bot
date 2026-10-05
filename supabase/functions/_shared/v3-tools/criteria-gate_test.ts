@@ -35,17 +35,34 @@ import type { ProductRef } from "./types.ts";
 
 Deno.test("rendered boolean facts require a customer-owned label, not incidental assent", () => {
   const products = ["one", "two"].map((id) => ({
-    id, pagetitle: "Изделие", vendor: null, price: 100, stock: "in_stock" as const,
+    id,
+    pagetitle: "Изделие",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
     short_traits: ["Диммирование: Да", "Защита: Да", "Разборный: Нет"],
   }));
-  for (const message of ["Одно изделие для всей задачи", "Да", "нет", "Для дачи"]) {
+  for (
+    const message of ["Одно изделие для всей задачи", "Да", "нет", "Для дачи"]
+  ) {
     assertEquals(projectCommonRenderedUserCriteria(products, message), []);
   }
-  assertEquals(projectCommonRenderedUserCriteria(products, "Диммирование: да"), [{
-    key: "Диммирование", op: "eq", value: "Да", level: "A", evidence: "user_explicit",
-  }]);
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Диммирование: да"),
+    [{
+      key: "Диммирование",
+      op: "eq",
+      value: "Да",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
   assertEquals(projectCommonRenderedUserCriteria(products, "Разборный: нет"), [{
-    key: "Разборный", op: "eq", value: "Нет", level: "A", evidence: "user_explicit",
+    key: "Разборный",
+    op: "eq",
+    value: "Нет",
+    level: "A",
+    evidence: "user_explicit",
   }]);
 });
 
@@ -1115,6 +1132,123 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
   assertEquals(
     checkCriterion(p, {
       key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
+    "pass",
+  );
+});
+
+Deno.test("motion-sensor boolean cannot overrule acoustic activation in original prose", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const acoustic = {
+    ...product("acoustic", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с оптико-акустическим датчиком",
+    description_excerpt: "Включается от звука при низкой освещённости.",
+  };
+  const check = checkCriterion(acoustic, requirement);
+  assertEquals(check.verdict, "fail");
+  assertEquals(check.actual?.startsWith("Название: "), true);
+  assertEquals(applyCriteriaGate([acoustic], [requirement]).passed_ids, []);
+
+  // by_filter lineage is projected into short_traits, never into the original
+  // title/description. The contradiction must survive that projection.
+  const filtered = projectCatalogFilterEvidence([{
+    ...product("filtered", []),
+    pagetitle: "Светильник со звуковым датчиком",
+  }], [requirement]);
+  assertEquals(filtered[0].short_traits, ["С датчиком движения: да"]);
+  assertEquals(applyCriteriaGate(filtered, [requirement]).passed_ids, []);
+
+  const recovered = {
+    ...product("recovered", []),
+    description_excerpt: "Активация только по звуку; на движение не реагирует.",
+  };
+  assertEquals(checkCriterion(recovered, requirement).verdict, "fail");
+});
+
+Deno.test("motion-sensor gate retains genuine PIR and microwave evidence", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const pir = {
+    ...product("pir", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с PIR-датчиком движения",
+  };
+  const microwave = {
+    ...product("microwave", ["С датчиком движения: да"]),
+    description_excerpt:
+      "Микроволновый сенсор реагирует на движение в помещении.",
+  };
+  const dual = {
+    ...product("dual", ["С датчиком движения: да"]),
+    pagetitle: "Светильник со звуковым датчиком и датчиком движения",
+  };
+  assertEquals(
+    applyCriteriaGate([pir, microwave, dual], [requirement]).passed_ids,
+    ["pir", "microwave", "dual"],
+  );
+  const explicitlyAbsent = {
+    ...product("absent", ["С датчиком движения: да"]),
+    description_excerpt: "Датчик движения отсутствует; включение по звуку.",
+  };
+  assertEquals(checkCriterion(explicitlyAbsent, requirement).verdict, "fail");
+  const soundOnlyDespiteMotionTitle = {
+    ...product("sound-only", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с датчиком движения",
+    description_excerpt: "Реагирует только на звук, не на движение.",
+  };
+  assertEquals(
+    checkCriterion(soundOnlyDespiteMotionTitle, requirement).verdict,
+    "fail",
+  );
+  const nonNegation = {
+    ...product("non-negation", ["С датчиком движения: да"]),
+    pagetitle: "Светильник со звуковым датчиком",
+    description_excerpt: "Нет проблем с датчиком движения при установке.",
+  };
+  assertEquals(checkCriterion(nonNegation, requirement).verdict, "pass");
+});
+
+Deno.test("motion-sensor contradiction leaves sparse and other boolean axes unchanged", () => {
+  const acoustic = {
+    ...product("acoustic", ["Диммирование: да"]),
+    pagetitle: "Акустическая панель",
+    description_excerpt: "Подходит для звукоизоляции помещения.",
+  };
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion(acoustic, motion).verdict, "unknown");
+  assertEquals(
+    checkCriterion(acoustic, {
+      key: "Диммирование",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion({
+      ...acoustic,
+      pagetitle: "Светильник со звуковым датчиком",
+      short_traits: ["С датчиком звука: да"],
+    }, {
+      key: "С датчиком звука",
       op: "eq",
       value: "да",
       level: "A",

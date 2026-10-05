@@ -8,10 +8,11 @@
 // мощность, ток, длина, объём, температура) не проверялись вообще, потому что
 // фасеты каталога — строгое равенство строк.
 //
-// Модуль — ЧИСТЫЙ и DATA-AGNOSTIC: никаких доменных ключей, значений, брендов и
-// жаргона. Он умеет только: (1) распарсить число/диапазон/единицу из произвольной
-// строки характеристики, (2) сопоставить критерий с характеристикой карточки по
-// нормализованному имени ключа, (3) вынести вердикт pass | fail | unknown.
+// Модуль — ЧИСТЫЙ: никаких SKU, брендов и категорий. Он умеет распарсить
+// число/диапазон/единицу, сопоставить критерий с характеристикой карточки и
+// вынести вердикт pass | fail | unknown. Там, где широкий булев фасет
+// противоречит конкретному типу активации в названии/описании, более точное
+// первичное свидетельство не может быть затёрто фасетом или его проекцией.
 //
 // Политика вердиктов:
 //   pass    — характеристика найдена и удовлетворяет оператору критерия.
@@ -1197,6 +1198,66 @@ function isNegativeBooleanValue(value: string): boolean {
   return ["нет", "отсутствует", "no", "false"].includes(normalizeKey(value));
 }
 
+/**
+ * A broad catalog yes/no flag is weaker than a concrete activation mechanism
+ * stated in the product's own title or description. In particular, a product
+ * described as sound-triggered must not satisfy a customer's motion-sensor
+ * requirement solely because a catalog facet says "да". Only these original
+ * prose fields participate: short_traits can contain by_filter proof projected
+ * by the caller, so using them here would let the same boolean erase the
+ * contradiction it is meant to resolve.
+ */
+function motionSensorProseContradiction(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !isAffirmativeValue(criterion.value)
+  ) return null;
+  const key = normalizeKey(criterion.key);
+  if (
+    !/(?:датчик|сенсор|детектор)\p{L}*(?:\s+\p{L}+){0,2}\s+движен\p{L}*|motion\s+(?:sensor|detector)/u
+      .test(key)
+  ) return null;
+
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ].filter(({ text }) => text.trim()).map((source) => ({
+    ...source,
+    normalized: normalizeKey(source.text),
+  }));
+  const motionAbsence =
+    /(?:без|нет)\s+(?:(?:встроен|интегрирован|отдельн|инфракрасн|пир|ик)\p{L}*\s+)?(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*|(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*\s+(?:отсутству\p{L}*|нет)|не\s+(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*)\s+(?:на|от|при)\s+движен\p{L}*|(?:на|от|при)\s+движен\p{L}*\s+не\s+(?:реагир|срабат|включа)\p{L}*|не\s+(?:на|от|по|при)\s+движен\p{L}*|(?:without|no)\s+motion\s+(?:sensor|detector)/u;
+  const explicitAbsence = sources.find(({ normalized }) =>
+    motionAbsence.test(normalized)
+  );
+  if (explicitAbsence) {
+    return `${explicitAbsence.label}: ${explicitAbsence.text.trim()}`;
+  }
+
+  const acousticActivation =
+    /(?:акустическ|звуков)\p{L}*\s+(?:(?:встроен|интегрирован)\p{L}*\s+)?(?:датчик|сенсор|управлен|включен)\p{L}*|(?:датчик|сенсор)\p{L}*\s+(?:звук|шум|хлопк)\p{L}*|(?:реагир|срабат|включа|активир|активац)\p{L}*(?:\s+\p{L}+){0,5}\s+(?:на|от|по|при)\s+(?:звук|шум|хлопк)\p{L}*|(?:sound|acoustic)\s+(?:sensor|activated|activation)/u;
+  const acousticSource = sources.find(({ normalized }) =>
+    acousticActivation.test(normalized) &&
+    !/(?:без|нет)\s+(?:акустическ|звуков)\p{L}*\s+(?:датчик|сенсор)\p{L}*|(?:акустическ|звуков)\p{L}*\s+(?:датчик|сенсор)\p{L}*\s+(?:отсутству\p{L}*|нет)/u
+      .test(normalized)
+  );
+  if (!acousticSource) return null;
+
+  const acousticOnly = sources.some(({ normalized }) =>
+    /(?:только|исключительно|лишь)\s+(?:(?:на|от|по|при)\s+)?(?:звук|шум|хлопк)\p{L}*|(?:только|исключительно|лишь)\s+(?:акустическ|звуков)\p{L}*(?:\s+\p{L}+){0,2}\s+(?:датчик|сенсор)\p{L}*|(?:sound|acoustic)\s+only/u
+      .test(normalized)
+  );
+  const motionActivation = sources.some(({ normalized }) =>
+    /(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*|(?:pir|пир|инфракрасн|микроволнов|радиоволнов)\p{L}*\s+(?:датчик|сенсор|детектор)\p{L}*|(?:реагир|срабат|включа|активир)\p{L}*(?:\s+\p{L}+){0,5}\s+(?:на|от|при)\s+движен\p{L}*|motion\s+(?:sensor|detector)/u
+      .test(normalized)
+  );
+  if (motionActivation && !acousticOnly) return null;
+  return `${acousticSource.label}: ${acousticSource.text.trim()}`;
+}
+
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) {
@@ -1222,6 +1283,15 @@ export function checkCriterion(
   c: Criterion,
 ): CriterionCheck {
   const expected = expectedLabel(c);
+  const proseContradiction = motionSensorProseContradiction(product, c);
+  if (proseContradiction) {
+    return {
+      key: c.key,
+      verdict: "fail",
+      expected,
+      actual: proseContradiction,
+    };
+  }
   const trait = findTrait(product, c.key);
   if (!trait) {
     // Часть доказательных признаков живёт только в названии/описании товара,
