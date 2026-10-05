@@ -5,6 +5,24 @@ implemented locally; live acceptance remains unproved. NOT ready for production.
 
 ## Integration checkpoint
 
+Latest: `6cefd0e0` adds one bounded format repair sharing the existing maximum
+two reasoning attempts. It preserves every property's typed key/op/value/unit/
+scope, all other original fields and the complete original visible reasoning;
+only appended grounding sentences and source-span formatting may change.
+`ccd1159a` adds conservative inflection/token-order matching and splits rejection
+diagnostics. 875 shared tests and Edge check passed before diagnostic-only edit.
+Live probe `c27d873a-8c02-4019-9869-8c2eca3282e9` is still FAIL/internal_error.
+The now-exact diagnostic is `key_not_grounded`: catalog caption `Назначение`
+is absent from prose describing a necessary coaxial radio-frequency cable.
+Inflection alone did not fix this rejection, and the bounded repair did not
+recover. Do not report it as resolved. The source also labels 75 ohm merely as
+recommended, so semantic completeness is a separate issue.
+Next integration boundary: legitimate live-facet caption/value mapping versus
+literal prose key ownership. A catalog key need not occur literally when its
+validated live value is semantically grounded; unknown free keys still need
+source ownership. Do not blanket-disable key validation or infer synonyms.
+Evidence: `obligation-repair-preview670-20261005.json`.
+
 Live follow-up (still FAIL): preview 667 rejected a copied customer fragment
 `расстояние 30 метров` declared as minimum product length, not a visible derived
 requirement. Evidence `f6f4d80f-0372-4115-907a-0d7a069059ae`.

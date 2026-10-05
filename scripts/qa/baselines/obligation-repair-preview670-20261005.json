@@ -1,0 +1,142 @@
+{
+  "test": {
+    "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+    "passed": false,
+    "cases": [
+      {
+        "id": "audit-15-analog-cctv-outdoor-cable",
+        "passed": false,
+        "repeats": [
+          {
+            "variant": "base",
+            "run": 1,
+            "passed": false,
+            "turns": [
+              {
+                "passed": true,
+                "duration_ms": 2199,
+                "log_id": "cdf3e3dc-ebd7-4658-854c-3b6ff95d8462",
+                "products_count": 0,
+                "products": [],
+                "text": "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
+                "failures": [],
+                "diagnostic_error": null,
+                "selection_contract": null,
+                "tool_events": []
+              },
+              {
+                "passed": false,
+                "duration_ms": 8497,
+                "log_id": "c27d873a-8c02-4019-9869-8c2eca3282e9",
+                "products_count": 0,
+                "products": [],
+                "text": "\n\nНе удалось завершить ответ из-за внутренней ошибки. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+                "failures": [
+                  "products 0 < 1",
+                  "none of required text fragments found: коакси, RG-59, RG59, КВК",
+                  "selection contract misses required groups: [75] [УФ, ультрафиолет, UV, улич, наружн]",
+                  "diagnostic error: internal_error"
+                ],
+                "diagnostic_error": "internal_error",
+                "selection_contract": null,
+                "tool_events": [
+                  {
+                    "tool": "discover_category",
+                    "phase": "start",
+                    "summary": "discover_category…",
+                    "duration_ms": null
+                  },
+                  {
+                    "tool": "discover_category",
+                    "phase": "result",
+                    "summary": "категория «Кабель и провод»: 741 тов., фасетов 29, листьев 15",
+                    "duration_ms": 1206
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "rejection": [
+    {
+      "id": "c27d873a-8c02-4019-9869-8c2eca3282e9",
+      "error": "derived_selection_reasoning_contract_invalid",
+      "steps": [
+        {
+          "ms": 7969,
+          "meta": {
+            "errors": [
+              {
+                "index": 0,
+                "reason": "key_not_grounded"
+              }
+            ],
+            "recovered": false,
+            "timeout_ms": 8000
+          },
+          "step": "v3_property_declaration_repair"
+        },
+        {
+          "ms": 7969,
+          "meta": {
+            "finish": "tool_calls",
+            "array_sizes": {
+              "mandatory_properties": 2,
+              "required_facet_values": 1,
+              "excluded_classifications": 7,
+              "compatible_classifications": 1,
+              "explicit_customer_classifications": 0
+            },
+            "tool_call_names": [
+              "declare_selection_reasoning"
+            ],
+            "declaration_keys": [
+              "clarification_question",
+              "compatible_classifications",
+              "excluded_classifications",
+              "explicit_customer_classifications",
+              "mandatory_properties",
+              "measurement_scope",
+              "per_product_measurement_evidence",
+              "reasoning",
+              "required_facet_values",
+              "retrieval_query"
+            ],
+            "declaration_found": true,
+            "response_text_chars": 0,
+            "declaration_reasoning": "Для передачи аналогового видеосигнала на расстояние 30 метров необходим радиочастотный коаксиальный кабель. Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена). Рекомендуется использовать кабель с волновым сопротивлением 75 Ом для минимизации потерь сигнала.",
+            "property_obligation_errors": [
+              {
+                "index": 0,
+                "reason": "key_not_grounded"
+              }
+            ],
+            "declaration_reasoning_chars": 311,
+            "property_obligation_sources": [
+              {
+                "op": "eq",
+                "key": "Назначение",
+                "unit": "",
+                "scope": "per_product",
+                "value": "Кабели радиочастотные",
+                "source_span": "Для передачи аналогового видеосигнала на расстояние 30 метров необходим радиочастотный коаксиальный кабель."
+              },
+              {
+                "op": "eq",
+                "key": "Оболочка",
+                "unit": "",
+                "scope": "per_product",
+                "value": "для уличной прокладки",
+                "source_span": "Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена)."
+              }
+            ]
+          },
+          "step": "v3_derived_selection_reasoning_contract_rejected"
+        }
+      ]
+    }
+  ]
+}
