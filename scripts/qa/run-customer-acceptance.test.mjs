@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveCaseExecutions, resolveEndpoint, resolveExpectations, selectCaseExecutions } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, repeatedAssistantAnswer, resolveCaseExecutions, resolveEndpoint, resolveExpectations, selectCaseExecutions } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -24,6 +24,12 @@ test('resolveEndpoint rejects unsafe or non-function targets', () => {
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
   );
+});
+
+test('repeated-answer gate catches a stalled continuation without penalizing progress', () => {
+  assert.equal(repeatedAssistantAnswer('Как планируется прокладка?', ' Как планируется   прокладка? '), true);
+  assert.equal(repeatedAssistantAnswer('Как планируется прокладка?', 'Прямую прокладку учёл. Уточните напряжение.'), false);
+  assert.equal(repeatedAssistantAnswer('', 'Как планируется прокладка?'), false);
 });
 
 test('suite defaults are inherited and explicit turn expectations win', () => {

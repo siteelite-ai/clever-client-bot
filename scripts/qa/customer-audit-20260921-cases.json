@@ -330,6 +330,7 @@
           "message": "прямо в землю если какой кабель применяется?",
           "expect": {
             "conversation_boundary": "continuation",
+            "forbid_repeat_previous_assistant": true,
             "require_any_text": ["бронир", "ВБбШв", "АВБбШв"],
             "forbid_assistant_text": ["UTP", "FTP", "витая пара"],
             "forbid_selection_criteria_any": ["структурированных систем связи"],

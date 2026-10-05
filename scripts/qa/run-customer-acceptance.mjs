@@ -432,6 +432,11 @@ const TRANSIENT_NETWORK_CODES = new Set([
   'UND_ERR_SOCKET',
 ]);
 
+export function repeatedAssistantAnswer(previous, current) {
+  const normalize = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
+  return normalize(previous) !== '' && normalize(previous) === normalize(current);
+}
+
 function isTransientNetworkError(error) {
   const code = error?.code ?? error?.cause?.code;
   return TRANSIENT_NETWORK_CODES.has(code) || /(?:terminated|fetch failed|socket|timeout)/iu.test(String(error?.message ?? ''));
@@ -466,6 +471,7 @@ export async function fetchAcceptanceTurn(payload, {
 }
 
 async function runTurn({ message, expect }, state) {
+  const previousAssistant = [...state.history].reverse().find((entry) => entry.role === 'assistant')?.content ?? '';
   const startedAt = Date.now();
   const payload = {
     message,
@@ -483,6 +489,12 @@ async function runTurn({ message, expect }, state) {
   parsed.durationMs = Date.now() - startedAt;
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
+  if (
+    expect.forbid_repeat_previous_assistant === true &&
+    repeatedAssistantAnswer(previousAssistant, combined)
+  ) {
+    failures.push('assistant repeated the previous answer after a customer follow-up');
+  }
   if (parsed.conversationBoundary?.sessionId) {
     state.sessionId = parsed.conversationBoundary.sessionId;
     state.history = [];

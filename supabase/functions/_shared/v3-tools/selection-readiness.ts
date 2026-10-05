@@ -179,12 +179,14 @@ export function selectReadinessAssistance(
     ? pending.facet_key.trim()
     : "";
   const options = normalizedClarificationOptions(pending.options);
-  if (!facetKey || options.length < 2) return null;
+  const freeform = facetKey === "readiness_remaining" && options.length === 0;
+  if (!facetKey || (!freeform && options.length < 2)) return null;
 
   const currentLevel = Number.isInteger(scoped.assistance_level)
     ? Number(scoped.assistance_level)
     : 0;
   const assistanceLevel = Math.min(currentLevel + 1, 2);
+  const terminal = assistanceLevel === 2;
   const explanation = FACET_PLAIN_LANGUAGE[facetKey] ??
     "Ориентируйтесь на надпись на оборудовании, упаковке или проекте — специальная терминология не требуется.";
   const labels = FACET_OPTION_LABELS[facetKey] ?? {};
@@ -192,15 +194,22 @@ export function selectReadinessAssistance(
     value: option.value,
     label: labels[option.value.toLocaleLowerCase("ru-RU")] ?? option.label,
   }));
-  const question = assistanceLevel === 1
+  const question = freeform
+    ? !terminal
+      ? "Не нужно угадывать технические параметры. Посмотрите маркировку оборудования или проект и пришлите хотя бы известные значения; если их нет, я могу объяснить типы решений, но не назвать безопасный конкретный товар."
+      : "Не буду повторять вопрос: без данных с маркировки или проекта безопасный подбор конкретного товара пока невозможен. Пришлите их позже либо уточните у квалифицированного специалиста; я помогу сравнить варианты после этого."
+    : !terminal
     ? `Разбираться в терминах не обязательно. ${explanation} Выберите ближайший вариант ниже; если ни один не подходит, напишите, что указано на оборудовании или в проекте.`
-    : `Не буду повторять прежний вопрос. ${explanation} Если определить параметр не получается, безопаснее уточнить маркировку или проект у электрика/монтажника. Пока можно выбрать ближайший вариант ниже.`;
+    : `Не буду повторять прежний вопрос. ${explanation} Если определить параметр не получается, безопаснее уточнить маркировку или проект у электрика/монтажника. Пришлите данные позже — тогда я продолжу подбор.`;
 
   return {
     assistance_level: assistanceLevel,
     question,
-    facet_key: facetKey,
-    options: guidedOptions,
+    // Keep the original selection scope while waiting for real facts. Ending
+    // the question ladder must not discard the task when details arrive later.
+    facet_key: terminal ? "readiness_remaining" : facetKey,
+    options: terminal ? [] : guidedOptions,
+    ...(freeform || terminal ? { freeform: true } : {}),
     scope: selectionReadinessScope(scoped.token, {
       resolved_category: typeof scoped.resolved_category === "string"
         ? scoped.resolved_category
@@ -214,6 +223,8 @@ interface ReadinessProfile {
   id: string;
   applies: RegExp;
   required: RegExp[];
+  /** Requirement represented by the opening quick replies. */
+  initial_requirement_index: number;
   /** Human-readable counterparts of `required`, in the same order. */
   missing_labels: string[];
   /**
@@ -329,6 +340,7 @@ export function measuredLoadGuidanceCanProceed(message: string): boolean {
 const PROFILES: ReadinessProfile[] = [
   {
     id: "electrical_distribution_plan",
+    initial_requirement_index: 0,
     priority: 20,
     // A request for the quantity/composition of protection devices in a
     // distribution board is a project-sizing task, not a SKU search. Area by
@@ -356,6 +368,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "pump_cable",
+    initial_requirement_index: 2,
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
     required: [
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
@@ -400,10 +413,11 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "underground_cable",
+    initial_requirement_index: 0,
     applies:
       /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}земл\p{L}*/iu,
     required: [
-      /(?:труб\p{L}*|пнд|брон\p{L}*|непосредственно\s+в\s+земл)/iu,
+      /(?:труб\p{L}*|пнд|брон\p{L}*|(?:непосредственно|прямо)\s+в\s+(?:земл|грунт))/iu,
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:жил\p{L}*|заземл\p{L}*)/iu,
@@ -413,6 +427,18 @@ const PROFILES: ReadinessProfile[] = [
       "мощность или ток нагрузки",
       "напряжение и число фаз",
       "число жил и наличие заземления",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question:
+          "Если кабель лежит прямо в грунте, обычно рассматривают силовой бронированный кабель; для прокладки в трубе условия другие. Конкретную марку и сечение без нагрузки и схемы питания выбирать нельзя. У линии однофазное питание 220–230 В или трёхфазное 380–400 В?",
+        facet_key: "supply_phase",
+        options: [
+          { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+          { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+        ],
+      },
     ],
     question:
       "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил и наличие заземления. Как планируется прокладка?",
@@ -424,6 +450,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "motor_breaker",
+    initial_requirement_index: 1,
     applies: /автомат\p{L}*[^.!?\n]{0,60}(?:для\s+)?двигател\p{L}*/iu,
     required: [
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
@@ -460,6 +487,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "apartment_breaker",
+    initial_requirement_index: 0,
     applies:
       /автомат\p{L}*[^.!?\n]{0,80}(?:квартир\p{L}*|квартир\p{L}*[^.!?\n]{0,80}автомат\p{L}*)/iu,
     required: [
@@ -503,6 +531,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "kg_cable_replacement",
+    initial_requirement_index: 2,
     applies: /замен\p{L}*[^.!?\n]{0,50}(?:кабел\p{L}*\s+)?кг(?!\p{L})/iu,
     required: [
       /(?:услов\p{L}*|примен\p{L}*|назнач\p{L}*|подключ\p{L}*)/iu,
@@ -524,6 +553,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "cable_lug",
+    initial_requirement_index: 0,
     applies: /наконечник\p{L}*[^.!?\n]{0,80}кабел\p{L}*/iu,
     required: [
       /(?:мед\p{L}*|алюмин\p{L}*)/iu,
@@ -543,6 +573,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "surveillance_cable",
+    initial_requirement_index: 0,
     applies: /кабел\p{L}*[^.!?\n]{0,80}видеонаблюден\p{L}*/iu,
     required: [
       /(?:цифров\p{L}*|аналог\p{L}*|ip[- ]?камер)/iu,
@@ -564,6 +595,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "warm_led_lamp",
+    initial_requirement_index: 0,
     applies:
       /светодиодн\p{L}*\s+ламп\p{L}*[^.!?\n]{0,100}(?:тепл\p{L}*|3000\s*к)|(?:тепл\p{L}*|3000\s*к)[^.!?\n]{0,100}светодиодн\p{L}*\s+ламп\p{L}*/iu,
     required: [
@@ -587,6 +619,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "outdoor_floodlight",
+    initial_requirement_index: 1,
     applies:
       /прожектор\p{L}*[^.!?\n]{0,80}(?:ули[цч]\p{L}*|наруж\p{L}*)|(?:ули[цч]\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
@@ -608,6 +641,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "parking_floodlight",
+    initial_requirement_index: 1,
     priority: 10,
     applies:
       /прожектор\p{L}*[^.!?\n]{0,80}парковк\p{L}*|парковк\p{L}*[^.!?\n]{0,80}прожектор\p{L}*/iu,
@@ -657,6 +691,11 @@ export function selectReadinessClarification(
       missing.includes(candidate.requirement_index)
     )
     : undefined;
+  // Once the opening facet has been answered, its quick replies are stale.
+  // Numeric and other open-ended gaps cannot honestly be represented by those
+  // same choices: keep the scoped conversation, but ask for free-form facts.
+  const freeformRemaining = options.progressive === true && !followUp &&
+    !missing.includes(profile.initial_requirement_index);
   const missingSummary = missing
     .map((index) => profile.missing_labels[index])
     .filter(Boolean)
@@ -665,9 +704,13 @@ export function selectReadinessClarification(
     profile: profile.id,
     question: followUp
       ? `Осталось уточнить: ${missingSummary}. ${followUp.question}`
+      : freeformRemaining
+      ? `Указанный параметр учёл. Для точного подбора ещё нужны: ${missingSummary}. Напишите, что из этого известно; если не знаете, так и скажите — объясню, где посмотреть.`
       : profile.question,
-    facet_key: followUp?.facet_key ?? profile.facet_key,
-    options: followUp?.options ?? profile.options,
+    facet_key: followUp?.facet_key ??
+      (freeformRemaining ? "readiness_remaining" : profile.facet_key),
+    options: followUp?.options ?? (freeformRemaining ? [] : profile.options),
+    ...(freeformRemaining ? { freeform: true } : {}),
     scope: selectionReadinessScope(current),
   };
 }

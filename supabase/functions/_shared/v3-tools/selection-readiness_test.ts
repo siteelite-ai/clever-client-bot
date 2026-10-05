@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { executeProposeClarification } from "./propose-clarification.ts";
 import {
   measuredLoadGuidanceCanProceed,
   resolveScopedCatalogSelectionContinuation,
@@ -115,6 +116,92 @@ Deno.test("progressive motor clarification advances from phase to nameplate curr
     true,
   );
   assertEquals(/пуск/iu.test(clarification?.question ?? ""), true);
+});
+
+Deno.test("an answered installation-method option advances instead of repeating it", () => {
+  const original = "Какой кабель подойдет для прокладки в земле?";
+  const answer = "прямо в землю если какой кабель применяется?";
+  const clarification = selectReadinessClarification(
+    `${original}\nУточнение клиента: ${answer}`,
+    `${original}\n${answer}`,
+    { progressive: true },
+  );
+  assertEquals(clarification?.profile, "underground_cable");
+  assertEquals(clarification?.facet_key, "supply_phase");
+  assertEquals(/бронирован/iu.test(clarification?.question ?? ""), true);
+  assertEquals(
+    /Как планируется прокладка\?/iu.test(clarification?.question ?? ""),
+    false,
+  );
+});
+
+Deno.test("remaining open-ended readiness gaps do not reuse solved quick replies", () => {
+  for (
+    const [original, answer] of [
+      ["Какие наконечники нужны для кабеля 35 мм²", "Медь"],
+      ["Есть ли у вас кабель для видеонаблюдения?", "Аналоговая"],
+    ]
+  ) {
+    const clarification = selectReadinessClarification(
+      `${original}\nУточнение клиента: ${answer}`,
+      `${original}\n${answer}`,
+      { progressive: true },
+    );
+    assertEquals(clarification?.facet_key, "readiness_remaining");
+    assertEquals(clarification?.freeform, true);
+    assertEquals(clarification?.options, []);
+    const issued = executeProposeClarification(clarification!);
+    assertEquals(issued.ok, true);
+    if (issued.ok) {
+      assertEquals(
+        (issued.side_effects ?? []).some((effect) =>
+          effect.type === "quick_replies"
+        ),
+        false,
+      );
+      assertEquals(
+        (issued.side_effects ?? []).some((effect) =>
+          effect.type === "slot_update"
+        ),
+        true,
+      );
+    }
+  }
+});
+
+Deno.test("unknown answer to a free-form gap gets bounded guidance, not the old choices", () => {
+  const original = "Какие наконечники нужны для кабеля 35 мм²";
+  const assistance = selectReadinessAssistance("Не знаю", {
+    pending_clarification: {
+      status: "pending",
+      facet_key: "readiness_remaining",
+      options: [],
+      scope: selectionReadinessScope(original),
+    },
+  });
+  assertEquals(assistance?.freeform, true);
+  assertEquals(assistance?.options, []);
+  assertEquals(/не нужно угадывать/iu.test(assistance?.question ?? ""), true);
+});
+
+Deno.test("free-form clarification is explicit and does not weaken ordinary choice validation", () => {
+  assertEquals(
+    executeProposeClarification({
+      question: "Укажите длину линии",
+      facet_key: "line_length",
+      options: [],
+    }).ok,
+    false,
+  );
+  assertEquals(
+    executeProposeClarification({
+      question: "Укажите длину линии",
+      facet_key: "line_length",
+      freeform: true,
+      options: [{ value: "10 м" }, { value: "20 м" }],
+    }).ok,
+    false,
+  );
 });
 
 Deno.test("a measured load guidance question reaches visible reasoning before catalog readiness", () => {
@@ -290,7 +377,25 @@ Deno.test("a second novice reply advances the bounded help ladder", () => {
     },
   });
   assertEquals(assistance?.assistance_level, 2);
+  assertEquals(assistance?.facet_key, "readiness_remaining");
+  assertEquals(assistance?.scope?.token, original);
+  assertEquals(assistance?.options, []);
   assertEquals(/Не буду повторять/iu.test(assistance?.question ?? ""), true);
+  const issued = executeProposeClarification(assistance!);
+  assertEquals(issued.ok, true);
+  if (issued.ok) {
+    const update = issued.side_effects?.find((effect) =>
+      effect.type === "slot_update"
+    );
+    if (update?.type === "slot_update") {
+      const resumed = resolveSelectionReadinessRequest("1P", update.slots);
+      assertEquals(resumed.scoped, true);
+      assertEquals(resumed.message.includes(original), true);
+      assertEquals(resumed.message.endsWith("1P"), true);
+    } else {
+      throw new Error("The paused selection scope was discarded");
+    }
+  }
 });
 
 Deno.test("apartment breaker clarification advances from poles to curve", () => {

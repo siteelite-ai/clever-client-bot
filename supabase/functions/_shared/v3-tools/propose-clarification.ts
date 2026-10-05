@@ -14,6 +14,8 @@ export interface ProposeClarificationInput {
   question: string;
   facet_key: string;
   options: Array<{ value: string; label?: string; count?: number }>;
+  /** Internal readiness follow-up requiring a value the quick replies cannot supply. */
+  freeform?: boolean;
   scope?: {
     kind: string;
     token: string;
@@ -32,13 +34,18 @@ export function executeProposeClarification(
   const question = (input.question ?? "").trim();
   const facet_key = (input.facet_key ?? "").trim();
   const opts = Array.isArray(input.options) ? input.options : [];
+  const freeform = input.freeform === true;
 
-  if (!question || !facet_key || opts.length < 2 || opts.length > 5) {
+  if (
+    !question || !facet_key || opts.length > 5 ||
+    (freeform ? opts.length !== 0 : opts.length < 2)
+  ) {
     return {
       tool: "propose_clarification",
       ok: false,
       error_code: "bad_input",
-      message: "question, facet_key and 2-5 options required",
+      message:
+        "question, facet_key and 2-5 options required (or an explicit freeform follow-up)",
     };
   }
 
@@ -49,7 +56,7 @@ export function executeProposeClarification(
       label: String(o.label ?? o.value),
     }));
 
-  if (replies.length < 2) {
+  if (!freeform && replies.length < 2) {
     return {
       tool: "propose_clarification",
       ok: false,
@@ -60,7 +67,9 @@ export function executeProposeClarification(
 
   const slot_id = crypto.randomUUID();
   const side_effects: ToolSideEffect[] = [
-    { type: "quick_replies", replies, facet_key },
+    ...(!freeform
+      ? [{ type: "quick_replies" as const, replies, facet_key }]
+      : []),
     {
       type: "slot_update",
       slots: {

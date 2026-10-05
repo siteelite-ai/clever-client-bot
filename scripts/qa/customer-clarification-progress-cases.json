@@ -1,0 +1,106 @@
+{
+  "schema_version": 3,
+  "default_expectations": { "max_duration_ms": 30000, "forbid_repeat_previous_assistant": true },
+  "cases": [
+    {
+      "id": "probe-pump-cable",
+      "title": "Неопытный клиент: кабель насоса",
+      "turns": [
+        {
+          "message": "Мне нужен кабель для поверхностного насоса 7 кВт, стационарно на улице",
+          "expect": { "max_products": 0, "require_any_text": ["фаз", "питан", "длин"] }
+        },
+        {
+          "message": "Не знаю, какие есть варианты?",
+          "expect": { "conversation_boundary": "continuation", "max_products": 0, "require_text_groups": [["220", "одну фаз"], ["380", "три фаз"]] }
+        },
+        {
+          "message": "380 В, 3 фазы",
+          "expect": { "conversation_boundary": "continuation", "max_products": 0, "require_any_text": ["длин", "расстоян"] }
+        }
+      ]
+    },
+    {
+      "id": "probe-surveillance-cable",
+      "title": "Неопытный клиент: кабель видеонаблюдения",
+      "turns": [
+        {
+          "message": "Есть ли у вас кабель для видеонаблюдения?",
+          "expect": { "max_products": 0, "require_text_groups": [["аналог"], ["IP", "цифров"]] }
+        },
+        {
+          "message": "Я не разбираюсь, какие есть варианты?",
+          "expect": { "conversation_boundary": "continuation", "max_products": 0, "require_text_groups": [["аналог"], ["IP", "цифров"]] }
+        },
+        {
+          "message": "Аналоговая",
+          "expect": { "conversation_boundary": "continuation", "max_products": 0, "require_text_groups": [["улица", "улиц"], ["длин", "расстоя"]], "forbid_assistant_text": ["Какая система камер?"] }
+        },
+        {
+          "message": "на улице, расстояние 30 метров",
+          "expect": { "conversation_boundary": "continuation", "min_products": 1, "require_every_product_title_any": ["коакси", "RG-59", "RG59", "RG-6", "RG6", "РК-75", "РК 75", "КВК", "радиочастот", "видеонаблюден"], "forbid_every_product_title_any": ["U/UTP", "F/UTP", "витая пара", "INDOOR"] }
+        }
+      ]
+    },
+    {
+      "id": "probe-underground-cable-customer-phrasing",
+      "title": "Кабель в земле: ответ на выбранный вариант не повторяет прежний вопрос",
+      "turns": [
+        {
+          "message": "Какой кабель подойдет для прокладки в земле?",
+          "expect": { "max_products": 0, "require_any_text": ["прямо", "труб", "ПНД"] }
+        },
+        {
+          "message": "прямо в землю если какой кабель применяется?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["бронир", "ВБбШв", "АВБбШв"],
+            "forbid_assistant_text": ["Как планируется прокладка?"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "probe-acti9-customer-phrasing",
+      "title": "Каталожный аналог: исходная формулировка клиента, без добавленной нами полюсности",
+      "turns": [
+        {
+          "message": "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+          "expect": { "max_products": 0, "require_any_text": ["полюс"] }
+        },
+        {
+          "message": "подбери их в каталоге",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["полюс"],
+            "forbid_assistant_text": ["USB", "HDMI", "категорию товара"]
+          }
+        },
+        {
+          "message": "1 полюс",
+          "expect": { "conversation_boundary": "continuation", "min_products": 2, "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16А", "16 А"], ["C", "С"]] }
+        }
+      ]
+    },
+    {
+      "id": "probe-floodlight-freeform-progress",
+      "title": "Открытое уточнение сохраняет задачу и доходит до товаров",
+      "turns": [
+        {
+          "message": "Нужен прожектор на улицу для двора частного дома",
+          "expect": { "max_products": 0, "require_text_groups": [["площад"], ["высот"]] }
+        },
+        {
+          "message": "Высота 4 м",
+          "expect": { "conversation_boundary": "continuation", "max_products": 0, "require_any_text": ["площад", "размер"], "forbid_assistant_text": ["на какой высоте", "высоту установки"] }
+        },
+        {
+          "message": "Площадь 120 м²",
+          "expect": { "conversation_boundary": "continuation", "min_products": 2, "require_every_product_title_any": ["прожектор"] }
+        }
+      ]
+    }
+  ]
+}
