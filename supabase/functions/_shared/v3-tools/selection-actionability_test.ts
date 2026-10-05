@@ -885,7 +885,10 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
       },
     ],
   );
-  assertEquals(messages.length, 3);
+  assertEquals(messages.length, 4);
+  assertEquals(messages[2].role, "system");
+  assertEquals(messages[2].content.includes("не из сообщения клиента"), true);
+  assertEquals(messages[2].content.includes("отсутствие свойства в каталожной схеме не отменяет требование"), true);
   assertEquals(messages[1].role, "system");
   assertEquals(
     messages[1].content.includes("количество материала для покупки"),
@@ -948,11 +951,11 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
     messages[0].content.includes("не задавай уточняющий вопрос"),
     false,
   );
-  assertEquals(messages[2].role, "user");
-  assertEquals(messages[2].content.includes("<script>"), false);
-  assertEquals(messages[2].content.includes("\\u003cscript>"), true);
-  assertEquals(messages[2].content.includes("\\u003coption>"), true);
-  assertEquals(messages[2].content.includes("hidden-option"), false);
+  assertEquals(messages[3].role, "user");
+  assertEquals(messages[3].content.includes("<script>"), false);
+  assertEquals(messages[3].content.includes("\\u003cscript>"), true);
+  assertEquals(messages[3].content.includes("\\u003coption>"), true);
+  assertEquals(messages[3].content.includes("hidden-option"), false);
 });
 
 Deno.test("derived reasoning exposes bounded technical values but not identity or boolean metadata", () => {
