@@ -104,6 +104,7 @@ import {
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
   filterSelectionRecoveryPool,
+  preserveRecoveryClassProof,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
   rankReasoningSearchQueries,
@@ -5433,6 +5434,10 @@ async function runExpertLoop(
   let selectionCriteriaPlan: SelectionCriteriaPlan | null = null;
   const disclosedUnverifiedCriterionSignatures = new Set<string>();
   let pendingUnverifiedRecoveryCriteria: Criterion[] = [];
+  // A disclosed sparse-property recovery is conditional on preserving the
+  // proven product class. Later cardinality supplements must satisfy that
+  // same condition; proof from the original pool cannot transfer to new IDs.
+  let recoveryClassProofCriteria: Criterion[] = [];
   let unverifiedRecoveryNoticeSent = false;
   const omitDisclosedUnverifiedCriteria = (
     criteria: Criterion[],
@@ -5670,6 +5675,7 @@ async function runExpertLoop(
     );
     if (result.relaxed.length === 0) return;
     selectionCriteriaPlan = result.plan;
+    recoveryClassProofCriteria = preserveRecoveryClassProof(recoveryClassProofCriteria, attempt);
     for (const criterion of result.relaxed) {
       disclosedUnverifiedCriterionSignatures.add(
         criterionContractSignature(criterion),
@@ -6638,13 +6644,21 @@ async function runExpertLoop(
   };
 
   const guardFinalRenderIds = (ids: string[]): string[] => {
-    const structurallySafe = guardReplacementRenderIds(
+    let structurallySafe = guardReplacementRenderIds(
       filterProductIdsByNamedSeries(
         guardVisibleCardinality(ids).ids,
         ctx.cache,
         namedSeriesToken,
       ),
     );
+    if (recoveryClassProofCriteria.length > 0) {
+      const proved = new Set(applyCriteriaGate(
+        structurallySafe.map((id) => ctx.cache.get(id))
+          .filter((product): product is ProductFull => Boolean(product)),
+        recoveryClassProofCriteria,
+      ).passed_ids);
+      structurallySafe = structurallySafe.filter((id) => proved.has(id));
+    }
     if (derivedExcludedClassificationCriteria.length === 0) {
       return structurallySafe;
     }

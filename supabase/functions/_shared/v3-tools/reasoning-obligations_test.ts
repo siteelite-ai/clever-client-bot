@@ -228,3 +228,12 @@ Deno.test("expanded attribution preserves trailing conditions, negation and nume
   assertEquals(result.obligations[0].criterion.exclusive, true);
   assertEquals(result.obligations[0].sourceSpan, source);
 });
+
+Deno.test("instrumental case preserves a measured live caption and its unit", () => {
+  const source = "Для освещения двора площадью 35м2 с учетом высоты установки 1,5м необходим прожектор со световым потоком не менее 3500 Лм.";
+  const item = { ...numeric, key: "Световой поток, Лм", value: 3500, op: "min", unit: "Лм", source_span: source };
+  const result = resolveReasoningObligations([item], source);
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations[0].criterion.value, 3500);
+  assertEquals(resolveReasoningObligations([{ ...item, key: "Световой поток, Вт" }], source).unresolved.length, 1);
+});

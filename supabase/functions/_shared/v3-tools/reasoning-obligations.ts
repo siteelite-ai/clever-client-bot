@@ -134,7 +134,7 @@ function containsInflectedPhrase(text: string, phrase: string): boolean {
   if (containsPhrase(text, phrase)) return true;
   const tokens = (value: string) => (normalized(value).match(/[\p{L}\p{N}]+/gu) ?? []).map((token) =>
     /^[а-яё]{5,}$/u.test(token)
-      ? token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ые|ие|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю|ь)$/u, "")
+      ? token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ые|ие|ой|ей|ом|ем|ым|им|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю|ь)$/u, "")
       : token);
   const wanted = tokens(phrase);
   const actual = new Set(tokens(text));

@@ -46,6 +46,23 @@ export interface SelectionSearchRecoveryAttempt {
   >;
 }
 
+/** Conditional recovery proof is not a new user requirement. Preserve its
+ * provenance, but require it again for every later pool/supplement before
+ * claiming that the recovered product class is proven. */
+export function preserveRecoveryClassProof(
+  existing: Criterion[],
+  attempt: SelectionSearchRecoveryAttempt,
+): Criterion[] {
+  const merged = new Map<string, Criterion>();
+  for (const criterion of [
+    ...existing, ...attempt.proven_criteria, ...attempt.evidence_required_criteria,
+  ]) {
+    const signature = JSON.stringify([criterion.key, criterion.op, criterion.value, criterion.unit, criterion.exclusive]);
+    merged.set(signature, { ...criterion, level: "A" });
+  }
+  return [...merged.values()];
+}
+
 /**
  * A recovery may widen retrieval, never product eligibility. In particular,
  * removing a sparse affirmative boolean from the HTTP request must not turn

@@ -9,6 +9,7 @@ import {
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
   filterSelectionRecoveryPool,
+  preserveRecoveryClassProof,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
   rankReasoningSearchQueries,
@@ -18,6 +19,21 @@ import {
   shouldFinalizePendingSelection,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
+import { applyCriteriaGate } from "./criteria-gate.ts";
+
+Deno.test("conditional class proof survives later supplements without promotion to user evidence", () => {
+  const criterion = { key: "Назначение", op: "eq" as const, value: "Кабели радиочастотные", level: "A" as const, evidence: "model_assumption" as const };
+  const attempt = { kind: "relax_model_advisory_facets" as const, args: {}, relaxed_inputs: [], proven_criteria: [], evidence_required_criteria: [criterion], unverified_criteria: [], revalidate: [] };
+  const proof = preserveRecoveryClassProof([], attempt);
+  assertEquals(proof, [criterion]);
+  assertEquals(preserveRecoveryClassProof(proof, attempt), proof);
+  const products = [
+    { id: "coax", pagetitle: "Кабель", short_traits: ["Назначение: Кабели радиочастотные"] },
+    { id: "power", pagetitle: "Кабель", short_traits: ["Назначение: Провода силовые для электрических установок"] },
+    { id: "unknown", pagetitle: "Кабель", short_traits: [] },
+  ] as ProductRef[];
+  assertEquals(applyCriteriaGate(products, proof).passed_ids, ["coax"]);
+});
 
 Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
   const messages = buildCatalogEmptySynthesisMessages(
