@@ -7227,7 +7227,7 @@ async function runExpertLoop(
                   }\n\n<correction>Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.</correction>`,
                 };
               }
-              structuredReasoning = await callOpenRouter(
+              const correctionResponse = await callOpenRouter(
                 apiKey,
                 correctionMessages,
                 turnController.signal,
@@ -7241,18 +7241,27 @@ async function runExpertLoop(
                 GENERAL_INQUIRY_MODEL_ROUTING,
               );
               derivedReasoningProviderAttempts += 1;
-              declarationCall = structuredReasoning.toolCalls.find((
+              const correctionCall = correctionResponse.toolCalls.find((
                 toolCall,
               ) => toolCall.name === "declare_selection_reasoning");
-              declaration = declarationCall
+              const correctedDeclaration = correctionCall
                 ? resolveDerivedSelectionReasoning(
-                  declarationCall.args,
+                  correctionCall.args,
                   lastDiscover.facets ?? [],
                   userMessage,
                   activeSelectionTarget ??
                     lastDiscover.category?.pagetitle ?? "",
                 )
                 : null;
+              // A retry can fail to honor the forced tool or exhaust its
+              // output budget. Retain the first validated declaration; never
+              // replace it with an invalid response and then report a false
+              // internal error to the customer.
+              if (correctedDeclaration?.text.trim()) {
+                structuredReasoning = correctionResponse;
+                declarationCall = correctionCall;
+                declaration = correctedDeclaration;
+              }
               steps.push({
                 step: "v3_derived_selection_measurement_retry",
                 ms: now(),
@@ -7260,9 +7269,14 @@ async function runExpertLoop(
                   retry_model: GENERAL_INQUIRY_MODEL,
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
-                    declaration?.text.trim() &&
+                    correctedDeclaration?.text.trim() &&
                       !missingRequiredProductMeasurement(),
                   ),
+                  corrected_declaration_valid: Boolean(
+                    correctedDeclaration?.text.trim(),
+                  ),
+                  retained_prior_declaration: !correctedDeclaration?.text
+                    .trim(),
                 },
               });
             }
@@ -17394,7 +17408,7 @@ Deno.serve(async (req) => {
 
       try {
         const priorHistory = stripCurrentUserEcho(history, userMessage);
-        const scopedSelectionRequest = resolveSelectionReadinessRequest(
+        let scopedSelectionRequest = resolveSelectionReadinessRequest(
           userMessage,
           slots,
         );
@@ -17421,13 +17435,19 @@ Deno.serve(async (req) => {
             isRecentProductShowFollowup(userMessage) ||
             isRecentProductPriceSelectionFollowup(userMessage)
           );
-        const startsNewTask = shouldStartNewConversation(boundary, {
-          matchedPendingClarification,
-          activeScopedClarification: Boolean(
-            pendingBroadAssortmentScope || scopedSelectionRequest.scoped,
-          ),
-          referencesRenderedProducts,
-        });
+        const explicitNewTask = boundary.source === "local" &&
+          boundary.reason === "local_explicit_new_task";
+        const startsNewTask = explicitNewTask ||
+          shouldStartNewConversation(boundary, {
+            matchedPendingClarification,
+            activeScopedClarification: Boolean(
+              pendingBroadAssortmentScope || scopedSelectionRequest.scoped,
+            ),
+            referencesRenderedProducts,
+          });
+        if (startsNewTask) {
+          scopedSelectionRequest = { message: userMessage, scoped: false };
+        }
         const effectiveSessionId = startsNewTask
           ? `session_${crypto.randomUUID()}`
           : sessionId;

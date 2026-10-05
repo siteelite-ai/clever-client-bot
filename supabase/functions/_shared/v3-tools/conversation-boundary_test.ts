@@ -2,6 +2,7 @@ import {
   classifyConversationBoundary,
   classifyConversationBoundaryLocally,
   type ConversationMessage,
+  isExplicitNewTaskRequest,
   parseConversationBoundaryDecision,
   shouldStartNewConversation,
   stripCurrentUserEcho,
@@ -75,11 +76,14 @@ Deno.test("local boundary classifier isolates complete requests without product 
     )?.mode,
     "new_task",
   );
-  assertEquals(classifyConversationBoundaryLocally("Новая тема: нужны розетки"), {
-    mode: "new_task",
-    confidence: 1,
-    reason: "local_explicit_new_task",
-  });
+  assertEquals(
+    classifyConversationBoundaryLocally("Новая тема: нужны розетки"),
+    {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_explicit_new_task",
+    },
+  );
 });
 
 Deno.test("local boundary classifier preserves references and short clarification answers", () => {
@@ -167,6 +171,40 @@ Deno.test("a server-scoped clarification answer never spends a boundary-model ca
     source: "local",
   });
   assertEquals(calls, 0);
+});
+
+Deno.test("explicit new topic wins over a pending scoped clarification", async () => {
+  const slots = {
+    pending_clarification: {
+      status: "pending",
+      scope: { kind: "selection_readiness", token: "Какой кабель для земли?" },
+    },
+  };
+  let calls = 0;
+  const deps = {
+    apiKey: "test",
+    model: "test-model",
+    fetchImpl: async () => {
+      calls++;
+      throw new Error("remote classifier must not be called");
+    },
+  };
+  const reset =
+    "Новая тема. Есть ли аналог автомату Schneider Electric Acti9 C16?";
+  assertEquals(isExplicitNewTaskRequest(reset), true);
+  assertEquals(await classifyConversationBoundary(reset, prior, slots, deps), {
+    mode: "new_task",
+    confidence: 1,
+    reason: "local_explicit_new_task",
+    source: "local",
+  });
+  assertEquals(calls, 0);
+  assertEquals(isExplicitNewTaskRequest("1 полюс"), false);
+  assertEquals(isExplicitNewTaskRequest("а есть другие варианты?"), false);
+  assertEquals(
+    (await classifyConversationBoundary("1 полюс", prior, slots, deps)).mode,
+    "continuation",
+  );
 });
 
 Deno.test("new topic requires a high-confidence semantic decision", () => {

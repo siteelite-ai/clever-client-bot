@@ -101,6 +101,25 @@
           "expect": { "conversation_boundary": "continuation", "min_products": 2, "require_every_product_title_any": ["прожектор"] }
         }
       ]
+    },
+    {
+      "id": "probe-explicit-topic-switch-with-pending-clarification",
+      "title": "Явная новая тема сбрасывает ожидающее уточнение старого товара",
+      "turns": [
+        {
+          "message": "Какой кабель подойдет для прокладки в земле?",
+          "expect": { "max_products": 0, "require_any_text": ["прямо", "труб", "ПНД"] }
+        },
+        {
+          "message": "Новая тема. Есть ли аналог автомату Schneider Electric Acti9 C16?",
+          "expect": {
+            "conversation_boundary": "new_task",
+            "max_products": 0,
+            "require_any_text": ["полюс"],
+            "forbid_assistant_text": ["Как планируется прокладка?", "бронированный кабель"]
+          }
+        }
+      ]
     }
   ]
 }

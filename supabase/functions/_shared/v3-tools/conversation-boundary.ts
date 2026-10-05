@@ -90,6 +90,14 @@ export function classifyConversationBoundaryLocally(
   return null;
 }
 
+/** A customer-owned reset marker takes precedence over pending server slots. */
+export function isExplicitNewTaskRequest(userMessage: string): boolean {
+  return EXPLICIT_NEW_TASK_RE.test(
+    String(userMessage ?? "").replace(/\p{Cc}/gu, " ").replace(/\s+/gu, " ")
+      .trim(),
+  );
+}
+
 function normalizeComparable(value: string): string {
   return value.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
 }
@@ -210,13 +218,18 @@ function compactPendingSlots(
   return pending;
 }
 
-function hasServerIssuedScopedClarification(slots: Record<string, unknown>): boolean {
+function hasServerIssuedScopedClarification(
+  slots: Record<string, unknown>,
+): boolean {
   const pending = slots?.pending_clarification;
-  if (!pending || typeof pending !== "object" || Array.isArray(pending)) return false;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return false;
+  }
   const scope = (pending as Record<string, unknown>).scope;
   if (!scope || typeof scope !== "object" || Array.isArray(scope)) return false;
   const row = scope as Record<string, unknown>;
-  return (row.kind === "selection_readiness" || row.kind === "broad_assortment") &&
+  return (row.kind === "selection_readiness" ||
+    row.kind === "broad_assortment") &&
     typeof row.token === "string" && row.token.trim().length > 0;
 }
 
@@ -232,6 +245,14 @@ export async function classifyConversationBoundary(
   deps: ConversationBoundaryDeps,
   signal?: AbortSignal,
 ): Promise<ConversationBoundaryResult> {
+  if (isExplicitNewTaskRequest(userMessage)) {
+    return {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_explicit_new_task",
+      source: "local",
+    };
+  }
   // A server-issued scoped clarification is stronger evidence than a semantic
   // guess: the current turn is the answer to a known pending question. Avoid a
   // remote call entirely so quota or classifier drift cannot erase that task.
