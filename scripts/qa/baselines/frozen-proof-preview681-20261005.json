@@ -1,0 +1,465 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": true,
+  "cases": [
+    {
+      "id": "audit-05-breaker-1p-16a-c-under-1000",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 8153,
+              "log_id": "73929c95-2b2f-4eae-b4d8-f2858aa11773",
+              "products_count": 4,
+              "products": [
+                "Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК",
+                "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710",
+                "Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)",
+                "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/"
+              ],
+              "text": "Для защиты цепи необходим автоматический выключатель с параметром Номинальный ток 16 А. Требуется исполнение Количество полюсов 1 шт для однофазной сети. Выбрана Характеристика срабатывания C для стандартных бытовых нагрузок. Цена до 1000 тенге учтена как фильтр стоимости. Обязательные параметры: «Характеристика срабатывания: C»; «Количество полюсов: 1»; «Номинальный ток: 16». Как рабочую гипотезу сначала проверяю «Тип монтажа: на DIN-рейку»; «Тип напряжения: переменный (АС)»; «Тип подключения: винтовое соединение»; без подтверждения клиента это не становится обязательным фильтром.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-6de41491",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество полюсов",
+                    "op": "eq",
+                    "value": "1",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Характеристика срабатывания",
+                    "op": "eq",
+                    "value": "C",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Номинальный ток",
+                    "op": "eq",
+                    "value": "16",
+                    "unit": "а",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Автоматические выключатели»: 1307 тов., фасетов 37, листьев 1",
+                  "duration_ms": 1206
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 6",
+                  "duration_ms": 279
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-09b-breaker-25a-novice-guidance",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 817,
+              "log_id": "87bc2c0c-523c-433f-a5a7-5763b273cc86",
+              "products_count": 0,
+              "products": [],
+              "text": "Номинал тока понятен. До подбора уточните полюсность/число фаз и характеристику (кривую B, C или D). Если проект задаёт отключающую способность в кА, также укажите её. Какая полюсность нужна?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 813,
+              "log_id": "a3266c80-bc56-416d-ae21-8704db0d3a33",
+              "products_count": 0,
+              "products": [],
+              "text": "Разбираться в терминах не обязательно. Обозначения числа полюсов: 1P применяют для обычной однофазной линии; 2P одновременно отключает фазу и ноль; 3P предназначен для трёхфазной линии, 4P — для трёхфазной линии с отключением нейтрали. Для замены ориентируйтесь на маркировку существующего аппарата или проект. Можно ответить текстом: «1P — обычная однофазная линия»; «2P — отключать фазу и ноль»; «3P — трёхфазная линия». Если ни один вариант не подходит, напишите, что указано на оборудовании или в проекте.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 601,
+              "log_id": "a7ced78b-7f99-4700-a3ef-a43b0ef5fc68",
+              "products_count": 0,
+              "products": [],
+              "text": "Осталось уточнить: характеристику B, C или D. Какая характеристика срабатывания указана в проекте?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 6915,
+              "log_id": "888eed4b-0fde-4fb0-b2a5-db31d0bd648a",
+              "products_count": 4,
+              "products": [
+                "Автомат 1Р ВА 47-100 25А 10 кА  х-ка С ИЭК",
+                "Авт.выкл-ль iC60N 1П 25А С /A9F79125/",
+                "Авт.выкл-ль ВА 101-1Р-025А-С /11056DEK/",
+                "Авт.выкл-ль EASY 9 1P 25A C 4,5кА 230В /EZ9F34125/"
+              ],
+              "text": "Для защиты квартирной электросети выбран автоматический выключатель, у которого номинальный ток составляет 25 А. Для однофазной сети необходим прибор, у которого количество полюсов равно 1. Для стандартных бытовых нагрузок обязательна характеристика срабатывания типа C. Монтаж осуществляется на DIN-рейку. Обязательные параметры: «Количество полюсов: 1»; «Номинальный ток: 25». Как рабочую гипотезу сначала проверяю «Тип монтажа: на DIN-рейку»; «Тип напряжения: переменный (АС)»; «Тип подключения: винтовое соединение»; без подтверждения клиента это не становится обязательным фильтром.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-639423ab",
+                "mandatory_criteria": [
+                  {
+                    "key": "Номинальный ток",
+                    "op": "eq",
+                    "value": "25",
+                    "unit": "а",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Количество полюсов",
+                    "op": "eq",
+                    "value": 1,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Характеристика срабатывания",
+                    "op": "eq",
+                    "value": "C",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Автоматические выключатели»: 1307 тов., фасетов 37, листьев 1",
+                  "duration_ms": 1228
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "jargon_recover_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 0",
+                  "duration_ms": 1
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 21",
+                  "duration_ms": 403
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-16-warm-e27-lamps",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 8171,
+              "log_id": "6a84e8ac-efd6-40fd-a4af-d8f4bc6be81b",
+              "products_count": 4,
+              "products": [
+                "929001899887/871869682204300 Лампа ESS LED Bulb 9W E27 3000К 230V 1CT",
+                "929001900287/871869682208100 Лампа ESS LEDBulb 11W E27 3000K 230V 1CT",
+                "929001955307/871869963969300 Лампа LED Bulb 10W E27 3000K HV ECO",
+                "929001915337/871869682270800 Лампа LED Bulb 8W E27 3000K 230V 1CT/12"
+              ],
+              "text": "Для создания уютной атмосферы необходима цветовая температура 3000 К. Для совместимости со светильником обязателен тип цоколя E27. Выбраны светодиодные лампы, обеспечивающие высокую энергоэффективность. Обязательные параметры: «Цветовая температура, К: 3000». По классу «Тип цоколя» выбираю «E27». Явно указанное свойство «Е27» соответствует «Тип цоколя: E27». Как рабочую гипотезу сначала проверяю «Тип лампы(обозначение): LED»; «Вид лампы (принцип работы): светодиодная»; без подтверждения клиента это не становится обязательным фильтром.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-b8282938",
+                "mandatory_criteria": [
+                  {
+                    "key": "Цветовая температура, К",
+                    "op": "eq",
+                    "value": "3000",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет свечения",
+                    "op": "eq",
+                    "value": "теплый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип цоколя",
+                    "op": "eq",
+                    "value": "E27",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид лампы (принцип работы)",
+                    "op": "eq",
+                    "value": "светодиодная",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цветовая температура",
+                    "op": "eq",
+                    "value": 3000,
+                    "unit": "К",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 1984
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 15",
+                  "duration_ms": 318
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-25-black-hidden-sockets-white-followup",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 8858,
+              "log_id": "4110a6d1-3466-4bcb-85ae-b6e1066207f1",
+              "products_count": 4,
+              "products": [
+                "Розетка с заземлением, защитные шторки, винтовые контакты, цвет черный (серия Florence)",
+                "Розетка с заземлением, винтовые контакты, цвет черный (серия Florence)",
+                "Розетка без заземления, винтовые контакты, цвет черный (серия Florence)",
+                "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)"
+              ],
+              "text": "Для установки внутри стен подходят розетки, поддерживающие скрытый Тип монтажа. Для соответствия дизайну необходим черный Цвет. По классу «Тип монтажа» выбираю «скрытый». Явно указанное свойство «скрытого монтажа» соответствует «Тип монтажа: скрытый».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-e10996cd",
+                "mandatory_criteria": [
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип монтажа",
+                    "op": "eq",
+                    "value": "скрытый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "черный",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 4347
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 170",
+                  "duration_ms": 456
+                }
+              ]
+            },
+            {
+              "passed": true,
+              "duration_ms": 3162,
+              "log_id": "c02e6be3-e3bd-487a-9adc-b1e199b38ed9",
+              "products_count": 4,
+              "products": [
+                "Розетка с заземлением, винтовые контакты, цвет белый (серия Florence)",
+                "Розетка без заземления, винтовые контакты, цвет белый (серия Florence)",
+                "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет белый (серия Florence)",
+                "Розетка с крышкой, с заземлением, винтовые контакты, цвет белый (серия Florence)"
+              ],
+              "text": "Для этой задачи проверены обязательные параметры товара: Тип монтажа — скрытый; Цвет — белый. Ниже — варианты, прошедшие эти условия.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-b7aeaec3",
+                "mandatory_criteria": [
+                  {
+                    "key": "Тип монтажа",
+                    "op": "eq",
+                    "value": "скрытый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "белый",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 1128
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 380",
+                  "duration_ms": 541
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
