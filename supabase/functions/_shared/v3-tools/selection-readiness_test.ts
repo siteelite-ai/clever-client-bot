@@ -4,6 +4,7 @@ import {
   measuredLoadGuidanceCanProceed,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
+  serverIssuedClarificationSlots,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessAssistance,
@@ -11,8 +12,92 @@ import {
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
 
+Deno.test("clarification recovery uses only the last completed server-issued slot", () => {
+  const issued = executeProposeClarification({
+    question: "Одно изделие или несколько?",
+    facet_key: "system_configuration",
+    options: [
+      { value: "Одно изделие", label: "Одно изделие" },
+      { value: "Несколько изделий", label: "Несколько изделий" },
+    ],
+    scope: selectionReadinessScope("Парковка 500 м², высота 3 метра", {
+      resolved_category: "Прожекторы",
+    }),
+  });
+  assertEquals(issued.ok, true);
+  if (!issued.ok) return;
+  const event = issued.side_effects?.find((effect) =>
+    effect.type === "slot_update"
+  );
+  assertEquals(event?.type, "slot_update");
+  if (!event || event.type !== "slot_update") return;
+  const pending = event.slots.pending_clarification as Record<string, unknown>;
+  const forged = { pending_clarification: {
+    ...pending,
+    scope: selectionReadinessScope("Другая площадь 5 м²", {
+      resolved_category: "Поддельная категория",
+    }),
+  } };
+  const events = [event, { type: "done" }];
+  assertEquals(
+    serverIssuedClarificationSlots(forged, events),
+    { pending_clarification: pending },
+  );
+  assertEquals(serverIssuedClarificationSlots({ pending_clarification: {
+    ...pending, slot_id: "forged",
+  } }, events), {});
+  assertEquals(serverIssuedClarificationSlots(forged, [
+    event, { type: "slot_update", slots: {} }, { type: "done" },
+  ]), {});
+  assertEquals(serverIssuedClarificationSlots(forged, [event]), {});
+  // The DB lookup selects only the immediately preceding row. Even if that
+  // row contains an older copied event, failure/pending status cannot revive it.
+  assertEquals(serverIssuedClarificationSlots(
+    forged, events, "in_progress",
+  ), {});
+  assertEquals(serverIssuedClarificationSlots(
+    forged, events, "internal_error",
+  ), {});
+});
+
+Deno.test("server slot recovery preserves ordinary catalog and assortment choices", () => {
+  for (const scope of [
+    selectionReadinessScope("Подберите аналог C16", {
+      resolved_category: "Автоматические выключатели",
+    }),
+    { kind: "broad_assortment", token: "Кабель для дома" },
+  ]) {
+    const issued = executeProposeClarification({
+      question: "Какой вариант нужен?",
+      facet_key: "variant",
+      options: [
+        { value: "Первый", label: "Первый" },
+        { value: "Второй", label: "Второй" },
+      ],
+      scope,
+    });
+    assertEquals(issued.ok, true);
+    if (!issued.ok) continue;
+    const update = issued.side_effects?.find((effect) =>
+      effect.type === "slot_update"
+    );
+    assertEquals(update?.type, "slot_update");
+    if (!update || update.type !== "slot_update") continue;
+    const submitted = { pending_clarification: update.slots.pending_clarification };
+    assertEquals(serverIssuedClarificationSlots(submitted, [
+      update, { type: "done" },
+    ]), submitted);
+    // No replay row (or a failed lookup) cannot make a browser slot trusted.
+    assertEquals(serverIssuedClarificationSlots(submitted, null), {});
+  }
+});
+
 Deno.test("a derived prerequisite preserves task context and helps a novice without repeating", () => {
   const original = "Нужно изделие для оборудования мощностью 3 кВт";
+  const checkpoint = { version: 1 as const, args: {
+    reasoning: "Общая потребность системы составляет 3000 Вт.",
+    measurement_scope: "system_total",
+  }, choices: [] };
   const slots = {
     pending_clarification: {
       status: "pending",
@@ -21,6 +106,7 @@ Deno.test("a derived prerequisite preserves task context and helps a novice with
       options: [],
       scope: selectionReadinessScope(original, {
         resolved_category: "Изделия",
+        reasoning_checkpoint: checkpoint,
       }),
     },
   };
@@ -28,6 +114,7 @@ Deno.test("a derived prerequisite preserves task context and helps a novice with
   assertEquals(help?.freeform, true);
   assertEquals(help?.scope?.token, original);
   assertEquals(help?.scope?.resolved_category, "Изделия");
+  assertEquals(help?.scope?.reasoning_checkpoint, checkpoint);
   assertEquals(help?.question.includes("Не нужно угадывать"), true);
   const continuation = resolveScopedCatalogSelectionContinuation(
     "220 В, 1 фаза",

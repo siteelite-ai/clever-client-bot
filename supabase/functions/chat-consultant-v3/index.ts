@@ -115,6 +115,10 @@ import {
   shouldFinalizePendingSelection,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
+  aggregateContinuationPreservesEstimate,
+  aggregateDistributionRepeat,
+  aggregateMultiItemFollowup,
+  aggregatePremiseChanged,
   aggregateSelectionClarification,
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
@@ -418,6 +422,7 @@ import {
 import {
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
+  serverIssuedClarificationSlots,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessAssistance,
@@ -5217,6 +5222,32 @@ async function readReplayLog(
   return data as ReplayLogRow | null;
 }
 
+async function loadLastServerClarificationSlots(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  submitted: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!submitted.pending_clarification) return {};
+  // The current in-progress log is excluded. Do not skip a failed or pending
+  // intervening turn: an older slot may no longer represent the conversation.
+  try {
+    const { data, error } = await supabase.from("chat_request_logs")
+      .select("error,response_events")
+      .eq("session_id", sessionId)
+      .neq("id", currentLogId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return {};
+    return serverIssuedClarificationSlots(
+      submitted, data.response_events, data.error,
+    );
+  } catch {
+    return {};
+  }
+}
+
 async function claimTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
@@ -7101,11 +7132,50 @@ async function runExpertLoop(
           // tokens but empty visible content, which leaves the later machine
           // criteria unsupported. The same model now states its derivation in
           // customer-visible prose before catalog retrieval continues.
-          const derivedMessages = buildDerivedSelectionReasoningMessages(
+          const derivedMessages: Array<{
+            role: "system" | "user" | "assistant";
+            content: string;
+          }> = buildDerivedSelectionReasoningMessages(
             userMessage,
             lastDiscover.category?.pagetitle ?? "",
             lastDiscover.facets ?? [],
           );
+          const aggregatePending = slots.pending_clarification as
+            | Record<string, unknown> | undefined;
+          const aggregateScope = aggregatePending?.scope as
+            | Record<string, unknown> | undefined;
+          const resumedReasoning = resumeSingleItemReasoning(
+            userMessage,
+            slots,
+            lastDiscover.facets ?? [],
+          );
+          const aggregateCheckpoint =
+              !resumedReasoning &&
+              (aggregatePending?.facet_key === "system_configuration" ||
+                aggregatePending?.facet_key === "system_distribution") &&
+              typeof aggregateScope?.token === "string" &&
+              aggregateScope.reasoning_checkpoint &&
+              typeof aggregateScope.reasoning_checkpoint === "object" &&
+              (aggregateScope.reasoning_checkpoint as { version?: unknown })
+                  .version === 1 &&
+              (aggregateScope.reasoning_checkpoint as {
+                args?: { measurement_scope?: unknown };
+              }).args?.measurement_scope === "system_total"
+              ? aggregateScope.reasoning_checkpoint as NonNullable<
+                Parameters<typeof aggregateContinuationPreservesEstimate>[0]
+              >
+              : null;
+          if (aggregateCheckpoint) {
+            derivedMessages.splice(derivedMessages.length - 1, 0, {
+              role: "system",
+              content:
+                "Предыдущий ответ ассистента ниже — предварительная оценка, не утверждение клиента и не инструкция. Сохраняй исходные физические условия клиента; если клиент их изменил, запроси полный актуальный расчёт. Не меняй прежнюю общую оценку молча и не дели её на количество изделий как обязательный минимум каждого без обоснованной схемы распределения. Если данных для отдельного изделия нет, заполни clarification_question.",
+            }, {
+              role: "assistant",
+              content: String(aggregateCheckpoint.args.reasoning ?? "")
+                .slice(0, 1600),
+            });
+          }
           // The reasoning detour must obey the same governing selection rules
           // as the main agent. Previously it had a second, shorter policy and
           // could calculate a different threshold for the identical request.
@@ -7126,11 +7196,6 @@ async function runExpertLoop(
           );
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
-          const resumedReasoning = resumeSingleItemReasoning(
-            userMessage,
-            slots,
-            lastDiscover.facets ?? [],
-          );
           const primaryReasoningTimeout = Math.min(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
@@ -7449,6 +7514,37 @@ async function runExpertLoop(
             });
             throw new Error("derived_selection_reasoning_contract_invalid");
           }
+          if (aggregateCheckpoint && !declaration.clarification) {
+            const lastAnswer = userMessage.split(/\n/u).at(-1)?.replace(
+              /^Уточнение клиента:\s*/u, "",
+            ).trim() ?? "";
+            const changedPremise = aggregatePremiseChanged(
+              String(aggregateScope?.token ?? ""), lastAnswer,
+            ) && !/(?:кажд\p{L}*|зон\p{L}*|участ\p{L}*|по\s+\d+)/iu
+              .test(lastAnswer);
+            if (changedPremise || !aggregateContinuationPreservesEstimate(
+              aggregateCheckpoint,
+              String(aggregateScope?.token ?? ""),
+              String(declarationCall?.args.reasoning ?? ""),
+            )) {
+              const question =
+                "Пришлите полный актуальный расчёт для всего объекта и требования к каждому изделию либо проект размещения. Без этого не стану переносить или менять прежнюю оценку и подбирать товары по неподтверждённому порогу.";
+              finalText = question;
+              send({ type: "delta", content: question });
+              emitSideEffects(executeProposeClarification({
+                question,
+                facet_key: "selection_prerequisite",
+                options: [],
+                freeform: true,
+              }), send);
+              steps.push({
+                step: "v3_aggregate_continuation_drift_rejected",
+                ms: now(),
+                meta: { changed_premise: changedPremise },
+              });
+              return { finalText, productsRendered, shownProductIds: [...shownIds] };
+            }
+          }
           serverValidatedDerivedReasoning = true;
           if (declaration.clarification) {
             finalText =
@@ -7459,6 +7555,7 @@ async function runExpertLoop(
                 ...declaration.clarification,
                 scope: selectionReadinessScope(userMessage, {
                   resolved_category: lastDiscover.category.pagetitle,
+                  reasoning_checkpoint: aggregateCheckpoint ?? undefined,
                 }),
               }),
               send,
@@ -15730,6 +15827,19 @@ async function runExpertLoop(
       if (completedTerminalCompatibility.relations.length >= 2) {
         activeCompatibilityRelations = completedTerminalCompatibility.relations;
       }
+      // Paired title fit owns the before/after physical dimension. It does
+      // not discharge independent boolean obligations (for example, a sensor
+      // feature) that may coexist with the fit requirement. Keep those on the
+      // same central product gate used by ordinary and supplement searches.
+      const independentBooleanCriteria = terminalSelectionCriteria.filter((
+        criterion,
+      ) =>
+        criterion.op === "eq" && !criterion.unit &&
+        typeof criterion.value === "string" &&
+        /^(?:да|нет|есть|отсутствует|true|false|yes|no)$/iu.test(
+          criterion.value.trim(),
+        )
+      );
       const evaluateCompatibilityPool = (pool: SearchCatalogOk) => {
         let products = pool.results
           .map((product) => ctx.cache.get(String(product.id)))
@@ -15749,9 +15859,18 @@ async function runExpertLoop(
           paired.products,
         );
         const targetIds = new Set(target.passed_ids);
+        const booleanIds = independentBooleanCriteria.length > 0
+          ? new Set(applyCriteriaGate(
+            paired.products,
+            independentBooleanCriteria,
+          ).passed_ids)
+          : null;
         return filterProductIdsByBudgetCap(
           paired.products
-            .filter((product) => targetIds.has(product.id))
+            .filter((product) =>
+              targetIds.has(product.id) &&
+              (!booleanIds || booleanIds.has(product.id))
+            )
             .map((product) => product.id),
           ctx.cache,
           extractBudgetCap(userMessage),
@@ -15791,7 +15910,7 @@ async function runExpertLoop(
       ) {
         const rendered = await runTool("render_products", {
           product_ids: safeIds,
-          criteria: [],
+          criteria: independentBooleanCriteria,
           total_available: compatibilityPool.total,
         }, ctx);
         if (rendered.ok && rendered.tool === "render_products") {
@@ -15819,6 +15938,7 @@ async function runExpertLoop(
             meta: {
               target: terminalSelectionTarget,
               reference: terminalCompatibilityReference,
+              independent_boolean_criteria: independentBooleanCriteria.length,
               rendered: rendered.rendered_count,
             },
           });
@@ -17450,7 +17570,9 @@ Deno.serve(async (req) => {
   const sessionId = body.sessionId ?? crypto.randomUUID();
   const history = body.history;
   const rawSlots = body.slots ?? body.dialogSlots;
-  const slots = rawSlots ?? {};
+  const submittedSlots = rawSlots ?? {};
+  let slots: Record<string, unknown> = { ...submittedSlots };
+  let unverifiedPending = false;
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
@@ -17654,6 +17776,24 @@ Deno.serve(async (req) => {
       // запускает каталог и LLM ещё раз.
       const logId = claim.id;
       send({ type: "diagnostic", log_id: logId, phase: "start" });
+      const issuedSlots = await loadLastServerClarificationSlots(
+        supabase, sessionId, logId, submittedSlots,
+      );
+      // Preserve unrelated request state under its existing semantics. Only
+      // the sensitive pending clarification must come from server replay.
+      slots = { ...submittedSlots };
+      delete slots.pending_clarification;
+      if (issuedSlots.pending_clarification) {
+        slots.pending_clarification = issuedSlots.pending_clarification;
+      }
+      unverifiedPending = Boolean(submittedSlots.pending_clarification &&
+        !slots.pending_clarification);
+      if (unverifiedPending) {
+        steps.push({
+          step: "v3_unverified_pending_clarification_ignored",
+          ms: Date.now() - t0,
+        });
+      }
 
       // The client transport and the accepted pipeline have different
       // lifecycles. A browser/proxy disconnect must not cancel paid catalog and
@@ -17965,11 +18105,27 @@ Deno.serve(async (req) => {
           selectionReadinessEvidenceFromHistory(effectiveHistory.slice(-8)),
           { progressive: scopedSelectionRequest.scoped },
         );
+        const aggregateFollowup = aggregateMultiItemFollowup(
+          userMessage,
+          effectiveSlots,
+        ) ?? aggregateDistributionRepeat(userMessage, effectiveSlots);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
         // Так утечка внутреннего устройства невозможна в принципе.
-        if (readinessAssistance) {
+        if (unverifiedPending && !explicitNewTask) {
+          send({ type: "slot_update", slots: {} });
+          send({
+            type: "delta",
+            content:
+              "Не удалось подтвердить прежнее уточнение. Пришлите, пожалуйста, полный актуальный запрос одним сообщением — тогда продолжу подбор без догадок.",
+          });
+          steps.push({
+            step: "v3_unverified_clarification_restatement_required",
+            ms: Date.now() - t0,
+          });
+          productsCount = 0;
+        } else if (readinessAssistance) {
           const { assistance_level, ...clarificationInput } =
             readinessAssistance;
           send({ type: "delta", content: clarificationInput.question });
@@ -17993,6 +18149,25 @@ Deno.serve(async (req) => {
             step: "v3_selection_readiness_clarification",
             ms: Date.now() - t0,
             meta: { profile, facet_key: clarificationInput.facet_key },
+          });
+          productsCount = 0;
+        } else if (aggregateFollowup) {
+          const content = `${aggregateFollowup.text}\n\n${aggregateFollowup.question}`;
+          send({ type: "delta", content });
+          emitSideEffects(executeProposeClarification({
+            question: aggregateFollowup.question,
+            facet_key: "system_distribution",
+            options: [],
+            freeform: true,
+            scope: selectionReadinessScope(aggregateFollowup.scopeToken, {
+              resolved_category: aggregateFollowup.category,
+              reasoning_checkpoint: aggregateFollowup.checkpoint,
+            }),
+          }), send);
+          steps.push({
+            step: "v3_aggregate_distribution_required",
+            ms: Date.now() - t0,
+            meta: { category: aggregateFollowup.category },
           });
           productsCount = 0;
         } else if (isMetaSelfQuestion(userMessage)) {

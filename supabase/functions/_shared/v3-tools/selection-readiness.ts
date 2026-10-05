@@ -35,6 +35,35 @@ export function selectionReadinessScope(
   };
 }
 
+/** The browser carries the slot only to identify the question it answered.
+ * Its token, category and reasoning are never authority: recover those from
+ * the last completed server response in the same session. */
+export function serverIssuedClarificationSlots(
+  submitted: Record<string, unknown>,
+  responseEvents: unknown,
+  previousTurnError: unknown = null,
+): Record<string, unknown> {
+  const requested = submitted?.pending_clarification;
+  const requestedId = requested && typeof requested === "object"
+    ? (requested as { slot_id?: unknown }).slot_id
+    : null;
+  if (previousTurnError !== null ||
+    typeof requestedId !== "string" || !requestedId ||
+    !Array.isArray(responseEvents)) return {};
+  if (responseEvents.at(-1)?.type !== "done") return {};
+  const lastUpdate = [...responseEvents].reverse().find((event) =>
+    event && typeof event === "object" && event.type === "slot_update"
+  );
+  const pending = lastUpdate?.slots?.pending_clarification;
+  if (
+    !pending || typeof pending !== "object" ||
+    pending.status !== "pending" || pending.slot_id !== requestedId ||
+    typeof pending.question !== "string" ||
+    typeof pending.facet_key !== "string"
+  ) return {};
+  return { pending_clarification: pending };
+}
+
 /**
  * Rebuild a catalog continuation from a server-issued clarification while
  * preserving the exact live category that justified the question. A terse
@@ -186,6 +215,7 @@ export function selectReadinessAssistance(
     token?: unknown;
     resolved_category?: unknown;
     assistance_level?: unknown;
+    reasoning_checkpoint?: unknown;
   };
   if (
     scoped.kind !== SELECTION_READINESS_SCOPE ||
@@ -245,6 +275,12 @@ export function selectReadinessAssistance(
         ? scoped.resolved_category
         : undefined,
       assistance_level: assistanceLevel,
+      reasoning_checkpoint: scoped.reasoning_checkpoint &&
+          typeof scoped.reasoning_checkpoint === "object" &&
+          (scoped.reasoning_checkpoint as { version?: unknown }).version === 1
+        ? scoped.reasoning_checkpoint as
+          import("./selection-actionability.ts").SelectionReasoningCheckpoint
+        : undefined,
     }),
   };
 }

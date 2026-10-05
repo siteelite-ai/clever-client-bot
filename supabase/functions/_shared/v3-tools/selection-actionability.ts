@@ -1899,6 +1899,149 @@ export function resumeSingleItemReasoning(
   return selectionReasoningCheckpoint(args, facets)?.args ?? null;
 }
 
+function premiseUnit(unit: string): string {
+  const normalized = normalizeUnit(unit);
+  if (/^(?:м|метр|метра|метров|метре|метры)$/u.test(normalized)) return "м";
+  if (/^(?:м²|метр²)$/u.test(normalized)) return "м²";
+  return normalized;
+}
+
+/** A new physical input supersedes the earlier premise; an allocation answer
+ * alone does not. Never replay the old total across a changed area or height. */
+export function aggregatePremiseChanged(
+  originalRequest: string,
+  currentAnswer: string,
+): boolean {
+  const original = extractClientQuantities(originalRequest).map((quantity) => ({
+    value: quantity.value,
+    unit: premiseUnit(quantity.unit),
+  }));
+  return extractClientQuantities(currentAnswer).some((quantity) => {
+    const unit = premiseUnit(quantity.unit);
+    return !original.some((prior) =>
+      prior.unit === unit && prior.value === quantity.value
+    );
+  });
+}
+
+function priorAggregateEstimate(
+  checkpoint: SelectionReasoningCheckpoint,
+  originalRequest: string,
+): { value: number; unit: string } | null {
+  const reasoning = typeof checkpoint.args?.reasoning === "string"
+    ? checkpoint.args.reasoning : "";
+  const aggregateCue = /(?:суммарн\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|расч[её]т\p{L}*|поток\p{L}*))/iu.exec(reasoning);
+  if (!aggregateCue || aggregateCue.index === undefined) return null;
+  const clause = reasoning.slice(aggregateCue.index).split(/[.!?\n]/u)[0];
+  const premiseUnits = new Set(
+    extractClientQuantities(originalRequest).map(({ unit }) => premiseUnit(unit)),
+  );
+  return extractClientQuantities(clause).find(({ value, unit }) =>
+    value > 0 && isPhysicalMeasurementUnit(unit) &&
+    !premiseUnits.has(premiseUnit(unit))
+  ) ?? null;
+}
+
+/** A later declaration may clarify allocation, but must not silently replace
+ * the earlier visible system total. A correction requires a fresh customer
+ * request instead of a hidden overwrite or an unsupported product filter. */
+export function aggregateContinuationPreservesEstimate(
+  checkpoint: SelectionReasoningCheckpoint,
+  originalRequest: string,
+  nextReasoning: string,
+): boolean {
+  const prior = priorAggregateEstimate(checkpoint, originalRequest);
+  if (!prior) return false;
+  const next = priorAggregateEstimate({
+    version: 1,
+    args: { reasoning: nextReasoning },
+    choices: [],
+  }, originalRequest);
+  return Boolean(next && next.value === prior.value &&
+    premiseUnit(next.unit) === premiseUnit(prior.unit));
+}
+
+/** A prior assistant estimate is displayed as an estimate, not promoted to a
+ * customer requirement or divided into an invented per-product minimum. */
+export function aggregateMultiItemFollowup(
+  currentAnswer: string,
+  slots: Record<string, unknown>,
+): { text: string; question: string; scopeToken: string;
+  category: string; checkpoint?: SelectionReasoningCheckpoint } | null {
+  const pending = slots.pending_clarification as Record<string, unknown> | undefined;
+  if (!pending || pending.facet_key !== "system_configuration") return null;
+  const scope = pending.scope as Record<string, unknown> | undefined;
+  const checkpoint = scope?.reasoning_checkpoint as SelectionReasoningCheckpoint | undefined;
+  const original = typeof scope?.token === "string" ? scope.token.trim() : "";
+  const answer = currentAnswer.trim();
+  const options = Array.isArray(pending.options) ? pending.options : [];
+  const multipleOption = options.find((option) =>
+    typeof option?.value === "string" &&
+    /(?:нескольк\p{L}*|мног\p{L}*|два|две|три|четыре)/iu.test(option.value)
+  )?.value;
+  const selectedMultiple = typeof multipleOption === "string" &&
+    (answer === multipleOption ||
+      answer.startsWith(`${multipleOption},`) ||
+      answer.startsWith(`${multipleOption} `));
+  // A terse free-form count can answer the same server-issued choice. It is
+  // still only a count, never proof that total/count suits each product.
+  const countOnly = /^(?:[2-9]\d{0,2}|дв[ае]|три|четыре|пять|шесть|семь|восемь|девять|десять|несколько)\s+[\p{L}-]{3,40}[.!?]*$/iu
+    .test(answer);
+  const changed = !countOnly && aggregatePremiseChanged(original, answer);
+  if (!original ||
+    (!changed && (!multipleOption || (!selectedMultiple && !countOnly))) ||
+    /(?:угл\p{L}*|ряд\p{L}*|размещ\p{L}*|располож\p{L}*|равномер\p{L}*|схем\p{L}*|зон\p{L}*)/iu.test(answer) ||
+    answer.length > 130) return null;
+  const usableCheckpoint = !changed && checkpoint?.version === 1 &&
+      checkpoint.args?.measurement_scope === "system_total"
+    ? checkpoint : undefined;
+  const demand = usableCheckpoint
+    ? priorAggregateEstimate(usableCheckpoint, original) : null;
+  const total = demand ? `${demand.value} ${demand.unit}` : "";
+  return {
+    text: changed
+      ? "Вы изменили или дополнили исходные физические условия, поэтому прежнюю оценку общей потребности нельзя переносить на новую задачу. Число изделий само по себе не задаёт требование к каждому из них."
+      : total
+      ? `В предыдущем ответе приводилась предварительная, не проверенная по схеме размещения оценка общей потребности: ${total}. Она относилась ко всему объекту, а не к каждому изделию; делить её поровну нельзя.`
+      : "Предыдущий расчёт относился ко всему объекту. Без проверяемой общей величины и схемы размещения нельзя назначить обязательный минимум каждому изделию.",
+    question: changed
+      ? "Пришлите полный актуальный запрос с новой площадью, высотой и другими условиями одним сообщением; если есть проектное требование к каждому изделию, добавьте его."
+      : "Как будут расположены изделия и какую часть объекта должно освещать каждое? Если есть проект или требование к каждому изделию, пришлите его — тогда продолжу подбор.",
+    scopeToken: changed ? "" : `${original}\nУточнение клиента: ${answer}`.slice(0, 500),
+    category: typeof scope?.resolved_category === "string"
+      ? scope.resolved_category : "",
+    ...(usableCheckpoint ? { checkpoint: usableCheckpoint } : {}),
+  };
+}
+
+/** A repeated count after asking for distribution adds no evidence. Keep the
+ * conversation scoped, but do not retry the same aggregate calculation. */
+export function aggregateDistributionRepeat(
+  currentAnswer: string,
+  slots: Record<string, unknown>,
+): { text: string; question: string; scopeToken: string;
+  category: string; checkpoint?: SelectionReasoningCheckpoint } | null {
+  const pending = slots.pending_clarification as Record<string, unknown> | undefined;
+  if (pending?.facet_key !== "system_distribution") return null;
+  const scope = pending.scope as Record<string, unknown> | undefined;
+  const original = typeof scope?.token === "string" ? scope.token.trim() : "";
+  const answer = currentAnswer.trim();
+  const lastAnswer = original.split(/\n/u).at(-1)?.replace(
+    /^Уточнение клиента:\s*/u, "",
+  ).trim();
+  const countOnly = /^(?:[2-9]\d{0,2}|дв[ае]|три|четыре|пять|шесть|семь|восемь|девять|десять)\s+[\p{L}-]{3,40}[.!?]*$/iu.test(answer);
+  if (!original || (answer !== lastAnswer && !countOnly)) return null;
+  const checkpoint = scope?.reasoning_checkpoint as SelectionReasoningCheckpoint | undefined;
+  return {
+    text: "Количество изделий уже учёл, но оно не показывает, какая нагрузка приходится на каждое. Без этих данных не стану делить общую оценку поровну.",
+    question: "Пришлите схему расположения и площадь зоны каждого изделия либо проектное требование к каждому; тогда продолжу подбор.",
+    scopeToken: original,
+    category: typeof scope?.resolved_category === "string"
+      ? scope.resolved_category : "",
+    ...(checkpoint?.version === 1 ? { checkpoint } : {}),
+  };
+}
+
 /** Optional numerical correction must not erase already validated obligations. */
 export function derivedCorrectionPreservesRequirements(
   prior:

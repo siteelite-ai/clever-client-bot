@@ -42,6 +42,10 @@ Deno.test("configuration recovery never excuses invalid actual per-item obligati
   assertEquals(resolved, null);
 });
 import {
+  aggregateContinuationPreservesEstimate,
+  aggregateDistributionRepeat,
+  aggregateMultiItemFollowup,
+  aggregatePremiseChanged,
   aggregateSelectionClarification,
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
@@ -65,6 +69,111 @@ import {
   systemTotalReasoningDeclaresPerProductMeasurement,
   validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("four-fixture continuation preserves the prior total only as an estimate", () => {
+  const original =
+    "Какие прожекторы подойдут для освещения парковки?\nУточнение клиента: 500м2 3 метра";
+  const reasoning =
+    "Для парковки 500 м² на высоте 3 метра суммарный световой поток оценивается не менее 10000 Лм. Для улицы нужна защита IP65.";
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning,
+    measurement_scope: "system_total",
+  }, []);
+  assertEquals(Boolean(checkpoint), true);
+  const slots = { pending_clarification: {
+    facet_key: "system_configuration",
+    options: aggregateSelectionClarification("system_total", "")!.options,
+    scope: {
+      token: original,
+      resolved_category: "Прожекторы",
+      reasoning_checkpoint: checkpoint,
+    },
+  } };
+  const followup = aggregateMultiItemFollowup(
+    "Несколько изделий вместе, четыре прожектора",
+    slots,
+  );
+  assertEquals(followup?.text.includes("10000 лм"), true);
+  assertEquals(followup?.text.includes("2500"), false);
+  assertEquals(followup?.text.includes("IP65"), false);
+  assertEquals(followup?.checkpoint, checkpoint);
+  assertEquals(followup?.scopeToken.includes("500м2 3 метра"), true);
+  assertEquals(followup?.scopeToken.includes("четыре прожектора"), true);
+  assertEquals(Boolean(aggregateMultiItemFollowup("4 прожектора", slots)), true);
+  assertEquals(Boolean(aggregateMultiItemFollowup("четыре прожектора", slots)), true);
+  assertEquals(aggregateMultiItemFollowup(
+    "Одно изделие для всей задачи", slots,
+  ), null);
+  const withoutCheckpoint = aggregateMultiItemFollowup(
+    "Несколько изделий вместе, четыре прожектора",
+    { pending_clarification: { ...slots.pending_clarification,
+      scope: { token: original, resolved_category: "Прожекторы" } } },
+  );
+  assertEquals(withoutCheckpoint?.checkpoint, undefined);
+  assertEquals(withoutCheckpoint?.text.includes("10000"), false);
+});
+
+Deno.test("changed area or mounting height invalidates the old aggregate estimate", () => {
+  const original = "Парковка 500м2, высота 3 метра";
+  assertEquals(aggregatePremiseChanged(original, "Четыре изделия"), false);
+  assertEquals(aggregatePremiseChanged(original, "Теперь площадь 600 м²"), true);
+  assertEquals(aggregatePremiseChanged(original, "Теперь высота 5 м"), true);
+  assertEquals(aggregatePremiseChanged(original, "Требуется 20 лк"), true);
+  assertEquals(aggregatePremiseChanged(original, "Суммарно 12000 лм"), true);
+  assertEquals(aggregatePremiseChanged(original, "Мощность 300 Вт"), true);
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning: "Для парковки суммарный поток не менее 10000 лм.",
+    measurement_scope: "system_total",
+  }, []);
+  const slots = { pending_clarification: { facet_key: "system_configuration",
+    options: aggregateSelectionClarification("system_total", "")!.options,
+    scope: { token: original, reasoning_checkpoint: checkpoint } } };
+  for (const answer of [
+    "Несколько изделий вместе, теперь площадь 600 м²",
+    "Несколько изделий вместе, высота 5 м",
+    "Несколько изделий вместе, нужно 20 лк",
+    "Одно изделие для всей задачи, теперь площадь 600 м²",
+  ]) {
+    const followup = aggregateMultiItemFollowup(answer, slots);
+    assertEquals(followup?.checkpoint, undefined);
+    assertEquals(followup?.text.includes("10000"), false);
+    assertEquals(followup?.text.includes("прежнюю оценку"), true);
+    assertEquals(followup?.scopeToken, "");
+  }
+});
+
+Deno.test("fourth turn repeats count safely but lets useful distribution reasoning proceed", () => {
+  const original = "Парковка 500м2, высота 3 метра\nУточнение клиента: Несколько изделий вместе, четыре прожектора";
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning: "Для парковки суммарный поток не менее 10000 лм.",
+    measurement_scope: "system_total",
+  }, []);
+  assertEquals(Boolean(checkpoint), true);
+  const slots = { pending_clarification: { facet_key: "system_distribution",
+    scope: { token: original, resolved_category: "Прожекторы",
+      reasoning_checkpoint: checkpoint } } };
+  const repeated = aggregateDistributionRepeat(
+    "Несколько изделий вместе, четыре прожектора", slots,
+  );
+  assertEquals(repeated?.scopeToken, original);
+  assertEquals(repeated?.text.includes("поровну"), true);
+  assertEquals(Boolean(aggregateDistributionRepeat("4 прожектора", slots)), true);
+  assertEquals(aggregateDistributionRepeat(
+    "Четыре зоны по 125 м², по одному изделию на зону", slots,
+  ), null);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для этих зон суммарный поток не менее 10000 лм. Для каждого изделия требуется подтверждение по проекту.",
+  ), true);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для этих зон суммарный поток не менее 50000 лм.",
+  ), false);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для каждого изделия требуется не менее 2500 лм.",
+  ), false);
+});
 
 Deno.test("configuration continuation preserves visible demand and rebinds live IDs", () => {
   const facets = [{
