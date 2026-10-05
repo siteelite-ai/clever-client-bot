@@ -641,6 +641,12 @@ export function buildDerivedSelectionReasoningToolSchema(
             description:
               "Область числового результата reasoning: параметр каждого отдельного товара, суммарная потребность всей системы либо числового преобразования нет. Для system_total сумму нельзя превращать в параметр одной карточки.",
           },
+          per_product_measurement_evidence: {
+            type: "string",
+            maxLength: 600,
+            description:
+              "Если reasoning содержит общий расчёт и отдельное требование к каждому изделию, скопируй сюда дословно только предложение о каждом изделии с числом и единицей. Явно напиши в reasoning «каждое изделие» или «на один товар». Не включай общий расчёт и не дели его без обоснования. Если отдельного требования нет, передай пустую строку.",
+          },
           retrieval_query: {
             type: "string",
             maxLength: 120,
@@ -691,6 +697,7 @@ export function buildDerivedSelectionReasoningToolSchema(
         required: [
           "reasoning",
           "measurement_scope",
+          "per_product_measurement_evidence",
           "retrieval_query",
           "compatible_classifications",
           "excluded_classifications",
@@ -1285,8 +1292,14 @@ export function resolveDerivedSelectionReasoning(
       facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim(),
     )
   );
+  const perProductEvidence = validatedPerProductMeasurementEvidence(
+    reasoning,
+    args.per_product_measurement_evidence,
+  );
   const aggregateScopeEvidence = measurementScope === "system_total"
-    ? "Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки."
+    ? perProductEvidence
+      ? "Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию."
+      : "Это суммарная потребность всей системы, а не подтверждённое требование к каждому отдельному товару."
     : "";
   const sentences = [reasoning.replace(/[.!?…]+$/u, "") + "."];
   if (aggregateScopeEvidence) sentences.push(aggregateScopeEvidence);
@@ -1353,8 +1366,8 @@ export function resolveDerivedSelectionReasoning(
     // Structured classification choices are enforced separately. Keep them
     // out of the generic prose-to-criteria compiler: sibling values from one
     // facet are an OR family, while that compiler can only express AND.
-    measurementEvidence: aggregateScopeEvidence
-      ? `${reasoning} ${aggregateScopeEvidence}`
+    measurementEvidence: measurementScope === "system_total"
+      ? perProductEvidence
       : reasoning,
     measurementScope,
     retrievalQuery,
@@ -1505,7 +1518,8 @@ export function shouldProjectDerivedScalarMeasurement(
 ): boolean {
   if (
     measurementScope === "system_total" &&
-    !systemTotalReasoningDeclaresPerProductMeasurement(reasoningText)
+    !systemTotalReasoningDeclaresPerProductMeasurement(reasoningText) &&
+    !validatedPerProductMeasurementEvidence(reasoningText, reasoningText)
   ) return false;
   const evidence = `${String(userMessage ?? "")}\n${
     String(reasoningText ?? "")
@@ -1532,13 +1546,42 @@ export function systemTotalReasoningDeclaresPerProductMeasurement(
   );
 }
 
-/** The later generic measured-reasoning compiler must obey the same scope as
- * the structured declaration. A system total may guide prose and ranking but
- * can never reopen a per-card numeric contract in a subsequent phase. */
+/** Later compilers may use an explicitly separated per-item span, never the
+ * full aggregate explanation, as numeric card evidence. */
 export function derivedMeasurementMayConstrainIndividualProducts(
   measurementScope: string | null | undefined,
+  perProductEvidence = "",
 ): boolean {
-  return measurementScope !== "system_total";
+  return measurementScope !== "system_total" ||
+    validatedPerProductMeasurementEvidence(
+        perProductEvidence,
+        perProductEvidence,
+      ).length > 0;
+}
+
+/** Select an explicitly per-item, visible evidence span; never synthesize a
+ * product threshold from aggregate demand. No product/category vocabulary. */
+export function validatedPerProductMeasurementEvidence(
+  visibleReasoning: string,
+  proposed: unknown,
+): string {
+  if (typeof proposed !== "string") return "";
+  const span = proposed.replace(/\s+/gu, " ").trim();
+  const visible = visibleReasoning.replace(/\s+/gu, " ").trim();
+  if (!span || span.length > 600 || !visible.includes(span)) return "";
+  if (
+    !/(?:кажд\p{L}*|на\s+(?:один|одно|одну|единиц\p{L}*)|per\s+(?:item|unit))/iu
+      .test(span)
+  ) return "";
+  if (
+    /(?:суммар\p{L}*|всего|всей\s+систем\p{L}*|всего\s+объект\p{L}*|распредел\p{L}*|площад\p{L}*|объ[её]м\p{L}*)|[×=*]/iu
+      .test(span)
+  ) return "";
+  return extractClientQuantities(span).some(({ unit }) =>
+      isPhysicalMeasurementUnit(normalizeUnit(unit))
+    )
+    ? span
+    : "";
 }
 
 export function buildDerivedSelectionReasoningMessages(

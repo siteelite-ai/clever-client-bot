@@ -7328,7 +7328,7 @@ async function runExpertLoop(
           const derivedScalarProjectionAllowed =
             shouldProjectDerivedScalarMeasurement(
               userMessage,
-              declaration.text,
+              declaration.measurementEvidence,
               declaration.measurementScope,
             );
           const measuredReference = extractSingleMeasuredReference(userMessage);
@@ -7530,7 +7530,9 @@ async function runExpertLoop(
             );
           const derivedExactImportance = alignCriteriaImportanceWithReasoning(
             proposedDerivedExactFacetCriteria,
-            declaration.measurementEvidence,
+            declaration.measurementScope === "system_total"
+              ? declaration.text
+              : declaration.measurementEvidence,
             customerGroundedExactFacetCriteria,
           );
           const derivedExactFacetCriteria = derivedExactImportance.criteria;
@@ -8339,7 +8341,9 @@ async function runExpertLoop(
               firstAssistantText = derivedText;
             }
             derivedSelectionReasoningEvidence =
-              pendingDerivedSelectionMeasurementEvidence || derivedText;
+              pendingDerivedSelectionMeasurementScope === "system_total"
+                ? pendingDerivedSelectionMeasurementEvidence
+                : pendingDerivedSelectionMeasurementEvidence || derivedText;
             derivedSelectionMeasurementScope =
               pendingDerivedSelectionMeasurementScope;
             pendingDerivedSelectionMeasurementEvidence = "";
@@ -9099,6 +9103,7 @@ async function runExpertLoop(
             !compatibilityShapedSearch &&
             derivedMeasurementMayConstrainIndividualProducts(
               derivedSelectionMeasurementScope,
+              derivedSelectionReasoningEvidence,
             );
           if (ordinaryMeasuredSelection) {
             const measuredContractReasoning = measuredSelectionContractEvidence(
@@ -14874,13 +14879,13 @@ async function runExpertLoop(
     const terminalCriteriaBase = preserveFrozenSelectionCriteria(
       latestRenderCriteria,
     );
-    // Keep the terminal gate on the same measurement scope that governed the
-    // structured search. A system-total calculation may mention auxiliary
-    // per-product ranges in its explanation, but the finalizer must not revive
-    // those numbers as hidden mandatory card filters after retrieval.
+    // Use the same validated per-item evidence as retrieval. Aggregate values
+    // never enter this compiler; a separately declared visible per-item span
+    // can constrain both search and the final card gate.
     const terminalProjectedRange = terminalDiscover &&
         derivedMeasurementMayConstrainIndividualProducts(
           derivedSelectionMeasurementScope,
+          derivedSelectionReasoningEvidence,
         )
       ? projectReasoningRangeCriteria(
         terminalCriteriaBase,

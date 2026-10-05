@@ -1,4 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { compileMeasuredReasoningSearchContract } from "./criteria-reasoning.ts";
+import { applyCriteriaGate } from "./criteria-gate.ts";
 import {
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
@@ -17,7 +19,111 @@ import {
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
+  validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("per-item evidence is a visible bounded span, never the aggregate calculation", () => {
+  const perItem =
+    "Каждое изделие должно иметь световой поток не менее 4000 лм.";
+  const reasoning = `Общий расчёт: 120 м² × 25 лк = 3000 лм. ${perItem}`;
+  assertEquals(
+    validatedPerProductMeasurementEvidence(reasoning, perItem),
+    perItem,
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      reasoning,
+      "Каждое изделие должно иметь 9000 лм.",
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(reasoning, reasoning),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Всего 5000 лм, распределить на каждый товар.",
+      "Всего 5000 лм, распределить на каждый товар.",
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Каждый вариант подходит.",
+      "Каждый вариант подходит.",
+    ),
+    "",
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("system_total", perItem),
+    true,
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("system_total", reasoning),
+    false,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 120 м²",
+      perItem,
+      "system_total",
+    ),
+    true,
+  );
+});
+
+Deno.test("a mixed declaration compiles only the separate per-product requirement", () => {
+  const perItem =
+    "Каждое изделие должно иметь световой поток не менее 4000 лм.";
+  const reasoning =
+    `Для площади 120 м² расчёт: 120 м² × 25 лк = 3000 лм. ${perItem}`;
+  const args = {
+    reasoning,
+    measurement_scope: "per_product",
+    per_product_measurement_evidence: perItem,
+  };
+  const declaration = resolveDerivedSelectionReasoning(
+    args,
+    [],
+    "Площадь 120 м²",
+  );
+  assertEquals(declaration?.measurementScope, "system_total");
+  assertEquals(declaration?.measurementEvidence, perItem);
+  assertEquals(declaration?.text.includes(reasoning), true);
+  const compiled = compileMeasuredReasoningSearchContract(
+    [],
+    declaration!.measurementEvidence,
+    [],
+    [{
+      key: "flux",
+      caption: "Световой поток",
+      type: "checkbox",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  const checked = applyCriteriaGate(
+    [3000, 4000, 5000].map((value) => ({
+      id: String(value),
+      pagetitle: "Изделие",
+      vendor: null,
+      price: 100,
+      stock: "unknown" as const,
+      short_traits: [`Световой поток: ${value} лм`],
+    })),
+    compiled.mandatory_criteria,
+  );
+  assertEquals(checked.passed_ids, ["4000", "5000"]);
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      { ...args, per_product_measurement_evidence: "" },
+      [],
+      "Площадь 120 м²",
+    )?.measurementEvidence,
+    "",
+  );
+});
 
 Deno.test("visible product type survives simultaneous numeric facet projection", () => {
   const search = buildDerivedReasoningSearch({
@@ -759,12 +865,8 @@ Deno.test("system-total reasoning is visibly marked and cannot masquerade as one
     resolved?.text.includes("суммарная потребность всей системы"),
     true,
   );
-  assertEquals(
-    resolved?.measurementEvidence.includes(
-      "распределить между несколькими товарами",
-    ),
-    true,
-  );
+  // Aggregate prose remains visible but is not numeric card evidence.
+  assertEquals(resolved?.measurementEvidence, "");
 });
 
 Deno.test("system total drops a derived per-card measurement", () => {
