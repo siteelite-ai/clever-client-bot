@@ -141,6 +141,66 @@ const discovered = {
   ],
 };
 
+Deno.test("short taxonomy codes cannot become implicit recovery targets", () => {
+  const scope = {
+    category: { pagetitle: "Кабель" },
+    leaf_categories: ["Кабель КГ", "Кабель ВВГ", "Кабель UTP"].map(
+      (pagetitle) => ({ pagetitle }),
+    ),
+  };
+  assertEquals(
+    groundedCategoryRecoveryQueries(scope, "Нужен коаксиальный кабель."),
+    ["Кабель"],
+  );
+  assertEquals(
+    groundedCategoryRecoveryQueries(scope, "Ищу кабель ВВГ 3х1,5."),
+    ["Кабель ВВГ"],
+  );
+  assertEquals(
+    groundedCategoryRecoveryQueries(scope, "Заменить кабель КГ на кабель ВВГ."),
+    ["Кабель ВВГ"],
+  );
+  assertEquals(
+    groundedCategoryRecoveryQueries(
+      scope,
+      "Кабель КГ не подходит. Нужен коаксиальный кабель.",
+    ),
+    ["Кабель"],
+  );
+});
+
+Deno.test("short-code grounding works across categories without a product dictionary", () => {
+  for (
+    const [umbrella, leaf] of [
+      ["Модули", "Модули X2"],
+      ["Провод", "Провод А"],
+      ["Кабель", "Кабель ввг"],
+    ]
+  ) {
+    const scope = {
+      category: { pagetitle: umbrella },
+      leaf_categories: [{ pagetitle: leaf }],
+    };
+    assertEquals(
+      groundedCategoryRecoveryQueries(
+        scope,
+        `Ищу ${umbrella}, а размеры уточню.`,
+      ),
+      [umbrella],
+    );
+    assertEquals(groundedCategoryRecoveryQueries(scope, `Нужны ${leaf}.`), [
+      leaf,
+    ]);
+    assertEquals(
+      groundedCategoryRecoveryQueries(
+        scope,
+        `Нужны не ${leaf}. Ищу ${umbrella}.`,
+      ),
+      [umbrella],
+    );
+  }
+});
+
 Deno.test("category reasoning guard drops a real but unsupported sibling leaf", () => {
   const result = guardCategoryScopeByReasoning(
     {
