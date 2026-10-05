@@ -356,6 +356,12 @@ Deno.test("readiness help is generic across product profiles and remains scoped"
   assertEquals(assistance?.facet_key, "supply_phase");
   assertEquals(/паспорт|щит/iu.test(assistance?.question ?? ""), true);
   assertEquals(assistance?.scope?.token, original);
+  // The embedded widget currently ignores quick_replies; help must remain
+  // actionable using only the visible assistant text.
+  for (const option of assistance?.options ?? []) {
+    assertEquals(assistance?.question.includes(option.label ?? option.value), true);
+  }
+  assertEquals(/вариант ниже/iu.test(assistance?.question ?? ""), false);
 });
 
 Deno.test("readiness assistance does not hijack an ordinary variants request", () => {
