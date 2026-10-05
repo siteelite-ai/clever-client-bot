@@ -2,9 +2,9 @@
 
 ## Latest checkpoint (supersedes historical status below)
 
-Production remains version 448. Preview 650 was confirmed at `ae23dff7`.
-Candidate `815cfb68` adds bounded supplementary verification and is being
-deployed/tested in preview only. PR #67 remains DRAFT / NOT READY.
+Production remains version 448. Preview 651 was confirmed after deploying
+`815cfb68`, which adds bounded supplementary verification. PR #67 remains
+DRAFT / NOT READY.
 
 ### Implemented since the earlier checkpoint
 
@@ -28,6 +28,19 @@ deployed/tested in preview only. PR #67 remains DRAFT / NOT READY.
 
 - 847 shared-tool tests passed; Edge Function type-check passed on 815cfb68.
 - CI 37313727313 passed on ae23dff7.
+- CI 37315145905 passed on 815cfb68.
+- Preview 651: audit-02 (cable then motion light), audit-18 (Acti9 analogs),
+  audit-25 (black sockets then white follow-up) passed automated assertions.
+  Sensor-subtype/manual acceptance limitations below still apply.
+- Two further audit-02 repetitions passed all six turns: cable in 1.6–1.8 s,
+  light replies in 11.4–12.4 s, five cards each. Light request IDs:
+  `54ed0c28-5d35-4b9e-9780-0bf6e93b6f7d`,
+  `3dad85ff-0041-41a7-aa04-b3ab7acf8c30`,
+  `4dc48e81-3062-4937-8e6c-65849a994ca2`,
+  `ce8ffa82-2cb0-4996-aeb3-30fd9d8d7ae8`.
+  Each still includes the two opto-acoustic models; manual acceptance is red.
+  These successful repeats alone do not establish that the new supplementary
+  branch was exercised (a zero-result route already had its own recovery).
 - Three repetitions of audit-02 on preview 650 completed without a connection
   error. Exact cable selection passed all three times. Of six light responses,
   one returned one Gauss and five returned five cards. This is NOT acceptance:
@@ -37,8 +50,11 @@ deployed/tested in preview only. PR #67 remains DRAFT / NOT READY.
 - Read-only catalog API check with the motion-sensor facet confirmed conflicting
   data: product 20554 (ДПО 1002) and 23306 (ДПО 1001) explicitly say acoustic
   sensor in their names, while both have `С датчиком движения: да`.
-  This does not prove they lack a second sensor; source specifications must be
-  checked. Do not silently change the catalog or add SKU exclusions to the bot.
+  Manufacturer verification identifies these as opto-acoustic models activated
+  by sufficient sound in low light, explicitly contrasting the principle with
+  infrared/microwave detection: https://www.iek.ru/company/news/6422744/ .
+  A broad source boolean cannot justify silently presenting the technologies
+  as equivalent. Do not silently change the catalog or add SKU exclusions.
 - The current acceptance assertion accepts any sensor keyword; therefore its
   PASS is insufficient. These two items need manual/source-data validation.
 - The remaining software blockers are application suitability (outdoor cable),
