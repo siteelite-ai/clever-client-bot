@@ -1,5 +1,52 @@
 # Preview audit — 2026-10-05
 
+## Measurement-scope continuation (latest)
+
+Candidate `5555fc2d` is deployed to preview only; production unchanged.
+This section supersedes older numerical-scope status below. NOT READY.
+
+- `237049da`: add a literal per-product evidence span to the reasoning schema.
+  It must be visible in the explanation, explicitly per-item, contain a physical
+  quantity and exclude aggregate calculations. Only that span may constrain
+  cards when the explanation also calculates total demand.
+- `e86af3d0`: when only total demand is known, ask configuration before claiming
+  cards satisfy it. The exact single-item choice transfers total demand to that
+  item. Free-form choices and multi-item configuration still need regression
+  coverage; do not claim the whole dialogue family is complete.
+- `5555fc2d`: optional numerical correction now sees the previous explanation
+  and cannot erase validated required facets or customer-owned classifications.
+  Nearest-sufficient ranking preserves alternatives while ordering them by
+  distance from the stated minimum, rather than arbitrary API order.
+- 851 shared-tool tests passed and Edge type-check passed on the final code.
+  A pipeline test proves a visible per-item 4000 lm minimum rejects a 3000 lm
+  card even when the aggregate calculation mentions 3000 lm.
+
+### Live evidence and remaining failures
+
+- Browser on e86af3d0: `447a8648-a47c-4e84-a0ca-f541fdf1932e` asks configuration
+  without rendering cards. Reply `Одно изделие для всей задачи` continues rather
+  than repeating the question (`5394cb60-7766-4192-980d-63700366587d`). The latter
+  enforces 18000 lm but exposes poor ranking and loss of an earlier qualitative
+  requirement during correction; 5555fc2d addresses those mechanisms, not yet
+  proven end-to-end on this same browser sequence.
+- Screenshot: `/private/tmp/220volt-preview-measurement-audit-20261005.png`.
+- Full 28-case suite on e86af3d0: 24 PASS, 4 FAIL. Living-room, yard and parking
+  scenarios ask configuration instead of satisfying the expected card count;
+  these are OPEN, not reclassified as passed. Cable for air conditioner also
+  fails. No acceptance assertion was weakened to hide these failures.
+- Final 5555fc2d targeted checks: CORN E14 PASS
+  (`a8e15805-accd-41d0-b333-482f8b8ef854`), apartment 7 kW breaker guidance PASS
+  (`b0fc16df-3ba3-43b0-a9f3-b14b178127a7`), air-conditioner cable FAIL
+  (`c32bdb2b-d16b-4167-abed-efeec5fdd00b`).
+- Cable diagnostic: reasoning selects 3×2.5 and a 2.5 mm² minimum; four cached
+  titles match the compound marking, but none passes the numeric evidence gate.
+  A generic later recovery wrongly explores `Провод А, АС` and also returns no
+  qualifying products. Next action: inspect real product traits and existing
+  compound-dimension evidence mapping; do NOT restore fabricated filter proof.
+- Outstanding: finish quantitative/application consistency, prevent irrelevant
+  recovery, validate free-form/multi-item replies, resolve sensor-type semantics
+  and outdoor suitability, then repeat the full suite and actual widget checks.
+
 ## Latest checkpoint (supersedes historical status below)
 
 Production remains version 448. Preview 651 was confirmed after deploying
