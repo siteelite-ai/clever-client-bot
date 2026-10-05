@@ -923,6 +923,7 @@ export function resolveDerivedSelectionReasoning(
     args.mandatory_properties ?? [],
     originalReasoning,
     facets,
+    customerEvidence,
   );
   if (propertyResolution.unresolved.length > 0) return null;
   const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
@@ -1389,7 +1390,7 @@ export function resolveDerivedSelectionReasoning(
   );
   // Later class cleanup must not erase the visible source of a hard property.
   if (
-    resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets)
+    resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets, customerEvidence)
       .unresolved.length > 0
   ) return null;
   const aggregateScopeEvidence = measurementScope === "system_total"

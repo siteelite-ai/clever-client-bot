@@ -4,7 +4,7 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { extractReasoningBounds } from "./criteria-reasoning.ts";
-import { compoundCountFacetValue } from "./search-filter-guard.ts";
+import { compoundCountFacetValue, guardSearchFilters } from "./search-filter-guard.ts";
 
 export interface ReasoningObligation {
   criterion: Criterion;
@@ -19,6 +19,7 @@ export interface ObligationResolution {
 export interface ObligationFacet {
   key?: string;
   caption?: string;
+  unit?: string | null;
   values?: Array<{ value?: string }>;
 }
 
@@ -28,6 +29,7 @@ export function repairObligationDeclaration(
   original: Record<string, unknown>,
   repaired: Record<string, unknown>,
   facets: ObligationFacet[] = [],
+  customerEvidence = "",
 ): Record<string, unknown> | null {
   const before = original.mandatory_properties;
   const after = repaired.mandatory_properties;
@@ -62,7 +64,7 @@ export function repairObligationDeclaration(
     JSON.stringify(first) !== JSON.stringify(second)
   ) return null;
   if (
-    resolveReasoningObligations(after, repaired.reasoning, facets).unresolved.length > 0
+    resolveReasoningObligations(after, repaired.reasoning, facets, customerEvidence).unresolved.length > 0
   ) return null;
   return {
     ...original,
@@ -150,6 +152,7 @@ export function resolveReasoningObligations(
   raw: unknown,
   visibleReasoning: string,
   facets: ObligationFacet[] = [],
+  customerEvidence = "",
 ): ObligationResolution {
   const obligations: ReasoningObligation[] = [];
   const unresolved: ObligationResolution["unresolved"] = [];
@@ -179,6 +182,24 @@ export function resolveReasoningObligations(
       continue;
     }
     const span = normalized(completeSource);
+    const matchingFacets = facets.filter((facet) =>
+      [facet.key, facet.caption].some((label) => typeof label === "string" && normalized(label) === normalized(key)));
+    // Reuse the existing customer-owned facet proof, not modal words in the
+    // model's explanation. This cannot promote a model-only default.
+    const customerGrounded = op === "eq" && customerEvidence.trim().length > 0 && matchingFacets.some((facet) => {
+      const liveFacet = { key: facet.key ?? facet.caption ?? "", caption: facet.caption, unit: facet.unit,
+        values: (facet.values ?? []).filter((entry): entry is { value: string } => typeof entry.value === "string") };
+      const selected = liveFacet.values.find((entry) => typeof value === "number"
+        ? /^\d+(?:[.,]\d+)?$/u.test(entry.value.trim()) && Number(entry.value.replace(",", ".")) === value
+        : typeof value === "string" && normalized(entry.value) === normalized(value));
+      if (!selected) return false;
+      if (typeof value === "number" && (unit
+        ? !extractClientQuantities(customerEvidence).some((q) => q.value === value && q.unit === normalizeUnit(unit))
+        : Number(compoundCountFacetValue(liveFacet, customerEvidence)?.value) !== value)) return false;
+      return guardSearchFilters({ mode: "by_filter", options: { [liveFacet.key]: [selected.value] } },
+        [liveFacet], customerEvidence, customerEvidence, "").user_backed.some((entry) =>
+          entry.key === liveFacet.key && entry.value === selected.value);
+    });
     const offset = visible.indexOf(span);
     const before = offset < 0 ? "" : visible.slice(0, offset).trim();
     if (offset < 0) {
@@ -209,7 +230,7 @@ export function resolveReasoningObligations(
           caption: facet.caption,
           values: (facet.values ?? []).filter((entry): entry is { value: string } => typeof entry.value === "string"),
         }, span)?.value) === value);
-    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded) {
+    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded && !customerGrounded) {
       reject("key_not_grounded");
       continue;
     }
@@ -221,7 +242,7 @@ export function resolveReasoningObligations(
     if (
       /(?:возможно|желательн|например|предпочт|либо|если|можно|суммар|распредел|отсутств)|(?:^|\s)(?:не|без)(?:\s|$)/iu
         .test(withoutBounds) ||
-      !/(?:необходим|требует|требуется|обязател|долж|критич)/iu.test(span)
+      (!customerGrounded && !/(?:необходим|требует|требуется|обязател|долж|критич)/iu.test(span))
     ) {
       reject("necessity_not_established");
       continue;
@@ -229,7 +250,7 @@ export function resolveReasoningObligations(
     let criterion: Criterion;
     if (typeof value === "number" && Number.isFinite(value)) {
       if (
-        !countGrounded && (typeof unit !== "string" || !unit.trim() ||
+        !countGrounded && !customerGrounded && (typeof unit !== "string" || !unit.trim() ||
         !extractClientQuantities(span).some((q) =>
           q.value === value && q.unit === normalizeUnit(unit)
         ))
@@ -256,7 +277,7 @@ export function resolveReasoningObligations(
         ...(unit ? { unit } : {}),
         exclusive: bounds.some((bound) => bound.strict),
         level: "A",
-        evidence: "derived_required",
+        evidence: customerGrounded ? "user_explicit" : "derived_required",
       };
     } else if (
       typeof value === "string" && value.trim().length >= 1 &&
@@ -269,7 +290,7 @@ export function resolveReasoningObligations(
         op: "eq",
         value,
         level: "A",
-        evidence: "derived_required",
+        evidence: customerGrounded ? "user_explicit" : "derived_required",
       };
     } else {
       reject("value_not_grounded");

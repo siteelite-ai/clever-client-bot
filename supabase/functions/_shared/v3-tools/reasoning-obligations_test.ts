@@ -257,3 +257,20 @@ Deno.test("dimensionless product counts reuse live schema count grounding", () =
     assertEquals(resolveReasoningObligations([item], source, []).unresolved.length, 1);
   }
 });
+
+Deno.test("explicit customer facet proof does not depend on a necessity verb in model prose", () => {
+  const source = "Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000.";
+  const item = { ...numeric, key: "Цветовая температура, К", unit: "К", value: 3000, source_span: source };
+  const facets = [{ key: "temperature", caption: item.key, unit: "К", values: [{ value: "3000" }, { value: "4000" }] }];
+  const result = resolveReasoningObligations([item], source, facets, "Нужны лампы 3000 К.");
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations[0].criterion.evidence, "user_explicit");
+  for (const request of ["Нужны лампы.", "Нужны лампы 4000 К.", "Нужны лампы 3000 Вт."]) {
+    assertEquals(resolveReasoningObligations([item], source, facets, request).unresolved.length, 1);
+  }
+  const codeSource = "Для совместимости выбраны лампы, у которых Тип цоколя E27.";
+  const code = { ...environmental, key: "Тип цоколя", value: "E27", source_span: codeSource };
+  const codeFacets = [{ key: "base", caption: code.key, values: [{ value: "E27" }, { value: "E14" }] }];
+  assertEquals(resolveReasoningObligations([code], codeSource, codeFacets, "Нужны лампы с цоколем E27.").unresolved, []);
+  assertEquals(resolveReasoningObligations([code], codeSource, codeFacets, "Нужны лампы с цоколем E14.").unresolved.length, 1);
+});
