@@ -1,0 +1,160 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": false,
+  "cases": [
+    {
+      "id": "scope-living-single",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 9505,
+              "log_id": "596fb2a9-9bbc-4a7e-8594-35d77b7f6ada",
+              "products_count": 0,
+              "products": [],
+              "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток должен составлять не менее 3750 Лм. Выбираем светодиодный светильник с типом лампы LED для эффективной замены люстры. Если планируется установка одного прибора, его световой поток должен быть не ниже расчетного значения.\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+                  "duration_ms": 3423
+                }
+              ]
+            },
+            {
+              "passed": false,
+              "duration_ms": 7362,
+              "log_id": "5bdbdadb-c4ec-40b4-bc4c-2198850a5902",
+              "products_count": 0,
+              "products": [],
+              "text": "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+              "failures": [
+                "products 0 < 3"
+              ],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "ошибка: category_not_found",
+                  "duration_ms": 739
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "ошибка: category_not_found",
+                  "duration_ms": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scope-parking-four",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 1108,
+              "log_id": "f9789a0b-505d-42e2-9b38-3e62678eaefe",
+              "products_count": 0,
+              "products": [],
+              "text": "Для парковки сначала нужны площадь территории и высота установки. Для улицы также уточним требуемую защиту, обычно рассматривают IP65/IP66. Какая площадь и высота монтажа?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 5128,
+              "log_id": "961dce66-a681-4aff-8948-6dd11df94a6d",
+              "products_count": 0,
+              "products": [],
+              "text": "Для обеспечения нормативной освещенности парковки 10 лк на площади 500 м² с учетом высоты подвеса 3 метра требуется суммарный световой поток не менее 10000 Лм. Эту потребность можно закрыть одним мощным устройством или несколькими менее яркими. Для уличного использования обязательна степень защиты IP65.\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1061
+                }
+              ]
+            },
+            {
+              "passed": false,
+              "duration_ms": 4442,
+              "log_id": "47c54e05-64ea-4b46-90bc-2bb35f0e7efb",
+              "products_count": 0,
+              "products": [],
+              "text": "Для подбора четырех прожекторов необходимо понимать условия их эксплуатации и требуемую яркость, так как от этого зависит выбор степени защиты корпуса и мощности каждого прибора. Уточните, пожалуйста, назначение освещения, чтобы я мог рассчитать параметры для системы из четырех изделий.\n\nДля каких целей и в каких условиях (улица или помещение) планируется использовать прожекторы?",
+              "failures": [
+                "products 0 < 3"
+              ],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 861
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

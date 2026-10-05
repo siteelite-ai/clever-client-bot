@@ -1,0 +1,69 @@
+{
+  "schema_version": 3,
+  "source": "Additional end-to-end configuration continuation probes; do not replace original acceptance",
+  "default_expectations": {
+    "max_duration_ms": 30000,
+    "require_selection_criteria_evidence": true
+  },
+  "cases": [
+    {
+      "id": "scope-living-single",
+      "repeat": 1,
+      "title": "Total demand to single living-room fixture",
+      "turns": [
+        {
+          "message": "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+          "expect": {
+            "max_duration_ms": 30000
+          }
+        },
+        {
+          "message": "Одно изделие для всей задачи",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "forbid_every_product_title_any": [
+              "6500K",
+              "ДПО",
+              "ДВО",
+              "линейный",
+              "prismatic",
+              "прожектор"
+            ],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "scope-parking-four",
+      "repeat": 1,
+      "title": "Parking with four fixtures",
+      "turns": [
+        {
+          "message": "Какие прожекторы подойдут для освещения парковки?",
+          "expect": {
+            "max_products": 0
+          }
+        },
+        {
+          "message": "500м2 3 метра",
+          "expect": {}
+        },
+        {
+          "message": "Несколько изделий вместе, четыре прожектора",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": [
+              "прожектор"
+            ],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    }
+  ]
+}

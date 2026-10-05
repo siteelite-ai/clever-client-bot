@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { compileMeasuredReasoningSearchContract } from "./criteria-reasoning.ts";
 import { applyCriteriaGate } from "./criteria-gate.ts";
+import { executeProposeClarification } from "./propose-clarification.ts";
 // Captured preview678 failures: aggregate demand was declared as per-item.
 Deno.test("aggregate obligations ask configuration before attempting per-product validation", () => {
   for (const [area, total] of [[25, 3750], [500, 10000]]) {
@@ -15,6 +16,19 @@ Deno.test("aggregate obligations ask configuration before attempting per-product
     assertEquals(resolved?.propertyObligations ?? [], []);
     assertEquals(resolved?.measurementEvidence, "");
     assertEquals(resolved?.requiredFacetValues, []);
+    const emitted = executeProposeClarification({
+      ...resolved!.clarification!,
+      scope: { kind: "selection_readiness", token: `Исходная задача ${area} м²` },
+    });
+    assertEquals(emitted.ok, true);
+    if (emitted.ok) {
+      const update = emitted.side_effects?.find((event) => event.type === "slot_update");
+      assertEquals(update?.type, "slot_update");
+      if (update?.type === "slot_update") {
+        assertEquals((update.slots.pending_clarification as { scope: { token: string } }).scope.token,
+          `Исходная задача ${area} м²`);
+      }
+    }
   }
 });
 

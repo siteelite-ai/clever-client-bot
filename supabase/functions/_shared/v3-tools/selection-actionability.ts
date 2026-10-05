@@ -765,9 +765,10 @@ export interface ResolvedDerivedSelectionReasoning {
   clarification?: {
     question: string;
     facet_key: string;
-    freeform: true;
-    options: Array<{ value: string; label: string }>;
-  };
+  } & (
+    | { freeform: true; options: [] }
+    | { freeform: false; options: Array<{ value: string; label: string }> }
+  );
   measurementEvidence: string;
   measurementScope: "per_product" | "system_total" | "not_applicable";
   retrievalQuery: string | null;
@@ -961,7 +962,7 @@ export function resolveDerivedSelectionReasoning(
       // validate the actual per-item plan from the customer's configuration.
       return {
         text: originalReasoning,
-        clarification: { ...configuration, freeform: true },
+        clarification: { ...configuration, freeform: false },
         measurementEvidence: "",
         measurementScope,
         propertyObligations: [],
