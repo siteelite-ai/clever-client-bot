@@ -1669,6 +1669,47 @@ Deno.test("a uniquely customer-grounded live class overrides a broader model cho
   assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
 });
 
+Deno.test("one shared application noun cannot own a narrower compound classification family", () => {
+  const facets = [{
+    caption: "Назначение",
+    values: [
+      { value: "Кабели силовые стационарные" },
+      { value: "Провод самонесущий для воздушных линий электропередач" },
+      { value: "Провод неизолированный для воздушных линий электропередач" },
+      { value: "Кабели сигнальные" },
+    ],
+  }];
+  const declaration = {
+    reasoning:
+      "Для стационарной прокладки требуется подходящий силовой кабель.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+  };
+  const unrelated = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Линия 10 метров, стационарная прокладка",
+    "кабель и провод",
+  );
+  assertEquals(
+    unrelated?.customerGroundedCompatible.some(({ value }) =>
+      value.includes("воздушных")
+    ),
+    false,
+  );
+  assertEquals(
+    unrelated?.compatible.some(({ value }) => value.includes("воздушных")),
+    false,
+  );
+  const explicit = resolveDerivedSelectionReasoning(
+    { ...declaration, compatible_classifications: [] },
+    facets,
+    "Нужен провод для воздушных линий электропередач",
+    "провод",
+  );
+  assertEquals(explicit?.customerGroundedCompatible.length, 2);
+});
+
 Deno.test("a customer-grounded class family preserves all matching live variants", () => {
   const liveFacets = [{
     caption: "Класс применения",

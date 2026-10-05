@@ -550,15 +550,33 @@ function customerGroundedClassificationChoices(
       )
       .sort((left, right) => left.length - right.length);
     const candidateGroup = selectiveGroups[0] ?? [];
-    const mostSelective = candidateGroup.length === 1 &&
-        !customerOwnsExactTransparentClassification(
-          customerEvidence,
-          candidateGroup[0],
-          allChoices,
-          productClass,
+    // A family is owned only when the customer names its complete shared
+    // qualifier, not one word inside it. Otherwise an installation "line"
+    // can accidentally own a family of "overhead transmission lines".
+    // Terms common to the whole facet or the established product class are
+    // non-selective; sibling-specific refinements remain alternatives.
+    const sharedFamilyStems = candidateGroup.length > 1
+      ? classificationLexicalTokens(candidateGroup[0].value).filter((stem) =>
+        !CLASSIFICATION_GLUE_STEMS.has(stem) &&
+        !productClassStems.has(stem) &&
+        candidateGroup.every((choice) =>
+          classificationLexicalTokens(choice.value).includes(stem)
+        ) &&
+        !choices.every((choice) =>
+          classificationLexicalTokens(choice.value).includes(stem)
         )
-      ? []
-      : candidateGroup;
+      )
+      : [];
+    const ownsGroup = candidateGroup.length === 1
+      ? customerOwnsExactTransparentClassification(
+        customerEvidence,
+        candidateGroup[0],
+        allChoices,
+        productClass,
+      )
+      : sharedFamilyStems.length > 0 &&
+        sharedFamilyStems.every((stem) => positiveStems.has(stem));
+    const mostSelective = ownsGroup ? candidateGroup : [];
     for (const choice of mostSelective) {
       if (!grounded.some(({ id }) => id === choice.id)) grounded.push(choice);
     }
