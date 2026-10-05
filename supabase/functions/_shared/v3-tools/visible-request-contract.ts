@@ -63,6 +63,29 @@ function tokenStem(value: string): string {
   return stripped.length >= 4 ? stripped : token;
 }
 
+/** Catalog titles sometimes put the underlying noun beside the product head
+ * instead of its relational adjective. Accept only the complete noun root
+ * obtained by removing the single adjectival -н suffix, directly adjacent to
+ * the established head. Never accept a prefix elsewhere in prose/traits:
+ * that can describe an accessory, an excluded feature, or a different item.
+ * No product names, aliases, brands or category IDs are involved. */
+function titleOwnsRelationalModifier(
+  title: string,
+  modifierStem: string,
+  productClass: string,
+): boolean {
+  if (!/^[а-я]{5,}н$/u.test(modifierStem)) return false;
+  const noun = modifierStem.slice(0, -1);
+  const head = tokenStem((productClass.match(/[a-zа-я0-9]+/giu) ?? []).at(-1) ?? "");
+  if (!head || head === noun) return false;
+  const tokens = (title.split(/\n/u)[0].match(/[a-zа-я0-9]+/giu) ?? []).map(normalizeToken);
+  return tokens.some((token, index) =>
+    token === noun &&
+    (tokenStem(tokens[index - 1] ?? "") === head ||
+      tokenStem(tokens[index + 1] ?? "") === head)
+  );
+}
+
 function canonicalUnit(raw: string): string {
   const unit = normalizeUnit(raw);
   const aliases: Record<string, string> = {
@@ -293,7 +316,9 @@ export function buildVisibleRequestContract(
       label: modifier.label,
       op: "eq",
       value: modifier.label,
-      matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
+      matches: (title) =>
+        (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem) ||
+        titleOwnsRelationalModifier(title, modifier.stem, String(context.productClass ?? "")),
     });
   }
 

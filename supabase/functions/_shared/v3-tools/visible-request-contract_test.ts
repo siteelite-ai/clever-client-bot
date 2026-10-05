@@ -13,6 +13,37 @@ Deno.test("literal linear length requires an actual unit in the title", () => {
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель EB-50-007", contract), false);
 });
 
+Deno.test("a complete relational noun beside the product head proves the adjective", () => {
+  for (const [request, head, full, compact] of [
+    ["светодиодный светильник", "Светильники", "Светильник светодиодный 48W", "Светильник светодиод (потолочный) 48W"],
+    ["лазерный уровень", "Уровень", "Лазерный уровень", "Уровень лазер"],
+  ]) {
+    const contract = buildVisibleRequestContract(request, {
+      productClass: head, candidateTitles: [full, compact],
+    });
+    assertEquals(contract.length, 1);
+    assertEquals(titleSupportsVisibleRequestContract(compact, contract), true);
+    assertEquals(titleSupportsVisibleRequestContract(full, contract), true);
+  }
+});
+
+Deno.test("relational noun proof is not arbitrary prefix matching or trait-word coincidence", () => {
+  const contract = buildVisibleRequestContract("светодиодный светильник", {
+    productClass: "Светильники", candidateTitles: ["Светильник светодиодный", "Светильник светодиод"],
+  });
+  for (const title of [
+    "Светильник светло-серый",
+    "Светильник светодиодрайвер",
+    "Светильник без светодиод",
+    "Светильник для светодиод",
+    "Светильник\nКомплект: светодиод",
+  ]) assertEquals(titleSupportsVisibleRequestContract(title, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник потолочный",
+    short_traits: ["Описание: светильник светодиод"],
+  }, contract), false);
+});
+
 Deno.test("room area is not treated as a product length", () => {
   assertEquals(buildVisibleRequestContract("светильник для гостиной 25 м²").length, 0);
 });
