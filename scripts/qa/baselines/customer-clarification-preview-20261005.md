@@ -1,6 +1,54 @@
 # Preview audit — 2026-10-05
 
-## Prerequisite and classification checkpoint (current work)
+## Current checkpoint — preview 662, not ready
+
+- `78db8710`: retain the validated reasoning declaration in the existing
+  configuration scope. An exact single-item answer reuses that declaration
+  rather than invoking a new model calculation; referenced facet IDs are
+  rebound by label/value against the current live schema. Normal declaration,
+  criteria and product proof gates still run. New conditions and multi-item
+  answers do not use this narrow replay path and remain open.
+- `bb9bbe4e`: emission-only reconstruction cannot promote a bare boolean
+  trait into customer intent. Root cause: catalog “Да” matched the substring
+  in “задачи”. Require a labelled boolean pair in this recovery layer;
+  existing search/visible-feature contracts are unchanged.
+- 864 shared tests pass; Edge typecheck passes; CI 37327962642 passes.
+  Management API confirms preview 662, production still 448.
+- Two repetitions of each completion case pass automated assertions; raw
+  evidence in `aggregate-completion-preview662-20261005.json`.
+  Living-room replies retain 3750 lm, three ceiling fixtures, and no invented
+  dimming (667359e8-ccfd-438b-8f3d-7b820e14da5f,
+  172dedaf-9b78-48e2-a3c5-ce95e97fe856), 4.1–4.7 seconds.
+- Scope preservation is verified, NOT complete engineering acceptance:
+  yard run 78145f08-0064-4ba9-8441-e4c57469cdd9 retains visible 3500 lm but
+  its contract has only IP65 and a 30–50 W alternative range. The source
+  declaration mixes one/two-item branches; replay retains that ambiguity.
+  Another initial run uses 350 lm / 700 lm instead. Cross-run calculation
+  policy and multi-branch projection remain unresolved.
+- Previously working exact cable, C16 budget breaker and CORN E14 pass:
+  3227f289-7fbc-46db-8dad-33138172b7c4,
+  b42abf83-284f-4f23-9687-5ea1e7f32bc4,
+  ac450350-e4b0-4138-a353-baeec43056b4.
+
+### Browser counterexample (must not hide behind API PASS)
+
+Actual widget, explicit new-topic living-room request:
+04af31b2-74b7-453e-9a95-3b6767aeb22f, then single-item answer
+02f3649f-75ae-4078-967c-2eb7c36936db. Scope replay succeeds and 3750 lm is
+retained, but **zero cards** are returned. No transport error. Supplement
+finds 11 criteria-passing candidates, but visible requirement recovery rejects
+the literal modifier “светодиодный”. Unlike successful API runs, this initial
+declaration did not map that modifier to the LED facet, so the title/evidence
+path differs. Inspect semantic mapping versus abbreviated title proof; do not
+delete the LED requirement or claim no catalog stock.
+Screenshot: /private/tmp/220volt-preview662-browser-failure.png.
+
+Production unchanged; draft PR remains NOT READY. Original 28-case suite has
+not been rerun on 662. Purchase-quantity handling, sensor semantics, reliable
+prerequisites, general freeform/multi-item continuation and full final
+regression remain required.
+
+## Prerequisite and classification checkpoint (historical: preview 660)
 
 Candidate `333be94e` is deployed to preview only. Production remains 448.
 No production merge/deploy; PR #67 remains DRAFT / NOT READY.
