@@ -5,10 +5,10 @@ import test from 'node:test';
 const suite = JSON.parse(fs.readFileSync(new URL('./customer-audit-20260921-cases.json', import.meta.url), 'utf8'));
 const variationSuite = JSON.parse(fs.readFileSync(new URL('./customer-audit-20260921-variations.json', import.meta.url), 'utf8'));
 
-test('customer audit suite contains all 27 source scenarios with stable unique ids', () => {
-  assert.equal(suite.cases.length, 27);
-  assert.equal(new Set(suite.cases.map((item) => item.id)).size, 27);
-  assert(suite.cases.every((item) => /^audit-\d{2}-/.test(item.id)));
+test('customer audit suite contains 27 source scenarios plus the novice regression', () => {
+  assert.equal(suite.cases.length, 28);
+  assert.equal(new Set(suite.cases.map((item) => item.id)).size, 28);
+  assert(suite.cases.every((item) => /^audit-\d{2}[a-z]?-/.test(item.id)));
   assert(suite.cases.every((item) => item.title && Array.isArray(item.turns) && item.turns.length > 0));
 });
 

@@ -240,6 +240,14 @@ function titleMeasurements(title, units, allowCompactNumeric = false) {
 
 export function evaluate(expect = {}, response) {
   const failures = [];
+  if (expect.forbid_additive_compound_marking === true) {
+    const invalid = response.links.filter((link) =>
+      /\d+(?:[.,]\d+)?\s*[xх×*]\s*\d+(?:[.,]\d+)?\s*\+\s*\d/iu.test(link.title)
+    );
+    if (invalid.length > 0) {
+      failures.push('additive construction is not an exact marking: ' + invalid.map((link) => link.title).join(' | '));
+    }
+  }
   const productTitles = response.links.map((link) => link.title).join('\n');
   const allOutput = `${response.text}\n${response.productsMarkdown}`;
   if (expect.conversation_boundary === 'new_task' && response.conversationBoundary?.mode !== 'new_task') {

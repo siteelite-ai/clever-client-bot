@@ -865,6 +865,28 @@ Deno.test("an exact count rejects a visible additional compact component", () =>
   );
 });
 
+Deno.test("exact count uses every component of an additive dimensional marking", () => {
+  const criterion: Criterion = { key: "Количество жил", op: "eq", value: 3 };
+  for (const title of ["Кабель 3*2,5+1*1,5", "Кабель 1×1.5 + 3×2.5"]) {
+    assertEquals(titleContradictsExactCountCriterion(title, criterion), true);
+  }
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 2*2,5+1*1,5", criterion),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 3*2,5", criterion),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 3*2,5+1*1,5", {
+      ...criterion,
+      key: "Сечение",
+    }),
+    false,
+  );
+});
+
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
   assertEquals(parseNumSpan("12"), { min: 12, max: 12 });
   assertEquals(parseNumSpan("12,5 ед"), { min: 12.5, max: 12.5 });

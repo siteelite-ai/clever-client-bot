@@ -720,6 +720,37 @@ Deno.test("derived reasoning exposes bounded technical values but not identity o
   );
 });
 
+Deno.test("a decimal live scalar cannot become customer-owned from one matching integer", () => {
+  const facets = [{
+    key: "weight",
+    caption: "Вес",
+    values: [{ value: "3.4" }, { value: "4.5" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для нагрузки 3 кВт рекомендую исполнение 3×4 или 3×2,5.",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+    },
+    facets,
+    "Нужен кабель для кондиционера мощностью 3 кВт",
+  );
+  assertEquals(declaration?.requiredFacetValues, []);
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Нагрузка 3 кВт",
+  );
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f0v0") ?? false,
+    false,
+  );
+});
+
 Deno.test("customer-scoped reasoning schema omits unrelated exact technical values", () => {
   const schema = buildDerivedSelectionReasoningToolSchema([
     {

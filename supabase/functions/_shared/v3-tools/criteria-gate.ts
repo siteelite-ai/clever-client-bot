@@ -907,6 +907,17 @@ export function titleContradictsExactCountCriterion(
     ? criterion.value.trim().replace(",", ".")
     : "";
   if (!/^\d+$/u.test(raw) || Number(raw) < 1) return false;
+  // Count facets may omit auxiliary elements of N×S + M×T. Compare the
+  // complete visible sum, not just the primary N, without interpreting S/T.
+  const additive =
+    /\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?(?:\s*\+\s*\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?)+/giu;
+  for (const construction of String(title ?? "").matchAll(additive)) {
+    const counts = [...construction[0].matchAll(/(\d+)\s*[xх×*]/giu)]
+      .map((match) => Number(match[1]));
+    if (counts.reduce((sum, count) => sum + count, 0) !== Number(raw)) {
+      return true;
+    }
+  }
   const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `(?<!\\d)${escaped}\\s*[\\p{L}]{0,3}\\s*\\+\\s*(?:\\d+\\s*)?[\\p{L}]`,

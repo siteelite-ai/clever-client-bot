@@ -7,6 +7,18 @@ function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
 }
 
+test('acceptance rejects additive markings despite matching title substrings', () => {
+  const response = {
+    text: '', productsMarkdown: '', done: true, durationMs: 1,
+    links: [{ title: 'Кабель ВВГ 3*2,5+1*1,5', url: 'https://example.test/item' }],
+  };
+  const failures = evaluate({ forbid_additive_compound_marking: true }, response);
+  assert.ok(failures.some((failure) => failure.includes('additive construction')));
+  response.links[0].title = 'Кабель ВВГ 3*2,5';
+  assert.ok(!evaluate({ forbid_additive_compound_marking: true }, response)
+    .some((failure) => failure.includes('additive construction')));
+});
+
 test('resolveEndpoint keeps production by default and accepts an isolated preview function', () => {
   assert.equal(resolveEndpoint(['node', 'runner']), DEFAULT_ENDPOINT);
   assert.equal(

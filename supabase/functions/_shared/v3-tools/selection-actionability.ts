@@ -204,7 +204,9 @@ function derivedRequiredFacetChoices(
       if (constrainToCustomerEvidence) {
         const normalizedValue = normalizeLiteralEvidence(choice.value);
         const valueTokens = normalizedValue.split(" ").filter(Boolean);
-        const bareNumericValue = /^\d+(?:[.,]\d+)?$/u.test(normalizedValue);
+        // Lexical normalization removes punctuation. It must not split a
+        // decimal live value into independent customer-owned integers.
+        const bareNumericValue = /^\d+(?:[.,]\d+)?$/u.test(choice.value.trim());
         const exactPhrase = !bareNumericValue && normalizedValue.length >= 2 &&
           (` ${normalizedEvidence} `).includes(` ${normalizedValue} `);
         const compactIdentifier = valueTokens.length === 1 &&
@@ -224,7 +226,10 @@ function derivedRequiredFacetChoices(
             choiceQuantities.map((quantity) => quantity.unit).filter(Boolean),
           ),
         ];
-        const numericLiteral = valueTokens.some((token) => {
+        const numericTokens = bareNumericValue
+          ? [choice.value.trim()]
+          : valueTokens;
+        const numericLiteral = numericTokens.some((token) => {
           if (!/^\d+(?:[.,]\d+)?$/u.test(token)) return false;
           const value = Number(token.replace(",", "."));
           if (!Number.isFinite(value)) return false;
@@ -239,7 +244,10 @@ function derivedRequiredFacetChoices(
             : declaredUnit
             ? [declaredUnit]
             : [];
-          if (expectedUnits.length === 0) return evidenceTokens.has(token);
+          if (expectedUnits.length === 0) {
+            return [...customerEvidence.matchAll(/\d+(?:[.,]\d+)?/gu)]
+              .some((match) => Number(match[0].replace(",", ".")) === value);
+          }
           return customerQuantities.some((quantity) =>
             quantity.value === value && expectedUnits.includes(quantity.unit)
           );
