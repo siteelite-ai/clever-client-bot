@@ -1,6 +1,113 @@
 # Preview audit — 2026-10-05
 
-## Terminal-contract and scalar-evidence checkpoint (latest)
+## Prerequisite and classification checkpoint (current work)
+
+Candidate `333be94e` is deployed to preview only. Production remains 448.
+No production merge/deploy; PR #67 remains DRAFT / NOT READY.
+
+- `c2fef9bb`: the existing reasoning declaration can explicitly return
+  `clarification_question` instead of an incomplete selection contract.
+  It preserves the original selection/category scope, skips premature numeric
+  correction/search, and supports bounded novice assistance on the new slot.
+  Removed the contradictory instruction that prohibited any question even
+  when an essential condition was missing. Empty question preserves ready
+  selection. This enables clarification; it does NOT prove reliable model use.
+- `4f4aadd2`: numeric inequality/range labels no longer bypass physical-unit
+  ownership through punctuation-stripped lexical matching. Reproduction:
+  customer length 10 m exposed nominal-voltage value ≤ 10 kV.
+- `333be94e`: a customer-owned classification family needs its complete
+  shared qualifier, not any coincident word. Reproduction: generic installation
+  “line” incorrectly selected “overhead transmission lines”. Existing household
+  surface/suspended family behavior remains covered and passing.
+- Local verification: 861 shared tests and Edge type-check pass. 36 acceptance
+  harness/matrix tests and 4 loader tests pass. Widget session suite initially
+  could not load jsdom; reused the already installed dependency via an ignored
+  node_modules symlink, then **37/37 session tests passed**. No production
+  dependencies or lockfiles changed.
+
+### Actual results before the final family correction
+
+- Preview 658 (`c2fef9bb`), prerequisite dialogue 2×: incomplete. One initial
+  turn asked about supply (f9564e3e-82f3-4682-a8e8-3d4f2239cb10), the other
+  assumed supply and rendered products (14d1fcf4-001d-4e35-b1b2-1b129b20094b).
+  Neither follow-up produced a valid selection. Explicit-input tests also
+  failed: false nominal-voltage constraint ≤ 10 kV; one request took 50 s.
+  CI 37323088132 passed, which did not establish customer acceptance.
+- Preview 659 (`4f4aadd2`): initial original question returned four exact
+  3×2.5 cards in 7.5 s (5ef4a0cb-dbea-46fa-add1-2c89577c0aa6), but did NOT
+  ask the missing-input question. The subsequent detail message returned empty
+  (d559a240-5da4-4251-8520-efcc5c36a7c0).
+- Explicit-input response b9baf247-187f-42fe-af56-1d5a0856529c returned in
+  5.6 s without the false voltage condition, but included KG and declared an
+  overhead-line class from the generic word “line”. Thus the complete
+  explicit-input case still failed. The subsequent family fix addresses that
+  projection, not yet a claim of full engineering suitability.
+- Added `customer-prerequisite-dialogue-cases.json`: asks for missing
+  prerequisites, then must finish with multiple matching products; a second
+  case supplies conditions immediately and forbids ending without products.
+  Original 28-case acceptance suite remains unchanged.
+
+Full 28-case run on `333be94e` / preview **660** finished: **25/28 automated
+cases passed**, not customer acceptance. Production **448** and preview **660**
+were independently confirmed via the management API after this run.
+
+Failures:
+
+- Living room, `373dd7c1-9298-440d-bd9e-3c39e77f073d`: no products;
+  the aggregate gate asks one item vs several after a total-light calculation.
+- Yard after area/height, `066d41e7-6adb-414f-92ce-9847543bab0c`: same gate;
+  no products. The visible reply also repeats appended contract text.
+- Outdoor analog CCTV after conditions,
+  `58275527-95eb-466b-9f62-765601efdc9e`: same gate incorrectly treats
+  **30 metres of purchased cable** as an unresolved system-capacity allocation.
+  The visible reply already states coaxial 75 ohm and outdoor jacket needs.
+
+The shared mechanism is not three independently empty catalog searches:
+all three stop at `v3_aggregate_selection_configuration_required`, with no
+operational error recorded. Quantity to purchase, application extent and
+per-item capacity must remain distinct. Do not simply disable the aggregate
+guard: total demand still must not certify under-capacity individual items.
+
+Added `customer-aggregate-completion-cases.json`: two follow-up tests require
+finished selections after choosing one item, and the CCTV case rejects the
+irrelevant configuration question. Original acceptance assertions unchanged.
+Its product-name checks still do not establish full physical suitability.
+
+Follow-up probe completed on the same preview 660 (raw compact evidence:
+`aggregate-completion-preview660-20261005.json`):
+
+- Living room: three residential ceiling fixtures returned after the one-item
+  choice; request `5bca3ce7-500a-4c37-9be9-106e8053b294`. The 3750 lm minimum
+  survived, but an unrequested mandatory “Диммирование: Да” appeared with
+  `user_explicit` provenance. Automated PASS is therefore not full acceptance.
+- Yard: five cards returned, `3ced8516-fcb5-45e6-8bbe-25f5cbe07855`.
+  **Semantic FAIL despite automated PASS:** the only new user information was
+  “one item”, but the previously visible total changed from 3500 lm / 100 lx
+  to 350 lm / 10 lx. No customer-authorized change in use was supplied.
+- CCTV: repeated failure `65715eed-c669-41dc-a5fd-26a4bdeb7a6a`, same
+  irrelevant one-vs-many question after stating 30 metres of required cable.
+
+Code inspection: `selectionReadinessScope` persists only the original user
+token, category and assistance level, not the visible engineering declaration.
+`resolveScopedCatalogSelectionContinuation` rebuilds the next selection from
+that user token plus the answer. The next reasoning pass can thus recreate,
+rather than refine, the prior quantitative plan. This is an evidence-backed
+candidate cause of the yard drift; no claim that a prompt tweak alone fixes it.
+Next correction must preserve a validated plan across configuration changes,
+distinguish purchase quantity from performance demand, and reject invented
+customer-owned boolean criteria. Existing aggregate capacity protection stays.
+
+The sensor test remains a **semantic failure despite automated PASS**: it
+returns acoustic-sensor titles under a movement-sensor catalog facet. The AC
+original case passes but does not prove the stricter prerequisite dialogue
+works. No production release is justified by the 25/28 count.
+
+Remaining work includes reliable
+use of the clarification outcome, normal detail-only continuation without a
+pending question, application suitability, catalog/provider reliability,
+aggregate dialogue completion, sensor semantics, and final browser regression.
+
+## Terminal-contract and scalar-evidence checkpoint (historical: preview 657)
 
 Preview 657 = `12ae96ba`; production remains 448 (verified via management API).
 PR #67 remains DRAFT / NOT READY.

@@ -1,0 +1,290 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": false,
+  "cases": [
+    {
+      "id": "living-room-single-item-completion",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 8734,
+              "log_id": "bc6be393-e992-4893-b5e1-698eb0df27b8",
+              "products_count": 0,
+              "products": [],
+              "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток системы должен составлять не менее 3750 Лм. Выбираю светодиодный светильник с типом лампы LED, обеспечивающий необходимую яркость для жилого помещения. Это суммарная потребность всей системы, а не подтверждённое требование к каждому отдельному товару. По классу «Тип лампы» выбираю «LED»; «Вид светильника» выбираю «люстры; бра; ночники». Явно указанное свойство «светодиодный» соответствует «Тип лампы: LED».\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1251
+                }
+              ]
+            },
+            {
+              "passed": true,
+              "duration_ms": 6462,
+              "log_id": "5bca3ce7-500a-4c37-9be9-106e8053b294",
+              "products_count": 3,
+              "products": [
+                "Светильник светодиод (потолочный) LE LED CLL ARIS-B 60W WHITE (1)",
+                "Светильник светодиод (потолочный) LE LED CLL BLISS-B 45W WHITE (1)",
+                "Светильник светодиод (потолочный) LE LED CLL DAINERIS-B 48W WHITE (1)"
+              ],
+              "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток должен составлять не менее 3750 Лм. Поскольку вы планируете использовать одно изделие, выбранный светодиодный светильник должен обладать световым потоком от 3750 Лм для обеспечения комфортного общего света. По классу «Тип лампы» выбираю «LED»; «Вид светильника» выбираю «люстры; бра; ночники». Явно указанное свойство «светодиодный» соответствует «Тип лампы: LED».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-c6cbb106",
+                "mandatory_criteria": [
+                  {
+                    "key": "Тип лампы",
+                    "op": "eq",
+                    "value": "LED",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "люстры; бра; ночники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 3750,
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Диммирование",
+                    "op": "eq",
+                    "value": "Да",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1181
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 85",
+                  "duration_ms": 824
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "yard-single-item-completion",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 853,
+              "log_id": "44affc96-5d8d-4458-91d4-0fdb7bdc46ce",
+              "products_count": 0,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 6989,
+              "log_id": "473b9c8d-b3f9-4112-9be1-7373f9c7f881",
+              "products_count": 0,
+              "products": [],
+              "text": "Для освещения двора площадью 35 м² при высоте установки 1,5 м, исходя из нормы 100 лк для придомовых территорий, необходим суммарный световой поток 3500 лм. Для освещения 35 м² при высоте 1,5 м требуется прожектор со световым потоком не менее 3500 Лм. Для уличной эксплуатации обязательна степень защиты IP65. Это суммарная потребность всей системы, а не подтверждённое требование к каждому отдельному товару. Обязательные параметры: «Степень защиты: IP65».\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 942
+                }
+              ]
+            },
+            {
+              "passed": true,
+              "duration_ms": 5447,
+              "log_id": "3ced8516-fcb5-45e6-8bbe-25f5cbe07855",
+              "products_count": 5,
+              "products": [
+                "Светодиодный прожектор GLANZEN FAD-0001-10-SL",
+                "Прожектор СДО 06-10 светодиодный черный IP65 6500 K ИЭК",
+                "Светодиодный прожектор GLANZEN FAD-0002-20-SL",
+                "Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК",
+                "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК"
+              ],
+              "text": "Для освещения двора площадью 35 м² при норме 10 лк требуется общий световой поток 350 Лм. Учитывая низкую высоту установки (1,5 м), для комфортного освещения без ослепления подойдет один прожектор со световым потоком от 350 Лм и обязательной степенью защиты IP65 для уличного использования. Обязательные параметры: «Степень защиты: IP65».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-e9c33605",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 350,
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 908
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 430
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cctv-order-quantity-not-system-capacity",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 825,
+              "log_id": "11d071ba-97ed-4cab-b2b4-789402bc990e",
+              "products_count": 0,
+              "products": [],
+              "text": "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": false,
+              "duration_ms": 7921,
+              "log_id": "65715eed-c669-41dc-a5fd-26a4bdeb7a6a",
+              "products_count": 0,
+              "products": [],
+              "text": "Для подключения аналоговой камеры на расстоянии 30 метров требуется радиочастотный коаксиальный кабель с волновым сопротивлением 75 Ом. Для уличной прокладки обязательна оболочка из полиэтилена (ПЭ), устойчивая к ультрафиолету. Общая потребность системы составляет 30 метров кабеля. Это суммарная потребность всей системы, а не подтверждённое требование к каждому отдельному товару. Обязательные параметры: «Оболочка: полиэтилен». Как рабочую гипотезу сначала проверяю «Назначение: Кабели радиочастотные»; без подтверждения клиента это не становится обязательным фильтром.\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [
+                "products 0 < 1",
+                "forbidden assistant text: одно изделие для всей задачи",
+                "forbidden assistant text: несколько изделий вместе"
+              ],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Кабель и провод»: 741 тов., фасетов 29, листьев 15",
+                  "duration_ms": 1125
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

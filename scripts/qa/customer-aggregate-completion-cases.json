@@ -1,0 +1,71 @@
+{
+  "schema_version": 3,
+  "source": "Preview 660 failures: aggregate clarification must not terminate a selection",
+  "default_expectations": {
+    "max_duration_ms": 30000,
+    "forbid_repeat_previous_assistant": true
+  },
+  "cases": [
+    {
+      "id": "living-room-single-item-completion",
+      "title": "Общее освещение: после выбора одного изделия нужны подходящие альтернативы",
+      "turns": [
+        {
+          "message": "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+          "expect": { "require_any_text": ["лм", "Лм", "люмен"] }
+        },
+        {
+          "message": "Одно изделие для всей задачи",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "forbid_every_product_title_any": ["6500K", "ДПО", "ДВО", "линейный", "prismatic", "прожектор"],
+            "forbid_selection_criteria_any": ["офисно-административное", "ЖКХ", "Диммирование"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "yard-single-item-completion",
+      "title": "Прожектор: площадь, высота, выбор одного изделия — законченный подбор",
+      "turns": [
+        {
+          "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+          "expect": { "max_products": 0, "require_any_text": ["площад", "размер", "высот"] }
+        },
+        {
+          "message": "35м2 и высота примерно 1,5м",
+          "expect": { "require_any_text": ["лм", "Лм", "люмен"] }
+        },
+        {
+          "message": "Одно изделие для всей задачи",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": ["прожектор"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cctv-order-quantity-not-system-capacity",
+      "title": "Метраж покупки не требует выбора нескольких совместно работающих изделий",
+      "turns": [
+        {
+          "message": "Есть ли у вас кабель для видеонаблюдения?",
+          "expect": { "max_products": 0, "require_any_text": ["аналог", "IP", "улиц", "помещ"] }
+        },
+        {
+          "message": "аналоговая, на улице, расстояние 30 метров",
+          "expect": {
+            "min_products": 1,
+            "max_products": 5,
+            "forbid_assistant_text": ["одно изделие для всей задачи", "несколько изделий вместе"],
+            "require_every_product_title_any": ["коакси", "RG-59", "RG59", "RG-6", "RG6", "РК-75", "РК 75", "КВК", "радиочастот", "видеонаблюден"],
+            "forbid_every_product_title_any": ["U/UTP", "F/UTP", "витая пара", "INDOOR"]
+          }
+        }
+      ]
+    }
+  ]
+}
