@@ -357,6 +357,7 @@
             "max_products": 5,
             "require_any_text": ["коакси", "RG-59", "RG59", "КВК"],
             "require_every_product_title_any": ["коакси", "RG-59", "RG59", "RG-6", "RG6", "РК-75", "РК 75", "КВК", "радиочастот", "видеонаблюден"],
+            "require_selection_criteria_groups": [["75"], ["УФ", "ультрафиолет", "UV", "улич", "наружн"]],
             "forbid_every_product_title_any": ["U/UTP", "F/UTP", "витая пара", "INDOOR"],
             "forbid_selection_criteria_any": ["кабелт для погружных", "Кабели для стационарной прокладки на 1 кВ"],
             "max_duration_ms": 30000

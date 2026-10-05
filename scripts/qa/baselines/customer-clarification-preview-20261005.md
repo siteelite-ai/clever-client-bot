@@ -1,6 +1,25 @@
 # Preview audit — 2026-10-05
 
-## Latest checkpoint — scope policy and evidence capitalization (not ready)
+## Latest checkpoint — preview 665 (not ready)
+
+- Deployed `37df39af` to preview only. Management API confirms preview 665,
+  production 448 unchanged.
+- Yard 3/3 PASS, three cards each, 5.09–6.71 seconds after area/height answer.
+  Every emitted contract retains IP65 and minimum 3500 lm. Third repeat uses
+  the formerly failing lowercase span: `52119ca3-5f4f-46e9-952b-298e99790e2e`.
+  Raw result: `yard-preview665-20261005.json`.
+- Browser CCTV: `1b51c7c1-a949-4078-b4d3-0c276fdc08fe` returned two coax cards
+  but emitted an EMPTY mandatory contract despite visible requirements for
+  75 ohm and UV-resistant outdoor use. This is a semantic FAIL, not success.
+  Original title-only assertions missed it; audit-15 now requires those two
+  obligations in the selection contract. Raw steps/events are preserved in
+  `cctv-preview665-browser-log-20261005.json`.
+- Root mechanism: reasoning-to-contract compilation drops unprojected
+  requirements; finalizer checks zero criteria and still claims confirmation.
+  Generic obligation coverage and card evidence remain unfinished. Do not
+  fix this with an RG6 blacklist or count this case closed after clarification.
+
+## Historical checkpoint — scope policy and evidence capitalization
 
 - `c30c122e` preview: living-room selection passed 3/3 (three cards each).
   Yard selection returned three cards twice; once it repeated the one-item
