@@ -1,5 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { resolveReasoningObligations } from "./reasoning-obligations.ts";
+import {
+  repairObligationDeclaration,
+  resolveReasoningObligations,
+} from "./reasoning-obligations.ts";
 
 const numeric = {
   key: "волновое сопротивление",
@@ -17,6 +20,54 @@ const environmental = {
   scope: "per_product",
   source_span: "Обязательна УФ-стойкая оболочка.",
 };
+
+Deno.test("format repair preserves all selected semantics and original reasoning", () => {
+  const original = {
+    reasoning: "Проверяю условия применения.",
+    mandatory_properties: [{ ...numeric, source_span: "неполная цитата" }],
+    required_facet_values: ["opaque-1"],
+    measurement_scope: "per_product",
+  };
+  const corrected = {
+    reasoning: original.reasoning + " " + numeric.source_span,
+    mandatory_properties: [numeric],
+    required_facet_values: [],
+    measurement_scope: "not_applicable",
+  };
+  const accepted = repairObligationDeclaration(original, corrected);
+  assertEquals(accepted?.required_facet_values, ["opaque-1"]);
+  assertEquals(accepted?.measurement_scope, "per_product");
+  for (const value of [50, "75"]) {
+    assertEquals(
+      repairObligationDeclaration(original, {
+        ...corrected,
+        mandatory_properties: [{ ...numeric, value }],
+      }),
+      null,
+    );
+  }
+  assertEquals(
+    repairObligationDeclaration(original, {
+      ...corrected,
+      mandatory_properties: [],
+    }),
+    null,
+  );
+  assertEquals(
+    repairObligationDeclaration(original, {
+      ...corrected,
+      reasoning: numeric.source_span,
+    }),
+    null,
+  );
+  assertEquals(
+    repairObligationDeclaration(original, {
+      ...corrected,
+      mandatory_properties: [{ ...numeric, op: "min" }],
+    }),
+    null,
+  );
+});
 
 Deno.test("obligations do not depend on catalog search facets", () => {
   const result = resolveReasoningObligations(

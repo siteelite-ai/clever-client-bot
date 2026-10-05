@@ -15,7 +15,60 @@ export interface ObligationResolution {
   unresolved: Array<{ index: number; reason: string }>;
 }
 
-export const reasoningObligationsPolicy = "После составления reasoning заполни mandatory_properties всеми обязательными свойствами отдельных товаров, которые ты сам обосновал в reasoning. Это независимый от live-фасетов список: отсутствие свойства в каталожной схеме не отменяет требование. Не копируй туда автоматически числа из запроса: расстояние, площадь и количество покупаемого материала — условия задачи, а не обязательно параметр одного заводского изделия. Сначала сформулируй каждое обязательное свойство отдельным полным предложением с ключом и значением, например в форме «Необходим …» или «Обязательна …». source_span — точная копия этого полного предложения из reasoning, не из сообщения клиента и не отдельный фрагмент. key и строковое value должны дословно встречаться в этом предложении; числовое value должно встречаться вместе с unit и тем же направлением сравнения. Для чисел используй тип number. Для текстового значения unit — пустая строка. Не подменяй необходимость предпочтением. Не создавай обязательное свойство только ради заполнения массива. Если вместо окончательного подбора задан clarification_question, оставь mandatory_properties пустым.";
+/** Repair prose/quote formatting only, never replace the selected semantics,
+ * live IDs, scope or cardinality with a second model's different answer. */
+export function repairObligationDeclaration(
+  original: Record<string, unknown>,
+  repaired: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const before = original.mandatory_properties;
+  const after = repaired.mandatory_properties;
+  if (
+    !Array.isArray(before) || !Array.isArray(after) || before.length === 0 ||
+    before.length > 12 || before.length !== after.length ||
+    typeof original.reasoning !== "string" ||
+    typeof repaired.reasoning !== "string" ||
+    repaired.reasoning.length > 1600 ||
+    !repaired.reasoning.startsWith(original.reasoning)
+  ) return null;
+  const signature = (item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const value = item as Record<string, unknown>;
+    if (
+      typeof value.key !== "string" || typeof value.op !== "string" ||
+      !(typeof value.value === "string" || typeof value.value === "number") ||
+      typeof value.unit !== "string" || value.scope !== "per_product"
+    ) return null;
+    return JSON.stringify([
+      value.key,
+      value.op,
+      value.value,
+      value.unit,
+      value.scope,
+    ]);
+  };
+  const first = before.map(signature).sort();
+  const second = after.map(signature).sort();
+  if (
+    first.some((s) => s === null) || second.some((s) => s === null) ||
+    JSON.stringify(first) !== JSON.stringify(second)
+  ) return null;
+  if (
+    resolveReasoningObligations(after, repaired.reasoning).unresolved.length > 0
+  ) return null;
+  return {
+    ...original,
+    reasoning: repaired.reasoning,
+    mandatory_properties: after,
+    // The revised text must quote the same per-item evidence if one existed.
+    // The normal resolver checks visibility; never silently change its number.
+    per_product_measurement_evidence:
+      original.per_product_measurement_evidence ?? "",
+  };
+}
+
+export const reasoningObligationsPolicy =
+  "После составления reasoning заполни mandatory_properties всеми обязательными свойствами отдельных товаров, которые ты сам обосновал в reasoning. Это независимый от live-фасетов список: отсутствие свойства в каталожной схеме не отменяет требование. Не копируй туда автоматически числа из запроса: расстояние, площадь и количество покупаемого материала — условия задачи, а не обязательно параметр одного заводского изделия. Сначала сформулируй каждое обязательное свойство отдельным полным предложением с ключом и значением, например в форме «Необходим …» или «Обязательна …». source_span — точная копия этого полного предложения из reasoning, не из сообщения клиента и не отдельный фрагмент. key и строковое value должны дословно встречаться в этом предложении; числовое value должно встречаться вместе с unit и тем же направлением сравнения. Для чисел используй тип number. Для текстового значения unit — пустая строка. Не подменяй необходимость предпочтением. Не создавай обязательное свойство только ради заполнения массива. Если вместо окончательного подбора задан clarification_question, оставь mandatory_properties пустым.";
 
 export const reasoningObligationsSchema = {
   type: "array",
