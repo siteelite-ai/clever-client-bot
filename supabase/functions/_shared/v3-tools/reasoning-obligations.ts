@@ -15,11 +15,18 @@ export interface ObligationResolution {
   unresolved: Array<{ index: number; reason: string }>;
 }
 
+export interface ObligationFacet {
+  key?: string;
+  caption?: string;
+  values?: Array<{ value?: string }>;
+}
+
 /** Repair prose/quote formatting only, never replace the selected semantics,
  * live IDs, scope or cardinality with a second model's different answer. */
 export function repairObligationDeclaration(
   original: Record<string, unknown>,
   repaired: Record<string, unknown>,
+  facets: ObligationFacet[] = [],
 ): Record<string, unknown> | null {
   const before = original.mandatory_properties;
   const after = repaired.mandatory_properties;
@@ -54,7 +61,7 @@ export function repairObligationDeclaration(
     JSON.stringify(first) !== JSON.stringify(second)
   ) return null;
   if (
-    resolveReasoningObligations(after, repaired.reasoning).unresolved.length > 0
+    resolveReasoningObligations(after, repaired.reasoning, facets).unresolved.length > 0
   ) return null;
   return {
     ...original,
@@ -110,7 +117,7 @@ function containsInflectedPhrase(text: string, phrase: string): boolean {
   if (containsPhrase(text, phrase)) return true;
   const tokens = (value: string) => (normalized(value).match(/[\p{L}\p{N}]+/gu) ?? []).map((token) =>
     /^[а-яё]{5,}$/u.test(token)
-      ? token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю)$/u, "")
+      ? token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ые|ие|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю|ь)$/u, "")
       : token);
   const wanted = tokens(phrase);
   const actual = new Set(tokens(text));
@@ -124,6 +131,7 @@ function containsInflectedPhrase(text: string, phrase: string): boolean {
 export function resolveReasoningObligations(
   raw: unknown,
   visibleReasoning: string,
+  facets: ObligationFacet[] = [],
 ): ObligationResolution {
   const obligations: ReasoningObligation[] = [];
   const unresolved: ObligationResolution["unresolved"] = [];
@@ -158,7 +166,19 @@ export function resolveReasoningObligations(
       reject("source_not_sentence_boundary");
       continue;
     }
-    if (!containsInflectedPhrase(span, key)) {
+    const valueOwners = typeof value === "string" && op === "eq" && !unit &&
+        (value.match(/[\p{L}]{3,}/gu) ?? []).length >= 2
+      ? facets.filter((facet) => (facet.values ?? []).some((entry) =>
+        typeof entry.value === "string" && normalized(entry.value) === normalized(value)))
+      : [];
+    // A unique live caption/value supplies the property name, while prose must
+    // still ground the complete descriptive value. Ambiguous values, numbers,
+    // boolean words and unknown keys cannot use this path.
+    const liveValueOwnsKey = valueOwners.length === 1 &&
+      [valueOwners[0].key, valueOwners[0].caption].some((caption) =>
+        typeof caption === "string" && normalized(caption) === normalized(key)) &&
+      containsInflectedPhrase(span, String(value));
+    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey) {
       reject("key_not_grounded");
       continue;
     }

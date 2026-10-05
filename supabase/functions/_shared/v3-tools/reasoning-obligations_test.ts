@@ -78,6 +78,20 @@ Deno.test("property quotes tolerate inflection and reordered explanation but pre
   }
 });
 
+Deno.test("a unique live descriptive value grounds its catalog caption without literal caption prose", () => {
+  const source = "Для аналогового сигнала необходим радиочастотный коаксиальный кабель.";
+  const item = { key: "Назначение", value: "Кабели радиочастотные", op: "eq", unit: "", scope: "per_product", source_span: source };
+  const facet = { key: "purpose", caption: "Назначение", values: [{ value: item.value }] };
+  assertEquals(resolveReasoningObligations([item], source, [facet]).unresolved, []);
+  assertEquals(resolveReasoningObligations([item], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([{ ...item, key: "Изоляция" }], source, [facet]).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([item], source, [facet, { ...facet, key: "other", caption: "Другое" }]).unresolved.length, 1);
+  const secondSource = "Необходим корпус из алюминиевого сплава.";
+  const second = { ...item, key: "Материал", value: "алюминиевый сплав", source_span: secondSource };
+  assertEquals(resolveReasoningObligations([second], secondSource, [{ key: "material", caption: "Материал", values: [{ value: second.value }] }]).unresolved, []);
+  assertEquals(resolveReasoningObligations([item], source.replace("радиочастотный", "силовой"), [facet]).unresolved.length, 1);
+});
+
 Deno.test("obligations do not depend on catalog search facets", () => {
   const result = resolveReasoningObligations(
     [numeric, environmental],

@@ -7214,6 +7214,7 @@ async function runExpertLoop(
             const errors = resolveReasoningObligations(
               originalArgs.mandatory_properties ?? [],
               typeof originalArgs.reasoning === "string" ? originalArgs.reasoning : "",
+              lastDiscover.facets ?? [],
             ).unresolved;
             const repairTimeout = errors.length > 0 ? boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS, now(), DERIVED_REASONING_SOFT_DEADLINE_MS, MIN_AGENT_STEP_BUDGET_MS,
@@ -7232,7 +7233,7 @@ async function runExpertLoop(
                   [reasoningToolSchema], 1800, GENERAL_INQUIRY_MODEL_ROUTING,
                 );
                 const repairedCall = repairedResponse.toolCalls.find((call) => call.name === "declare_selection_reasoning");
-                const repairedArgs = repairedCall ? repairObligationDeclaration(originalArgs, repairedCall.args) : null;
+                const repairedArgs = repairedCall ? repairObligationDeclaration(originalArgs, repairedCall.args, lastDiscover.facets ?? []) : null;
                 const repairedDeclaration = repairedArgs ? resolveDerivedSelectionReasoning(
                   repairedArgs, lastDiscover.facets ?? [], userMessage,
                   activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
@@ -7403,6 +7404,7 @@ async function runExpertLoop(
                 property_obligation_errors: resolveReasoningObligations(
                   declarationArgs.mandatory_properties ?? [],
                   typeof declarationArgs.reasoning === "string" ? declarationArgs.reasoning : "",
+                  lastDiscover.facets ?? [],
                 ).unresolved,
                 property_obligation_sources: Array.isArray(declarationArgs.mandatory_properties)
                   ? declarationArgs.mandatory_properties.slice(0, 12).map((item: Record<string, unknown>) => ({
