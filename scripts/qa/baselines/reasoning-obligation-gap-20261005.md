@@ -1,6 +1,22 @@
 # Requirement coverage: confirmed gap and implementation boundary
 
-Status: design grounded in preview 665 evidence; NOT implemented or accepted.
+Status: design grounded in preview 665 evidence; isolated compiler implemented,
+not integrated into the declaration/search/render paths and NOT accepted.
+
+## Isolated implementation checkpoint
+
+`reasoning-obligations.ts` validates bounded typed per-product declarations
+against their complete visible source sentence, without taking catalog facets
+as an input. Invalid or unsupported entries remain in `unresolved`; callers
+must not ignore this list. Positive necessary properties and exact/range-bound
+quantities are supported; preferences, conditional configurations, aggregate
+claims and negative-property declarations remain unresolved.
+
+Tests cover two independent properties without search facets, cross-category
+numeric bounds, changed units/values/operators, fabricated evidence, omitted
+negation, substring property collisions and string-based numeric bypasses.
+This validates declaration provenance only, NOT product suitability or complete
+extraction of all requirements. No production or preview route uses it yet.
 
 ## Reproduction
 
