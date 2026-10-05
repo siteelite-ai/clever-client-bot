@@ -1592,6 +1592,37 @@ export function validatedPerProductMeasurementEvidence(
 
 const SINGLE_ITEM_TOTAL_CHOICE = "Одно изделие для всей задачи";
 
+/** Optional numerical correction must not erase already validated obligations. */
+export function derivedCorrectionPreservesRequirements(
+  prior: Pick<
+    ResolvedDerivedSelectionReasoning,
+    | "requiredFacetValues"
+    | "customerGroundedCompatible"
+    | "customerGroundedExcluded"
+  >,
+  next: Pick<
+    ResolvedDerivedSelectionReasoning,
+    | "requiredFacetValues"
+    | "customerGroundedCompatible"
+    | "customerGroundedExcluded"
+  >,
+): boolean {
+  return ([
+    "requiredFacetValues",
+    "customerGroundedCompatible",
+    "customerGroundedExcluded",
+  ] as const).every((field) =>
+    prior[field].every((before) =>
+      next[field].some((after) =>
+        normalizeLiteralEvidence(before.key) ===
+          normalizeLiteralEvidence(after.key) &&
+        normalizeLiteralEvidence(before.value) ===
+          normalizeLiteralEvidence(after.value)
+      )
+    )
+  );
+}
+
 /** A total demand cannot certify individual alternatives until the intended
  * configuration or an explicit per-item requirement is known. */
 export function aggregateSelectionClarification(

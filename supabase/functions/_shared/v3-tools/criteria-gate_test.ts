@@ -200,6 +200,11 @@ Deno.test("derived minimum prefers the closest sufficient standard tier", () => 
     ),
     ["a", "b", "c", "d"],
   );
+  assertEquals(
+    preferClosestPassingNumericTier([...products].reverse(), [criterion], 3)
+      .map(({ id }) => id),
+    ["b", "a", "c", "d"],
+  );
 });
 
 Deno.test("declared exclusions remove only positively proven incompatible values", () => {

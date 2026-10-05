@@ -1051,7 +1051,18 @@ export function preferClosestPassingNumericTier<T extends ProductRef>(
       .filter(({ distance }) => Math.abs(distance - closest) < 1e-9)
       .map(({ product }) => String(product.id)),
   );
-  if (closestIds.size < Math.max(1, minimumTierSize)) return products;
+  if (closestIds.size < Math.max(1, minimumTierSize)) {
+    // Keep enough alternatives without falling back to arbitrary API order.
+    // A distant oversized item must not precede a nearer sufficient item just
+    // because the nearest exact tier contains fewer than the requested count.
+    const distances = new Map(
+      scored.map(({ product, distance }) => [String(product.id), distance]),
+    );
+    return [...products].sort((a, b) =>
+      (distances.get(String(a.id)) ?? Infinity) -
+      (distances.get(String(b.id)) ?? Infinity)
+    );
+  }
   return products.filter((product) => closestIds.has(String(product.id)));
 }
 

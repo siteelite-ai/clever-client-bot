@@ -117,6 +117,7 @@ import {
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  derivedCorrectionPreservesRequirements,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -7219,7 +7220,9 @@ async function runExpertLoop(
               MIN_AGENT_STEP_BUDGET_MS,
             );
             if (correctionTimeout !== null) {
-              const correctionMessages = derivedMessages.map((message) => ({
+              const correctionMessages: Array<
+                { role: "system" | "user" | "assistant"; content: string }
+              > = derivedMessages.map((message) => ({
                 ...message,
               }));
               if (correctionMessages[0]?.role === "system") {
@@ -7230,6 +7233,14 @@ async function runExpertLoop(
                   }\n\n<correction>Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.</correction>`,
                 };
               }
+              correctionMessages.push(
+                { role: "assistant", content: declaration.text },
+                {
+                  role: "user",
+                  content:
+                    "Уточни только числовое обоснование предыдущего ответа. Сохрани уже названные обязательные требования и явные условия клиента. Если есть общий расчёт и отдельное требование к изделию, отдели последнее в per_product_measurement_evidence дословной цитатой из нового reasoning.",
+                },
+              );
               const correctionResponse = await callOpenRouter(
                 apiKey,
                 correctionMessages,
@@ -7260,7 +7271,14 @@ async function runExpertLoop(
               // output budget. Retain the first validated declaration; never
               // replace it with an invalid response and then report a false
               // internal error to the customer.
-              if (correctedDeclaration?.text.trim()) {
+              const correctionAccepted = Boolean(
+                correctedDeclaration?.text.trim() &&
+                  derivedCorrectionPreservesRequirements(
+                    declaration,
+                    correctedDeclaration,
+                  ),
+              );
+              if (correctionAccepted && correctedDeclaration) {
                 structuredReasoning = correctionResponse;
                 declarationCall = correctionCall;
                 declaration = correctedDeclaration;
@@ -7272,14 +7290,14 @@ async function runExpertLoop(
                   retry_model: GENERAL_INQUIRY_MODEL,
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
-                    correctedDeclaration?.text.trim() &&
+                    correctionAccepted &&
                       !missingRequiredProductMeasurement(),
                   ),
                   corrected_declaration_valid: Boolean(
                     correctedDeclaration?.text.trim(),
                   ),
-                  retained_prior_declaration: !correctedDeclaration?.text
-                    .trim(),
+                  retained_prior_declaration: !correctionAccepted,
+                  correction_preserves_requirements: correctionAccepted,
                 },
               });
             }

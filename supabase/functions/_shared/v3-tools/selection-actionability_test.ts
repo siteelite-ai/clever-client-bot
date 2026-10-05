@@ -6,6 +6,7 @@ import {
   buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  derivedCorrectionPreservesRequirements,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -22,6 +23,46 @@ import {
   systemTotalReasoningDeclaresPerProductMeasurement,
   validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("numeric correction cannot erase validated qualitative or customer-owned requirements", () => {
+  const prior = {
+    requiredFacetValues: [{ key: "Защита", value: "IP65" }],
+    customerGroundedCompatible: [{ key: "Исполнение", value: "A" }],
+    customerGroundedExcluded: [{ key: "Материал", value: "B" }],
+  };
+  assertEquals(derivedCorrectionPreservesRequirements(prior, prior), true);
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      requiredFacetValues: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      customerGroundedCompatible: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      customerGroundedExcluded: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      requiredFacetValues: [...prior.requiredFacetValues, {
+        key: "Порог",
+        value: "20",
+      }],
+    }),
+    true,
+  );
+});
 
 Deno.test("aggregate-only selection clarifies configuration and preserves a single-item choice", () => {
   const question = aggregateSelectionClarification("system_total", "");
