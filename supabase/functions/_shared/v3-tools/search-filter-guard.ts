@@ -838,7 +838,7 @@ function separatedCountClaims(
  * the facet caption, and the facet itself must explicitly be a count axis.
  * Therefore unrelated measurements (`3 кВт`, `25 м²`) cannot open this path.
  */
-function compoundCountFacetValue(
+export function compoundCountFacetValue(
   facet: SearchFacet,
   evidence: string,
 ): SearchFacetValue | null {

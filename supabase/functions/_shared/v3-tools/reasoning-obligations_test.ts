@@ -237,3 +237,23 @@ Deno.test("instrumental case preserves a measured live caption and its unit", ()
   assertEquals(result.obligations[0].criterion.value, 3500);
   assertEquals(resolveReasoningObligations([{ ...item, key: "Световой поток, Вт" }], source).unresolved.length, 1);
 });
+
+Deno.test("short enum codes retain exact token and caption grounding", () => {
+  const source = "Обязательна характеристика срабатывания типа C для стандартных бытовых нагрузок.";
+  const item = { ...environmental, key: "Характеристика срабатывания", value: "C", source_span: source };
+  assertEquals(resolveReasoningObligations([item], source).unresolved, []);
+  assertEquals(resolveReasoningObligations([{ ...item, value: "D" }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([item], source.replace("типа C", "типа CCS")).unresolved.length, 1);
+});
+
+Deno.test("dimensionless product counts reuse live schema count grounding", () => {
+  for (const [key, source] of [["Количество полюсов", "Для однофазной сети требуется 1 полюсной прибор."], ["Количество элементов", "Необходимо 1 элементное изделие."]]) {
+    const item = { ...numeric, key, value: 1, unit: "", source_span: source };
+    const facets = [{ key: "count", caption: key, values: [{ value: "1" }, { value: "2" }] }];
+    const result = resolveReasoningObligations([item], source, facets);
+    assertEquals(result.unresolved, []);
+    assertEquals(result.obligations[0].criterion.value, 1);
+    assertEquals(resolveReasoningObligations([{ ...item, value: 2 }], source, facets).unresolved.length, 1);
+    assertEquals(resolveReasoningObligations([item], source, []).unresolved.length, 1);
+  }
+});

@@ -1,0 +1,600 @@
+[
+  {
+    "id": "bb89db34-2571-4ff8-94ea-f745a148acc2",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 10132,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 1,
+            "required_facet_values": 1,
+            "excluded_classifications": 5,
+            "compatible_classifications": 1,
+            "explicit_customer_classifications": 1
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для автоматического включения при обнаружении присутствия обязательна функция С датчиком движения со значением да. Для домашнего использования подберем бытовые светильники накладные, учитывая ограничение по бюджету до 4000 тенге.",
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "value_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 229,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "С датчиком движения",
+              "unit": "",
+              "scope": "per_product",
+              "value": "да",
+              "source_span": "Для автоматического включения при обнаружении присутствия обязательна функция С датчиком движения со значением да."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "5331b25b-a010-4544-a7fe-aa2418a540cf",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 7513,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 1,
+            "required_facet_values": 1,
+            "excluded_classifications": 5,
+            "compatible_classifications": 1,
+            "explicit_customer_classifications": 1
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для автоматического включения при обнаружении присутствия обязательна функция С датчиком движения со значением да. Для домашнего использования подберем бытовые светильники накладные, учитывая ограничение по бюджету до 4000 тенге.",
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "value_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 229,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "С датчиком движения",
+              "unit": "",
+              "scope": "per_product",
+              "value": "да",
+              "source_span": "Для автоматического включения при обнаружении присутствия обязательна функция С датчиком движения со значением да."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "bbd64516-7fdb-448c-bb53-9227da662181",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 10075,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 3,
+            "required_facet_values": 2,
+            "excluded_classifications": 0,
+            "compatible_classifications": 0,
+            "explicit_customer_classifications": 2
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для защиты цепи необходим автоматический выключатель с номинальным током 16 А. Для однофазной сети требуется 1 полюсной прибор. Обязательна характеристика срабатывания типа C для стандартных бытовых нагрузок. Цена до 1000 тенге является бюджетным ограничением.",
+          "property_obligation_errors": [
+            {
+              "index": 1,
+              "reason": "key_not_grounded"
+            },
+            {
+              "index": 2,
+              "reason": "value_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 260,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Номинальный ток",
+              "unit": "А",
+              "scope": "per_product",
+              "value": "16",
+              "source_span": "Для защиты цепи необходим автоматический выключатель с номинальным током 16 А."
+            },
+            {
+              "op": "eq",
+              "key": "Количество полюсов",
+              "unit": "",
+              "scope": "per_product",
+              "value": "1",
+              "source_span": "Для однофазной сети требуется 1 полюсной прибор."
+            },
+            {
+              "op": "eq",
+              "key": "Характеристика срабатывания",
+              "unit": "",
+              "scope": "per_product",
+              "value": "C",
+              "source_span": "Обязательна характеристика срабатывания типа C для стандартных бытовых нагрузок."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "d75366e8-3b87-4aa8-a75f-19938b559ac5",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 8777,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 3,
+            "required_facet_values": 3,
+            "excluded_classifications": 5,
+            "compatible_classifications": 3,
+            "explicit_customer_classifications": 1
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для защиты бытовой сети необходим автоматический выключатель с номинальным током 25 А. Для однофазной цепи требуется 1 полюс. Обязательна характеристика срабатывания типа C для стандартных нагрузок. Для квартирного щитка выбран стандартный тип монтажа на DIN-рейку.",
+          "property_obligation_errors": [
+            {
+              "index": 1,
+              "reason": "key_not_grounded"
+            },
+            {
+              "index": 2,
+              "reason": "value_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 265,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Номинальный ток",
+              "unit": "А",
+              "scope": "per_product",
+              "value": "25",
+              "source_span": "Для защиты бытовой сети необходим автоматический выключатель с номинальным током 25 А."
+            },
+            {
+              "op": "eq",
+              "key": "Количество полюсов",
+              "unit": "",
+              "scope": "per_product",
+              "value": "1",
+              "source_span": "Для однофазной цепи требуется 1 полюс."
+            },
+            {
+              "op": "eq",
+              "key": "Характеристика срабатывания",
+              "unit": "",
+              "scope": "per_product",
+              "value": "C",
+              "source_span": "Обязательна характеристика срабатывания типа C для стандартных нагрузок."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "5a964b89-9b05-42c7-99a8-aa2a6da7d7ab",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 8740,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 3,
+            "required_facet_values": 2,
+            "excluded_classifications": 5,
+            "compatible_classifications": 3,
+            "explicit_customer_classifications": 2
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для защиты бытовой сети необходим автоматический выключатель с номинальным током 25 А. Согласно вашему уточнению, требуется однополюсное исполнение 1P. Выбрана характеристика срабатывания C, подходящая для стандартных нагрузок в квартире.",
+          "property_obligation_errors": [
+            {
+              "index": 1,
+              "reason": "key_not_grounded"
+            },
+            {
+              "index": 2,
+              "reason": "necessity_not_established"
+            }
+          ],
+          "declaration_reasoning_chars": 238,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Номинальный ток",
+              "unit": "А",
+              "scope": "per_product",
+              "value": "25",
+              "source_span": "Для защиты бытовой сети необходим автоматический выключатель с номинальным током 25 А."
+            },
+            {
+              "op": "eq",
+              "key": "Количество полюсов",
+              "unit": "",
+              "scope": "per_product",
+              "value": "1",
+              "source_span": "Согласно вашему уточнению, требуется однополюсное исполнение 1P."
+            },
+            {
+              "op": "eq",
+              "key": "Характеристика срабатывания",
+              "unit": "",
+              "scope": "per_product",
+              "value": "C",
+              "source_span": "Выбрана характеристика срабатывания C, подходящая для стандартных нагрузок в квартире."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "405d8e68-c05e-4291-af95-08c26ee02dfd",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 7866,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 2,
+            "required_facet_values": 1,
+            "excluded_classifications": 6,
+            "compatible_classifications": 1,
+            "explicit_customer_classifications": 0
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для безопасного подключения кондиционера с заземлением необходим кабель, в котором Количество жил составляет 3. При мощности 3 кВт ток составляет около 13.6 А, поэтому на одно изделие необходимо Сечение кабеля не менее 2.5 мм2. Рекомендуется использовать медный кабель с негорючей изоляцией для стационарной прокладки.",
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "quantity_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 318,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Количество жил",
+              "unit": "",
+              "scope": "per_product",
+              "value": "3",
+              "source_span": "Для безопасного подключения кондиционера с заземлением необходим кабель, в котором Количество жил составляет 3."
+            },
+            {
+              "op": "min",
+              "key": "Сечение кабеля",
+              "unit": "мм2",
+              "scope": "per_product",
+              "value": "2.5",
+              "source_span": "При мощности 3 кВт ток составляет около 13.6 А, поэтому на одно изделие необходимо Сечение кабеля не менее 2.5 мм2."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "82717416-2a65-49e8-b75f-c2d7b102563a",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 9667,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 3,
+            "required_facet_values": 3,
+            "excluded_classifications": 8,
+            "compatible_classifications": 3,
+            "explicit_customer_classifications": 2
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для совместимости с вашим светильником выбраны лампы, у которых Тип цоколя E27. В соответствии с запросом подобрана светодиодная Вид лампы (принцип работы). Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000.",
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "necessity_not_established"
+            },
+            {
+              "index": 1,
+              "reason": "necessity_not_established"
+            },
+            {
+              "index": 2,
+              "reason": "necessity_not_established"
+            }
+          ],
+          "declaration_reasoning_chars": 249,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Тип цоколя",
+              "unit": "",
+              "scope": "per_product",
+              "value": "E27",
+              "source_span": "Для совместимости с вашим светильником выбраны лампы, у которых Тип цоколя E27."
+            },
+            {
+              "op": "eq",
+              "key": "Цветовая температура, К",
+              "unit": "К",
+              "scope": "per_product",
+              "value": "3000",
+              "source_span": "Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000."
+            },
+            {
+              "op": "eq",
+              "key": "Вид лампы (принцип работы)",
+              "unit": "",
+              "scope": "per_product",
+              "value": "светодиодная",
+              "source_span": "В соответствии с запросом подобрана светодиодная Вид лампы (принцип работы)."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "7e5cd135-a49c-4189-b95d-f75fc51e5b85",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 7675,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 2,
+            "required_facet_values": 0,
+            "excluded_classifications": 0,
+            "compatible_classifications": 0,
+            "explicit_customer_classifications": 0
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для освещения парковки 500 м² при норме 10 лк суммарный световой поток составляет 5000 лм, поэтому на одно изделие необходим Световой поток не менее 2500 лм при установке двух приборов. Для уличного использования обязательна Степень защиты IP65 для устойчивости к осадкам. Высота установки 3 метра позволяет использовать модели с широким углом рассеивания.",
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "necessity_not_established"
+            }
+          ],
+          "declaration_reasoning_chars": 356,
+          "property_obligation_sources": [
+            {
+              "op": "min",
+              "key": "Световой поток",
+              "unit": "Лм",
+              "scope": "per_product",
+              "value": "2500",
+              "source_span": "Для освещения парковки 500 м² при норме 10 лк суммарный световой поток составляет 5000 лм, поэтому на одно изделие необходим Световой поток не менее 2500 лм при установке двух приборов."
+            },
+            {
+              "op": "eq",
+              "key": "Степень защиты",
+              "unit": "",
+              "scope": "per_product",
+              "value": "IP65",
+              "source_span": "Для уличного использования обязательна Степень защиты IP65 для устойчивости к осадкам."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  },
+  {
+    "id": "2c48270f-6226-4453-a6ea-ef687161fc8a",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 7544,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 2,
+            "required_facet_values": 2,
+            "excluded_classifications": 4,
+            "compatible_classifications": 1,
+            "explicit_customer_classifications": 1
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "declaration_reasoning": "Для установки внутри стен обязателен скрытый тип монтажа. Для соответствия дизайну необходим черный цвет корпуса. Рекомендуется выбирать модели с заземлением для обеспечения электробезопасности.",
+          "property_obligation_errors": [],
+          "declaration_reasoning_chars": 194,
+          "property_obligation_sources": [
+            {
+              "op": "eq",
+              "key": "Цвет",
+              "unit": "",
+              "scope": "per_product",
+              "value": "черный",
+              "source_span": "Для соответствия дизайну необходим черный цвет корпуса."
+            },
+            {
+              "op": "eq",
+              "key": "Тип монтажа",
+              "unit": "",
+              "scope": "per_product",
+              "value": "скрытый",
+              "source_span": "Для установки внутри стен обязателен скрытый тип монтажа."
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      }
+    ]
+  }
+]

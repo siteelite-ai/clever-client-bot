@@ -4,6 +4,7 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { extractReasoningBounds } from "./criteria-reasoning.ts";
+import { compoundCountFacetValue } from "./search-filter-guard.ts";
 
 export interface ReasoningObligation {
   criterion: Criterion;
@@ -90,7 +91,7 @@ export const reasoningObligationsSchema = {
       value: {
         anyOf: [{ type: "number" }, {
           type: "string",
-          minLength: 3,
+          minLength: 1,
           maxLength: 160,
         }],
       },
@@ -200,7 +201,15 @@ export function resolveReasoningObligations(
       [valueOwners[0].key, valueOwners[0].caption].some((caption) =>
         typeof caption === "string" && normalized(caption) === normalized(key)) &&
       containsInflectedPhrase(span, String(value));
-    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey) {
+    const countGrounded = typeof value === "number" && Number.isInteger(value) && !unit && op === "eq" &&
+      facets.some((facet) =>
+        [facet.key, facet.caption].some((label) => typeof label === "string" && normalized(label) === normalized(key)) &&
+        Number(compoundCountFacetValue({
+          key: facet.key ?? facet.caption ?? "",
+          caption: facet.caption,
+          values: (facet.values ?? []).filter((entry): entry is { value: string } => typeof entry.value === "string"),
+        }, span)?.value) === value);
+    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded) {
       reject("key_not_grounded");
       continue;
     }
@@ -220,10 +229,10 @@ export function resolveReasoningObligations(
     let criterion: Criterion;
     if (typeof value === "number" && Number.isFinite(value)) {
       if (
-        typeof unit !== "string" || !unit.trim() ||
+        !countGrounded && (typeof unit !== "string" || !unit.trim() ||
         !extractClientQuantities(span).some((q) =>
           q.value === value && q.unit === normalizeUnit(unit)
-        )
+        ))
       ) {
         reject("quantity_not_grounded");
         continue;
@@ -244,13 +253,13 @@ export function resolveReasoningObligations(
         key,
         op,
         value,
-        unit,
+        ...(unit ? { unit } : {}),
         exclusive: bounds.some((bound) => bound.strict),
         level: "A",
         evidence: "derived_required",
       };
     } else if (
-      typeof value === "string" && value.trim().length >= 3 &&
+      typeof value === "string" && value.trim().length >= 1 &&
       value.length <= 160 && op === "eq" &&
       !unit && containsInflectedPhrase(span, value) &&
       extractClientQuantities(value).length === 0
