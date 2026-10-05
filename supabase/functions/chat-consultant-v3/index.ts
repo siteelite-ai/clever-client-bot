@@ -367,6 +367,7 @@ import {
   selectionPlanSystemHint,
 } from "../_shared/v3-tools/selection-plan.ts";
 import {
+  buildCardinalityVerificationSearches,
   capResultCandidateIds,
   ensureSearchCapacity,
   expandResultCandidateIds,
@@ -15355,6 +15356,77 @@ async function runExpertLoop(
         extractBudgetCap(userMessage),
       ).ids;
       safeIds = finalizeTerminalRenderIds(safeIds);
+      const supplementProjection = projectCriteriaFacetOptions(
+        terminalSelectionCriteria,
+        terminalDiscover.facets,
+      );
+      const supplementSearches = buildCardinalityVerificationSearches({
+        eligible_count: safeIds.length,
+        contract: resultCardinality,
+        mandatory_options: supplementProjection.options,
+        leaf_categories: terminalDiscover.leaf_categories.map(({ pagetitle }) =>
+          pagetitle
+        ),
+        lexical_route: Boolean(
+          terminalAliasRequirement || terminalTitleGroundedSemanticPool ||
+            derivedStructuredSearchRecommendedMarking,
+        ),
+      });
+      for (const supplementArgs of supplementSearches) {
+        const supplement = await runTool("search_catalog", supplementArgs, ctx);
+        if (!supplement.ok || supplement.tool !== "search_catalog") continue;
+        const supplementProducts = supplement.results
+          .map(({ id }) => ctx.cache.get(String(id)))
+          .filter((product): product is ProductFull => Boolean(product));
+        const grounded = terminalGroundedTargets.length > 0
+          ? filterProductsByGroundedCategoryTargets(
+            supplementProducts,
+            terminalGroundedTargets,
+            terminalDiscover.category.pagetitle,
+            terminalCategoryEvidence,
+          )
+          : supplementProducts;
+        const targetPassed = new Set(
+          verifyTerminalSelectionTarget(terminalSelectionTarget, grounded)
+            .passed_ids,
+        );
+        const criteriaPassed = new Set(
+          applyCriteriaGate(
+            projectCatalogFilterEvidence(
+              grounded,
+              catalogFilterProvenCriteria(
+                terminalSelectionCriteria,
+                terminalDiscover.facets,
+                supplementArgs,
+              ),
+            ),
+            terminalSelectionCriteria,
+          ).passed_ids,
+        );
+        const additionalIds = grounded.filter(({ id }) =>
+          targetPassed.has(id) && criteriaPassed.has(id)
+        ).map(({ id }) => id);
+        const before = safeIds.length;
+        safeIds = finalizeTerminalRenderIds(
+          filterProductIdsByBudgetCap(
+            [...new Set([...safeIds, ...additionalIds])],
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids,
+        );
+        steps.push({
+          step: "v3_verified_cardinality_supplement",
+          ms: now(),
+          meta: {
+            before,
+            found: supplement.results.length,
+            after: safeIds.length,
+            scope: supplementArgs.category_in ? "discovered" : "all_categories",
+            mandatory_count: terminalSelectionCriteria.length,
+          },
+        });
+        if (safeIds.length >= resultCardinality.minimum) break;
+      }
       if (safeIds.length > 0) {
         announceResultCardinalityShortfall(
           safeIds.length,
