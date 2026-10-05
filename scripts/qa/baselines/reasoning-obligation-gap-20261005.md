@@ -5,6 +5,26 @@ implemented locally; live acceptance remains unproved. NOT ready for production.
 
 ## Integration checkpoint
 
+Live follow-up (still FAIL): preview 667 rejected a copied customer fragment
+`расстояние 30 метров` declared as minimum product length, not a visible derived
+requirement. Evidence `f6f4d80f-0372-4115-907a-0d7a069059ae`.
+Policy commit `303c7e56` explicitly separates task inputs and product properties,
+and requires complete source sentences from reasoning. 873 tests and Edge
+typecheck pass; deployed to preview only.
+Next live request `be27fe9e-6ab2-4365-8fbe-7211d41f1600` no longer made that length
+claim, but failed because a semantic class caption `Назначение` and value
+`Кабели радиочастотные` did not occur literally in the source sentence, which
+said `радиочастотный коаксиальный кабель`. Do not treat prompt improvement as
+acceptance. Source validation is unchanged; do not accept arbitrary ungrounded
+keys/values just to remove the internal error. Need a bounded declaration
+format repair preserving original obligations, or a single canonical typed
+representation rather than inconsistent parallel prose/fields. Any repair must
+share the existing two-attempt/time budget, not add an unbounded model loop.
+The same request also did not demonstrate coverage of 75 ohm. Coverage remains
+an independent acceptance gap even after format repair.
+Evidence files: `obligation-declaration-rejection-preview667-20261005.json` and
+`obligation-declaration-preview668-20261005.json`.
+
 - Forced reasoning schema now includes independent `mandatory_properties`.
 - Resolver rejects malformed/unproven property declarations instead of dropping
   individual obligations. Previously saved declarations without the field remain
