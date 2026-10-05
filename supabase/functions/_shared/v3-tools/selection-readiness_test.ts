@@ -365,6 +365,35 @@ Deno.test("readiness assistance does not hijack an ordinary variants request", (
   );
 });
 
+Deno.test("repeated catalog request explains the live clarification and preserves numeric choices", () => {
+  const slots = {
+    pending_clarification: {
+      status: "pending",
+      question:
+        "Чтобы подобрать совместимый аналог, уточните количество полюсов.",
+      facet_key: "kolichestvo_polyusov__polyuster_sany",
+      options: [{ value: "1" }, { value: "2" }, { value: "3" }, { value: "4" }],
+      scope: selectionReadinessScope(
+        "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+        {
+          resolved_category: "Автоматические выключатели",
+        },
+      ),
+    },
+  };
+  const help = selectReadinessAssistance("подбери их в каталоге", slots);
+  assertEquals(help?.options.map((option) => option.value), [
+    "1",
+    "2",
+    "3",
+    "4",
+  ]);
+  assertEquals(help?.options[0].label, "1P — обычная однофазная линия");
+  assertEquals(help?.scope?.resolved_category, "Автоматические выключатели");
+  assertEquals(/маркировк/iu.test(help?.question ?? ""), true);
+  assertEquals(selectReadinessAssistance("подбери их, 1 полюс", slots), null);
+});
+
 Deno.test("a second novice reply advances the bounded help ladder", () => {
   const original = "Подбери автомат 25 А для квартиры";
   const assistance = selectReadinessAssistance("Все равно не понимаю", {

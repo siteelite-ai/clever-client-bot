@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
   derivedMeasurementMayConstrainIndividualProducts,
@@ -17,6 +18,54 @@ import {
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("visible product type survives simultaneous numeric facet projection", () => {
+  const search = buildDerivedReasoningSearch({
+    compoundQuery: null,
+    retrievalQuery: "коаксиальный кабель",
+    options: { diameter: { min: 0.5 } },
+    categoryScope: { category: "Кабель и провод" },
+    measurementScope: "per_product",
+    scalarProjectionAllowed: true,
+  });
+  assertEquals(search, {
+    mode: "by_query",
+    query: "коаксиальный кабель",
+    category: "Кабель и провод",
+    options: { diameter: { min: 0.5 } },
+    per_page: 50,
+  });
+});
+
+Deno.test("exact compound search still precedes general retrieval wording", () => {
+  const search = buildDerivedReasoningSearch({
+    compoundQuery: "3*2,5",
+    retrievalQuery: "силовой кабель",
+    options: {},
+    categoryScope: { category: "Кабель" },
+    measurementScope: "per_product",
+    scalarProjectionAllowed: true,
+  });
+  assertEquals(search?.query, "3*2,5");
+  assertEquals(search?.mode, "by_query");
+});
+
+Deno.test("numeric-only search and unresolved reasoning keep their existing contracts", () => {
+  const input = {
+    compoundQuery: null,
+    retrievalQuery: null,
+    options: { power: "20" },
+    categoryScope: { category: "Светильники" },
+    measurementScope: "per_product" as const,
+    scalarProjectionAllowed: true,
+  };
+  assertEquals(buildDerivedReasoningSearch(input), {
+    mode: "by_filter",
+    options: { power: "20" },
+    per_page: 50,
+  });
+  assertEquals(buildDerivedReasoningSearch({ ...input, options: {} }), null);
+});
 
 Deno.test("a system total may separately declare one per-product range", () => {
   const reasoning =

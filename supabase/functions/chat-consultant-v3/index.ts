@@ -112,6 +112,7 @@ import {
   shouldFinalizePendingSelection,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
+  buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
   derivedMeasurementMayConstrainIndividualProducts,
@@ -7601,47 +7602,20 @@ async function runExpertLoop(
               ) => pagetitle),
             }
             : { category: lastDiscover.category.pagetitle };
-          const directSearchBase: Record<string, unknown> | null =
-            recommendedCompoundMarking
-              ? {
-                mode: "by_query",
-                query: canonicalizeCompoundMarkingForCatalog(
-                  `${recommendedCompoundMarking.first}×${
-                    String(recommendedCompoundMarking.second).replace(".", ",")
-                  }`,
-                ),
-                ...directCategoryScope,
-                ...(Object.keys(directSearchOptions).length > 0
-                  ? { options: directSearchOptions }
-                  : {}),
-                per_page: 50,
-              }
-              : Object.keys(directSearchOptions).length > 0
-              ? {
-                mode: "by_filter",
-                options: directSearchOptions,
-                per_page: 50,
-              }
-              : declaration.measurementScope === "system_total"
-              ? {
-                mode: "by_filter",
-                ...directCategoryScope,
-                per_page: 50,
-              }
-              : declaration.retrievalQuery
-              ? {
-                mode: "by_query",
-                query: declaration.retrievalQuery,
-                ...directCategoryScope,
-                per_page: 50,
-              }
-              : !derivedScalarProjectionAllowed
-              ? {
-                mode: "by_filter",
-                ...directCategoryScope,
-                per_page: 50,
-              }
-              : null;
+          const directSearchBase = buildDerivedReasoningSearch({
+            compoundQuery: recommendedCompoundMarking
+              ? canonicalizeCompoundMarkingForCatalog(
+                `${recommendedCompoundMarking.first}×${
+                  String(recommendedCompoundMarking.second).replace(".", ",")
+                }`,
+              )
+              : null,
+            retrievalQuery: declaration.retrievalQuery,
+            options: directSearchOptions,
+            categoryScope: directCategoryScope,
+            measurementScope: declaration.measurementScope,
+            scalarProjectionAllowed: derivedScalarProjectionAllowed,
+          });
           const directSearchArgs = directSearchBase
             ? guardSearchFilters(
               directSearchBase,
@@ -7703,6 +7677,7 @@ async function runExpertLoop(
               ),
               projected_options: Object.keys(directSearchOptions),
               recommended_compound_marking: recommendedCompoundMarking,
+              retrieval_query: declaration.retrievalQuery,
               projected_criteria: derivedScalarProjectionAllowed
                 ? [
                   ...derivedExactFacetCriteria.filter((criterion) =>

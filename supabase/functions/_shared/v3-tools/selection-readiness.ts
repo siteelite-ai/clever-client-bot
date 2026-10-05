@@ -78,6 +78,8 @@ interface PendingClarificationRecord {
 
 const UNCERTAIN_CLARIFICATION_REPLY =
   /(?:не\s+(?:знаю|понимаю|разбираюсь|уверен\p{L}*)|без\s+понятия|затрудняюсь|какие\s+(?:есть\s+)?варианты|что\s+лучше|посовет\p{L}*|подскаж\p{L}*|выбер\p{L}*\s+(?:сам\p{L}*|за\s+меня))/iu;
+const REPEATED_SELECTION_REPLY =
+  /^(?:подбер\p{L}*|покаж\p{L}*|найд\p{L}*)\s+(?:их|эти|такие|варианты)(?:\s+(?:в\s+каталог\p{L}*|пожалуйста))*[.!?]*$/iu;
 
 const FACET_PLAIN_LANGUAGE: Record<string, string> = {
   supply_phase:
@@ -89,7 +91,7 @@ const FACET_PLAIN_LANGUAGE: Record<string, string> = {
   motor_start_method:
     "Прямой пуск — двигатель подключается без частотника; частотник или софтстартер обычно указан в схеме или стоит рядом с двигателем.",
   pole_count:
-    "1P применяют для обычной однофазной линии; 2P одновременно отключает фазу и ноль; 3P предназначен для трёхфазной линии.",
+    "1P применяют для обычной однофазной линии; 2P одновременно отключает фазу и ноль; 3P предназначен для трёхфазной линии, 4P — для трёхфазной линии с отключением нейтрали. Для замены ориентируйтесь на маркировку существующего аппарата или проект.",
   trip_curve:
     "B выбирают для нагрузок с небольшими пусковыми токами, C — наиболее распространённый бытовой вариант, D — для больших пусковых токов. Если проекта нет, окончательный выбор лучше сверить с электриком.",
   installation_mode:
@@ -113,6 +115,7 @@ const FACET_OPTION_LABELS: Record<string, Record<string, string>> = {
     "1p": "1P — обычная однофазная линия",
     "2p": "2P — отключать фазу и ноль",
     "3p": "3P — трёхфазная линия",
+    "4p": "4P — три фазы и нейтраль",
   },
   trip_curve: {
     b: "B — небольшие пусковые токи",
@@ -156,7 +159,11 @@ export function selectReadinessAssistance(
   slots: Record<string, unknown>,
 ): SelectionReadinessAssistance | null {
   const current = String(currentMessage ?? "").trim();
-  if (!current || !UNCERTAIN_CLARIFICATION_REPLY.test(current)) return null;
+  if (
+    !current ||
+    (!UNCERTAIN_CLARIFICATION_REPLY.test(current) &&
+      !REPEATED_SELECTION_REPLY.test(current))
+  ) return null;
   const pending = slots?.pending_clarification as
     | PendingClarificationRecord
     | undefined;
@@ -187,13 +194,22 @@ export function selectReadinessAssistance(
     : 0;
   const assistanceLevel = Math.min(currentLevel + 1, 2);
   const terminal = assistanceLevel === 2;
-  const explanation = FACET_PLAIN_LANGUAGE[facetKey] ??
+  const helpKey = FACET_PLAIN_LANGUAGE[facetKey]
+    ? facetKey
+    : /количеств\p{L}*\s+полюс\p{L}*|полюсност/iu.test(
+        String(pending.question ?? ""),
+      )
+    ? "pole_count"
+    : facetKey;
+  const explanation = FACET_PLAIN_LANGUAGE[helpKey] ??
     "Ориентируйтесь на надпись на оборудовании, упаковке или проекте — специальная терминология не требуется.";
-  const labels = FACET_OPTION_LABELS[facetKey] ?? {};
-  const guidedOptions = options.map((option) => ({
-    value: option.value,
-    label: labels[option.value.toLocaleLowerCase("ru-RU")] ?? option.label,
-  }));
+  const labels = FACET_OPTION_LABELS[helpKey] ?? {};
+  const guidedOptions = options.map((option) => {
+    const key = helpKey === "pole_count" && /^[1-4]$/u.test(option.value)
+      ? `${option.value}p`
+      : option.value.toLocaleLowerCase("ru-RU");
+    return { value: option.value, label: labels[key] ?? option.label };
+  });
   const question = freeform
     ? !terminal
       ? "Не нужно угадывать технические параметры. Посмотрите маркировку оборудования или проект и пришлите хотя бы известные значения; если их нет, я могу объяснить типы решений, но не назвать безопасный конкретный товар."

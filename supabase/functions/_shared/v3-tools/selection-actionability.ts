@@ -645,7 +645,7 @@ export function buildDerivedSelectionReasoningToolSchema(
             type: "string",
             maxLength: 120,
             description:
-              "Короткое (1–6 слов) название искомого типа товара, уже дословно произнесённое в reasoning. Используется только как видимая поисковая формулировка, когда точный live-фасет не выбран. Пустая строка допустима, если reasoning не называет более точный тип.",
+              "Короткое (1–6 слов) название искомого типа товара, уже дословно произнесённое в reasoning. Сохраняй его и при наличии числовых live-фасетов: числовой фильтр не заменяет тип товара. Пустая строка допустима, если reasoning не называет более точный тип.",
           },
           compatible_classifications: {
             type: "array",
@@ -691,6 +691,7 @@ export function buildDerivedSelectionReasoningToolSchema(
         required: [
           "reasoning",
           "measurement_scope",
+          "retrieval_query",
           "compatible_classifications",
           "excluded_classifications",
           "required_facet_values",
@@ -716,6 +717,40 @@ export interface ResolvedDerivedSelectionReasoning {
   explicitCustomerMappings: Array<
     { phrase: string; key: string; value: string }
   >;
+}
+
+/** Compile all visible search directions together; a scalar facet must never
+ * erase the product type the consultant has just named. The query is already
+ * validated against visible reasoning by resolveDerivedSelectionReasoning. */
+export function buildDerivedReasoningSearch(input: {
+  compoundQuery: string | null;
+  retrievalQuery: string | null;
+  options: Record<string, unknown>;
+  categoryScope: Record<string, unknown>;
+  measurementScope: ResolvedDerivedSelectionReasoning["measurementScope"];
+  scalarProjectionAllowed: boolean;
+}): Record<string, unknown> | null {
+  const query = input.compoundQuery || input.retrievalQuery;
+  const hasOptions = Object.keys(input.options).length > 0;
+  if (query) {
+    return {
+      mode: "by_query",
+      query,
+      ...input.categoryScope,
+      ...(hasOptions ? { options: input.options } : {}),
+      per_page: 50,
+    };
+  }
+  if (hasOptions) {
+    return { mode: "by_filter", options: input.options, per_page: 50 };
+  }
+  if (
+    input.measurementScope === "system_total" ||
+    !input.scalarProjectionAllowed
+  ) {
+    return { mode: "by_filter", ...input.categoryScope, per_page: 50 };
+  }
+  return null;
 }
 
 function visibleFacetText(value: string): string {
