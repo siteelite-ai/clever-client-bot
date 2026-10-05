@@ -1579,6 +1579,84 @@ Deno.test("a bare derived up-to capability does not become a product maximum", (
   }]);
 });
 
+Deno.test("recompiling a selection at final render preserves the retrieval contract", () => {
+  const facets = [
+    {
+      key: "area",
+      caption: "Сечение кабеля, мм2",
+      type: "number",
+      unit: "мм²",
+      values: [{ value: "2.5" }, { value: "4" }],
+    },
+    {
+      key: "voltage",
+      caption: "Номинальное напряжение, кВ",
+      type: "string",
+      unit: null,
+      values: [{ value: "≤ 1" }],
+    },
+  ];
+  const reasoning =
+    "Требуется сечение не менее 2,5 мм². Изделие рассчитано на напряжение до 1 кВ.";
+  const retrieval = compileMeasuredReasoningSearchContract(
+    [],
+    reasoning,
+    [],
+    facets,
+  );
+  const terminal = compileMeasuredReasoningSearchContract(
+    retrieval.criteria,
+    reasoning,
+    [],
+    facets,
+  );
+  assertEquals(terminal.mandatory_criteria, retrieval.mandatory_criteria);
+  assertEquals(terminal.mandatory_criteria.length, 1);
+  assertEquals(terminal.mandatory_criteria[0].op, "min");
+  const customerMaximum: Criterion = {
+    key: "Номинальное напряжение, кВ",
+    op: "max",
+    value: 1,
+    unit: "кв",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const explicitTerminal = compileMeasuredReasoningSearchContract(
+    [...retrieval.criteria, customerMaximum],
+    reasoning,
+    [customerMaximum],
+    facets,
+  );
+  assertEquals(
+    explicitTerminal.mandatory_criteria.some(
+      (criterion) =>
+        criterion.key === customerMaximum.key && criterion.op === "max",
+    ),
+    true,
+  );
+});
+
+Deno.test("terminal finalization uses the retrieval compiler and preserves frozen obligations", () => {
+  const source = Deno.readTextFileSync(
+    new URL("../../chat-consultant-v3/index.ts", import.meta.url),
+  );
+  const terminal = source.slice(
+    source.indexOf("const terminalMeasuredContract ="),
+    source.indexOf("const verifyTerminalSelectionTarget ="),
+  );
+  assertEquals(
+    terminal.includes("compileMeasuredReasoningSearchContract("),
+    true,
+  );
+  assertEquals(terminal.includes("projectReasoningRangeCriteria("), false);
+  assertEquals(
+    terminal.includes(
+      "preserveFrozenSelectionCriteria(terminalMeasuredContract.criteria)",
+    ),
+    true,
+  );
+});
+
 Deno.test("an exact live application class remains mandatory while colour stays advisory", () => {
   const contract = compileMeasuredReasoningSearchContract(
     [

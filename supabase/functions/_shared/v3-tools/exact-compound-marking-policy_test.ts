@@ -15,6 +15,41 @@ import {
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
 } from "./exact-compound-marking-policy.ts";
+
+Deno.test("exact compound evidence rejects a matching fragment of an additive construction", () => {
+  const marking = { first: 3, second: 2.5 };
+  for (
+    const title of [
+      "Изделие 3*2,5+1*1,5",
+      "Изделие 1×1,5 + 3×2,5",
+      "Изделие 3х2.5 + 1",
+    ]
+  ) {
+    assertEquals(
+      productTitleMatchesExplicitCompoundMarking(title, marking),
+      false,
+    );
+  }
+  for (
+    const title of [
+      "Изделие 3*2,5",
+      "Изделие 3×2.5 исполнение плюс",
+      "Изделие 3х2,5 + упаковка",
+    ]
+  ) {
+    assertEquals(
+      productTitleMatchesExplicitCompoundMarking(title, marking),
+      true,
+    );
+  }
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking(
+      "Изделие 2×4+1×2",
+      { first: 2, second: 4 },
+    ),
+    false,
+  );
+});
 import type { ProductRef } from "./types.ts";
 
 const product = (id: string, pagetitle: string, price: number): ProductRef => ({

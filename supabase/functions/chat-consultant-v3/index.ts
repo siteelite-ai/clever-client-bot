@@ -14932,20 +14932,21 @@ async function runExpertLoop(
     // Use the same validated per-item evidence as retrieval. Aggregate values
     // never enter this compiler; a separately declared visible per-item span
     // can constrain both search and the final card gate.
-    const terminalProjectedRange = terminalDiscover &&
+    const terminalMeasuredContract = terminalDiscover &&
         derivedMeasurementMayConstrainIndividualProducts(
           derivedSelectionMeasurementScope,
           derivedSelectionReasoningEvidence,
         )
-      ? projectReasoningRangeCriteria(
+      ? compileMeasuredReasoningSearchContract(
         terminalCriteriaBase,
         terminalReasoningEvidence,
+        userBackedSearchCriteria,
         terminalDiscover.facets,
       )
-      : { criteria: terminalCriteriaBase, added: [] };
+      : { criteria: terminalCriteriaBase };
     let terminalSelectionCriteria = terminalDiscover
       ? resolveTerminalSelectionCriteria(
-        terminalProjectedRange.criteria,
+        preserveFrozenSelectionCriteria(terminalMeasuredContract.criteria),
         latestRenderCriteria,
         userBackedSearchCriteria,
         Boolean(namedSeriesToken),
