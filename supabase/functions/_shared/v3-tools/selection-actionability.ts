@@ -1375,11 +1375,17 @@ export function resolveDerivedSelectionReasoning(
     const sentenceStems = new Set(
       sentenceTokens.map(classificationLexicalStem),
     );
-    const namesUnselectedSibling = unselectedChoices.some((choice) =>
-      classificationDiscriminativeStems(choice, allLiveChoices).some((token) =>
-        sentenceStems.has(token)
-      )
-    );
+    const namesUnselectedSibling = unselectedChoices.some((choice) => {
+      const discriminators = new Set(classificationDiscriminativeStems(choice, allLiveChoices));
+      // A compound class is not established by a single shared purpose word.
+      // Semicolon-separated catalogue alternatives are OR; the meaningful
+      // discriminator tokens inside each alternative must all be present.
+      return choice.value.split(";").some((alternative) => {
+        const tokens = classificationLexicalTokens(alternative)
+          .filter((token) => discriminators.has(token));
+        return tokens.length > 0 && tokens.every((token) => sentenceStems.has(token));
+      });
+    });
     if (namesUnselectedSibling) return false;
     for (const choice of compatibleChoices) {
       const selectedStems = new Set(

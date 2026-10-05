@@ -1219,6 +1219,28 @@ Deno.test("classification cleanup cannot erase a separately validated required f
   assertEquals(resolved?.text.includes(sentence), true);
 });
 
+Deno.test("one shared purpose word is not evidence of a different compound product class", () => {
+  const source = "Необходим медный кабель с сечением не менее 2.5 мм2 для обеспечения пожарной безопасности.";
+  const facets = [{ key: "purpose", caption: "Назначение", values: [
+    { value: "Кабели силовые стационарные до 1кВ" },
+    { value: "кабели пожарной сигнализации" },
+  ] }];
+  const args = {
+    reasoning: source + " Проверяю условия подключения нагрузки.",
+    measurement_scope: "per_product", compatible_classifications: ["f0v0"],
+    excluded_classifications: ["f0v1"],
+    mandatory_properties: [{ key: "Сечение кабеля", value: 2.5, unit: "мм2", op: "min", scope: "per_product", source_span: source }],
+  };
+  const result = resolveDerivedSelectionReasoning(args, facets, "Нужен кабель для нагрузки.");
+  assertEquals(result?.propertyObligations?.length, 1);
+  assertEquals(result?.text.includes(source), true);
+  const conflicting = resolveDerivedSelectionReasoning({ ...args,
+    mandatory_properties: [],
+    reasoning: "Необходим номинальный ток 10 А. Выбираю кабели пожарной сигнализации.",
+  }, facets, "Нужен кабель для нагрузки.");
+  assertEquals(conflicting?.text.includes("Выбираю кабели пожарной сигнализации"), false);
+});
+
 Deno.test("a facet label inside a negated sibling cannot erase an explicitly selected value", () => {
   const sentence = "Для установки в ваш светильник необходим Тип цоколя E27.";
   const result = resolveDerivedSelectionReasoning({
