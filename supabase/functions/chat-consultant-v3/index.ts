@@ -15321,9 +15321,18 @@ async function runExpertLoop(
         categoryGroundedProducts,
       );
       const targetIds = new Set(targetReport.passed_ids);
+      // Only a catalog filter that actually constrained this exact result
+      // pool may stand in for a compact card's missing trait. A mandatory
+      // render criterion by itself is a requirement, never product evidence.
+      const provenTerminalCriteria = reasoningBackedSearch &&
+          categoryGroundedProducts.every((product) =>
+            reasoningBackedSearch!.ids.includes(product.id)
+          )
+        ? reasoningBackedSearch.criteria
+        : [];
       const evidenced = projectCatalogFilterEvidence(
         categoryGroundedProducts,
-        terminalSelectionCriteria,
+        provenTerminalCriteria,
       );
       const criteriaGate = applyCriteriaGate(
         evidenced,
