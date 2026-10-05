@@ -5,6 +5,29 @@ implemented locally; live acceptance remains unproved. NOT ready for production.
 
 ## Integration checkpoint
 
+`0645dcd9` live checkpoint: `0688e5bb-28fe-42e4-bc5c-1e390772af89` now completes
+without an internal error, preserving three mandatory criteria. Still FAIL:
+zero cards, 13.895 s. Full raw evidence in `obligations-preview671-20261005.json`.
+Unique live descriptive values can ground a caption absent from prose;
+unknown/ambiguous keys, bare codes and numeric values cannot take that path.
+
+Direct read-only catalog check: all three records classified as radio-frequency
+cables have PVC sheaths (two in stock, one out of stock). Two GENERICA descriptions
+explicitly describe indoor use. Their PE/FPE trait is INSULATION, not outer
+SHEATH. No UV suitability was established by this check; it is not proof that
+no suitable product exists elsewhere/misclassified in the entire catalog.
+The free query `КВК` returned zero. Do not force a product-count PASS by showing
+these records as outdoor-suitable without evidence.
+
+Local next change: examples in parentheses (“обычно…”, “например…”) no longer
+inherit a neighboring functional property's necessity. Both ordinary exact
+criteria and independent properties use this importance alignment; explicit
+customer and independently mandatory properties stay A. 877 shared tests pass;
+not live-verified/deployed at this checkpoint. Generic retrieval/category scope
+and honest unavailable-evidence response remain open. Current retrieval excludes
+the relevant miscellaneous-cable leaf and searches an over-specific full phrase;
+even repairing retrieval must not remove outdoor-evidence checks.
+
 Latest: `6cefd0e0` adds one bounded format repair sharing the existing maximum
 two reasoning attempts. It preserves every property's typed key/op/value/unit/
 scope, all other original fields and the complete original visible reasoning;

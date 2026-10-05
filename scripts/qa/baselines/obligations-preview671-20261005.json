@@ -1,0 +1,654 @@
+{
+  "test": {
+    "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+    "passed": false,
+    "cases": [
+      {
+        "id": "audit-15-analog-cctv-outdoor-cable",
+        "passed": false,
+        "repeats": [
+          {
+            "variant": "base",
+            "run": 1,
+            "passed": false,
+            "turns": [
+              {
+                "passed": true,
+                "duration_ms": 3259,
+                "log_id": "c5cbd903-5905-4d69-ab91-0ccd2f966faa",
+                "products_count": 0,
+                "products": [],
+                "text": "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
+                "failures": [],
+                "diagnostic_error": null,
+                "selection_contract": null,
+                "tool_events": []
+              },
+              {
+                "passed": false,
+                "duration_ms": 13895,
+                "log_id": "0688e5bb-28fe-42e4-bc5c-1e390772af89",
+                "products_count": 0,
+                "products": [],
+                "text": "Для передачи аналогового видеосигнала на расстояние 30 метров необходим радиочастотный коаксиальный кабель. Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена). Рекомендуется использовать кабель с волновым сопротивлением 75 Ом для минимизации потерь сигнала. Обязательные параметры: «Оболочка: полиэтилен». Как рабочую гипотезу сначала проверяю «Назначение: Кабели радиочастотные»; без подтверждения клиента это не становится обязательным фильтром.\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+                "failures": [
+                  "products 0 < 1",
+                  "selection contract misses required groups: [75] [УФ, ультрафиолет, UV, улич, наружн]"
+                ],
+                "diagnostic_error": null,
+                "selection_contract": null,
+                "tool_events": [
+                  {
+                    "tool": "discover_category",
+                    "phase": "start",
+                    "summary": "discover_category…",
+                    "duration_ms": null
+                  },
+                  {
+                    "tool": "discover_category",
+                    "phase": "result",
+                    "summary": "категория «Кабель и провод»: 741 тов., фасетов 29, листьев 15",
+                    "duration_ms": 1117
+                  },
+                  {
+                    "tool": "search_catalog",
+                    "phase": "start",
+                    "summary": "search_catalog…",
+                    "duration_ms": null
+                  },
+                  {
+                    "tool": "search_catalog",
+                    "phase": "result",
+                    "summary": "найдено 0",
+                    "duration_ms": 1971
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "log": [
+    {
+      "id": "0688e5bb-28fe-42e4-bc5c-1e390772af89",
+      "error": null,
+      "steps": [
+        {
+          "ms": 0,
+          "meta": {
+            "message_id": "db95320c-035b-4755-a763-42eccf2a871e",
+            "session_id": "customer_acceptance_audit-15-analog-cctv-outdoor-cable_base_1791215499405_1",
+            "user_message": "аналоговая, на улице, расстояние 30 метров"
+          },
+          "step": "v3_turn_start"
+        },
+        {
+          "ms": 193,
+          "meta": {
+            "kind": "created"
+          },
+          "step": "v3_turn_claim_resolved"
+        },
+        {
+          "ms": 421,
+          "meta": {
+            "has_catalog_token": true,
+            "has_openrouter_key": true
+          },
+          "step": "v3_settings_loaded"
+        },
+        {
+          "ms": 434,
+          "meta": {
+            "mode": "continuation",
+            "reason": "local_server_scoped_clarification",
+            "source": "local",
+            "confidence": 1,
+            "classifier_mode": "continuation",
+            "history_echo_removed": false,
+            "references_rendered_products": false,
+            "matched_pending_clarification": true,
+            "pending_broad_assortment_scope": null
+          },
+          "step": "v3_conversation_boundary"
+        },
+        {
+          "ms": 739,
+          "meta": {
+            "score": 1,
+            "chosen": "Аналоговая",
+            "relaxed": [
+              "Цифровая/IP"
+            ]
+          },
+          "step": "v3_dialogue_choice_resolved"
+        },
+        {
+          "ms": 753,
+          "meta": {
+            "strategy": "live_taxonomy_full_message",
+            "forced_tool": "discover_category"
+          },
+          "step": "v3_initial_discovery_compiled"
+        },
+        {
+          "ms": 760,
+          "meta": {
+            "phase": "intro",
+            "finish": "server_compiled_initial_discovery",
+            "has_text": false,
+            "provider": "server_compiled",
+            "ctx_bytes": 57504,
+            "step_index": 0,
+            "timeout_ms": 10000,
+            "tool_calls": 1,
+            "agent_phase": "open",
+            "duration_ms": 21,
+            "forced_tool": "discover_category",
+            "available_tools": [
+              "discover_category",
+              "search_catalog",
+              "lookup_knowledge",
+              "lookup_contacts",
+              "escalate_to_manager",
+              "note_state"
+            ],
+            "remote_agent_steps": 0
+          },
+          "step": "v3_llm_call"
+        },
+        {
+          "ms": 768,
+          "meta": {
+            "strategy": "live_taxonomy_then_target_guard"
+          },
+          "step": "v3_customer_query_discovery_allowed"
+        },
+        {
+          "ms": 1878,
+          "meta": {
+            "ok": true,
+            "args": {
+              "noun": "Есть ли у вас кабель для видеонаблюдения? Уточнение клиента: аналоговая, на улице, расстояние 30 метров"
+            },
+            "tool": "discover_category",
+            "result": {
+              "pagetitle": "Кабель и провод",
+              "facet_keys": [
+                "brend__brend",
+                "bronirovannyy__sauytty",
+                "diapazon_rabochih_temperatur__ghұmys_temperaturalarynyң_diapozony",
+                "edinica_izmereniya__Өlsheu_bіrlіgі",
+                "ekranirovannyy__ekrandalғan",
+                "garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_",
+                "izolyaciya__oқshaulau",
+                "kod_tn_ved__seҚ_tn_kody",
+                "kolichestvo_ghil__taram_sany",
+                "material_provodnika__Өtkіzgіsh_materialy",
+                "narughnyy_diametr_kabelya__mm__kabelydің_syrtқy_diametrі__mm",
+                "naznachenie__maқsaty_",
+                "negoryuchesty__ghanatyn_қasietі_ghoқ",
+                "nominalynoe_napryaghenie__kv__nominaldy_kerneuі__kb",
+                "obolochka__Қabyқsha",
+                "obyem__kөlemі",
+                "ogranichennyy_prosmotr",
+                "opisaniefayla",
+                "opisanie_na_kazahskom_yazyke",
+                "prodaetsya_tolyko_v_gruppovoy_upakovke__toptyқ_ghiyntyғynda_ғana_satylady"
+              ],
+              "facets_count": 29,
+              "resolved_from": "кабель",
+              "total_products": 741,
+              "resolution_method": "live_taxonomy"
+            },
+            "error_code": null,
+            "duration_ms": 1117
+          },
+          "step": "v3_tool_call"
+        },
+        {
+          "ms": 1985,
+          "meta": {
+            "category": "Кабель и провод",
+            "measured_contexts": true,
+            "direct_measured_criteria": 0,
+            "direct_application_criteria": 0
+          },
+          "step": "v3_unprojected_selection_context_requires_reasoning"
+        },
+        {
+          "ms": 1986,
+          "meta": {
+            "source": "initial_reasoning_and_live_taxonomy",
+            "target": "кабель"
+          },
+          "step": "v3_selection_target_bootstrapped"
+        },
+        {
+          "ms": 2001,
+          "meta": {
+            "to": "search_after_discovery",
+            "from": "open",
+            "tool": "discover_category"
+          },
+          "step": "v3_agent_phase_transition"
+        },
+        {
+          "ms": 8139,
+          "meta": {
+            "recovered": false,
+            "timeout_ms": 8000,
+            "retry_model": "google/gemini-2.5-flash",
+            "retained_prior_declaration": true,
+            "corrected_declaration_valid": false,
+            "correction_preserves_requirements": false
+          },
+          "step": "v3_derived_selection_measurement_retry"
+        },
+        {
+          "ms": 8149,
+          "meta": {
+            "plan_hash": "selection-0f9b70f5",
+            "provenance": "reasoning_projection",
+            "mandatory_count": 3,
+            "restored_omissions": [],
+            "rejected_unowned_count": 0
+          },
+          "step": "v3_selection_criteria_plan_extended"
+        },
+        {
+          "ms": 8159,
+          "meta": {
+            "facets": 29,
+            "category": "Кабель и провод",
+            "direct_search": true,
+            "reasoning_model": "anthropic/claude-sonnet-4.5",
+            "retrieval_query": "радиочастотный коаксиальный кабель",
+            "projected_options": [
+              "naznachenie__maқsaty_",
+              "obolochka__Қabyқsha"
+            ],
+            "projected_criteria": [
+              {
+                "op": "eq",
+                "key": "Оболочка",
+                "level": "A",
+                "value": "полиэтилен",
+                "evidence": "derived_required"
+              }
+            ],
+            "compatible_family_facets": [],
+            "excluded_classifications": [
+              {
+                "key": "Назначение",
+                "value": "Провода и кабели монтажные, ленточные"
+              },
+              {
+                "key": "Назначение",
+                "value": "Провода силовые для электрических установок"
+              },
+              {
+                "key": "Назначение",
+                "value": "Кабели связи телефонные"
+              },
+              {
+                "key": "Назначение",
+                "value": "Кабели для структурированных систем связи"
+              },
+              {
+                "key": "Назначение",
+                "value": "Кабели волоконно-оптические"
+              }
+            ],
+            "compatible_classifications": [
+              {
+                "key": "Назначение",
+                "value": "Кабели радиочастотные"
+              }
+            ],
+            "paired_compatibility_owned": false,
+            "recommended_compound_marking": null,
+            "independent_property_obligations": [
+              {
+                "criterion": {
+                  "op": "eq",
+                  "key": "Назначение",
+                  "level": "A",
+                  "value": "Кабели радиочастотные",
+                  "evidence": "derived_required"
+                },
+                "sourceSpan": "Для передачи аналогового видеосигнала на расстояние 30 метров необходим радиочастотный коаксиальный кабель."
+              },
+              {
+                "criterion": {
+                  "op": "eq",
+                  "key": "Оболочка",
+                  "level": "A",
+                  "value": "для уличной прокладки",
+                  "evidence": "derived_required"
+                },
+                "sourceSpan": "Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена)."
+              }
+            ],
+            "explicit_customer_classifications": [],
+            "mandatory_excluded_classifications": [],
+            "advisory_compatible_classifications": [
+              {
+                "key": "Назначение",
+                "value": "Кабели радиочастотные"
+              },
+              {
+                "key": "Оболочка",
+                "value": "полиэтилен"
+              }
+            ],
+            "mandatory_compatible_classifications": []
+          },
+          "step": "v3_derived_selection_reasoning_requested"
+        },
+        {
+          "ms": 8166,
+          "meta": {
+            "phase": "derived_reasoning",
+            "finish": "tool_calls",
+            "has_text": true,
+            "provider": "server_compiled",
+            "ctx_bytes": 212930,
+            "step_index": 1,
+            "timeout_ms": 22000,
+            "tool_calls": 1,
+            "agent_phase": "search_after_discovery",
+            "duration_ms": 6152,
+            "forced_tool": null,
+            "available_tools": [],
+            "remote_agent_steps": 1
+          },
+          "step": "v3_llm_call"
+        },
+        {
+          "ms": 8170,
+          "meta": {
+            "text": "Для передачи аналогового видеосигнала на расстояние 30 метров необходим радиочастотный коаксиальный кабель. Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена). Рекомендуется использовать кабель с волновым сопротивлением 75 Ом для минимизации потерь сигнала. Обязательные параметры: «Оболочка: полиэтилен». Как рабочую гипотезу сначала проверяю «Назначение: Кабели радиочастотные»; без подтверждения клиента это не становится обязательным фильтром.",
+            "chars": 501,
+            "fragment_index": 1,
+            "derived_selection": true
+          },
+          "step": "v3_assistant_text"
+        },
+        {
+          "ms": 8172,
+          "meta": {
+            "kept": [
+              "Кабель UTP, FTP",
+              "Провод А, АС",
+              "Провод АПВ",
+              "Провод ПВ",
+              "Провод ПВС",
+              "Кабель КГ",
+              "Кабель ВВГ",
+              "Кабель СИП"
+            ],
+            "dropped": [
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Провод ПУГНП, ПУНП"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Кабель КВВГ"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Кабель силовой алюминиевый"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Кабель силовой с медными жилами"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Провод АППВ"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Кабель АВВГ"
+              },
+              {
+                "reason": "not_declared_in_reasoning",
+                "category": "Кабель и провод разного назначения"
+              }
+            ]
+          },
+          "step": "v3_guard_category_reasoning"
+        },
+        {
+          "ms": 8173,
+          "meta": {
+            "plan_hash": "selection-0f9b70f5",
+            "provenance": "guarded_search",
+            "mandatory_count": 3,
+            "restored_omissions": [
+              {
+                "op": "eq",
+                "key": "Назначение",
+                "level": "A",
+                "value": "Кабели радиочастотные",
+                "evidence": "derived_required"
+              },
+              {
+                "op": "eq",
+                "key": "Оболочка",
+                "level": "A",
+                "value": "для уличной прокладки",
+                "evidence": "derived_required"
+              },
+              {
+                "op": "eq",
+                "key": "Оболочка",
+                "level": "A",
+                "value": "полиэтилен",
+                "evidence": "derived_required"
+              }
+            ],
+            "rejected_unowned_count": 0
+          },
+          "step": "v3_selection_criteria_plan_extended"
+        },
+        {
+          "ms": 8174,
+          "meta": {
+            "plan_hash": "selection-0f9b70f5",
+            "option_keys": [
+              "obolochka__Қabyқsha",
+              "naznachenie__maқsaty_"
+            ],
+            "unmatched_keys": [],
+            "mandatory_count": 3,
+            "conflicting_keys": []
+          },
+          "step": "v3_selection_criteria_plan_enforced"
+        },
+        {
+          "ms": 8667,
+          "meta": {
+            "revalidate": [
+              "selection_target",
+              "mandatory_criteria",
+              "compatibility",
+              "budget"
+            ],
+            "scoped_candidates": 0,
+            "unscoped_candidates": 0
+          },
+          "step": "v3_visible_reasoning_query_scope_recovery"
+        },
+        {
+          "ms": 10140,
+          "meta": {
+            "attempts": [],
+            "selected": null,
+            "category_total": 741,
+            "original_query": "радиочастотный коаксиальный кабель"
+          },
+          "step": "v3_model_query_token_recovery"
+        },
+        {
+          "ms": 10141,
+          "meta": {
+            "ok": true,
+            "args": {
+              "mode": "by_query",
+              "query": "радиочастотный коаксиальный кабель",
+              "options": {
+                "obolochka__Қabyқsha": [
+                  "нить полиэфирная, швейные нити для оплетки, лак ЭЦ-959",
+                  "шланг из резины на основе полихлоропрена",
+                  "поливинилхлорид (PVC)",
+                  "полиэтилен"
+                ],
+                "naznachenie__maқsaty_": [
+                  "Кабели радиочастотные"
+                ]
+              },
+              "per_page": 50,
+              "category_in": [
+                "Кабель UTP, FTP",
+                "Провод А, АС",
+                "Провод АПВ",
+                "Провод ПВ",
+                "Провод ПВС",
+                "Кабель КГ",
+                "Кабель ВВГ",
+                "Кабель СИП"
+              ]
+            },
+            "tool": "search_catalog",
+            "result": {
+              "total": 0,
+              "materialized": 0
+            },
+            "error_code": null,
+            "duration_ms": 1971
+          },
+          "step": "v3_tool_call"
+        },
+        {
+          "ms": 10142,
+          "meta": {
+            "maximum": 1,
+            "step_index": 2,
+            "agent_phase": "search_after_discovery",
+            "remote_steps": 1
+          },
+          "step": "v3_remote_step_budget_finalize"
+        },
+        {
+          "ms": 13283,
+          "meta": {
+            "query": "Провод А, АС",
+            "total": 3,
+            "source": "category",
+            "candidates": 3
+          },
+          "step": "v3_grounded_category_search_recovery"
+        },
+        {
+          "ms": 13283,
+          "meta": {
+            "reason": "deadline_finalize",
+            "step_count": 12
+          },
+          "step": "v3_turn_end"
+        }
+      ]
+    }
+  ],
+  "catalog": {
+    "status": 200,
+    "pagination": {
+      "page": 1,
+      "per_page": 50,
+      "pages": 1,
+      "total": 3
+    },
+    "products": [
+      {
+        "id": 19994,
+        "title": "Кабель коаксиальный  F660BV 100м, белый, Tehnosat (РК-75) (м)",
+        "stock": 76245,
+        "category": "Кабель и провод разного назначения",
+        "options": [
+          {
+            "key": "Изоляция",
+            "value": "вспененный полиэтилен (FPE)"
+          },
+          {
+            "key": "Назначение",
+            "value": "Кабели радиочастотные"
+          },
+          {
+            "key": "Оболочка",
+            "value": "термостойкий ПВХ"
+          },
+          {
+            "key": "Ограниченный просмотр",
+            "value": "Нет"
+          }
+        ],
+        "content": "Коаксиальный кабель F660BV TVBS относится к кабелям серии RG-6, который применяется на домовом и абонентском уровне.\n\n\n\nДомовые распределительные сети строятся на основе коаксиального кабеля серии RG-6 или RG-11. Эти кабели имеют разные качественные показатели и конструктивные особенности. Серия кабеля строго не определяет, на каком участке распределительной сети он должен использоваться. Разработчик сам делает этот выбор исходя из стоимости строительства. Абонентские кабели серии RG6 применяются для создания отводов от стояковых фидерных ветвей домовой сети, заканчивающихся терминальными точками в квартирах абонентов."
+      },
+      {
+        "id": 42699,
+        "title": "Кабель коаксиальный RG6 CCS 75Ом FPE PVC белый (300м) GENERICA",
+        "stock": 300,
+        "category": "Кабель и провод разного назначения",
+        "options": [
+          {
+            "key": "Изоляция",
+            "value": "вспененный полиэтилен (FPE)"
+          },
+          {
+            "key": "Назначение",
+            "value": "Кабели радиочастотные"
+          },
+          {
+            "key": "Оболочка",
+            "value": "ПВХ"
+          },
+          {
+            "key": "Ограниченный просмотр",
+            "value": "Нет"
+          }
+        ],
+        "content": "<br>Артикул: CC1-R6F1-111-300-G\n<br>\n<br>Коаксиальный кабель GENERICA RG6 CCS 75 Ом предназначен для передачи телевизионного сигнала в сетях кабельного и спутникового телевидения, а также для подключения антенн к телевизорам. Кабель имеет центральный проводник из омедненной стали, вспененный полиэтиленовый диэлектрик, комбинированный экран из алюминизированной пленки и алюминиевой оплетки плотностью 60 процентов, оболочку из ПВХ и белый цвет\n<br>\n<br>Назначение и область применения:\n<br>- Сети кабельного телевидения\n<br>- Системы спутникового телевидения\n<br>- Подключение телевизионных антенн\n<br>- Передача телевизионного сигнала внутри домов и квартир\n<br>- Прокладка телевизионных линий и линий передачи данных\n<br>\n<br>Основные преимущества:\n<br>- Стабильная передача сигнала на частотах до 3 ГГц\n<br>- Волновое сопротивление 75 Ом\n<br>- Эффективное экранирование от внешних электромагнитных помех\n<br>- Центральный проводник из омедненной стали диаметром 1,02 мм\n<br>- Экран из алюминизированной пленки и алюминиевой оплетки плотностью 60 процентов\n<br>- ПВХ оболочка обеспечивает защиту кабеля\n<br>- Белая оболочка подходит для аккуратной прокладки внутри помещений\n<br>\n<br>Примеры использования:\n<br>Для квартир и домов: подключение телевизоров к антенным и кабельным сетям\n<br>Для систем спутникового телевидения: прокладка линии между антенной системой и приемным оборудованием\n<br>Для кабельного телевидения: создание телевизионных линий внутри помещений\n<br>\n<br>Инструкция по монтажу:\n<br>1. Определите маршрут прокладки кабеля\n<br>2. Отмерьте необходимую длину кабеля\n<br>3. Выполните разделку кабеля с сохранением целостности экрана\n<br>4. Установите подходящий коаксиальный разъем\n<br>5. Подключите кабель к антенне, телевизору или другому оборудованию\n<br>6. Проверьте качество приема телевизионного сигнала\n<br>\n<br>Часто задаваемые вопросы (FAQ):\n<br>В: Для каких систем подходит кабель?\n<br>О: Кабель подходит для сетей кабельного и спутникового телевидения,а также для подключения телевизионных антенн\n<br>В: Какое волновое сопротивление у кабеля?\n<br>О: Волновое сопротивление составляет 75 Ом\n<br>В: На какой частоте может работать кабель?\n<br>О: Кабель RG6 рассчитан на работу приложений и систем на частоте до 3 ГГц\n<br>В: Какой центральный проводник используется?\n<br"
+      },
+      {
+        "id": 42706,
+        "title": "Кабель коаксиальный RG6 медный 75Ом FPE PVC белый (300м) GENERICA",
+        "stock": 0,
+        "category": "Кабель и провод разного назначения",
+        "options": [
+          {
+            "key": "Изоляция",
+            "value": "вспененный полиэтилен (FPE)"
+          },
+          {
+            "key": "Назначение",
+            "value": "Кабели радиочастотные"
+          },
+          {
+            "key": "Оболочка",
+            "value": "ПВХ"
+          },
+          {
+            "key": "Ограниченный просмотр",
+            "value": "Нет"
+          }
+        ],
+        "content": "<br>Артикул: CC1-R6F1-111-300-G\n<br>\n<br>Коаксиальный кабель GENERICA RG6 CCS 75 Ом предназначен для передачи телевизионного сигнала в сетях кабельного и спутникового телевидения, а также для подключения антенн к телевизорам. Кабель имеет центральный проводник из омедненной стали, вспененный полиэтиленовый диэлектрик, комбинированный экран из алюминизированной пленки и алюминиевой оплетки плотностью 60 процентов, оболочку из ПВХ и белый цвет\n<br>\n<br>Назначение и область применения:\n<br>- Сети кабельного телевидения\n<br>- Системы спутникового телевидения\n<br>- Подключение телевизионных антенн\n<br>- Передача телевизионного сигнала внутри домов и квартир\n<br>- Прокладка телевизионных линий и линий передачи данных\n<br>\n<br>Основные преимущества:\n<br>- Стабильная передача сигнала на частотах до 3 ГГц\n<br>- Волновое сопротивление 75 Ом\n<br>- Эффективное экранирование от внешних электромагнитных помех\n<br>- Центральный проводник из омедненной стали диаметром 1,02 мм\n<br>- Экран из алюминизированной пленки и алюминиевой оплетки плотностью 60 процентов\n<br>- ПВХ оболочка обеспечивает защиту кабеля\n<br>- Белая оболочка подходит для аккуратной прокладки внутри помещений\n<br>\n<br>Примеры использования:\n<br>Для квартир и домов: подключение телевизоров к антенным и кабельным сетям\n<br>Для систем спутникового телевидения: прокладка линии между антенной системой и приемным оборудованием\n<br>Для кабельного телевидения: создание телевизионных линий внутри помещений\n<br>\n<br>Инструкция по монтажу:\n<br>1. Определите маршрут прокладки кабеля\n<br>2. Отмерьте необходимую длину кабеля\n<br>3. Выполните разделку кабеля с сохранением целостности экрана\n<br>4. Установите подходящий коаксиальный разъем\n<br>5. Подключите кабель к антенне, телевизору или другому оборудованию\n<br>6. Проверьте качество приема телевизионного сигнала\n<br>\n<br>Часто задаваемые вопросы (FAQ):\n<br>В: Для каких систем подходит кабель?\n<br>О: Кабель подходит для сетей кабельного и спутникового телевидения,а также для подключения телевизионных антенн\n<br>В: Какое волновое сопротивление у кабеля?\n<br>О: Волновое сопротивление составляет 75 Ом\n<br>В: На какой частоте может работать кабель?\n<br>О: Кабель RG6 рассчитан на работу приложений и систем на частоте до 3 ГГц\n<br>В: Какой центральный проводник используется?\n<br"
+      }
+    ]
+  }
+}

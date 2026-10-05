@@ -1459,6 +1459,17 @@ Deno.test("advisory model defaults do not become mandatory filters", () => {
   assertEquals(aligned.demoted, ["Параметр бета", "Параметр гамма"]);
 });
 
+Deno.test("parenthetical implementation examples do not inherit necessity from the functional property", () => {
+  const material: Criterion = { key: "Оболочка", op: "eq", value: "полиэтилен", level: "A" };
+  const functional: Criterion = { key: "Оболочка", op: "eq", value: "стойкая к ультрафиолету", level: "A" };
+  const text = "Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена).";
+  assertEquals(alignCriteriaImportanceWithReasoning([material, functional], text).criteria.map(c => c.level), ["B", "A"]);
+  assertEquals(alignCriteriaImportanceWithReasoning([material], text, [material]).criteria[0].level, "A");
+  assertEquals(alignCriteriaImportanceWithReasoning([material], text + " Обязательно используйте полиэтилен.").criteria[0].level, "A");
+  const finish: Criterion = { key: "Поверхность", op: "eq", value: "глянцевая", level: "A" };
+  assertEquals(alignCriteriaImportanceWithReasoning([finish], "Необходима моющаяся поверхность (например, глянцевая).").criteria[0].level, "B");
+});
+
 Deno.test("user-backed criterion stays mandatory without necessity wording", () => {
   const criterion: Criterion = {
     key: "Параметр дельта",

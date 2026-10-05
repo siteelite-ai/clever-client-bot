@@ -254,7 +254,7 @@ export function alignCriteriaImportanceWithReasoning(
   const mandatory =
     /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
   const advisory =
-    /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
+    /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|обычно|как\s+правило|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
@@ -266,6 +266,23 @@ export function alignCriteriaImportanceWithReasoning(
         criteriaIdentityMatches(criterion, candidate)
       )
     ) return { ...criterion, level: "A" as const };
+    // A necessary functional property does not make an illustrative material
+    // or implementation in parentheses necessary. Match the VALUE here, not
+    // the shared key (e.g. both properties may belong to the same shell).
+    if (typeof criterion.value === "string") {
+      const valueOnly = { ...criterion, key: "" };
+      const parentheticalAdvice = clauses.some((clause) =>
+        [...clause.matchAll(/\(([^()]*)\)/gu)].some((match) =>
+          advisory.test(match[1]) && clauseSupportsCriterion(match[1], valueOnly)));
+      const independentlyRequired = clauses.some((clause) => {
+        const outside = clause.replace(/\([^()]*\)/gu, " ");
+        return mandatory.test(outside) && clauseSupportsCriterion(outside, valueOnly);
+      });
+      if (parentheticalAdvice && !independentlyRequired) {
+        demoted.push(criterion.key);
+        return { ...criterion, level: "B" as const };
+      }
+    }
     const relevant = clauses.filter((clause) =>
       clauseSupportsCriterion(clause, criterion)
     );

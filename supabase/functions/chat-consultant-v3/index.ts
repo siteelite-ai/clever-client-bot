@@ -7721,8 +7721,15 @@ async function runExpertLoop(
           // live facet and rendered back into the visible declaration. Do not
           // send them through prose importance parsing: a live compound value
           // may itself contain punctuation that looks like clause boundaries.
+          const independentPropertyImportance = alignCriteriaImportanceWithReasoning(
+            (declaration.propertyObligations ?? []).map(({ criterion }) => criterion),
+            String(declarationCall?.args.reasoning ?? ""),
+            userBackedSearchCriteria,
+          );
+          const independentPropertyCriteria = independentPropertyImportance.criteria
+            .filter((criterion) => (criterion.level ?? "A") === "A");
           const derivedMandatoryCriteria = mergeMandatorySelectionCriteria([
-            ...(declaration.propertyObligations ?? []).map(({ criterion }) => criterion),
+            ...independentPropertyCriteria,
             ...declaredClassificationCriteria,
             ...derivedExactFacetCriteria.filter((criterion) =>
               (criterion.level ?? "A") === "A"
@@ -7753,7 +7760,7 @@ async function runExpertLoop(
             );
           postFilterOnlyReasoningCriteria = mergeMandatorySelectionCriteria([
             ...postFilterOnlyReasoningCriteria,
-            ...(declaration.propertyObligations ?? []).map(({ criterion }) => criterion),
+            ...independentPropertyCriteria,
             ...(derivedScalarProjectionAllowed
               ? derivedMeasuredContract.projected_criteria
               : []),
@@ -7855,6 +7862,7 @@ async function runExpertLoop(
               category: lastDiscover.category?.pagetitle ?? "",
               facets: lastDiscover.facets?.length ?? 0,
               independent_property_obligations: declaration.propertyObligations ?? [],
+              independent_property_advice_demoted: independentPropertyImportance.demoted,
               compatible_classifications: declaration.compatible,
               mandatory_compatible_classifications:
                 declaration.customerGroundedCompatible,
