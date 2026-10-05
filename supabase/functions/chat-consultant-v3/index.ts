@@ -7660,6 +7660,7 @@ async function runExpertLoop(
           // send them through prose importance parsing: a live compound value
           // may itself contain punctuation that looks like clause boundaries.
           const derivedMandatoryCriteria = mergeMandatorySelectionCriteria([
+            ...(declaration.propertyObligations ?? []).map(({ criterion }) => criterion),
             ...declaredClassificationCriteria,
             ...derivedExactFacetCriteria.filter((criterion) =>
               (criterion.level ?? "A") === "A"
@@ -7690,6 +7691,7 @@ async function runExpertLoop(
             );
           postFilterOnlyReasoningCriteria = mergeMandatorySelectionCriteria([
             ...postFilterOnlyReasoningCriteria,
+            ...(declaration.propertyObligations ?? []).map(({ criterion }) => criterion),
             ...(derivedScalarProjectionAllowed
               ? derivedMeasuredContract.projected_criteria
               : []),
@@ -7790,6 +7792,7 @@ async function runExpertLoop(
             meta: {
               category: lastDiscover.category?.pagetitle ?? "",
               facets: lastDiscover.facets?.length ?? 0,
+              independent_property_obligations: declaration.propertyObligations ?? [],
               compatible_classifications: declaration.compatible,
               mandatory_compatible_classifications:
                 declaration.customerGroundedCompatible,

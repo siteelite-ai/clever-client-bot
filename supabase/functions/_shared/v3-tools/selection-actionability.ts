@@ -1,5 +1,10 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import {
+  type ReasoningObligation,
+  reasoningObligationsSchema,
+  resolveReasoningObligations,
+} from "./reasoning-obligations.ts";
+import {
   extractClientQuantities,
   isPhysicalMeasurementUnit,
   normalizeUnit,
@@ -658,6 +663,7 @@ export function buildDerivedSelectionReasoningToolSchema(
       parameters: {
         type: "object",
         properties: {
+          mandatory_properties: reasoningObligationsSchema,
           reasoning: {
             type: "string",
             minLength: 20,
@@ -731,6 +737,7 @@ export function buildDerivedSelectionReasoningToolSchema(
           },
         },
         required: [
+          "mandatory_properties",
           "reasoning",
           "clarification_question",
           "measurement_scope",
@@ -748,6 +755,7 @@ export function buildDerivedSelectionReasoningToolSchema(
 }
 
 export interface ResolvedDerivedSelectionReasoning {
+  propertyObligations?: ReasoningObligation[];
   text: string;
   clarification?: {
     question: string;
@@ -910,6 +918,11 @@ export function resolveDerivedSelectionReasoning(
   const declaredMeasurementScope = String(
     args.measurement_scope ?? "per_product",
   );
+  const propertyResolution = resolveReasoningObligations(
+    args.mandatory_properties ?? [],
+    originalReasoning,
+  );
+  if (propertyResolution.unresolved.length > 0) return null;
   const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
     customerEvidence,
     originalReasoning,
@@ -1372,6 +1385,11 @@ export function resolveDerivedSelectionReasoning(
     reasoning,
     args.per_product_measurement_evidence,
   );
+  // Later class cleanup must not erase the visible source of a hard property.
+  if (
+    resolveReasoningObligations(args.mandatory_properties ?? [], reasoning)
+      .unresolved.length > 0
+  ) return null;
   const aggregateScopeEvidence = measurementScope === "system_total"
     ? perProductEvidence
       ? "Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию."
@@ -1439,6 +1457,7 @@ export function resolveDerivedSelectionReasoning(
   }
   return {
     text: sentences.join(" "),
+    propertyObligations: propertyResolution.obligations,
     // Structured classification choices are enforced separately. Keep them
     // out of the generic prose-to-criteria compiler: sibling values from one
     // facet are an OR family, while that compiler can only express AND.
@@ -1682,6 +1701,21 @@ export function selectionReasoningCheckpoint(
     return null;
   }
   const clean: Record<string, unknown> = {};
+  const properties = resolveReasoningObligations(
+    args.mandatory_properties ?? [],
+    args.reasoning,
+  );
+  if (properties.unresolved.length > 0) return null;
+  clean.mandatory_properties = properties.obligations.map((
+    { criterion, sourceSpan },
+  ) => ({
+    key: criterion.key,
+    op: criterion.op,
+    value: criterion.value,
+    unit: criterion.unit ?? "",
+    scope: "per_product",
+    source_span: sourceSpan,
+  }));
   for (
     const key of [
       "reasoning",
@@ -1811,19 +1845,38 @@ export function resumeSingleItemReasoning(
 
 /** Optional numerical correction must not erase already validated obligations. */
 export function derivedCorrectionPreservesRequirements(
-  prior: Pick<
-    ResolvedDerivedSelectionReasoning,
-    | "requiredFacetValues"
-    | "customerGroundedCompatible"
-    | "customerGroundedExcluded"
-  >,
-  next: Pick<
-    ResolvedDerivedSelectionReasoning,
-    | "requiredFacetValues"
-    | "customerGroundedCompatible"
-    | "customerGroundedExcluded"
-  >,
+  prior:
+    & Pick<
+      ResolvedDerivedSelectionReasoning,
+      | "requiredFacetValues"
+      | "customerGroundedCompatible"
+      | "customerGroundedExcluded"
+    >
+    & Pick<ResolvedDerivedSelectionReasoning, "propertyObligations">,
+  next:
+    & Pick<
+      ResolvedDerivedSelectionReasoning,
+      | "requiredFacetValues"
+      | "customerGroundedCompatible"
+      | "customerGroundedExcluded"
+    >
+    & Pick<ResolvedDerivedSelectionReasoning, "propertyObligations">,
 ): boolean {
+  const fingerprint = ({ criterion }: ReasoningObligation) =>
+    JSON.stringify([
+      normalizeLiteralEvidence(criterion.key),
+      criterion.op,
+      criterion.value,
+      normalizeUnit(criterion.unit ?? ""),
+      Boolean(criterion.exclusive),
+    ]);
+  if (
+    (prior.propertyObligations ?? []).some((before) =>
+      !(next.propertyObligations ?? []).some((after) =>
+        fingerprint(before) === fingerprint(after)
+      )
+    )
+  ) return false;
   return ([
     "requiredFacetValues",
     "customerGroundedCompatible",
@@ -1894,7 +1947,8 @@ export function buildDerivedSelectionReasoningMessages(
     },
     {
       role: "system",
-      content: "Различай количество материала для покупки, входные условия применения и производительность отдельного изделия. Метраж или количество заказа сами по себе не являются system_total: system_total означает суммарную производительность совместно работающих изделий. Не создавай вопрос об их числе только из-за количества покупаемого материала. Если расчёт описывает весь объект, а клиент не заказывал распределённую систему и нет ограничения на применение одного изделия, предложи базовое решение одним изделием и явно отдели его числовое требование: «На одно изделие необходимо не менее …». Несколько вариантов в подборке — альтернативы, а не совместно работающая система. Скопируй отдельное требование дословно в per_product_measurement_evidence. Если клиент указал несколько совместно работающих изделий или безопасность зависит от неизвестной конфигурации, не заменяй это базовым решением: уточни недостающие условия. Не дели общий расчёт на произвольное число изделий и не меняй входные условия ради доступного ассортимента.",
+      content:
+        "Различай количество материала для покупки, входные условия применения и производительность отдельного изделия. Метраж или количество заказа сами по себе не являются system_total: system_total означает суммарную производительность совместно работающих изделий. Не создавай вопрос об их числе только из-за количества покупаемого материала. Если расчёт описывает весь объект, а клиент не заказывал распределённую систему и нет ограничения на применение одного изделия, предложи базовое решение одним изделием и явно отдели его числовое требование: «На одно изделие необходимо не менее …». Несколько вариантов в подборке — альтернативы, а не совместно работающая система. Скопируй отдельное требование дословно в per_product_measurement_evidence. Если клиент указал несколько совместно работающих изделий или безопасность зависит от неизвестной конфигурации, не заменяй это базовым решением: уточни недостающие условия. Не дели общий расчёт на произвольное число изделий и не меняй входные условия ради доступного ассортимента.",
     },
     {
       role: "user",

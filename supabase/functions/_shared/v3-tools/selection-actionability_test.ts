@@ -246,12 +246,34 @@ Deno.test("aggregate-only selection clarifies configuration and preserves a sing
 });
 
 Deno.test("per-item evidence tolerates capitalization but preserves visible wording and quantities", () => {
-  const visible = "Суммарная потребность 3500 Лм. При установке одного прибора на одно изделие необходимо не менее 3500 Лм.";
+  const visible =
+    "Суммарная потребность 3500 Лм. При установке одного прибора на одно изделие необходимо не менее 3500 Лм.";
   const proposed = "На одно изделие необходимо не менее 3500 Лм.";
-  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed), "на одно изделие необходимо не менее 3500 Лм.");
-  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed.replace("3500", "350")), "");
-  assertEquals(validatedPerProductMeasurementEvidence(visible, proposed.replace("не менее", "не более")), "");
-  assertEquals(validatedPerProductMeasurementEvidence("Всего на одно изделие 3500 Лм.", "ВСЕГО на одно изделие 3500 Лм."), "");
+  assertEquals(
+    validatedPerProductMeasurementEvidence(visible, proposed),
+    "на одно изделие необходимо не менее 3500 Лм.",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      visible,
+      proposed.replace("3500", "350"),
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      visible,
+      proposed.replace("не менее", "не более"),
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Всего на одно изделие 3500 Лм.",
+      "ВСЕГО на одно изделие 3500 Лм.",
+    ),
+    "",
+  );
 });
 
 Deno.test("per-item evidence is a visible bounded span, never the aggregate calculation", () => {
@@ -302,6 +324,80 @@ Deno.test("per-item evidence is a visible bounded span, never the aggregate calc
       "system_total",
     ),
     true,
+  );
+});
+
+Deno.test("non-facet obligations survive declaration, checkpoint and correction and gate each product", () => {
+  const source =
+    "Необходимо волновое сопротивление 75 Ом. Обязательна УФ-стойкая оболочка.";
+  const args = {
+    reasoning: source,
+    measurement_scope: "system_total",
+    mandatory_properties: [
+      {
+        key: "волновое сопротивление",
+        value: 75,
+        unit: "Ом",
+        op: "eq",
+        scope: "per_product",
+        source_span: "Необходимо волновое сопротивление 75 Ом.",
+      },
+      {
+        key: "оболочка",
+        value: "УФ-стойкая",
+        unit: "",
+        op: "eq",
+        scope: "per_product",
+        source_span: "Обязательна УФ-стойкая оболочка.",
+      },
+    ],
+  };
+  const resolved = resolveDerivedSelectionReasoning(args, []);
+  assertEquals(resolved?.propertyObligations?.length, 2);
+  const checkpoint = selectionReasoningCheckpoint(args, []);
+  assertEquals(
+    checkpoint?.args.mandatory_properties,
+    args.mandatory_properties,
+  );
+  const resumed = resolveDerivedSelectionReasoning(checkpoint!.args, []);
+  assertEquals(resumed?.propertyObligations, resolved?.propertyObligations);
+  const empty = resolveDerivedSelectionReasoning({
+    ...args,
+    mandatory_properties: [],
+  }, []);
+  assertEquals(
+    derivedCorrectionPreservesRequirements(resolved!, empty!),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(resolved!, resumed!),
+    true,
+  );
+  const candidates = [
+    ["proven", "Волновое сопротивление: 75 Ом", "Оболочка: УФ-стойкая"],
+    ["wrong", "Волновое сопротивление: 50 Ом", "Оболочка: УФ-стойкая"],
+    ["unknown", "Волновое сопротивление: 75 Ом"],
+  ].map(([id, ...short_traits]) => ({
+    id,
+    pagetitle: "Кабель",
+    vendor: null,
+    price: 100,
+    stock: "unknown" as const,
+    short_traits,
+  }));
+  assertEquals(
+    applyCriteriaGate(
+      candidates,
+      resolved!.propertyObligations!.map(({ criterion }) => criterion),
+    ).passed_ids,
+    ["proven"],
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning({
+      ...args,
+      mandatory_properties: [{ ...args.mandatory_properties[0], value: 50 }],
+    }, []),
+    null,
   );
 });
 
@@ -791,10 +887,26 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
   );
   assertEquals(messages.length, 3);
   assertEquals(messages[1].role, "system");
-  assertEquals(messages[1].content.includes("количество материала для покупки"), true);
-  assertEquals(messages[1].content.includes("альтернативы, а не совместно работающая система"), true);
-  assertEquals(messages[1].content.includes("Скопируй отдельное требование дословно"), true);
-  assertEquals(messages[1].content.includes("безопасность зависит от неизвестной конфигурации"), true);
+  assertEquals(
+    messages[1].content.includes("количество материала для покупки"),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes(
+      "альтернативы, а не совместно работающая система",
+    ),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes("Скопируй отдельное требование дословно"),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes(
+      "безопасность зависит от неизвестной конфигурации",
+    ),
+    true,
+  );
   assertEquals(messages[0].content.includes("недоверенные данные"), true);
   assertEquals(
     messages[0].content.includes(

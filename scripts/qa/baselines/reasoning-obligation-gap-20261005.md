@@ -1,7 +1,24 @@
 # Requirement coverage: confirmed gap and implementation boundary
 
-Status: design grounded in preview 665 evidence; isolated compiler implemented,
-not integrated into the declaration/search/render paths and NOT accepted.
+Status: declaration, search criteria, checkpoint and correction integration
+implemented locally; live acceptance remains unproved. NOT ready for production.
+
+## Integration checkpoint
+
+- Forced reasoning schema now includes independent `mandatory_properties`.
+- Resolver rejects malformed/unproven property declarations instead of dropping
+  individual obligations. Previously saved declarations without the field remain
+  compatible. Clarification-only outcomes do not freeze conditional properties.
+- Validated properties enter both mandatory selection criteria and post-filter
+  criteria; query projection still uses available facets only.
+- Configuration checkpoints preserve the properties. Optional correction must
+  preserve key, operator, value, unit and strictness of every prior property.
+- A later rewrite of visible reasoning cannot erase their source sentences.
+- Diagnostics include independent obligations for inspection.
+- Integration test covers no-facet declaration, checkpoint, correction and
+  actual criteria gate: proven card passes, wrong quantity and missing evidence
+  do not. Live model output coverage, product evidence adequacy and conflicting
+  semantic data still need verification; no claim of full client acceptance.
 
 ## Isolated implementation checkpoint
 
@@ -15,8 +32,9 @@ claims and negative-property declarations remain unresolved.
 Tests cover two independent properties without search facets, cross-category
 numeric bounds, changed units/values/operators, fabricated evidence, omitted
 negation, substring property collisions and string-based numeric bypasses.
-This validates declaration provenance only, NOT product suitability or complete
-extraction of all requirements. No production or preview route uses it yet.
+This validates declaration provenance only, NOT complete extraction of all
+requirements. Product verification uses the existing mandatory criteria gate;
+its semantic-evidence limitations below remain open.
 
 ## Reproduction
 

@@ -15,6 +15,32 @@ export interface ObligationResolution {
   unresolved: Array<{ index: number; reason: string }>;
 }
 
+export const reasoningObligationsSchema = {
+  type: "array",
+  maxItems: 12,
+  description:
+    "Обязательные свойства каждого товара независимо от наличия поискового фасета. Для каждого свойства скопируй полное предложение из reasoning с явной необходимостью, именем свойства и значением. Не включай предположения, общие суммы, предпочтения и входные параметры объекта. Числа передавай числом с единицей, не строкой. Не теряй необходимое свойство только потому, что его нет среди live IDs. Пусто только при отсутствии дополнительных обязательных свойств.",
+  items: {
+    type: "object",
+    properties: {
+      key: { type: "string", minLength: 3, maxLength: 120 },
+      op: { type: "string", enum: ["eq", "min", "max"] },
+      value: {
+        anyOf: [{ type: "number" }, {
+          type: "string",
+          minLength: 3,
+          maxLength: 160,
+        }],
+      },
+      unit: { type: "string", maxLength: 20 },
+      scope: { type: "string", enum: ["per_product"] },
+      source_span: { type: "string", minLength: 8, maxLength: 600 },
+    },
+    required: ["key", "op", "value", "unit", "scope", "source_span"],
+    additionalProperties: false,
+  },
+};
+
 const normalized = (value: string) =>
   value.replace(/\s+/gu, " ").trim().toLowerCase();
 const containsPhrase = (text: string, phrase: string) => {
