@@ -1,6 +1,73 @@
 # Preview audit — 2026-10-05
 
-## Measurement-scope continuation (latest)
+## Terminal-contract and scalar-evidence checkpoint (latest)
+
+Preview 657 = `12ae96ba`; production remains 448 (verified via management API).
+PR #67 remains DRAFT / NOT READY.
+
+- `cc67d7a6`: terminal selection now uses the same measured-criteria compiler
+  as retrieval and restores frozen mandatory obligations afterward. Diagnostic
+  `36c994cf-e303-4189-acf8-a3b3d3f82481` proved that the former raw projector
+  reintroduced a weak maximum voltage not present in the retrieval contract,
+  rejected every candidate with missing voltage metadata, and entered a
+  differently constrained recovery. Catalog core-count/section data were
+  present; inventing product traits was neither necessary nor acceptable.
+- Exact compound evidence no longer accepts an additive marking fragment.
+  `12ae96ba` also extends the shared exact-count contradiction gate to sum
+  every component of a visible N×S + M×T construction. This covers derived
+  count requirements even when the consultant did not literally write N×S.
+- `12ae96ba`: customer-evidence matching preserves decimal scalars instead of
+  treating the integer pieces of 3.4 as customer-owned numbers. The old path
+  could turn an unrelated 3 kW load into a mandatory live weight of 3.4.
+- Acceptance now rejects additive false matches. Repaired the suite metadata
+  test (27 source cases plus the existing novice regression) and supplied the
+  missing novice wording variation; did not reduce acceptance requirements.
+- Local verification: 856 shared tests, 36 acceptance-harness/matrix tests,
+  Edge type-check, and diff whitespace check passed.
+
+### Intermediate live failures — not closed by a single successful request
+
+Three runs on `cc67d7a6` (before the decimal/count follow-up):
+
+1. `911969d0-1512-45b0-99e2-359b26492e54`, 14.4 s: automated PASS but
+   manual FAIL because 3×2.5+1×1.5 was included. New acceptance gate detects it.
+   Terminal diagnostic confirms the unowned voltage maximum is no longer added.
+2. `7136f8a8-3cb7-4874-94fe-c9b31c363ffc`, 22.7 s: catalog rate_limited;
+   reasoning also acquired the unrelated weight 3.4. Decimal fix addresses
+   the latter only; transport failure remains separate.
+3. `123a5f4a-ab03-4527-9060-12afc82a8220`, 19.6 s: primary reasoning timeout,
+   retry returned an unexpected `google:python_interpreter` call with finish
+   `length`, not the required declaration. No usable reasoning was available;
+   still an OPEN reliability defect, not a connection/cache diagnosis.
+
+### Latest preview 657 evidence
+
+- Actual widget with explicit new-topic message: four 3×2.5 cable cards,
+  no additive extra-core item and no connection error.
+  Request `aa22a4c7-b0f1-4020-8ddb-3534640842e3`.
+  Screenshot: `/private/tmp/220volt-preview-cable-20261005.png`.
+- Three independent audit-12 repetitions: **0/3 PASS**, about 13.2 seconds
+  each. IDs `922439d5-3e4b-4c63-a4e9-63018aa623a6`,
+  `9f9adfeb-a397-4a57-bb3f-9bdc72ae8572`,
+  `a1a2f35d-802f-421c-ab6f-911f5c43b448`.
+  No transport errors in these three calls, but all include 2-core/4-core
+  candidates. Reasoning describes different phase-dependent configurations;
+  log 922439d5 confirms only section criteria enter the contract, no core count.
+  This is an OPEN ambiguous-branch projection defect. Do not force an
+  invented three-core customer constraint from the unrelated 3 kW load.
+  Next: retain the conditional branch structure and request the missing
+  discriminating input before a definitive selection, or prove a single
+  chosen branch. Do not solve by a cable-specific count default.
+- Cross-route checks passed: exact VVG cheapest
+  `c5d5f364-57cd-49c3-afa3-a49d2a7f1b71` (3.4 s),
+  1P C16 under 1000 `be29a9b0-6d97-40b5-9e3d-61b7a97575b4` (12.3 s),
+  CORN E14 `9e00311c-5a05-46f8-8a73-d0f19853d672` (21.8 s).
+- CI 37321617410 passed for `12ae96ba`.
+- Earlier 24/28 result is historical, not a claim that the latest candidate
+  passed the complete suite. Full suite, free-form aggregate continuation,
+  sensor subtype and outdoor application evidence remain open.
+
+## Measurement-scope continuation (historical)
 
 Candidate `5555fc2d` is deployed to preview only; production unchanged.
 This section supersedes older numerical-scope status below. NOT READY.
