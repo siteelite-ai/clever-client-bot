@@ -1,5 +1,52 @@
 # Preview audit — 2026-10-05
 
+## Latest checkpoint (supersedes historical status below)
+
+Production remains version 448. Preview 650 was confirmed at `ae23dff7`.
+Candidate `815cfb68` adds bounded supplementary verification and is being
+deployed/tested in preview only. PR #67 remains DRAFT / NOT READY.
+
+### Implemented since the earlier checkpoint
+
+- `bee8cb26`: explicit `Новая тема` takes precedence over pending clarification
+  and clears stale scoped selection inputs. Live transition from underground
+  cable to Acti9 passed (`4bf19546-3e82-4d04-9a44-a4abfb3b9be0`). This does
+  not claim that every implicit topic switch is solved.
+- `bee8cb26`: malformed optional reasoning correction no longer discards the
+  prior validated declaration. Live analog-camera request
+  `f914c28a-3345-4639-8bdc-2a7e0aa687f9` completed; diagnostic confirms
+  `retained_prior_declaration=true`. Outdoor suitability still needs proof.
+- `bccffc30`, `ae23dff7`: mandatory requirements are no longer fabricated as
+  product traits. Missing traits may be projected only from matching actual
+  catalog filters tied to the same result pool, not query words or intentions.
+- `815cfb68`: a short verified selection gets at most two supplementary
+  catalog searches preserving all mandatory facet filters and all final gates.
+  Existing safe candidates are retained. Exact/alias routes and single-result
+  requests are not widened. No product-name or category-specific rule added.
+
+### Verification and unresolved findings
+
+- 847 shared-tool tests passed; Edge Function type-check passed on 815cfb68.
+- CI 37313727313 passed on ae23dff7.
+- Three repetitions of audit-02 on preview 650 completed without a connection
+  error. Exact cable selection passed all three times. Of six light responses,
+  one returned one Gauss and five returned five cards. This is NOT acceptance:
+  the five-card answers included acoustically triggered models.
+- Example short response: `211720b0-1f59-495e-8d55-e01a4cc1bcc8`.
+  Example five-card response: `acf4822b-5e6d-4409-a2a0-34406fd43b33`.
+- Read-only catalog API check with the motion-sensor facet confirmed conflicting
+  data: product 20554 (ДПО 1002) and 23306 (ДПО 1001) explicitly say acoustic
+  sensor in their names, while both have `С датчиком движения: да`.
+  This does not prove they lack a second sensor; source specifications must be
+  checked. Do not silently change the catalog or add SKU exclusions to the bot.
+- The current acceptance assertion accepts any sensor keyword; therefore its
+  PASS is insufficient. These two items need manual/source-data validation.
+- The remaining software blockers are application suitability (outdoor cable),
+  total-system versus per-product quantities, and final repeated verification
+  of cardinality without admitting unsuitable products.
+
+## Historical checkpoint
+
 ## Release decision
 
 NOT READY FOR PRODUCTION. PR #67 remains a draft. Passing automated checks
