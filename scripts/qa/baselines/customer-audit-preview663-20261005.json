@@ -1,0 +1,583 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": false,
+  "cases": [
+    {
+      "id": "audit-01-vvg-3x1_5-cheapest",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 3372,
+          "products": [
+            "Кабель ВВГ 3*1,5 ГОСТ IK"
+          ],
+          "failures": [],
+          "log_ids": [
+            "a1c61bbb-00c7-4b24-81a9-0761a75cecd9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-02-topic-boundary-cable-to-motion-light",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 13010,
+          "products": [
+            "Кабель ВВГ 3*1,5 ГОСТ IK",
+            "Светильник LED ДПО 1002 12Вт 4000К с акуст.датч (ИЭК)",
+            "Светильник светодиодный НПП 20W круг белый с датчиком PLATO",
+            "Светильник светодиодный НПП 30W круг белый с датчиком PLATO",
+            "Светильник LED ДПО 1001 8Вт 4000К с акуст.датч (ИЭК)",
+            "Светильник НПО3234Д белый 2х25 с датчиком движения ИЭК",
+            "Светильник LED ДПО 1002 12Вт 4000К с акуст.датч (ИЭК)",
+            "Светильник светодиодный НПП 20W круг белый с датчиком PLATO",
+            "Светильник светодиодный НПП 30W круг белый с датчиком PLATO",
+            "Светильник LED ДПО 1001 8Вт 4000К с акуст.датч (ИЭК)",
+            "Светильник НПО3234Д белый 2х25 с датчиком движения ИЭК"
+          ],
+          "failures": [],
+          "log_ids": [
+            "76226964-b2bd-4f65-a32c-c29cc872bcb5",
+            "5a72d500-1673-42ba-b672-add0c70b4105",
+            "733d389e-dff3-4a2e-8daf-31f19e424b82"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-03-living-room-25m2",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "duration_ms": 8160,
+          "products": [],
+          "failures": [
+            "products 0 < 3"
+          ],
+          "log_ids": [
+            "16fea2d7-327b-4ea6-a310-41b9b067486f"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-04-yard-floodlight-35m2",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "duration_ms": 7364,
+          "products": [],
+          "failures": [
+            "products 0 < 3"
+          ],
+          "log_ids": [
+            "338c0ebb-f9cb-49ee-aebe-b99f65819995",
+            "a8708c15-0b93-4d89-9c60-b16bf3073dea"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-05-breaker-1p-16a-c-under-1000",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 7061,
+          "products": [
+            "Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК",
+            "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710",
+            "Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)",
+            "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/"
+          ],
+          "failures": [],
+          "log_ids": [
+            "199fba87-588c-4fa5-bca3-3d8ec68e25fd"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-06-corn-e14",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 16838,
+          "products": [
+            "Лампа LED CORN капсула 5Вт 230В 4000К керамика E14 ИЭК",
+            "Лампа LED CORN капсула 7Вт 230В 4000К керамика E14 ИЭК",
+            "Лампа светодиодная CORN капсула 7Вт 230В 3000К керамика E14 IEK"
+          ],
+          "failures": [],
+          "log_ids": [
+            "49ddb957-2625-44e0-ad1e-c4d859ab9653"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-07-vvg-3x1_5-all",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 1583,
+          "products": [
+            "Кабель ВВГ 3*1,5 ГОСТ IK",
+            "Кабель ВВГ нг 3*1,5 ГОСТ IK",
+            "Кабель ВВГ нг LS 3*1,5 ГОСТ IK",
+            "Кабель ВВГ 3*1,5 ГК ГОСТ",
+            "Кабель ВВГ нг 3*1,5 ГК ГОСТ(зеленый)",
+            "Кабель ВВГ нг 3*1,5 ГК ГОСТ(красный)",
+            "Кабель ВВГ нг 3*1,5 ГК ГОСТ(желтый)",
+            "Кабель ВВГ нг 3*1,5 AT"
+          ],
+          "failures": [],
+          "log_ids": [
+            "2bbbfe51-3201-4d69-a71b-cc41e5572c1b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-08-gx53-lamp-analogs",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 10084,
+          "products": [
+            "Лампа NLL-GX53-6-230-4K 94 248 Navigator",
+            "Лампа NLL-GX53-6-230-2,7K 94 249 Navigator",
+            "Лампа NLL-GX53-6-230-6,5K 61 247 Navigator",
+            "Лампа светодиодная ECO T75 таблетка 6Вт 230В 3000К GX53 IEK"
+          ],
+          "failures": [],
+          "log_ids": [
+            "e6612956-4651-4f2b-bef3-424865de6236"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-09-breaker-25a-apartment",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 7058,
+          "products": [
+            "Авт.выкл-ль RX3 4,5КА 25A 1п C /419666/",
+            "Автоматический выключатель M06N 1P 25A C ARMAT ИЭК",
+            "Автоматический выключатель M10N 1P C 25А ARMAT ИЭК",
+            "Автомат 1Р ВА 47-29М 25А 4,5кА х-ка С GENERICA (ИЭК)"
+          ],
+          "failures": [],
+          "log_ids": [
+            "e78061b7-25cd-48c0-af09-43b3daf17ff8",
+            "6dcfef49-29fc-4f1d-b6fd-ad8b033a3a64"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-09b-breaker-25a-novice-guidance",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 8720,
+          "products": [
+            "Автомат 1Р ВА 47-100 25А 10 кА  х-ка С ИЭК",
+            "Авт.выкл-ль iC60N 1П 25А С /A9F79125/",
+            "Авт.выкл-ль ВА 101-1Р-025А-С /11056DEK/",
+            "Авт.выкл-ль EASY 9 1P 25A C 4,5кА 230В /EZ9F34125/"
+          ],
+          "failures": [],
+          "log_ids": [
+            "3c5a051e-4993-473b-ad10-c9f04744e75c",
+            "2b436189-152f-4155-bbfc-fef4490f8dfe",
+            "27a80f5a-043b-4d1b-83e2-6f0772364776",
+            "bbaee681-d4dd-4973-8ad1-f9ba48235724"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-10-pump-cable-7kw",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 1790,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "58a122ec-a953-4cbc-b08d-e18287278e0f",
+            "828894ec-c3da-4abc-ae79-4d883256942b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-11-motor-breaker-3kw",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 1358,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "3d4d1826-87b3-447c-80d3-e8433e1d7e46",
+            "1af24b2f-f57f-4ced-814d-173ed531ed43"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-12-air-conditioner-cable-3kw",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 6944,
+          "products": [
+            "Кабель ВВГ 3*2,5",
+            "Кабель ВВГ нг 3*2,5",
+            "Кабель ВВГ нг LS 3*2,5",
+            "Кабель ВВГ нг FRLS 3*2,5"
+          ],
+          "failures": [],
+          "log_ids": [
+            "9c960f8e-472b-4222-8b22-de5062cf09dc"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-13-boiler-breaker-trip",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 1954,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "a1a6fcb2-63cd-40bf-870f-b4f5411e37db",
+            "25e1d125-43a2-4c72-aedf-8256eebc6a03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-14-underground-power-cable",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 1305,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "eeda39e6-0774-4f87-8163-87f31f97c82f",
+            "8b1eda31-8e06-4188-84d8-09514c0af759"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-15-analog-cctv-outdoor-cable",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "duration_ms": 7299,
+          "products": [],
+          "failures": [
+            "products 0 < 1"
+          ],
+          "log_ids": [
+            "3a730bc1-4bc2-4087-ae42-c6f9ccc6e47a",
+            "ac9d0cea-1367-488c-a670-320cbc78af1b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-16-warm-e27-lamps",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 5957,
+          "products": [
+            "929001899887/871869682204300 Лампа ESS LED Bulb 9W E27 3000К 230V 1CT",
+            "929001900287/871869682208100 Лампа ESS LEDBulb 11W E27 3000K 230V 1CT",
+            "929001955307/871869963969300 Лампа LED Bulb 10W E27 3000K HV ECO",
+            "929001915337/871869682270800 Лампа LED Bulb 8W E27 3000K 230V 1CT/12"
+          ],
+          "failures": [],
+          "log_ids": [
+            "b2623d9c-89cb-4369-997e-7733aa3b6b9d"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-17-parking-floodlights",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 7894,
+          "products": [
+            "Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК",
+            "Прожектор СДО 06-50 светодиодный черный IP65 4000 K ИЭК",
+            "Светодиодный прожектор GLANZEN FAD-0005-50-SL"
+          ],
+          "failures": [],
+          "log_ids": [
+            "4f381fe0-4e51-4e48-9c29-87bf7ac90cbf",
+            "53bf9139-70ca-4764-924e-9b1424817eb4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-18-acti9-c16-analogs",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 11619,
+          "products": [
+            "Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК",
+            "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/",
+            "Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)",
+            "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710"
+          ],
+          "failures": [],
+          "log_ids": [
+            "ddd6bf78-52e5-4501-b4ef-b4a45cd95afd",
+            "fdef3222-0bed-40d8-837c-741b008bcb65"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-19-apartment-breaker-7kw",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 807,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "e6041393-7ba7-4cc9-a83b-c9060813e52f"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-20-vvgng-vs-nym",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 588,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "1b266f83-011a-446e-9de3-5be81f8f9090"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-21-floodlight-1000-lumen",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 618,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "1298dd67-05d5-4308-a92d-f490e4b4bd68"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-22-voltage-stabilizer-170v",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 549,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "4f89f01e-cb31-4ddf-ba66-6966ccaeb82d"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-23-welding-extension-30m",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 2231,
+          "products": [
+            "Катушка УК30 на металлическом барабане с термозащитой 4места 2Р+PЕ/30м КГ 3х2,5мм2 IP44 Professional"
+          ],
+          "failures": [],
+          "log_ids": [
+            "228f892a-b60a-4330-aec2-2b20c448ebc3"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-24-three-phase-motor-on-220v",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 660,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "d58a2599-d639-4b03-bc3a-5bde5b83dfe4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-25-black-hidden-sockets-white-followup",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 11413,
+          "products": [
+            "Розетка с заземлением, защитные шторки, винтовые контакты, цвет черный (серия Florence)",
+            "Розетка с заземлением, винтовые контакты, цвет черный (серия Florence)",
+            "Розетка без заземления, винтовые контакты, цвет черный (серия Florence)",
+            "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+            "Розетка с заземлением, винтовые контакты, цвет белый (серия Florence)",
+            "Розетка без заземления, винтовые контакты, цвет белый (серия Florence)",
+            "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет белый (серия Florence)",
+            "Розетка с крышкой, с заземлением, винтовые контакты, цвет белый (серия Florence)"
+          ],
+          "failures": [],
+          "log_ids": [
+            "def2491f-66c0-4a63-ad3e-658aba37bd6f",
+            "6c6d0ea0-b305-4fc6-8960-5a9bbb6b5abc"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-26-philips-office-cheapest",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 2681,
+          "products": [
+            "911401834781/871951450143099 Светильник RC087B LED Panel 9W/840 W30L30FCW",
+            "911401834881/871951450144799 Светильник RC087B LED Panel 18W/840 W30L60FCW"
+          ],
+          "failures": [],
+          "log_ids": [
+            "4b1e0895-d078-45f1-b09e-612d7fa71b84"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-27-house-panel-180m2",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "duration_ms": 714,
+          "products": [],
+          "failures": [],
+          "log_ids": [
+            "650c6633-ccaa-4329-a715-123b67d4e70e"
+          ]
+        }
+      ]
+    }
+  ]
+}

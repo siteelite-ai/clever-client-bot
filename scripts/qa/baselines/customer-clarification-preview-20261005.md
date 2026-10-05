@@ -1,6 +1,41 @@
 # Preview audit — 2026-10-05
 
-## Current checkpoint — preview 662, not ready
+## Current checkpoint — preview 663 (still not ready)
+
+- `be95ed1d`: generic relational-adjective evidence in catalog titles.
+  A complete noun root directly adjacent to the established product head can
+  prove the corresponding -н adjective; no product dictionary, SKU exceptions
+  or substring/prefix expansion. Description/trait coincidences and intervening
+  “без” / “для” do not activate the new path. Existing exact/numeric gates stay.
+  Tests cover luminaire and laser-level wording plus negative cases.
+- 866 shared tests, Edge typecheck and CI 37329127393 pass.
+  Management API: preview 663, production unchanged 448.
+- Browser repeat returns three ceiling fixtures after the one-item answer,
+  `d2972865-c062-4b4f-acea-eff9961ebca2`; screenshot
+  `/private/tmp/220volt-preview663-living-room.png`.
+  It still has unnecessary explanation/constraint wording
+  “Количество ламп: нет”; this is not a claim of perfect selection UX.
+- Stronger isolated reproduction: loaded the saved declaration/slots from
+  original failed browser first turn `04af31b2-74b7-453e-9a95-3b6767aeb22f`
+  and repeated only the same single-item answer on preview 663. No new model
+  calculation or new semantic mapping could account for the improvement.
+  Result `7eb267ac-e2fa-48bf-9eed-f1d14d5491cc`: HTTP 200, 4.232 s, three
+  cards, same 3750 lm minimum; visible literal modifier “светодиодный” remains
+  in the contract. Raw output in
+  `frozen-living-room-preview663-20261005.json`.
+- Full original 28-case suite finished: **25 PASS / 3 FAIL**, same failing
+  scenarios as preview 660. No newly failing automated case in this run.
+  Living room first response: `16fea2d7-327b-4ea6-a310-41b9b067486f`;
+  yard after area/height: `a8708c15-0b93-4d89-9c60-b16bf3073dea`;
+  CCTV: `ac9d0cea-1367-488c-a670-320cbc78af1b`.
+  Raw result: `customer-audit-preview663-20261005.json`.
+  Sensor case still returns acoustic titles and is not semantically accepted
+  despite automated PASS. Do not interpret 25/28 as 25 closed customer bugs.
+  Original first-turn completion, purchase-quantity handling,
+  mixed aggregate branches, sensor semantics, prerequisite reliability and
+  broader final regression remain open.
+
+## Historical checkpoint — preview 662
 
 - `78db8710`: retain the validated reasoning declaration in the existing
   configuration scope. An exact single-item answer reuses that declaration
