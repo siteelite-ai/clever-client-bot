@@ -4,6 +4,7 @@
 // LLM: Claude Sonnet 4.5 via OpenRouter (mem rule: LLM via OpenRouter only).
 // Tools: search_catalog, lookup_knowledge, render_products.
 
+import { resolveReasoningObligations } from "../_shared/v3-tools/reasoning-obligations.ts";
 import {
   createClient,
   type SupabaseClient,
@@ -7354,6 +7355,20 @@ async function runExpertLoop(
                     ? declarationArgs.reasoning.length
                     : 0,
                 array_sizes: arraySizes,
+                property_obligation_errors: resolveReasoningObligations(
+                  declarationArgs.mandatory_properties ?? [],
+                  typeof declarationArgs.reasoning === "string" ? declarationArgs.reasoning : "",
+                ).unresolved,
+                property_obligation_sources: Array.isArray(declarationArgs.mandatory_properties)
+                  ? declarationArgs.mandatory_properties.slice(0, 12).map((item: Record<string, unknown>) => ({
+                    key: String(item?.key ?? "").slice(0, 120),
+                    op: String(item?.op ?? "").slice(0, 10),
+                    value: String(item?.value ?? "").slice(0, 160),
+                    unit: String(item?.unit ?? "").slice(0, 20),
+                    scope: String(item?.scope ?? "").slice(0, 24),
+                    source_span: String(item?.source_span ?? "").slice(0, 600),
+                  }))
+                  : [],
               },
             });
             throw new Error("derived_selection_reasoning_contract_invalid");
