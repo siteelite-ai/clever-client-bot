@@ -104,6 +104,19 @@ const containsPhrase = (text: string, phrase: string) => {
     .test(text);
 };
 
+/** Same lexemes in inflected prose, not arbitrary prefixes or synonyms.
+ * Preserve every short code and number; punctuation/order may differ. */
+function containsInflectedPhrase(text: string, phrase: string): boolean {
+  if (containsPhrase(text, phrase)) return true;
+  const tokens = (value: string) => (normalized(value).match(/[\p{L}\p{N}]+/gu) ?? []).map((token) =>
+    /^[а-яё]{5,}$/u.test(token)
+      ? token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю)$/u, "")
+      : token);
+  const wanted = tokens(phrase);
+  const actual = new Set(tokens(text));
+  return wanted.length > 0 && wanted.every((token) => actual.has(token));
+}
+
 /** A declaration of necessity is not product evidence. This compiler only
  * preserves visible per-product requirements independently of search facets.
  * Callers must reject unresolved declarations and prove each obligation
@@ -137,11 +150,16 @@ export function resolveReasoningObligations(
     const span = normalized(sourceSpan);
     const offset = visible.indexOf(span);
     const before = offset < 0 ? "" : visible.slice(0, offset).trim();
-    if (
-      offset < 0 || (before && !/[.!?]$/u.test(before)) ||
-      !containsPhrase(span, key)
-    ) {
-      reject("source_not_visible_or_key_not_grounded");
+    if (offset < 0) {
+      reject("source_not_visible");
+      continue;
+    }
+    if (before && !/[.!?]$/u.test(before)) {
+      reject("source_not_sentence_boundary");
+      continue;
+    }
+    if (!containsInflectedPhrase(span, key)) {
+      reject("key_not_grounded");
       continue;
     }
     // Preferences and unresolved alternatives cannot become hard conditions.
@@ -192,7 +210,7 @@ export function resolveReasoningObligations(
     } else if (
       typeof value === "string" && value.trim().length >= 3 &&
       value.length <= 160 && op === "eq" &&
-      !unit && containsPhrase(span, value) &&
+      !unit && containsInflectedPhrase(span, value) &&
       extractClientQuantities(value).length === 0
     ) {
       criterion = {

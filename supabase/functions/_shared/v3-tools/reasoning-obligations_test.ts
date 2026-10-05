@@ -69,6 +69,15 @@ Deno.test("format repair preserves all selected semantics and original reasoning
   );
 });
 
+Deno.test("property quotes tolerate inflection and reordered explanation but preserve codes", () => {
+  const span = "Для уличной прокладки обязательна светостабилизированная оболочка из полиэтилена (ПЭ) черного цвета.";
+  const item = { ...environmental, key: "Оболочка", value: "ПЭ (полиэтилен)", source_span: span };
+  assertEquals(resolveReasoningObligations([item], span).unresolved, []);
+  for (const value of ["ПП (полиэтилен)", "ПЭ (полипропилен)", "ПЭ (полиэтилен) красный"]) {
+    assertEquals(resolveReasoningObligations([{ ...item, value }], span).unresolved.length, 1);
+  }
+});
+
 Deno.test("obligations do not depend on catalog search facets", () => {
   const result = resolveReasoningObligations(
     [numeric, environmental],

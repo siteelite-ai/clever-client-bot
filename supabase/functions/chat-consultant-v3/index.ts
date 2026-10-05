@@ -7391,6 +7391,8 @@ async function runExpertLoop(
                   call.name
                 ),
                 declaration_found: Boolean(declarationCall),
+                declaration_reasoning: typeof declarationArgs.reasoning === "string"
+                  ? declarationArgs.reasoning.slice(0, 1600) : "",
                 declaration_keys: Object.keys(declarationArgs).sort(),
                 declaration_reasoning_chars:
                   typeof declarationArgs.reasoning ===
