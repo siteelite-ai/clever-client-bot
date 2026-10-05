@@ -1850,6 +1850,21 @@ Deno.test("a measured preference already demoted as advisory cannot be promoted 
   assertEquals(aligned.promoted, []);
 });
 
+Deno.test("projected recommendation ranges cannot bypass necessity through arithmetic wording", () => {
+  const facets = [
+    { key: "flux", caption: "Световой поток, Лм", type: "number", unit: "лм", values: [{ value: "3500" }, { value: "4000" }] },
+    { key: "power", caption: "Мощность, вт", type: "number", unit: "вт", values: [{ value: "40" }, { value: "50" }, { value: "70" }] },
+  ];
+  const reasoning = "Необходим световой поток не менее 3500 Лм. Рекомендуемая мощность для таких параметров составляет от 40-50 Вт.";
+  const result = compileMeasuredReasoningSearchContract([], reasoning, [], facets);
+  assertEquals(result.mandatory_criteria.some((criterion) => criterion.key === "Мощность, вт"), false);
+  assertEquals(result.projected_criteria.some((criterion) => criterion.key === "Мощность, вт"), false);
+  assertEquals(result.options.power, undefined);
+  assertEquals(result.mandatory_criteria.some((criterion) => criterion.op === "min" && criterion.value === 3500), true);
+  const customer = { key: "Мощность, вт", op: "range" as const, value: [40, 50] as [number, number], unit: "вт", level: "A" as const, evidence: "user_explicit" as const };
+  assertEquals(compileMeasuredReasoningSearchContract([customer], reasoning, [customer], facets).mandatory_criteria.some((criterion) => criterion.key === customer.key), true);
+});
+
 Deno.test("render-only model criteria cannot retroactively strengthen an ordinary search", () => {
   const frozen: Criterion[] = [
     {
