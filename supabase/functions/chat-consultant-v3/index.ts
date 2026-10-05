@@ -124,6 +124,8 @@ import {
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
   resolveDerivedSelectionReasoning,
+  resumeSingleItemReasoning,
+  selectionReasoningCheckpoint,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -7109,24 +7111,42 @@ async function runExpertLoop(
           );
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
+          const resumedReasoning = resumeSingleItemReasoning(
+            userMessage,
+            slots,
+            lastDiscover.facets ?? [],
+          );
           const primaryReasoningTimeout = Math.min(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
           );
           try {
-            structuredReasoning = await callOpenRouter(
-              apiKey,
-              derivedMessages,
-              turnController.signal,
-              primaryReasoningTimeout,
-              "derived_reasoning",
-              ["declare_selection_reasoning"],
-              "declare_selection_reasoning",
-              0,
-              [reasoningToolSchema],
-              1200,
-              buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
-            );
+            structuredReasoning = resumedReasoning
+              ? {
+                text: "",
+                toolCalls: [{
+                  id: crypto.randomUUID(),
+                  name: "declare_selection_reasoning",
+                  args: resumedReasoning,
+                }],
+                finishReason: "preserved_configuration_reasoning",
+                provider: "server_preserved",
+              }
+              : await callOpenRouter(
+                apiKey,
+                derivedMessages,
+                turnController.signal,
+                primaryReasoningTimeout,
+                "derived_reasoning",
+                ["declare_selection_reasoning"],
+                "declare_selection_reasoning",
+                0,
+                [reasoningToolSchema],
+                1200,
+                buildOpenRouterModelRouting(ctx.selectionReasoningModel, [
+                  MODEL,
+                ]),
+              );
           } catch (reasoningError) {
             const timedOut =
               (reasoningError as Error)?.name === "TimeoutError" ||
@@ -7214,7 +7234,8 @@ async function runExpertLoop(
           };
           if (
             declaration?.text.trim() && missingRequiredProductMeasurement() &&
-            derivedReasoningProviderAttempts < 2
+            derivedReasoningProviderAttempts < 2 &&
+            !resumedReasoning
           ) {
             const correctionTimeout = boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS,
@@ -7385,6 +7406,12 @@ async function runExpertLoop(
                 ...aggregateClarification,
                 scope: selectionReadinessScope(userMessage, {
                   resolved_category: lastDiscover.category.pagetitle,
+                  reasoning_checkpoint: declarationCall
+                    ? selectionReasoningCheckpoint(
+                      declarationCall.args,
+                      lastDiscover.facets ?? [],
+                    ) ?? undefined
+                    : undefined,
                 }),
               }),
               send,
@@ -7402,6 +7429,13 @@ async function runExpertLoop(
               productsRendered,
               shownProductIds: [...shownIds],
             };
+          }
+          if (resumedReasoning) {
+            steps.push({
+              step: "v3_configuration_reasoning_preserved",
+              ms: now(),
+              meta: { category: lastDiscover.category.pagetitle },
+            });
           }
           const derivedScalarProjectionAllowed =
             shouldProjectDerivedScalarMeasurement(

@@ -4,12 +4,19 @@ const SELECTION_READINESS_SCOPE = "selection_readiness";
 
 export function selectionReadinessScope(
   token: string,
-  context: { resolved_category?: string; assistance_level?: number } = {},
+  context: {
+    resolved_category?: string;
+    assistance_level?: number;
+    reasoning_checkpoint?:
+      import("./selection-actionability.ts").SelectionReasoningCheckpoint;
+  } = {},
 ): {
   kind: string;
   token: string;
   resolved_category?: string;
   assistance_level?: number;
+  reasoning_checkpoint?:
+    import("./selection-actionability.ts").SelectionReasoningCheckpoint;
 } {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
@@ -22,6 +29,9 @@ export function selectionReadinessScope(
     token: String(token ?? "").trim().slice(0, 500),
     ...(resolvedCategory ? { resolved_category: resolvedCategory } : {}),
     ...(assistanceLevel ? { assistance_level: assistanceLevel } : {}),
+    ...(context.reasoning_checkpoint
+      ? { reasoning_checkpoint: context.reasoning_checkpoint }
+      : {}),
   };
 }
 

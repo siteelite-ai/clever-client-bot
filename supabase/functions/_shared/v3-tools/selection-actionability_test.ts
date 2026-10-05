@@ -15,6 +15,8 @@ import {
   measuredSelectionContractEvidence,
   reasoningComputesSystemTotalFromSpatialExtent,
   resolveDerivedSelectionReasoning,
+  resumeSingleItemReasoning,
+  selectionReasoningCheckpoint,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -23,6 +25,98 @@ import {
   systemTotalReasoningDeclaresPerProductMeasurement,
   validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("configuration continuation preserves visible demand and rebinds live IDs", () => {
+  const facets = [{
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }, { value: "IP20" }],
+  }];
+  const args = {
+    reasoning:
+      "Для площади 35 м² требуется общий световой поток не менее 3500 лм. Обязательна степень защиты IP65.",
+    measurement_scope: "system_total",
+    required_facet_values: ["f0v0"],
+  };
+  const checkpoint = selectionReasoningCheckpoint(args, facets);
+  const slots = {
+    pending_clarification: {
+      facet_key: "system_configuration",
+      scope: { reasoning_checkpoint: checkpoint },
+    },
+  };
+  const movedFacets = [{
+    key: "other",
+    caption: "Материал",
+    values: [{ value: "сталь" }],
+  }, ...facets];
+  const message =
+    "Площадь 35 м²\nУточнение клиента: Одно изделие для всей задачи";
+  const restored = resumeSingleItemReasoning(message, slots, movedFacets);
+  assertEquals(restored?.reasoning, args.reasoning);
+  assertEquals(restored?.required_facet_values, ["f1v0"]);
+  const resolved = resolveDerivedSelectionReasoning(
+    restored!,
+    movedFacets,
+    message,
+  );
+  assertEquals(resolved?.measurementScope, "per_product");
+  assertEquals(resolved?.measurementEvidence.includes("3500"), true);
+  assertEquals(
+    resumeSingleItemReasoning("Теперь площадь 3 м²", slots, movedFacets),
+    null,
+  );
+  assertEquals(
+    resumeSingleItemReasoning("Несколько изделий вместе", slots, movedFacets),
+    null,
+  );
+  assertEquals(resumeSingleItemReasoning(message, slots, []), null);
+  assertEquals(resumeSingleItemReasoning(message, {}, movedFacets), null);
+  assertEquals(
+    resumeSingleItemReasoning(message, {
+      pending_clarification: {
+        facet_key: "another_question",
+        scope: slots.pending_clarification.scope,
+      },
+    }, movedFacets),
+    null,
+  );
+});
+
+Deno.test("reasoning checkpoints reject malformed or non-aggregate declarations", () => {
+  assertEquals(
+    selectionReasoningCheckpoint({
+      reasoning: "test",
+      measurement_scope: "per_product",
+    }, []),
+    null,
+  );
+  const args = {
+    reasoning: "Общая потребность составляет не менее 5000 лм.",
+    measurement_scope: "system_total",
+  };
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      required_facet_values: ["unknown"],
+    }, []),
+    null,
+  );
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      clarification_question: "Какой тип?",
+    }, []),
+    null,
+  );
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      explicit_customer_classifications: [null],
+    }, []),
+    null,
+  );
+});
 
 Deno.test("an unresolved prerequisite is a clarification outcome, never a partial search contract", () => {
   const result = resolveDerivedSelectionReasoning({

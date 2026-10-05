@@ -23,6 +23,8 @@ export interface ProposeClarificationInput {
     resolved_category?: string;
     /** Number of plain-language help turns already shown for this question. */
     assistance_level?: number;
+    reasoning_checkpoint?:
+      import("./selection-actionability.ts").SelectionReasoningCheckpoint;
   };
 }
 

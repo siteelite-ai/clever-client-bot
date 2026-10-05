@@ -1662,6 +1662,152 @@ export function validatedPerProductMeasurementEvidence(
 
 const SINGLE_ITEM_TOTAL_CHOICE = "Одно изделие для всей задачи";
 
+export interface SelectionReasoningCheckpoint {
+  version: 1;
+  args: Record<string, unknown>;
+  choices: Array<{ id: string; facet: string; value: string }>;
+}
+
+/** Keep the declaration as data, not as new instructions or a new user claim.
+ * Only referenced live values are retained; they must be rebound on resume. */
+export function selectionReasoningCheckpoint(
+  args: Record<string, unknown>,
+  facets: DerivedSelectionFacet[],
+): SelectionReasoningCheckpoint | null {
+  if (
+    typeof args.reasoning !== "string" || args.reasoning.length > 1600 ||
+    args.measurement_scope !== "system_total" || args.clarification_question
+  ) {
+    return null;
+  }
+  const clean: Record<string, unknown> = {};
+  for (
+    const key of [
+      "reasoning",
+      "measurement_scope",
+      "per_product_measurement_evidence",
+      "retrieval_query",
+      "clarification_question",
+    ]
+  ) {
+    clean[key] = typeof args[key] === "string" ? args[key] : "";
+  }
+  const ids = new Set<string>();
+  for (
+    const key of [
+      "compatible_classifications",
+      "excluded_classifications",
+      "required_facet_values",
+    ]
+  ) {
+    const values = args[key] ?? [];
+    if (
+      !Array.isArray(values) || values.length > 8 ||
+      values.some((id) => typeof id !== "string")
+    ) return null;
+    clean[key] = [...values];
+    values.forEach((id) => ids.add(id));
+  }
+  const mappings = args.explicit_customer_classifications ?? [];
+  if (!Array.isArray(mappings) || mappings.length > 8) return null;
+  clean.explicit_customer_classifications = [];
+  for (const mapping of mappings) {
+    if (
+      !mapping || typeof mapping.customer_phrase !== "string" ||
+      typeof mapping.classification_id !== "string" ||
+      mapping.customer_phrase.length > 500
+    ) return null;
+    (clean.explicit_customer_classifications as unknown[]).push({
+      customer_phrase: mapping.customer_phrase,
+      classification_id: mapping.classification_id,
+    });
+    ids.add(mapping.classification_id);
+  }
+  const choices = [
+    ...derivedClassificationChoices(facets),
+    ...derivedRequiredFacetChoices(facets),
+  ]
+    .filter(({ id }) => ids.has(id))
+    .map(({ id, facet, value }) => ({ id, facet, value }));
+  if ([...ids].some((id) => !choices.some((choice) => choice.id === id))) {
+    return null;
+  }
+  return { version: 1, args: clean, choices };
+}
+
+/** An exact configuration answer changes allocation, not demand. Reuse only
+ * this narrow transition; new conditions and other answers require new work.
+ * The normal declaration resolver and product evidence gates still run. */
+export function resumeSingleItemReasoning(
+  userMessage: string,
+  slots: Record<string, unknown>,
+  facets: DerivedSelectionFacet[],
+): Record<string, unknown> | null {
+  const lastLine = userMessage.split(/\n/u).at(-1)?.replace(
+    /^Уточнение клиента:\s*/u,
+    "",
+  ).trim();
+  if (lastLine !== SINGLE_ITEM_TOTAL_CHOICE) return null;
+  const pending = slots.pending_clarification as
+    | Record<string, unknown>
+    | undefined;
+  if (!pending || pending.facet_key !== "system_configuration") return null;
+  const scope = pending.scope as Record<string, unknown> | undefined;
+  const raw = scope?.reasoning_checkpoint as
+    | SelectionReasoningCheckpoint
+    | undefined;
+  if (
+    !raw || raw.version !== 1 || !raw.args || !Array.isArray(raw.choices) ||
+    raw.choices.length > 32
+  ) return null;
+  const live = [
+    ...derivedClassificationChoices(facets),
+    ...derivedRequiredFacetChoices(facets),
+  ];
+  const ids = new Map<string, string>();
+  for (const old of raw.choices) {
+    if (
+      !old || typeof old.id !== "string" || typeof old.facet !== "string" ||
+      typeof old.value !== "string"
+    ) return null;
+    const match = live.find((choice) =>
+      choice.facet === old.facet && choice.value === old.value
+    );
+    if (!match) return null;
+    ids.set(old.id, match.id);
+  }
+  const args = { ...raw.args };
+  for (
+    const key of [
+      "compatible_classifications",
+      "excluded_classifications",
+      "required_facet_values",
+    ]
+  ) {
+    if (
+      !Array.isArray(args[key]) ||
+      (args[key] as unknown[]).some((id) => !ids.has(String(id)))
+    ) return null;
+    args[key] = (args[key] as string[]).map((id) => ids.get(id)!);
+  }
+  if (!Array.isArray(args.explicit_customer_classifications)) return null;
+  const mappings: Array<
+    { customer_phrase: string; classification_id: string }
+  > = [];
+  for (const item of args.explicit_customer_classifications) {
+    if (
+      !item || typeof item.customer_phrase !== "string" ||
+      !ids.has(item.classification_id)
+    ) return null;
+    mappings.push({
+      customer_phrase: item.customer_phrase,
+      classification_id: ids.get(item.classification_id)!,
+    });
+  }
+  args.explicit_customer_classifications = mappings;
+  return selectionReasoningCheckpoint(args, facets)?.args ?? null;
+}
+
 /** Optional numerical correction must not erase already validated obligations. */
 export function derivedCorrectionPreservesRequirements(
   prior: Pick<
