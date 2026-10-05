@@ -287,6 +287,15 @@ function renderedValueIsCustomerOwned(
   userMessage: string,
 ): boolean {
   if (isAdministrativeCatalogField({ caption: label })) return false;
+  // Boolean storage values cannot own an unrelated trait via conversational
+  // assent or a substring such as "да" in "задачи". This emission-only path
+  // requires the explicit labelled pair; semantic requests keep the normal
+  // visible-requirement/search contract.
+  const normalizedValue = normalizeKey(value);
+  if (/^(?:да|нет|yes|no|true|false)$/u.test(normalizedValue)) {
+    const pair = normalizeKey(`${label} ${value}`);
+    return (` ${normalizeKey(userMessage)} `).includes(` ${pair} `);
+  }
   // A bare scalar is not self-describing. Matching the digit `3` in `3 кВт`
   // must not promote an unrelated metadata field whose value also happens to
   // be `3`; numeric ownership additionally requires a grounded label or a

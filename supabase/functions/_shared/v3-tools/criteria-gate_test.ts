@@ -33,6 +33,22 @@ import {
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
+Deno.test("rendered boolean facts require a customer-owned label, not incidental assent", () => {
+  const products = ["one", "two"].map((id) => ({
+    id, pagetitle: "Изделие", vendor: null, price: 100, stock: "in_stock" as const,
+    short_traits: ["Диммирование: Да", "Защита: Да", "Разборный: Нет"],
+  }));
+  for (const message of ["Одно изделие для всей задачи", "Да", "нет", "Для дачи"]) {
+    assertEquals(projectCommonRenderedUserCriteria(products, message), []);
+  }
+  assertEquals(projectCommonRenderedUserCriteria(products, "Диммирование: да"), [{
+    key: "Диммирование", op: "eq", value: "Да", level: "A", evidence: "user_explicit",
+  }]);
+  assertEquals(projectCommonRenderedUserCriteria(products, "Разборный: нет"), [{
+    key: "Разборный", op: "eq", value: "Нет", level: "A", evidence: "user_explicit",
+  }]);
+});
+
 Deno.test("catalog proof requires the actual request to constrain the same facet", () => {
   const required: Criterion[] = [{
     key: "Нужная функция",
