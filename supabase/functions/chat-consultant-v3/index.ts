@@ -49,6 +49,7 @@ import {
 import {
   applyCriteriaGate,
   buildCriteriaQuery,
+  catalogFilterProvenCriteria,
   type Criterion,
   type CriterionEvidence,
   extendSelectionCriteriaPlan,
@@ -14243,8 +14244,12 @@ async function runExpertLoop(
               // request, so the resulting pool cannot inherit it as proven
               // evidence. It remains mandatory in latestRenderCriteria and
               // is checked against every materialized card before rendering.
-              enforcedSearchCriteria.filter((criterion) =>
-                !isPostFilterOnlyReasoningCriterion(criterion)
+              catalogFilterProvenCriteria(
+                enforcedSearchCriteria.filter((criterion) =>
+                  !isPostFilterOnlyReasoningCriterion(criterion)
+                ),
+                lastDiscover?.facets ?? [],
+                runArgs,
               ),
               selectedSearchRecoveryAttempt,
             );

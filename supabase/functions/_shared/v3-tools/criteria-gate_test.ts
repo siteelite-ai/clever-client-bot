@@ -5,6 +5,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   applyCriteriaGate,
   buildCriteriaQuery,
+  catalogFilterProvenCriteria,
   checkCriterion,
   type Criterion,
   extendSelectionCriteriaPlan,
@@ -31,6 +32,82 @@ import {
   titleProvesCompactCriterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
+
+Deno.test("catalog proof requires the actual request to constrain the same facet", () => {
+  const required: Criterion[] = [{
+    key: "Нужная функция",
+    op: "eq",
+    value: "да",
+    level: "A",
+  }];
+  const facets = [{
+    key: "feature",
+    caption: "Нужная функция",
+    unit: null,
+    values: [{ value: "да" }, { value: "нет" }],
+  }];
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_query",
+      query: "изделие с функцией",
+    }),
+    [],
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_filter",
+      options: { another: ["да"] },
+    }),
+    [],
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_filter",
+      options: { feature: ["да", "нет"] },
+    }),
+    [],
+  );
+  const proof = catalogFilterProvenCriteria(required, facets, {
+    mode: "by_filter",
+    options: { feature: ["да"] },
+  });
+  assertEquals(proof, required);
+  const unproved = projectCatalogFilterEvidence([product("1", [])], []);
+  assertEquals(applyCriteriaGate(unproved, required).passed_ids, []);
+});
+
+Deno.test("catalog proof preserves exact alternatives but excludes missing requirements", () => {
+  const alternatives: Criterion[] = [
+    { key: "Исполнение", op: "eq", value: "A", level: "A" },
+    { key: "Исполнение", op: "eq", value: "B", level: "A" },
+  ];
+  const missing: Criterion = {
+    key: "Другой признак",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const facets = [{
+    key: "variant",
+    caption: "Исполнение",
+    unit: null,
+    values: [{ value: "A" }, { value: "B" }, { value: "C" }],
+  }];
+  assertEquals(
+    catalogFilterProvenCriteria([...alternatives, missing], facets, {
+      mode: "by_filter",
+      options: { variant: ["A", "B"] },
+    }),
+    alternatives,
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(alternatives, facets, {
+      mode: "by_filter",
+      options: { variant: ["A", "C"] },
+    }),
+    [],
+  );
+});
 
 function product(id: string, traits: string[]): ProductRef {
   return {

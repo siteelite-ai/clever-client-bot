@@ -742,6 +742,43 @@ export function projectCatalogFilterEvidence<T extends ProductRef>(
   }));
 }
 
+/** Retain only requirements proved by the actual options sent to the catalog.
+ * Merely requesting a feature or searching for its words is not filter proof.
+ * Multiple allowed values of the same facet preserve their OR semantics. */
+export function catalogFilterProvenCriteria(
+  criteria: Criterion[],
+  facets: CriteriaFacet[],
+  searchArgs: Record<string, unknown>,
+): Criterion[] {
+  if (searchArgs.mode !== "by_filter" && searchArgs.mode !== "by_query") {
+    return [];
+  }
+  const options = searchArgs.options;
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return [];
+  }
+  const groups = new Map<string, Criterion[]>();
+  for (const criterion of criteria) {
+    const key = normalizeKey(criterion.key);
+    groups.set(key, [...(groups.get(key) ?? []), criterion]);
+  }
+  return [...groups.values()].flatMap((group) => {
+    const projection = projectCriteriaFacetOptions(group, facets);
+    const entries = Object.entries(projection.options);
+    const proven = entries.length > 0 && entries.every(([key, allowed]) => {
+      const raw = (options as Record<string, unknown>)[key];
+      const actual = Array.isArray(raw)
+        ? raw.map(String)
+        : typeof raw === "string"
+        ? [raw]
+        : [];
+      return actual.length > 0 &&
+        actual.every((value) => allowed.includes(value));
+    });
+    return proven ? projection.proven_criteria : [];
+  });
+}
+
 /** Enforces a user price ceiling on every render path, including recoveries. */
 export function filterProductIdsByBudgetCap<T extends { price: number }>(
   ids: string[],
