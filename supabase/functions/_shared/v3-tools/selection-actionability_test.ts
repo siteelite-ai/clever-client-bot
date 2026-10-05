@@ -1224,6 +1224,9 @@ Deno.test("one shared purpose word is not evidence of a different compound produ
   const facets = [{ key: "purpose", caption: "Назначение", values: [
     { value: "Кабели силовые стационарные до 1кВ" },
     { value: "кабели пожарной сигнализации" },
+    // Another live sibling shares the signal stem. It remains an essential
+    // part of the compound label even though it is no longer unique.
+    { value: "Кабели сигнально-блокировочные" },
   ] }];
   const args = {
     reasoning: source + " Проверяю условия подключения нагрузки.",

@@ -1376,13 +1376,18 @@ export function resolveDerivedSelectionReasoning(
       sentenceTokens.map(classificationLexicalStem),
     );
     const namesUnselectedSibling = unselectedChoices.some((choice) => {
-      const discriminators = new Set(classificationDiscriminativeStems(choice, allLiveChoices));
-      // A compound class is not established by a single shared purpose word.
-      // Semicolon-separated catalogue alternatives are OR; the meaningful
-      // discriminator tokens inside each alternative must all be present.
+      const facetStems = new Set(classificationLexicalTokens(choice.facet));
+      // Uniqueness among siblings is insufficient here: a compound class may
+      // share one of its essential words with another class (for example a
+      // purpose word), leaving only a misleading generic overlap. Require
+      // every meaningful word of an alternative, not merely its unique words.
+      // The facet label and grammatical glue are context, not class evidence.
       return choice.value.split(";").some((alternative) => {
         const tokens = classificationLexicalTokens(alternative)
-          .filter((token) => discriminators.has(token));
+          .filter((token) =>
+            !CLASSIFICATION_GLUE_STEMS.has(token) &&
+            !facetStems.has(token)
+          );
         return tokens.length > 0 && tokens.every((token) => sentenceStems.has(token));
       });
     });
