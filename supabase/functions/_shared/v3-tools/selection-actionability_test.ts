@@ -1166,6 +1166,19 @@ Deno.test("a model-derived exact value requires visible facet context", () => {
   }]);
 });
 
+Deno.test("classification cleanup cannot erase a separately validated required facet", () => {
+  const sentence = "Необходим цвет корпуса черный.";
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: sentence + " Проверяю соответствие условиям применения.",
+    measurement_scope: "not_applicable",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [], excluded_classifications: [], explicit_customer_classifications: [],
+    mandatory_properties: [{ key: "Цвет корпуса", value: "черный", unit: "", op: "eq", scope: "per_product", source_span: sentence }],
+  }, [{ key: "colour", caption: "Цвет корпуса", values: [{ value: "черный" }, { value: "белый" }] }], "Подбери изделие для проекта.");
+  assertEquals(resolved?.propertyObligations?.length, 1);
+  assertEquals(resolved?.text.includes(sentence), true);
+});
+
 Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {
   const facets = [{
     key: "shell",

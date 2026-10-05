@@ -222,7 +222,8 @@ export function resolveReasoningObligations(
       [valueOwners[0].key, valueOwners[0].caption].some((caption) =>
         typeof caption === "string" && normalized(caption) === normalized(key)) &&
       containsInflectedPhrase(span, String(value));
-    const countGrounded = typeof value === "number" && Number.isInteger(value) && !unit && op === "eq" &&
+    const countGrounded = typeof value === "number" && Number.isInteger(value) &&
+      (!unit || /^(?:шт\.?|штук|pcs?|pieces?)$/iu.test(String(unit))) && op === "eq" &&
       facets.some((facet) =>
         [facet.key, facet.caption].some((label) => typeof label === "string" && normalized(label) === normalized(key)) &&
         Number(compoundCountFacetValue({
@@ -274,7 +275,7 @@ export function resolveReasoningObligations(
         key,
         op,
         value,
-        ...(unit ? { unit } : {}),
+        ...(unit && !countGrounded ? { unit } : {}),
         exclusive: bounds.some((bound) => bound.strict),
         level: "A",
         evidence: customerGrounded ? "user_explicit" : "derived_required",

@@ -863,6 +863,7 @@ export function compoundCountFacetValue(
     )
   );
   const claimedCounts = [...new Set(claims.map(({ count }) => count))];
+  if (claimedCounts.length === 0) return explicitlyLabelledFacetValue(facet, evidence);
   if (claimedCounts.length !== 1) return null;
   const count = claimedCounts[0];
   const candidates = facet.values.filter(({ value }) => {
@@ -891,7 +892,8 @@ function explicitlyLabelledFacetValue(
   for (const labelTokens of labels) {
     for (let index = 0; index <= evidenceTokens.length - labelTokens.length; index++) {
       if (!labelTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
-      const valueStart = index + labelTokens.length;
+      let valueStart = index + labelTokens.length;
+      if (["составляет", "равно", "равен", "равна"].includes(evidenceTokens[valueStart])) valueStart += 1;
       for (const candidate of facet.values) {
         if (!isAtomicFacetValue(candidate.value)) continue;
         const valueTokens = norm(candidate.value).split(" ").filter(Boolean);

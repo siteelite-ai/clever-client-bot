@@ -258,6 +258,17 @@ Deno.test("dimensionless product counts reuse live schema count grounding", () =
   }
 });
 
+Deno.test("label-first count statements canonicalize counting units but never physical measurements", () => {
+  const facets = [{ key: "count", caption: "Количество элементов", values: [{ value: "1" }, { value: "3" }] }];
+  for (const [source, unit, value] of [["Необходимо Количество элементов 1 шт.", "шт", 1], ["Необходимо количество элементов составляет 3.", "", 3]] as const) {
+    const item = { ...numeric, key: "Количество элементов", source_span: source, unit, value };
+    const result = resolveReasoningObligations([item], source, facets);
+    assertEquals(result.unresolved, []);
+    assertEquals(result.obligations[0].criterion.unit, undefined);
+    assertEquals(resolveReasoningObligations([{ ...item, unit: "А" }], source, facets).unresolved.length, 1);
+  }
+});
+
 Deno.test("explicit customer facet proof does not depend on a necessity verb in model prose", () => {
   const source = "Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000.";
   const item = { ...numeric, key: "Цветовая температура, К", unit: "К", value: 3000, source_span: source };

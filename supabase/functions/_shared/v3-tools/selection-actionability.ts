@@ -884,6 +884,7 @@ export function resolveDerivedSelectionReasoning(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
   productClass = "",
+  onRejected?: (diagnostic: { stage: string; reasoning: string; errors: Array<{ index: number; reason: string }> }) => void,
 ): ResolvedDerivedSelectionReasoning | null {
   const originalReasoning = stripDerivedSchemaIds(
     visibleFacetText(String(args.reasoning ?? "")),
@@ -925,7 +926,10 @@ export function resolveDerivedSelectionReasoning(
     facets,
     customerEvidence,
   );
-  if (propertyResolution.unresolved.length > 0) return null;
+  if (propertyResolution.unresolved.length > 0) {
+    onRejected?.({ stage: "original_properties", reasoning: originalReasoning, errors: propertyResolution.unresolved });
+    return null;
+  }
   const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
     customerEvidence,
     originalReasoning,
@@ -1389,10 +1393,11 @@ export function resolveDerivedSelectionReasoning(
     args.per_product_measurement_evidence,
   );
   // Later class cleanup must not erase the visible source of a hard property.
-  if (
-    resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets, customerEvidence)
-      .unresolved.length > 0
-  ) return null;
+  const retainedProperties = resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets, customerEvidence);
+  if (retainedProperties.unresolved.length > 0) {
+    onRejected?.({ stage: "classification_cleanup", reasoning, errors: retainedProperties.unresolved });
+    return null;
+  }
   const aggregateScopeEvidence = measurementScope === "system_total"
     ? perProductEvidence
       ? "Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию."

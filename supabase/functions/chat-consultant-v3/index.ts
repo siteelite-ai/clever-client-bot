@@ -7397,10 +7397,15 @@ async function runExpertLoop(
                 .filter(([, value]) => Array.isArray(value))
                 .map(([key, value]) => [key, (value as unknown[]).length]),
             );
+            const rejectionStages: unknown[] = [];
+            resolveDerivedSelectionReasoning(declarationArgs, lastDiscover.facets ?? [], userMessage,
+              activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
+              (diagnostic) => rejectionStages.push(diagnostic));
             steps.push({
               step: "v3_derived_selection_reasoning_contract_rejected",
               ms: now(),
               meta: {
+                rejection_stages: rejectionStages,
                 finish: structuredReasoning.finishReason,
                 response_text_chars: structuredReasoning.text.length,
                 tool_call_names: structuredReasoning.toolCalls.map((call) =>
