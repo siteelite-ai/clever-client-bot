@@ -38,6 +38,21 @@ const environmental = {
   source_span: "Обязательна УФ-стойкая оболочка.",
 };
 
+Deno.test("regular Russian noun cases preserve property identity across measured axes", () => {
+  const cases = [
+    { key: "Сечение кабеля", source: "Необходим медный кабель с сечением не менее 2.5 мм2.", value: 2.5, unit: "мм2" },
+    { key: "Напряжение питания", source: "Необходим прибор с напряжением питания не менее 12 В.", value: 12, unit: "В" },
+    { key: "Волновое сопротивление", source: "Необходим кабель с волновым сопротивлением не менее 75 Ом.", value: 75, unit: "Ом" },
+  ];
+  for (const item of cases) {
+    const declaration = { key: item.key, value: item.value, unit: item.unit,
+      op: "min", scope: "per_product", source_span: item.source };
+    assertEquals(resolveReasoningObligations([declaration], item.source).unresolved, []);
+    assertEquals(resolveReasoningObligations([{ ...declaration, key: "Длина кабеля" }], item.source).unresolved.length, 1);
+    assertEquals(resolveReasoningObligations([{ ...declaration, value: 999 }], item.source).unresolved.length, 1);
+  }
+});
+
 Deno.test("format repair preserves all selected semantics and original reasoning", () => {
   const original = {
     reasoning: "Проверяю условия применения.",
