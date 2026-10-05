@@ -11,6 +11,32 @@ import {
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
 
+Deno.test("a derived prerequisite preserves task context and helps a novice without repeating", () => {
+  const original = "Нужно изделие для оборудования мощностью 3 кВт";
+  const slots = {
+    pending_clarification: {
+      status: "pending",
+      question: "Какая схема подключения указана на оборудовании?",
+      facet_key: "selection_prerequisite",
+      options: [],
+      scope: selectionReadinessScope(original, {
+        resolved_category: "Изделия",
+      }),
+    },
+  };
+  const help = selectReadinessAssistance("Не знаю", slots);
+  assertEquals(help?.freeform, true);
+  assertEquals(help?.scope?.token, original);
+  assertEquals(help?.scope?.resolved_category, "Изделия");
+  assertEquals(help?.question.includes("Не нужно угадывать"), true);
+  const continuation = resolveScopedCatalogSelectionContinuation(
+    "220 В, 1 фаза",
+    slots,
+  );
+  assertEquals(continuation?.message.includes(original), true);
+  assertEquals(continuation?.message.includes("220 В, 1 фаза"), true);
+});
+
 const cases = [
   [
     "Сколько автоматов нужно поставить в щит для дома?",
@@ -359,7 +385,10 @@ Deno.test("readiness help is generic across product profiles and remains scoped"
   // The embedded widget currently ignores quick_replies; help must remain
   // actionable using only the visible assistant text.
   for (const option of assistance?.options ?? []) {
-    assertEquals(assistance?.question.includes(option.label ?? option.value), true);
+    assertEquals(
+      assistance?.question.includes(option.label ?? option.value),
+      true,
+    );
   }
   assertEquals(/вариант ниже/iu.test(assistance?.question ?? ""), false);
 });

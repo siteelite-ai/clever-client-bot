@@ -1,0 +1,54 @@
+{
+  "schema_version": 3,
+  "default_expectations": {
+    "max_duration_ms": 30000,
+    "forbid_repeat_previous_assistant": true
+  },
+  "cases": [
+    {
+      "id": "ac-cable-conditional-input",
+      "title": "Уточнение неизвестной схемы, затем законченный подбор",
+      "turns": [
+        {
+          "message": "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["напряж", "фаз", "220", "380", "потребляем", "паспорт"]
+          }
+        },
+        {
+          "message": "3 кВт — потребляемая электрическая мощность. 220 В, однофазный. Длина линии 10 метров, стационарная прокладка медным кабелем.",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "forbid_additive_compound_marking": true,
+            "require_every_product_title_groups": [
+              ["ВВГ", "NYM"],
+              ["3*2,5", "3×2,5", "3x2,5", "3х2,5"]
+            ],
+            "forbid_product_title": ["2*2,5", "4*2,5", "UTP", "FTP", "Ретро"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit-input-no-redundant-question",
+      "title": "Достаточные условия не вызывают повторного уточнения",
+      "turns": [
+        {
+          "message": "Подбери кабель для кондиционера с потребляемой электрической мощностью 3 кВт, 220 В, одна фаза. Линия 10 метров, стационарная прокладка, медные жилы.",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "forbid_additive_compound_marking": true,
+            "require_every_product_title_groups": [
+              ["ВВГ", "NYM"],
+              ["3*2,5", "3×2,5", "3x2,5", "3х2,5"]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

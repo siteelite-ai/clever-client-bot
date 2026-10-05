@@ -186,7 +186,9 @@ export function selectReadinessAssistance(
     ? pending.facet_key.trim()
     : "";
   const options = normalizedClarificationOptions(pending.options);
-  const freeform = facetKey === "readiness_remaining" && options.length === 0;
+  const freeform = options.length === 0 &&
+    (facetKey === "readiness_remaining" ||
+      facetKey === "selection_prerequisite");
   if (!facetKey || (!freeform && options.length < 2)) return null;
 
   const currentLevel = Number.isInteger(scoped.assistance_level)

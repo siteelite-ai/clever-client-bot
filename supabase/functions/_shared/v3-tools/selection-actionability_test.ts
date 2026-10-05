@@ -24,6 +24,52 @@ import {
   validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
 
+Deno.test("an unresolved prerequisite is a clarification outcome, never a partial search contract", () => {
+  const result = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Исполнение зависит от условий подключения, которые пока не указаны.",
+    clarification_question: "Какая схема подключения у оборудования?",
+    measurement_scope: "per_product",
+    retrieval_query: "изделие",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "count",
+    caption: "Количество элементов",
+    values: [{ value: "3" }, { value: "4" }],
+  }], "Нужно изделие для оборудования");
+  assertEquals(result?.clarification?.freeform, true);
+  assertEquals(
+    result?.clarification?.question,
+    "Какая схема подключения у оборудования?",
+  );
+  assertEquals(result?.measurementEvidence, "");
+  assertEquals(result?.requiredFacetValues, []);
+  assertEquals(result?.retrievalQuery, null);
+});
+
+Deno.test("a sufficient selection with an empty clarification preserves the existing path", () => {
+  const result = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Нужен трехэлементный вариант для уже указанной схемы подключения.",
+    clarification_question: "",
+    measurement_scope: "not_applicable",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "count",
+    caption: "Количество элементов",
+    values: [{ value: "3" }, { value: "4" }],
+  }], "Нужно трехэлементное изделие");
+  assertEquals(result?.clarification, undefined);
+  assertEquals(result?.requiredFacetValues, [{
+    key: "Количество элементов",
+    value: "3",
+  }]);
+});
+
 Deno.test("numeric correction cannot erase validated qualitative or customer-owned requirements", () => {
   const prior = {
     requiredFacetValues: [{ key: "Защита", value: "IP65" }],
@@ -672,11 +718,16 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
   );
   assertEquals(
     messages[0].content.includes(
-      "Промежуточный расчёт — например, ток из мощности — не завершает подбор",
+      "промежуточный расчёт — например, ток из мощности — не завершает подбор",
     ),
     true,
   );
   assertEquals(messages[0].content.includes("required_facet_values"), true);
+  assertEquals(messages[0].content.includes("clarification_question"), true);
+  assertEquals(
+    messages[0].content.includes("не задавай уточняющий вопрос"),
+    false,
+  );
   assertEquals(messages[1].content.includes("<script>"), false);
   assertEquals(messages[1].content.includes("\\u003cscript>"), true);
   assertEquals(messages[1].content.includes("\\u003coption>"), true);

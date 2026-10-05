@@ -7189,7 +7189,10 @@ async function runExpertLoop(
             )
             : null;
           const missingRequiredProductMeasurement = () => {
-            if (!unresolvedProductMeasurementRequired || !declaration) {
+            if (
+              !unresolvedProductMeasurementRequired || !declaration ||
+              declaration.clarification
+            ) {
               return false;
             }
             const compiled = compileMeasuredReasoningSearchContract(
@@ -7273,10 +7276,11 @@ async function runExpertLoop(
               // internal error to the customer.
               const correctionAccepted = Boolean(
                 correctedDeclaration?.text.trim() &&
-                  derivedCorrectionPreservesRequirements(
-                    declaration,
-                    correctedDeclaration,
-                  ),
+                  (correctedDeclaration.clarification ||
+                    derivedCorrectionPreservesRequirements(
+                      declaration,
+                      correctedDeclaration,
+                    )),
               );
               if (correctionAccepted && correctedDeclaration) {
                 structuredReasoning = correctionResponse;
@@ -7334,6 +7338,30 @@ async function runExpertLoop(
             throw new Error("derived_selection_reasoning_contract_invalid");
           }
           serverValidatedDerivedReasoning = true;
+          if (declaration.clarification) {
+            finalText =
+              `${declaration.text}\n\n${declaration.clarification.question}`;
+            send({ type: "delta", content: finalText });
+            emitSideEffects(
+              executeProposeClarification({
+                ...declaration.clarification,
+                scope: selectionReadinessScope(userMessage, {
+                  resolved_category: lastDiscover.category.pagetitle,
+                }),
+              }),
+              send,
+            );
+            steps.push({
+              step: "v3_derived_selection_prerequisite_required",
+              ms: now(),
+              meta: { category: lastDiscover.category.pagetitle },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          }
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
