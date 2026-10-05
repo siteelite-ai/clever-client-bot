@@ -802,6 +802,36 @@ Deno.test("a decimal live scalar cannot become customer-owned from one matching 
   );
 });
 
+Deno.test("numeric inequality labels require the matching physical unit, not matching digits", () => {
+  const facets = [{
+    key: "rated_voltage",
+    caption: "Номинальное напряжение, кВ",
+    unit: null,
+    values: [{ value: "≤ 10" }, { value: "≥ 20" }, { value: "10–20" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Линия длиной 10 метров",
+  );
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum ?? [], []);
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для линии длиной 10 метров требуется кабель номинальным напряжением ≤ 10 кВ.",
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "Линия длиной 10 метров",
+  );
+  assertEquals(declaration?.requiredFacetValues, []);
+});
+
 Deno.test("customer-scoped reasoning schema omits unrelated exact technical values", () => {
   const schema = buildDerivedSelectionReasoningToolSchema([
     {

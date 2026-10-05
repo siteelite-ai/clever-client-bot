@@ -206,7 +206,7 @@ function derivedRequiredFacetChoices(
         const valueTokens = normalizedValue.split(" ").filter(Boolean);
         // Lexical normalization removes punctuation. It must not split a
         // decimal live value into independent customer-owned integers.
-        const bareNumericValue = /^\d+(?:[.,]\d+)?$/u.test(choice.value.trim());
+        const bareNumericValue = requiredChoiceIsBareScalar(choice);
         const exactPhrase = !bareNumericValue && normalizedValue.length >= 2 &&
           (` ${normalizedEvidence} `).includes(` ${normalizedValue} `);
         const compactIdentifier = valueTokens.length === 1 &&
@@ -227,7 +227,7 @@ function derivedRequiredFacetChoices(
           ),
         ];
         const numericTokens = bareNumericValue
-          ? [choice.value.trim()]
+          ? choice.value.match(/[+-]?\d+(?:[.,]\d+)?/gu) ?? []
           : valueTokens;
         const numericLiteral = numericTokens.some((token) => {
           if (!/^\d+(?:[.,]\d+)?$/u.test(token)) return false;
@@ -309,7 +309,11 @@ function requiredChoiceMeasuresPhysicalQuantity(
 function requiredChoiceIsBareScalar(
   choice: DerivedRequiredFacetChoice,
 ): boolean {
-  return /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+  // Comparison/range punctuation does not turn a physical scalar into a
+  // lexical catalog label. A bound of ≤ 10 must not gain ownership from
+  // an unrelated customer length of 10 metres.
+  return /^\s*(?:(?:<=|>=|[<>≤≥=~≈])\s*)?[+-]?\d+(?:[.,]\d+)?(?:\s*(?:[-–—…]|\.\.)\s*[+-]?\d+(?:[.,]\d+)?)?\s*$/u
+    .test(choice.value);
 }
 
 /** A scalar on an explicitly named count axis is a qualitative product
