@@ -1,4 +1,5 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
+import type { Criterion } from "./criteria-gate.ts";
 import {
   type ReasoningObligation,
   reasoningObligationsPolicy,
@@ -890,6 +891,7 @@ export function resolveDerivedSelectionReasoning(
   customerEvidence = "",
   productClass = "",
   onRejected?: (diagnostic: { stage: string; reasoning: string; errors: Array<{ index: number; reason: string }> }) => void,
+  confirmedCustomerCriteria: Criterion[] = [],
 ): ResolvedDerivedSelectionReasoning | null {
   const originalReasoning = stripDerivedSchemaIds(
     visibleFacetText(String(args.reasoning ?? "")),
@@ -946,6 +948,7 @@ export function resolveDerivedSelectionReasoning(
     originalReasoning,
     facets,
     customerEvidence,
+    confirmedCustomerCriteria,
   );
   if (propertyResolution.unresolved.length > 0) {
     const configuration = aggregateSelectionClarification(
@@ -1426,7 +1429,7 @@ export function resolveDerivedSelectionReasoning(
     args.per_product_measurement_evidence,
   );
   // Later class cleanup must not erase the visible source of a hard property.
-  const retainedProperties = resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets, customerEvidence);
+  const retainedProperties = resolveReasoningObligations(args.mandatory_properties ?? [], reasoning, facets, customerEvidence, confirmedCustomerCriteria);
   if (retainedProperties.unresolved.length > 0) {
     onRejected?.({ stage: "classification_cleanup", reasoning, errors: retainedProperties.unresolved });
     return null;

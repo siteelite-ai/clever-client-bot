@@ -12,6 +12,23 @@ const numeric = {
   scope: "per_product",
   source_span: "Необходимо волновое сопротивление 75 Ом.",
 };
+
+Deno.test("frozen customer requirements survive incomplete live facet metadata without re-inference", () => {
+  const source = "Для защиты линии выбран автоматический выключатель с параметром Номинальный ток 25 А.";
+  const item = { key: "Номинальный ток", value: 25, unit: "А", op: "eq", scope: "per_product", source_span: source };
+  const confirmed = { key: item.key, value: "25", unit: "а", op: "eq" as const,
+    level: "A" as const, evidence: "user_explicit" as const };
+  const resolve = (criteria: Parameters<typeof resolveReasoningObligations>[4]) =>
+    resolveReasoningObligations([item], source, [], "", criteria);
+  assertEquals(resolve([confirmed]).unresolved, []);
+  assertEquals(resolve([confirmed]).obligations[0].criterion.evidence, "user_explicit");
+  for (const criteria of [[], [{ ...confirmed, value: "16" }],
+    [{ ...confirmed, unit: "В" }], [{ ...confirmed, key: "Другой параметр" }],
+    [{ ...confirmed, evidence: "derived_required" as const }],
+    [{ ...confirmed, op: "min" as const }]]) {
+    assertEquals(resolve(criteria).unresolved.length, 1);
+  }
+});
 const environmental = {
   key: "оболочка",
   value: "УФ-стойкая",

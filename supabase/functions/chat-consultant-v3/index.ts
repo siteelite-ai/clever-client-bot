@@ -7215,12 +7215,16 @@ async function runExpertLoop(
           let declarationCall = structuredReasoning.toolCalls.find((
             toolCall,
           ) => toolCall.name === "declare_selection_reasoning");
+          const confirmedCustomerCriteria = (currentSelectionCriteriaPlan()?.mandatory_criteria ?? [])
+            .filter((criterion) => criterion.evidence === "user_explicit")
+            .map((criterion) => ({ ...criterion }));
           let declaration = declarationCall
             ? resolveDerivedSelectionReasoning(
               declarationCall.args,
               lastDiscover.facets ?? [],
               userMessage,
               activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
+              undefined, confirmedCustomerCriteria,
             )
             : null;
           if (!declaration && declarationCall && !resumedReasoning && derivedReasoningProviderAttempts < 2) {
@@ -7230,6 +7234,7 @@ async function runExpertLoop(
               typeof originalArgs.reasoning === "string" ? originalArgs.reasoning : "",
               lastDiscover.facets ?? [],
               userMessage,
+              confirmedCustomerCriteria,
             ).unresolved;
             const repairTimeout = errors.length > 0 ? boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS, now(), DERIVED_REASONING_SOFT_DEADLINE_MS, MIN_AGENT_STEP_BUDGET_MS,
@@ -7248,10 +7253,11 @@ async function runExpertLoop(
                   [reasoningToolSchema], 1800, GENERAL_INQUIRY_MODEL_ROUTING,
                 );
                 const repairedCall = repairedResponse.toolCalls.find((call) => call.name === "declare_selection_reasoning");
-                const repairedArgs = repairedCall ? repairObligationDeclaration(originalArgs, repairedCall.args, lastDiscover.facets ?? [], userMessage) : null;
+                const repairedArgs = repairedCall ? repairObligationDeclaration(originalArgs, repairedCall.args, lastDiscover.facets ?? [], userMessage, confirmedCustomerCriteria) : null;
                 const repairedDeclaration = repairedArgs ? resolveDerivedSelectionReasoning(
                   repairedArgs, lastDiscover.facets ?? [], userMessage,
                   activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
+                  undefined, confirmedCustomerCriteria,
                 ) : null;
                 if (repairedDeclaration && repairedArgs) {
                   declaration = repairedDeclaration;
@@ -7349,6 +7355,7 @@ async function runExpertLoop(
                   userMessage,
                   activeSelectionTarget ??
                     lastDiscover.category?.pagetitle ?? "",
+                  undefined, confirmedCustomerCriteria,
                 )
                 : null;
               // A retry can fail to honor the forced tool or exhaust its
@@ -7400,7 +7407,7 @@ async function runExpertLoop(
             const rejectionStages: unknown[] = [];
             resolveDerivedSelectionReasoning(declarationArgs, lastDiscover.facets ?? [], userMessage,
               activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
-              (diagnostic) => rejectionStages.push(diagnostic));
+              (diagnostic) => rejectionStages.push(diagnostic), confirmedCustomerCriteria);
             steps.push({
               step: "v3_derived_selection_reasoning_contract_rejected",
               ms: now(),
@@ -7426,6 +7433,7 @@ async function runExpertLoop(
                   typeof declarationArgs.reasoning === "string" ? declarationArgs.reasoning : "",
                   lastDiscover.facets ?? [],
                   userMessage,
+                  confirmedCustomerCriteria,
                 ).unresolved,
                 property_obligation_sources: Array.isArray(declarationArgs.mandatory_properties)
                   ? declarationArgs.mandatory_properties.slice(0, 12).map((item: Record<string, unknown>) => ({

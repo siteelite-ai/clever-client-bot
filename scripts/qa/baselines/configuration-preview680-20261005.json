@@ -1,0 +1,194 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": false,
+  "cases": [
+    {
+      "id": "scope-living-single",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 7906,
+              "log_id": "c9abc5bb-490d-4d17-98c5-07517ca7ecd3",
+              "products_count": 0,
+              "products": [],
+              "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток должен составлять не менее 3750 Лм. Вы можете использовать один мощный светодиодный светильник или распределить эту яркость между несколькими приборами. Обязателен тип лампы LED для энергоэффективности.\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1265
+                }
+              ]
+            },
+            {
+              "passed": true,
+              "duration_ms": 7059,
+              "log_id": "8159f6ab-f87d-42d4-ba90-a864f2e83a44",
+              "products_count": 3,
+              "products": [
+                "Светильник светодиод (потолочный) LE LED CLL ARIS-B 60W WHITE (1)",
+                "Светильник светодиод (потолочный) LE LED CLL BLISS-B 45W WHITE (1)",
+                "Светильник светодиод (потолочный) LE LED CLL DAINERIS-B 48W WHITE (1)"
+              ],
+              "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк на одно изделие необходим световой поток не менее 3750 Лм. Рекомендую выбирать светодиодный светильник с интегрированным LED-модулем для обеспечения достаточной яркости. По классу «Вид светильника» выбираю «люстры; бра; ночники». Как рабочую гипотезу сначала проверяю «Тип лампы: LED»; без подтверждения клиента это не становится обязательным фильтром.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-f1bf202d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 3750,
+                    "unit": "Лм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "люстры; бра; ночники",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "светодиодный",
+                    "op": "eq",
+                    "value": "светодиодный"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1367
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 92",
+                  "duration_ms": 512
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scope-parking-four",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 769,
+              "log_id": "f2accee2-740e-4a2e-9bb1-0224900d8373",
+              "products_count": 0,
+              "products": [],
+              "text": "Для парковки сначала нужны площадь территории и высота установки. Для улицы также уточним требуемую защиту, обычно рассматривают IP65/IP66. Какая площадь и высота монтажа?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 5249,
+              "log_id": "c700dbd6-d3b2-455f-b756-1b59232f4162",
+              "products_count": 0,
+              "products": [],
+              "text": "Для обеспечения нормативной освещенности парковки 10 лк на площади 500 м² с учетом высоты подвеса 3 метра требуется суммарный световой поток не менее 10000 Лм. Эту потребность можно закрыть одним мощным устройством или несколькими менее яркими. Для уличного использования обязательна степень защиты IP65.\n\nЧтобы подобрать отдельные товары по этому общему расчёту, уточните: нужно одно изделие для всей задачи или несколько, работающих вместе? Можно ответить: «Одно изделие для всей задачи» или «Несколько изделий вместе»; во втором случае укажите их количество, если оно известно.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 841
+                }
+              ]
+            },
+            {
+              "passed": false,
+              "duration_ms": 8145,
+              "log_id": "9c47ee5b-f640-40bc-80f8-074691958cc4",
+              "products_count": 0,
+              "products": [],
+              "text": "\n\nНе удалось завершить ответ из-за внутренней ошибки. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "failures": [
+                "products 0 < 3",
+                "diagnostic error: internal_error"
+              ],
+              "diagnostic_error": "internal_error",
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 892
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

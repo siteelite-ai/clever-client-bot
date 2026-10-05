@@ -30,6 +30,7 @@ export function repairObligationDeclaration(
   repaired: Record<string, unknown>,
   facets: ObligationFacet[] = [],
   customerEvidence = "",
+  confirmedCustomerCriteria: Criterion[] = [],
 ): Record<string, unknown> | null {
   const before = original.mandatory_properties;
   const after = repaired.mandatory_properties;
@@ -64,7 +65,7 @@ export function repairObligationDeclaration(
     JSON.stringify(first) !== JSON.stringify(second)
   ) return null;
   if (
-    resolveReasoningObligations(after, repaired.reasoning, facets, customerEvidence).unresolved.length > 0
+    resolveReasoningObligations(after, repaired.reasoning, facets, customerEvidence, confirmedCustomerCriteria).unresolved.length > 0
   ) return null;
   return {
     ...original,
@@ -153,6 +154,7 @@ export function resolveReasoningObligations(
   visibleReasoning: string,
   facets: ObligationFacet[] = [],
   customerEvidence = "",
+  confirmedCustomerCriteria: Criterion[] = [],
 ): ObligationResolution {
   const obligations: ReasoningObligation[] = [];
   const unresolved: ObligationResolution["unresolved"] = [];
@@ -186,7 +188,19 @@ export function resolveReasoningObligations(
       [facet.key, facet.caption].some((label) => typeof label === "string" && normalized(label) === normalized(key)));
     // Reuse the existing customer-owned facet proof, not modal words in the
     // model's explanation. This cannot promote a model-only default.
-    const customerGrounded = op === "eq" && customerEvidence.trim().length > 0 && matchingFacets.some((facet) => {
+    // The server's frozen customer contract is stronger than rediscovering the
+    // same fact through incomplete catalog metadata. Never use model-derived
+    // criteria here, nor broaden equality, units, value or property identity.
+    const confirmedCustomerOwned = op === "eq" && confirmedCustomerCriteria.some((criterion) =>
+      criterion.evidence === "user_explicit" && criterion.level === "A" &&
+      criterion.op === "eq" && !criterion.exclusive &&
+      normalized(criterion.key) === normalized(key) &&
+      normalizeUnit(criterion.unit ?? "") === normalizeUnit(unit ?? "") &&
+      (typeof value === "number"
+        ? /^\d+(?:[.,]\d+)?$/u.test(String(criterion.value)) &&
+          Number(String(criterion.value).replace(",", ".")) === value
+        : typeof value === "string" && normalized(String(criterion.value)) === normalized(value)));
+    const customerGrounded = confirmedCustomerOwned || op === "eq" && customerEvidence.trim().length > 0 && matchingFacets.some((facet) => {
       const liveFacet = { key: facet.key ?? facet.caption ?? "", caption: facet.caption, unit: facet.unit,
         values: (facet.values ?? []).filter((entry): entry is { value: string } => typeof entry.value === "string") };
       const selected = liveFacet.values.find((entry) => typeof value === "number"
