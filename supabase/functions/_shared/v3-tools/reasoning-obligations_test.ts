@@ -79,13 +79,11 @@ Deno.test("format repair preserves all selected semantics and original reasoning
       null,
     );
   }
-  assertEquals(
-    repairObligationDeclaration(original, {
-      ...corrected,
-      mandatory_properties: [],
-    }),
-    null,
-  );
+  const omittedArray = repairObligationDeclaration(original, {
+    ...corrected,
+    mandatory_properties: [],
+  });
+  assertEquals(omittedArray?.mandatory_properties, [numeric]);
   assertEquals(
     repairObligationDeclaration(original, {
       ...corrected,
@@ -100,6 +98,39 @@ Deno.test("format repair preserves all selected semantics and original reasoning
     }),
     null,
   );
+});
+
+Deno.test("format repair reconstructs every frozen property from visible complete sentences", () => {
+  const original = {
+    reasoning: "Для аналоговой камеры на улице проверяю кабель.",
+    mandatory_properties: [
+      { ...numeric, source_span: "волновое сопротивление" },
+      { ...environmental, source_span: "УФ-стойкая" },
+    ],
+    required_facet_values: ["unchanged-id"],
+  };
+  const repaired = {
+    reasoning: `${original.reasoning} ${numeric.source_span} ${environmental.source_span}`,
+    // A retry may drop one signature from its own array. The original
+    // semantics must be retained, and both quotes must still be proven.
+    mandatory_properties: [numeric],
+    required_facet_values: [],
+  };
+  const accepted = repairObligationDeclaration(original, repaired);
+  assertEquals(accepted?.mandatory_properties, [numeric, environmental]);
+  assertEquals(accepted?.required_facet_values, ["unchanged-id"]);
+  assertEquals(repairObligationDeclaration(original, {
+    ...repaired,
+    reasoning: `${original.reasoning} ${numeric.source_span}`,
+  }), null);
+  assertEquals(repairObligationDeclaration(original, {
+    ...repaired,
+    mandatory_properties: [{ ...numeric, value: 50 }],
+  }), null);
+  assertEquals(repairObligationDeclaration(original, {
+    ...repaired,
+    reasoning: `${original.reasoning} ${numeric.source_span} УФ-стойкая оболочка возможна.`,
+  }), null);
 });
 
 Deno.test("property quotes tolerate inflection and reordered explanation but preserve codes", () => {
@@ -482,10 +513,63 @@ Deno.test("bare measured decimal strings compile as numbers only with the same v
   assertEquals(resolveReasoningObligations([{ ...boundItem, op: "eq" }], bounded).unresolved.length, 1);
   const ambiguous = "Необходим номинальный ток 25 А, пусковой ток 16 А.";
   assertEquals(resolveReasoningObligations([{ ...item, key: "Номинальный ток", value: "25", unit: "А", source_span: ambiguous }], ambiguous).unresolved.length, 1);
-  // An ordered IP code has no declared numeric scale. Never turn min IP65
-  // into an exact text value or a fabricated physical quantity.
+  // An ordered IP code remains a string minimum, not an integer/equality.
   const ip = "Необходима степень защиты не ниже IP65.";
-  assertEquals(resolveReasoningObligations([{ ...item, key: "Степень защиты", value: "IP65", unit: "", op: "min", source_span: ip }], ip).unresolved.length, 1);
+  const ipResult = resolveReasoningObligations([{ ...item, key: "Степень защиты", value: "IP65", unit: "", op: "min", source_span: ip }], ip);
+  assertEquals(ipResult.unresolved, []);
+  assertEquals(ipResult.obligations[0].criterion, {
+    key: "Степень защиты", op: "min", value: "IP65", exclusive: false,
+    level: "A", evidence: "derived_required",
+  });
+});
+
+Deno.test("IP minimum declaration preserves code, property and visible direction", () => {
+  const source = "Для уличной эксплуатации обязательна степень защиты не ниже IP65.";
+  const item = { key: "Степень защиты", op: "min", value: "IP65", unit: "", scope: "per_product", source_span: source };
+  const resolved = resolveReasoningObligations([item], source);
+  assertEquals(resolved.unresolved, []);
+  assertEquals(resolved.obligations[0].criterion.op, "min");
+  assertEquals(resolved.obligations[0].criterion.value, "IP65");
+  for (const invalid of [
+    { ...item, op: "eq" },
+    { ...item, op: "max" },
+    { ...item, value: "IP66" },
+    { ...item, value: "IP7A" },
+    { ...item, key: "Модель" },
+    { ...item, unit: "мм" },
+  ]) {
+    assertEquals(resolveReasoningObligations([invalid], source).unresolved.length, 1, JSON.stringify(invalid));
+  }
+  for (const invalidSource of [
+    "Для уличной эксплуатации желательна степень защиты не ниже IP65.",
+    "Для уличной эксплуатации степень защиты не обязательна, не ниже IP65.",
+    "Если нужна улица, обязательна степень защиты не ниже IP65.",
+    "Для уличной эксплуатации обязательна степень защиты IP65.",
+    "Для уличной эксплуатации обязательна степень защиты не выше IP65.",
+    "Для уличной эксплуатации обязательна степень защиты не ниже IP65 или IP66.",
+    "Для уличной эксплуатации обязательна степень защиты не ниже IP65, допускается IP67.",
+    "Для уличной эксплуатации обязательна степень защиты не ниже IP65, но не ниже IP66.",
+  ]) {
+    assertEquals(resolveReasoningObligations([{ ...item, source_span: invalidSource }], invalidSource).unresolved.length, 1, invalidSource);
+  }
+  const strict = "Для уличной эксплуатации обязательна степень защиты выше IP65.";
+  assertEquals(resolveReasoningObligations([{ ...item, source_span: strict }], strict).obligations[0]?.criterion.exclusive, true);
+});
+
+Deno.test("enumerated IP minimum quote cannot borrow or conceal another bound", () => {
+  const source = "Обязательны: степень защиты — не ниже IP65, материал корпуса — алюминий.";
+  const item = { key: "Степень защиты", op: "min", value: "IP65", unit: "", scope: "per_product",
+    source_span: "Обязательны: степень защиты — не ниже IP65." };
+  const resolved = resolveReasoningObligations([item], source);
+  assertEquals(resolved.unresolved, []);
+  assertEquals(resolved.obligations[0].sourceSpan, source);
+  for (const invalid of [
+    "Обязательны: степень защиты — IP65, материал корпуса — алюминий.",
+    "Обязательны: степень защиты — не ниже IP65, степень защиты — не ниже IP66.",
+    "Обязательны: степень защиты — не ниже IP65, материал корпуса — алюминий, но защита необязательна.",
+  ]) {
+    assertEquals(resolveReasoningObligations([item], invalid).unresolved.length, 1, invalid);
+  }
 });
 
 Deno.test("one exact clause under a visible necessity heading inherits its unique full sentence", () => {

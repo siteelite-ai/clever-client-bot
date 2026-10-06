@@ -919,6 +919,20 @@ Deno.test("an adjacent suitability modifier requires reasoning when no live face
   const message = "Подбери несколько недорогих офисных светильников";
   assertEquals(hasSelectionSuitabilityContext(message, "Светильники"), true);
   assertEquals(
+    hasSelectionSuitabilityContext(
+      "Есть ли у вас розетки скрытого монтажа черного цвета?",
+      "розетки",
+    ),
+    false,
+  );
+  assertEquals(
+    hasSelectionSuitabilityContext(
+      "Есть ли у вас бытовые светильники?",
+      "светильники",
+    ),
+    true,
+  );
+  assertEquals(
     shouldRequireDerivedSelectionReasoning({
       intentMode: "select",
       phase: "search_after_discovery",
@@ -1511,6 +1525,188 @@ Deno.test("a facet label inside a negated sibling cannot erase an explicitly sel
   }, [{ key: "base", caption: "Тип цоколя", values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }] }], "Нужны лампы E27.", "Лампы");
   assertEquals(result?.propertyObligations?.length, 1);
   assertEquals(result?.text.includes(sentence), true);
+});
+
+Deno.test("frozen exact customer classification vetoes a conflicting model class before search", () => {
+  const facets = [{
+    key: "base",
+    caption: "Тип цоколя",
+    values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }],
+  }, {
+    key: "body",
+    caption: "Тип отделки",
+    values: [{ value: "черный" }, { value: "белый" }],
+  }];
+  const args = {
+    reasoning:
+      "Для указанного цоколя подходит E27 и теплый свет. Без цоколя выбираю альтернативное исполнение.",
+    retrieval_query: "без цоколя",
+    compatible_classifications: ["f0v2", "f1v0"],
+    excluded_classifications: ["f0v1"],
+    explicit_customer_classifications: [{
+      customer_phrase: "Е27",
+      classification_id: "f0v2",
+    }],
+  };
+  const frozen = [{
+    key: "Тип цоколя",
+    op: "eq" as const,
+    value: "Е27", // Visually identical Cyrillic character in a compact code.
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    args,
+    facets,
+    "Нужны лампы с цоколем Е27",
+    "лампы",
+    undefined,
+    frozen,
+  );
+  assertEquals(resolved?.compatible, [
+    { key: "Тип цоколя", value: "E27" },
+    { key: "Тип отделки", value: "черный" },
+  ]);
+  assertEquals(resolved?.customerGroundedCompatible, [
+    { key: "Тип цоколя", value: "E27" },
+  ]);
+  assertEquals(resolved?.excluded.some(({ value }) => value === "E27"), false);
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.retrievalQuery, null);
+  assertEquals(resolved?.text.includes("без цоколя"), false);
+  assertEquals(resolved?.text.includes("E27"), true);
+
+  const withoutFrozen = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для этого применения выбираю исполнение без цоколя.",
+      compatible_classifications: ["f0v2"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен вариант",
+  );
+  assertEquals(withoutFrozen?.compatible, [{
+    key: "Тип цоколя",
+    value: "без цоколя",
+  }]);
+});
+
+Deno.test("provider exclusion or local prose negation of a frozen exact class fails closed", () => {
+  const facets = [{
+    key: "base",
+    caption: "Тип цоколя",
+    values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }],
+  }];
+  const frozen = [{
+    key: "Тип цоколя",
+    op: "eq" as const,
+    value: "E27",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const resolve = (
+    reasoning: string,
+    excluded: string[],
+    stages: string[],
+  ) => resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: excluded,
+    },
+    facets,
+    "Нужно исполнение Е27",
+    "изделие",
+    (diagnostic) => stages.push(diagnostic.stage),
+    frozen,
+  );
+
+  for (const [reasoning, excluded] of [
+    ["Цоколь E27 не подходит для этой задачи.", ["f0v0"]],
+    ["Цоколь E27 подходит для этой задачи.", ["f0v0"]],
+    ["Цоколь E27 не подходит для этой задачи.", []],
+  ] as const) {
+    const stages: string[] = [];
+    assertEquals(resolve(reasoning, [...excluded], stages), null);
+    assertEquals(stages, ["customer_exact_classification_contradiction"]);
+  }
+
+  const stages: string[] = [];
+  const control = resolve(
+    "Цоколь E27 подходит для этой задачи, а E14 не подходит.",
+    ["f0v1"],
+    stages,
+  );
+  assertEquals(stages, []);
+  assertEquals(control?.compatible, [{ key: "Тип цоколя", value: "E27" }]);
+});
+
+Deno.test("same-facet exact colour wins in either direction without vetoing other axes", () => {
+  const facets = [{
+    key: "finish",
+    caption: "Тип отделки",
+    values: [{ value: "черный" }, { value: "белый" }],
+  }, {
+    key: "mounting",
+    caption: "Тип монтажа",
+    values: [{ value: "настенный" }, { value: "потолочный" }],
+  }];
+  for (const [frozenValue, wrongId, expectedValue] of [
+    ["черный", "f0v1", "черный"],
+    ["белый", "f0v0", "белый"],
+  ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для указанного применения подходит отделка ${frozenValue}. Проверяю настенный монтаж по каталогу.`,
+        compatible_classifications: [wrongId, "f1v0"],
+        excluded_classifications: [],
+      },
+      facets,
+      `Нужен вариант ${frozenValue}`,
+      "изделие",
+      undefined,
+      [{
+        key: "Тип отделки",
+        op: "eq",
+        value: frozenValue,
+        level: "A",
+        evidence: "user_explicit",
+      }],
+    );
+    assertEquals(resolved?.compatible, [
+      { key: "Тип отделки", value: expectedValue },
+      { key: "Тип монтажа", value: "настенный" },
+    ]);
+  }
+});
+
+Deno.test("a solely contradictory model explanation is rejected, not shown after redaction", () => {
+  const stages: string[] = [];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для вашей задачи подойдет исполнение без цоколя.",
+      compatible_classifications: ["f0v1"],
+      excluded_classifications: [],
+    },
+    [{
+      key: "base",
+      caption: "Тип цоколя",
+      values: [{ value: "E27" }, { value: "без цоколя" }],
+    }],
+    "Нужно исполнение E27",
+    "изделие",
+    (diagnostic) => stages.push(diagnostic.stage),
+    [{
+      key: "Тип цоколя",
+      op: "eq",
+      value: "E27",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
+  assertEquals(resolved, null);
+  assertEquals(stages, ["classification_conflict_cleanup"]);
 });
 
 Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {

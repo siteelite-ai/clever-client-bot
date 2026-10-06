@@ -27,6 +27,10 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import {
+  compareIpProtectionMinimum,
+  isIpProtectionPropertyKey,
+} from "./ip-protection-order.ts";
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
@@ -1364,6 +1368,21 @@ export function checkCriterion(
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
+
+  // IEC IP markings have a partial order on two independent axes. Keep them
+  // away from generic numeric parsing, including malformed `IP 65` strings.
+  // Only an ingress-protection property and a supported minimum can use this
+  // path; other directional code declarations remain unverified.
+  if (typeof c.value === "string" && /^ip/iu.test(c.value.trim()) && c.op !== "eq") {
+    return {
+      key: c.key,
+      verdict: c.op === "min" && !c.unit && isIpProtectionPropertyKey(c.key)
+        ? compareIpProtectionMinimum(actual, c.value, !!c.exclusive)
+        : "unknown",
+      expected,
+      actual,
+    };
+  }
 
   // Catalog facet values are strings even when they represent measurements.
   // Numeric equality must therefore use numeric spans, not substring matching:

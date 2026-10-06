@@ -25,8 +25,13 @@ import {
 } from "../_shared/v3-tools/schemas.ts";
 import {
   executeSearchCatalog,
+  type CatalogClientDeps,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
+import {
+  classifyTurnDeadline,
+  publicTurnDeadlineOutcome,
+} from "../_shared/v3-tools/turn-deadline-state.ts";
 import {
   type DiscoverCategoryInput,
   type DiscoverCategoryOk,
@@ -727,6 +732,10 @@ interface ToolContext {
   cache: ProductCache;
   supabase: SupabaseClient;
   catalogToken: string;
+  turnDeadlineAtMs: number;
+  catalogSignal: AbortSignal;
+  catalogDeadlineExceeded: boolean;
+  turnDeadlineExceeded: boolean;
   openrouterKey: string;
   lovableApiKey: string | null;
   selectionReasoningModel: string;
@@ -735,12 +744,24 @@ interface ToolContext {
   jargonAxialModifiersEnabled: boolean;
 }
 
+function catalogDepsFor(ctx: ToolContext): CatalogClientDeps {
+  return {
+    baseUrl: CATALOG_BASE_URL,
+    apiToken: ctx.catalogToken,
+    deadlineAtMs: ctx.turnDeadlineAtMs,
+    signal: ctx.catalogSignal,
+    onDeadlineExceeded: () => {
+      ctx.catalogDeadlineExceeded = true;
+    },
+  };
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const catalogDeps = catalogDepsFor(ctx);
   if (name === "search_catalog") {
     return executeSearchCatalog(
       args as unknown as SearchCatalogInput,
@@ -1341,7 +1362,7 @@ async function guardedOutcomeForSearch(
   if (suspiciousFilters.length === 0) return null;
 
   const requested = extractEchoLabel(firstAssistantText, userMessage);
-  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const catalogDeps = catalogDepsFor(ctx);
   const confirmedOptions: Record<string, string[]> = {};
   for (const f of confirmedFilters) {
     confirmedOptions[f.key] ??= [];
@@ -2154,10 +2175,7 @@ async function broadenPriceDirectionSearch(
     );
     if (input.min_price && input.min_price > input.max_price) return [];
   }
-  const fb = await executeSearchCatalog(input, {
-    baseUrl: CATALOG_BASE_URL,
-    apiToken: ctx.catalogToken,
-  }, ctx.cache);
+  const fb = await executeSearchCatalog(input, catalogDepsFor(ctx), ctx.cache);
   if (!fb.ok || fb.total === 0) return [];
   const sorted = [...fb.results]
     .filter((p) =>
@@ -2732,7 +2750,7 @@ async function trySplitFallback(
   if (axisEntries.length < 2) return null;
 
   const t0 = Date.now();
-  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const deps = catalogDepsFor(ctx);
   const category = typeof origArgs.category === "string"
     ? origArgs.category
     : undefined;
@@ -3362,7 +3380,7 @@ async function loadVerifiedNamedSeriesProducts(
       min_price: 1,
       per_page: perPage,
     },
-    { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+    catalogDepsFor(ctx),
     ctx.cache,
   );
   const groundedRefs = search.ok
@@ -3415,6 +3433,7 @@ async function answerVerifiedNamedSeriesInquiry(
       duration_ms: duration,
     },
   });
+  if (ctx.catalogDeadlineExceeded) return;
   if (products.length === 0) {
     send({
       type: "delta",
@@ -3474,6 +3493,7 @@ async function selectVerifiedNamedSeriesRequest(
     summary: `Товаров подтверждённой серии: ${products.length}`,
   });
 
+  if (ctx.catalogDeadlineExceeded) return [];
   if (products.length === 0) {
     send({
       type: "delta",
@@ -3594,10 +3614,7 @@ async function answerVerifiedExactProductInquiry(
       mode: "by_article",
       article,
       per_page: 5,
-    }, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
+    }, catalogDepsFor(ctx), ctx.cache);
     const exact = found.ok
       ? found.results.filter((product) =>
         String(product.article ?? "").replace(/\D/gu, "") === article
@@ -3618,10 +3635,7 @@ async function answerVerifiedExactProductInquiry(
         query: code,
         min_price: 1,
         per_page: 20,
-      }, {
-        baseUrl: CATALOG_BASE_URL,
-        apiToken: ctx.catalogToken,
-      }, ctx.cache);
+      }, catalogDepsFor(ctx), ctx.cache);
       const exact = found.ok
         ? found.results.filter((product) =>
           productContainsSourceModel(product, [code])
@@ -3753,10 +3767,7 @@ async function selectVerifiedCompactReplacementContinuation(
       query: token.raw,
       min_price: 1,
       per_page: 8,
-    }, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, evidenceCache);
+    }, catalogDepsFor(ctx), evidenceCache);
     if (!result.ok) return null;
     for (const product of result.results) {
       if (compactEvidenceById.size >= 8) break;
@@ -3827,10 +3838,7 @@ async function selectVerifiedCompactReplacementContinuation(
     options,
     min_price: 1,
     per_page: 20,
-  }, {
-    baseUrl: CATALOG_BASE_URL,
-    apiToken: ctx.catalogToken,
-  }, ctx.cache);
+  }, catalogDepsFor(ctx), ctx.cache);
   if (!filtered.ok) return null;
 
   const excludedIdentity = explicitReplacementIdentityValues(
@@ -4029,10 +4037,7 @@ async function selectVerifiedOrdinaryReplacement(
       mode: "by_article",
       article,
       per_page: 3,
-    }, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
+    }, catalogDepsFor(ctx), ctx.cache);
     if (found.ok && found.results.length > 0) {
       addSourceCandidates(found.results);
       anchor = found.results.find((product) =>
@@ -4049,10 +4054,7 @@ async function selectVerifiedOrdinaryReplacement(
         mode: "by_query",
         query: sourceDescription,
         per_page: 50,
-      }, {
-        baseUrl: CATALOG_BASE_URL,
-        apiToken: ctx.catalogToken,
-      }, ctx.cache);
+      }, catalogDepsFor(ctx), ctx.cache);
       if (described.ok) addSourceCandidates(described.results);
     }
     for (const code of lookup.modelCodes.slice(0, 3)) {
@@ -4060,10 +4062,7 @@ async function selectVerifiedOrdinaryReplacement(
         mode: "by_pagetitle",
         pagetitle: code,
         per_page: 5,
-      }, {
-        baseUrl: CATALOG_BASE_URL,
-        apiToken: ctx.catalogToken,
-      }, ctx.cache);
+      }, catalogDepsFor(ctx), ctx.cache);
       let grounded = found.ok
         ? found.results.filter((product) =>
           productContainsSourceModel(product, [code])
@@ -4077,10 +4076,7 @@ async function selectVerifiedOrdinaryReplacement(
           mode: "by_query",
           query: code,
           per_page: 50,
-        }, {
-          baseUrl: CATALOG_BASE_URL,
-          apiToken: ctx.catalogToken,
-        }, ctx.cache);
+        }, catalogDepsFor(ctx), ctx.cache);
         grounded = found.ok
           ? found.results.filter((product) =>
             productContainsSourceModel(product, [code])
@@ -4105,6 +4101,15 @@ async function selectVerifiedOrdinaryReplacement(
           ).length;
       return score(right) - score(left);
     })[0] ?? null;
+  }
+
+  if (ctx.catalogDeadlineExceeded) {
+    return {
+      handled: false,
+      products: [],
+      outcome: "upstream_error",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
   }
 
   if (!anchor && sourceClassDiscovery.ok) {
@@ -4287,7 +4292,7 @@ async function selectVerifiedOrdinaryReplacement(
         : {}),
       options: Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
     },
-    { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+    catalogDepsFor(ctx),
     ctx.cache,
   );
   let selected = strict.ok
@@ -4330,7 +4335,7 @@ async function selectVerifiedOrdinaryReplacement(
           per_page: 5,
           options: { [axis.key]: [axis.value] },
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       ),
     })));
@@ -4398,7 +4403,7 @@ async function selectVerifiedOrdinaryReplacement(
             : {}),
           per_page: 50,
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       );
       if (broad.ok) {
@@ -4434,6 +4439,14 @@ async function selectVerifiedOrdinaryReplacement(
       }`,
   });
 
+  if (ctx.catalogDeadlineExceeded) {
+    return {
+      handled: false,
+      products: [],
+      outcome: "upstream_error",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
+  }
   if (selected.length === 0) {
     steps.push({
       step: "v3_replacement_preflight_delegated",
@@ -4526,7 +4539,7 @@ async function selectVerifiedExactCompoundProducts(
         ? { sort_expensive: true }
         : {}),
     },
-    { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+    catalogDepsFor(ctx),
     ctx.cache,
   );
   let candidates = search.ok ? search.results : [];
@@ -4551,7 +4564,7 @@ async function selectVerifiedExactCompoundProducts(
             ? { sort_expensive: true }
             : {}),
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       );
       if (!recovered.ok || recovered.results.length === 0) continue;
@@ -4572,6 +4585,7 @@ async function selectVerifiedExactCompoundProducts(
     summary: `Exact compound marking: подтверждено ${verified.length}`,
   });
 
+  if (ctx.catalogDeadlineExceeded) return [];
   if (verified.length === 0) {
     send({ type: "delta", content: exactCompoundMarkingEmpty(request) });
     steps.push({
@@ -4696,7 +4710,7 @@ async function selectVerifiedSemanticCompoundProducts(
       min_price: 1,
       per_page: 50,
     },
-    { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+    catalogDepsFor(ctx),
     ctx.cache,
   );
   let seedProducts = seedSearch.ok
@@ -4714,7 +4728,7 @@ async function selectVerifiedSemanticCompoundProducts(
           min_price: 1,
           per_page: 50,
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       );
       const exact = candidateSeed.ok
@@ -4729,6 +4743,7 @@ async function selectVerifiedSemanticCompoundProducts(
       break;
     }
   }
+  if (ctx.catalogDeadlineExceeded) return { handled: false, products: [] };
   const categoryCounts = new Map<string, number>();
   for (const product of seedProducts) {
     const category = String(product.leaf_category ?? "").trim();
@@ -4766,8 +4781,7 @@ async function selectVerifiedSemanticCompoundProducts(
       : {}),
     require_semantic_bridge: partition.semanticModifiers.length > 0,
   }, {
-    baseUrl: CATALOG_BASE_URL,
-    apiToken: ctx.catalogToken,
+    ...catalogDepsFor(ctx),
     openrouterApiKey: ctx.openrouterKey,
     lovableApiKey: ctx.lovableApiKey,
     lovableModel: LOVABLE_AGENT_MODEL,
@@ -4882,7 +4896,7 @@ async function refreshRecentProductSet(
         pagetitle: previous.pagetitle,
         per_page: 3,
       },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+      catalogDepsFor(ctx),
       ctx.cache,
     );
     if (!result.ok) return null;
@@ -4920,6 +4934,11 @@ async function selectVerifiedRecentShowFollowup(
     5,
   );
   const elapsed = Date.now() - started;
+  const recentDeadline = classifyTurnDeadline(ctx, Date.now());
+  if (recentDeadline) {
+    if (recentDeadline === "turn") ctx.turnDeadlineExceeded = true;
+    return { handled: true, products: [] };
+  }
   if (liveProducts.length === 0) {
     send({
       type: "delta",
@@ -4991,6 +5010,12 @@ async function selectVerifiedRecentPriceFollowup(
     );
   const selected = liveProducts.slice(0, 1);
   const elapsed = Date.now() - started;
+
+  const recentDeadline = classifyTurnDeadline(ctx, Date.now());
+  if (recentDeadline) {
+    if (recentDeadline === "turn") ctx.turnDeadlineExceeded = true;
+    return { handled: true, products: [] };
+  }
 
   send({
     type: "tool_event",
@@ -5072,7 +5097,7 @@ async function answerBroadAssortmentRequest(
         min_price: 1,
         per_page: 50,
       },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+      catalogDepsFor(ctx),
       ctx.cache,
     );
     if (result.ok) {
@@ -5084,6 +5109,7 @@ async function answerBroadAssortmentRequest(
       }
     }
   }
+  if (ctx.catalogDeadlineExceeded) return;
   const suffix = leaves.length > 0
     ? ` В каталоге уже видны разделы: ${leaves.slice(0, 5).join(", ")}.`
     : "";
@@ -5145,7 +5171,7 @@ async function selectVerifiedOutdoorPoeProducts(
           min_price: 1,
           per_page: 50,
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       )
     ),
@@ -5164,6 +5190,7 @@ async function selectVerifiedOutdoorPoeProducts(
     summary: `PoE outdoor policy: подтверждено ${verified.length}`,
   });
 
+  if (ctx.catalogDeadlineExceeded) return [];
   if (verified.length === 0) {
     send({ type: "delta", content: OUTDOOR_POE_SELECTION_EMPTY });
     steps.push({
@@ -6478,7 +6505,7 @@ async function runExpertLoop(
           max_price: searchInput.max_price,
           per_page: searchInput.per_page,
         },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       );
       if (!bridge.ok || bridge.results.length === 0) continue;
@@ -6497,14 +6524,11 @@ async function runExpertLoop(
       break;
     }
     if (!result && !allowBroadFallback) return 0;
-    result ??= await executeSearchCatalog(searchInput, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
+    result ??= await executeSearchCatalog(searchInput, catalogDepsFor(ctx), ctx.cache);
     if (result.ok && result.results.length === 0 && leaves.length > 0) {
       result = await executeSearchCatalog(
         { ...searchInput, category_in: undefined },
-        { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+        catalogDepsFor(ctx),
         ctx.cache,
       );
     }
@@ -6516,10 +6540,7 @@ async function runExpertLoop(
         max_price: searchInput.max_price,
         per_page: searchInput.per_page,
       };
-      result = await executeSearchCatalog(queryFallback, {
-        baseUrl: CATALOG_BASE_URL,
-        apiToken: ctx.catalogToken,
-      }, ctx.cache);
+      result = await executeSearchCatalog(queryFallback, catalogDepsFor(ctx), ctx.cache);
     }
     const duration = Date.now() - start;
     if (!result.ok || result.results.length === 0) {
@@ -6800,7 +6821,7 @@ async function runExpertLoop(
         sort_cheapest: true,
         ...(category ? { category } : {}),
       },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+      catalogDepsFor(ctx),
       ctx.cache,
     );
     if (!recovered.ok) return null;
@@ -6893,12 +6914,28 @@ async function runExpertLoop(
   }
 
   const turnController = new AbortController();
-  const turnTimer = setTimeout(() => turnController.abort(), TURN_TIMEOUT_MS);
+  const turnTimer = setTimeout(
+    () => turnController.abort(),
+    Math.max(0, ctx.turnDeadlineAtMs - Date.now()),
+  );
   let remoteAgentSteps = 0;
   let recoveredDiscoveryAfterRemoteRewrite = false;
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      const expired = classifyTurnDeadline(ctx, Date.now());
+      if (expired) {
+        if (expired === "turn") ctx.turnDeadlineExceeded = true;
+        deadlineFinalizeBreak = true;
+        steps.push({
+          step: expired === "catalog"
+            ? "v3_catalog_turn_deadline"
+            : "v3_turn_deadline",
+          ms: now(),
+          meta: { step_index: step, products_rendered: productsRendered },
+        });
+        break;
+      }
       let knowledgeHitsThisStep = 0;
       // Классификация фазы для выбора таймаута. Эвристика:
       //  • step 0 — всегда intro (LLM ещё не видел tool_results).
@@ -13093,7 +13130,7 @@ async function runExpertLoop(
                 );
                 const facetRecovered = await executeSearchCatalog(
                   recoveryInput,
-                  { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+                  catalogDepsFor(ctx),
                   ctx.cache,
                 );
                 recovered = facetRecovered.ok ? facetRecovered : null;
@@ -13114,7 +13151,7 @@ async function runExpertLoop(
             if (grounded.length === 0) {
               const canonicalQuery = await executeSearchCatalog(
                 buildCanonicalEntityRecoveryInput(namedSeriesToken),
-                { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+                catalogDepsFor(ctx),
                 ctx.cache,
               );
               recovered = canonicalQuery.ok ? canonicalQuery : recovered;
@@ -13710,7 +13747,7 @@ async function runExpertLoop(
             attempted += 1;
             const recovered = await executeSearchCatalog(
               { mode: "by_query", query, min_price: 1, per_page: 50 },
-              { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+              catalogDepsFor(ctx),
               ctx.cache,
             );
             if (!recovered.ok) continue;
@@ -14115,7 +14152,7 @@ async function runExpertLoop(
                   : { category: lastDiscover.category.pagetitle }),
                 ...baseControls,
               },
-              { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+              catalogDepsFor(ctx),
               ctx.cache,
             );
             if (!broad.ok || broad.results.length === 0) {
@@ -14125,7 +14162,7 @@ async function runExpertLoop(
                   category: lastDiscover.category.pagetitle,
                   ...baseControls,
                 },
-                { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+                catalogDepsFor(ctx),
                 ctx.cache,
               );
             }
@@ -15754,6 +15791,15 @@ async function runExpertLoop(
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
       if (criteriaDeadEndBreak) break;
       // After tools → loop back, model decides what's next.
+    }
+
+    // Expired work is not evidence of an empty assortment. Do not run
+    // terminal fallback searches or append an honest-empty claim; the HTTP
+    // boundary emits a traceable timeout/partial response below.
+    const terminalDeadline = classifyTurnDeadline(ctx, Date.now());
+    if (terminalDeadline) {
+      if (terminalDeadline === "turn") ctx.turnDeadlineExceeded = true;
+      return { finalText, productsRendered, shownProductIds: [...shownIds] };
     }
 
     // A deadline or no-progress break must not convert an unfinished derived
@@ -18431,6 +18477,7 @@ Deno.serve(async (req) => {
         TURN_TIMEOUT_MS + 10_000,
       );
       let logFinalized = false;
+      let requestToolContext: ToolContext | null = null;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
         if (logFinalized) return;
@@ -18583,6 +18630,10 @@ Deno.serve(async (req) => {
           cache,
           supabase,
           catalogToken: settings.volt220_api_token!,
+          turnDeadlineAtMs: t0 + TURN_TIMEOUT_MS,
+          catalogSignal: executionController.signal,
+          catalogDeadlineExceeded: false,
+          turnDeadlineExceeded: false,
           openrouterKey: settings.openrouter_api_key!,
           lovableApiKey: LOVABLE_API_KEY,
           selectionReasoningModel: settings.classifier_model,
@@ -18592,6 +18643,7 @@ Deno.serve(async (req) => {
           jargonAxialModifiersEnabled:
             settings.v3_jargon_axial_modifiers_enabled,
         };
+        requestToolContext = ctx;
 
         let recentProductEvidence = await loadRecentProductEvidence(
           supabase,
@@ -19306,6 +19358,26 @@ Deno.serve(async (req) => {
           });
         } catch { /* stream may be closed */ }
       } finally {
+        const deadlineOutcome = requestToolContext
+          ? publicTurnDeadlineOutcome(requestToolContext, productsCount)
+          : null;
+        if (deadlineOutcome && !publicDiagnosticError) {
+          publicDiagnosticError = deadlineOutcome.code;
+          errorMsg = deadlineOutcome.code;
+          steps.push({
+            step: deadlineOutcome.kind === "catalog"
+              ? "v3_catalog_deadline_response"
+              : "v3_turn_deadline_response",
+            ms: Date.now() - t0,
+            meta: { products_count: productsCount, public_error: publicDiagnosticError },
+          });
+          try {
+            send({
+              type: "delta",
+              content: deadlineOutcome.message,
+            });
+          } catch { /* stream may be closed */ }
+        }
         clearInterval(keepAliveTimer);
         clearTimeout(executionTimer);
         const completeEvent: SseEvent = {

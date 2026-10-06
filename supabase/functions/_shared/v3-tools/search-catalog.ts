@@ -106,6 +106,10 @@ export interface CatalogClientDeps {
   apiToken: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Absolute request deadline shared by every page, retry and recovery. */
+  deadlineAtMs?: number;
+  signal?: AbortSignal;
+  onDeadlineExceeded?: () => void;
 }
 
 export interface SearchCatalogInput {
@@ -285,6 +289,80 @@ type SingleSearchResult =
   | { ok: true; total: number; results: ProductRef[] }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
 
+function catalogDeadlineExceeded(deps: CatalogClientDeps): boolean {
+  return Boolean(deps.signal?.aborted) ||
+    (typeof deps.deadlineAtMs === "number" && Date.now() >= deps.deadlineAtMs);
+}
+
+function catalogDeadlineFailure(
+  deps: CatalogClientDeps,
+): Extract<SingleSearchResult, { ok: false }> {
+  deps.onDeadlineExceeded?.();
+  return {
+    ok: false,
+    error_code: "catalog_timeout",
+    message: "catalog_turn_deadline_exceeded",
+  };
+}
+
+function isTurnDeadlineFailure(
+  result: SingleSearchResult,
+): result is Extract<SingleSearchResult, { ok: false }> & {
+  message: "catalog_turn_deadline_exceeded";
+} {
+  return !result.ok && result.error_code === "catalog_timeout" &&
+    result.message === "catalog_turn_deadline_exceeded";
+}
+
+/** Bound even an injected/non-compliant fetch that ignores AbortSignal. */
+function awaitCatalogAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("catalog request aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("catalog request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
+async function waitCatalogRetry(
+  delayMs: number,
+  deps: CatalogClientDeps,
+): Promise<boolean> {
+  if (catalogDeadlineExceeded(deps)) return false;
+  const remaining = typeof deps.deadlineAtMs === "number"
+    ? Math.max(0, deps.deadlineAtMs - Date.now())
+    : delayMs;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      deps.signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.min(delayMs, remaining));
+    deps.signal?.addEventListener("abort", finish, { once: true });
+    if (deps.signal?.aborted) finish();
+  });
+  return !catalogDeadlineExceeded(deps);
+}
+
 /** Один HTTP-вызов /products. Применяет input как есть, плюс опциональный single `category` override. */
 async function singleSearch(
   input: SearchCatalogInput,
@@ -292,8 +370,14 @@ async function singleSearch(
   cache: ProductCache,
   categoryOverride?: string,
 ): Promise<SingleSearchResult> {
+  if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 8000;
+  const timeoutMs = Math.min(
+    deps.timeoutMs ?? 8000,
+    typeof deps.deadlineAtMs === "number"
+      ? Math.max(1, deps.deadlineAtMs - Date.now())
+      : Number.POSITIVE_INFINITY,
+  );
 
   const params = new URLSearchParams();
   if (input.mode === "by_article" && input.article) params.append("article", input.article);
@@ -321,22 +405,28 @@ async function singleSearch(
   const url = `${deps.baseUrl}/products?${params}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onOuterAbort = () => controller.abort(deps.signal?.reason);
+  deps.signal?.addEventListener("abort", onOuterAbort, { once: true });
+  if (deps.signal?.aborted) onOuterAbort();
 
   try {
-    const res = await fetchImpl(url, {
+    const res = await awaitCatalogAbort(fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
       signal: controller.signal,
-    });
+    }), controller.signal);
 
     if (!res.ok) {
-      await res.body?.cancel();
+      if (res.body) await awaitCatalogAbort(res.body.cancel(), controller.signal);
       if (res.status === 429) return { ok: false, error_code: "rate_limited", message: `429 from catalog` };
       if (res.status >= 500) return { ok: false, error_code: "transport_5xx", message: `${res.status}` };
       return { ok: false, error_code: "bad_input", message: `${res.status}` };
     }
 
-    const json = await res.json() as { data?: { results?: unknown[]; pagination?: { total?: number } } };
+    const json = await awaitCatalogAbort(res.json(), controller.signal) as {
+      data?: { results?: unknown[]; pagination?: { total?: number } };
+    };
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
     const rawResults = Array.isArray(json?.data?.results) ? json.data!.results! : [];
     const total = Number(json?.data?.pagination?.total ?? rawResults.length) || 0;
 
@@ -379,12 +469,17 @@ async function singleSearch(
       });
       results.push(ref);
     }
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
     return { ok: true, total, results };
   } catch (e) {
-    const isAbort = (e as { name?: string })?.name === "AbortError";
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
+    const isAbort = ["AbortError", "TimeoutError"].includes(
+      (e as { name?: string })?.name ?? "",
+    );
     return { ok: false, error_code: isAbort ? "catalog_timeout" : "transport_5xx", message: (e as Error)?.message ?? "fetch failed" };
   } finally {
     clearTimeout(timer);
+    deps.signal?.removeEventListener("abort", onOuterAbort);
   }
 }
 
@@ -435,6 +530,7 @@ async function recoverUnmaterializedCatalogWindow(
       categoryOverride,
     );
     if (!candidatePage.ok) {
+      if (isTurnDeadlineFailure(candidatePage)) return candidatePage;
       if (candidatePage.error_code === "rate_limited") break;
       continue;
     }
@@ -515,6 +611,8 @@ async function singleSearchSorted(
         singleSearch({ ...input, per_page: SORT_PAGE_SIZE, page: i + 2 }, deps, cache, categoryOverride),
       ),
     );
+    const timedOut = extra.find(isTurnDeadlineFailure);
+    if (timedOut) return timedOut;
     for (const r of extra) {
       if (r.ok) all.push(...r.results);
     }
@@ -561,6 +659,7 @@ async function singleSearchSortedWithCompoundFallback(
     categoryOverride,
     warnings,
   );
+  if (isTurnDeadlineFailure(retry)) return retry;
   if (!retry.ok || retry.total <= 0) return primary;
   if (!warnings.includes("compound_query_variant_retry")) {
     warnings.push("compound_query_variant_retry");
@@ -577,7 +676,7 @@ async function searchWithRateLimitRetry(
 ): Promise<SingleSearchResult> {
   let result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
   for (let attempt = 1; !result.ok && result.error_code === "rate_limited" && attempt <= 2; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    if (!await waitCatalogRetry(500 * attempt, deps)) return catalogDeadlineFailure(deps);
     result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
     if (result.ok && !warnings.includes("rate_limit_retry_recovered")) warnings.push("rate_limit_retry_recovered");
   }
@@ -589,6 +688,10 @@ export async function executeSearchCatalog(
   deps: CatalogClientDeps,
   cache: ProductCache,
 ): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  if (catalogDeadlineExceeded(deps)) {
+    const timeout = catalogDeadlineFailure(deps);
+    return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+  }
   // Валидация режима.
   if (input.mode === "by_article" && !input.article) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_article requires article" };
   if (input.mode === "by_pagetitle" && !input.pagetitle) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_pagetitle requires pagetitle" };
@@ -631,6 +734,10 @@ export async function executeSearchCatalog(
   // Один запрос: нет ни category fan-out, ни OR-альтернатив фасета.
   if (categories.length <= 1 && optionVariants.length === 1) {
     const r = await searchWithRateLimitRetry(optionVariants[0], deps, cache, categories[0], warnings);
+    if (catalogDeadlineExceeded(deps)) {
+      const timeout = catalogDeadlineFailure(deps);
+      return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+    }
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
     return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
@@ -651,6 +758,10 @@ export async function executeSearchCatalog(
       const batch = await Promise.all(categoryVariants.map((cat) =>
         searchWithRateLimitRetry(variant, deps, cache, cat, warnings)
       ));
+      if (catalogDeadlineExceeded(deps)) {
+        const timeout = catalogDeadlineFailure(deps);
+        return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+      }
       settled.push(...batch);
       for (const result of batch) {
         if (result.ok) result.results.forEach((product) => collected.add(product.id));
@@ -661,6 +772,14 @@ export async function executeSearchCatalog(
     settled.push(...await Promise.all(
       categoryVariants.map((cat) => searchWithRateLimitRetry(optionVariants[0], deps, cache, cat, warnings)),
     ));
+  }
+  if (catalogDeadlineExceeded(deps)) {
+    const timeout = catalogDeadlineFailure(deps);
+    return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+  }
+  const timedOut = settled.find(isTurnDeadlineFailure);
+  if (timedOut) {
+    return { tool: "search_catalog", ok: false, error_code: timedOut.error_code, message: timedOut.message };
   }
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {

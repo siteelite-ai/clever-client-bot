@@ -998,6 +998,38 @@ Deno.test("selection commands do not erase actual adjacent or explicit applicati
   assertEquals(extractCustomerApplicationContexts("Нужен кабель для аналоговой камеры", "кабель"), ["аналоговой камеры"]);
 });
 
+Deno.test("availability questions and pronouns do not become application context", () => {
+  for (const request of [
+    "Есть ли у вас розетки скрытого монтажа черного цвета?",
+    "У вас есть розетки?",
+    "Покажите мне розетки",
+    "Какие розетки у вас есть?",
+    "Есть ли в наличии розетки?",
+  ]) {
+    assertEquals(extractCustomerApplicationContexts(request, "розетки"), [], request);
+  }
+  assertEquals(
+    extractCustomerApplicationContexts("Есть ли у вас бытовые светильники?", "светильники"),
+    ["бытовые"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts("Нужны офисные уличные светильники", "светильники"),
+    ["уличные"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts("Интересуюсь уличными светильниками", "светильники"),
+    ["уличными"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts("Есть ли у вас светильники для дома?", "светильники"),
+    ["дома"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts("Покажи светодиодный светильник", "светодиодный светильник"),
+    [],
+  );
+});
+
 Deno.test("provider fallback projects one unique adjacent application facet and fails closed on ambiguity", () => {
   assertEquals(
     projectUniqueAdjacentApplicationFacetCriteria(

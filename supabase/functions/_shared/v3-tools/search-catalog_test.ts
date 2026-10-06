@@ -310,3 +310,229 @@ Deno.test("catalog exposes zero when a bounded raw pool cannot materialize any r
     { page: 3, perPage: 50 },
   ]);
 });
+
+Deno.test("absolute catalog deadline stops sequential facet alternatives without returning a partial assortment", async () => {
+  const requested: string[] = [];
+  let deadlineCalls = 0;
+  const cache: ProductCache = new Map();
+  const fetchImpl: typeof fetch = (input, init) => {
+    const value = new URL(String(input)).searchParams.get("options[power][]") ?? "";
+    requested.push(value);
+    if (value === "20") {
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "verified-first",
+            pagetitle: "Прожектор 20 Вт",
+            price: 1000,
+            url: "https://220volt.kz/catalog/light/floodlights/verified-first/",
+            options: [],
+          }],
+          pagination: { total: 1 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(new DOMException("aborted", "AbortError"));
+        return;
+      }
+      signal?.addEventListener("abort", () =>
+        reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  };
+  const started = Date.now();
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Прожекторы",
+    options: { power: ["20", "30"] },
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+    deadlineAtMs: started + 200,
+    onDeadlineExceeded: () => deadlineCalls++,
+  }, cache);
+
+  assertEquals(requested, ["20", "30"]);
+  assertEquals(result.ok, false);
+  if (result.ok) return;
+  assertEquals(result.error_code, "catalog_timeout");
+  assertEquals(result.message, "catalog_turn_deadline_exceeded");
+  assertEquals(deadlineCalls > 0, true);
+  assertEquals(Date.now() - started < 1_000, true);
+  // The completed first request remains proven in the cache, but an incomplete
+  // OR search is never returned as a complete customer-facing assortment.
+  assertEquals([...cache.keys()], ["verified-first"]);
+});
+
+Deno.test("absolute catalog deadline interrupts unmaterialized-page recovery instead of claiming zero products", async () => {
+  const requestedPages: number[] = [];
+  const fetchImpl: typeof fetch = (input, init) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    requestedPages.push(page);
+    if (requestedPages.length === 1) {
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "unrenderable",
+            pagetitle: "Архивный товар",
+            price: 0,
+            url: "https://220volt.kz/catalog/test/products/unrenderable/",
+            options: [],
+          }],
+          pagination: { total: 120 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(new DOMException("aborted", "AbortError"));
+        return;
+      }
+      signal?.addEventListener("abort", () =>
+        reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  };
+  const started = Date.now();
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Товары",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+    deadlineAtMs: started + 200,
+  }, new Map());
+
+  assertEquals(requestedPages, [1, 1]);
+  assertEquals(result.ok, false);
+  if (result.ok) return;
+  assertEquals(result.error_code, "catalog_timeout");
+  assertEquals(result.message, "catalog_turn_deadline_exceeded");
+  assertEquals(Date.now() - started < 1_000, true);
+});
+
+Deno.test("catalog deadline returns even when upstream fetch ignores the abort signal", async () => {
+  const started = Date.now();
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "кабель",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    deadlineAtMs: started + 100,
+    fetchImpl: () => new Promise<Response>(() => {}),
+  }, new Map());
+
+  assertEquals(result.ok, false);
+  if (result.ok) return;
+  assertEquals(result.error_code, "catalog_timeout");
+  assertEquals(Date.now() - started < 1_000, true);
+});
+
+Deno.test("fast catalog search keeps its ordinary result under an absolute deadline", async () => {
+  let deadlineCalls = 0;
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "реле",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    deadlineAtMs: Date.now() + 1_000,
+    onDeadlineExceeded: () => deadlineCalls++,
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "available-relay",
+          pagetitle: "Реле контроля напряжения",
+          price: 1200,
+          url: "https://220volt.kz/catalog/electric/relay/available-relay/",
+          options: [],
+        }],
+        pagination: { total: 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["available-relay"]);
+  assertEquals(result.total, 1);
+  assertEquals(deadlineCalls, 0);
+});
+
+Deno.test("one local HTTP timeout does not discard a verified sibling category", async () => {
+  const cache: ProductCache = new Map();
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category_in: ["Рабочая категория", "Медленная категория"],
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    timeoutMs: 25,
+    deadlineAtMs: Date.now() + 1_000,
+    fetchImpl: (input) => {
+      const category = new URL(String(input)).searchParams.get("category");
+      if (category === "Медленная категория") {
+        return new Promise<Response>(() => {});
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "verified-sibling",
+            pagetitle: "Доступный товар",
+            price: 700,
+            url: "https://220volt.kz/catalog/test/products/verified-sibling/",
+            options: [],
+          }],
+          pagination: { total: 1 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, cache);
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["verified-sibling"]);
+  assertEquals(result.total, 1);
+});
+
+Deno.test("one local sorted-page timeout preserves the verified first-page pool", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    timeoutMs: 25,
+    deadlineAtMs: Date.now() + 1_000,
+    fetchImpl: (input) => {
+      const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+      if (page > 1) return new Promise<Response>(() => {});
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "first-page",
+            pagetitle: "Доступный товар",
+            price: 700,
+            url: "https://220volt.kz/catalog/test/products/first-page/",
+            options: [],
+          }],
+          pagination: { total: 100 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["first-page"]);
+  assertEquals(result.total, 100);
+});

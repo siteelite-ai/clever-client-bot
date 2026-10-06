@@ -6,6 +6,11 @@ import {
 } from "./criteria-consistency.ts";
 import { extractReasoningBounds } from "./criteria-reasoning.ts";
 import { compoundCountFacetValue, guardSearchFilters } from "./search-filter-guard.ts";
+import {
+  extractIpProtectionBounds,
+  isIpProtectionCode,
+  isIpProtectionPropertyKey,
+} from "./ip-protection-order.ts";
 
 export interface ReasoningObligation {
   criterion: Criterion;
@@ -44,12 +49,13 @@ export function repairObligationDeclaration(
   const after = repaired.mandatory_properties;
   if (
     !Array.isArray(before) || !Array.isArray(after) || before.length === 0 ||
-    before.length > 12 || before.length !== after.length ||
+    before.length > 12 || after.length > before.length ||
     typeof original.reasoning !== "string" ||
     typeof repaired.reasoning !== "string" ||
     repaired.reasoning.length > 1600 ||
     !repaired.reasoning.startsWith(original.reasoning)
   ) return null;
+  const revisedReasoning = repaired.reasoning as string;
   const signature = (item: unknown) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const value = item as Record<string, unknown>;
@@ -66,19 +72,54 @@ export function repairObligationDeclaration(
       value.scope,
     ]);
   };
-  const first = before.map(signature).sort();
-  const second = after.map(signature).sort();
+  const first = before.map(signature);
+  const second = after.map(signature);
   if (
     first.some((s) => s === null) || second.some((s) => s === null) ||
-    JSON.stringify(first) !== JSON.stringify(second)
+    new Set(first).size !== first.length ||
+    second.some((s) => !first.includes(s)) ||
+    new Set(second).size !== second.length
   ) return null;
+  // A formatting retry may omit an original property in its *array* even
+  // while adding a valid sentence for it. Never adopt that reduced array:
+  // recover quotes only for the original, frozen property signatures.
+  const visibleSentences = revisedReasoning.match(
+    /[\s\S]+?(?:[.!?](?=\s|$)|$)/gu,
+  )?.map((sentence) => sentence.trim()).filter((sentence) =>
+    sentence.length >= 8 && sentence.length <= 600
+  ) ?? [];
+  const reconstructed = before.map((item) => {
+    const frozen = item as Record<string, unknown>;
+    const matchingRetry = after.find((candidate) =>
+      signature(candidate) === signature(frozen)
+    ) as Record<string, unknown> | undefined;
+    const candidateSpans = [
+      frozen.source_span,
+      matchingRetry?.source_span,
+      ...visibleSentences,
+    ].filter((span): span is string => typeof span === "string");
+    for (const source_span of new Set(candidateSpans)) {
+      const candidate = { ...frozen, source_span };
+      if (
+        resolveReasoningObligations(
+          [candidate], revisedReasoning, facets, customerEvidence,
+          confirmedCustomerCriteria,
+        ).unresolved.length === 0
+      ) return candidate;
+    }
+    return null;
+  });
   if (
-    resolveReasoningObligations(after, repaired.reasoning, facets, customerEvidence, confirmedCustomerCriteria).unresolved.length > 0
+    reconstructed.some((item) => item === null) ||
+    resolveReasoningObligations(
+      reconstructed, revisedReasoning, facets, customerEvidence,
+      confirmedCustomerCriteria,
+    ).unresolved.length > 0
   ) return null;
   return {
     ...original,
-    reasoning: repaired.reasoning,
-    mandatory_properties: after,
+    reasoning: revisedReasoning,
+    mandatory_properties: reconstructed,
     // The revised text must quote the same per-item evidence if one existed.
     // The normal resolver checks visibility; never silently change its number.
     per_product_measurement_evidence:
@@ -87,7 +128,7 @@ export function repairObligationDeclaration(
 }
 
 export const reasoningObligationsPolicy =
-  "После составления reasoning заполни mandatory_properties всеми обязательными свойствами отдельных товаров, которые ты сам обосновал в reasoning. Это независимый от live-фасетов список: отсутствие свойства в каталожной схеме не отменяет требование. Не копируй туда автоматически числа из запроса: расстояние, площадь и количество покупаемого материала — условия задачи, а не обязательно параметр одного заводского изделия. Сначала сформулируй каждое обязательное свойство отдельным полным предложением с ключом и значением, например в форме «Необходим …» или «Обязательна …». source_span — точная копия этого полного предложения из reasoning, не из сообщения клиента и не отдельный фрагмент. key и строковое value должны дословно встречаться в этом предложении; числовое value должно встречаться вместе с unit и тем же направлением сравнения. Для чисел используй тип number. Для текстового значения unit — пустая строка. Не подменяй необходимость предпочтением. Не создавай обязательное свойство только ради заполнения массива. Если вместо окончательного подбора задан clarification_question, оставь mandatory_properties пустым.";
+  "После составления reasoning заполни mandatory_properties всеми обязательными свойствами отдельных товаров, которые ты сам обосновал в reasoning. Это независимый от live-фасетов список: отсутствие свойства в каталожной схеме не отменяет требование. Не копируй туда автоматически числа из запроса: расстояние, площадь и количество покупаемого материала — условия задачи, а не обязательно параметр одного заводского изделия. Сначала сформулируй каждое обязательное свойство отдельным полным предложением с ключом и значением, например в форме «Необходим …» или «Обязательна …». source_span — точная копия этого полного предложения из reasoning, не из сообщения клиента и не отдельный фрагмент. key и строковое value должны дословно встречаться в этом предложении; числовое value должно встречаться вместе с unit и тем же направлением сравнения. Для чисел используй тип number. Для текстового значения unit — пустая строка. Если для степени защиты указано «не ниже IP65», сохрани op=min и строковое value=IP65; не подменяй его равенством или числом. Не подменяй необходимость предпочтением. Не создавай обязательное свойство только ради заполнения массива. Если вместо окончательного подбора задан clarification_question, оставь mandatory_properties пустым.";
 
 export const reasoningObligationsSchema = {
   type: "array",
@@ -383,6 +424,9 @@ export function resolveReasoningObligations(
       const quoteBounds = typeof value === "number"
         ? extractReasoningBounds(quoted).filter((bound) =>
           bound.value === value && normalizeUnit(bound.unit) === normalizeUnit(unit))
+        : typeof value === "string" && isIpProtectionCode(value)
+        ? extractIpProtectionBounds(quoted).filter((bound) =>
+          bound.value === value.toUpperCase())
         : [];
       const localValue = typeof value === "number"
         ? unit && isPhysicalMeasurementUnit(unit)
@@ -477,7 +521,7 @@ export function resolveReasoningObligations(
     }
     // Preferences and unresolved alternatives cannot become hard conditions.
     const withoutBounds = span.replace(
-      /не\s+(?:менее|более|меньше|больше)/giu,
+      /не\s+(?:менее|более|меньше|больше|ниже|выше)/giu,
       "",
     );
     if (
@@ -526,12 +570,40 @@ export function resolveReasoningObligations(
       !unit && (containsInflectedPhrase(span, value) || affirmativePresenceGrounded) &&
       extractClientQuantities(value).length === 0
     ) {
+      if (isIpProtectionCode(value) && extractIpProtectionBounds(span).length > 0) {
+        reject("operator_not_grounded");
+        continue;
+      }
       criterion = {
         key,
         op: "eq",
         value,
         level: "A",
         evidence: customerGrounded ? "user_explicit" : "derived_required",
+      };
+    } else if (
+      typeof value === "string" && isIpProtectionCode(value) &&
+      op === "min" && !unit && isIpProtectionPropertyKey(key) &&
+      containsInflectedPhrase(span, value)
+    ) {
+      const bounds = extractIpProtectionBounds(span);
+      const codes = [...span.matchAll(/(?<![\p{L}\p{N}])IP[0-6][0-9](?![\p{L}\p{N}])/giu)]
+        .map((match) => match[0].toUpperCase());
+      if (
+        codes.length !== 1 || codes[0] !== value.toUpperCase() ||
+        bounds.length !== 1 || bounds[0].op !== "min" ||
+        bounds[0].value !== value.toUpperCase()
+      ) {
+        reject("operator_not_grounded");
+        continue;
+      }
+      criterion = {
+        key,
+        op: "min",
+        value: value.toUpperCase(),
+        exclusive: bounds[0].strict,
+        level: "A",
+        evidence: "derived_required",
       };
     } else {
       reject("value_not_grounded");

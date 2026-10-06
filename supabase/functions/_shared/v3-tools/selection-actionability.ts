@@ -847,6 +847,108 @@ function normalizeLiteralEvidence(value: unknown): string {
     .trim();
 }
 
+/** A customer can type a visually identical Cyrillic letter in a compact
+ * alphanumeric catalog code. Fold lookalikes only inside mixed letter-digit
+ * tokens; ordinary natural-language values remain distinct. */
+function normalizeExactLiveValue(value: unknown): string {
+  const lookalikes: Record<string, string> = {
+    а: "a", в: "b", с: "c", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", т: "t", х: "x", у: "y",
+  };
+  return normalizeLiteralEvidence(value).split(" ").map((token) =>
+    /\d/u.test(token) && /[a-zа-я]/u.test(token)
+      ? token.replace(/[авсекмнортху]/gu, (letter) => lookalikes[letter])
+      : token
+  ).join(" ");
+}
+
+/** An exact customer-owned live value cannot be visibly declared unsuitable.
+ * Keep the negation local to that value: a sentence may legitimately say
+ * `A подходит, а B не подходит` without negating A. */
+function reasoningNegatesFrozenExactValue(
+  reasoning: string,
+  value: string,
+): boolean {
+  const normalizedValue = normalizeExactLiveValue(value);
+  if (!normalizedValue) return false;
+  const escaped = normalizedValue.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+    .replace(/\s+/gu, "\\s+");
+  const preceding = new RegExp(
+    `(?:^|\\s)(?:не(?:\\s+для)?|без|кроме|исключ\\p{L}*)\\s+${escaped}(?=\\s|$)`,
+    "u",
+  );
+  const following = new RegExp(
+    `(?:^|\\s)${escaped}\\s+(?:(?:совсем|вообще|точно|категорически)\\s+)?(?:не\\s+(?:под(?:ход|ойд)\\p{L}*|совмест\\p{L}*|год\\p{L}*|нуж\\p{L}*|соответ\\p{L}*|рекоменд\\p{L}*|выбир\\p{L}*|использ\\p{L}*)|нельзя|неподход\\p{L}*|несовмест\\p{L}*|исключ\\p{L}*)(?=\\s|$)`,
+    "u",
+  );
+  return String(reasoning ?? "").split(/[.!?;,\n]+/u)
+    .map(normalizeExactLiveValue)
+    .some((clause) => preceding.test(clause) || following.test(clause));
+}
+
+/** A frozen exact customer criterion can own a live classification only when
+ * both its facet identity and exact live value resolve uniquely. A broad
+ * caption that could refer to two axes is never allowed to veto either one.
+ * The output is keyed by the live classification facet name and used before
+ * accepting any model-selected class or search option. */
+function frozenExactClassificationChoices(
+  facets: DerivedSelectionFacet[],
+  choices: DerivedClassificationChoice[],
+  confirmedCustomerCriteria: Criterion[],
+): Map<string, Set<string>> {
+  const allowedByFacet = new Map<string, Set<string>>();
+  for (const criterion of confirmedCustomerCriteria) {
+    if (
+      criterion.evidence !== "user_explicit" ||
+      (criterion.level ?? "A") !== "A" || criterion.op !== "eq" ||
+      Array.isArray(criterion.value)
+    ) continue;
+    const wantedKey = normalizeLiteralEvidence(criterion.key);
+    const wantedValue = normalizeExactLiveValue(criterion.value);
+    if (!wantedKey || !wantedValue) continue;
+    const labels = (facet: DerivedSelectionFacet) =>
+      [facet.key, facet.caption].map(normalizeLiteralEvidence).filter(Boolean);
+    const indexed = facets.slice(0, 80).map((facet, index) => ({ facet, index }));
+    const exact = indexed.filter(({ facet }) =>
+      labels(facet).includes(wantedKey)
+    );
+    const matches = exact.length > 0 ? exact : indexed.filter(({ facet }) =>
+      wantedKey.length >= 5 && labels(facet).some((label) =>
+        label.length >= 5 &&
+        (label.includes(wantedKey) || wantedKey.includes(label))
+      )
+    );
+    if (matches.length !== 1) continue;
+    const { index } = matches[0];
+    const choiceFacetName = choices.find((choice) =>
+      choice.id.startsWith(`f${index}v`)
+    )?.facet;
+    if (!choiceFacetName) continue;
+    // Downstream classification bookkeeping uses the public facet label.
+    // If two machine axes reuse that label, it cannot safely distinguish
+    // their choices even when this criterion matched one machine key.
+    const collidingIndexes = new Set(
+      choices.filter((choice) =>
+        normalizeLiteralEvidence(choice.facet) ===
+          normalizeLiteralEvidence(choiceFacetName)
+      ).map((choice) => choice.id.match(/^f(\d+)v\d+$/u)?.[1]),
+    );
+    if (collidingIndexes.size !== 1) continue;
+    const liveMatches = choices.filter((choice) =>
+      choice.id.startsWith(`f${index}v`) &&
+      normalizeExactLiveValue(choice.value) === wantedValue
+    );
+    if (liveMatches.length === 0) continue;
+    for (const choice of liveMatches) {
+      const identity = normalizeLiteralEvidence(choice.facet);
+      const allowed = allowedByFacet.get(identity) ?? new Set<string>();
+      allowed.add(choice.id);
+      allowedByFacet.set(identity, allowed);
+    }
+  }
+  return allowedByFacet;
+}
+
 /** A provider must not serialize one member of its own visible `A or B`
  * statement as the sole mandatory exact value. Both values come from the
  * current live facet; this only detects a short explicit disjunction and does
@@ -1001,6 +1103,18 @@ export function resolveDerivedSelectionReasoning(
   const byId = new Map(
     derivedClassificationChoices(facets).map((choice) => [choice.id, choice]),
   );
+  const allLiveChoices = [...byId.values()];
+  const frozenAllowedByFacet = frozenExactClassificationChoices(
+    facets,
+    allLiveChoices,
+    confirmedCustomerCriteria,
+  );
+  const incompatibleDeclaredIds = new Set<string>();
+  const frozenGroundedChoices = allLiveChoices.filter((choice) =>
+    frozenAllowedByFacet.get(normalizeLiteralEvidence(choice.facet))?.has(
+      choice.id,
+    )
+  );
   const requiredById = new Map(
     derivedRequiredFacetChoices(facets).map((choice) => [choice.id, choice]),
   );
@@ -1019,6 +1133,28 @@ export function resolveDerivedSelectionReasoning(
     }
     return resolved;
   };
+  const excludesCustomerExact = resolveIds(args.excluded_classifications, 8)
+    .some((choice) =>
+      frozenAllowedByFacet.get(normalizeLiteralEvidence(choice.facet))?.has(
+        choice.id,
+      )
+    );
+  const negatesCustomerExact = frozenGroundedChoices.some((choice) =>
+    reasoningNegatesFrozenExactValue(originalReasoning, choice.value)
+  );
+  if (excludesCustomerExact || negatesCustomerExact) {
+    // Silently removing the excluded ID would leave the model's visible
+    // negative claim beside a server-added positive exact requirement. Ask
+    // for a new coherent declaration before any retrieval starts instead.
+    onRejected?.({
+      stage: "customer_exact_classification_contradiction",
+      reasoning: originalReasoning,
+      errors: [{ index: -1, reason: excludesCustomerExact
+        ? "customer_exact_classification_excluded"
+        : "customer_exact_classification_negated" }],
+    });
+    return null;
+  }
   const normalizedCustomerEvidence = normalizeLiteralEvidence(customerEvidence);
   const normalizedProductClass = new Set(
     classificationLexicalTokens(productClass),
@@ -1027,7 +1163,6 @@ export function resolveDerivedSelectionReasoning(
     phrase: string;
     choice: DerivedClassificationChoice;
   }> = [];
-  const allLiveChoices = [...byId.values()];
   if (Array.isArray(args.explicit_customer_classifications)) {
     const seenMappingFacets = new Set<string>();
     for (const raw of args.explicit_customer_classifications.slice(0, 6)) {
@@ -1038,6 +1173,13 @@ export function resolveDerivedSelectionReasoning(
       const normalizedPhrase = normalizeLiteralEvidence(phrase);
       const choice = byId.get(String(record.classification_id ?? ""));
       if (!choice || normalizedPhrase.length < 3) continue;
+      const frozenAllowed = frozenAllowedByFacet.get(
+        normalizeLiteralEvidence(choice.facet),
+      );
+      if (frozenAllowed && !frozenAllowed.has(choice.id)) {
+        incompatibleDeclaredIds.add(choice.id);
+        continue;
+      }
       if (
         !customerOwnsExactTransparentClassification(
           phrase,
@@ -1108,11 +1250,15 @@ export function resolveDerivedSelectionReasoning(
   // declaration. They therefore replace a conflicting broader choice in the
   // same facet instead of being diluted into an OR-list.
   const mappedFacetIdentities = new Set(
-    explicitCustomerMappings.map(({ choice }) =>
-      choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim()
-    ),
+    [
+      ...frozenAllowedByFacet.keys(),
+      ...explicitCustomerMappings.map(({ choice }) =>
+        normalizeLiteralEvidence(choice.facet)
+      ),
+    ],
   );
   const groundedChoices = [
+    ...frozenGroundedChoices,
     ...explicitCustomerMappings.map(({ choice }) => choice),
     ...customerGroundedClassificationChoices(
       customerEvidence,
@@ -1121,7 +1267,7 @@ export function resolveDerivedSelectionReasoning(
     )
       .filter((choice) =>
         !mappedFacetIdentities.has(
-          choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim(),
+          normalizeLiteralEvidence(choice.facet),
         )
       ),
   ];
@@ -1137,6 +1283,17 @@ export function resolveDerivedSelectionReasoning(
   }
   const providerRefinedIds = new Set<string>();
   for (const choice of resolveIds(args.compatible_classifications, 6)) {
+    const frozenAllowed = frozenAllowedByFacet.get(
+      normalizeLiteralEvidence(choice.facet),
+    );
+    if (frozenAllowed) {
+      // The model may not broaden, replace or narrow an exact customer-owned
+      // value (including an explicit OR family) on the same live axis.
+      if (!frozenAllowed.has(choice.id)) {
+        incompatibleDeclaredIds.add(choice.id);
+      }
+      continue;
+    }
     const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(
       /\s+/gu,
       " ",
@@ -1191,7 +1348,12 @@ export function resolveDerivedSelectionReasoning(
     facets,
     productClass,
   )
-    .filter((choice) => !compatibleIds.has(choice.id));
+    .filter((choice) =>
+      !compatibleIds.has(choice.id) &&
+      !frozenAllowedByFacet.get(normalizeLiteralEvidence(choice.facet))?.has(
+        choice.id,
+      )
+    );
   const groundedExcludedIds = new Set(
     groundedExcludedChoices.map(({ id }) => id),
   );
@@ -1201,6 +1363,9 @@ export function resolveDerivedSelectionReasoning(
   ]
     .filter((choice) =>
       !compatibleIds.has(choice.id) &&
+      !frozenAllowedByFacet.get(normalizeLiteralEvidence(choice.facet))?.has(
+        choice.id,
+      ) &&
       (groundedExcludedIds.has(choice.id) ||
         !classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices))
     )
@@ -1405,6 +1570,14 @@ export function resolveDerivedSelectionReasoning(
     }
     return true;
   }).join(" ").trim();
+  if (incompatibleDeclaredIds.size > 0 && retainedReasoning.length < 20) {
+    onRejected?.({
+      stage: "classification_conflict_cleanup",
+      reasoning: originalReasoning,
+      errors: [{ index: -1, reason: "customer_exact_classification_conflict" }],
+    });
+    return null;
+  }
   let reasoning = retainedReasoning.length >= 20
     ? retainedReasoning
     : originalReasoning;
@@ -1510,6 +1683,12 @@ export function resolveDerivedSelectionReasoning(
       }.`,
     );
   }
+  const retainedRetrievalQuery = retrievalQuery &&
+      (` ${normalizeLiteralEvidence(reasoning)} `).includes(
+        ` ${normalizeLiteralEvidence(retrievalQuery)} `,
+      )
+    ? retrievalQuery
+    : null;
   return {
     text: sentences.join(" "),
     propertyObligations: propertyResolution.obligations,
@@ -1520,7 +1699,7 @@ export function resolveDerivedSelectionReasoning(
       ? perProductEvidence
       : reasoning,
     measurementScope,
-    retrievalQuery,
+    retrievalQuery: retainedRetrievalQuery,
     compatible: compatibleChoices.map(({ facet, value }) => ({
       key: facet,
       value,

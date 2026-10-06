@@ -1437,6 +1437,32 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
   assertEquals(projection.unmatched_keys, []);
 });
 
+Deno.test("IP minimum gates products and live facets by proven partial order", () => {
+  const criterion: Criterion = {
+    key: "Степень защиты", op: "min", value: "IP65", level: "A",
+  };
+  const ratings = ["IP65", "IP66", "IP54", "IP67", "IP56", "IP69", "IP65/IP67", "IP65/IP7A"];
+  const products = ratings.map((rating) => product(rating, [`Степень защиты: ${rating}`]));
+  assertEquals(ratings.map((rating, index) => checkCriterion(products[index], criterion).verdict), [
+    "pass", "pass", "fail", "unknown", "fail", "unknown", "pass", "unknown",
+  ]);
+  assertEquals(applyCriteriaGate(products, [criterion]).passed_ids, ["IP65", "IP66", "IP65/IP67"]);
+  assertEquals(projectCriteriaFacetOptions([criterion], [{
+    key: "ip", caption: "Степень защиты", unit: null,
+    values: ratings.map((value) => ({ value })),
+  }]).options, { ip: ["IP65", "IP66", "IP65/IP67"] });
+  assertEquals(checkCriterion(product("bad-key", ["Модель: IP65"]), {
+    ...criterion, key: "Модель",
+  }).verdict, "unknown");
+  assertEquals(checkCriterion(product("bad-unit", ["Степень защиты: IP65"]), {
+    ...criterion, unit: "мм",
+  }).verdict, "unknown");
+  assertEquals(checkCriterion(product("unknown", []), criterion).verdict, "unknown");
+  assertEquals(checkCriterion(product("max", ["Степень защиты: IP65"]), {
+    ...criterion, op: "max",
+  }).verdict, "unknown");
+});
+
 Deno.test("advisory model classification guides retrieval without becoming mandatory", () => {
   const facets = [{
     key: "application",
