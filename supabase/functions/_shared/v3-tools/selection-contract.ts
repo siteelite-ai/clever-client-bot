@@ -260,11 +260,17 @@ export function extractCustomerApplicationContexts(
     const tokens = normalize(source).split(/\s+/u).filter(Boolean);
     const ignoredModifier =
       /^(?:сам\p{L}*|дешев\p{L}*|дорог\p{L}*|недорог\p{L}*|бюджетн\p{L}*|нескольк\p{L}*|все|кажд\p{L}*|подходящ\p{L}*)$/u;
+    // The word immediately before a class can be the customer's selection
+    // command ("найди автомат"), not an adjective describing application.
+    // Keep this grammatical and independent of product/category vocabulary.
+    const requestWord =
+      /^(?:найд(?:и|ите)|подбер(?:и|ите)|покаж(?:и|ите)|предлож(?:и|ите)|выбер(?:и|ите)|куп(?:и|ите)|закаж(?:и|ите)|подскаж(?:и|ите)|посоветуй(?:те)?|дай|дайте|ищу|ищем|хочу|нуж(?:ен|на|но|ны)|необходим(?:а|о|ы)?|требу(?:ется|ются))$/u;
     for (let index = 1; index < tokens.length; index += 1) {
       if (!classStems.has(stem(tokens[index]))) continue;
       const candidate = tokens[index - 1];
       if (
         !candidate || ignoredModifier.test(candidate) ||
+        requestWord.test(candidate) ||
         meaningfulTokens(candidate).length === 0
       ) continue;
       if (contexts.some((known) => normalize(known) === candidate)) continue;

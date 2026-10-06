@@ -118,9 +118,45 @@ export const reasoningObligationsSchema = {
 const normalized = (value: string) =>
   value.replace(/\s+/gu, " ").trim().toLowerCase();
 
-/** Attribution may expand an exact sentence prefix to its complete source,
- * never shorten the source or invent/replace words. All semantic checks run
- * on the expanded sentence, including trailing conditions and negations. */
+/** Only a bare decimal with a declared unit can be a formatting variant of
+ * a measured number. Codes and unitless enum/count values stay strings. */
+function measuredValue(value: unknown, unit: unknown): unknown {
+  if (
+    typeof value !== "string" || typeof unit !== "string" || !unit.trim() ||
+    !/^(?:0|[1-9]\d*)(?:[.,]\d+)?$/u.test(value.trim())
+  ) return value;
+  const number = Number(value.trim().replace(",", "."));
+  return Number.isFinite(number) ? number : value;
+}
+
+/** An enumerated obligation is one exact clause under the same visible
+ * necessity heading. No words may be rewritten or borrowed from another
+ * clause; the complete sentence remains the source of semantic checks. */
+function enumeratedSentence(sentence: string): { heading: string; clauses: string[] } | null {
+  const source = normalized(sentence).replace(/[.!?]+$/u, "").trim();
+  const match = /^([^:]{3,100}):\s*(.+)$/u.exec(source);
+  if (!match || !/(?:необходим|обязател|требу)/iu.test(match[1])) return null;
+  const clauses = match[2].split(/[,;]\s+/u).map((clause) => clause.trim());
+  return clauses.length > 1 && clauses.every((clause) => clause.length >= 3)
+    ? { heading: match[1], clauses }
+    : null;
+}
+
+function enumeratedQuoteClause(quote: string, sentence: string): string | null {
+  const list = enumeratedSentence(sentence);
+  if (!list) return null;
+  const source = normalized(quote).replace(/[.!?]+$/u, "").trim();
+  const heading = `${list.heading}: `;
+  if (!source.startsWith(heading)) return null;
+  const clause = source.slice(heading.length);
+  return list.clauses.filter((item) => item === clause).length === 1
+    ? clause
+    : null;
+}
+
+/** Attribution may expand an exact sentence prefix or a uniquely located
+ * enumerated clause to its complete source, never invent/replace words.
+ * Semantic checks run on the full sentence, including trailing conditions. */
 function completeVisibleSource(quote: string, reasoning: string): string | null {
   const prefix = normalized(quote).replace(/[.!?]+$/u, "").trim();
   if (prefix.length < 8) return null;
@@ -128,9 +164,11 @@ function completeVisibleSource(quote: string, reasoning: string): string | null 
   const matches = sentences.map((sentence) => sentence.trim()).filter((sentence) => {
     if (sentence.length > 600) return false;
     const source = normalized(sentence);
-    if (!source.startsWith(prefix)) return false;
-    const next = source.slice(prefix.length, prefix.length + 1);
-    return !next || /[\s,;:.!?—()]/u.test(next);
+    if (source.startsWith(prefix)) {
+      const next = source.slice(prefix.length, prefix.length + 1);
+      if (!next || /[\s,;:.!?—()]/u.test(next)) return true;
+    }
+    return enumeratedQuoteClause(quote, sentence) !== null;
   });
   return matches.length === 1 ? matches[0] : null;
 }
@@ -226,7 +264,7 @@ export function findOmittedReasoningObligations(
       const property = (withProperty?.[1] ?? directProperty?.[1] ?? "").trim();
       if (!property || taskInput.test(property)) continue;
       const covered = declarations.some((item) =>
-        typeof item.value === "number" && item.value === value &&
+        measuredValue(item.value, item.unit) === value &&
         typeof item.unit === "string" && normalizeUnit(item.unit) === unit &&
         (declaredIn.includes(item) ||
           typeof item.key === "string" && containsInflectedPhrase(property, item.key)));
@@ -307,7 +345,8 @@ export function resolveReasoningObligations(
       reject("invalid_item");
       continue;
     }
-    const { key, value, unit, op, source_span: sourceSpan, scope } = item;
+    const { key, value: rawValue, unit, op, source_span: sourceSpan, scope } = item;
+    const value = measuredValue(rawValue, unit);
     if (
       typeof key !== "string" || key.length < 3 || key.length > 120 ||
       typeof sourceSpan !== "string" || sourceSpan.length < 8 ||
@@ -323,6 +362,44 @@ export function resolveReasoningObligations(
       continue;
     }
     const span = normalized(completeSource);
+    const list = enumeratedSentence(completeSource);
+    if (list && list.clauses.filter((clause) => containsInflectedPhrase(clause, key)).length > 1) {
+      reject("ambiguous_property_clause");
+      continue;
+    }
+    const quotedClause = enumeratedQuoteClause(sourceSpan, completeSource);
+    if (
+      !quotedClause && typeof rawValue === "string" && typeof value === "number" &&
+      extractClientQuantities(span).some((quantity) =>
+        quantity.unit === normalizeUnit(unit) && quantity.value !== value)
+    ) {
+      reject("ambiguous_quantity");
+      continue;
+    }
+    if (quotedClause && normalized(sourceSpan) !== span) {
+      // A clause quote cannot borrow its property, value, unit or comparison
+      // from another item in the same sentence.
+      const quoted = normalized(sourceSpan);
+      const quoteBounds = typeof value === "number"
+        ? extractReasoningBounds(quoted).filter((bound) =>
+          bound.value === value && normalizeUnit(bound.unit) === normalizeUnit(unit))
+        : [];
+      const localValue = typeof value === "number"
+        ? unit && isPhysicalMeasurementUnit(unit)
+          ? extractClientQuantities(quoted).some((q) =>
+            q.value === value && q.unit === normalizeUnit(unit))
+          : containsPhrase(quoted, String(value)) &&
+            (!unit || containsPhrase(quoted, String(unit)))
+        : typeof value === "string" && containsInflectedPhrase(quoted, value);
+      if (
+        !containsInflectedPhrase(quoted, key) || !localValue ||
+        (op === "eq" && quoteBounds.length > 0) ||
+        (op !== "eq" && (quoteBounds.length === 0 || quoteBounds.some((bound) => bound.op !== op)))
+      ) {
+        reject("source_clause_not_grounded");
+        continue;
+      }
+    }
     const matchingFacets = facets.filter((facet) =>
       [facet.key, facet.caption].some((label) => typeof label === "string" && normalized(label) === normalized(key)));
     // Reuse the existing customer-owned facet proof, not modal words in the
@@ -404,7 +481,7 @@ export function resolveReasoningObligations(
       "",
     );
     if (
-      /(?:возможно|желательн|например|предпочт|либо|если|можно|суммар|распредел|отсутств)|(?:^|\s)(?:не|без)(?:\s|$)/iu
+      /(?:возможно|желательн|рекоменду|необязател|например|предпочт|либо|если|можно|суммар|распредел|отсутств|по\s+желанию)|(?:^|[^\p{L}])или(?:$|[^\p{L}])|(?:^|\s)(?:не|без)(?:\s|$)/iu
         .test(withoutBounds) ||
       (!customerGrounded && !/(?:необходим|требует|требуется|обязател|долж|критич)/iu.test(span))
     ) {

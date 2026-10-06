@@ -458,3 +458,67 @@ Deno.test("explicit required presence grounds an affirmative boolean facet witho
     assertEquals(resolveReasoningObligations([{ ...item, source_span: negative }], negative).unresolved.length, 1);
   }
 });
+
+Deno.test("bare measured decimal strings compile as numbers only with the same visible unit and operator", () => {
+  const source = "Обязательна цветовая температура 3000 К для получения тёплого света.";
+  const item = { key: "Цветовая температура", op: "eq", value: "3000", unit: "К", scope: "per_product", source_span: source };
+  const result = resolveReasoningObligations([item], source);
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations[0].criterion.value, 3000);
+  assertEquals(findOmittedReasoningObligations([item], source), []);
+  for (const invalid of [
+    { ...item, value: "3001" },
+    { ...item, unit: "Вт" },
+    { ...item, op: "min" },
+    { ...item, key: "Номинальная мощность" },
+    { ...item, value: "3000 К" },
+    { ...item, value: "IP65" },
+  ]) {
+    assertEquals(resolveReasoningObligations([invalid], source).unresolved.length, 1);
+  }
+  const bounded = "Необходим ток не менее 25 А.";
+  const boundItem = { ...item, key: "ток", value: "25", unit: "А", op: "min", source_span: bounded };
+  assertEquals(resolveReasoningObligations([boundItem], bounded).obligations[0]?.criterion.op, "min");
+  assertEquals(resolveReasoningObligations([{ ...boundItem, op: "eq" }], bounded).unresolved.length, 1);
+  const ambiguous = "Необходим номинальный ток 25 А, пусковой ток 16 А.";
+  assertEquals(resolveReasoningObligations([{ ...item, key: "Номинальный ток", value: "25", unit: "А", source_span: ambiguous }], ambiguous).unresolved.length, 1);
+  // An ordered IP code has no declared numeric scale. Never turn min IP65
+  // into an exact text value or a fabricated physical quantity.
+  const ip = "Необходима степень защиты не ниже IP65.";
+  assertEquals(resolveReasoningObligations([{ ...item, key: "Степень защиты", value: "IP65", unit: "", op: "min", source_span: ip }], ip).unresolved.length, 1);
+});
+
+Deno.test("one exact clause under a visible necessity heading inherits its unique full sentence", () => {
+  const source = "Обязательны: количество полюсов — 1, номинальный ток — 25 А, характеристика срабатывания — C, модульное исполнение для установки на DIN-рейку в щитке.";
+  const base = { op: "eq", scope: "per_product" };
+  const items = [
+    { ...base, key: "Количество полюсов", value: "1", unit: "", source_span: "Обязательны: количество полюсов — 1." },
+    { ...base, key: "Номинальный ток", value: "25", unit: "А", source_span: "Обязательны: номинальный ток — 25 А." },
+    { ...base, key: "Характеристика срабатывания", value: "C", unit: "", source_span: "Обязательны: характеристика срабатывания — C." },
+  ];
+  const result = resolveReasoningObligations(items, source);
+  assertEquals(result.unresolved, []);
+  assertEquals(result.obligations.map((obligation) => obligation.sourceSpan), [source, source, source]);
+  assertEquals(result.obligations[1].criterion.value, 25);
+  assertEquals(resolveReasoningObligations([{ ...items[1], value: "16" }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([{ ...items[1], unit: "Вт" }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([{ ...items[1], op: "min" }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([{ ...items[1], key: "Сечение кабеля" }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([{ ...items[1], source_span: "Обязательны: номинальная мощность — 25 А." }], source).unresolved.length, 1);
+  assertEquals(resolveReasoningObligations([items[1]], `${source} ${source}`).unresolved.length, 1);
+  const twoCurrents = "Обязательны: номинальный ток — 25 А, пусковой ток — 16 А.";
+  assertEquals(resolveReasoningObligations([items[1]], twoCurrents).unresolved, []);
+});
+
+Deno.test("enumerated quote attribution fails closed on same-key conflict or sentence-wide drift", () => {
+  const item = { key: "Номинальный ток", op: "eq", value: "25", unit: "А", scope: "per_product", source_span: "Обязательны: номинальный ток — 25 А." };
+  for (const source of [
+    "Обязательны: количество полюсов — 1, номинальный ток — 25 А, номинальный ток — 16 А.",
+    "Обязательны: количество полюсов — 1, номинальный ток — 25 А, но это не обязательное требование.",
+    "Обязательны: количество полюсов — 1, номинальный ток — 25 А, характеристика C желательна.",
+    "Обязательны: количество полюсов — 1, номинальный ток — 25 А или 16 А.",
+    "Желательны: количество полюсов — 1, номинальный ток — 25 А.",
+  ]) {
+    assertEquals(resolveReasoningObligations([item], source).unresolved.length, 1, source);
+  }
+});

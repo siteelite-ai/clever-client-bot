@@ -971,6 +971,33 @@ Deno.test("adjacent class modifiers require reasoning instead of direct applicat
   );
 });
 
+Deno.test("selection commands and necessity words are not application modifiers", () => {
+  const audit05 = "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С";
+  assertEquals(extractCustomerApplicationContexts(audit05, "Автоматические выключатели"), []);
+  for (const [request, productClass] of [
+    ["Подбери светильник", "светильник"],
+    ["Покажи шкаф", "шкаф"],
+    ["Предложи насос", "насос"],
+    ["Выбери кабель", "кабель"],
+    ["Купи розетку", "розетка"],
+    ["Закажи выключатель", "выключатель"],
+    ["Ищу автомат", "автомат"],
+    ["Нужен датчик", "датчик"],
+    ["Необходим прибор", "прибор"],
+    ["Требуется провод", "провод"],
+  ]) {
+    assertEquals(extractCustomerApplicationContexts(request, productClass), [], request);
+  }
+});
+
+Deno.test("selection commands do not erase actual adjacent or explicit application context", () => {
+  assertEquals(extractCustomerApplicationContexts("Найди уличный шкаф", "шкаф"), ["уличный"]);
+  assertEquals(extractCustomerApplicationContexts("Подбери офисные светильники", "светильники"), ["офисные"]);
+  assertEquals(extractCustomerApplicationContexts("Необходим модульный автомат", "автомат"), ["модульный"]);
+  assertEquals(extractCustomerApplicationContexts("Найди автомат для квартиры до 1000 тенге", "автомат"), ["квартиры"]);
+  assertEquals(extractCustomerApplicationContexts("Нужен кабель для аналоговой камеры", "кабель"), ["аналоговой камеры"]);
+});
+
 Deno.test("provider fallback projects one unique adjacent application facet and fails closed on ambiguity", () => {
   assertEquals(
     projectUniqueAdjacentApplicationFacetCriteria(

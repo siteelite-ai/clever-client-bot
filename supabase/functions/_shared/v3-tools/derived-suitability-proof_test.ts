@@ -1,0 +1,273 @@
+import {
+  assertEquals,
+  assertFalse,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { Criterion } from "./criteria-gate.ts";
+import {
+  assessDerivedSuitabilityProof,
+  hasCheckableMandatoryProductCriterion,
+  isQuantityOnlyPurchaseRequest,
+  UNVERIFIED_SUITABILITY_RESPONSE,
+} from "./derived-suitability-proof.ts";
+
+Deno.test("derived application search with only a retrieval phrase fails closed", () => {
+  const decision = assessDerivedSuitabilityProof({
+    route: "server_derived",
+    mandatoryCriteria: [],
+    retrievalQuery: "аналоговая видеокамера",
+    customerEvidence:
+      "Нужна камера: аналоговая, на улице, расстояние 30 метров",
+  });
+  assertEquals(decision, {
+    kind: "unverified",
+    response: UNVERIFIED_SUITABILITY_RESPONSE,
+  });
+  assertEquals(
+    UNVERIFIED_SUITABILITY_RESPONSE,
+    "Не могу подтвердить пригодность конкретных товаров для описанных условий: мне не удалось установить обязательный параметр товара, который можно проверить по его характеристикам. Не буду показывать неподтверждённые варианты.",
+  );
+  assertFalse(/нет\s+в\s+наличии|товары\s+отсутствуют/iu.test(
+    UNVERIFIED_SUITABILITY_RESPONSE,
+  ));
+  assertFalse(UNVERIFIED_SUITABILITY_RESPONSE.includes("?"));
+});
+
+Deno.test("a real mandatory per-product proof keeps the derived route open", () => {
+  const criteria: Criterion[] = [
+    {
+      key: "Степень защиты",
+      op: "eq",
+      value: "IP65",
+      level: "A",
+      evidence: "derived_required",
+    },
+    {
+      key: "Световой поток",
+      op: "min",
+      value: 3500,
+      unit: "лм",
+      level: "A",
+      evidence: "derived_required",
+    },
+  ];
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: criteria,
+      customerEvidence: "Прожектор для двора 35 м², один на всю зону",
+    }),
+    { kind: "continue" },
+  );
+  assertEquals(hasCheckableMandatoryProductCriterion(criteria), true);
+});
+
+Deno.test("previously frozen customer criteria still count as product proof", () => {
+  const priorExplicitCriteria: Criterion[] = [
+    {
+      key: "Степень защиты",
+      op: "eq",
+      value: "IP65",
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "Световой поток",
+      op: "min",
+      value: 3500,
+      unit: "лм",
+      level: "A",
+      evidence: "user_explicit",
+    },
+  ];
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: priorExplicitCriteria,
+      customerEvidence: "Прожектор для двора, IP65, не менее 3500 лм",
+    }),
+    { kind: "continue" },
+  );
+});
+
+Deno.test("advisory, malformed and catalog-only values cannot substitute for proof", () => {
+  assertEquals(
+    hasCheckableMandatoryProductCriterion([
+      {
+        key: "Тип",
+        op: "eq",
+        value: "А",
+        level: "B",
+        evidence: "model_assumption",
+      },
+      {
+        key: "Цена",
+        op: "min",
+        value: Number.NaN,
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "",
+        op: "eq",
+        value: "IP65",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Найденный фасет",
+        op: "eq",
+        value: "да",
+        level: "A",
+        evidence: "catalog_verified",
+      },
+    ]),
+    false,
+  );
+});
+
+Deno.test("a clarification cannot ask a fact already supplied by the customer", () => {
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question: "Какая система камеры: аналоговая или IP?" },
+      customerEvidence:
+        "Нужна аналоговая камера на улице, расстояние 30 метров",
+    }).kind,
+    "unverified",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question: "Какое расстояние до устройства?" },
+      customerEvidence: "Расстояние до устройства 30 метров",
+    }).kind,
+    "unverified",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question: "Какое напряжение питания: 220 или 380 В?" },
+      customerEvidence: "Нужно подключить устройство на участке",
+    }).kind,
+    "clarify",
+  );
+});
+
+Deno.test("a one-letter answer is known only when it belongs to the questioned axis", () => {
+  const question = "Какая характеристика срабатывания нужна?";
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence: "Нужен автомат 16 А, характеристика С",
+    }).kind,
+    "unverified",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence: "Нужен автомат 16 А типа С; характеристику не знаю",
+    }).kind,
+    "clarify",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence:
+        "Характеристика с дополнительной защитой, без названного значения",
+    }).kind,
+    "clarify",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence: "Характеристика с 16 А пока не выбрана",
+    }).kind,
+    "clarify",
+  );
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence:
+        "Нужен автомат 16 А, характеристика срабатывания пока не известна",
+    }).kind,
+    "clarify",
+  );
+});
+
+Deno.test("unrelated measurements do not answer a missing named dimension", () => {
+  const question = "Какой диаметр нужен?";
+  for (
+    const customerEvidence of [
+      "Диаметр пока не знаю, трасса 30 м",
+      "Диаметр ещё не известен, трасса 30 м",
+      "Нужен диаметр для трассы 30 м",
+      "Трасса 30 м; диаметр неизвестен",
+    ]
+  ) {
+    assertEquals(
+      assessDerivedSuitabilityProof({
+        route: "server_derived",
+        mandatoryCriteria: [],
+        clarification: { question },
+        customerEvidence,
+      }).kind,
+      "clarify",
+      customerEvidence,
+    );
+  }
+  assertEquals(
+    assessDerivedSuitabilityProof({
+      route: "server_derived",
+      mandatoryCriteria: [],
+      clarification: { question },
+      customerEvidence: "Диаметр трубы 20 мм, длина трассы 30 м",
+    }).kind,
+    "unverified",
+  );
+});
+
+Deno.test("exact lookup, availability and quantity-only browsing stay outside this guard", () => {
+  assertEquals(isQuantityOnlyPurchaseRequest("Нужно 50 метров кабеля"), true);
+  assertEquals(isQuantityOnlyPurchaseRequest("50 м провода"), true);
+  assertEquals(
+    isQuantityOnlyPurchaseRequest(
+      "Нужна аналоговая камера на улице, расстояние 30 метров",
+    ),
+    false,
+  );
+  assertEquals(
+    isQuantityOnlyPurchaseRequest(
+      "Прожектор для двора 35 м², один на всю зону",
+    ),
+    false,
+  );
+  for (
+    const request of [
+      "Есть ВВГнг-LS 3×2,5?",
+      "Покажите лампы с цоколем E27",
+      "Нужно 50 метров кабеля",
+    ]
+  ) {
+    assertEquals(
+      assessDerivedSuitabilityProof({
+        route: "other",
+        mandatoryCriteria: [],
+        customerEvidence: request,
+      }),
+      { kind: "continue" },
+    );
+  }
+});
