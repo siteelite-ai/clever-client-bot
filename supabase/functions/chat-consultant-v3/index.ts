@@ -366,6 +366,16 @@ import {
   parseConfiguredModelFallbacks,
 } from "../_shared/v3-tools/model-routing.ts";
 import {
+  allowDerivedReasoningProviderFailover,
+  derivedReasoningModelRouting,
+  safeDerivedReasoningErrorType,
+  safeDerivedReasoningFinish,
+  safeDerivedReasoningModelId,
+  safeDerivedReasoningProvider,
+  safeDerivedReasoningToolName,
+  selectDerivedReasoningModel,
+} from "../_shared/v3-tools/derived-reasoning-model-route.ts";
+import {
   deterministicSeriesExplanation,
   safeSeriesTraits,
 } from "../_shared/v3-tools/series-explanation.ts";
@@ -537,12 +547,18 @@ const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
 const GENERAL_INQUIRY_MODEL =
   Deno.env.get("OPENROUTER_GENERAL_INQUIRY_MODEL") ??
     "google/gemini-2.5-flash";
+const GENERAL_INQUIRY_MODEL_FALLBACKS = parseConfiguredModelFallbacks(
+  Deno.env.get("OPENROUTER_GENERAL_INQUIRY_FALLBACK_MODELS"),
+);
 const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
   GENERAL_INQUIRY_MODEL,
-  parseConfiguredModelFallbacks(
-    Deno.env.get("OPENROUTER_GENERAL_INQUIRY_FALLBACK_MODELS"),
-  ),
+  GENERAL_INQUIRY_MODEL_FALLBACKS,
 );
+// Project secrets are shared by both Edge functions. The preview wrapper is
+// the only authority to read this optional experiment model.
+const PREVIEW_SELECTION_REASONING_MODEL = DEPLOYMENT_VARIANT === "preview"
+  ? Deno.env.get("OPENROUTER_PREVIEW_SELECTION_REASONING_MODEL")
+  : null;
 const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
 const TURN_TIMEOUT_MS = 32_000;
@@ -3017,6 +3033,7 @@ interface ORResponse {
   toolCalls: ORToolCall[];
   finishReason: string;
   provider?: string;
+  responseModel?: string;
 }
 
 interface ORToolSchema {
@@ -3091,6 +3108,7 @@ async function callOpenRouter(
   let res: Response;
   let provider = "openrouter";
   let data: {
+    model?: string;
     choices?: Array<{
       message?: {
         content?: string | null;
@@ -3115,7 +3133,15 @@ async function callOpenRouter(
           "X-Title": "220volt-chat-consultant-v3",
         },
       },
-      fallback: LOVABLE_API_KEY
+      // A forced-schema preview experiment must be attributable to one
+      // provider and model. Other phases and production keep their established
+      // provider failover behavior.
+      fallback: LOVABLE_API_KEY &&
+          allowDerivedReasoningProviderFailover(
+            DEPLOYMENT_VARIANT,
+            phase,
+            PREVIEW_SELECTION_REASONING_MODEL,
+          )
         ? {
           id: "lovable",
           url: "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -3187,6 +3213,7 @@ async function callOpenRouter(
     toolCalls,
     finishReason: data?.choices?.[0]?.finish_reason ?? "stop",
     provider,
+    responseModel: typeof data?.model === "string" ? data.model : undefined,
   };
 }
 
@@ -7327,6 +7354,87 @@ async function runExpertLoop(
                 return resolved?.text.trim() ? resolved : null;
               },
             );
+          const retryReasoningRouting = derivedReasoningModelRouting({
+            variant: DEPLOYMENT_VARIANT,
+            model: GENERAL_INQUIRY_MODEL,
+            productionFallbacks: GENERAL_INQUIRY_MODEL_FALLBACKS,
+            previewModel: PREVIEW_SELECTION_REASONING_MODEL,
+          });
+          const callForcedReasoningAttempt = async (
+            stage: string,
+            attemptMessages: ORMessage[],
+            timeoutMs: number,
+            maxTokens: number,
+            requestedModel: string,
+            modelRouting: OpenRouterModelRouting,
+          ): Promise<{
+            response: ORResponse;
+            setValidationOutcome: (outcome: string) => void;
+          }> => {
+            const startedAt = performance.now();
+            try {
+              const response = await callOpenRouter(
+                apiKey,
+                attemptMessages,
+                turnController.signal,
+                timeoutMs,
+                "derived_reasoning",
+                ["declare_selection_reasoning"],
+                "declare_selection_reasoning",
+                0,
+                [reasoningToolSchema],
+                maxTokens,
+                modelRouting,
+              );
+              const entry: StepLog = {
+                step: "v3_derived_selection_reasoning_model_attempt",
+                ms: now(),
+                meta: {
+                  stage,
+                  requested_model: safeDerivedReasoningModelId(requestedModel),
+                  response_model: safeDerivedReasoningModelId(
+                    response.responseModel,
+                  ),
+                  provider: safeDerivedReasoningProvider(response.provider),
+                  duration_ms: Math.round(performance.now() - startedAt),
+                  finish: safeDerivedReasoningFinish(response.finishReason),
+                  tool_call_names: response.toolCalls.slice(0, 8).map((call) =>
+                    safeDerivedReasoningToolName(call.name)
+                  ),
+                  validation_outcome: "not_checked",
+                },
+              };
+              steps.push(entry);
+              return {
+                response,
+                setValidationOutcome: (outcome) => {
+                  if (entry.meta) entry.meta.validation_outcome = outcome;
+                },
+              };
+            } catch (error) {
+              steps.push({
+                step: "v3_derived_selection_reasoning_model_attempt",
+                ms: now(),
+                meta: {
+                  stage,
+                  requested_model: safeDerivedReasoningModelId(requestedModel),
+                  response_model: null,
+                  provider: "openrouter",
+                  duration_ms: Math.round(performance.now() - startedAt),
+                  finish: null,
+                  tool_call_names: [],
+                  validation_outcome: "transport_error",
+                  error_type: safeDerivedReasoningErrorType(
+                    error instanceof Error ? error.name : null,
+                  ),
+                  http_status: error instanceof UpstreamHttpError
+                    ? error.status
+                    : null,
+                },
+              });
+              throw error;
+            }
+          };
           const isTransientReasoningError = (error: unknown) =>
             (error as Error)?.name === "TimeoutError" ||
             String((error as Error)?.message ?? error).includes("llm_call_timeout:") ||
@@ -7338,9 +7446,12 @@ async function runExpertLoop(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
           );
+          let primaryAttempt: Awaited<ReturnType<
+            typeof callForcedReasoningAttempt
+          >> | null = null;
           try {
-            structuredReasoning = resumedReasoning
-              ? {
+            if (resumedReasoning) {
+              structuredReasoning = {
                 text: "",
                 toolCalls: [{
                   id: crypto.randomUUID(),
@@ -7349,22 +7460,23 @@ async function runExpertLoop(
                 }],
                 finishReason: "preserved_configuration_reasoning",
                 provider: "server_preserved",
-              }
-              : await callOpenRouter(
-                apiKey,
+              };
+            } else {
+              primaryAttempt = await callForcedReasoningAttempt(
+                "primary",
                 derivedMessages,
-                turnController.signal,
                 primaryReasoningTimeout,
-                "derived_reasoning",
-                ["declare_selection_reasoning"],
-                "declare_selection_reasoning",
-                0,
-                [reasoningToolSchema],
                 1200,
-                buildOpenRouterModelRouting(ctx.selectionReasoningModel, [
-                  MODEL,
-                ]),
+                ctx.selectionReasoningModel,
+                derivedReasoningModelRouting({
+                  variant: DEPLOYMENT_VARIANT,
+                  model: ctx.selectionReasoningModel,
+                  productionFallbacks: [MODEL],
+                  previewModel: PREVIEW_SELECTION_REASONING_MODEL,
+                }),
               );
+              structuredReasoning = primaryAttempt.response;
+            }
           } catch (reasoningError) {
             // Auth/quota errors are not a reason to try another provider route.
             if (
@@ -7376,6 +7488,9 @@ async function runExpertLoop(
           let validatedReasoning = structuredReasoning
             ? validateReasoningResponse(structuredReasoning)
             : null;
+          primaryAttempt?.setValidationOutcome(
+            validatedReasoning ? "valid" : "invalid",
+          );
           let declarationCall = validatedReasoning?.call ??
             structuredReasoning?.toolCalls.find((call) =>
               call.name === "declare_selection_reasoning"
@@ -7447,14 +7562,17 @@ async function runExpertLoop(
                 },
               });
               try {
-                const retryResponse = await callOpenRouter(
-                  apiKey,
+                const retryAttempt = await callForcedReasoningAttempt(
+                  targetedObligationRepair
+                    ? "property_declaration_repair"
+                    : "invalid_contract_retry",
                   retryMessages,
-                  turnController.signal, retryTimeout, "derived_reasoning",
-                  ["declare_selection_reasoning"], "declare_selection_reasoning", 0,
-                  [reasoningToolSchema], targetedObligationRepair ? 1800 : 1200,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
+                  retryTimeout,
+                  targetedObligationRepair ? 1800 : 1200,
+                  GENERAL_INQUIRY_MODEL,
+                  retryReasoningRouting,
                 );
+                const retryResponse = retryAttempt.response;
                 structuredReasoning = retryResponse;
                 const retryCall = retryResponse.toolCalls.find((call) =>
                   call.name === "declare_selection_reasoning"
@@ -7499,6 +7617,9 @@ async function runExpertLoop(
                 } else {
                   validatedReasoning = validateReasoningResponse(retryResponse);
                 }
+                retryAttempt.setValidationOutcome(
+                  validatedReasoning ? "valid" : "invalid",
+                );
                 if (validatedReasoning) {
                   declaration = validatedReasoning.value;
                   declarationCall = validatedReasoning.call;
@@ -7605,19 +7726,15 @@ async function runExpertLoop(
               );
               derivedReasoningProviderAttempts += 1;
               try {
-                const correctionResponse = await callOpenRouter(
-                  apiKey,
+                const correctionAttempt = await callForcedReasoningAttempt(
+                  "measurement_correction",
                   correctionMessages,
-                  turnController.signal,
                   correctionTimeout,
-                  "derived_reasoning",
-                  ["declare_selection_reasoning"],
-                  "declare_selection_reasoning",
-                  0,
-                  [reasoningToolSchema],
                   1200,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
+                  GENERAL_INQUIRY_MODEL,
+                  retryReasoningRouting,
                 );
+                const correctionResponse = correctionAttempt.response;
                 const correctedContract = validateReasoningResponse(
                   correctionResponse,
                 );
@@ -7630,7 +7747,14 @@ async function runExpertLoop(
                       derivedCorrectionPreservesRequirements(
                         declaration,
                         correctedDeclaration,
-                      )),
+                    )),
+                );
+                correctionAttempt.setValidationOutcome(
+                  correctionAccepted
+                    ? "accepted"
+                    : correctedContract
+                    ? "valid_contract_rejected_by_requirements"
+                    : "invalid",
                 );
                 if (correctionAccepted && correctedContract) {
                   structuredReasoning = correctionResponse;
@@ -7797,19 +7921,15 @@ async function runExpertLoop(
               );
               derivedReasoningProviderAttempts += 1;
               try {
-                const correctedResponse = await callOpenRouter(
-                  apiKey,
+                const correctionAttempt = await callForcedReasoningAttempt(
+                  "one_for_one_correction",
                   correctionMessages,
-                  turnController.signal,
                   correctionTimeout,
-                  "derived_reasoning",
-                  ["declare_selection_reasoning"],
-                  "declare_selection_reasoning",
-                  0,
-                  [reasoningToolSchema],
                   1200,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
+                  GENERAL_INQUIRY_MODEL,
+                  retryReasoningRouting,
                 );
+                const correctedResponse = correctionAttempt.response;
                 const correctedCall = correctedResponse.toolCalls.find((call) =>
                   call.name === "declare_selection_reasoning"
                 );
@@ -7846,6 +7966,13 @@ async function runExpertLoop(
                       corrected,
                     ) && factsPreserved && aggregateThresholdPreserved &&
                     corrected.retrievalQuery === declaration.retrievalQuery,
+                );
+                correctionAttempt.setValidationOutcome(
+                  accepted
+                    ? "accepted"
+                    : corrected
+                    ? "parsed_candidate_rejected_by_requirements"
+                    : "invalid",
                 );
                 if (accepted && corrected && correctedCall) {
                   declaration = corrected;
@@ -7953,19 +8080,15 @@ async function runExpertLoop(
               );
               derivedReasoningProviderAttempts += 1;
               try {
-                const coverageResponse = await callOpenRouter(
-                  apiKey,
+                const coverageAttempt = await callForcedReasoningAttempt(
+                  "property_coverage_correction",
                   coverageMessages,
-                  turnController.signal,
                   coverageTimeout,
-                  "derived_reasoning",
-                  ["declare_selection_reasoning"],
-                  "declare_selection_reasoning",
-                  0,
-                  [reasoningToolSchema],
                   1800,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
+                  GENERAL_INQUIRY_MODEL,
+                  retryReasoningRouting,
                 );
+                const coverageResponse = coverageAttempt.response;
                 const coverageCall = coverageResponse.toolCalls.find((call) =>
                   call.name === "declare_selection_reasoning"
                 );
@@ -8009,6 +8132,13 @@ async function runExpertLoop(
                       declaration.text,
                       coverageDeclaration.text,
                     ),
+                );
+                coverageAttempt.setValidationOutcome(
+                  accepted
+                    ? "accepted"
+                    : coverageDeclaration
+                    ? "parsed_candidate_rejected_by_requirements"
+                    : "invalid",
                 );
                 if (accepted && coverageCall && coverageDeclaration) {
                   declarationCall = coverageCall;
@@ -18636,7 +18766,11 @@ Deno.serve(async (req) => {
           turnDeadlineExceeded: false,
           openrouterKey: settings.openrouter_api_key!,
           lovableApiKey: LOVABLE_API_KEY,
-          selectionReasoningModel: settings.classifier_model,
+          selectionReasoningModel: selectDerivedReasoningModel({
+            variant: DEPLOYMENT_VARIANT,
+            classifierModel: settings.classifier_model,
+            previewModel: PREVIEW_SELECTION_REASONING_MODEL,
+          }),
           sessionId: effectiveSessionId,
           jargonCategoryContextEnabled:
             settings.v3_jargon_category_context_enabled,
