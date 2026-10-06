@@ -4,7 +4,7 @@
 // LLM: Claude Sonnet 4.5 via OpenRouter (mem rule: LLM via OpenRouter only).
 // Tools: search_catalog, lookup_knowledge, render_products.
 
-import { findOmittedReasoningObligations, resolveReasoningObligations, repairObligationDeclaration } from "../_shared/v3-tools/reasoning-obligations.ts";
+import { findOmittedReasoningObligations, resolveReasoningObligations, repairObligationDeclaration, repairOriginalObligationSourceSpans } from "../_shared/v3-tools/reasoning-obligations.ts";
 import {
   filterPartialApplicationClassContradictions,
   freezePartialApplicationClassGuards,
@@ -468,10 +468,16 @@ import {
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
   buildVisibleRequestContract,
+  deriveCustomerOwnedVisibleFacetProofs,
   productSupportsVisibleRequestContract,
+  productSupportsVisibleRequestRequirement,
+  recordVerifiedCustomerFacetFilterEvidence,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
+  type VerifiedCustomerFacetLineage,
+  withVerifiedCustomerFacetEvidence,
 } from "../_shared/v3-tools/visible-request-contract.ts";
+import { renderBlockingClarificationAnswer } from "../_shared/v3-tools/clarification-public-answer.ts";
 import {
   type EscalateInput,
   executeEscalate,
@@ -5479,6 +5485,25 @@ async function runExpertLoop(
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
+  const customerOwnedVisibleFacetProofs = (
+    discover: DiscoverCategoryOk | null = lastDiscover,
+  ) =>
+    deriveCustomerOwnedVisibleFacetProofs(
+      userMessage,
+      discover?.facets ?? [],
+      userBackedSearchCriteria,
+      userBackedSearchFacetValues,
+    );
+  // A compact catalog card may omit the facet that constrained the exact
+  // successful filter request. Keep that proof per returned ID and live key;
+  // never infer it from a model criterion or from a sibling search result.
+  const verifiedCustomerFacetValuesById: VerifiedCustomerFacetLineage =
+    new Map();
+  const visibleEvidenceProduct = (product: ProductFull): ProductFull =>
+    withVerifiedCustomerFacetEvidence(
+      product,
+      verifiedCustomerFacetValuesById,
+    );
   const modelAssumedSearchFacetValues: Array<{ key: string; value: string }> =
     [];
   const modelAssumedClassificationFacetValues: Array<{
@@ -5651,6 +5676,7 @@ async function runExpertLoop(
       semanticallyMappedCustomerPhrases: [
         ...semanticallyMappedCustomerPhrases,
       ],
+      customerOwnedFacetProofs: customerOwnedVisibleFacetProofs(),
     }).map(({ kind, label, op, value, unit, exclusive }) => ({
       kind,
       label,
@@ -5889,6 +5915,7 @@ async function runExpertLoop(
       semanticallyMappedCustomerPhrases: [
         ...semanticallyMappedCustomerPhrases,
       ],
+      customerOwnedFacetProofs: customerOwnedVisibleFacetProofs(),
     });
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
       isLiteralUserCompactCriterion(userMessage, criterion)
@@ -5929,7 +5956,7 @@ async function runExpertLoop(
       const product = ctx.cache.get(id);
       return Boolean(
         product && productSupportsVisibleRequestContract(
-          product,
+          visibleEvidenceProduct(product),
           visibleRequestContract,
         ),
       );
@@ -6784,13 +6811,14 @@ async function runExpertLoop(
       ).map(({ id }) => id));
       partialClassSafeIds = ids.filter((id) => eligible.has(id));
     }
-    let structurallySafe = guardReplacementRenderIds(
-      filterProductIdsByNamedSeries(
-        guardVisibleCardinality(partialClassSafeIds).ids,
-        ctx.cache,
-        namedSeriesToken,
-      ),
+    const visibleReport = guardVisibleCardinality(partialClassSafeIds);
+    const afterSeries = filterProductIdsByNamedSeries(
+      visibleReport.ids,
+      ctx.cache,
+      namedSeriesToken,
     );
+    let structurallySafe = guardReplacementRenderIds(afterSeries);
+    const afterReplacement = structurallySafe.length;
     if (recoveryClassProofCriteria.length > 0) {
       const proved = new Set(applyCriteriaGate(
         structurallySafe.map((id) => ctx.cache.get(id))
@@ -6799,18 +6827,35 @@ async function runExpertLoop(
       ).passed_ids);
       structurallySafe = structurallySafe.filter((id) => proved.has(id));
     }
-    if (derivedExcludedClassificationCriteria.length === 0) {
-      return structurallySafe;
+    const afterRecoveryClass = structurallySafe.length;
+    if (derivedExcludedClassificationCriteria.length > 0) {
+      const eligible = new Set(
+        filterProductsByExcludedCriteria(
+          structurallySafe
+            .map((id) => ctx.cache.get(id))
+            .filter((product): product is ProductFull => Boolean(product)),
+          derivedExcludedClassificationCriteria,
+        ).map(({ id }) => id),
+      );
+      structurallySafe = structurallySafe.filter((id) => eligible.has(id));
     }
-    const eligible = new Set(
-      filterProductsByExcludedCriteria(
-        structurallySafe
-          .map((id) => ctx.cache.get(id))
-          .filter((product): product is ProductFull => Boolean(product)),
-        derivedExcludedClassificationCriteria,
-      ).map(({ id }) => id),
-    );
-    return structurallySafe.filter((id) => eligible.has(id));
+    if (ids.length > 0 && structurallySafe.length === 0) {
+      steps.push({
+        step: "v3_final_render_guard_empty_audit",
+        ms: now(),
+        meta: {
+          input: ids.length,
+          after_partial_class: partialClassSafeIds.length,
+          after_visible: visibleReport.ids.length,
+          visible_removed: visibleReport.visibleRequestRemoved,
+          after_series: afterSeries.length,
+          after_replacement: afterReplacement,
+          after_recovery_class: afterRecoveryClass,
+          after_excluded_class: structurallySafe.length,
+        },
+      });
+    }
+    return structurallySafe;
   };
 
   const finalizeTerminalRenderIds = (ids: string[]): string[] => {
@@ -7496,6 +7541,40 @@ async function runExpertLoop(
               call.name === "declare_selection_reasoning"
             );
           let declaration = validatedReasoning?.value ?? null;
+          if (!declaration && !resumedReasoning && structuredReasoning &&
+            declarationCall?.args && typeof declarationCall.args === "object" &&
+            !Array.isArray(declarationCall.args)) {
+            const repairedArgs = repairOriginalObligationSourceSpans(
+              declarationCall.args,
+              lastDiscover.facets ?? [],
+              userMessage,
+              confirmedCustomerCriteria,
+            );
+            if (repairedArgs) {
+              const repairedResponse: ORResponse = {
+                ...structuredReasoning,
+                toolCalls: structuredReasoning.toolCalls.map((call) =>
+                  call === declarationCall ? { ...call, args: repairedArgs } : call
+                ),
+              };
+              const repairedContract = validateReasoningResponse(repairedResponse);
+              if (repairedContract) {
+                structuredReasoning = repairedResponse;
+                validatedReasoning = repairedContract;
+                declarationCall = repairedContract.call;
+                declaration = repairedContract.value;
+                primaryAttempt?.setValidationOutcome("valid_original_quote_repair");
+                steps.push({
+                  step: "v3_original_obligation_quote_recovered",
+                  ms: now(),
+                  meta: {
+                    properties: Array.isArray(repairedArgs.mandatory_properties)
+                      ? repairedArgs.mandatory_properties.length : 0,
+                  },
+                });
+              }
+            }
+          }
           if (!declaration && !resumedReasoning) {
             const originalArgs = declarationCall?.args &&
                 typeof declarationCall.args === "object" &&
@@ -8205,8 +8284,16 @@ async function runExpertLoop(
                 "answered_or_invalid_clarification",
               );
             }
-            finalText =
-              `${declaration.text}\n\n${declaration.clarification.question}`;
+            const clarificationAnswer = renderBlockingClarificationAnswer({
+              question: declaration.clarification.question,
+              provisionalReasoning: declaration.text,
+            });
+            if (!clarificationAnswer) {
+              return finishUnverifiedDerivedSuitability(
+                "invalid_public_clarification",
+              );
+            }
+            finalText = clarificationAnswer;
             send({ type: "delta", content: finalText });
             emitSideEffects(
               executeProposeClarification({
@@ -15351,6 +15438,15 @@ async function runExpertLoop(
               ),
               selectedSearchRecoveryAttempt,
             );
+            if (tc.name === "search_catalog") {
+              recordVerifiedCustomerFacetFilterEvidence(
+                verifiedCustomerFacetValuesById,
+                ids,
+                runArgs,
+                provenSearchCriteria,
+                customerOwnedVisibleFacetProofs(),
+              );
+            }
             if (
               tc.name === "search_catalog" && optionCount > 0 &&
               provenSearchCriteria.length > 0
@@ -17964,6 +18060,9 @@ async function runExpertLoop(
         semanticallyMappedCustomerPhrases: [
           ...semanticallyMappedCustomerPhrases,
         ],
+        customerOwnedFacetProofs: customerOwnedVisibleFacetProofs(
+          terminalDiscover,
+        ),
       });
       if (visibleContract.length > 0) {
         const categoryIn = terminalDiscover.leaf_categories
@@ -18115,10 +18214,10 @@ async function runExpertLoop(
               const matched = diagnosticCandidateIds.filter((id) => {
                 const product = ctx.cache.get(id);
                 return Boolean(
-                  product && requirement.matches([
-                    product.pagetitle,
-                    ...(product.short_traits ?? []),
-                  ].join("\n")),
+                  product && productSupportsVisibleRequestRequirement(
+                    visibleEvidenceProduct(product),
+                    requirement,
+                  ),
                 );
               }).length;
               return `${requirement.label}:${matched}/${diagnosticCandidateIds.length}`;

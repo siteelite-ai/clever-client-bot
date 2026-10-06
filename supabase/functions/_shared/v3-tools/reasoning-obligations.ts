@@ -36,6 +36,66 @@ export interface OmittedReasoningObligation {
   sourceSpan: string;
 }
 
+/** Recover only source quotes from the *original* visible reasoning. This is
+ * useful when a model declares the right property but fabricates a shortened
+ * `source_span`. A unique, complete sentence must independently pass the
+ * normal obligation validator for every frozen declaration. No new prose,
+ * property, value, operator, scope, or other model field is adopted. */
+export function repairOriginalObligationSourceSpans(
+  original: Record<string, unknown>,
+  facets: ObligationFacet[] = [],
+  customerEvidence = "",
+  confirmedCustomerCriteria: Criterion[] = [],
+): Record<string, unknown> | null {
+  const raw = original.mandatory_properties;
+  const reasoning = original.reasoning;
+  if (
+    !Array.isArray(raw) || raw.length === 0 || raw.length > 12 ||
+    typeof reasoning !== "string" || reasoning.length > 1600
+  ) return null;
+  const sentences = reasoning.match(/[\s\S]+?(?:[.!?](?=\s|$)|$)/gu)
+    ?.map((sentence) => sentence.trim()).filter((sentence) =>
+      sentence.length >= 8 && sentence.length <= 600
+    ) ?? [];
+  const necessity = /(?:необходим\p{L}*|требуется|обязател\p{L}*|обязательн\p{L}*|долж\p{L}*|нуж\p{L}*|критич\p{L}*)/iu;
+  const repaired: Record<string, unknown>[] = [];
+  for (const declaration of raw) {
+    if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) {
+      return null;
+    }
+    const frozen = declaration as Record<string, unknown>;
+    const existing = resolveReasoningObligations(
+      [frozen], reasoning, facets, customerEvidence,
+      confirmedCustomerCriteria,
+    );
+    // A valid original quote already identifies its exact sentence. Retain
+    // that attribution even if some other sentence repeats the requirement.
+    if (existing.unresolved.length === 0 && existing.obligations.length === 1) {
+      repaired.push({ ...frozen, source_span: existing.obligations[0].sourceSpan });
+      continue;
+    }
+    // With a frozen customer-owned facet, the ordinary resolver also accepts
+    // descriptive customer restatements without a necessity verb. A quote
+    // repair must not accidentally switch a mandatory declaration to one of
+    // those weaker sentences merely because the value is repeated there.
+    const matches = sentences.filter((source_span) =>
+      necessity.test(source_span) && resolveReasoningObligations(
+        [{ ...frozen, source_span }], reasoning, facets,
+        customerEvidence, confirmedCustomerCriteria,
+      ).unresolved.length === 0
+    );
+    if (matches.length !== 1) return null;
+    repaired.push({ ...frozen, source_span: matches[0] });
+  }
+  if (
+    resolveReasoningObligations(
+      repaired, reasoning, facets, customerEvidence,
+      confirmedCustomerCriteria,
+    ).unresolved.length > 0
+  ) return null;
+  return { ...original, mandatory_properties: repaired };
+}
+
 /** Repair prose/quote formatting only, never replace the selected semantics,
  * live IDs, scope or cardinality with a second model's different answer. */
 export function repairObligationDeclaration(

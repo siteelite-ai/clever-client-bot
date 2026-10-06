@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   findOmittedReasoningObligations,
   repairObligationDeclaration,
+  repairOriginalObligationSourceSpans,
   resolveReasoningObligations,
 } from "./reasoning-obligations.ts";
 
@@ -131,6 +132,87 @@ Deno.test("format repair reconstructs every frozen property from visible complet
     ...repaired,
     reasoning: `${original.reasoning} ${numeric.source_span} УФ-стойкая оболочка возможна.`,
   }), null);
+});
+
+Deno.test("original quote repair reuses one complete visible sentence for three frozen properties", () => {
+  const sentence = "Необходим вид лампы — светодиодная, тип цоколя E27 и цветовая температура 3000 К.";
+  const reasoning = `Клиент ищет светодиодную лампу с цоколем E27 и цветовой температурой 3000 К (тёплый белый свет). ${sentence} Эти три параметра полностью определяют запрос и обеспечивают совместимость с патроном и желаемым оттенком света.`;
+  const declarations = [
+    { key: "Вид лампы", op: "eq", value: "светодиодная", unit: "", scope: "per_product",
+      source_span: "Необходим вид лампы — светодиодная." },
+    { key: "Тип цоколя", op: "eq", value: "E27", unit: "", scope: "per_product",
+      source_span: "Необходим тип цоколя E27." },
+    { key: "Цветовая температура", op: "eq", value: "3000", unit: "К", scope: "per_product",
+      source_span: "Необходима цветовая температура 3000 К." },
+  ];
+  const original = { reasoning, mandatory_properties: declarations,
+    required_facet_values: ["frozen-facet-id"], measurement_scope: "per_product" };
+  const repaired = repairOriginalObligationSourceSpans(original);
+  assertEquals(repaired?.reasoning, reasoning);
+  assertEquals(repaired?.required_facet_values, original.required_facet_values);
+  assertEquals(repaired?.measurement_scope, original.measurement_scope);
+  assertEquals((repaired?.mandatory_properties as typeof declarations | undefined)
+    ?.map((item) => item.source_span), [sentence, sentence, sentence]);
+  assertEquals((repaired?.mandatory_properties as typeof declarations | undefined)
+    ?.map(({ source_span: _source, ...signature }) => signature),
+    declarations.map(({ source_span: _source, ...signature }) => signature));
+  assertEquals(resolveReasoningObligations(repaired?.mandatory_properties, reasoning).unresolved, []);
+
+  // This is the exact preview688 key. Parenthesized facet-caption detail is
+  // absent from the reasoning; quote repair must not invent that identity.
+  const preview688 = { ...original, mandatory_properties: [
+    { ...declarations[0], key: "Вид лампы (принцип работы)" },
+    ...declarations.slice(1),
+  ] };
+  assertEquals(repairOriginalObligationSourceSpans(preview688), null);
+  const confirmed = [
+    { key: "Вид лампы (принцип работы)", value: "светодиодная", op: "eq" as const,
+      level: "A" as const, evidence: "user_explicit" as const },
+    { key: "Тип цоколя", value: "E27", op: "eq" as const,
+      level: "A" as const, evidence: "user_explicit" as const },
+    { key: "Цветовая температура, К", value: "3000", unit: "К", op: "eq" as const,
+      level: "A" as const, evidence: "user_explicit" as const },
+    { key: "Цвет свечения", value: "теплый", op: "eq" as const,
+      level: "A" as const, evidence: "user_explicit" as const },
+  ];
+  const full = preview688.mandatory_properties.map((item) => ({ ...item, source_span: sentence }));
+  assertEquals(resolveReasoningObligations(full, reasoning, [], "", confirmed).unresolved, []);
+  const customerGrounded = repairOriginalObligationSourceSpans(preview688, [], "", confirmed);
+  assertEquals((customerGrounded?.mandatory_properties as typeof declarations | undefined)
+    ?.map((item) => item.source_span), [sentence, sentence, sentence]);
+  assertEquals((customerGrounded?.mandatory_properties as typeof declarations | undefined)
+    ?.map(({ source_span: _source, ...signature }) => signature),
+    preview688.mandatory_properties.map(({ source_span: _source, ...signature }) => signature));
+  assertEquals(resolveReasoningObligations(customerGrounded?.mandatory_properties,
+    reasoning, [], "", confirmed).unresolved, []);
+});
+
+Deno.test("original quote repair refuses missing, changed, partial and ambiguous proof", () => {
+  const frozen = { key: "Цветовая температура", op: "eq", value: "3000", unit: "К",
+    scope: "per_product", source_span: "Необходима цветовая температура 3000 К." };
+  const accept = (reasoning: string, declaration = frozen) =>
+    repairOriginalObligationSourceSpans({ reasoning, mandatory_properties: [declaration] });
+  for (const reasoning of [
+    "Необходима номинальная мощность 3000 К.",
+    "Необходима цветовая температура 4000 К.",
+    "Цветовая температура 3000 К. Необходима лампа для комнаты.",
+    "Необходима лампа с цоколем E27. Цветовая температура 3000 К.",
+    "Необходима цветовая температура 3000 К. Необходима цветовая температура 3000 К.",
+  ]) assertEquals(accept(reasoning), null, reasoning);
+  assertEquals(accept("Необходима цветовая температура 3000 К.",
+    { ...frozen, op: "min" }), null);
+  assertEquals(accept("Необходима цветовая температура 3000 К.",
+    { ...frozen, value: "4000" }), null);
+  const repeated = "Необходима цветовая температура 3000 К. Для второго варианта также необходима цветовая температура 3000 К.";
+  assertEquals((accept(repeated)?.mandatory_properties as typeof frozen[] | undefined)
+    ?.[0].source_span, frozen.source_span);
+  assertEquals(accept(repeated, { ...frozen, source_span: "температура 3000 К" }), null);
+  const customerOwned = { key: frozen.key, value: frozen.value, unit: frozen.unit,
+    op: "eq" as const, level: "A" as const, evidence: "user_explicit" as const };
+  assertEquals(repairOriginalObligationSourceSpans({
+    reasoning: "Клиент ищет цветовую температуру 3000 К.",
+    mandatory_properties: [{ ...frozen, source_span: "Необходима цветовая температура 3000 К." }],
+  }, [], "", [customerOwned]), null);
 });
 
 Deno.test("property quotes tolerate inflection and reordered explanation but preserve codes", () => {
