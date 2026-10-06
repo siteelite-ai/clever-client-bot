@@ -1290,6 +1290,63 @@ Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelate
   );
 });
 
+Deno.test("checkCriterion: a unit-bearing numeric property can be proven by its own attributed catalog prose", () => {
+  const requirement = {
+    key: "Волновое сопротивление",
+    op: "eq" as const,
+    value: 75,
+    unit: "Ом",
+    level: "A" as const,
+  };
+  const attributed = {
+    ...product("coax-75", ["Оболочка: ПВХ"]),
+    pagetitle: "Кабель RG6 75Ом, длина 300м",
+    description_excerpt:
+      "Кабель для телевизионной сети. Волновое сопротивление составляет 75 Ом. Оболочка из ПВХ.",
+  };
+  assertEquals(checkCriterion(attributed, requirement).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Кабель для телевизионной сети. Волновое сопротивление составляет 50 Ом.",
+  }, requirement).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Длина 75 м. Волновое сопротивление не указано.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Волновое сопротивление составляет 50 Ом или 75 Ом в зависимости от версии.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Тип RG6, 75 Ом. Наружная длина 30 м.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Например, волновое сопротивление 75 Ом встречается у других моделей.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...product("light-4000", []),
+    description_excerpt: "Световой поток составляет 4000 лм. Мощность 36 Вт.",
+  }, {
+    key: "Световой поток",
+    op: "min",
+    value: 3750,
+    unit: "лм",
+    level: "A",
+  }).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...product("cable-2.5", []),
+    description_excerpt: "Сечение кабеля 2.5 мм². Длина бухты 100 м.",
+  }, {
+    key: "Сечение кабеля",
+    op: "min",
+    value: 2.5,
+    unit: "мм²",
+    level: "A",
+  }).verdict, "pass");
+});
+
 Deno.test("checkCriterion: строковое противоречие в одноимённом фасете = fail", () => {
   const p = product("1", ["Вид светильника: Светильники для ЖКХ"]);
   assertEquals(

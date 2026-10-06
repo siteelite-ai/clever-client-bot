@@ -2117,6 +2117,201 @@ export function aggregateSelectionClarification(
   };
 }
 
+/** A *candidate* one-for-one replacement is grounded in the customer's
+ * singular `replace X with Y` construction, not in product/category names.
+ * It is deliberately too narrow for a general count detector: a positive
+ * result only permits one bounded reasoning correction, never promotion of
+ * a whole-object estimate into a per-product requirement on its own. */
+function oneForOneReplacementCandidate(customerEvidence: string): boolean {
+  const request = String(customerEvidence ?? "").normalize("NFKC")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+  if (request.includes("уточнение клиента:")) {
+    return false;
+  }
+  if (
+    /(?:распредел\p{L}*|совместн\p{L}*|(?:^|[^\p{L}])вместе(?:$|[^\p{L}])|по\s+(?:зон\p{L}*|периметр\p{L}*|нескольк\p{L}*)|(?:нескольк\p{L}*|много|два|две|три|четыре|пять)\s+(?!вариант\p{L}*))/iu
+      .test(request)
+  ) return false;
+  const replacement = /(?:^|[^\p{L}])(?:заменить|заменю|заменяю|поменять|поменяю|меняю|сменить)\s+(.{2,90}?)\s+на\s+(.{2,120}?)(?:[.!?\n]|$)/iu
+    .exec(request);
+  if (!replacement) return false;
+  const source = replacement[1].trim();
+  const target = replacement[2].split(
+    /\s+(?:в|во|для|при|площадью|площадь)\s+/iu,
+  )[0].trim();
+  if (!source || !target || /(?:^|\s)и(?:\s|$)/u.test(`${source} ${target}`)) {
+    return false;
+  }
+  const multiple = /(?:^|[^\p{L}\p{N}])(?:[2-9]|\d{2,}|нескольк\p{L}*|два|две|три|четыре|пять|много|все|кажд\p{L}*)(?:$|[^\p{L}\p{N}])/iu;
+  if (multiple.test(`${source} ${target}`)) return false;
+  const head = (phrase: string) => phrase.match(/[\p{L}]+$/u)?.[0] ?? "";
+  const sourceHead = head(source);
+  const targetHead = head(target);
+  // An explicit plural head is incompatible with one-for-one replacement.
+  // A collective neuter source ("replace lighting") is not one installed
+  // unit. Ambiguous forms are not used as product evidence by this helper.
+  return Boolean(sourceHead && targetHead) &&
+    /[уюьбвгджзйклмнпрстфхцчшщ]$/u.test(sourceHead) &&
+    !/[ыи]$/u.test(targetHead);
+}
+
+/** Prompt for one bounded correction when a singular replacement was turned
+ * into an unsupported one-vs-many question. The correction must itself state
+ * and validate a visible per-item requirement; this helper never invents it. */
+export function oneForOneReplacementCorrection(
+  customerEvidence: string,
+  declaration: Pick<ResolvedDerivedSelectionReasoning,
+    "text" | "measurementScope" | "measurementEvidence">,
+): string | null {
+  if (
+    !oneForOneReplacementCandidate(customerEvidence) ||
+    declaration.measurementScope !== "system_total" ||
+    aggregateSelectionClarification(
+      declaration.measurementScope,
+      declaration.measurementEvidence,
+    ) === null
+  ) return null;
+  const customerExtents = extractClientQuantities(customerEvidence)
+    .map(({ unit }) => normalizeUnit(unit)).filter((unit) => /[²³]/u.test(unit));
+  const derivedPhysicalDimension = extractClientQuantities(declaration.text)
+    .some(({ unit }) => isPhysicalMeasurementUnit(unit) &&
+      !customerExtents.includes(normalizeUnit(unit)));
+  if (
+    customerExtents.length === 0 || !derivedPhysicalDimension ||
+    !/(?:суммарн\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|расч[её]т\p{L}*|поток\p{L}*)|всей\s+систем\p{L}*)/iu
+      .test(declaration.text)
+  ) return null;
+  return "Перепроверь исходный запрос клиента: конструкция «заменить одно установленное изделие на другое» в единственном числе обычно означает одно заменяющее изделие, а несколько карточек в ответе — альтернативы, не совместная система. Не предлагай вопрос «один или несколько», если распределённое решение клиент не запрашивал и для одного изделия нет доказанного ограничения. Сохрани исходные условия, расчёт, единицы, обязательные свойства и совместимые классы. Если один товар обоснован, отдельно и явно напиши в новом reasoning проверяемый числовой порог для одного заменяющего изделия; перед числом повтори название ТОГО ЖЕ физического параметра, что в исходном суммарном расчёте, включая важные уточнения параметра (например, входной или выходной). Скопируй эту видимую фразу дословно в per_product_measurement_evidence. Не выдумывай порог, не меняй тип параметра и не переноси суммарную величину на товар без такого отдельного обоснования. Если одиночная замена на самом деле невозможна или небезопасна, назови конкретную причину и задай только необходимый уточняющий вопрос.";
+}
+
+/** Compare an explicit physical-property phrase by its inflection-tolerant
+ * lexical identity. Grammatical calculation words are not metric names. An
+ * absent/extra qualifier is a different or ambiguous property, not proof. */
+function metricLexicalStem(token: string): string {
+  const normalized = token.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+  if (/^[a-z]+$/u.test(normalized)) return normalized;
+  const adjectiveEnding = /(?:ого|ему|ому|ыми|ими|ых|их|ая|яя|ое|ее|ые|ие|ый|ий|ой|ую|юю)$/u
+    .exec(normalized)?.[0];
+  if (adjectiveEnding && normalized.length - adjectiveEnding.length >= 3) {
+    return normalized.slice(0, -adjectiveEnding.length);
+  }
+  const nounEnding = /(?:ами|ями|ах|ях|ов|ев|ей|ом|ем|ою|ею|а|я|у|ю|ы|и|е|ь)$/u
+    .exec(normalized)?.[0];
+  return nounEnding && normalized.length - nounEnding.length >= 3
+    ? normalized.slice(0, -nounEnding.length)
+    : normalized;
+}
+
+function visibleMetricIdentity(prefix: string, cue = ""): string {
+  const cueMetric = /^общ\p{L}*\s+(.+)$/iu.exec(cue)?.[1] ?? "";
+  const cuePart = /^(?:потребност\p{L}*|расч[её]т\p{L}*|значен\p{L}*)$/iu
+    .test(cueMetric) ? "" : cueMetric;
+  const withoutPerItem = `${cuePart} ${prefix}`.replace(
+    /(?:^|[^\p{L}])(?:на\s+(?:один|одно|одну)\s+\p{L}+|кажд\p{L}*\s+\p{L}+)(?=$|[^\p{L}])/giu,
+    " ",
+  );
+  const boundary = /(?:^|[^\p{L}])(?:долж\p{L}*|составл\p{L}*|требу\p{L}*|необходим\p{L}*|нужн\p{L}*|равн\p{L}*|буд\p{L}*|быть|не\s+менее|минимум|при|по|для|из)(?:$|[^\p{L}])/iu
+    .exec(withoutPerItem);
+  const metricPhrase = boundary
+    ? withoutPerItem.slice(0, boundary.index)
+    : withoutPerItem;
+  const stems = (metricPhrase.match(/[a-zа-я]{3,}/giu) ?? [])
+    .map(metricLexicalStem);
+  return stems.length > 0 && stems.length <= 4 ? stems.join(" ") : "";
+}
+
+/** Pick only a visibly stated whole-object output, not the area/volume input
+ * or a contextual premise such as illuminance. Conflicting totals fail shut. */
+function provenAggregateOutput(reasoning: string): {
+  value: number;
+  unit: string;
+  metric: string;
+} | null {
+  const totals: Array<{ value: number; unit: string; metric: string }> = [];
+  const sentences = String(reasoning ?? "").normalize("NFKC").split(
+    /(?<!\d)[.!?]+(?!\d)|\n+/u,
+  );
+  for (const sentence of sentences) {
+    const cue = /(?:суммарн\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|расч[её]т\p{L}*|значен\p{L}*|нагрузк\p{L}*|мощност\p{L}*|поток\p{L}*)|всей\s+систем\p{L}*)/iu
+      .exec(sentence);
+    if (!cue || cue.index === undefined) continue;
+    const suffix = sentence.slice(cue.index + cue[0].length);
+    const quantityPattern = /(?<![a-zа-я0-9])\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,6}[²³]?\d?(?![a-zа-я])/giu;
+    const sentenceTotals: typeof totals = [];
+    const observedValues = new Map<string, Set<number>>();
+    for (const match of suffix.matchAll(quantityPattern)) {
+      const quantity = extractClientQuantities(match[0])[0];
+      if (
+        !quantity || quantity.value <= 0 ||
+        !isPhysicalMeasurementUnit(quantity.unit) ||
+        /[²³]/u.test(quantity.unit)
+      ) continue;
+      const sameUnit = observedValues.get(quantity.unit) ?? new Set<number>();
+      sameUnit.add(quantity.value);
+      observedValues.set(quantity.unit, sameUnit);
+      const prefix = suffix.slice(0, match.index ?? 0);
+      const outputPredicate = /(?:не\s+менее|как\s+минимум|минимум|составл\p{L}*|требу\p{L}*|необходим\p{L}*|нужн\p{L}*|равн\p{L}*|=|≈)\s*$/iu
+        .test(prefix);
+      const directTotal = !/\d/u.test(prefix) &&
+        prefix.trim().split(/\s+/u).length <= 4 &&
+        !/(?:^|[^\p{L}])(?:при|по|из|норм\p{L}*|площад\p{L}*|нагрузк\p{L}*)(?:$|[^\p{L}])/iu
+          .test(prefix);
+      if (outputPredicate || directTotal) {
+        const metric = visibleMetricIdentity(prefix, cue[0]);
+        if (metric) sentenceTotals.push({ ...quantity, metric });
+      }
+    }
+    // A second value of the same physical quantity in the aggregate clause
+    // makes a lone extracted floor ambiguous even without a second predicate.
+    if (sentenceTotals.some(({ unit }) =>
+      (observedValues.get(unit)?.size ?? 0) > 1
+    )) return null;
+    totals.push(...sentenceTotals);
+  }
+  const distinct = new Map(totals.map(({ value, unit, metric }) => [
+    `${value}\u0000${unit}\u0000${metric}`,
+    { value, unit, metric },
+  ]));
+  return distinct.size === 1 ? [...distinct.values()][0] : null;
+}
+
+/** The corrected declaration must retain the original system demand as the
+ * floor for a single replacement. The caller must also validate that the
+ * per-item evidence is a literal span of the corrected visible reasoning.
+ * No unit conversion or product-specific knowledge is assumed. */
+export function oneForOneCorrectionPreservesAggregateThreshold(
+  priorReasoning: string,
+  correctedPerProductEvidence: string,
+  customerEvidence: string,
+): boolean {
+  if (!oneForOneReplacementCandidate(customerEvidence)) return false;
+  const total = provenAggregateOutput(priorReasoning);
+  if (!total) return false;
+  const perItem = validatedPerProductMeasurementEvidence(
+    correctedPerProductEvidence,
+    correctedPerProductEvidence,
+  );
+  if (!perItem) return false;
+  const allSameUnitValues = extractClientQuantities(perItem)
+    .filter(({ unit }) => normalizeUnit(unit) === total.unit)
+    .map(({ value }) => value);
+  if (
+    allSameUnitValues.length !== 1 ||
+    allSameUnitValues.some((value) => value < total.value)
+  ) return false;
+  const lowerBounds = [...perItem.matchAll(
+    /(?:не\s+менее|как\s+минимум|минимум|от)\s+(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,6}[²³]?\d?)/giu,
+  )].filter((match) => normalizeUnit(match[2]) === total.unit)
+    .map((match) => ({
+      value: Number(match[1].replace(",", ".")),
+      metric: visibleMetricIdentity(perItem.slice(0, match.index ?? 0)),
+    }));
+  return lowerBounds.length === 1 &&
+    Number.isFinite(lowerBounds[0].value) &&
+    lowerBounds[0].value >= total.value &&
+    lowerBounds[0].metric === total.metric;
+}
+
 export function buildDerivedSelectionReasoningMessages(
   userMessage: string,
   category: string,

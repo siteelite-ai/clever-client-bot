@@ -1096,6 +1096,46 @@ function productEvidenceText(product: ProductRef): string {
   ].join(" "));
 }
 
+/**
+ * A measured property may be present only in the original product prose.
+ * Attribute the number to the named property in the same short statement and
+ * require its unit; a bare number in an SKU, price or unrelated measurement is
+ * not evidence. Ambiguous/conflicting statements remain unverified.
+ */
+function findUnitAttributedProseTrait(
+  product: ProductRef,
+  criterion: Criterion,
+): { label: string; value: string } | null {
+  const unit = normalizeUnit(criterion.unit ?? "");
+  if (!unit || !criterion.key.trim()) return null;
+  const sources = [product.pagetitle, product.description_excerpt ?? ""];
+  const values: number[] = [];
+  for (const source of sources) {
+    for (const statement of String(source ?? "").split(/(?:[.!?](?=\s|$)|[;\n])+/u)) {
+      const text = statement.trim();
+      if (!text || text.length > 260 ||
+        !stringEvidenceMatches(criterion.key, text)) continue;
+      const normalizedStatement = normalizeKey(text);
+      // A comparison, example, hypothetical or explicit negation is not a
+      // measured attribute of this specific product.
+      if (/(?:^|\s)(?:не|без|если|например|возможно|вариант)(?:\s|$)|отсутств/u
+        .test(normalizedStatement)) continue;
+      const quantities = extractClientQuantities(text).filter((quantity) =>
+        quantity.unit === unit
+      );
+      if (quantities.length !== 1) {
+        if (quantities.length > 1) return null;
+        continue;
+      }
+      values.push(quantities[0].value);
+    }
+  }
+  if (values.length === 0 || values.some((value) => value !== values[0])) {
+    return null;
+  }
+  return { label: criterion.key, value: `${values[0]} ${criterion.unit}` };
+}
+
 function looseStem(token: string): string {
   if (token.length < 5) return token;
   return token.replace(
@@ -1292,7 +1332,8 @@ export function checkCriterion(
       actual: proseContradiction,
     };
   }
-  const trait = findTrait(product, c.key);
+  const trait = findTrait(product, c.key) ??
+    findUnitAttributedProseTrait(product, c);
   if (!trait) {
     // Часть доказательных признаков живёт только в названии/описании товара,
     // а не в отдельном фасете. Строковое требование можно подтвердить по всему

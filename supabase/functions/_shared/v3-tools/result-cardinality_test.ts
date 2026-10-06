@@ -4,10 +4,26 @@ import {
   capResultCandidateIds,
   ensureSearchCapacity,
   expandResultCandidateIds,
+  numericTierMinimumForCardinality,
   resolveResultCardinality,
   resultCardinalityCandidateWindow,
   resultCardinalityShortfallText,
 } from "./result-cardinality.ts";
+
+Deno.test("numeric tier preference preserves explicit requested alternative counts", () => {
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Покажи 3 варианта от 2,5 мм²", { selection: true }),
+  ), 3);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Дай несколько вариантов", { selection: true }),
+  ), 3);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Какой кабель подойдёт?", { selection: true }),
+  ), 2);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Покажи один вариант", { selection: true }),
+  ), 1);
+});
 
 Deno.test("incomplete selections search mandatory facets without weakening them", () => {
   const input = {

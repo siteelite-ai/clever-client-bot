@@ -11,6 +11,16 @@ export interface ResultCardinalityContext {
   superlative?: boolean;
 }
 
+/** Right-sizing may prefer a narrow numeric tier for an open-ended request,
+ * but must not discard eligible adjacent tiers when the customer explicitly
+ * asked for a minimum number of alternatives. */
+export function numericTierMinimumForCardinality(
+  contract: ResultCardinalityContract,
+): number {
+  if (contract.explicit) return Math.max(1, contract.minimum);
+  return contract.target <= 1 ? 1 : 2;
+}
+
 const MAX_RENDERED_PRODUCTS = 10;
 const MAX_CANDIDATE_WINDOW = 50;
 const DEFAULT_SELECTION_TARGET = 4;

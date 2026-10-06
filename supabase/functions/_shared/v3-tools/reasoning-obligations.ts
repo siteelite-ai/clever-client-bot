@@ -1,6 +1,7 @@
 import type { Criterion } from "./criteria-gate.ts";
 import {
   extractClientQuantities,
+  isPhysicalMeasurementUnit,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { extractReasoningBounds } from "./criteria-reasoning.ts";
@@ -21,6 +22,13 @@ export interface ObligationFacet {
   caption?: string;
   unit?: string | null;
   values?: Array<{ value?: string }>;
+}
+
+export interface OmittedReasoningObligation {
+  reason:
+    | "undeclared_measured_product_property"
+    | "undeclared_qualitative_product_property";
+  sourceSpan: string;
 }
 
 /** Repair prose/quote formatting only, never replace the selected semantics,
@@ -145,6 +153,137 @@ function containsInflectedPhrase(text: string, phrase: string): boolean {
   return wanted.length > 0 && wanted.every((token) => actual.has(token));
 }
 
+/** Deliberately high-precision coverage check, not a substitute for the
+ * declaration compiler or a way to invent a property from a customer number.
+ * Only an explicit product-side necessity can trigger a repair/retry. */
+export function findOmittedReasoningObligations(
+  raw: unknown,
+  visibleReasoning: string,
+  options: { clarificationQuestion?: unknown } = {},
+): OmittedReasoningObligation[] {
+  if (
+    typeof options.clarificationQuestion === "string" &&
+    options.clarificationQuestion.trim()
+  ) return [];
+  if (typeof visibleReasoning !== "string" || !visibleReasoning.trim()) {
+    return [];
+  }
+  const declarations = Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> =>
+    !!item && typeof item === "object" && !Array.isArray(item) &&
+    item.scope === "per_product" && typeof item.source_span === "string" &&
+    !!completeVisibleSource(item.source_span, visibleReasoning)) : [];
+  const sentences = visibleReasoning.match(/[^.!?]+(?:[.!?](?=\s|$)|$)/gu) ?? [];
+  const omitted: OmittedReasoningObligation[] = [];
+  const necessity = /(?:необходим\p{L}*|требуется|обязател\p{L}*|обязательн\p{L}*|долж\p{L}*|нуж\p{L}*)/iu;
+  const nonbinding = /(?:возможно|желательн|предпочт|рекоменду|например|обычно|гипотез|предполож|(?:^|[^\p{L}])(?:можно|если|либо|или)(?:$|[^\p{L}])|при\s+(?:условии|необходимости)|не\s+(?:требуется|нуж\p{L}*|долж\p{L}*|обязател\p{L}*))/iu;
+  const aggregate = /(?:суммарн|совокупн|распредел|между\s+нескольк|общ\p{L}*\s+(?:светов\p{L}*\s+)?(?:поток|мощност|потребност)|для\s+всей\s+системы)/iu;
+  const taskInput = /(?:уч[её]т|площад|расстоян|трасс|помещен|двор|участ|высот\p{L}*\s+(?:установ|монтаж)|длин\p{L}*\s+(?:проклад|трасс))/iu;
+  const numeric = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,6}[²³]?\d?)(?![\p{L}\p{N}×xх*/]|[.,]\d)/giu;
+  const coversQualitativeValue = (value: string, predicate: string): boolean => {
+    const resistance = /^((?:устойчив|стойк|защищ)\p{L}*)\s+к\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2})/iu.exec(predicate);
+    if (resistance) {
+      // "Устойчива" without "к ультрафиолету" is not the same requirement.
+      return containsInflectedPhrase(value, resistance[1]) &&
+        containsInflectedPhrase(value, resistance[2]);
+    }
+    const compound = /^([\p{L}\p{N}]{2,})-((?:стойк|устойчив|защищ)\p{L}*)$/iu.exec(predicate);
+    if (compound) {
+      return containsInflectedPhrase(value, compound[1]) &&
+        containsInflectedPhrase(value, compound[2]);
+    }
+    return containsInflectedPhrase(predicate, value);
+  };
+
+  for (const untrimmed of sentences) {
+    const sentence = untrimmed.trim();
+    // Examples in parentheses may be optional while the surrounding clause
+    // remains binding; do not let "обычно ..." cancel the whole requirement.
+    const statement = sentence.replace(/\([^)]*\)/gu, "").replace(/\s+/gu, " ").trim();
+    if (
+      sentence.length < 16 || sentence.length > 600 || sentence.endsWith("?") ||
+      !necessity.test(statement) || nonbinding.test(statement) ||
+      /необязател/iu.test(statement) || aggregate.test(statement) ||
+      /(?:уточните|уточнить|для\s+(?:выбора|подбора)|чтобы\s+подобрать)/iu.test(statement)
+    ) continue;
+    const declaredIn = declarations.filter((item) => {
+      const full = completeVisibleSource(String(item.source_span), visibleReasoning);
+      return full && normalized(full) === normalized(sentence);
+    });
+    let measuredMissing = false;
+    for (const match of statement.matchAll(numeric)) {
+      const value = Number(match[1].replace(",", "."));
+      const unit = normalizeUnit(match[2]);
+      if (
+        !Number.isFinite(value) || !isPhysicalMeasurementUnit(unit) ||
+        /^(?:м²|см²|км²|m²|cm²|km²)$/iu.test(unit)
+      ) continue;
+      const prefix = statement.slice(0, match.index).trimEnd().replace(
+        /(?:не\s+менее|не\s+более|более|менее|от|до)\s*$/iu,
+        "",
+      ).trimEnd();
+      const withProperty = /(?:^|[^\p{L}\p{N}])(?:с|со)\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,4})\s*$/iu.exec(prefix);
+      const directProperty = /(?:необходим\p{L}*|требуется|обязател\p{L}*|обязательн\p{L}*|нуж\p{L}*)\s+([\p{L}-]+(?:\s+[\p{L}-]+){1,4})\s*$/iu.exec(prefix);
+      const property = (withProperty?.[1] ?? directProperty?.[1] ?? "").trim();
+      if (!property || taskInput.test(property)) continue;
+      const covered = declarations.some((item) =>
+        typeof item.value === "number" && item.value === value &&
+        typeof item.unit === "string" && normalizeUnit(item.unit) === unit &&
+        (declaredIn.includes(item) ||
+          typeof item.key === "string" && containsInflectedPhrase(property, item.key)));
+      if (!covered) measuredMissing = true;
+    }
+    if (measuredMissing) omitted.push({
+      reason: "undeclared_measured_product_property",
+      sourceSpan: sentence,
+    });
+
+    // A component's demanded resistance/material is product-side evidence,
+    // unlike a site size or a qualitative preference. These predicates are
+    // grammatical attribute families, never category, brand or SKU rules.
+    const qualitative = /([\p{L}-]+(?:\s+[\p{L}-]+){0,3})\s+(?:должен|должна|должно|должны|обязан|обязана|обязано|обязаны)\s+быть\s+((?:устойчив\p{L}*|стойк\p{L}*|защищ\p{L}*|влагозащищ\p{L}*|негорюч\p{L}*|самозатухающ\p{L}*|выполнен\p{L}*\s+из|изготовлен\p{L}*\s+из)[^.!?]*)/iu.exec(statement);
+    const adjectiveFirst = /(?:обязательн\p{L}*|необходим\p{L}*|требуется)\s+([\p{L}-]*(?:стойк|устойчив|защищ|влагозащищ|негорюч|самозатухающ)[\p{L}-]*(?:\s+к\s+[\p{L}-]+)?)\s+([\p{L}-]+)/iu.exec(statement);
+    // "Требуется оболочка из полиэтилена, устойчивая к УФ" states two
+    // independently provable properties of the same component. A declaration
+    // of its material must not silently cover the separate resistance claim.
+    const materialMatch = /(?:^|[^\p{L}])(?:необходим\p{L}*|требуется|обязательн\p{L}*|нуж\p{L}*)\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2})\s+из\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2}?)(?=\s*(?:,|[.!?]|$|(?:устойчив|стойк|защищ)\p{L}*))/iu.exec(statement);
+    // "Один из светильников" selects from a set; "из" is not a material
+    // relation when its left-hand side is a quantifier/pronoun.
+    const requiredMaterial = materialMatch && !/^(?:\d+|один|одн\p{L}*|два|две|двух|три|тр[её]х|четыре|четыр[её]х|пять|пяти|шесть|семь|восемь|девять|десять|много|пара|нескольк\p{L}*|люб\p{L}*|кажд\p{L}*|част\p{L}*)$/iu.test(materialMatch[1])
+      ? materialMatch
+      : null;
+    const afterMaterial = requiredMaterial
+      ? statement.slice((requiredMaterial.index ?? 0) + requiredMaterial[0].length).replace(/^\s*,?\s*/u, "")
+      : "";
+    const modalMaterial = /([\p{L}-]+(?:\s+[\p{L}-]+){0,3})\s+(?:должен|должна|должно|должны|обязан|обязана|обязано|обязаны)\s+быть\s+(?:(?:выполнен|изготовлен)\p{L}*\s+)?из\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2}?)(?=\s*(?:,|[.!?]|$|(?:устойчив|стойк|защищ)\p{L}*))/iu.exec(statement);
+    const afterModalMaterial = modalMaterial
+      ? statement.slice((modalMaterial.index ?? 0) + modalMaterial[0].length).replace(/^\s*,?\s*/u, "")
+      : "";
+    const resistanceAfter = /^((?:устойчив|стойк|защищ)\p{L}*\s+к\s+[\p{L}-]+(?:\s+[\p{L}-]+){0,2})/iu;
+    const materialResistance = resistanceAfter.exec(afterMaterial);
+    const modalResistance = resistanceAfter.exec(afterModalMaterial);
+    const modalSubject = modalMaterial?.[1].split(/\s+/u).slice(-2).join(" ") ?? "";
+    const claims = [
+      ...(qualitative && !modalMaterial ? [{ subject: qualitative[1].split(/\s+/u).slice(-2).join(" "), predicate: qualitative[2].trim() }] : []),
+      ...(adjectiveFirst ? [{ subject: adjectiveFirst[2], predicate: adjectiveFirst[1] }] : []),
+      ...(requiredMaterial ? [{ subject: requiredMaterial[1], predicate: requiredMaterial[2], requireSubjectKey: true }] : []),
+      ...(requiredMaterial && materialResistance ? [{ subject: requiredMaterial[1], predicate: materialResistance[1], requireSubjectKey: true }] : []),
+      ...(modalMaterial ? [{ subject: modalSubject, predicate: modalMaterial[2], requireSubjectKey: true }] : []),
+      ...(modalMaterial && modalResistance ? [{ subject: modalSubject, predicate: modalResistance[1], requireSubjectKey: true }] : []),
+    ];
+    if (claims.some(({ subject, predicate, requireSubjectKey }) => subject && predicate && !taskInput.test(subject) &&
+      !declarations.some((item) =>
+        typeof item.value === "string" && !item.unit &&
+        coversQualitativeValue(item.value, predicate) &&
+        typeof item.key === "string" &&
+        (!requireSubjectKey || containsInflectedPhrase(subject, item.key) || containsInflectedPhrase(item.key, subject)) &&
+        (declaredIn.includes(item) || containsInflectedPhrase(subject, item.key))))) omitted.push({
+      reason: "undeclared_qualitative_product_property",
+      sourceSpan: sentence,
+    });
+  }
+  return omitted;
+}
+
 /** A declaration of necessity is not product evidence. This compiler only
  * preserves visible per-product requirements independently of search facets.
  * Callers must reject unresolved declarations and prove each obligation
@@ -245,7 +384,17 @@ export function resolveReasoningObligations(
           caption: facet.caption,
           values: (facet.values ?? []).filter((entry): entry is { value: string } => typeof entry.value === "string"),
         }, span)?.value) === value);
-    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded && !customerGrounded) {
+    // A live yes/no facet may say "да" while the model's complete source
+    // sentence expresses the same truth as required *presence* of that exact
+    // property. This is a grammatical equivalence, not a blanket acceptance
+    // of the model's preferred Boolean or a new category-specific synonym.
+    const presenceKey = key.replace(/^(?:с|со)\s+/iu, "").replace(/^наличи\p{L}*\s+/iu, "");
+    const affirmativePresenceGrounded =
+      typeof value === "string" && normalized(value) === "да" &&
+      op === "eq" && unit === "" && presenceKey.length >= 3 &&
+      /(?:^|[^\p{L}])(?:наличи\p{L}*|имеется|имеет|оснащ[её]н\p{L}*|предусмотрен\p{L}*|присутств\p{L}*)/iu.test(span) &&
+      containsInflectedPhrase(span, presenceKey);
+    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded && !customerGrounded && !affirmativePresenceGrounded) {
       reject("key_not_grounded");
       continue;
     }
@@ -297,7 +446,7 @@ export function resolveReasoningObligations(
     } else if (
       typeof value === "string" && value.trim().length >= 1 &&
       value.length <= 160 && op === "eq" &&
-      !unit && containsInflectedPhrase(span, value) &&
+      !unit && (containsInflectedPhrase(span, value) || affirmativePresenceGrounded) &&
       extractClientQuantities(value).length === 0
     ) {
       criterion = {

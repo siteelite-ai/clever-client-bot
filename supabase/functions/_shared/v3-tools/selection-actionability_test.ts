@@ -57,6 +57,8 @@ import {
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
+  oneForOneReplacementCorrection,
+  oneForOneCorrectionPreservesAggregateThreshold,
   reasoningComputesSystemTotalFromSpatialExtent,
   resolveDerivedSelectionReasoning,
   resumeSingleItemReasoning,
@@ -392,6 +394,153 @@ Deno.test("aggregate-only selection clarifies configuration and preserves a sing
     )?.measurementScope,
     "system_total",
   );
+});
+
+Deno.test("one-for-one replacement offers a bounded correction only for an unresolved aggregate calculation", () => {
+  const unresolved = {
+    text:
+      "Для гостиной 25 м² нужно 25 м² × 150 лк = 3750 лм суммарно. Можно взять один прибор или несколько.",
+    measurementScope: "system_total" as const,
+    measurementEvidence: "",
+  };
+  const correction = oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что предложите?",
+    unresolved,
+  );
+  assertEquals(typeof correction, "string");
+  assertEquals(correction?.includes("per_product_measurement_evidence"), true);
+  assertEquals(correction?.toLocaleLowerCase("ru-RU").includes("не выдумывай"), true);
+  assertEquals(typeof oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+    { ...unresolved,
+      text: "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток должен составлять не менее 3750 Лм. Вы можете использовать один мощный светильник или распределить яркость между несколькими приборами." },
+  ), "string");
+
+  for (const request of [
+    "Подбери светильники для гостиной 25 м²",
+    "Заменить люстры на светодиодные светильники в гостиной 25 м²",
+    "Заменить люстру на несколько светодиодных светильников в гостиной 25 м²",
+    "Заменить люстру на светильник и распределить свет между тремя приборами в гостиной 25 м²",
+    "Заменить люстру на светильник. Уточнение клиента: Несколько изделий вместе для гостиной 25 м²",
+    "Заменить освещение на светильник в гостиной 25 м²",
+  ]) {
+    assertEquals(oneForOneReplacementCorrection(request, unresolved), null, request);
+  }
+  assertEquals(oneForOneReplacementCorrection(
+    "Заменить насос на новый энергоэффективный насос для помещения 25 м²",
+    unresolved,
+  ) !== null, true);
+  assertEquals(typeof oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Предложите несколько вариантов.",
+    unresolved,
+  ), "string");
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, measurementEvidence: "На одно изделие необходимо не менее 3750 лм." },
+  ), null);
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, measurementScope: "per_product" },
+  ), null);
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, text: "Для помещения 25 м² нужен совместимый товар." },
+  ), null);
+});
+
+Deno.test("one-for-one correction cannot silently lower the original aggregate threshold", () => {
+  const customer =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²";
+  const prior =
+    "Для гостиной площадью 25 м² при норме 150 лк суммарный световой поток должен составлять не менее 3750 лм.";
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 4000 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие необходимо не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарный световой поток при норме 150 лк должен быть не менее 3750 лм для помещения 25 м².",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно при норме 150 лк требуется не менее 3750 лм для помещения 25 м².",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 500 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    `${prior} На одно изделие не менее 500 лм.`,
+    "На одно изделие световой поток должен быть не менее 500 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток не более 4000 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 4000 W.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие электрическая мощность должна быть не менее 4000 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для гостиной 25 м² при норме 150 лк нужен световой поток 3750 лм.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для гостиной 25 м² суммарная потребность зависит от условий.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно при норме 150 лк для помещения 25 м².",
+    "На одно изделие необходимо не менее 150 лк.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно нужно не менее 3750 лм или не менее 5000 лм.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарный световой поток 3750 лм или 5000 лм в зависимости от режима.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior,
+    "На одно изделие световой поток должен быть не менее 3750 лм.",
+    "Нужно несколько изделий для гостиной 25 м²",
+  ), false);
+
+  const otherUnit =
+    "Для помещения 25 м² суммарная мощность должна составлять не менее 3000 W.";
+  const onePump = "Хочу заменить насос на новый для помещения 25 м²";
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit, "На одно изделие мощность должна быть не менее 3000 W.", onePump,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit, "На одно изделие мощность должна быть не менее 2500 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие потребность мощности должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная входная мощность не менее 3000 W.",
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие потребляемая мощность должна быть не менее 3000 W.", onePump,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit,
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
 });
 
 Deno.test("per-item evidence tolerates capitalization but preserves visible wording and quantities", () => {

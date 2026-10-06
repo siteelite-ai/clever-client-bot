@@ -7,7 +7,9 @@ import {
   buildAnchorMissingRecoveryQueries,
   buildCatalogEmptySynthesisMessages,
   buildCategoryVerificationSearchInput,
+  buildLiveFacetRecoveryFromEmptyQuery,
   buildSelectionSearchRecoveryPlan,
+  filterLiveFacetQueryRecoveryPool,
   filterSelectionRecoveryPool,
   preserveRecoveryClassProof,
   isRecoverableSelectionSearchFailure,
@@ -73,6 +75,243 @@ const facets = [
     values: [{ value: "Модельный подтип" }],
   },
 ];
+
+Deno.test("empty query fallback preserves live facets and neutral controls without query or scope", () => {
+  const attempt = buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: {
+      mode: "by_query",
+      query: "многословный класс товара",
+      category_in: ["Stale leaf"],
+      options: { kind: ["Модельный подтип"] },
+      min_price: 1,
+      max_price: 4000,
+      sort_cheapest: true,
+      per_page: 20,
+    },
+    facets,
+    exact_literal_required: false,
+  });
+  assert(attempt);
+  assertEquals(attempt.kind, "preserve_live_filters_drop_empty_query");
+  assertEquals(attempt.args, {
+    mode: "by_filter",
+    options: { kind: ["Модельный подтип"] },
+    min_price: 1,
+    max_price: 4000,
+    sort_cheapest: true,
+    per_page: 20,
+  });
+  assertEquals(attempt.proven_criteria, []);
+  assertEquals(attempt.evidence_required_criteria.length, 1);
+  assertEquals(attempt.revalidate, [
+    "selection_target",
+    "mandatory_criteria",
+    "compatibility",
+    "budget",
+  ]);
+});
+
+Deno.test("empty query fallback refuses literal identity, stale facets and unbounded option fan-out", () => {
+  const base = {
+    mode: "by_query",
+    query: "точная модель ABC-123",
+    options: { kind: ["Модельный подтип"] },
+  };
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: base,
+    facets,
+    exact_literal_required: true,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: base,
+    facets,
+    exact_literal_required: false,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: { ...base, query: "маркировка 3*1,5" },
+    facets,
+    exact_literal_required: false,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: { ...base, options: { kind: ["Неизвестное значение"] } },
+    facets,
+    exact_literal_required: false,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: { ...base, options: {} },
+    facets,
+    exact_literal_required: false,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: { ...base, query: "каталожный запрос", options: { output: ["4000", "5000"] } },
+    facets,
+    exact_literal_required: false,
+  }), null);
+  assertEquals(buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: {
+      ...base,
+      options: { kind: Array(9).fill("Модельный подтип") },
+    },
+    facets,
+    exact_literal_required: false,
+  }), null);
+});
+
+Deno.test("empty query facet fallback never treats alternative values as mandatory proof", () => {
+  const liveFacets = [{
+    key: "shell",
+    caption: "Оболочка",
+    type: "string",
+    unit: null,
+    values: [{ value: "ПВХ" }, { value: "полиэтилен" }],
+  }];
+  const attempt = buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: {
+      mode: "by_query",
+      query: "каталожный многословный запрос",
+      options: { shell: ["полиэтилен"] },
+      max_price: 4000,
+      per_page: 50,
+    },
+    facets: liveFacets,
+    exact_literal_required: false,
+  });
+  assert(attempt);
+  const product = (
+    id: string,
+    traits: string[],
+    price = 100,
+    description: string | null = null,
+  ): ProductRef => ({
+    id,
+    pagetitle: `Товар ${id}`,
+    vendor: null,
+    price,
+    stock: "in_stock",
+    short_traits: traits,
+    description_excerpt: description,
+  });
+  const products = [
+    product("pe", ["Оболочка: полиэтилен"]),
+    product("pvc", ["Оболочка: ПВХ"]),
+    product("unknown", []),
+    product("insulation-only", [], 100, "Полиэтиленовая внутренняя изоляция"),
+    product("over-budget", ["Оболочка: полиэтилен"], 4500),
+  ];
+  assertEquals(
+    filterLiveFacetQueryRecoveryPool(products, attempt, [{
+      key: "Оболочка",
+      op: "eq",
+      value: "полиэтилен",
+      level: "A",
+      evidence: "user_explicit",
+    }]).map(({ id }) => id),
+    ["pe"],
+  );
+});
+
+Deno.test("empty query facet fallback cannot bypass a mandatory motion sensor veto", () => {
+  const liveFacets = [{
+    key: "motion",
+    caption: "С датчиком движения",
+    type: "string",
+    unit: null,
+    values: [{ value: "Да" }],
+  }];
+  const attempt = buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: {
+      mode: "by_query",
+      query: "подбор по модели",
+      options: { motion: ["Да"] },
+    },
+    facets: liveFacets,
+    exact_literal_required: false,
+  });
+  assert(attempt);
+  const products: ProductRef[] = [{
+    id: "acoustic",
+    pagetitle: "Оптико-акустический прибор со звуковым датчиком",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: ["С датчиком движения: Да"],
+    description_excerpt: "Включается при звуке.",
+  }];
+  assertEquals(filterLiveFacetQueryRecoveryPool(products, attempt, [{
+    key: "С датчиком движения",
+    op: "eq",
+    value: "Да",
+    level: "A",
+    evidence: "user_explicit",
+  }]), []);
+});
+
+Deno.test("empty query facet fallback rejects coax cards with PVC jacket despite PE insulation", () => {
+  const liveFacets = [
+    {
+      key: "purpose",
+      caption: "Назначение",
+      type: "string",
+      unit: null,
+      values: [{ value: "Кабели радиочастотные" }],
+    },
+    {
+      key: "jacket",
+      caption: "Оболочка",
+      type: "string",
+      unit: null,
+      values: [{ value: "ПВХ" }, { value: "полиэтилен" }],
+    },
+  ];
+  const attempt = buildLiveFacetRecoveryFromEmptyQuery({
+    failed_args: {
+      mode: "by_query",
+      query: "радиочастотный коаксиальный кабель",
+      category_in: ["ошибочный лист"],
+      options: {
+        purpose: ["Кабели радиочастотные"],
+        jacket: ["полиэтилен"],
+      },
+      per_page: 50,
+    },
+    facets: liveFacets,
+    exact_literal_required: false,
+  });
+  assert(attempt);
+  const pvc: ProductRef = {
+    id: "pvc",
+    pagetitle: "Кабель коаксиальный 75 Ом FPE PVC",
+    vendor: null,
+    price: 100,
+    stock: "in_stock",
+    short_traits: [
+      "Назначение: Кабели радиочастотные",
+      "Изоляция: вспененный полиэтилен",
+      "Оболочка: ПВХ",
+    ],
+    description_excerpt: "Полиэтиленовая изоляция под внешней оболочкой ПВХ.",
+  };
+  const pe: ProductRef = {
+    ...pvc,
+    id: "pe",
+    pagetitle: "Кабель коаксиальный 75 Ом для наружной прокладки",
+    short_traits: [
+      "Назначение: Кабели радиочастотные",
+      "Оболочка: полиэтилен",
+      "УФ-стойкость: Да",
+    ],
+    description_excerpt: "Уличная прокладка; УФ-стойкая оболочка.",
+  };
+  const mandatory = [
+    { key: "Оболочка", op: "eq" as const, value: "полиэтилен", level: "A" as const },
+    { key: "УФ-стойкость", op: "eq" as const, value: "Да", level: "A" as const },
+  ];
+  assertEquals(
+    filterLiveFacetQueryRecoveryPool([pvc, pe], attempt, mandatory)
+      .map(({ id }) => id),
+    ["pe"],
+  );
+});
 
 Deno.test("model advisory facets relax before customer-owned boolean filters", () => {
   const plan = buildSelectionSearchRecoveryPlan({

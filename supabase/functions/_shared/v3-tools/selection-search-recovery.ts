@@ -13,6 +13,7 @@ import {
 } from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
+  | "preserve_live_filters_drop_empty_query"
   | "relax_model_advisory_facets"
   | "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
   | "preserve_filters_expand_category_scope"
@@ -78,6 +79,165 @@ export function filterSelectionRecoveryPool<T extends ProductRef>(
   if (required.length === 0) return [...products];
   const safe = new Set(applyCriteriaGate(products, required).passed_ids);
   return products.filter((product) => safe.has(String(product.id)));
+}
+
+/**
+ * A full-text catalog query is an AND search. If the consultant supplied live
+ * facet options alongside an empty query, exactly one query-free retrieval may
+ * verify those options without the possibly stale leaf scope. This is only a
+ * candidate search: neither an option nor a returned total proves that a card
+ * meets the customer's independent selection requirements.
+ *
+ * Literal identifiers have a separate exact-evidence path and must never be
+ * broadened into a facet-only search. Unknown/stale option values also fail
+ * closed rather than silently disappearing from the recovered request.
+ */
+export function buildLiveFacetRecoveryFromEmptyQuery(input: {
+  failed_args: Record<string, unknown>;
+  facets: Facet[];
+  exact_literal_required: boolean;
+}): SelectionSearchRecoveryAttempt | null {
+  const original = input.failed_args;
+  if (
+    original.mode !== "by_query" || input.exact_literal_required ||
+    typeof original.query !== "string" || !original.query.trim()
+  ) return null;
+  const queryTokens = original.query.match(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu) ?? [];
+  if (
+    queryTokens.some((token) =>
+      token.length >= 3 && /\p{L}/u.test(token) && /\p{N}/u.test(token)
+    ) || /\d+\s*[*/xх×]\s*\d+/u.test(original.query)
+  ) return null;
+  const rawOptions = original.options;
+  if (
+    !rawOptions || typeof rawOptions !== "object" ||
+    Array.isArray(rawOptions)
+  ) return null;
+  const entries = Object.entries(rawOptions as Record<string, unknown>);
+  if (entries.length === 0 || entries.length > 4) return null;
+
+  const options: Record<string, string[]> = {};
+  const required: Criterion[] = [];
+  let valueCount = 0;
+  for (const [key, rawValues] of entries) {
+    if (["__proto__", "constructor", "prototype"].includes(key)) return null;
+    const facet = input.facets.find((candidate) => candidate.key === key);
+    if (
+      !facet || !Array.isArray(rawValues) || rawValues.length !== 1
+    ) {
+      return null;
+    }
+    const liveValues = new Map(
+      facet.values.map(({ value }) => [normalizeFacetValue(value), value]),
+    );
+    const values: string[] = [];
+    for (const rawValue of rawValues) {
+      if (typeof rawValue !== "string") return null;
+      const value = liveValues.get(normalizeFacetValue(rawValue));
+      if (!value) return null;
+      if (!values.includes(value)) values.push(value);
+    }
+    valueCount += values.length;
+    // Existing downstream recovery proof is conjunctive. Until it supports
+    // per-facet OR groups, recover only one exact live value per facet.
+    if (valueCount > 4) return null;
+    options[key] = values;
+    for (const value of values) {
+      required.push({
+        key: facet.caption.trim() || key,
+        op: "eq",
+        value,
+        level: "A",
+        evidence: "model_assumption",
+      });
+    }
+  }
+
+  const args: Record<string, unknown> = { mode: "by_filter", options };
+  for (const key of ["min_price", "max_price"] as const) {
+    if (original[key] === undefined) continue;
+    if (
+      typeof original[key] !== "number" ||
+      !Number.isFinite(original[key]) || original[key] < 0
+    ) return null;
+    args[key] = original[key];
+  }
+  if (
+    typeof args.min_price === "number" &&
+    typeof args.max_price === "number" &&
+    args.min_price > args.max_price
+  ) return null;
+  for (const key of ["sort_cheapest", "sort_expensive"] as const) {
+    if (original[key] === true) args[key] = true;
+  }
+  if (original.page !== undefined) {
+    if (
+      typeof original.page !== "number" ||
+      !Number.isInteger(original.page) || original.page < 1
+    ) return null;
+    args.page = original.page;
+  }
+  if (original.per_page !== undefined) {
+    if (
+      typeof original.per_page !== "number" ||
+      !Number.isInteger(original.per_page) || original.per_page < 1
+    ) return null;
+    args.per_page = Math.min(original.per_page, 50);
+  }
+
+  return {
+    kind: "preserve_live_filters_drop_empty_query",
+    args,
+    relaxed_inputs: ["query", "category_scope"],
+    proven_criteria: [],
+    evidence_required_criteria: required,
+    unverified_criteria: [],
+    revalidate: [...REVALIDATE],
+  };
+}
+
+/** Separate the facet OR groups from customer-owned criteria (AND). Combining
+ * them into one criteria list would accidentally let an optional facet value
+ * satisfy a different mandatory value with the same caption. */
+export function filterLiveFacetQueryRecoveryPool<T extends ProductRef>(
+  products: T[],
+  attempt: SelectionSearchRecoveryAttempt,
+  mandatoryCriteria: readonly Criterion[],
+): T[] {
+  const requiredFacetKeys = [...new Set(
+    attempt.evidence_required_criteria.map((criterion) =>
+      normalizeFacetValue(criterion.key)
+    ),
+  )];
+  // A generic mention in the title/description can describe a different
+  // component (for example insulation rather than the outer jacket). This
+  // query-free route accepts only labelled product-facet evidence for every
+  // live option key it relied on while widening retrieval.
+  const labelled = products.filter((product) => {
+    const presentKeys = new Set((product.short_traits ?? []).flatMap((line) => {
+      const separator = line.indexOf(":");
+      return separator > 0
+        ? [normalizeFacetValue(line.slice(0, separator))]
+        : [];
+    }));
+    return requiredFacetKeys.every((key) => presentKeys.has(key));
+  });
+  const facetSafe = filterSelectionRecoveryPool(labelled, attempt);
+  const mandatory = mandatoryCriteria.filter((criterion) =>
+    (criterion.level ?? "A") === "A"
+  );
+  const safe = new Set(applyCriteriaGate(facetSafe, mandatory).passed_ids);
+  const minPrice = typeof attempt.args.min_price === "number"
+    ? attempt.args.min_price
+    : 0;
+  const maxPrice = typeof attempt.args.max_price === "number"
+    ? attempt.args.max_price
+    : Infinity;
+  return facetSafe.filter((product) =>
+    safe.has(String(product.id)) && Number.isFinite(product.price) &&
+    product.price > 0 && product.price >= minPrice &&
+    product.price <= maxPrice
+  );
 }
 
 export interface SelectionSearchRecoveryPlanInput {

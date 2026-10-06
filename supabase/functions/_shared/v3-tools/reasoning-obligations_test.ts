@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  findOmittedReasoningObligations,
   repairObligationDeclaration,
   resolveReasoningObligations,
 } from "./reasoning-obligations.ts";
@@ -316,4 +317,144 @@ Deno.test("explicit customer facet proof does not depend on a necessity verb in 
   const codeFacets = [{ key: "base", caption: code.key, values: [{ value: "E27" }, { value: "E14" }] }];
   assertEquals(resolveReasoningObligations([code], codeSource, codeFacets, "Нужны лампы с цоколем E27.").unresolved, []);
   assertEquals(resolveReasoningObligations([code], codeSource, codeFacets, "Нужны лампы с цоколем E14.").unresolved.length, 1);
+});
+
+Deno.test("explicit outdoor coax requirements cannot disappear into an empty declaration", () => {
+  const reasoning = "Для аналоговой камеры необходим коаксиальный кабель с волновым сопротивлением 75 Ом. Для уличного применения оболочка кабеля должна быть устойчива к ультрафиолету.";
+  assertEquals(findOmittedReasoningObligations([], reasoning), [
+    { reason: "undeclared_measured_product_property", sourceSpan: "Для аналоговой камеры необходим коаксиальный кабель с волновым сопротивлением 75 Ом." },
+    { reason: "undeclared_qualitative_product_property", sourceSpan: "Для уличного применения оболочка кабеля должна быть устойчива к ультрафиолету." },
+  ]);
+});
+
+Deno.test("property coverage is per claim, not merely a nonempty mandatory list", () => {
+  const measured = "Для аналоговой камеры необходим коаксиальный кабель с волновым сопротивлением 75 Ом.";
+  const environmental = "Для уличного применения оболочка кабеля должна быть устойчива к ультрафиолету.";
+  const measuredObligation = { key: "Волновое сопротивление", op: "eq", value: 75, unit: "Ом", scope: "per_product", source_span: measured };
+  const environmentalObligation = { key: "Оболочка", op: "eq", value: "устойчива к ультрафиолету", unit: "", scope: "per_product", source_span: environmental };
+  const reasoning = `${measured} ${environmental}`;
+  assertEquals(findOmittedReasoningObligations([measuredObligation], reasoning), [
+    { reason: "undeclared_qualitative_product_property", sourceSpan: environmental },
+  ]);
+  assertEquals(findOmittedReasoningObligations([environmentalObligation], reasoning), [
+    { reason: "undeclared_measured_product_property", sourceSpan: measured },
+  ]);
+  assertEquals(findOmittedReasoningObligations([measuredObligation, environmentalObligation], reasoning), []);
+  assertEquals(findOmittedReasoningObligations([{ ...measuredObligation, value: 50 }, environmentalObligation], reasoning), [
+    { reason: "undeclared_measured_product_property", sourceSpan: measured },
+  ]);
+});
+
+Deno.test("coverage guard is category-neutral for quantified product attributes", () => {
+  const source = "Для станка требуется двигатель с номинальной мощностью не менее 5 кВт.";
+  assertEquals(findOmittedReasoningObligations([], source), [
+    { reason: "undeclared_measured_product_property", sourceSpan: source },
+  ]);
+  assertEquals(findOmittedReasoningObligations([{ key: "Номинальная мощность", op: "min", value: 5, unit: "кВт", scope: "per_product", source_span: source }], source), []);
+});
+
+Deno.test("a binding sheath requirement survives an optional parenthetical example", () => {
+  const source = "Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена).";
+  assertEquals(findOmittedReasoningObligations([], source), [
+    { reason: "undeclared_qualitative_product_property", sourceSpan: source },
+  ]);
+  const declared = { key: "Оболочка", op: "eq", value: "стойкая к ультрафиолету", unit: "", scope: "per_product", source_span: source };
+  assertEquals(findOmittedReasoningObligations([declared], source), []);
+});
+
+Deno.test("required material and environmental resistance remain two covered claims", () => {
+  const source = "Для улицы требуется оболочка из полиэтилена, устойчивая к УФ.";
+  const material = { key: "Оболочка", op: "eq", value: "полиэтилен", unit: "", scope: "per_product", source_span: source };
+  const resistance = { key: "Оболочка", op: "eq", value: "устойчивая к УФ", unit: "", scope: "per_product", source_span: source };
+  const missing = [{ reason: "undeclared_qualitative_product_property", sourceSpan: source }];
+  assertEquals(findOmittedReasoningObligations([], source), missing);
+  assertEquals(findOmittedReasoningObligations([material], source), missing);
+  assertEquals(findOmittedReasoningObligations([resistance], source), missing);
+  assertEquals(findOmittedReasoningObligations([material, resistance], source), []);
+  assertEquals(findOmittedReasoningObligations([{ ...material, key: "Изоляция" }, resistance], source), missing);
+
+  const otherCategory = "Для морской эксплуатации необходим корпус из алюминиевого сплава, стойкий к коррозии.";
+  assertEquals(findOmittedReasoningObligations([], otherCategory), [
+    { reason: "undeclared_qualitative_product_property", sourceSpan: otherCategory },
+  ]);
+
+  const modalForm = "Для уличной прокладки оболочка кабеля должна быть выполнена из полиэтилена, устойчивая к ультрафиолету.";
+  const modalMaterial = { ...material, source_span: modalForm };
+  const modalResistance = { ...resistance, value: "устойчивая к ультрафиолету", source_span: modalForm };
+  assertEquals(findOmittedReasoningObligations([modalMaterial], modalForm), [
+    { reason: "undeclared_qualitative_product_property", sourceSpan: modalForm },
+  ]);
+  assertEquals(findOmittedReasoningObligations([modalMaterial, modalResistance], modalForm), []);
+});
+
+Deno.test("material-resistance grammar does not promote options, examples or site quantities", () => {
+  for (const source of [
+    "Требуется один из светильников.",
+    "Требуется два из светильников.",
+    "Нужен любой из предложенных приборов.",
+    "Требуется несколько из доступных вариантов.",
+    "Для улицы можно использовать оболочку из полиэтилена, устойчивую к УФ.",
+    "Можно, при необходимости требуется оболочка из полиэтилена, устойчивая к УФ.",
+    "Для улицы требуется оболочка, например из полиэтилена, устойчивая к УФ.",
+    "Если прокладка уличная, требуется оболочка из полиэтилена, устойчивая к УФ.",
+    "Для всей системы суммарно требуется оболочка из полиэтилена, устойчивая к УФ.",
+    "Для трассы нужно 30 м оболочки из полиэтилена, устойчивой к УФ.",
+  ]) {
+    assertEquals(findOmittedReasoningObligations([], source), [], source);
+  }
+});
+
+Deno.test("a resistance declaration must include what the product resists", () => {
+  const source = "Для улицы оболочка должна быть устойчива к ультрафиолету.";
+  const base = { key: "Оболочка", op: "eq", unit: "", scope: "per_product", source_span: source };
+  const missing = [{ reason: "undeclared_qualitative_product_property", sourceSpan: source }];
+  assertEquals(findOmittedReasoningObligations([{ ...base, value: "устойчива" }], source), missing);
+  assertEquals(findOmittedReasoningObligations([{ ...base, value: "ультрафиолету" }], source), missing);
+  assertEquals(findOmittedReasoningObligations([{ ...base, value: "устойчива к ультрафиолету" }], source), []);
+  const compoundSource = "Для улицы обязательна УФ-стойкая оболочка.";
+  const compoundBase = { ...base, source_span: compoundSource };
+  assertEquals(findOmittedReasoningObligations([{ ...compoundBase, value: "стойкая" }], compoundSource), [
+    { reason: "undeclared_qualitative_product_property", sourceSpan: compoundSource },
+  ]);
+  assertEquals(findOmittedReasoningObligations([{ ...compoundBase, value: "УФ-стойкая" }], compoundSource), []);
+});
+
+Deno.test("coverage guard does not promote site inputs, totals, options or clarifications", () => {
+  const nonObligations = [
+    "Для двора площадью 500 м² требуется суммарный световой поток 10000 лм, распределённый между четырьмя изделиями.",
+    "Для трассы длиной 30 м нужен кабель; можно взять бухту большей длины.",
+    "Можно выбрать кабель с волновым сопротивлением 75 Ом или другой совместимый вариант.",
+    "Если требуется уличная прокладка, оболочка должна быть устойчива к ультрафиолету.",
+    "Чтобы подобрать товар, необходимо уточнить площадь двора 500 м².",
+    "Не требуется кабель с волновым сопротивлением 75 Ом.",
+    "Необходим кабель с маркировкой 3x1.5.",
+  ];
+  for (const reasoning of nonObligations) {
+    assertEquals(findOmittedReasoningObligations([], reasoning), [], reasoning);
+  }
+  const prescriptive = "Необходим кабель с волновым сопротивлением 75 Ом.";
+  assertEquals(findOmittedReasoningObligations([], prescriptive, { clarificationQuestion: "Какой тип камеры?" }), []);
+});
+
+Deno.test("explicit required presence grounds an affirmative boolean facet without literal да", () => {
+  const source = "Обязательно наличие встроенного датчика движения — это функциональное требование к каждому светильнику.";
+  const item = { key: "С датчиком движения", op: "eq", value: "да", unit: "", scope: "per_product", source_span: source };
+  const resolved = resolveReasoningObligations([item], source);
+  assertEquals(resolved.unresolved, []);
+  assertEquals(resolved.obligations[0].criterion.value, "да");
+  for (const invalid of [
+    { ...item, key: "С датчиком температуры" },
+    { ...item, value: "нет" },
+    { ...item, value: "да", source_span: "Обязательно наличие встроенного датчика температуры." },
+  ]) {
+    assertEquals(resolveReasoningObligations([invalid], source).unresolved.length, 1);
+  }
+  for (const negative of [
+    "Обязательно отсутствие встроенного датчика движения.",
+    "Не обязательно наличие встроенного датчика движения.",
+    "Можно предусмотреть наличие встроенного датчика движения.",
+    "Если нужно, обязательно наличие встроенного датчика движения.",
+  ]) {
+    assertEquals(resolveReasoningObligations([{ ...item, source_span: negative }], negative).unresolved.length, 1);
+  }
 });
