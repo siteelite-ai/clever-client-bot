@@ -10,7 +10,32 @@ import {
   selectReadinessAssistance,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
+  verifiedClarificationAnswers,
 } from "./selection-readiness.ts";
+
+Deno.test("server-issued clarification scope carries only uniquely selected answers", () => {
+  const original = "Нужен автомат 25 А";
+  const poleSlot = { pending_clarification: {
+    facet_key: "pole_count",
+    question: "Какая полюсность нужна?",
+    options: [{ value: "1P", label: "1P — одна фаза" }, { value: "2P", label: "2P" }],
+    scope: selectionReadinessScope(original),
+  } };
+  const first = verifiedClarificationAnswers(poleSlot, "1P");
+  assertEquals(first, [{ facet_key: "pole_count", question: "Какая полюсность нужна?", selected_value: "1P" }]);
+  const curveSlot = { pending_clarification: {
+    facet_key: "trip_curve",
+    question: "Какая характеристика срабатывания указана в проекте?",
+    options: [{ value: "B", label: "B" }, { value: "C", label: "C" }],
+    scope: selectionReadinessScope(`${original}\nУточнение клиента: 1P`, { answered: first }),
+  } };
+  assertEquals(verifiedClarificationAnswers(curveSlot, "C"), [
+    first[0],
+    { facet_key: "trip_curve", question: "Какая характеристика срабатывания указана в проекте?", selected_value: "C" },
+  ]);
+  assertEquals(verifiedClarificationAnswers(curveSlot, "новая тема"), []);
+  assertEquals(verifiedClarificationAnswers({}, "C"), []);
+});
 
 Deno.test("clarification recovery uses only the last completed server-issued slot", () => {
   const issued = executeProposeClarification({

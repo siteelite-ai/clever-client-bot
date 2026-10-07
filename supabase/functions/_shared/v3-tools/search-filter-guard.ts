@@ -119,6 +119,55 @@ export function projectExplicitCompactFacetValues(
   return { kept, user_backed: kept.map((item) => ({ ...item })) };
 }
 
+/** Resolve a server-issued clarification answer against the live schema.
+ * The option alone is not evidence: `1P` can resemble both a pole count and
+ * an unrelated packaging count. Its issuing question must identify one live
+ * facet by a distinctive caption word, and its selected value must map to one
+ * value of that facet. Ambiguous answers are dropped, never guessed. */
+export function projectVerifiedClarificationFacetValues(
+  facets: SearchFacet[],
+  answers: Array<{ question: string; selected_value: string }>,
+): ReasoningFacetProjection {
+  const kept: FacetValueEvidence[] = [];
+  const generic = new Set([
+    "количество", "тип", "вид", "значение", "параметр", "характеристика",
+  ]);
+  for (const answer of answers.slice(-6)) {
+    const question = String(answer.question ?? "").slice(0, 350);
+    const selected = String(answer.selected_value ?? "").trim().slice(0, 80);
+    if (!question || !selected) continue;
+    const questionTokens = norm(question).split(" ").filter((token) =>
+      token.length >= 4
+    );
+    const candidates: FacetValueEvidence[] = [];
+    for (const facet of facets) {
+      if (isAdministrativeCatalogField(facet)) continue;
+      const captionTokens = norm(facet.caption ?? facet.key).split(" ")
+        .filter((token) => token.length >= 4 && !generic.has(token));
+      if (!captionTokens.some((caption) => questionTokens.some((token) =>
+        tokensMatchByStem(caption, token)
+      ))) continue;
+      const compact = projectExplicitCompactFacetValues([facet], selected).kept
+        .filter((entry) => entry.key === facet.key).map((entry) => entry.value);
+      const direct = facet.values.filter(({ value }) =>
+        norm(value) === norm(selected) ||
+        value.length === 1 && selected.length === 1 &&
+          visualSingleLetter(value) === visualSingleLetter(selected)
+      ).map(({ value }) => value);
+      const values = [...new Set([...compact, ...direct])];
+      if (values.length === 1) {
+        candidates.push({ key: facet.key, value: values[0] });
+      }
+    }
+    if (candidates.length !== 1) continue;
+    const candidate = candidates[0];
+    const prior = kept.findIndex((entry) => entry.key === candidate.key);
+    if (prior >= 0) kept.splice(prior, 1);
+    kept.push(candidate);
+  }
+  return { kept, user_backed: [...kept] };
+}
+
 export interface BooleanFilterFallbackResult {
   args: Record<string, unknown>;
   removed: Array<{ key: string; value: string }>;

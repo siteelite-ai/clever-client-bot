@@ -252,6 +252,7 @@ import {
   productMatchesExcludedReplacementIdentity,
   projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
+  projectVerifiedClarificationFacetValues,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
   compactCodeTokensInQuery,
@@ -472,6 +473,8 @@ import {
   selectionReadinessScope,
   selectReadinessAssistance,
   selectReadinessClarification,
+  type VerifiedClarificationAnswer,
+  verifiedClarificationAnswers,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
   buildVisibleRequestContract,
@@ -5457,6 +5460,7 @@ async function runExpertLoop(
   preExcludedReplacementIds: string[] = [],
   selectionPlan: ReplacementSelectionPlan | null = null,
   ellipticalContinuation: EllipticalSelectionContinuation | null = null,
+  verifiedAnswers: VerifiedClarificationAnswer[] = [],
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -14690,19 +14694,32 @@ async function runExpertLoop(
                 lastDiscover.facets,
                 explicitCustomerEvidence,
               );
-              const currentKept = mergeFacetValuesWithCurrentOverrides(
+              const verifiedClarificationProjection =
+                projectVerifiedClarificationFacetValues(
+                  lastDiscover.facets,
+                  verifiedAnswers,
+                );
+              const currentKeptBeforeAnswers = mergeFacetValuesWithCurrentOverrides(
                 currentExplicit.kept,
                 mergeFacetValuesWithCurrentOverrides(
                   reasoningProjection.kept,
                   compactCodeProjection.kept,
                 ),
               );
-              const currentUserBacked = mergeFacetValuesWithCurrentOverrides(
+              const currentKept = mergeFacetValuesWithCurrentOverrides(
+                currentKeptBeforeAnswers,
+                verifiedClarificationProjection.kept,
+              );
+              const currentUserBackedBeforeAnswers = mergeFacetValuesWithCurrentOverrides(
                 currentExplicit.user_backed,
                 mergeFacetValuesWithCurrentOverrides(
                   reasoningProjection.user_backed,
                   compactCodeProjection.user_backed,
                 ),
+              );
+              const currentUserBacked = mergeFacetValuesWithCurrentOverrides(
+                currentUserBackedBeforeAnswers,
+                verifiedClarificationProjection.user_backed,
               );
               const explicitKept = mergeFacetValuesWithCurrentOverrides(
                 inheritedExplicit?.kept ?? [],
@@ -18739,6 +18756,7 @@ Deno.serve(async (req) => {
   const submittedSlots = rawSlots ?? {};
   let slots: Record<string, unknown> = { ...submittedSlots };
   let unverifiedPending = false;
+  let verifiedAnswers: VerifiedClarificationAnswer[] = [];
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
@@ -18766,6 +18784,28 @@ Deno.serve(async (req) => {
         // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
         let out = ev;
+        if (ev.type === "slot_update" && verifiedAnswers.length > 0) {
+          const pending = ev.slots.pending_clarification;
+          if (pending && typeof pending === "object" &&
+            !Array.isArray(pending)) {
+            const scope = (pending as Record<string, unknown>).scope;
+            if (scope && typeof scope === "object" &&
+              !Array.isArray(scope) &&
+              (scope as Record<string, unknown>).kind ===
+                "selection_readiness") {
+              out = {
+                type: "slot_update",
+                slots: {
+                  ...ev.slots,
+                  pending_clarification: {
+                    ...pending,
+                    scope: { ...scope, answered: verifiedAnswers },
+                  },
+                },
+              };
+            }
+          }
+        }
         if (ev.type === "delta") {
           const r = redactInternals(ev.content);
           if (r.redacted) {
@@ -19078,6 +19118,13 @@ Deno.serve(async (req) => {
           : sessionId;
         const effectiveHistory = startsNewTask ? [] : priorHistory;
         const effectiveSlots = startsNewTask ? {} : slots;
+        // Only the pending slot recovered from the previous completed server
+        // response can authorize an answer atom. A new task or an unverified
+        // client slot carries none of the prior selection constraints.
+        verifiedAnswers = startsNewTask ? [] : verifiedClarificationAnswers(
+          effectiveSlots,
+          userMessage,
+        );
         const electricalTripDiagnostic =
           resolveElectricalProtectionTripDiagnostic(
             userMessage,
@@ -19451,6 +19498,7 @@ Deno.serve(async (req) => {
               [],
               null,
               ellipticalContinuation,
+              verifiedAnswers,
             );
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
@@ -19568,6 +19616,7 @@ Deno.serve(async (req) => {
               [],
               null,
               ellipticalContinuation,
+              verifiedAnswers,
             );
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
@@ -19783,6 +19832,7 @@ Deno.serve(async (req) => {
               direct.source_candidate_ids ?? [],
               replacementSelectionPlan,
               ellipticalContinuation,
+              verifiedAnswers,
             );
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
@@ -19817,6 +19867,7 @@ Deno.serve(async (req) => {
             [],
             null,
             ellipticalContinuation,
+            verifiedAnswers,
           );
           productsCount = out.productsRendered;
           const shownProducts = out.shownProductIds

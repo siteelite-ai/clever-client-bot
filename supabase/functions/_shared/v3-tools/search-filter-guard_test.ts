@@ -12,6 +12,7 @@ import {
   mergeFacetValuesWithCurrentOverrides,
   projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
+  projectVerifiedClarificationFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
 import { buildVisibleRequestContract } from "./visible-request-contract.ts";
@@ -35,6 +36,32 @@ Deno.test("explicit compact codes project only through one unique live multi-axi
     ...live,
     { key: "reserve_current", caption: "Резервный ток", values: [{ value: "16" }] },
   ], "изделие C16"), { kept: [], user_backed: [] });
+});
+
+Deno.test("verified clarification questions disambiguate multi-turn compact answers", () => {
+  const live = [
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "1" }, { value: "2" }] },
+    { key: "pack", caption: "Количество в групповой упаковке", values: [{ value: "1" }, { value: "12" }] },
+    { key: "curve", caption: "Характеристика срабатывания", values: [{ value: "B" }, { value: "C" }] },
+  ];
+  assertEquals(projectExplicitCompactFacetValues(live, "1P"), {
+    kept: [], user_backed: [],
+  });
+  const answers = [{
+    question: "Какая полюсность нужна?",
+    selected_value: "1P",
+  }, {
+    question: "Какая характеристика срабатывания указана в проекте?",
+    selected_value: "C",
+  }];
+  assertEquals(projectVerifiedClarificationFacetValues(live, answers), {
+    kept: [{ key: "poles", value: "1" }, { key: "curve", value: "C" }],
+    user_backed: [{ key: "poles", value: "1" }, { key: "curve", value: "C" }],
+  });
+  assertEquals(projectVerifiedClarificationFacetValues(live, [{
+    question: "Какой товар нужен?",
+    selected_value: "1P",
+  }]), { kept: [], user_backed: [] });
 });
 
 Deno.test("a unique numeric axis abbreviation remains customer-backed", () => {

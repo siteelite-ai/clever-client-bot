@@ -2,6 +2,80 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
+export interface VerifiedClarificationAnswer {
+  facet_key: string;
+  question: string;
+  selected_value: string;
+}
+
+function boundedAnswered(value: unknown): VerifiedClarificationAnswer[] {
+  if (!Array.isArray(value)) return [];
+  const result: VerifiedClarificationAnswer[] = [];
+  for (const entry of value.slice(-6)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const facet_key = typeof item.facet_key === "string"
+      ? item.facet_key.trim().slice(0, 80) : "";
+    const question = typeof item.question === "string"
+      ? item.question.trim().slice(0, 350) : "";
+    const selected_value = typeof item.selected_value === "string"
+      ? item.selected_value.trim().slice(0, 80) : "";
+    if (!facet_key || !question || !selected_value) continue;
+    const prior = result.findIndex((answer) => answer.facet_key === facet_key);
+    if (prior >= 0) result.splice(prior, 1);
+    result.push({ facet_key, question, selected_value });
+  }
+  return result;
+}
+
+function normalizedChoice(value: string): string {
+  const ordinary = value.normalize("NFKC").trim().toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/[.!?]+$/u, "").trim();
+  if (!/^[0-9a-zа-я]{1,4}$/iu.test(ordinary)) return ordinary;
+  return ordinary.replace(/с/gu, "c").replace(/р/gu, "p");
+}
+
+/** Call only with the server-recovered pending clarification, never a client
+ * scope. A selected option becomes one bounded evidence atom; the menu and
+ * assistant history do not become customer requirements. */
+export function verifiedClarificationAnswers(
+  slots: Record<string, unknown>,
+  currentMessage: string,
+): VerifiedClarificationAnswer[] {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return [];
+  }
+  const item = pending as Record<string, unknown>;
+  const scope = item.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== SELECTION_READINESS_SCOPE) {
+    return [];
+  }
+  const options = Array.isArray(item.options) ? item.options : [];
+  const answer = normalizedChoice(String(currentMessage ?? ""));
+  const matching = options.filter((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+    const record = option as Record<string, unknown>;
+    return [record.value, record.label].some((choice) =>
+      typeof choice === "string" && normalizedChoice(choice) === answer
+    );
+  });
+  if (matching.length !== 1) return [];
+  const chosen = matching[0] as Record<string, unknown>;
+  const facet_key = typeof item.facet_key === "string"
+    ? item.facet_key.trim().slice(0, 80) : "";
+  const question = typeof item.question === "string"
+    ? item.question.trim().slice(0, 350) : "";
+  const selected_value = typeof chosen.value === "string"
+    ? chosen.value.trim().slice(0, 80) : "";
+  if (!facet_key || !question || !selected_value) return [];
+  return boundedAnswered([
+    ...boundedAnswered((scope as Record<string, unknown>).answered),
+    { facet_key, question, selected_value },
+  ]);
+}
+
 export function selectionReadinessScope(
   token: string,
   context: {
@@ -9,6 +83,7 @@ export function selectionReadinessScope(
     assistance_level?: number;
     reasoning_checkpoint?:
       import("./selection-actionability.ts").SelectionReasoningCheckpoint;
+    answered?: VerifiedClarificationAnswer[];
   } = {},
 ): {
   kind: string;
@@ -17,6 +92,7 @@ export function selectionReadinessScope(
   assistance_level?: number;
   reasoning_checkpoint?:
     import("./selection-actionability.ts").SelectionReasoningCheckpoint;
+  answered?: VerifiedClarificationAnswer[];
 } {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
@@ -31,6 +107,9 @@ export function selectionReadinessScope(
     ...(assistanceLevel ? { assistance_level: assistanceLevel } : {}),
     ...(context.reasoning_checkpoint
       ? { reasoning_checkpoint: context.reasoning_checkpoint }
+      : {}),
+    ...(boundedAnswered(context.answered).length > 0
+      ? { answered: boundedAnswered(context.answered) }
       : {}),
   };
 }
