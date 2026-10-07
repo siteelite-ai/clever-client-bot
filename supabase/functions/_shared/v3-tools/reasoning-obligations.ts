@@ -96,8 +96,9 @@ export function repairOriginalObligationSourceSpans(
   return { ...original, mandatory_properties: repaired };
 }
 
-/** Repair prose/quote formatting only, never replace the selected semantics,
- * live IDs, scope or cardinality with a second model's different answer. */
+/** Repair quote attribution only. A retry may suggest a quote from the
+ * original reasoning, but its appended prose cannot become new evidence for
+ * an already frozen obligation. */
 export function repairObligationDeclaration(
   original: Record<string, unknown>,
   repaired: Record<string, unknown>,
@@ -111,11 +112,11 @@ export function repairObligationDeclaration(
     !Array.isArray(before) || !Array.isArray(after) || before.length === 0 ||
     before.length > 12 || after.length > before.length ||
     typeof original.reasoning !== "string" ||
+    original.reasoning.length > 1600 ||
     typeof repaired.reasoning !== "string" ||
     repaired.reasoning.length > 1600 ||
     !repaired.reasoning.startsWith(original.reasoning)
   ) return null;
-  const revisedReasoning = repaired.reasoning as string;
   const signature = (item: unknown) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const value = item as Record<string, unknown>;
@@ -140,51 +141,27 @@ export function repairObligationDeclaration(
     second.some((s) => !first.includes(s)) ||
     new Set(second).size !== second.length
   ) return null;
-  // A formatting retry may omit an original property in its *array* even
-  // while adding a valid sentence for it. Never adopt that reduced array:
-  // recover quotes only for the original, frozen property signatures.
-  const visibleSentences = revisedReasoning.match(
-    /[\s\S]+?(?:[.!?](?=\s|$)|$)/gu,
-  )?.map((sentence) => sentence.trim()).filter((sentence) =>
-    sentence.length >= 8 && sentence.length <= 600
-  ) ?? [];
-  const reconstructed = before.map((item) => {
+  // A formatting retry may omit an original property in its array, but may
+  // only supply quote hints for signatures it retained. All signatures and
+  // all proof-bearing prose remain those of the original response.
+  const hinted = before.map((item) => {
     const frozen = item as Record<string, unknown>;
     const matchingRetry = after.find((candidate) =>
       signature(candidate) === signature(frozen)
     ) as Record<string, unknown> | undefined;
-    const candidateSpans = [
-      frozen.source_span,
-      matchingRetry?.source_span,
-      ...visibleSentences,
-    ].filter((span): span is string => typeof span === "string");
-    for (const source_span of new Set(candidateSpans)) {
-      const candidate = { ...frozen, source_span };
-      if (
-        resolveReasoningObligations(
-          [candidate], revisedReasoning, facets, customerEvidence,
-          confirmedCustomerCriteria,
-        ).unresolved.length === 0
-      ) return candidate;
-    }
-    return null;
+    return {
+      ...frozen,
+      source_span: typeof matchingRetry?.source_span === "string"
+        ? matchingRetry.source_span
+        : frozen.source_span,
+    };
   });
-  if (
-    reconstructed.some((item) => item === null) ||
-    resolveReasoningObligations(
-      reconstructed, revisedReasoning, facets, customerEvidence,
-      confirmedCustomerCriteria,
-    ).unresolved.length > 0
-  ) return null;
-  return {
-    ...original,
-    reasoning: revisedReasoning,
-    mandatory_properties: reconstructed,
-    // The revised text must quote the same per-item evidence if one existed.
-    // The normal resolver checks visibility; never silently change its number.
-    per_product_measurement_evidence:
-      original.per_product_measurement_evidence ?? "",
-  };
+  return repairOriginalObligationSourceSpans(
+    { ...original, mandatory_properties: hinted }, facets,
+    customerEvidence, confirmedCustomerCriteria,
+  ) ?? repairOriginalObligationSourceSpans(
+    original, facets, customerEvidence, confirmedCustomerCriteria,
+  );
 }
 
 export const reasoningObligationsPolicy =
@@ -470,7 +447,7 @@ export function resolveReasoningObligations(
     }
     const quotedClause = enumeratedQuoteClause(sourceSpan, completeSource);
     if (
-      !quotedClause && typeof rawValue === "string" && typeof value === "number" &&
+      !quotedClause && typeof value === "number" &&
       extractClientQuantities(span).some((quantity) =>
         quantity.unit === normalizeUnit(unit) && quantity.value !== value)
     ) {
@@ -575,7 +552,7 @@ export function resolveReasoningObligations(
       op === "eq" && unit === "" && presenceKey.length >= 3 &&
       /(?:^|[^\p{L}])(?:наличи\p{L}*|имеется|имеет|оснащ[её]н\p{L}*|предусмотрен\p{L}*|присутств\p{L}*)/iu.test(span) &&
       containsInflectedPhrase(span, presenceKey);
-    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded && !customerGrounded && !affirmativePresenceGrounded) {
+    if (!containsInflectedPhrase(span, key) && !liveValueOwnsKey && !countGrounded && !affirmativePresenceGrounded) {
       reject("key_not_grounded");
       continue;
     }
@@ -595,7 +572,7 @@ export function resolveReasoningObligations(
     let criterion: Criterion;
     if (typeof value === "number" && Number.isFinite(value)) {
       if (
-        !countGrounded && !customerGrounded && (typeof unit !== "string" || !unit.trim() ||
+        !countGrounded && (typeof unit !== "string" || !unit.trim() ||
         !extractClientQuantities(span).some((q) =>
           q.value === value && q.unit === normalizeUnit(unit)
         ))

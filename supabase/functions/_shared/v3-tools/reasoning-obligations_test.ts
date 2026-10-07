@@ -31,6 +31,102 @@ Deno.test("frozen customer requirements survive incomplete live facet metadata w
     assertEquals(resolve(criteria).unresolved.length, 1);
   }
 });
+
+Deno.test("frozen customer number cannot borrow a different same-unit property's value", () => {
+  const confirmed = [{ key: "Номинальный ток", value: "25", unit: "А", op: "eq" as const,
+    level: "A" as const, evidence: "user_explicit" as const }];
+  const item = { key: "Номинальный ток", value: 25, unit: "А", op: "eq",
+    scope: "per_product" };
+  const mismatched = "Необходим номинальный ток 16 А и максимальный ток 25 А.";
+  assertEquals(resolveReasoningObligations([{
+    ...item, source_span: mismatched,
+  }], mismatched, [], "", confirmed).unresolved, [
+    { index: 0, reason: "ambiguous_quantity" },
+  ]);
+  const distinctUnits = "Необходим номинальный ток 25 А и отключающая способность 6 кА.";
+  assertEquals(resolveReasoningObligations([{
+    ...item, source_span: distinctUnits,
+  }], distinctUnits, [], "", confirmed).unresolved, []);
+});
+
+Deno.test("customer confirmation never substitutes for source-local property, value, unit or operator", () => {
+  const cases = [
+    { key: "Номинальный ток", value: 25, unit: "А", op: "eq", source: "Необходим номинальный ток 25 А." },
+    { key: "Характеристика срабатывания", value: "C", unit: "", op: "eq", source: "Обязательна характеристика срабатывания C." },
+    { key: "Количество полюсов", value: "1", unit: "", op: "eq", source: "Необходимо количество полюсов 1." },
+  ] as const;
+  for (const { key, value, unit, op, source } of cases) {
+    const item = { key, value, unit, op, scope: "per_product", source_span: source };
+    const confirmed = [{ key, value: String(value), unit, op,
+      level: "A" as const, evidence: "user_explicit" as const }];
+    const local = resolveReasoningObligations([item], source, [], "", confirmed);
+    assertEquals(local.unresolved, [], key);
+    assertEquals(local.obligations[0].criterion.evidence, "user_explicit", key);
+    const originalRepair = repairOriginalObligationSourceSpans({
+      reasoning: source,
+      mandatory_properties: [{ ...item, source_span: "неполная цитата" }],
+      required_facet_values: ["frozen"],
+    }, [], "", confirmed);
+    assertEquals(originalRepair?.mandatory_properties, [item], key);
+    assertEquals(originalRepair?.required_facet_values, ["frozen"], key);
+    const unrelated = "Необходима надежность.";
+    const unrelatedItem = { ...item, source_span: unrelated };
+    assertEquals(resolveReasoningObligations([unrelatedItem], unrelated, [], source, confirmed).unresolved.length, 1, key);
+    assertEquals(repairOriginalObligationSourceSpans({
+      reasoning: unrelated,
+      mandatory_properties: [unrelatedItem],
+    }, [], source, confirmed), null, key);
+    assertEquals(repairObligationDeclaration({
+      reasoning: unrelated,
+      mandatory_properties: [unrelatedItem],
+      required_facet_values: ["frozen"],
+    }, {
+      reasoning: `${unrelated} ${source}`,
+      mandatory_properties: [item],
+      required_facet_values: [],
+    }, [], source, confirmed), null, key);
+    assertEquals(resolveReasoningObligations([item], `${source} ${source}`, [], "", confirmed).unresolved.length, 1, key);
+  }
+  const measured = cases[0];
+  const confirmed = [{ key: measured.key, value: "25", unit: "А", op: "eq" as const,
+    level: "A" as const, evidence: "user_explicit" as const }];
+  for (const source of [
+    "Необходим номинальный ток 25.",
+    "Необходим номинальный ток 16 А.",
+    "Необходим номинальный ток не менее 25 А.",
+  ]) {
+    assertEquals(resolveReasoningObligations([{
+      ...measured, scope: "per_product", source_span: source,
+    }], source, [], "Нужен номинальный ток 25 А.", confirmed).unresolved.length, 1, source);
+  }
+});
+
+Deno.test("derived 75 Ohm requirement cannot be proved by customer text or retry-only prose", () => {
+  const original = {
+    reasoning: "Проверяю подключение камеры.",
+    mandatory_properties: [{ ...numeric, source_span: "волновое сопротивление 75 Ом" }],
+    required_facet_values: ["frozen"],
+  };
+  const retry = {
+    reasoning: `${original.reasoning} ${numeric.source_span}`,
+    mandatory_properties: [numeric],
+    required_facet_values: [],
+  };
+  const facet = [{ key: "impedance", caption: numeric.key, unit: numeric.unit,
+    values: [{ value: "75" }] }];
+  assertEquals(resolveReasoningObligations([{ ...numeric, source_span: "Необходима надежность." }],
+    "Необходима надежность.", facet, numeric.source_span).unresolved.length, 1);
+  assertEquals(repairObligationDeclaration(original, retry, facet, numeric.source_span), null);
+  assertEquals(repairOriginalObligationSourceSpans(original, facet, numeric.source_span), null);
+  const withOriginalProof = { ...original, reasoning: `${original.reasoning} ${numeric.source_span}` };
+  const accepted = repairObligationDeclaration(withOriginalProof, {
+    ...retry,
+    reasoning: `${withOriginalProof.reasoning} Дополнительный текст.`,
+  }, facet, numeric.source_span);
+  assertEquals(accepted?.reasoning, withOriginalProof.reasoning);
+  assertEquals(accepted?.mandatory_properties, [numeric]);
+  assertEquals(accepted?.required_facet_values, ["frozen"]);
+});
 const environmental = {
   key: "оболочка",
   value: "УФ-стойкая",
@@ -57,20 +153,24 @@ Deno.test("regular Russian noun cases preserve property identity across measured
 
 Deno.test("format repair preserves all selected semantics and original reasoning", () => {
   const original = {
-    reasoning: "Проверяю условия применения.",
+    reasoning: `Проверяю условия применения. ${numeric.source_span}`,
     mandatory_properties: [{ ...numeric, source_span: "неполная цитата" }],
     required_facet_values: ["opaque-1"],
     measurement_scope: "per_product",
+    per_product_measurement_evidence: "original evidence",
   };
   const corrected = {
-    reasoning: original.reasoning + " " + numeric.source_span,
+    reasoning: original.reasoning + " Добавлено объяснение, которое не станет доказательством.",
     mandatory_properties: [numeric],
     required_facet_values: [],
     measurement_scope: "not_applicable",
   };
   const accepted = repairObligationDeclaration(original, corrected);
+  assertEquals(accepted?.reasoning, original.reasoning);
   assertEquals(accepted?.required_facet_values, ["opaque-1"]);
   assertEquals(accepted?.measurement_scope, "per_product");
+  assertEquals(accepted?.per_product_measurement_evidence, "original evidence");
+  assertEquals(accepted?.mandatory_properties, [numeric]);
   for (const value of [50, "75"]) {
     assertEquals(
       repairObligationDeclaration(original, {
@@ -88,7 +188,7 @@ Deno.test("format repair preserves all selected semantics and original reasoning
   assertEquals(
     repairObligationDeclaration(original, {
       ...corrected,
-      reasoning: numeric.source_span,
+      reasoning: "Проверяю условия применения.",
     }),
     null,
   );
@@ -103,7 +203,7 @@ Deno.test("format repair preserves all selected semantics and original reasoning
 
 Deno.test("format repair reconstructs every frozen property from visible complete sentences", () => {
   const original = {
-    reasoning: "Для аналоговой камеры на улице проверяю кабель.",
+    reasoning: `Для аналоговой камеры на улице проверяю кабель. ${numeric.source_span} ${environmental.source_span}`,
     mandatory_properties: [
       { ...numeric, source_span: "волновое сопротивление" },
       { ...environmental, source_span: "УФ-стойкая" },
@@ -111,18 +211,19 @@ Deno.test("format repair reconstructs every frozen property from visible complet
     required_facet_values: ["unchanged-id"],
   };
   const repaired = {
-    reasoning: `${original.reasoning} ${numeric.source_span} ${environmental.source_span}`,
+    reasoning: `${original.reasoning} Добавленный текст не нужен для доказательства.`,
     // A retry may drop one signature from its own array. The original
-    // semantics must be retained, and both quotes must still be proven.
+    // semantics must be retained, and both original quotes must be proven.
     mandatory_properties: [numeric],
     required_facet_values: [],
   };
   const accepted = repairObligationDeclaration(original, repaired);
   assertEquals(accepted?.mandatory_properties, [numeric, environmental]);
   assertEquals(accepted?.required_facet_values, ["unchanged-id"]);
+  assertEquals(accepted?.reasoning, original.reasoning);
   assertEquals(repairObligationDeclaration(original, {
     ...repaired,
-    reasoning: `${original.reasoning} ${numeric.source_span}`,
+    reasoning: `Для аналоговой камеры на улице проверяю кабель. ${numeric.source_span}`,
   }), null);
   assertEquals(repairObligationDeclaration(original, {
     ...repaired,
@@ -130,7 +231,15 @@ Deno.test("format repair reconstructs every frozen property from visible complet
   }), null);
   assertEquals(repairObligationDeclaration(original, {
     ...repaired,
-    reasoning: `${original.reasoning} ${numeric.source_span} УФ-стойкая оболочка возможна.`,
+    mandatory_properties: [{ ...numeric, source_span: "Необходимо волновое сопротивление 50 Ом." }],
+    reasoning: `${original.reasoning} Необходимо волновое сопротивление 50 Ом.`,
+  })?.mandatory_properties, [numeric, environmental]);
+  assertEquals(repairObligationDeclaration({
+    ...original,
+    reasoning: `Для аналоговой камеры на улице проверяю кабель. ${numeric.source_span}`,
+  }, {
+    ...repaired,
+    reasoning: `Для аналоговой камеры на улице проверяю кабель. ${numeric.source_span} ${environmental.source_span}`,
   }), null);
 });
 
@@ -176,15 +285,10 @@ Deno.test("original quote repair reuses one complete visible sentence for three 
       level: "A" as const, evidence: "user_explicit" as const },
   ];
   const full = preview688.mandatory_properties.map((item) => ({ ...item, source_span: sentence }));
-  assertEquals(resolveReasoningObligations(full, reasoning, [], "", confirmed).unresolved, []);
-  const customerGrounded = repairOriginalObligationSourceSpans(preview688, [], "", confirmed);
-  assertEquals((customerGrounded?.mandatory_properties as typeof declarations | undefined)
-    ?.map((item) => item.source_span), [sentence, sentence, sentence]);
-  assertEquals((customerGrounded?.mandatory_properties as typeof declarations | undefined)
-    ?.map(({ source_span: _source, ...signature }) => signature),
-    preview688.mandatory_properties.map(({ source_span: _source, ...signature }) => signature));
-  assertEquals(resolveReasoningObligations(customerGrounded?.mandatory_properties,
-    reasoning, [], "", confirmed).unresolved, []);
+  // Customer confirmation cannot supply an omitted parenthetical key inside
+  // an otherwise visible reasoning quote.
+  assertEquals(resolveReasoningObligations(full, reasoning, [], "", confirmed).unresolved.length, 1);
+  assertEquals(repairOriginalObligationSourceSpans(preview688, [], "", confirmed), null);
 });
 
 Deno.test("original quote repair refuses missing, changed, partial and ambiguous proof", () => {
@@ -416,12 +520,16 @@ Deno.test("label-first count statements canonicalize counting units but never ph
 });
 
 Deno.test("explicit customer facet proof does not depend on a necessity verb in model prose", () => {
-  const source = "Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000.";
+  const source = "Для создания уютной атмосферы подобраны модели, где Цветовая температура, К составляет 3000 К.";
   const item = { ...numeric, key: "Цветовая температура, К", unit: "К", value: 3000, source_span: source };
   const facets = [{ key: "temperature", caption: item.key, unit: "К", values: [{ value: "3000" }, { value: "4000" }] }];
   const result = resolveReasoningObligations([item], source, facets, "Нужны лампы 3000 К.");
   assertEquals(result.unresolved, []);
   assertEquals(result.obligations[0].criterion.evidence, "user_explicit");
+  assertEquals(resolveReasoningObligations([{
+    ...item,
+    source_span: source.replace("3000 К.", "3000."),
+  }], source.replace("3000 К.", "3000."), facets, "Нужны лампы 3000 К.").unresolved.length, 1);
   for (const request of ["Нужны лампы.", "Нужны лампы 4000 К.", "Нужны лампы 3000 Вт."]) {
     assertEquals(resolveReasoningObligations([item], source, facets, request).unresolved.length, 1);
   }
