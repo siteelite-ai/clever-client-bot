@@ -23,11 +23,12 @@ export type VerifiedCustomerFacetLineage = Map<
 export function recordVerifiedCustomerFacetFilterEvidence(
   lineage: VerifiedCustomerFacetLineage,
   ids: string[],
-  search: { mode?: unknown; options?: unknown },
+  search: { mode?: unknown; query?: unknown; options?: unknown },
   provenCriteria: Criterion[],
   proofs: CustomerOwnedVisibleFacetProof[],
 ): number {
-  if (search.mode !== "by_filter" || !search.options ||
+  if (search.mode !== "by_filter" && search.mode !== "by_query") return 0;
+  if (!search.options ||
     typeof search.options !== "object" || Array.isArray(search.options)) return 0;
   const options = search.options as Record<string, unknown>;
   let recorded = 0;

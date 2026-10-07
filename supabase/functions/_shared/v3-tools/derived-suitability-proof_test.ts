@@ -5,7 +5,9 @@ import {
 import type { Criterion } from "./criteria-gate.ts";
 import {
   assessDerivedSuitabilityProof,
+  diagnoseDerivedClarification,
   hasCheckableMandatoryProductCriterion,
+  isGenuinelyMissingDerivedClarification,
   isQuantityOnlyPurchaseRequest,
   UNVERIFIED_SUITABILITY_RESPONSE,
 } from "./derived-suitability-proof.ts";
@@ -154,6 +156,106 @@ Deno.test("a clarification cannot ask a fact already supplied by the customer", 
     }).kind,
     "clarify",
   );
+});
+
+Deno.test("derived clarification diagnostic explains cross-category decisions without changing them", () => {
+  const cases = [
+    {
+      question: "Какая система камеры: аналоговая или IP?",
+      customerEvidence: "Нужна аналоговая камера на улице, расстояние 30 метров",
+      isMissing: false,
+      reason: "already_answered_choice",
+      questionAxis: "система",
+    },
+    {
+      question: "Какая характеристика срабатывания нужна?",
+      customerEvidence: "Нужен автомат 16 А, характеристика С",
+      isMissing: false,
+      reason: "already_answered_axis",
+      questionAxis: "характеристика",
+    },
+    {
+      question: "Какой диаметр нужен?",
+      customerEvidence: "Диаметр трубы 20 мм, длина трассы 30 м",
+      isMissing: false,
+      reason: "already_answered_axis",
+      questionAxis: "диаметр",
+    },
+    {
+      question: "Какая мощность светильника нужна?",
+      customerEvidence: "Мощность 50 Вт для двора",
+      isMissing: false,
+      reason: "already_answered_axis",
+      questionAxis: "мощность",
+    },
+    {
+      question: "Какое напряжение сети у кондиционера: 220 В или 380 В?",
+      customerEvidence:
+        "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?",
+      isMissing: true,
+      reason: "missing",
+      questionAxis: "напряжение",
+    },
+    {
+      question: "Однофазная или трёхфазная сеть питания?",
+      customerEvidence:
+        "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?",
+      isMissing: true,
+      reason: "missing",
+      questionAxis: "фаза",
+    },
+  ] as const;
+  for (const testCase of cases) {
+    const clarification = { question: testCase.question };
+    const diagnostic = diagnoseDerivedClarification(
+      clarification,
+      testCase.customerEvidence,
+    );
+    assertEquals(diagnostic, {
+      isMissing: testCase.isMissing,
+      reason: testCase.reason,
+      questionAxis: testCase.questionAxis,
+    }, testCase.question);
+    assertEquals(
+      isGenuinelyMissingDerivedClarification(
+        clarification,
+        testCase.customerEvidence,
+      ),
+      diagnostic.isMissing,
+    );
+    assertEquals(
+      assessDerivedSuitabilityProof({
+        route: "server_derived",
+        mandatoryCriteria: [],
+        clarification,
+        customerEvidence: testCase.customerEvidence,
+      }).kind,
+      diagnostic.isMissing ? "clarify" : "unverified",
+    );
+  }
+});
+
+Deno.test("derived clarification diagnostic is bounded and contains no free-form text", () => {
+  for (const clarification of [null, { question: "  ?  " }]) {
+    assertEquals(diagnoseDerivedClarification(clarification, "private evidence"), {
+      isMissing: false,
+      reason: "malformed",
+      questionAxis: null,
+    });
+  }
+  const question = "Какой СверхсекретныйКодКлиента123 нужен?";
+  const customerEvidence = "Private evidence: secret-123";
+  const diagnostic = diagnoseDerivedClarification({ question }, customerEvidence);
+  assertEquals(diagnostic, {
+    isMissing: true,
+    reason: "missing",
+    questionAxis: "other",
+  });
+  const serialized = JSON.stringify(diagnostic);
+  assertFalse(serialized.includes(question));
+  assertFalse(serialized.includes(customerEvidence));
+  assertFalse(serialized.includes("сверхсекретный"));
+  assertEquals((diagnostic.questionAxis ?? "").length <= 16, true);
 });
 
 Deno.test("a one-letter answer is known only when it belongs to the questioned axis", () => {

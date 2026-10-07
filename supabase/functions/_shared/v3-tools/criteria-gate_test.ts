@@ -105,6 +105,11 @@ Deno.test("catalog proof requires the actual request to constrain the same facet
     options: { feature: ["да"] },
   });
   assertEquals(proof, required);
+  assertEquals(catalogFilterProvenCriteria(required, facets, {
+    mode: "by_query",
+    query: "изделие",
+    options: { feature: ["да"] },
+  }), required);
   const unproved = projectCatalogFilterEvidence([product("1", [])], []);
   assertEquals(applyCriteriaGate(unproved, required).passed_ids, []);
 });

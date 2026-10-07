@@ -12,6 +12,7 @@ import {
 } from "../_shared/v3-tools/partial-application-class-guard.ts";
 import {
   assessDerivedSuitabilityProof,
+  diagnoseDerivedClarification,
   isQuantityOnlyPurchaseRequest,
   UNVERIFIED_SUITABILITY_RESPONSE,
 } from "../_shared/v3-tools/derived-suitability-proof.ts";
@@ -8270,11 +8271,26 @@ async function runExpertLoop(
           }
           serverValidatedDerivedReasoning = true;
           if (declaration.clarification) {
+            const clarificationEvidence =
+              `${selectionDiscoveryMessage}\n${userMessage}`;
             const clarificationProof = assessDerivedSuitabilityProof({
               route: "server_derived",
               mandatoryCriteria: [],
               clarification: declaration.clarification,
-              customerEvidence: `${selectionDiscoveryMessage}\n${userMessage}`,
+              customerEvidence: clarificationEvidence,
+            });
+            const clarificationDiagnostic = diagnoseDerivedClarification(
+              declaration.clarification,
+              clarificationEvidence,
+            );
+            steps.push({
+              step: "v3_derived_clarification_assessed",
+              ms: now(),
+              meta: {
+                verdict: clarificationProof.kind,
+                reason: clarificationDiagnostic.reason,
+                question_axis: clarificationDiagnostic.questionAxis,
+              },
             });
             if (
               derivedSuitabilityProofRequired &&
@@ -15420,7 +15436,8 @@ async function runExpertLoop(
               });
             }
             const optionCount =
-              runArgs.mode === "by_filter" && runArgs.options &&
+              (runArgs.mode === "by_filter" ||
+                runArgs.mode === "by_query") && runArgs.options &&
                 typeof runArgs.options === "object"
                 ? Object.keys(runArgs.options as Record<string, unknown>).length
                 : 0;

@@ -5,6 +5,19 @@ export const UNVERIFIED_SUITABILITY_RESPONSE =
 
 type Clarification = { question: string } | null | undefined;
 
+export type DerivedClarificationReason =
+  | "malformed"
+  | "already_answered_choice"
+  | "already_answered_axis"
+  | "missing";
+
+/** Safe to log: never includes the question or customer evidence. */
+export type DerivedClarificationDiagnostic = {
+  isMissing: boolean;
+  reason: DerivedClarificationReason;
+  questionAxis: string | null;
+};
+
 export type DerivedSuitabilityProofDecision =
   | { kind: "continue" }
   | { kind: "clarify" }
@@ -88,6 +101,45 @@ function questionAxis(question: string): string | null {
   ) ?? null;
 }
 
+// Diagnostic labels are a finite vocabulary, never arbitrary question tokens.
+// Unrecognized axes are grouped so a name or other private word in a model's
+// question cannot enter logs. This does not affect the decision's axis check.
+const DIAGNOSTIC_AXES: ReadonlyArray<[RegExp, string]> = [
+  [/^напряж/u, "напряжение"],
+  [/^фаз/u, "фаза"],
+  [/^(?:однофаз|трехфаз)/u, "фаза"],
+  [/^систем/u, "система"],
+  [/^расстоян/u, "расстояние"],
+  [/^диаметр/u, "диаметр"],
+  [/^характерист/u, "характеристика"],
+  [/^мощност/u, "мощность"],
+  [/^сечен/u, "сечение"],
+  [/^длин/u, "длина"],
+  [/^материал/u, "материал"],
+  [/^размер/u, "размер"],
+  [/^частот/u, "частота"],
+  [/^температур/u, "температура"],
+  [/^давлен/u, "давление"],
+  [/^скорост/u, "скорость"],
+  [/^емкост/u, "емкость"],
+  [/^цокол/u, "цоколь"],
+  [/^количеств/u, "количество"],
+  [/^полюс/u, "полюсность"],
+  [/^площад/u, "площадь"],
+  [/^высот/u, "высота"],
+  [/^ширин/u, "ширина"],
+  [/^цвет/u, "цвет"],
+  [/^тип/u, "тип"],
+  [/^ток/u, "ток"],
+];
+
+function diagnosticQuestionAxis(question: string): string | null {
+  const axis = questionAxis(question);
+  if (!axis) return null;
+  return DIAGNOSTIC_AXES.find(([pattern]) => pattern.test(axis))?.[1] ??
+    "other";
+}
+
 function evidenceClauses(evidence: string): string[][] {
   return evidence.split(/[,;.!?](?=\s|$)|\n+/u).map((
     clause,
@@ -146,14 +198,16 @@ function isLocalAnswerForAxis(
   return false;
 }
 
-/** A question is not a missing prerequisite when the customer has already
- * supplied one of its explicit choices, or the named measured quantity. */
-export function isGenuinelyMissingDerivedClarification(
+/** Explains the existing decision without exposing free-form customer text. */
+export function diagnoseDerivedClarification(
   clarification: Clarification,
   customerEvidence: string,
-): boolean {
+): DerivedClarificationDiagnostic {
   const question = clarification?.question?.trim() ?? "";
-  if (question.length < 8) return false;
+  if (question.length < 8) {
+    return { isMissing: false, reason: "malformed", questionAxis: null };
+  }
+  const axis = diagnosticQuestionAxis(question);
   const normalizedQuestion = normalized(question);
   const alternative = /(?:^|\s)(?:или|либо|or)(?:\s|$)/iu.exec(
     normalizedQuestion,
@@ -167,9 +221,31 @@ export function isGenuinelyMissingDerivedClarification(
     if (
       containsAnswerToken(customerEvidence, before) ||
       containsAnswerToken(customerEvidence, after)
-    ) return false;
+    ) {
+      return {
+        isMissing: false,
+        reason: "already_answered_choice",
+        questionAxis: axis,
+      };
+    }
   }
-  return !isLocalAnswerForAxis(question, customerEvidence);
+  if (isLocalAnswerForAxis(question, customerEvidence)) {
+    return {
+      isMissing: false,
+      reason: "already_answered_axis",
+      questionAxis: axis,
+    };
+  }
+  return { isMissing: true, reason: "missing", questionAxis: axis };
+}
+
+/** A question is not a missing prerequisite when the customer has already
+ * supplied one of its explicit choices, or the named measured quantity. */
+export function isGenuinelyMissingDerivedClarification(
+  clarification: Clarification,
+  customerEvidence: string,
+): boolean {
+  return diagnoseDerivedClarification(clarification, customerEvidence).isMissing;
 }
 
 export function hasCheckableMandatoryProductCriterion(

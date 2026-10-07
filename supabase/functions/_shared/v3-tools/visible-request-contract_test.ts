@@ -285,6 +285,13 @@ Deno.test("successful exact filtered pool proves only its returned IDs and prese
   assertEquals(recordVerifiedCustomerFacetFilterEvidence(
     lineage, ["gauss"], exact, criterion, proof,
   ), 1);
+  assertEquals(recordVerifiedCustomerFacetFilterEvidence(
+    lineage, ["query-id"], {
+      mode: "by_query", query: "светильник",
+      options: { [motionFacet.key]: ["да"] },
+    }, criterion, proof,
+  ), 1);
+  assertEquals(lineage.get("query-id"), { [motionFacet.key]: ["да"] });
   assertEquals(lineage.has("sibling"), false);
   assertEquals(withVerifiedCustomerFacetEvidence({
     id: "gauss", pagetitle: "Светильник Gauss с микроволновым сенсором",
@@ -297,7 +304,7 @@ Deno.test("successful exact filtered pool proves only its returned IDs and prese
     [{ mode: "by_filter", options: { [motionFacet.key]: ["да", "нет"] } }, criterion],
     [{ mode: "by_filter", options: { [motionFacet.key]: ["нет"] } }, criterion],
     [{ mode: "by_filter", options: { neighbor: ["да"] } }, criterion],
-    [{ mode: "by_query", options: { [motionFacet.key]: ["да"] } }, criterion],
+    [{ mode: "by_query", query: "светильник" }, criterion],
     [exact, []],
   ] as const) {
     assertEquals(recordVerifiedCustomerFacetFilterEvidence(
