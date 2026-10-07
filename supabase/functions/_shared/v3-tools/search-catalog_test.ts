@@ -104,6 +104,41 @@ Deno.test("live facet keys stay in the internal cache without inflating tool res
   assertEquals(cache.get("c16")?.facet_values, { nominal_current: ["16"] });
 });
 
+Deno.test("repeated catalog cards preserve sparse facets but replace explicit same-key values", async () => {
+  const cache: ProductCache = new Map();
+  let call = 0;
+  const optionsByCall = [
+    [{ key: "motion_sensor", caption_ru: "Датчик движения", value_ru: "Да" }],
+    [],
+    [{ key: "motion_sensor", caption_ru: "Датчик движения", value_ru: "Нет" }],
+  ];
+  const fetchImpl: typeof fetch = () => {
+    const options = optionsByCall[call++];
+    return Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "fixture",
+          pagetitle: "Светильник с датчиком",
+          price: 1000,
+          url: "https://220volt.kz/catalog/light/fixture/fixture/",
+          options,
+        }],
+        pagination: { total: 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+  const deps = { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl };
+  const input = { mode: "by_query" as const, query: "светильник" };
+
+  await executeSearchCatalog(input, deps, cache);
+  assertEquals(cache.get("fixture")?.facet_values, { motion_sensor: ["Да"] });
+  await executeSearchCatalog(input, deps, cache);
+  assertEquals(cache.get("fixture")?.facet_values, { motion_sensor: ["Да"] });
+  await executeSearchCatalog(input, deps, cache);
+  assertEquals(cache.get("fixture")?.facet_values, { motion_sensor: ["Нет"] });
+  assertEquals(call, 3);
+});
+
 Deno.test("catalog retries an equivalent compound spelling only after an empty result", async () => {
   const queries: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
@@ -470,6 +505,7 @@ Deno.test("one local HTTP timeout does not discard a verified sibling category",
   const result = await executeSearchCatalog({
     mode: "by_filter",
     category_in: ["Рабочая категория", "Медленная категория"],
+    sort_cheapest: true,
     per_page: 5,
   }, {
     baseUrl: "https://catalog.test",
@@ -500,6 +536,354 @@ Deno.test("one local HTTP timeout does not discard a verified sibling category",
   if (!result.ok) return;
   assertEquals(result.results.map((product) => product.id), ["verified-sibling"]);
   assertEquals(result.total, 1);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 1,
+    total: null,
+    reasons: ["branch_timeout"],
+  });
+});
+
+Deno.test("price-sort fanout preserves a sibling's partial page coverage", async () => {
+  const fetchImpl: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    const category = url.searchParams.get("category");
+    const page = Number(url.searchParams.get("page") ?? "1");
+    if (category === "Частичная категория" && page === 2) {
+      return Promise.resolve(new Response("", { status: 503 }));
+    }
+    const id = category === "Частичная категория" ? "partial-first" : "complete-sibling";
+    return Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id,
+          pagetitle: `Товар ${id}`,
+          price: id === "partial-first" ? 100 : 200,
+          url: `https://220volt.kz/catalog/test/products/${id}/`,
+          options: [],
+        }],
+        pagination: { total: category === "Частичная категория" ? 100 : 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category_in: ["Частичная категория", "Полная категория"],
+    sort_cheapest: true,
+    per_page: 2,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["partial-first", "complete-sibling"]);
+  assertEquals(result.total, 101);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 2,
+    total: 101,
+    reasons: ["page_error"],
+  });
+});
+
+Deno.test("price-sort OR early stop marks skipped alternatives as partial", async () => {
+  const requestedValues: string[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const value = new URL(String(input)).searchParams.get("options[power][]") ?? "";
+    requestedValues.push(value);
+    return Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: value,
+          pagetitle: `Товар ${value}`,
+          price: 100,
+          url: `https://220volt.kz/catalog/test/products/item-${value}/`,
+          options: [],
+        }],
+        pagination: { total: 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Товары",
+    options: { power: ["20", "30"] },
+    sort_cheapest: true,
+    per_page: 1,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(requestedValues, ["20"]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["20"]);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 1,
+    total: null,
+    reasons: ["branch_skipped"],
+  });
+});
+
+Deno.test("price sort marks a fully scanned later-page cheaper product as full coverage", async () => {
+  const pages: number[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    pages.push(page);
+    const ids = page === 1 ? Array.from({ length: 50 }, (_, index) => index + 1) : [51];
+    const results = ids.map((id) => ({
+      id: String(id),
+      pagetitle: `Товар ${id}`,
+      price: id === 51 ? 100 : 1_000 + id,
+      url: `https://220volt.kz/catalog/test/products/item-${id}/`,
+      options: [],
+    }));
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results, pagination: { total: 51 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+    per_page: 1,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(pages, [1, 2]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["51"]);
+  assertEquals(result.price_sort_coverage, {
+    status: "full",
+    scanned: 51,
+    total: 51,
+    reasons: [],
+  });
+});
+
+Deno.test("price sort stays partial when a later page changes the upstream total", async () => {
+  const fetchImpl: typeof fetch = (input) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    const results = Array.from({ length: 50 }, (_, index) => {
+      const id = (page - 1) * 50 + index + 1;
+      return {
+        id: String(id),
+        pagetitle: `Товар ${id}`,
+        price: page === 2 ? 100 + id : 1_000 + id,
+        url: `https://220volt.kz/catalog/test/products/item-${id}/`,
+        options: [],
+      };
+    });
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results, pagination: { total: page === 1 ? 100 : 150 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+    per_page: 1,
+  }, { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["51"]);
+  assertEquals(result.total, 100);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 100,
+    total: null,
+    reasons: ["pagination_total_changed"],
+  });
+});
+
+Deno.test("price sort stays partial when raw IDs overlap across fetched pages", async () => {
+  const fetchImpl: typeof fetch = (input) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    const results = Array.from({ length: 50 }, (_, index) => {
+      const id = index + 1;
+      return {
+        id: String(id),
+        pagetitle: `Товар ${id}`,
+        price: page === 2 ? 100 + id : 1_000 + id,
+        url: `https://220volt.kz/catalog/test/products/item-${id}/`,
+        options: [],
+      };
+    });
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results, pagination: { total: 100 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+    per_page: 1,
+  }, { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.total, 100);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 100,
+    total: 100,
+    reasons: ["overlapping_raw_ids"],
+  });
+});
+
+Deno.test("failed canonical price-sort retry cannot inherit a full empty primary scan", async () => {
+  const queries: string[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const query = new URL(String(input)).searchParams.get("query") ?? "";
+    queries.push(query);
+    if (query === "ВВГнг 2*1,5") return Promise.resolve(new Response("", { status: 503 }));
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results: [], pagination: { total: 0 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "ВВГнг 2х1.5",
+    sort_cheapest: true,
+  }, { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl }, new Map());
+
+  assertEquals(queries, ["ВВГнг 2х1.5", "ВВГнг 2*1,5"]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.total, 0);
+  assertEquals(result.results, []);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 0,
+    total: null,
+    reasons: ["canonical_retry_error"],
+  });
+});
+
+Deno.test("price sort reports the 200 raw-row cap without changing its returned pool", async () => {
+  const pages: number[] = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    pages.push(page);
+    const results = Array.from({ length: 50 }, (_, index) => {
+      const id = (page - 1) * 50 + index + 1;
+      return {
+        id: String(id),
+        pagetitle: `Товар ${id}`,
+        price: 1_000 + id,
+        url: `https://220volt.kz/catalog/test/products/item-${id}/`,
+        options: [],
+      };
+    });
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results, pagination: { total: 201 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+    per_page: 1,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(pages, [1, 2, 3, 4]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["1"]);
+  assertEquals(result.total, 201);
+  assertEquals(result.warnings, ["sort_truncated:201>200"]);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 200,
+    total: 201,
+    reasons: ["raw_row_cap"],
+  });
+});
+
+Deno.test("price sort cannot report full coverage when upstream omits its raw total", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "known-card",
+          pagetitle: "Товар",
+          price: 100,
+          url: "https://220volt.kz/catalog/test/products/known-card/",
+          options: [],
+        }],
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.total, 1);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 1,
+    total: null,
+    reasons: ["unknown_total"],
+  });
+});
+
+Deno.test("price sort detects an incomplete raw window even when every requested page succeeds", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "товар",
+    sort_cheapest: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "one-of-two",
+          pagetitle: "Товар",
+          price: 100,
+          url: "https://220volt.kz/catalog/test/products/one-of-two/",
+          options: [],
+        }],
+        pagination: { total: 2 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 1,
+    total: 2,
+    reasons: ["incomplete_raw_window"],
+  });
 });
 
 Deno.test("one local sorted-page timeout preserves the verified first-page pool", async () => {
@@ -535,4 +919,10 @@ Deno.test("one local sorted-page timeout preserves the verified first-page pool"
   if (!result.ok) return;
   assertEquals(result.results.map((product) => product.id), ["first-page"]);
   assertEquals(result.total, 100);
+  assertEquals(result.price_sort_coverage, {
+    status: "partial",
+    scanned: 1,
+    total: 100,
+    reasons: ["page_timeout"],
+  });
 });
