@@ -548,6 +548,36 @@ Deno.test("explicit outdoor coax requirements cannot disappear into an empty dec
   ]);
 });
 
+Deno.test("an exact frozen customer facet covers only its own single measured claim", () => {
+  const source = "Для квартиры требуется однополюсный (1P) автоматический выключатель номиналом 25 А с характеристикой срабатывания C.";
+  const current = { key: "Номинальный ток", op: "eq" as const, value: "25", unit: "А", level: "A" as const, evidence: "user_explicit" as const };
+  assertEquals(findOmittedReasoningObligations([], source), [
+    { reason: "undeclared_measured_product_property", sourceSpan: source },
+  ]);
+  assertEquals(findOmittedReasoningObligations([], source, { verifiedProductCriteria: [current] }), []);
+  assertEquals(findOmittedReasoningObligations([], source, {
+    verifiedProductCriteria: [{ ...current, value: 16 }],
+  }).length, 1);
+  assertEquals(findOmittedReasoningObligations([], source, {
+    verifiedProductCriteria: [{ ...current, evidence: "model_assumption" }],
+  }).length, 1);
+  const wrongAxis = "Для квартиры необходим автоматический выключатель с максимальным током 25 А.";
+  assertEquals(findOmittedReasoningObligations([], wrongAxis, {
+    verifiedProductCriteria: [current],
+  }).length, 1);
+  const differentOperator = "Для квартиры необходим автоматический выключатель с номинальным током не менее 25 А.";
+  assertEquals(findOmittedReasoningObligations([], differentOperator, {
+    verifiedProductCriteria: [current],
+  }).length, 1);
+
+  const extra = `${source} Для подключения необходим кабель с волновым сопротивлением 75 Ом.`;
+  assertEquals(findOmittedReasoningObligations([], extra, { verifiedProductCriteria: [current] }), [
+    { reason: "undeclared_measured_product_property", sourceSpan: "Для подключения необходим кабель с волновым сопротивлением 75 Ом." },
+  ]);
+  const ambiguous = "Для защиты необходим автомат с током 25 А и провод с допустимым током 25 А.";
+  assertEquals(findOmittedReasoningObligations([], ambiguous, { verifiedProductCriteria: [current] }).length, 1);
+});
+
 Deno.test("property coverage is per claim, not merely a nonempty mandatory list", () => {
   const measured = "Для аналоговой камеры необходим коаксиальный кабель с волновым сопротивлением 75 Ом.";
   const environmental = "Для уличного применения оболочка кабеля должна быть устойчива к ультрафиолету.";

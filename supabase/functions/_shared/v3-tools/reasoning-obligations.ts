@@ -275,7 +275,10 @@ function containsInflectedPhrase(text: string, phrase: string): boolean {
 export function findOmittedReasoningObligations(
   raw: unknown,
   visibleReasoning: string,
-  options: { clarificationQuestion?: unknown } = {},
+  options: {
+    clarificationQuestion?: unknown;
+    verifiedProductCriteria?: Criterion[];
+  } = {},
 ): OmittedReasoningObligation[] {
   if (
     typeof options.clarificationQuestion === "string" &&
@@ -295,6 +298,17 @@ export function findOmittedReasoningObligations(
   const aggregate = /(?:суммарн|совокупн|распредел|между\s+нескольк|общ\p{L}*\s+(?:светов\p{L}*\s+)?(?:поток|мощност|потребност)|для\s+всей\s+системы)/iu;
   const taskInput = /(?:уч[её]т|площад|расстоян|трасс|помещен|двор|участ|высот\p{L}*\s+(?:установ|монтаж)|длин\p{L}*\s+(?:проклад|трасс))/iu;
   const numeric = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,6}[²³]?\d?)(?![\p{L}\p{N}×xх*/]|[.,]\d)/giu;
+  const matchesVerifiedProperty = (property: string, key: string): boolean => {
+    const keyWords = normalized(key).match(/\p{L}{6,}/gu) ?? [];
+    const propertyWords = normalized(property).match(/\p{L}{6,}/gu) ?? [];
+    // A long shared root can cover inflection and adjective/noun forms such
+    // as «номинальный»/«номиналом», but a different same-unit attribute
+    // («максимальный ток») must not borrow the customer's nominal rating.
+    return keyWords.length > 0
+      ? keyWords.every((word) => propertyWords.some((candidate) =>
+        candidate.slice(0, 6) === word.slice(0, 6)))
+      : containsInflectedPhrase(property, key);
+  };
   const coversQualitativeValue = (value: string, predicate: string): boolean => {
     const resistance = /^((?:устойчив|стойк|защищ)\p{L}*)\s+к\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2})/iu.exec(predicate);
     if (resistance) {
@@ -325,8 +339,12 @@ export function findOmittedReasoningObligations(
       const full = completeVisibleSource(String(item.source_span), visibleReasoning);
       return full && normalized(full) === normalized(sentence);
     });
+    const measuredOccurrences = [...statement.matchAll(numeric)].filter((match) =>
+      Number.isFinite(Number(match[1].replace(",", "."))) &&
+      isPhysicalMeasurementUnit(normalizeUnit(match[2]))
+    );
     let measuredMissing = false;
-    for (const match of statement.matchAll(numeric)) {
+    for (const match of measuredOccurrences) {
       const value = Number(match[1].replace(",", "."));
       const unit = normalizeUnit(match[2]);
       if (
@@ -345,7 +363,22 @@ export function findOmittedReasoningObligations(
         measuredValue(item.value, item.unit) === value &&
         typeof item.unit === "string" && normalizeUnit(item.unit) === unit &&
         (declaredIn.includes(item) ||
-          typeof item.key === "string" && containsInflectedPhrase(property, item.key)));
+          typeof item.key === "string" && containsInflectedPhrase(property, item.key))) ||
+        // A customer-owned per-product facet is already a mandatory search
+        // and card criterion. Do not demand a duplicate model declaration for
+        // that same single measured claim. Repeated equal measurements in a
+        // sentence remain ambiguous and still require explicit attribution.
+        measuredOccurrences.filter((candidate) =>
+          Number(candidate[1].replace(",", ".")) === value &&
+          normalizeUnit(candidate[2]) === unit
+        ).length === 1 && (options.verifiedProductCriteria ?? []).some((criterion) =>
+          criterion.evidence === "user_explicit" &&
+          criterion.level === "A" && criterion.op === "eq" &&
+          measuredValue(criterion.value, criterion.unit) === value &&
+          typeof criterion.unit === "string" && normalizeUnit(criterion.unit) === unit &&
+          !/(?:не\s+менее|не\s+более|более|менее|от|до)\s*$/iu.test(statement.slice(0, match.index)) &&
+          matchesVerifiedProperty(property, criterion.key)
+        );
       if (!covered) measuredMissing = true;
     }
     if (measuredMissing) omitted.push({

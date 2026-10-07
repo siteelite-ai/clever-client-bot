@@ -8133,6 +8133,7 @@ async function runExpertLoop(
                 {
                   clarificationQuestion:
                     declarationCall.args.clarification_question,
+                  verifiedProductCriteria: confirmedCustomerCriteria,
                 },
               )
               : [];
@@ -8200,6 +8201,7 @@ async function runExpertLoop(
                     {
                       clarificationQuestion:
                         coverageCall.args.clarification_question,
+                      verifiedProductCriteria: confirmedCustomerCriteria,
                     },
                   )
                   : omittedProperties;
