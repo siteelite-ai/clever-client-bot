@@ -11,6 +11,11 @@ import {
   type PartialApplicationClassGuard,
 } from "../_shared/v3-tools/partial-application-class-guard.ts";
 import {
+  buildSparseFeatureRecoveryPlan,
+  hasPriceOrderingIntentForSparseRecovery,
+  mergeProvenRecoveryIds,
+} from "../_shared/v3-tools/sparse-feature-recovery-plan.ts";
+import {
   assessDerivedSuitabilityProof,
   diagnoseDerivedClarification,
   isQuantityOnlyPurchaseRequest,
@@ -18082,6 +18087,189 @@ async function runExpertLoop(
         ),
       });
       if (visibleContract.length > 0) {
+        let sparseProvenIds: string[] = [];
+        // A sparse positive boolean can exclude a card whose own prose proves
+        // the requested feature. Retrieve through exact live values of the
+        // already-frozen use class instead, never through that sparse feature.
+        // This changes candidate discovery only: each ID still passes the
+        // original class target, every frozen criterion, the final visible/
+        // partial-class guard, budget and cardinality before rendering.
+        const sparsePlan = hasPriceOrderingIntentForSparseRecovery(userMessage)
+          ? null
+          : buildSparseFeatureRecoveryPlan({
+            facets: terminalDiscover.facets,
+            categoryTotal: terminalDiscover.category.total_products,
+            customerCriteria: userBackedSearchCriteria,
+            terminalCriteria: terminalSelectionCriteria,
+            classGuards: partialCustomerApplicationClassGuards,
+          });
+        // Reserve time for the ordinary two-attempt category route. If the
+        // terminal turn is already late, leave that existing route alone.
+        const recoveryDeadlineAtMs = Math.min(
+          ctx.turnDeadlineAtMs - 16_000,
+          Date.now() + 5_000,
+        );
+        if (sparsePlan && Date.now() + 1_000 < recoveryDeadlineAtMs) {
+          const budgetCap = extractBudgetCap(userMessage);
+          const foundById = new Map<string, ProductFull>();
+          const pagesByClassValue = new Map<string, number>();
+          let retrievedCount = 0;
+          let pagesChecked = 0;
+          let targetCount = 0;
+          let criteriaCount = 0;
+          let finalGuardCount = 0;
+          let safeIds: string[] = [];
+          send({
+            type: "tool_event",
+            tool: "search_catalog",
+            phase: "start",
+            summary: "Проверяю подходящие классы и свойства карточек…",
+          });
+          sparseSearch:
+          for (const branch of sparsePlan.branches) {
+            // Exactly two pages per exact live class value, with one shared
+            // short deadline. Leave time for the ordinary category recovery
+            // when this narrower route cannot prove a card.
+            for (let page = 1; page <= 2; page += 1) {
+              if (Date.now() + 750 >= recoveryDeadlineAtMs) break sparseSearch;
+              const classValueKeys = branch.classValues.map(({ key, value }) =>
+                `${key}\u0000${value}`
+              );
+              if (classValueKeys.some((key) =>
+                (pagesByClassValue.get(key) ?? 0) >= 2
+              )) break;
+              const searchInput: SearchCatalogInput = {
+                mode: "by_filter",
+                options: branch.options,
+                ...(terminalDiscover.leaf_categories.length === 1
+                  ? {
+                    category: terminalDiscover.leaf_categories[0].pagetitle,
+                  }
+                  : {}),
+                min_price: 1,
+                ...(budgetCap !== null && budgetCap > 0
+                  ? { max_price: budgetCap }
+                  : {}),
+                page,
+                per_page: 50,
+              };
+              const recovered = await executeSearchCatalog(
+                searchInput,
+                {
+                  ...catalogDepsFor(ctx),
+                  deadlineAtMs: recoveryDeadlineAtMs,
+                  timeoutMs: Math.min(
+                    2_500,
+                    Math.max(1, recoveryDeadlineAtMs - Date.now()),
+                  ),
+                  // This is a local recovery budget, not the turn deadline.
+                  onDeadlineExceeded: undefined,
+                },
+                ctx.cache,
+              );
+              pagesChecked += 1;
+              for (const key of classValueKeys) {
+                pagesByClassValue.set(key, (pagesByClassValue.get(key) ?? 0) + 1);
+              }
+              if (!recovered.ok) break;
+              retrievedCount += recovered.results.length;
+              for (const candidate of recovered.results) {
+                const product = ctx.cache.get(String(candidate.id));
+                if (product) foundById.set(product.id, product);
+              }
+              const products = [...foundById.values()];
+              const groundedProducts = terminalGroundedTargets.length > 0
+                ? filterProductsByGroundedCategoryTargets(
+                  products,
+                  terminalGroundedTargets,
+                  terminalDiscover.category.pagetitle,
+                  terminalCategoryEvidence,
+                )
+                : products;
+              const targetReport = verifyTerminalSelectionTarget(
+                terminalSelectionTarget,
+                groundedProducts,
+              );
+              const targetIds = new Set(targetReport.passed_ids);
+              targetCount = targetIds.size;
+              const criteriaReport = applyCriteriaGate(
+                groundedProducts,
+                terminalSelectionCriteria,
+              );
+              const criteriaIds = new Set(criteriaReport.passed_ids);
+              criteriaCount = criteriaIds.size;
+              const candidateIds = groundedProducts
+                .map((product) => product.id)
+                .filter((id) => targetIds.has(id) && criteriaIds.has(id));
+              const finallyGuarded = guardFinalRenderIds(candidateIds);
+              finalGuardCount = finallyGuarded.length;
+              safeIds = filterProductIdsByBudgetCap(
+                finallyGuarded,
+                ctx.cache,
+                budgetCap,
+              ).ids.filter((id) => (ctx.cache.get(id)?.price ?? 0) > 0);
+              safeIds = capResultCandidateIds(safeIds, resultCardinality);
+              if (safeIds.length >= resultCardinality.target) {
+                break sparseSearch;
+              }
+              if (page * 50 >= recovered.total) break;
+            }
+          }
+          steps.push({
+            step: "v3_terminal_sparse_feature_class_recovery",
+            ms: now(),
+            meta: {
+              feature_facet: sparsePlan.featureFacetKey,
+              positive_count: sparsePlan.positiveCount,
+              scope_count: sparsePlan.scopeCount,
+              class_branches: sparsePlan.branches.map(({ classValues }) =>
+                classValues
+              ),
+              pages_checked: pagesChecked,
+              retrieved: retrievedCount,
+              unique_cards: foundById.size,
+              target_passed: targetCount,
+              criteria_passed: criteriaCount,
+              final_guard_passed: finalGuardCount,
+              proven: safeIds.length,
+            },
+          });
+          send({
+            type: "tool_event",
+            tool: "search_catalog",
+            phase: "result",
+            summary:
+              `Проверено ${retrievedCount} карточек, подтверждено ${safeIds.length} по всем условиям.`,
+          });
+          sparseProvenIds = safeIds;
+          if (safeIds.length >= resultCardinality.target) {
+            const rendered = await runTool("render_products", {
+              product_ids: safeIds,
+              criteria: terminalSelectionCriteria,
+              // The broad class pool is not a proven eligible total.
+              total_available: safeIds.length,
+            }, ctx);
+            if (rendered.ok && rendered.tool === "render_products") {
+              announceResultCardinalityShortfall(
+                rendered.rendered_count,
+                "sparse_feature_class_recovery",
+              );
+              for (const id of safeIds) shownIds.add(id);
+              send({
+                type: "products_block",
+                markdown: rendered.markdown,
+                count: rendered.rendered_count,
+                total_available: safeIds.length,
+              });
+              productsRendered += rendered.rendered_count;
+              return {
+                finalText,
+                productsRendered,
+                shownProductIds: [...shownIds],
+              };
+            }
+          }
+        }
         const categoryIn = terminalDiscover.leaf_categories
           .map((category) => category.pagetitle)
           .filter(Boolean);
@@ -18142,7 +18330,13 @@ async function runExpertLoop(
             ctx.cache,
             extractBudgetCap(userMessage),
           ).ids;
+          if (sparseProvenIds.length > 0) {
+            safeIds = safeIds.filter((id) =>
+              (ctx.cache.get(id)?.price ?? 0) > 0
+            );
+          }
           safeIds = capResultCandidateIds(safeIds, resultCardinality);
+          const categorySafeIds = [...safeIds];
 
           // `category=` is exact-leaf-only in the catalog API. A non-empty leaf
           // still is not a successful recovery when no card satisfies the
@@ -18151,10 +18345,11 @@ async function runExpertLoop(
           // result remains subject to the same class, measurement, modifier
           // and budget guards before it can be rendered.
           if (
-            shouldExpandVisibleRecoverySearch(
-              categoryIn.length > 0,
-              safeIds.length,
-            )
+            categoryIn.length > 0 &&
+            (sparseProvenIds.length > 0
+              ? mergeProvenRecoveryIds(sparseProvenIds, categorySafeIds)
+                .length < resultCardinality.target
+              : shouldExpandVisibleRecoverySearch(true, safeIds.length))
           ) {
             const queryProductsById = new Map<string, ProductFull>();
             const maxQueryPages = 4;
@@ -18204,24 +18399,45 @@ async function runExpertLoop(
                 ctx.cache,
                 extractBudgetCap(userMessage),
               ).ids;
-              querySafeIds = capResultCandidateIds(
-                querySafeIds,
-                resultCardinality,
-              );
+              if (sparseProvenIds.length > 0) {
+                querySafeIds = querySafeIds.filter((id) =>
+                  (ctx.cache.get(id)?.price ?? 0) > 0
+                );
+              } else {
+                querySafeIds = capResultCandidateIds(
+                  querySafeIds,
+                  resultCardinality,
+                );
+              }
               targetIds = queryTargetIds;
               criteriaIds = queryCriteriaIds;
               diagnosticCandidateIds = queryCandidateIds;
-              safeIds = querySafeIds;
+              safeIds = sparseProvenIds.length > 0
+                ? mergeProvenRecoveryIds(categorySafeIds, querySafeIds)
+                : querySafeIds;
+              const combinedConfirmed = mergeProvenRecoveryIds(
+                sparseProvenIds,
+                safeIds,
+              ).length;
               if (
-                !shouldContinueVisibleRecoveryPage({
-                  page,
-                  pageSize: 50,
-                  total: queryRecovered.total,
-                  confirmedCount: safeIds.length,
-                  maxPages: maxQueryPages,
-                })
+                sparseProvenIds.length > 0
+                  ? combinedConfirmed >= resultCardinality.target ||
+                    page >= maxQueryPages || page * 50 >= queryRecovered.total
+                  : !shouldContinueVisibleRecoveryPage({
+                    page,
+                    pageSize: 50,
+                    total: queryRecovered.total,
+                    confirmedCount: safeIds.length,
+                    maxPages: maxQueryPages,
+                  })
               ) break;
             }
+          }
+          if (sparseProvenIds.length > 0) {
+            safeIds = capResultCandidateIds(
+              mergeProvenRecoveryIds(sparseProvenIds, safeIds),
+              resultCardinality,
+            );
           }
           const diagnosticGuard = guardVisibleCardinality(
             diagnosticCandidateIds,
@@ -18252,15 +18468,25 @@ async function runExpertLoop(
             const rendered = await runTool("render_products", {
               product_ids: safeIds,
               criteria: terminalSelectionCriteria,
-              total_available: recovered.total,
+              total_available: sparseProvenIds.length > 0
+                ? safeIds.length
+                : recovered.total,
             }, ctx);
             if (rendered.ok && rendered.tool === "render_products") {
+              if (sparseProvenIds.length > 0) {
+                announceResultCardinalityShortfall(
+                  rendered.rendered_count,
+                  "terminal_visible_request_recovery",
+                );
+              }
               for (const id of safeIds) shownIds.add(id);
               send({
                 type: "products_block",
                 markdown: rendered.markdown,
                 count: rendered.rendered_count,
-                total_available: recovered.total,
+                total_available: sparseProvenIds.length > 0
+                  ? safeIds.length
+                  : recovered.total,
               });
               productsRendered += rendered.rendered_count;
               steps.push({
@@ -18296,6 +18522,36 @@ async function runExpertLoop(
               })),
             },
           });
+        }
+        // A class-only card has already passed every terminal gate. Keep it
+        // when the ordinary broad request fails or times out, but report the
+        // actual shortfall rather than claiming the requested count.
+        if (sparseProvenIds.length > 0) {
+          const rendered = await runTool("render_products", {
+            product_ids: sparseProvenIds,
+            criteria: terminalSelectionCriteria,
+            total_available: sparseProvenIds.length,
+          }, ctx);
+          if (rendered.ok && rendered.tool === "render_products") {
+            announceResultCardinalityShortfall(
+              rendered.rendered_count,
+              "sparse_feature_partial_recovery",
+            );
+            for (const id of sparseProvenIds) shownIds.add(id);
+            send({
+              type: "products_block",
+              markdown: rendered.markdown,
+              count: rendered.rendered_count,
+              total_available: sparseProvenIds.length,
+            });
+            productsRendered += rendered.rendered_count;
+            steps.push({
+              step: "v3_terminal_sparse_feature_partial_render",
+              ms: now(),
+              meta: { proven: sparseProvenIds.length, rendered: rendered.rendered_count },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
         }
       }
     }

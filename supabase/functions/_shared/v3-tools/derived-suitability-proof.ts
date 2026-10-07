@@ -54,6 +54,142 @@ function containsAnswerToken(evidence: string, token: string): boolean {
   );
 }
 
+type NumericChoice = { value: string; unit: string | null };
+type ExplicitChoice = { label: string | null; numeric: NumericChoice | null };
+
+const CHOICE_WORD = /^(?:\p{L}[\p{L}\p{N}-]*|\d+(?:[.,]\d+)?)$/u;
+const CHOICE_NUMBER = /^\d+(?:[.,]\d+)?$/u;
+const ALTERNATIVE = /(^|[^\p{L}])(или|либо|or)(?=[^\p{L}]|$)/iu;
+
+function choiceTokens(value: string): string[] {
+  return value.normalize("NFKC").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .match(/\d+(?:[.,]\d+)?|\p{L}[\p{L}\p{N}-]*|[():]/gu) ?? [];
+}
+
+function numericAtEnd(tokens: string[]): NumericChoice | null {
+  const last = tokens.at(-1);
+  if (last && CHOICE_NUMBER.test(last)) return { value: last, unit: null };
+  const previous = tokens.at(-2);
+  return last && previous && CHOICE_NUMBER.test(previous) &&
+      /^\p{L}+$/u.test(last)
+    ? { value: previous, unit: last }
+    : null;
+}
+
+function numericAtStart(tokens: string[]): NumericChoice | null {
+  const first = tokens[0];
+  if (!first || !CHOICE_NUMBER.test(first)) return null;
+  const next = tokens[1];
+  return {
+    value: first,
+    unit: next && /^\p{L}+$/u.test(next) ? next : null,
+  };
+}
+
+function leftChoice(value: string): ExplicitChoice {
+  const tokens = choiceTokens(value);
+  if (tokens.at(-1) === ")") {
+    const open = tokens.lastIndexOf("(");
+    if (open > 0) {
+      const label = tokens[open - 1];
+      return {
+        label: CHOICE_WORD.test(label) && !CHOICE_NUMBER.test(label)
+          ? label
+          : null,
+        numeric: numericAtEnd(tokens.slice(open + 1, -1)),
+      };
+    }
+  }
+  const numeric = numericAtEnd(tokens);
+  const label = tokens.at(-1);
+  return {
+    label: !numeric && label && CHOICE_WORD.test(label) ? label : null,
+    numeric,
+  };
+}
+
+function rightChoice(value: string): ExplicitChoice {
+  const tokens = choiceTokens(value);
+  const numeric = numericAtStart(tokens);
+  if (numeric) return { label: null, numeric };
+  const label = tokens[0];
+  return {
+    label: label && CHOICE_WORD.test(label) ? label : null,
+    numeric: tokens[1] === "(" && tokens.indexOf(")", 2) > 2
+      ? numericAtEnd(tokens.slice(2, tokens.indexOf(")", 2)))
+      : null,
+  };
+}
+
+/** Only the clause containing "or" contributes alternatives. In particular,
+ * a measurement in a sentence after the question is not a choice alias. */
+function explicitChoices(question: string): [ExplicitChoice, ExplicitChoice] | null {
+  const clauses = question.split(/[?!;]|\.(?=\s|$)|\n+/u);
+  for (const clause of clauses) {
+    const marker = ALTERNATIVE.exec(clause);
+    if (!marker) continue;
+    const start = marker.index + marker[1].length;
+    const left = leftChoice(clause.slice(0, start));
+    const right = rightChoice(clause.slice(start + marker[2].length));
+    if (!left.label && !left.numeric || !right.label && !right.numeric) {
+      return null;
+    }
+    // "220 или 380 В" shares the unit of the adjacent numeric option.
+    if (left.numeric && right.numeric) {
+      left.numeric.unit ??= right.numeric.unit;
+      right.numeric.unit ??= left.numeric.unit;
+    }
+    return [left, right];
+  }
+  return null;
+}
+
+function unitKey(value: string): string {
+  if (/^(?:в|вольт\p{L}*)$/u.test(value)) return "в";
+  if (/^(?:м|метр\p{L}*)$/u.test(value)) return "м";
+  if (/^(?:мм|миллиметр\p{L}*)$/u.test(value)) return "мм";
+  if (/^(?:вт|ватт\p{L}*)$/u.test(value)) return "вт";
+  if (/^(?:квт|киловатт\p{L}*)$/u.test(value)) return "квт";
+  if (/^(?:а|ампер\p{L}*)$/u.test(value)) return "а";
+  return stem(value);
+}
+
+function matchesNumericChoice(
+  evidence: string,
+  choice: NumericChoice,
+  contextAxis: string | null,
+): boolean {
+  for (const tokens of evidenceClauses(evidence)) {
+    for (const [index, token] of tokens.entries()) {
+      if (token !== choice.value) continue;
+      const following = tokens[index + 1];
+      if (choice.unit && following &&
+        unitKey(following) === unitKey(choice.unit)) {
+        // A bare lowercase "в" before a noun is more likely a preposition
+        // ("220 в доме") than a voltage unit. Fail closed if ambiguous.
+        if (following === "в" && tokens[index + 2]) continue;
+        return true;
+      }
+      // A unitless numeric answer needs the named question axis locally.
+      // Never use an arbitrary shared subject as numeric context.
+      if (!following && contextAxis && tokens.slice(Math.max(0, index - 3), index)
+        .some((word) => stem(word) === stem(contextAxis))) return true;
+    }
+  }
+  return false;
+}
+
+function matchesExplicitChoice(
+  evidence: string,
+  choice: ExplicitChoice,
+  contextAxis: string | null,
+): boolean {
+  return Boolean(choice.label && containsAnswerToken(evidence, choice.label)) ||
+    Boolean(choice.numeric &&
+      matchesNumericChoice(evidence, choice.numeric, contextAxis));
+}
+
 // These are question grammar and generic placeholders, not product classes.
 // The first remaining term names the axis whose answer must be checked.
 const QUESTION_FILLER = new Set([
@@ -208,26 +344,29 @@ export function diagnoseDerivedClarification(
     return { isMissing: false, reason: "malformed", questionAxis: null };
   }
   const axis = diagnosticQuestionAxis(question);
-  const normalizedQuestion = normalized(question);
-  const alternative = /(?:^|\s)(?:или|либо|or)(?:\s|$)/iu.exec(
-    normalizedQuestion,
-  );
-  if (alternative?.index !== undefined) {
-    const before = normalizedQuestion.slice(0, alternative.index).trim()
-      .split(" ").at(-1) ?? "";
-    const after =
-      normalizedQuestion.slice(alternative.index + alternative[0].length)
-        .trim().split(" ")[0] ?? "";
-    if (
-      containsAnswerToken(customerEvidence, before) ||
-      containsAnswerToken(customerEvidence, after)
-    ) {
+  const choices = explicitChoices(question);
+  if (choices) {
+    const contextAxis = axis && axis !== "other"
+      ? questionAxis(question)
+      : null;
+    const matched = choices.map((choice) =>
+      matchesExplicitChoice(customerEvidence, choice, contextAxis)
+    );
+    // One selected branch is proof; a customer repeating both alternatives
+    // is still asking for help choosing between them.
+    if (matched[0] !== matched[1]) {
       return {
         isMissing: false,
         reason: "already_answered_choice",
         questionAxis: axis,
       };
     }
+    return { isMissing: true, reason: "missing", questionAxis: axis };
+  }
+  // A malformed or unsupported explicit choice cannot fall through to the
+  // loose named-axis heuristic and count a shared subject measurement.
+  if (ALTERNATIVE.test(question)) {
+    return { isMissing: true, reason: "missing", questionAxis: axis };
   }
   if (isLocalAnswerForAxis(question, customerEvidence)) {
     return {

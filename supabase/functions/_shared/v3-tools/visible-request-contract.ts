@@ -277,11 +277,12 @@ function productProvesExactCustomerFacet(
   // catalog filter proof. An explicit contradiction there vetoes a broad yes
   // flag, including acoustic-only rather than motion activation.
   if (verdict === "fail") return false;
-  // Free-form descriptions can say "compatible with a motion sensor" without
-  // the product containing one. They may veto a contradiction, but cannot
-  // stand in for a raw facet or verified filter lineage. Keep the old literal
-  // title/trait proof only when this exact facet is absent, not contradicted.
+  // Only the criteria gate's intrinsic ownership/activation verdict may stand
+  // in for a sparse affirmative catalog facet. A reference to a compatible or
+  // optional accessory remains unknown there, and exact negative values still
+  // veto the card above. Preserve literal title support for other modifiers.
   return exactValues.includes(wanted) ||
+    (verdict === "pass" && exactValues.length === 0) ||
     (literalSupported && exactValues.length === 0);
 }
 

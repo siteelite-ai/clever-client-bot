@@ -235,6 +235,109 @@ Deno.test("derived clarification diagnostic explains cross-category decisions wi
   }
 });
 
+Deno.test("a subject's load does not answer an explicit mains-phase choice", () => {
+  const question = "Кондиционер подключается однофазно (220 В) или трёхфазно (380 В)? Это определит количество жил и сечение кабеля.";
+  const base = "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?";
+  assertEquals(diagnoseDerivedClarification({ question }, base), {
+    isMissing: true,
+    reason: "missing",
+    questionAxis: "other",
+  });
+  for (const answered of [
+    `${base} Сеть 220 В, однофазная.`,
+    `${base} Сеть 380 В, трёхфазная.`,
+    `${base} Подключение однофазное.`,
+    `${base} Питание 220 В.`,
+    `${base} Подключение трёхфазное.`,
+    `${base} Питание 380 В.`,
+  ]) {
+    assertEquals(diagnoseDerivedClarification({ question }, answered).isMissing,
+      false, answered);
+  }
+  for (const unanswered of [
+    `${base} Трасса 220 м.`,
+    `${base} Трасса 380 м.`,
+    `${base} Мощность 220 Вт.`,
+    `${base} Однофазное или трёхфазное — не знаю.`,
+  ]) {
+    assertEquals(diagnoseDerivedClarification({ question }, unanswered).isMissing,
+      true, unanswered);
+  }
+});
+
+Deno.test("explicit alternatives are local to the question, not its shared subject or following sentence", () => {
+  const cases = [
+    {
+      question: "Кондиционер 3 кВт: однофазно или трёхфазно?",
+      evidence: "Кондиционер 3 кВт",
+      isMissing: true,
+    },
+    {
+      question: "Кондиционер 3 кВт: однофазно или трёхфазно?",
+      evidence: "Кондиционер 3 кВт, подключение однофазное",
+      isMissing: false,
+    },
+    {
+      question: "Какой кабель: ВВГ или NYM? Для трассы 30 м",
+      evidence: "Трасса 30 м, нужен кабель",
+      isMissing: true,
+    },
+    {
+      question: "Какой кабель: ВВГ или NYM? Для трассы 30 м",
+      evidence: "Трасса 30 м, кабель ВВГ",
+      isMissing: false,
+    },
+    {
+      question: "Какой кабель: ВВГ или NYM? Для трассы 30 м",
+      evidence: "Трасса 30 м, кабель NYM",
+      isMissing: false,
+    },
+    {
+      question: "Какая система камеры: аналоговая или IP?",
+      evidence: "Камера на улице, расстояние 30 м",
+      isMissing: true,
+    },
+    {
+      question: "Какая система камеры: аналоговая или IP?",
+      evidence: "Нужна аналоговая камера на улице",
+      isMissing: false,
+    },
+    {
+      question: "Какая система камеры: аналоговая или IP?",
+      evidence: "Нужна IP-камера на улице",
+      isMissing: false,
+    },
+    {
+      question: "Какое напряжение питания: 220 или 380 В?",
+      evidence: "Трасса 220 м",
+      isMissing: true,
+    },
+    {
+      question: "Какое напряжение питания: 220 или 380 В?",
+      evidence: "Сеть 220 В",
+      isMissing: false,
+    },
+  ] as const;
+  for (const { question, evidence, isMissing } of cases) {
+    const clarification = { question };
+    assertEquals(
+      diagnoseDerivedClarification(clarification, evidence).isMissing,
+      isMissing,
+      `${question} / ${evidence}`,
+    );
+    assertEquals(
+      assessDerivedSuitabilityProof({
+        route: "server_derived",
+        mandatoryCriteria: [],
+        clarification,
+        customerEvidence: evidence,
+      }).kind,
+      isMissing ? "clarify" : "unverified",
+      `${question} / ${evidence}`,
+    );
+  }
+});
+
 Deno.test("derived clarification diagnostic is bounded and contains no free-form text", () => {
   for (const clarification of [null, { question: "  ?  " }]) {
     assertEquals(diagnoseDerivedClarification(clarification, "private evidence"), {

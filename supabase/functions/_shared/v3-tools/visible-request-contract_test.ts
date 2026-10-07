@@ -355,6 +355,17 @@ Deno.test("exact motion-sensor facet proves a differently worded product per car
     short_traits: [],
   }, contract), false);
   assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+  }, contract), true);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+    short_traits: ["С датчиком движения: нет"],
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
     pagetitle: "Светильник Gauss",
     description_excerpt: "Совместим с датчиком движения",
   }, contract), false);

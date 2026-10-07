@@ -1145,6 +1145,188 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
   );
 });
 
+Deno.test("sparse affirmative feature proof requires intrinsic ownership or activation", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const compatible = {
+    ...product("compatible", []),
+    pagetitle: "Светильник совместим с датчиком движения",
+  };
+  const connection = {
+    ...product("connection", []),
+    description_excerpt: "Для подключения датчика движения предусмотрены клеммы.",
+  };
+  const connector = {
+    ...product("connector", []),
+    pagetitle: "Светильник с разъёмом для датчика движения",
+  };
+  const optional = {
+    ...product("optional", []),
+    pagetitle: "Светильник с опциональным датчиком движения",
+    description_excerpt: "Дополнительный датчик движения приобретается отдельно.",
+  };
+  const looseTrait = {
+    ...product("loose-trait", ["Совместимость с датчиком движения: да"]),
+    description_excerpt: "Подходит для подключения датчика движения.",
+  };
+  const articleOnly = {
+    ...product("article-only", []),
+    article: "датчик движения",
+  };
+  for (const candidate of [
+    compatible,
+    connection,
+    connector,
+    optional,
+    looseTrait,
+    articleOnly,
+  ]) {
+    assertEquals(checkCriterion(candidate, requirement).verdict, "unknown");
+  }
+  assertEquals(
+    applyCriteriaGate([
+      compatible,
+      connection,
+      connector,
+      optional,
+      looseTrait,
+      articleOnly,
+    ], [requirement]).passed_ids,
+    [],
+  );
+
+  const intrinsic = {
+    ...product("intrinsic", []),
+    pagetitle: "Светильник с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+  };
+  const embedded = {
+    ...product("embedded", []),
+    description_excerpt:
+      "Корпус оснащён встроенным датчиком движения для автоматического включения.",
+  };
+  const roomContext = {
+    ...product("room-context", []),
+    pagetitle: "Светильник для коридора с датчиком движения",
+  };
+  assertEquals(
+    applyCriteriaGate([intrinsic, embedded, roomContext], [requirement])
+      .passed_ids,
+    ["intrinsic", "embedded", "room-context"],
+  );
+});
+
+Deno.test("sparse boolean ownership works across categories without overriding exact facet proof", () => {
+  const requirement: Criterion = {
+    key: "С крышкой",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const withCover = {
+    ...product("with-cover", []),
+    pagetitle: "Розетка с защитной крышкой",
+  };
+  const equipped = {
+    ...product("equipped", []),
+    description_excerpt: "Корпус оснащён защитной крышкой.",
+  };
+  const compatible = {
+    ...product("compatible", []),
+    pagetitle: "Розетка совместима с крышкой",
+  };
+  const optional = {
+    ...product("optional", []),
+    description_excerpt: "Для установки крышки предусмотрено крепление.",
+  };
+  assertEquals(
+    applyCriteriaGate([withCover, equipped, compatible, optional], [requirement])
+      .passed_ids,
+    ["with-cover", "equipped"],
+  );
+  const exactTrait = {
+    ...compatible,
+    short_traits: ["С крышкой: да"],
+  };
+  assertEquals(checkCriterion(exactTrait, requirement).verdict, "pass");
+  const projected = projectCatalogFilterEvidence([compatible], [requirement]);
+  assertEquals(checkCriterion(projected[0], requirement).verdict, "pass");
+  assertEquals(
+    checkCriterion({
+      ...exactTrait,
+      pagetitle: "Розетка без крышки",
+    }, requirement).verdict,
+    "fail",
+  );
+});
+
+Deno.test("explicit negated feature ownership vetoes exact and projected affirmative proof", () => {
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const exact = product("exact", ["С датчиком движения: да"]);
+  for (const description_excerpt of [
+    "Светильник не оснащён датчиком движения.",
+    "Прибор не оборудован встроенным микроволновым датчиком движения.",
+    "Светильник не имеет датчика движения.",
+  ]) {
+    const contradicted = { ...exact, description_excerpt };
+    assertEquals(checkCriterion(contradicted, motion).verdict, "fail");
+    assertEquals(applyCriteriaGate([contradicted], [motion]).passed_ids, []);
+  }
+  const projected = projectCatalogFilterEvidence([
+    {
+      ...product("projected", []),
+      description_excerpt: "Не оснащён датчиком движения.",
+    },
+  ], [motion]);
+  assertEquals(checkCriterion(projected[0], motion).verdict, "fail");
+
+  const cover: Criterion = {
+    key: "С крышкой",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion({
+    ...product("cover", ["С крышкой: да"]),
+    pagetitle: "Розетка не имеет крышки",
+  }, cover).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...product("fine", ["С крышкой: да"]),
+    description_excerpt: "Не имеет проблем с крышкой при монтаже.",
+  }, cover).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...product("owned", []),
+    description_excerpt: "Корпус оснащён крышкой.",
+  }, cover).verdict, "pass");
+});
+
+Deno.test("negated activation vetoes only the named functional trigger", () => {
+  const protection: Criterion = {
+    key: "Защита от перегрузки",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion({
+    ...product("broken", ["Защита от перегрузки: да"]),
+    description_excerpt: "Защита не срабатывает при перегрузке.",
+  }, protection).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...product("fine", ["Защита от перегрузки: да"]),
+    description_excerpt: "Защита не срабатывает при штатной нагрузке.",
+  }, protection).verdict, "pass");
+});
+
 Deno.test("motion-sensor boolean cannot overrule acoustic activation in original prose", () => {
   const requirement: Criterion = {
     key: "С датчиком движения",

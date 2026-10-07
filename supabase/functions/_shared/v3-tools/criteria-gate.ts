@@ -1242,6 +1242,158 @@ function isNegativeBooleanValue(value: string): boolean {
   return ["нет", "отсутствует", "no", "false"].includes(normalizeKey(value));
 }
 
+function affirmativeFeatureName(key: string): string {
+  // Facet captions often start with the grammatical "С" ("С крышкой"). It
+  // names ownership, not a one-letter catalog code that every sentence must
+  // repeat; removing it also lets an activation sentence supply the proof.
+  return normalizeKey(key).replace(/^(?:с|со)\s+/u, "");
+}
+
+/**
+ * A feature mentioned as an accessory, supported add-on or connection target
+ * is not necessarily part of this product. A sparse affirmative boolean must
+ * instead be owned by the product ("с крышкой", "оснащён датчиком") or have
+ * an asserted effect ("сенсор включает прибор при движении"). Work on short
+ * statements so unrelated words in different fields cannot complete a proof.
+ * Exact labelled traits and proven live filters are handled separately below.
+ */
+function intrinsicAffirmativeProseProof(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  const feature = affirmativeFeatureName(criterion.key);
+  if (!feature) return null;
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ];
+  const weakRelation =
+    /(?:^|\s)(?:совместим\p{L}*|совместимость|опциональн\p{L}*|дополнительн\p{L}*|внешн\p{L}*|отдельн\p{L}*|приобрета\p{L}*|подключ\p{L}*|подсоедин\p{L}*|поддержива\p{L}*|подходит|подходят|возможн\p{L}*|можно|может|могут|если|для\s+(?:подключ\p{L}*|установ\p{L}*|монтаж\p{L}*|использован\p{L}*|работы)|compatible|optional|separately|external|connect\p{L}*|supports?)(?=\s|$)/iu;
+  const owner =
+    /(?:^|\s)(?:с|со|имеет|имеется|оснащ\p{L}*|оборудован\p{L}*|встроен\p{L}*|интегрирован\p{L}*|предусмотрен\p{L}*|with|includes?|equipped)(?=\s|$)/giu;
+  const activation =
+    /(?:^|\s)(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*|активир\p{L}*|открыва\p{L}*|закрыва\p{L}*|защища\p{L}*|detect\p{L}*|activat\p{L}*|switch\p{L}*|trigger\p{L}*)(?=\s|$)/iu;
+  for (const source of sources) {
+    for (const statement of source.text.split(/[.!?;,\n]+/u)) {
+      const normalized = normalizeKey(statement);
+      if (!normalized || !stringEvidenceMatches(feature, normalized)) {
+        continue;
+      }
+      // If a weak relationship is stated, an independent intrinsic assertion
+      // must precede it. "Совместим с датчиком" and "с опциональным датчиком"
+      // therefore stay unknown; "с датчиком, совместим с ..." still passes.
+      const weak = normalized.match(weakRelation);
+      const asserted = weak ? normalized.slice(0, weak.index) : normalized;
+      if (!stringEvidenceMatches(feature, asserted)) continue;
+      const owned = [...asserted.matchAll(owner)].some((match) => {
+        const after = asserted.slice((match.index ?? 0) + match[0].length);
+        // "с разъёмом для датчика" owns the connector, not the sensor.
+        // Limit the ownership window at a new target relation; a later
+        // independent "с датчиком" gets its own owner match.
+        const near = after.split(/\s+(?:для|под|через|к)\s+/u)[0]
+          .split(/\s+/u).slice(0, 6).join(" ");
+        return stringEvidenceMatches(feature, near);
+      });
+      if (owned || activation.test(asserted)) {
+        return `${source.label}: ${statement.trim()}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Only explicit absence can veto a first-party affirmative facet. */
+function explicitAffirmativeProseAbsence(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !isAffirmativeValue(criterion.value)
+  ) return null;
+  const feature = affirmativeFeatureName(criterion.key);
+  if (!feature) return null;
+  const featureLength = feature.split(/\s+/u).length;
+  const namesFeature = (words: string[]): boolean =>
+    stringEvidenceMatches(feature, words.join(" "));
+  const modifier = (word: string): boolean =>
+    /(?:ого|его|ой|ый|ий|ая|яя|ое|ее|ые|ых|их|ыми|ими|ым|им)$/u
+      .test(word) &&
+    !/(?:дополнител|опционал|внешн|отдельн)/u.test(word);
+  const namesLeadingFeature = (words: string[]): boolean => {
+    for (let skip = 0; skip <= 2; skip++) {
+      if (skip > 0 && !modifier(words[skip - 1] ?? "")) break;
+      if (namesFeature(words.slice(skip, skip + featureLength))) return true;
+    }
+    return false;
+  };
+  // A negated effect only contradicts a multi-part functional feature when
+  // its own trigger/target is named (e.g. sensor + motion, protection + load).
+  // "Крышка не закрывает ..." alone does not assert that the cover is absent.
+  const trigger = feature.split(/\s+/u).slice(1)
+    .filter((word) => !["на", "от", "по", "при", "для", "of", "for"].includes(word))
+    .join(" ");
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ];
+  for (const source of sources) {
+    for (const statement of source.text.split(/[.!?;,\n]+/u)) {
+      const normalized = normalizeKey(statement);
+      if (!stringEvidenceMatches(feature, normalized)) continue;
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)(?:без|without|нет)\s+/giu,
+        )
+      ) {
+        const words = normalized.slice(
+          (negative.index ?? 0) + negative[0].length,
+        ).split(/\s+/u);
+        if (namesLeadingFeature(words)) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)не\s+(?:оснащ\p{L}*|оборудован\p{L}*|имеет|имеются|содержит|снабжен\p{L}*|укомплектован\p{L}*)(?=\s|$)\s*/giu,
+        )
+      ) {
+        const words = normalized.slice(
+          (negative.index ?? 0) + negative[0].length,
+        ).split(/\s+/u);
+        if (namesLeadingFeature(words)) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+      if (trigger) {
+        for (
+          const negative of normalized.matchAll(
+            /(?:^|\s)не\s+(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*|активир\p{L}*|защища\p{L}*)(?=\s|$)/giu,
+          )
+        ) {
+          const tail = normalized.slice(
+            (negative.index ?? 0) + negative[0].length,
+          ).split(/\s+/u).slice(0, 8).join(" ");
+          if (stringEvidenceMatches(trigger, tail)) {
+            return `${source.label}: ${statement.trim()}`;
+          }
+        }
+      }
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)(?:отсутству\p{L}*|не\s+(?:предусмотрен\p{L}*|установлен\p{L}*|встроен\p{L}*))(?=\s|$)/giu,
+        )
+      ) {
+        const words = normalized.slice(0, negative.index).trim().split(/\s+/u);
+        if (namesFeature(words.slice(-featureLength))) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * A broad catalog yes/no flag is weaker than a concrete activation mechanism
  * stated in the product's own title or description. In particular, a product
@@ -1327,7 +1479,8 @@ export function checkCriterion(
   c: Criterion,
 ): CriterionCheck {
   const expected = expectedLabel(c);
-  const proseContradiction = motionSensorProseContradiction(product, c);
+  const proseContradiction = motionSensorProseContradiction(product, c) ??
+    explicitAffirmativeProseAbsence(product, c);
   if (proseContradiction) {
     return {
       key: c.key,
@@ -1348,11 +1501,12 @@ export function checkCriterion(
       // Boolean facets are often sparse in the source catalog even when the
       // feature is explicitly described in the product title or description.
       // For an affirmative value, the criterion key carries the feature name
-      // (e.g. "С датчиком движения"); require that full key to be evidenced
-      // instead of looking for the uninformative word "да".
+      // (e.g. "С датчиком движения"). A mere reference to a compatible or
+      // optional accessory is not proof that the feature is built in.
       if (isAffirmativeValue(c.value)) {
-        return stringEvidenceMatches(c.key, evidence)
-          ? { key: c.key, verdict: "pass", expected, actual: c.key }
+        const proof = intrinsicAffirmativeProseProof(product, c);
+        return proof
+          ? { key: c.key, verdict: "pass", expected, actual: proof }
           : { key: c.key, verdict: "unknown", expected, actual: null };
       }
       // An omitted negative boolean facet is not evidence of absence. More
@@ -1414,6 +1568,18 @@ export function checkCriterion(
     const want = normalizeKey(c.value);
     const got = normalizeKey(actual);
     if (!want) return { key: c.key, verdict: "unknown", expected, actual };
+    if (
+      isAffirmativeValue(c.value) && stringEvidenceMatches(want, got) &&
+      normalizeKey(trait.label) !== normalizeKey(c.key)
+    ) {
+      // Fuzzy label matching is useful for values but not authoritative for
+      // feature ownership: "Совместимость с датчиком движения: да" is not the
+      // exact "С датчиком движения: да" facet or a proven filter projection.
+      const proof = intrinsicAffirmativeProseProof(product, c);
+      return proof
+        ? { key: c.key, verdict: "pass", expected, actual: proof }
+        : { key: c.key, verdict: "unknown", expected, actual: null };
+    }
     return {
       key: c.key,
       verdict: stringEvidenceMatches(want, got) ? "pass" : "fail",
