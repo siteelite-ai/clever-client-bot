@@ -60,6 +60,53 @@ function visibleMessages(dom) {
   return dom.window.document.querySelector('#volt-widget-messages')?.textContent ?? '';
 }
 
+function clarificationSse({ replies, slotReplies = replies, facetKey = 'power_phase', slotFacetKey = facetKey, slotQuestion = 'Какое питание у оборудования?', assistantText = slotQuestion, complete = true, boundary = null, duplicate = false } = {}) {
+  const events = [
+    { v3_event: { type: 'diagnostic', log_id: 'quick-reply-test-log', phase: 'start' } },
+    { choices: [{ delta: { content: assistantText } }] },
+    { v3_event: { type: 'quick_replies', facet_key: facetKey, replies } },
+    ...(duplicate ? [{ v3_event: { type: 'quick_replies', facet_key: facetKey, replies } }] : []),
+    ...(boundary ? [{ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundary } }] : []),
+    { v3_event: { type: 'slot_update', slots: {
+      pending_clarification: {
+        status: 'pending',
+        slot_id: 'quick-reply-slot',
+        facet_key: slotFacetKey,
+        question: slotQuestion,
+        options: slotReplies,
+      },
+    } } },
+    ...(complete ? [{ v3_event: { type: 'diagnostic', log_id: 'quick-reply-test-log', phase: 'complete', products_count: 0 } }] : []),
+  ];
+  return events.map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+}
+
+function freeformClarificationSse({ complete = true, includeSlot = true, slotId = 'freeform-slot-1' } = {}) {
+  const events = [
+    { v3_event: { type: 'diagnostic', log_id: 'freeform-clarification-log', phase: 'start' } },
+    { choices: [{ delta: { content: 'Какова площадь двора в м²?' } }] },
+    ...(includeSlot ? [{ v3_event: { type: 'slot_update', slots: {
+      pending_clarification: {
+        status: 'pending', slot_id: slotId, facet_key: 'yard_area',
+        question: 'Укажите площадь двора.', options: [],
+        scope: { kind: 'selection_readiness', token: 'yard-floodlight' },
+      },
+    } } }] : []),
+    ...(complete ? [{ v3_event: {
+      type: 'diagnostic', log_id: 'freeform-clarification-log', phase: 'complete', products_count: 0,
+    } }] : []),
+  ];
+  return events.map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+}
+
+async function waitForWidget(predicate, message, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(predicate(), message);
+}
+
 test('an existing in-progress request is accepted before the backend waits for replay completion', () => {
   const existingBranch = chatV3Source.indexOf('if (claim.kind === "existing")');
   const replayAcceptance = chatV3Source.indexOf(
@@ -1816,4 +1863,740 @@ test('SSE is parsed by payload when an intermediary rewrites content-type', asyn
   assert.equal(fetchCount, 1);
   assert.match(visibleMessages(dom), /Подходящий ответ\./u);
   dom.window.close();
+});
+
+test('complete server clarification renders keyboard-accessible chips and sends the exact option once', async () => {
+  const replies = [
+    { value: 'Однофазное 220 В', label: '220 В · 1 фаза' },
+    { value: 'Трёхфазное 380 В', label: '380 В · 3 фазы' },
+  ];
+  const payloads = [];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const sse = payloads.length === 1
+        ? clarificationSse({ replies, duplicate: true })
+        : [
+            { v3_event: { type: 'diagnostic', log_id: 'quick-reply-answer-log', phase: 'start' } },
+            { choices: [{ delta: { content: 'Питание уточнено.' } }] },
+            { v3_event: { type: 'slot_update', slots: {} } },
+            { v3_event: { type: 'diagnostic', log_id: 'quick-reply-answer-log', phase: 'complete', products_count: 0 } },
+          ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  dom.window.document.querySelector('[aria-label="Открыть чат"]').click();
+  assert.equal(dom.window.document.activeElement, input);
+  input.value = 'Нужен кабель для кондиционера';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'complete clarification should show exactly two chips');
+
+  const chips = [...dom.window.document.querySelectorAll('.volt-quick-reply')];
+  assert.equal(dom.window.document.querySelectorAll('[role="group"][aria-label="Варианты ответа"]').length, 1);
+  assert.deepEqual(chips.map((chip) => chip.textContent), replies.map((reply) => reply.label));
+  assert.ok(chips.every((chip) => chip.tagName === 'BUTTON' && chip.type === 'button'));
+  assert.equal(dom.window.document.activeElement, chips[0],
+    'first choice should receive focus after a complete clarification');
+  assert.ok(chips[0].compareDocumentPosition(input) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    'Tab order must reach both chips before free text');
+  assert.equal(chips[0].tabIndex, 0);
+  assert.equal(chips[1].tabIndex, 0);
+  assert.equal(input.disabled, false, 'free text must remain available');
+  const customReply = dom.window.document.querySelector('.volt-custom-reply');
+  assert.equal(customReply.textContent, 'Напишу свой вариант');
+  assert.ok(chips[1].compareDocumentPosition(customReply) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(customReply.compareDocumentPosition(input) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  const slotBeforeFocus = structuredClone(readState(dom).dialogSlots.pending_clarification);
+  customReply.click();
+  assert.equal(dom.window.document.activeElement, input, 'free text remains keyboard-accessible');
+  assert.equal(payloads.length, 1, 'custom answer focus action must not send a request');
+  assert.equal(input.value, '', 'focus action must not invent an answer');
+  assert.deepEqual(readState(dom).dialogSlots.pending_clarification, slotBeforeFocus,
+    'focus action must not mutate server-issued options');
+  chips[0].click();
+  chips[0].click();
+  chips[1].click();
+  await waitForWidget(() => payloads.length === 2 && visibleMessages(dom).includes('Питание уточнено.'),
+    'a selected option should complete one follow-up request');
+
+  assert.equal(payloads[1].message, replies[0].value);
+  assert.equal(payloads[1].dialogSlots.pending_clarification.facet_key, 'power_phase');
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+  assert.equal(payloads.length, 2, 'duplicate clicks must not produce duplicate requests');
+  dom.window.close();
+});
+
+test('quick-reply labels are inert text and free-text follow-up removes the chips', async () => {
+  const attackLabel = '<img src=x onerror="globalThis.__widgetChipXss = true">';
+  const replies = [
+    { value: 'Однофазное', label: attackLabel },
+    { value: 'Трёхфазное', label: 'Трёхфазное' },
+  ];
+  const payloads = [];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const sse = payloads.length === 1
+        ? clarificationSse({ replies })
+        : [
+            { v3_event: { type: 'diagnostic', log_id: 'free-text-answer-log', phase: 'start' } },
+            { choices: [{ delta: { content: 'Ответ свободным текстом принят.' } }] },
+            { v3_event: { type: 'diagnostic', log_id: 'free-text-answer-log', phase: 'complete', products_count: 0 } },
+          ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Какой кабель выбрать?';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'server options should render');
+  assert.equal(dom.window.document.querySelector('.volt-quick-reply').textContent, attackLabel);
+  assert.equal(dom.window.document.querySelector('.volt-quick-reply img'), null);
+  assert.equal(dom.window.__widgetChipXss, undefined);
+
+  input.value = 'Другая конфигурация';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+  await waitForWidget(() => payloads.length === 2 &&
+    visibleMessages(dom).includes('Ответ свободным текстом принят.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'free-text request should complete');
+  assert.equal(payloads[1].message, 'Другая конфигурация');
+  dom.window.close();
+});
+
+test('quick replies require a matching active pending slot and are hidden on partial turns', async () => {
+  const replies = [
+    { value: 'Однофазное', label: 'Однофазное' },
+    { value: 'Трёхфазное', label: 'Трёхфазное' },
+  ];
+  const mismatches = [
+    { facetKey: 'other_phase', slotFacetKey: 'power_phase' },
+    { slotReplies: [replies[0], { value: 'Другое', label: 'Другое' }] },
+    { replies: [{ value: 'Однофазное', label: 'Первый' }, { value: 'Однофазное', label: 'Повтор' }] },
+    { replies: [{ value: 'Однофазное', label: 'Первый' }] },
+  ];
+  for (const mismatch of mismatches) {
+    const dom = bootWidget({
+      fetchImpl: async () => new Response(clarificationSse({ replies, ...mismatch }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Уточнить питание';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => visibleMessages(dom).includes('Какое питание у оборудования?') &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'mismatched clarification should complete');
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+    dom.window.close();
+  }
+
+  const partialDom = bootWidget({
+    fetchImpl: async () => new Response(clarificationSse({ replies, complete: false }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+  partialDom.window.document.querySelector('#volt-widget-input').value = 'Уточнить питание';
+  partialDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(partialDom).includes('Ответ получен не полностью') &&
+    !partialDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'partial answer and replay should settle');
+  assert.equal(partialDom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+  partialDom.window.close();
+});
+
+test('replay commits one canonical chip group; reset, topic boundary and TTL remove stale choices', async () => {
+  const replies = [
+    { value: 'До 20 м²', label: 'До 20 м²' },
+    { value: 'Больше 20 м²', label: 'Больше 20 м²' },
+  ];
+  let fetchCount = 0;
+  const now = 1_800_000_000_000;
+  const dom = bootWidget({
+    now,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(clarificationSse({ replies, complete: fetchCount !== 1 }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Нужен прожектор';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'complete replay should show one group');
+  await waitForWidget(() => !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'replay turn should be idle before reset');
+  assert.equal(fetchCount, 2, 'accepted partial turn should be replayed once');
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-replies').length, 1);
+
+  const staleChip = dom.window.document.querySelector('.volt-quick-reply');
+  dom.window.document.querySelector('[aria-label="Новый диалог"]').click();
+  staleChip.click();
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+  assert.equal(fetchCount, 2, 'detached chip must not send after reset');
+
+  input.value = 'Нужен другой прожектор';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'new dialogue may show fresh options');
+  dom.window.Date.now = () => now + SESSION_TTL_MS + 1;
+  dom.window.document.querySelector('[aria-label="Открыть чат"]').click();
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0,
+    'expired dialogue must remove choices');
+  dom.window.close();
+
+  const boundaryDom = bootWidget({
+    fetchImpl: async () => new Response(clarificationSse({ replies, boundary: 'session_new_topic_quick_reply' }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+  boundaryDom.window.document.querySelector('#volt-widget-input').value = 'Новая тема';
+  boundaryDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(boundaryDom).includes('Новая тема') &&
+    !boundaryDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'boundary turn should complete');
+  assert.equal(boundaryDom.window.document.querySelectorAll('.volt-quick-reply').length, 0,
+    'choices emitted before a topic boundary must not leak into the new topic');
+  boundaryDom.window.close();
+});
+
+test('reload restores chips only for the same visible question and active server slot', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной монтаж' },
+    { value: 'Подвесной', label: 'Подвесной монтаж' },
+  ];
+  const firstDom = bootWidget({
+    fetchImpl: async () => new Response(clarificationSse({
+      replies,
+      slotQuestion: 'Укажите тип монтажа.',
+      assistantText: 'Как будем крепить светильник?',
+    }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+  firstDom.window.document.querySelector('#volt-widget-input').value = 'Подберите светильник';
+  firstDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => firstDom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !firstDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'first turn should finish with chips');
+  const persisted = readState(firstDom);
+  assert.equal(persisted.quickReplyState.slotId, 'quick-reply-slot');
+  firstDom.window.close();
+
+  const payloads = [];
+  const restoredDom = bootWidget({
+    state: persisted,
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const events = [
+        { v3_event: { type: 'diagnostic', log_id: 'restored-chip-answer-log', phase: 'start' } },
+        { choices: [{ delta: { content: 'Монтаж уточнён.' } }] },
+        { v3_event: { type: 'diagnostic', log_id: 'restored-chip-answer-log', phase: 'complete', products_count: 0 } },
+      ];
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}`)
+        .concat('data: [DONE]', '').join('\n\n'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  assert.deepEqual([...restoredDom.window.document.querySelectorAll('.volt-quick-reply')]
+    .map((chip) => chip.textContent), replies.map((reply) => reply.label));
+  assert.equal(readState(restoredDom).updatedAt, persisted.updatedAt,
+    'restoring chips must not prolong the 30-minute session lifetime');
+  restoredDom.window.document.querySelectorAll('.volt-quick-reply')[1].click();
+  await waitForWidget(() => payloads.length === 1 && visibleMessages(restoredDom).includes('Монтаж уточнён.'),
+    'restored chip should send a follow-up');
+  assert.equal(payloads[0].message, 'Подвесной');
+  assert.equal(payloads[0].dialogSlots.pending_clarification.slot_id, 'quick-reply-slot');
+  restoredDom.window.close();
+
+  for (const tamper of [
+    (state) => { state.quickReplyState.assistantContent = 'Другой ответ'; },
+    (state) => { state.dialogSlots.pending_clarification.slot_id = 'different-slot'; },
+    (state) => { state.dialogSlots.pending_clarification.options[0].value = 'Подмена'; },
+  ]) {
+    const changed = structuredClone(persisted);
+    tamper(changed);
+    const dom = bootWidget({ state: changed });
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0,
+      'saved chips must not outlive their exact visible turn and pending slot');
+    assert.equal(dom.window.document.querySelector('#volt-widget-input').disabled, false);
+    dom.window.close();
+  }
+});
+
+test('quick replies in a final unterminated SSE line use the same validation path', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной' },
+    { value: 'Подвесной', label: 'Подвесной' },
+  ];
+  const events = [
+    { v3_event: { type: 'diagnostic', log_id: 'final-flush-quick-reply', phase: 'start' } },
+    { choices: [{ delta: { content: 'Какое питание у оборудования?' } }] },
+    { v3_event: { type: 'slot_update', slots: { pending_clarification: {
+      status: 'pending', slot_id: 'final-flush-slot', facet_key: 'mounting',
+      question: 'Какое питание у оборудования?', options: replies,
+    } } } },
+    { v3_event: { type: 'diagnostic', log_id: 'final-flush-quick-reply', phase: 'complete', products_count: 0 } },
+    { v3_event: { type: 'quick_replies', facet_key: 'mounting', replies } },
+  ];
+  const sse = events.map((event) => `data: ${JSON.stringify(event)}`).join('\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Уточнить монтаж';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'final flush should recognize the valid server choices');
+  dom.window.close();
+});
+
+test('visible chips expire while an open tab is idle and cannot be clicked afterward', async () => {
+  const replies = [
+    { value: 'Однофазное', label: 'Однофазное' },
+    { value: 'Трёхфазное', label: 'Трёхфазное' },
+  ];
+  let fetchCount = 0;
+  const source = widgetSource.replace('const SESSION_TTL_MS = 30 * 60 * 1000;',
+    'const SESSION_TTL_MS = 120;');
+  assert.notEqual(source, widgetSource, 'test must shorten the real session TTL');
+  const dom = bootWidget({
+    source,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(clarificationSse({ replies }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Уточнить питание';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'fresh chips should first become visible');
+  const staleChip = dom.window.document.querySelector('.volt-quick-reply');
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 0,
+    'idle chips should disappear at the session TTL', 500);
+  staleChip.click();
+  assert.equal(fetchCount, 1);
+  dom.window.close();
+});
+
+test('two pre-acceptance 503 failures restore the same pending choices, including after reload', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной монтаж' },
+    { value: 'Подвесной', label: 'Подвесной монтаж' },
+  ];
+  let fetchCount = 0;
+  const dom = bootWidget({
+    fetchImpl: async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return new Response(clarificationSse({ replies }), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+        status: 503, headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+  dom.window.document.querySelector('[aria-label="Открыть чат"]').click();
+  dom.window.document.querySelector('#volt-widget-input').value = 'Нужен светильник';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'first clarification should complete');
+  const originalState = readState(dom).quickReplyState;
+  assert.equal(dom.window.document.activeElement,
+    dom.window.document.querySelector('.volt-quick-reply'));
+  dom.window.document.querySelector('.volt-quick-reply').click();
+  await waitForWidget(() => fetchCount === 3 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'two failed routes should restore still-valid choices');
+  assert.equal(dom.window.document.activeElement,
+    dom.window.document.querySelector('.volt-quick-reply'),
+    'restored choices should receive focus after transient failure');
+  const persisted = readState(dom);
+  assert.equal(persisted.history.at(-1).content, originalState.assistantContent);
+  assert.equal(persisted.history.some((item) => item.content === 'Накладной'), false,
+    'unaccepted answer must be rolled back from request history');
+  assert.equal(persisted.quickReplyState.slotId, originalState.slotId);
+  assert.deepEqual(persisted.quickReplyState.replies, replies);
+  dom.window.close();
+
+  const reloaded = bootWidget({ state: persisted });
+  assert.deepEqual([...reloaded.window.document.querySelectorAll('.volt-quick-reply')]
+    .map((chip) => chip.textContent), replies.map((reply) => reply.label));
+  assert.notEqual(reloaded.window.document.activeElement,
+    reloaded.window.document.querySelector('.volt-quick-reply'),
+    'closed widget must not focus a restored choice');
+  reloaded.window.document.querySelector('[aria-label="Открыть чат"]').click();
+  assert.equal(reloaded.window.document.activeElement,
+    reloaded.window.document.querySelector('.volt-quick-reply'),
+    'opening a restored dialogue should focus the first choice');
+  reloaded.window.close();
+});
+
+test('a clarification finishing after chat closes never focuses hidden chips', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной монтаж' },
+    { value: 'Подвесной', label: 'Подвесной монтаж' },
+  ];
+  let finishFetch;
+  const dom = bootWidget({
+    fetchImpl: () => new Promise((resolve) => { finishFetch = resolve; }),
+  });
+  const launcher = dom.window.document.querySelector('[aria-label="Открыть чат"]');
+  launcher.click();
+  dom.window.document.querySelector('#volt-widget-input').value = 'Нужен светильник';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => typeof finishFetch === 'function', 'request should be pending');
+  dom.window.document.querySelector('#volt-widget-close').click();
+  assert.equal(dom.window.document.activeElement, launcher);
+
+  finishFetch(new Response(clarificationSse({ replies }), {
+    headers: { 'Content-Type': 'text/event-stream' },
+  }));
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'closed turn should still finish and store choices');
+  assert.equal(dom.window.document.activeElement, launcher,
+    'hidden choices must not steal focus');
+  launcher.click();
+  assert.equal(dom.window.document.activeElement,
+    dom.window.document.querySelector('.volt-quick-reply'));
+  dom.window.close();
+});
+
+test('stale 400 dialog state and accepted partial errors never restore previous chips', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной монтаж' },
+    { value: 'Подвесной', label: 'Подвесной монтаж' },
+  ];
+  for (const failureMode of ['stale_400', 'accepted_partial']) {
+    let fetchCount = 0;
+    const dom = bootWidget({
+      fetchImpl: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return new Response(clarificationSse({ replies }), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        if (failureMode === 'stale_400' && fetchCount === 2) {
+          return new Response(JSON.stringify({ error: 'invalid_request' }), {
+            status: 400, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (failureMode === 'accepted_partial' && fetchCount === 2) {
+          const events = [
+            { v3_event: { type: 'diagnostic', log_id: 'accepted-partial-after-chip', phase: 'start' } },
+            { choices: [{ delta: { content: 'Проверяю наличие.' } }] },
+          ];
+          return new Response(events.map((event) => `data: ${JSON.stringify(event)}`)
+            .concat('data: [DONE]', '').join('\n\n'), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Нужен светильник';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'initial clarification should complete');
+    dom.window.document.querySelector('.volt-quick-reply').click();
+    await waitForWidget(() => fetchCount >= 3 &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'failed follow-up should settle');
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0,
+      `${failureMode} must not revive old choices`);
+    assert.equal(readState(dom).quickReplyState, null);
+    dom.window.close();
+  }
+});
+
+test('a server topic boundary or expired original choice prevents restoration after failed routes', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной монтаж' },
+    { value: 'Подвесной', label: 'Подвесной монтаж' },
+  ];
+  for (const failureMode of ['new_topic', 'expired']) {
+    let fetchCount = 0;
+    let now = 1_800_000_000_000;
+    const dom = bootWidget({
+      now,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return new Response(clarificationSse({ replies }), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        if (fetchCount === 2 && failureMode === 'new_topic') {
+          const boundary = `data: ${JSON.stringify({ v3_event: {
+            type: 'conversation_boundary', mode: 'new_task', session_id: 'session_changed_during_failure',
+          } })}\n\ndata: [DONE]\n\n`;
+          return new Response(boundary, { headers: { 'Content-Type': 'text/event-stream' } });
+        }
+        if (fetchCount === 2 && failureMode === 'expired') {
+          now += SESSION_TTL_MS + 1;
+          dom.window.Date.now = () => now;
+        }
+        return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Нужен светильник';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'initial clarification should complete');
+    dom.window.document.querySelector('.volt-quick-reply').click();
+    await waitForWidget(() => fetchCount >= (failureMode === 'expired' ? 2 : 3) &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'failed request should settle');
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0,
+      `${failureMode} must not revive stale choices`);
+    assert.equal(readState(dom).quickReplyState, null);
+    dom.window.close();
+  }
+});
+
+test('server-issued freeform clarification offers focus-only action, survives reload, and preserves text input', async () => {
+  const payloads = [];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const sse = payloads.length === 1
+        ? freeformClarificationSse()
+        : [
+            { v3_event: { type: 'diagnostic', log_id: 'freeform-answer-log', phase: 'start' } },
+            { choices: [{ delta: { content: 'Площадь уточнена.' } }] },
+            { v3_event: { type: 'slot_update', slots: {} } },
+            { v3_event: { type: 'diagnostic', log_id: 'freeform-answer-log', phase: 'complete', products_count: 0 } },
+          ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const launcher = dom.window.document.querySelector('[aria-label="Открыть чат"]');
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  launcher.click();
+  input.value = 'Нужен прожектор во двор';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-custom-reply').length === 1 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'complete freeform slot should offer one action');
+  const customReply = dom.window.document.querySelector('.volt-custom-reply');
+  assert.equal(customReply.textContent, 'Напишу свой вариант');
+  assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+  assert.equal(dom.window.document.activeElement, customReply);
+  assert.ok(customReply.compareDocumentPosition(input) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(readState(dom).quickReplyState.mode, 'freeform');
+  assert.deepEqual(readState(dom).dialogSlots.pending_clarification.options, []);
+  const persisted = readState(dom);
+  customReply.click();
+  assert.equal(dom.window.document.activeElement, input);
+  assert.equal(payloads.length, 1, 'focus-only action must not call the backend');
+  assert.equal(input.value, '');
+  assert.deepEqual(readState(dom).dialogSlots.pending_clarification.options, []);
+
+  input.value = '35 м²';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-close').click();
+  assert.equal(dom.window.document.activeElement, launcher);
+  launcher.click();
+  assert.equal(dom.window.document.activeElement, input,
+    'reopening with a draft must focus the editor instead of the available action');
+  assert.equal(input.value, '35 м²');
+  assert.equal(dom.window.document.querySelectorAll('.volt-custom-reply').length, 1);
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => payloads.length === 2 &&
+    visibleMessages(dom).includes('Площадь уточнена.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'typed freeform answer should complete');
+  assert.equal(payloads[1].message, '35 м²');
+  assert.equal(payloads[1].dialogSlots.pending_clarification.slot_id, 'freeform-slot-1');
+  assert.equal(dom.window.document.querySelectorAll('.volt-custom-reply').length, 0);
+  dom.window.close();
+
+  const reloaded = bootWidget({ state: persisted });
+  const reloadedAction = reloaded.window.document.querySelector('.volt-custom-reply');
+  assert.ok(reloadedAction);
+  assert.notEqual(reloaded.window.document.activeElement, reloadedAction);
+  reloaded.window.document.querySelector('[aria-label="Открыть чат"]').click();
+  assert.equal(reloaded.window.document.activeElement, reloadedAction);
+  reloadedAction.click();
+  assert.equal(reloaded.window.document.activeElement,
+    reloaded.window.document.querySelector('#volt-widget-input'));
+  assert.deepEqual(readState(reloaded).dialogSlots.pending_clarification.options, []);
+  reloaded.window.close();
+});
+
+test('freeform action returns after two unaccepted 503 routes but not a stale 400', async () => {
+  for (const failureStatus of [503, 400]) {
+    let fetchCount = 0;
+    const dom = bootWidget({
+      fetchImpl: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return new Response(freeformClarificationSse(), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+          status: failureStatus, headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    dom.window.document.querySelector('[aria-label="Открыть чат"]').click();
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    input.value = 'Нужен прожектор во двор';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => dom.window.document.querySelectorAll('.volt-custom-reply').length === 1 &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'first freeform clarification should complete');
+    dom.window.document.querySelector('.volt-custom-reply').click();
+    assert.equal(dom.window.document.activeElement, input);
+    input.value = '35 м²';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => fetchCount === 3 &&
+      /ошибка соединения|устаревших данных/iu.test(visibleMessages(dom)) &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    `${failureStatus} follow-up should settle after both routes`);
+
+    if (failureStatus === 503) {
+      const restored = dom.window.document.querySelector('.volt-custom-reply');
+      assert.ok(restored, 'transient transport failure must restore the unanswered choice');
+      assert.equal(dom.window.document.activeElement, restored);
+      assert.equal(readState(dom).history.at(-1).content, 'Какова площадь двора в м²?');
+      assert.equal(readState(dom).history.some((turn) => turn.content === '35 м²'), false);
+      assert.deepEqual(readState(dom).dialogSlots.pending_clarification.options, []);
+      const reloaded = bootWidget({ state: readState(dom) });
+      assert.ok(reloaded.window.document.querySelector('.volt-custom-reply'));
+      reloaded.window.close();
+    } else {
+      assert.equal(dom.window.document.querySelectorAll('.volt-custom-reply').length, 0,
+        'invalid dialog state must not revive the freeform action');
+      assert.equal(readState(dom).quickReplyState, null);
+    }
+    dom.window.close();
+  }
+});
+
+test('stale pending freeform slot and incomplete response never produce a custom-answer chip', async () => {
+  const now = Date.now();
+  const staleState = {
+    sessionId: 'session_stale_freeform',
+    history: [
+      { role: 'assistant', content: 'Здравствуйте!' },
+      { role: 'user', content: 'Нужен прожектор' },
+      { role: 'assistant', content: 'Какова площадь двора в м²?' },
+    ],
+    dialogSlots: { pending_clarification: {
+      status: 'pending', slot_id: 'old-freeform-slot', facet_key: 'yard_area',
+      question: 'Какова площадь двора в м²?', options: [],
+    } },
+    updatedAt: now,
+  };
+  const noSlotDom = bootWidget({
+    state: staleState,
+    fetchImpl: async () => new Response(freeformClarificationSse({ includeSlot: false }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+  assert.equal(noSlotDom.window.document.querySelectorAll('.volt-custom-reply').length, 0);
+  const staleInput = noSlotDom.window.document.querySelector('#volt-widget-input');
+  staleInput.value = 'Продолжи подбор';
+  staleInput.dispatchEvent(new noSlotDom.window.Event('input', { bubbles: true }));
+  noSlotDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => !noSlotDom.window.document.querySelector('#volt-widget-new-chat').disabled &&
+    readState(noSlotDom).history.at(-1).content === 'Какова площадь двора в м²?',
+  'text-only turn without a fresh slot should complete');
+  assert.equal(noSlotDom.window.document.querySelectorAll('.volt-custom-reply').length, 0,
+    'old pending slot alone cannot authorize a chip');
+  noSlotDom.window.close();
+
+  const partialDom = bootWidget({
+    fetchImpl: async () => new Response(freeformClarificationSse({ complete: false }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+  });
+  partialDom.window.document.querySelector('#volt-widget-input').value = 'Нужен прожектор';
+  partialDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(partialDom).includes('Ответ получен не полностью') &&
+    !partialDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'partial freeform answer should settle after replay');
+  assert.equal(partialDom.window.document.querySelectorAll('.volt-custom-reply').length, 0);
+  partialDom.window.close();
+});
+
+test('freeform action expires while idle and is removed on new topic', async () => {
+  const source = widgetSource.replace('const SESSION_TTL_MS = 30 * 60 * 1000;',
+    'const SESSION_TTL_MS = 120;');
+  let fetchCount = 0;
+  const expiryDom = bootWidget({
+    source,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(freeformClarificationSse(), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  expiryDom.window.document.querySelector('#volt-widget-input').value = 'Нужен прожектор';
+  expiryDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => expiryDom.window.document.querySelectorAll('.volt-custom-reply').length === 1,
+    'fresh freeform action should appear');
+  const staleAction = expiryDom.window.document.querySelector('.volt-custom-reply');
+  await waitForWidget(() => expiryDom.window.document.querySelectorAll('.volt-custom-reply').length === 0,
+    'freeform action should expire with session TTL', 500);
+  staleAction.click();
+  assert.equal(fetchCount, 1);
+  expiryDom.window.close();
+
+  let topicFetchCount = 0;
+  const topicDom = bootWidget({
+    fetchImpl: async () => {
+      topicFetchCount += 1;
+      const sse = topicFetchCount === 1 ? freeformClarificationSse() : [
+        { v3_event: { type: 'diagnostic', log_id: 'new-topic-freeform-log', phase: 'start' } },
+        { v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: 'session_new_freeform_topic' } },
+        { choices: [{ delta: { content: 'Ищу лампы в каталоге.' } }] },
+        { v3_event: { type: 'diagnostic', log_id: 'new-topic-freeform-log', phase: 'complete', products_count: 0 } },
+      ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const input = topicDom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Нужен прожектор';
+  topicDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => topicDom.window.document.querySelectorAll('.volt-custom-reply').length === 1 &&
+    !topicDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'first freeform turn should complete');
+  input.value = 'А у вас есть лампы?';
+  input.dispatchEvent(new topicDom.window.Event('input', { bubbles: true }));
+  topicDom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => topicFetchCount === 2 && visibleMessages(topicDom).includes('Ищу лампы в каталоге.') &&
+    !topicDom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'new topic should complete');
+  assert.equal(topicDom.window.document.querySelectorAll('.volt-custom-reply').length, 0);
+  assert.equal(readState(topicDom).quickReplyState, null);
+  topicDom.window.close();
 });

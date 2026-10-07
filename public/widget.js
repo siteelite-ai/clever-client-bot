@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-9ed958efa52536eb';
+  var WIDGET_VERSION = 'widget-ee3fb9a3f8ea7f60';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -56,6 +56,10 @@
   // user bubble left by a crash before server acceptance.
   let acceptedPendingTurn = null;
   let lastActivityAt = 0;
+  // Only a completed clarification turn may persist selectable suggestions.
+  // The binding is checked against the visible assistant turn and pending slot
+  // again after a page reload; saved storage alone is never authoritative.
+  let quickReplyState = null;
   // Стабильный UUID одного сообщения для валидации, журналирования и будущей дедупликации.
   let currentMessageId = '';
   function generateMessageId() {
@@ -238,6 +242,98 @@
     }
     return activeSlots;
   }
+  function normalizeQuickRepliesEvent(event) {
+    if (!isPlainRecord(event) || typeof event.facet_key !== 'string' ||
+        !event.facet_key.trim() || event.facet_key.length > 128 ||
+        !Array.isArray(event.replies) || event.replies.length < 2 ||
+        event.replies.length > 5) return null;
+    var replies = [];
+    var values = new Set();
+    for (var i = 0; i < event.replies.length; i++) {
+      var reply = event.replies[i];
+      if (!isPlainRecord(reply) || typeof reply.value !== 'string' ||
+          typeof reply.label !== 'string' || !reply.value.trim() ||
+          !reply.label.trim() || reply.value !== reply.value.trim() ||
+          reply.value.length > 2000 || reply.label.length > 160 ||
+          values.has(reply.value)) return null;
+      values.add(reply.value);
+      replies.push({ value: reply.value, label: reply.label });
+    }
+    return { facet_key: event.facet_key, replies: replies };
+  }
+  function quickRepliesMatchPendingSlot(quickReplies, slots) {
+    var activeSlots = snapshotActiveSlots(slots);
+    var pending = activeSlots.pending_clarification;
+    if (!quickReplies || !isPlainRecord(pending) ||
+        pending.status !== 'pending' ||
+        pending.facet_key !== quickReplies.facet_key ||
+        !Array.isArray(pending.options) ||
+        pending.options.length !== quickReplies.replies.length) return false;
+    return quickReplies.replies.every(function(reply, index) {
+      var option = pending.options[index];
+      return isPlainRecord(option) && option.value === reply.value &&
+        option.label === reply.label;
+    });
+  }
+  function freeformChoiceFromSlotUpdate(slots) {
+    var pending = snapshotActiveSlots(slots).pending_clarification;
+    if (!isPlainRecord(pending) || pending.status !== 'pending' ||
+        typeof pending.slot_id !== 'string' || !pending.slot_id ||
+        pending.slot_id.length > 128 ||
+        typeof pending.facet_key !== 'string' || !pending.facet_key.trim() ||
+        pending.facet_key.length > 128 ||
+        typeof pending.question !== 'string' || !pending.question.trim() ||
+        !Array.isArray(pending.options) || pending.options.length !== 0) return null;
+    return {
+      mode: 'freeform', slotId: pending.slot_id,
+      facet_key: pending.facet_key, replies: []
+    };
+  }
+  function choiceMatchesPendingSlot(choice, slots) {
+    if (!choice) return false;
+    if (choice.mode === 'freeform') {
+      var freeform = freeformChoiceFromSlotUpdate(slots);
+      return Boolean(freeform && choice.slotId === freeform.slotId &&
+        choice.facet_key === freeform.facet_key &&
+        Array.isArray(choice.replies) && choice.replies.length === 0);
+    }
+    return quickRepliesMatchPendingSlot(choice, slots);
+  }
+  function sanitizeQuickReplyState(value) {
+    var freeform = isPlainRecord(value) && value.mode === 'freeform' &&
+      typeof value.facet_key === 'string' && value.facet_key.trim() &&
+      value.facet_key.length <= 128 && Array.isArray(value.replies) &&
+      value.replies.length === 0;
+    if (isPlainRecord(value) && value.mode &&
+        value.mode !== 'freeform' && value.mode !== 'options') return null;
+    var normalized = freeform
+      ? { facet_key: value.facet_key, replies: [] }
+      : normalizeQuickRepliesEvent(value);
+    if (!normalized || !isValidSessionId(value.sessionId) ||
+        typeof value.slotId !== 'string' || !value.slotId ||
+        value.slotId.length > 128 ||
+        typeof value.assistantContent !== 'string' ||
+        !value.assistantContent.trim() ||
+        value.assistantContent.length > 8000) return null;
+    return {
+      sessionId: value.sessionId,
+      slotId: value.slotId,
+      assistantContent: value.assistantContent,
+      mode: freeform ? 'freeform' : 'options',
+      facet_key: normalized.facet_key,
+      replies: normalized.replies
+    };
+  }
+  function quickRepliesMatchVisibleTurn(value) {
+    var pending = snapshotActiveSlots(dialogSlots).pending_clarification;
+    var lastMessage = conversationHistory[conversationHistory.length - 1];
+    return value && value.sessionId === sessionId &&
+      isPlainRecord(pending) && value.slotId === pending.slot_id &&
+      lastMessage && lastMessage.role === 'assistant' &&
+      lastMessage.content === value.assistantContent &&
+      !acceptedPendingTurn &&
+      choiceMatchesPendingSlot(value, dialogSlots);
+  }
   // The request context contains complete user/assistant turns plus, at most,
   // the latest accepted user turn whose answer could not be delivered. Known
   // pre-acceptance failures are rolled back below. Old context is evicted by
@@ -333,6 +429,7 @@
     conversationHistory = [{ role: 'assistant', content: initialGreeting }];
     dialogSlots = {};
     acceptedPendingTurn = null;
+    quickReplyState = null;
     currentMessageId = '';
     lastActivityAt = Date.now();
   }
@@ -347,6 +444,7 @@
         conversationHistory = sanitizeHistory(parsed.history);
         dialogSlots = sanitizeDialogSlots(parsed.dialogSlots);
         acceptedPendingTurn = sanitizeAcceptedPendingTurn(parsed.acceptedPendingTurn);
+        quickReplyState = sanitizeQuickReplyState(parsed.quickReplyState);
         // A saved trailing user without the matching acceptance marker means
         // the page closed between rendering the bubble and server acceptance.
         // Remove that crash residue before it can become hidden model context.
@@ -365,6 +463,8 @@
         lastActivityAt = parsed.updatedAt;
         if (!conversationHistory.length || !hasUserMessages(conversationHistory)) {
           resetConversationState();
+        } else if (!quickRepliesMatchVisibleTurn(quickReplyState)) {
+          quickReplyState = null;
         }
       } else {
         // Legacy-состояние без updatedAt и просроченный диалог сбрасываются.
@@ -407,12 +507,14 @@
       conversationHistory = sanitizeHistory(conversationHistory);
       dialogSlots = sanitizeDialogSlots(dialogSlots);
       acceptedPendingTurn = sanitizeAcceptedPendingTurn(acceptedPendingTurn);
+      quickReplyState = sanitizeQuickReplyState(quickReplyState);
       lastActivityAt = Date.now();
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         sessionId: sessionId,
         history: conversationHistory.slice(-20),
         dialogSlots: dialogSlots,
         acceptedPendingTurn: acceptedPendingTurn,
+        quickReplyState: quickReplyState,
         updatedAt: lastActivityAt
       }));
     } catch(e) {}
@@ -741,6 +843,48 @@
       color: white;
     }
 
+    .volt-quick-replies {
+      align-self: flex-start;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-width: 100%;
+    }
+
+    .volt-quick-reply,
+    .volt-custom-reply {
+      min-height: 44px;
+      max-width: 100%;
+      padding: 8px 12px;
+      border: 1px solid ${CONFIG.primaryColor};
+      border-radius: 8px;
+      background: #333;
+      color: white;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.35;
+      text-align: left;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+
+    .volt-quick-reply:hover,
+    .volt-custom-reply:hover {
+      background: #444;
+    }
+
+    .volt-quick-reply:focus-visible,
+    .volt-custom-reply:focus-visible {
+      outline: 2px solid ${CONFIG.primaryColor};
+      outline-offset: 2px;
+    }
+
+    .volt-quick-reply:disabled,
+    .volt-custom-reply:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     .volt-topic-divider {
       align-self: stretch;
       display: flex;
@@ -974,6 +1118,110 @@
   const input = document.getElementById('volt-widget-input');
   const sendBtn = document.getElementById('volt-widget-send');
   const messagesContainer = document.getElementById('volt-widget-messages');
+  let activeQuickRepliesGroup = null;
+  let quickReplyExpiryTimer = null;
+
+  function clearQuickReplies() {
+    if (quickReplyExpiryTimer) clearTimeout(quickReplyExpiryTimer);
+    quickReplyExpiryTimer = null;
+    if (activeQuickRepliesGroup) activeQuickRepliesGroup.remove();
+    activeQuickRepliesGroup = null;
+    quickReplyState = null;
+  }
+
+  function renderQuickReplies(choice, assistantContent, persist) {
+    clearQuickReplies();
+    var pending = snapshotActiveSlots(dialogSlots).pending_clarification;
+    if (!choiceMatchesPendingSlot(choice, dialogSlots) ||
+        !isPlainRecord(pending) || typeof pending.slot_id !== 'string' ||
+        !pending.slot_id || !assistantContent ||
+        assistantContent.length > 8000) return;
+    var boundState = sanitizeQuickReplyState({
+      sessionId: sessionId,
+      slotId: pending.slot_id,
+      assistantContent: assistantContent,
+      mode: choice.mode === 'freeform' ? 'freeform' : 'options',
+      facet_key: choice.facet_key,
+      replies: choice.replies
+    });
+    if (!quickRepliesMatchVisibleTurn(boundState)) return;
+    quickReplyState = boundState;
+    if (persist !== false) saveState();
+    var expectedSessionId = sessionId;
+    var group = document.createElement('div');
+    group.className = 'volt-quick-replies';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', boundState.mode === 'freeform'
+      ? 'Ответить на уточнение' : 'Варианты ответа');
+    var chosen = false;
+    boundState.replies.forEach(function(reply) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'volt-quick-reply';
+      chip.textContent = reply.label;
+      chip.addEventListener('click', function() {
+        if (chosen || isLoading || activeQuickRepliesGroup !== group ||
+            !group.isConnected || sessionId !== expectedSessionId) return;
+        if (expireConversationIfNeeded(true)) return;
+        if (!choiceMatchesPendingSlot(boundState, dialogSlots)) {
+          clearQuickReplies();
+          return;
+        }
+        chosen = true;
+        group.querySelectorAll('button').forEach(function(button) {
+          button.disabled = true;
+        });
+        input.value = reply.value;
+        sendMessage();
+      });
+      group.appendChild(chip);
+    });
+    var customReply = document.createElement('button');
+    customReply.type = 'button';
+    customReply.className = 'volt-custom-reply';
+    customReply.textContent = 'Напишу свой вариант';
+    customReply.addEventListener('click', function() {
+      if (chosen || isLoading || activeQuickRepliesGroup !== group ||
+          !group.isConnected || sessionId !== expectedSessionId) return;
+      if (expireConversationIfNeeded(true)) return;
+      if (!choiceMatchesPendingSlot(boundState, dialogSlots)) {
+        clearQuickReplies();
+        return;
+      }
+      if (isOpen) input.focus();
+    });
+    group.appendChild(customReply);
+    messagesContainer.appendChild(group);
+    activeQuickRepliesGroup = group;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    var expiresIn = lastActivityAt + SESSION_TTL_MS - Date.now();
+    if (expiresIn <= 0) {
+      clearQuickReplies();
+    } else {
+      quickReplyExpiryTimer = setTimeout(function() {
+        if (activeQuickRepliesGroup === group && sessionId === expectedSessionId) {
+          clearQuickReplies();
+        }
+      }, expiresIn + 1);
+    }
+  }
+
+  function focusActiveChoiceOrInput() {
+    if (!isOpen) return;
+    // A typed draft takes precedence over suggested replies when the chat
+    // reopens; the user should be able to continue editing without another click.
+    if (input.value) {
+      input.focus();
+      return;
+    }
+    var firstChoice = activeQuickRepliesGroup &&
+      activeQuickRepliesGroup.querySelector('button:not(:disabled)');
+    if (firstChoice && firstChoice.isConnected) {
+      firstChoice.focus();
+    } else {
+      input.focus();
+    }
+  }
 
   // Force enable wheel scrolling (fix for Mac and sites that block it)
   messagesContainer.addEventListener('wheel', function(e) {
@@ -991,7 +1239,9 @@
     if (isOpen) expireConversationIfNeeded(false);
     window.classList.toggle('open', isOpen);
     if (isOpen) {
-      input.focus();
+      focusActiveChoiceOrInput();
+    } else {
+      button.focus();
     }
   }
 
@@ -1103,6 +1353,7 @@
 
   function renderConversationHistory() {
     const safeHistory = sanitizeHistory(conversationHistory);
+    clearQuickReplies();
     messagesContainer.textContent = '';
     for (var i = 0; i < safeHistory.length; i++) {
       messagesContainer.appendChild(createMessageElement(safeHistory[i].content, safeHistory[i].role));
@@ -1133,6 +1384,7 @@
   // topic. The user does not need to close incognito or press "Новый диалог".
   function applyAutomaticConversationBoundary(nextSessionId, currentMessage, messageId) {
     if (!isValidSessionId(nextSessionId) || nextSessionId === sessionId) return false;
+    clearQuickReplies();
     sessionId = nextSessionId;
     dialogSlots = {};
     conversationHistory = [
@@ -1167,7 +1419,11 @@
 
   // Восстановленный контекст обязан быть видимым: не отправляем модели историю,
   // которой пользователь не видит в окне чата.
+  var restoredQuickReplyState = quickReplyState;
   renderConversationHistory();
+  if (restoredQuickReplyState) {
+    renderQuickReplies(restoredQuickReplyState, restoredQuickReplyState.assistantContent, false);
+  }
 
   function addDiagnosticLabel(target, logId, isPartial) {
     if (!target || (!logId && !isPartial)) return;
@@ -1345,7 +1601,18 @@
     var diagnosticComplete = false;
     var diagnosticProductsCount = null;
     var diagnosticError = null;
+    var quickReplies = null;
+    var freeformPendingSlot = null;
     var sawSseData = false;
+
+    function acceptSlotUpdate(slots) {
+      markProtocolAccepted();
+      dialogSlots = slots || {};
+      // A freeform action is shown only for a slot issued in this response,
+      // never just because a pending slot survived in browser storage.
+      freeformPendingSlot = freeformChoiceFromSlotUpdate(dialogSlots);
+      saveState();
+    }
 
     function appendDelta(delta) {
       if (mode === 'intro') {
@@ -1437,23 +1704,30 @@
             if (ev.type === 'contacts') { markProtocolAccepted(); contacts = ev.html; continue; }
             if (ev.type === 'conversation_boundary' && ev.mode === 'new_task') {
               markProtocolAccepted();
+              quickReplies = null;
+              freeformPendingSlot = null;
               applyAutomaticConversationBoundary(ev.session_id, message, requestPayloads.messageId);
               continue;
             }
-            if (ev.type === 'slot_update') { markProtocolAccepted(); dialogSlots = ev.slots || {}; saveState(); continue; }
+            if (ev.type === 'slot_update') { acceptSlotUpdate(ev.slots); continue; }
+            if (ev.type === 'quick_replies') {
+              markProtocolAccepted();
+              quickReplies = normalizeQuickRepliesEvent(ev);
+              continue;
+            }
             if (ev.type === 'products_block' && ev.markdown) {
               markProtocolAccepted();
               if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
               handleProductsBlock(ev.markdown);
               continue;
             }
-            if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') {
+            if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event') {
               markProtocolAccepted();
               continue;
             }
           }
           if (obj.contacts) { markProtocolAccepted(); contacts = obj.contacts; continue; }
-          if (obj.slot_update) { markProtocolAccepted(); dialogSlots = obj.slot_update; saveState(); continue; }
+          if (obj.slot_update) { acceptSlotUpdate(obj.slot_update); continue; }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
             markProtocolAccepted();
@@ -1500,22 +1774,29 @@
               if (ev2.type === 'contacts') { markProtocolAccepted(); contacts = ev2.html; continue; }
               if (ev2.type === 'conversation_boundary' && ev2.mode === 'new_task') {
                 markProtocolAccepted();
+                quickReplies = null;
+                freeformPendingSlot = null;
                 applyAutomaticConversationBoundary(ev2.session_id, message, requestPayloads.messageId);
                 continue;
               }
-              if (ev2.type === 'slot_update') { markProtocolAccepted(); dialogSlots = ev2.slots || {}; saveState(); continue; }
+              if (ev2.type === 'slot_update') { acceptSlotUpdate(ev2.slots); continue; }
+              if (ev2.type === 'quick_replies') {
+                markProtocolAccepted();
+                quickReplies = normalizeQuickRepliesEvent(ev2);
+                continue;
+              }
               if (ev2.type === 'products_block' && ev2.markdown) {
                 markProtocolAccepted();
                 handleProductsBlock(ev2.markdown);
                 continue;
               }
-              if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') {
+              if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event') {
                 markProtocolAccepted();
                 continue;
               }
             }
             if (o2.contacts) { markProtocolAccepted(); contacts = o2.contacts; continue; }
-            if (o2.slot_update) { markProtocolAccepted(); dialogSlots = o2.slot_update; saveState(); continue; }
+            if (o2.slot_update) { acceptSlotUpdate(o2.slot_update); continue; }
             var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
             if (d2) { markProtocolAccepted(); appendDelta(d2); }
           } catch(e) {}
@@ -1576,6 +1857,8 @@
       logId: diagnosticLogId,
       serverProductsCount: diagnosticProductsCount,
       diagnosticError: diagnosticError,
+      quickReplies: quickReplies,
+      freeformPendingSlot: freeformPendingSlot,
       routeLabel: label
     };
     } catch (transportError) {
@@ -1592,6 +1875,13 @@
     var message = input.value.trim();
     if (!message) return;
 
+    // Keep the previous completed clarification only for a genuinely
+    // unaccepted transport failure. A normal send removes its old buttons
+    // immediately; an accepted response must never resurrect them.
+    var previousQuickReplyState = quickRepliesMatchVisibleTurn(quickReplyState)
+      ? quickReplyState : null;
+    var previousQuickReplyExpiresAt = lastActivityAt + SESSION_TTL_MS;
+    clearQuickReplies();
     isLoading = true;
     input.value = '';
     sendBtn.disabled = true;
@@ -1907,6 +2197,9 @@
       } else if (typeof result.serverProductsCount === 'number' && result.serverProductsCount > 0 && !result.productsContent) {
         addMessage('Сервер нашёл товары, но карточки не отобразились. Повторите запрос и сообщите менеджеру код запроса, указанный выше.', 'assistant');
       }
+      if (!result.partial && !result.diagnosticError && hasContent) {
+        renderQuickReplies(result.freeformPendingSlot || result.quickReplies, cleanContent);
+      }
     } else if (firstTokenArrived && assistantMsg.textContent && assistantMsg.textContent.trim()) {
       // Стрим оборвался посреди ответа, но в UI уже есть текст — сохраняем его в историю
       // вместо показа «ошибки соединения». Лучше частичный ответ, чем пустота.
@@ -1922,9 +2215,11 @@
       // failed user turn into the next model context.
       var lastHistoryItem = conversationHistory[conversationHistory.length - 1];
       var currentTurnWasAccepted = acceptedPendingTurn && acceptedPendingTurn.messageId === requestMessageId;
+      var failedUserRolledBack = false;
       if (!currentTurnWasAccepted && lastHistoryItem && lastHistoryItem.role === 'user' &&
           lastHistoryItem.messageId === requestMessageId && lastHistoryItem.content === message) {
         conversationHistory.pop();
+        failedUserRolledBack = true;
         saveState();
       }
       var failureMessage;
@@ -1934,13 +2229,23 @@
         failureMessage = addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
       }
       addAttemptLabel(failureMessage, requestMessageId);
+      var transientPreAcceptanceFailure = routeFailures.length === streamEndpoints.length &&
+        routeFailures.every(function(failure) {
+          return failure.status === null || failure.status === 429 || failure.status >= 500;
+        });
+      if (failedUserRolledBack && !firstTokenArrived &&
+          transientPreAcceptanceFailure && previousQuickReplyState &&
+          requestSessionId === sessionId && Date.now() <= previousQuickReplyExpiresAt &&
+          quickRepliesMatchVisibleTurn(previousQuickReplyState)) {
+        renderQuickReplies(previousQuickReplyState, previousQuickReplyState.assistantContent);
+      }
       try { console.warn('[Widget] attempt=' + requestMessageId + ' route failures: ' + JSON.stringify(routeFailures)); } catch(e) {}
     }
 
     isLoading = false;
     sendBtn.disabled = false;
     newChatBtn.disabled = false;
-    try { input.focus(); } catch(e) {}
+    try { focusActiveChoiceOrInput(); } catch(e) {}
   }
 
   // Character counter
