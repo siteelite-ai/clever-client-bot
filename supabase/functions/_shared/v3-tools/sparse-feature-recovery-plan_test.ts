@@ -6,6 +6,7 @@ import {
   buildSparseFeatureRecoveryPlan,
   hasPriceOrderingIntentForSparseRecovery,
   mergeProvenRecoveryIds,
+  sparseClassSearchInput,
 } from "./sparse-feature-recovery-plan.ts";
 
 const facets: Facet[] = [
@@ -46,6 +47,21 @@ const affirmative: Criterion = {
   level: "A",
   evidence: "user_explicit",
 };
+
+Deno.test("sparse class request never inherits an unrelated discovered leaf", () => {
+  const branch = {
+    options: { kind: ["Бытовые накладные"] },
+    classValues: [{ key: "kind", value: "Бытовые накладные" }],
+  };
+  assertEquals(sparseClassSearchInput(branch, 1, 4000), {
+    mode: "by_filter",
+    options: { kind: ["Бытовые накладные"] },
+    min_price: 1,
+    max_price: 4000,
+    page: 1,
+    per_page: 50,
+  });
+});
 
 Deno.test("sparse positive feature retrieves only exact compatible live class values", () => {
   const plan = buildSparseFeatureRecoveryPlan({

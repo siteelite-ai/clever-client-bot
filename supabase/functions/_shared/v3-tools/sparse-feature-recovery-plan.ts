@@ -1,6 +1,7 @@
 import { type Criterion, normalizeKey } from "./criteria-gate.ts";
 import type { Facet } from "./discover-category.ts";
 import type { PartialApplicationClassGuard } from "./partial-application-class-guard.ts";
+import type { SearchCatalogInput } from "./search-catalog.ts";
 
 export interface SparseFeatureRecoveryBranch {
   /** Exact live classification values only; never includes the sparse feature. */
@@ -13,6 +14,26 @@ export interface SparseFeatureRecoveryPlan {
   positiveCount: number;
   scopeCount: number;
   branches: SparseFeatureRecoveryBranch[];
+}
+
+/** The frozen live class is the retrieval scope. A discovered leaf can be an
+ * unrelated sibling, so never intersect this recovery with a suggested leaf.
+ * Final product-class and customer-criterion checks still apply per card. */
+export function sparseClassSearchInput(
+  branch: SparseFeatureRecoveryBranch,
+  page: number,
+  budgetCap: number | null,
+): SearchCatalogInput {
+  return {
+    mode: "by_filter",
+    options: branch.options,
+    min_price: 1,
+    ...(budgetCap !== null && budgetCap > 0
+      ? { max_price: budgetCap }
+      : {}),
+    page,
+    per_page: 50,
+  };
 }
 
 const AFFIRMATIVE = new Set([

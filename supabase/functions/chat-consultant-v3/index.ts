@@ -14,6 +14,7 @@ import {
   buildSparseFeatureRecoveryPlan,
   hasPriceOrderingIntentForSparseRecovery,
   mergeProvenRecoveryIds,
+  sparseClassSearchInput,
 } from "../_shared/v3-tools/sparse-feature-recovery-plan.ts";
 import {
   assessDerivedSuitabilityProof,
@@ -18138,21 +18139,11 @@ async function runExpertLoop(
               if (classValueKeys.some((key) =>
                 (pagesByClassValue.get(key) ?? 0) >= 2
               )) break;
-              const searchInput: SearchCatalogInput = {
-                mode: "by_filter",
-                options: branch.options,
-                ...(terminalDiscover.leaf_categories.length === 1
-                  ? {
-                    category: terminalDiscover.leaf_categories[0].pagetitle,
-                  }
-                  : {}),
-                min_price: 1,
-                ...(budgetCap !== null && budgetCap > 0
-                  ? { max_price: budgetCap }
-                  : {}),
+              const searchInput: SearchCatalogInput = sparseClassSearchInput(
+                branch,
                 page,
-                per_page: 50,
-              };
+                budgetCap,
+              );
               const recovered = await executeSearchCatalog(
                 searchInput,
                 {
