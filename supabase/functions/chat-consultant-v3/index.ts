@@ -5153,39 +5153,28 @@ async function answerBroadAssortmentRequest(
     }
   }
   if (ctx.catalogDeadlineExceeded) return;
-  const suffix = leaves.length > 0
-    ? ` В каталоге уже видны разделы: ${leaves.slice(0, 5).join(", ")}.`
+  const choiceLeaves = leaves.filter((leaf) => leaf.length <= 160).slice(0, 5);
+  const suffix = choiceLeaves.length >= 2
+    ? ` В каталоге уже видны разделы: ${choiceLeaves.join(", ")}.`
+    : choiceLeaves.length === 1
+    ? ` В каталоге уже виден раздел: ${choiceLeaves[0]}.`
     : "";
   const answer =
     `Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками.${suffix}`;
   send({ type: "delta", content: answer });
-  if (leaves.length >= 2) {
-    const clarification = executeProposeClarification({
-      question: answer,
-      facet_key: "catalog_section",
-      options: leaves.slice(0, 5).map((value) => ({ value, label: value })),
-      ...(seriesToken
-        ? { scope: { kind: "broad_assortment", token: seriesToken } }
-        : {}),
-    });
-    emitSideEffects(clarification, send);
-  } else if (seriesToken) {
-    // Free-form refinements still inherit the catalog entity even when there
-    // are not enough leaf categories to offer quick replies.
-    send({
-      type: "slot_update",
-      slots: {
-        pending_clarification: {
-          status: "pending",
-          slot_id: crypto.randomUUID(),
-          facet_key: "catalog_section",
-          question: answer,
-          options: leaves,
-          scope: { kind: "broad_assortment", token: seriesToken },
-        },
-      },
-    });
-  }
+  // A single discovered leaf is not a choice. Keep the clarification tracked
+  // even when the catalog has too little evidence to offer quick replies.
+  emitSideEffects(executeProposeClarification({
+    question: answer,
+    facet_key: "catalog_section",
+    options: choiceLeaves.length >= 2
+      ? choiceLeaves.map((value) => ({ value, label: value }))
+      : [],
+    ...(choiceLeaves.length < 2 ? { freeform: true } : {}),
+    ...(seriesToken
+      ? { scope: { kind: "broad_assortment", token: seriesToken } }
+      : {}),
+  }), send);
   steps.push({
     step: "v3_broad_assortment_preflight",
     ms: Date.now() - t0,
@@ -10689,20 +10678,41 @@ async function runExpertLoop(
               originalIds.length,
             )
           ) {
-            const clarification = buildBroadAssortmentClarification(
-              lastDiscover!,
-            );
+            // Discover-category leaves are server-grounded taxonomy options;
+            // never turn model prose or an only child into a quick reply.
+            const groundedLeaves = [...new Set(
+              (lastDiscover?.leaf_categories ?? [])
+                .map((leaf) => leaf.pagetitle.trim())
+                .filter((leaf) => Boolean(leaf) && leaf.length <= 160),
+            )].slice(0, 5);
+            const clarification = groundedLeaves.length >= 2
+              ? buildBroadAssortmentClarification(lastDiscover!, groundedLeaves)
+              : "В каталоге много товаров, поэтому несколько случайных карточек не будут честно представлять весь выбор. Уточните нужный раздел или тип товара.";
             send({ type: "delta", content: clarification });
             finalText += `${finalText ? "\n\n" : ""}${clarification}`;
+            emitSideEffects(executeProposeClarification({
+              question: clarification,
+              facet_key: "catalog_section",
+              options: groundedLeaves.length >= 2
+                ? groundedLeaves.map((value) => ({ value, label: value }))
+                : [],
+              ...(groundedLeaves.length < 2 ? { freeform: true } : {}),
+              ...(namedSeriesToken
+                ? {
+                  scope: {
+                    kind: "broad_assortment",
+                    token: namedSeriesToken,
+                  },
+                }
+                : {}),
+            }), send);
             steps.push({
               step: "v3_broad_assortment_clarification",
               ms: now(),
               meta: {
                 proposed_count: originalIds.length,
                 category_total: lastDiscover?.category?.total_products ?? null,
-                leaf_categories: lastDiscover?.leaf_categories?.map((leaf) =>
-                  leaf.pagetitle
-                ) ?? [],
+                leaf_categories: groundedLeaves,
               },
             });
             return {

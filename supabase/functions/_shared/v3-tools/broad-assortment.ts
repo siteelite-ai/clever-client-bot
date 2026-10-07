@@ -83,9 +83,13 @@ export function broadAssortmentNeedsClarification(
   return (discover.leaf_categories?.length ?? 0) > 1 || total > Math.max(10, proposedCount);
 }
 
-export function buildBroadAssortmentClarification(discover: DiscoverCategoryOk): string {
-  const leaves = (discover.leaf_categories ?? [])
-    .map((leaf) => leaf.pagetitle.trim())
+export function buildBroadAssortmentClarification(
+  discover: DiscoverCategoryOk,
+  offeredLeaves?: string[],
+): string {
+  const leaves = (offeredLeaves ?? (discover.leaf_categories ?? [])
+    .map((leaf) => leaf.pagetitle))
+    .map((leaf) => leaf.trim())
     .filter(Boolean)
     .slice(0, 4);
   const suffix = leaves.length >= 2 ? ` Например: ${leaves.join(", ")}.` : "";
