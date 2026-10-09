@@ -13348,7 +13348,9 @@ async function runExpertLoop(
             minimum_results: resultCardinality.minimum,
           });
           for (const attempt of shortfallPlan) {
-            if (now() > TURN_TIMEOUT_MS - 2_000) break;
+            // search_catalog has its own 8 s cap. Leave another bounded
+            // interval for evidence rendering and terminal persistence.
+            if (now() > TURN_TIMEOUT_MS - 12_000) break;
             const recovered = await runTool(
               "search_catalog",
               attempt.args,
@@ -18595,20 +18597,25 @@ Deno.serve(async (req) => {
               recentProductEvidence.length > 0 &&
               isRecentProductPriceSelectionFollowup(userMessage) &&
               !isPureRecentPriceFollowup(userMessage);
+            const previouslyRenderedProductUrls = extractRenderedProductUrls(
+              effectiveHistory,
+            );
             const additionalProductSelectionFollowup =
-              recentProductEvidence.length > 0 &&
+              previouslyRenderedProductUrls.length > 0 &&
               isAdditionalProductSelectionFollowup(userMessage);
-            const ellipticalBaseRequest = recentProductEvidence.length > 0 &&
-                (additionalProductSelectionFollowup ||
-                  isEllipticalAttributeFollowup(userMessage) ||
-                  constrainedRecentPriceFollowup)
+            const ellipticalBaseRequest = additionalProductSelectionFollowup ||
+                (recentProductEvidence.length > 0 &&
+                  (
+                    isEllipticalAttributeFollowup(userMessage) ||
+                    constrainedRecentPriceFollowup
+                  ))
               ? latestRenderedSelectionRequest(effectiveHistory)
               : null;
             const additionalSelectionRequest =
               additionalProductSelectionFollowup &&
               Boolean(ellipticalBaseRequest);
             const priorShownProductUrls = additionalSelectionRequest
-              ? extractRenderedProductUrls(effectiveHistory)
+              ? previouslyRenderedProductUrls
               : [];
             const ellipticalContinuation:
               | EllipticalSelectionContinuation
