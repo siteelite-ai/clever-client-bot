@@ -432,6 +432,86 @@ test('strict product proof requires matching JSON-LD Product/@id/name/sku, not a
   assert.equal(productProofFromHtml(productHtml.replace(productUrl, 'https://220volt.kz/catalog/other/item/'), identity), null);
 });
 
+test('a no-SKU Product needs matching canonical, @id, H1, detail facets, KZT price and stock', () => {
+  const cardUrl = 'https://220volt.kz/catalog/kabeli/kabel-vvg/ng/kabel-vvg-ng-3*1,5-gk-gost%28krasnyij%29/';
+  const canonicalUrl = 'https://220volt.kz/catalog/kabeli/kabel-vvg/ng/kabel-vvg-ng-3*1,5-gk-gost(krasnyij)/';
+  const otherUrl = 'https://220volt.kz/catalog/kabeli/kabel-vvg/ng/another-cable/';
+  const identity = productUrlIdentity(cardUrl);
+  const name = 'Кабель ВВГ нг 3*1,5 ГК ГОСТ(красный)';
+  const html = ({ canonical = canonicalUrl, id = canonicalUrl, productName = name,
+    heading = name, sku = '', missingSku = false, price = '456.00', currency = 'KZT',
+    availability = 'https://schema.org/InStock', facets = true } = {}) => `
+    ${canonical ? `<link rel="canonical" href="${canonical}">` : ''}
+    <h1>${heading}</h1>
+    <script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'Product', '@id': id,
+      name: productName, ...(missingSku ? {} : { sku }),
+      offers: { '@type': 'Offer', price, priceCurrency: currency, availability },
+    })}</script>
+    ${facets ? '<div class="product__tab-description-item"><span class="product__description-title">Количество жил:</span><span class="product__tab-description-text">3</span></div>' : ''}`;
+  assert.deepEqual(productProofFromHtml(html(), identity), {
+    sku: null, identityMode: 'jsonld_no_sku_canonical_name_price_stock', canonicalUrl,
+    name, facets: { 'Количество жил': '3' }, description: '',
+    offerPrice: 456, availability: 'https://schema.org/InStock',
+  });
+  assert.equal(productProofFromHtml(html({ missingSku: true }), identity)?.identityMode,
+    'jsonld_no_sku_canonical_name_price_stock');
+  for (const invalid of [
+    { canonical: otherUrl }, { canonical: null }, { canonical: `${canonicalUrl}?tracking=1` },
+    { id: otherUrl }, { id: `${canonicalUrl}?tracking=1` },
+    { productName: `${name} другой` }, { heading: `${name} другой` },
+    { price: null }, { price: '0' }, { currency: 'USD' },
+    { availability: 'https://schema.org/OutOfStock' }, { facets: false },
+    { sku: '0' },
+  ]) {
+    assert.equal(productProofFromHtml(html(invalid), identity), null, JSON.stringify(invalid));
+  }
+  assert.equal(productProofFromHtml(html().replace('"@type":"Product"', '"@type":"ItemList"'), identity), null);
+});
+
+test('no-SKU identity verifies exact rendered name and price, and tracks distinct canonical products', async () => {
+  const url = 'https://220volt.kz/catalog/kabeli/kabel-vvg/ng/red-cable/';
+  const otherUrl = 'https://220volt.kz/catalog/kabeli/kabel-vvg/ng/blue-cable/';
+  const name = 'Кабель ВВГ нг 3*1,5 красный';
+  const html = `<link rel="canonical" href="${url}"><h1>${name}</h1>
+    <script type="application/ld+json">${JSON.stringify({
+      '@type': 'Product', '@id': url, name, sku: '',
+      offers: { price: '456.00', priceCurrency: 'KZT', availability: 'https://schema.org/InStock' },
+    })}</script>
+    <div class="product__tab-description-item"><span class="product__description-title">Цвет:</span><span class="product__tab-description-text">красный</span></div>`;
+  const proof = await verifyProductPage(url, {
+    fetchImpl: async () => new Response(html, { headers: { 'Content-Type': 'text/html' } }),
+  });
+  assert.equal(proof.verified, true);
+  assert.equal(proof.identityMode, 'jsonld_no_sku_canonical_name_price_stock');
+  const identity = productUrlIdentity(url);
+  const otherIdentity = productUrlIdentity(otherUrl);
+  const base = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-no-sku', diagnosticError: null, serverProductsCount: 1,
+    links: [{ title: name, url, price: 456, stockLine: 'Астана (5939 м)' }],
+    verifiedProductPages: new Map([[identity, proof]]),
+  };
+  assert.deepEqual(evaluate({}, base, { requireVerifiedPages: true }), []);
+  assert(evaluate({}, { ...base, links: [{ ...base.links[0], title: `${name} другой` }] },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('name disagrees')));
+  assert(evaluate({}, { ...base, links: [{ ...base.links[0], price: 457 }] },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('price disagrees')));
+  assert(evaluate({}, { ...base, links: [{ ...base.links[0], stockLine: null }] },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('stock is missing')));
+  assert.deepEqual(evaluate({}, {
+    ...base,
+    serverProductsCount: 2,
+    links: [...base.links, { title: name, url: otherUrl, price: 456, stockLine: 'Астана (5 м)' }],
+    verifiedProductPages: new Map([[identity, proof], [otherIdentity, {
+      ...proof, identity: otherIdentity, canonicalUrl: otherUrl,
+    }]]),
+  }, { requireVerifiedPages: true }), []);
+  assert(evaluate({ require_new_product_skus: true }, base, {
+    requireVerifiedPages: true, previousVerifiedSkus: new Set([`canonical:${identity}`]),
+  }).some((failure) => failure.includes('previously shown canonical product')));
+});
+
 test('strict acceptance checks rendered SKU identity, source price, stock and terminal trace', () => {
   const url = 'https://220volt.kz/catalog/kabeli/prokladka/trubki/ttu-12-6/';
   const identity = productUrlIdentity(url);
@@ -463,6 +543,44 @@ test('strict acceptance checks rendered SKU identity, source price, stock and te
   }]]) };
   assert(evaluate({}, unavailable, { requireVerifiedPages: true })
     .some((failure) => failure.includes('not confirmed in stock')));
+});
+
+test('SKU-backed shorter title can expand only with canonical and price proof, not conflicting names', () => {
+  const url = 'https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-%28iek%29/';
+  const canonical = url.replace('%28iek%29', '(iek)');
+  const identity = productUrlIdentity(url);
+  const sourceName = 'Автоматический выключатель ВА47-29М 1P 16А 4,5кА C GENERICA (ИЭК)';
+  const renderedName = 'Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)';
+  const html = (canonicalUrl = canonical) => `
+    <link rel="canonical" href="${canonicalUrl}">
+    <script type="application/ld+json">${JSON.stringify({
+      '@type': 'Product', '@id': canonical, name: sourceName, sku: 'Ем000033671',
+      offers: { price: 578, priceCurrency: 'KZT', availability: 'https://schema.org/InStock' },
+    })}</script>`;
+  const proof = { identity, verified: true, ...productProofFromHtml(html(), identity) };
+  assert.equal(proof.canonicalUrl, canonical);
+  const base = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-short-title', diagnosticError: null, serverProductsCount: 1,
+    links: [{ title: renderedName, url, price: 578, stockLine: 'Астана (1041 шт)' }],
+    verifiedProductPages: new Map([[identity, proof]]),
+  };
+  assert.deepEqual(evaluate({}, base, { requireVerifiedPages: true }), []);
+  for (const title of [
+    'Розетка 1Р ВА 47-29М 16А 4,5кА GENERICA (ИЭК)',
+    'Автомат 1Р ВА 47-29М 16А 4,5кА CHINT',
+    'Автомат 1Р ВА 47-29М 25А 4,5кА GENERICA (ИЭК)',
+  ]) {
+    assert(evaluate({}, { ...base, links: [{ ...base.links[0], title }] },
+      { requireVerifiedPages: true }).some((failure) => failure.includes('name disagrees')), title);
+  }
+  const withoutCanonical = { ...proof, canonicalUrl: undefined };
+  assert(evaluate({}, { ...base, verifiedProductPages: new Map([[identity, withoutCanonical]]) },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('name disagrees')));
+  const wrongCanonical = productProofFromHtml(html('https://220volt.kz/catalog/other/item/'), identity);
+  assert.equal(wrongCanonical.canonicalUrl, undefined);
+  assert(evaluate({}, { ...base, links: [{ ...base.links[0], price: 579 }] },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('price disagrees')));
 });
 
 test('alternative follow-up rejects a previously verified SKU', () => {

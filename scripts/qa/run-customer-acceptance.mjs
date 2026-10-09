@@ -439,27 +439,28 @@ function validProductPageRules(rules) {
 
 function productPageRuleFailures(rules, proof) {
   const failures = [];
+  const sourceId = proof.sku ?? proof.identity;
   for (const facetRule of rules.facets ?? []) {
     const field = Object.entries(proof.facets ?? {})
       .find(([name]) => sameSourceLabel(name, facetRule.name));
     failures.push(...sourceRuleFailures(
       facetRule,
       field?.[1] ?? '',
-      `product ${proof.sku} facet ${facetRule.name}`,
+      `product ${sourceId} facet ${facetRule.name}`,
     ));
   }
   if (rules.description) {
     failures.push(...sourceRuleFailures(
       rules.description,
       proof.description,
-      `product ${proof.sku} description`,
+      `product ${sourceId} description`,
     ));
   }
   if (rules.name) {
     failures.push(...sourceRuleFailures(
       rules.name,
       proof.name,
-      `product ${proof.sku} name`,
+      `product ${sourceId} name`,
     ));
   }
   for (const branch of rules.all_of ?? []) {
@@ -468,7 +469,7 @@ function productPageRuleFailures(rules, proof) {
   if (rules.any_of) {
     const alternatives = rules.any_of.map((branch) => productPageRuleFailures(branch, proof));
     if (alternatives.every((branchFailures) => branchFailures.length > 0)) {
-      failures.push(`product ${proof.sku}: no source-backed alternative matched: ${alternatives.map((branchFailures) => branchFailures.join('; ')).join(' | ')}`);
+      failures.push(`product ${sourceId}: no source-backed alternative matched: ${alternatives.map((branchFailures) => branchFailures.join('; ')).join(' | ')}`);
     }
   }
   return failures;
@@ -534,11 +535,20 @@ export function productUrlIdentity(rawUrl) {
     ) return null;
     // URL shape is only a candidate identity. A nested category can have the
     // exact same shape, so strict acceptance also verifies the live Product
-    // JSON-LD and SKU at this URL before counting it as a product.
+    // JSON-LD and a source-backed identity at this URL before counting it.
     // Tracking parameters, fragments, www and a trailing slash do not create
-    // another SKU. The canonical path remains the evidence identity.
+    // another product. The canonical path remains the evidence identity.
     const pathname = decodeURIComponent(url.pathname).normalize('NFC').replace(/\/+$/u, '').toLowerCase();
     return `220volt.kz${pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function sourceCanonicalIdentity(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.search || url.hash ? null : productUrlIdentity(rawUrl);
   } catch {
     return null;
   }
@@ -552,6 +562,18 @@ function productNodes(json) {
   return types.some((type) => typeof type === 'string' && /(?:^|\/)Product$/iu.test(type))
     ? [json, ...nested]
     : nested;
+}
+
+function exactProductName(value) {
+  return typeof value === 'string' ? value.normalize('NFC').replace(/\s+/gu, ' ').trim() : '';
+}
+
+function noSkuProductKey(identity) {
+  return `canonical:${identity}`;
+}
+
+function verifiedProductKey(proof, identity) {
+  return proof.sku ?? noSkuProductKey(identity);
 }
 
 export function productProofFromHtml(html, requestedIdentity) {
@@ -568,8 +590,7 @@ export function productProofFromHtml(html, requestedIdentity) {
           : product.sku;
         if (
           productUrlIdentity(product['@id']) !== requestedIdentity ||
-          typeof product.name !== 'string' || product.name.trim().length < 3 ||
-          typeof sku !== 'string' || !sku.trim() || sku.trim() === '0'
+          typeof product.name !== 'string' || product.name.trim().length < 3
         ) continue;
         // These are the product's own detail fields, not the category's
         // ItemList or related-product carousel. A facet may be inaccurate,
@@ -586,10 +607,35 @@ export function productProofFromHtml(html, requestedIdentity) {
         const offers = Array.isArray(product.offers) ? product.offers : [product.offers];
         const offer = offers.find((entry) => entry && typeof entry === 'object' &&
           entry.priceCurrency === 'KZT' && Number.isFinite(Number(entry.price)) && Number(entry.price) > 0);
+        const canonicalUrl = document.querySelector('link[rel~="canonical"][href]')?.getAttribute('href') ?? '';
+        const canonicalMatches = sourceCanonicalIdentity(canonicalUrl) === requestedIdentity;
+        const sourceIdMatchesCanonical = sourceCanonicalIdentity(product['@id']) === requestedIdentity;
+        const hasSku = typeof sku === 'string' && Boolean(sku.trim());
+        if (hasSku && sku.trim() === '0') continue;
+        if (!hasSku) {
+          // A blank/missing SKU is not an invitation to trust a URL-shaped
+          // category. Require the page's canonical, Product @id, H1, detail
+          // facets and an in-stock KZT offer to agree on one product.
+          if (sku !== undefined && sku !== null && typeof sku !== 'string') continue;
+          const heading = exactProductName(document.querySelector('h1')?.textContent);
+          if (
+            !canonicalMatches ||
+            !sourceIdMatchesCanonical ||
+            heading !== exactProductName(product.name) ||
+            Object.keys(facets).length === 0 ||
+            !offer || !/^https?:\/\/schema\.org\/InStock$/iu.test(offer.availability ?? '')
+          ) continue;
+          return {
+            sku: null, identityMode: 'jsonld_no_sku_canonical_name_price_stock', canonicalUrl,
+            name: product.name.trim(), facets, description,
+            offerPrice: Number(offer.price), availability: offer.availability,
+          };
+        }
         return {
           sku: sku.trim(), name: product.name.trim(), facets, description,
           offerPrice: offer ? Number(offer.price) : null,
           availability: typeof offer?.availability === 'string' ? offer.availability : null,
+          ...(canonicalMatches && sourceIdMatchesCanonical ? { canonicalUrl } : {}),
         };
       }
     }
@@ -639,7 +685,7 @@ export async function verifyProductPage(rawUrl, {
         throw new Error('product page exceeds HTML size limit');
       }
       const proof = productProofFromHtml(html, identity);
-      if (!proof) throw new Error('matching JSON-LD Product/@id/name/sku not found');
+      if (!proof) throw new Error('matching JSON-LD Product identity not found (SKU or canonical/name/price/stock fallback)');
       return { identity, verified: true, ...proof };
     })();
     return await Promise.race([request, deadline]);
@@ -715,6 +761,27 @@ function nameTokenRecall(displayed, source) {
   return shared / displayedWords.size;
 }
 
+function sourceNameAllowsLexicalExpansion(displayed, source) {
+  // A shorter catalog title may abbreviate prose (e.g. "Автомат" vs
+  // "Автоматический выключатель") and separate a model's letters/digits.
+  // Never use this route if it introduces a conflicting long word or changes
+  // any numeric specification; SKU, canonical URL and price are checked by
+  // the caller before the exception is allowed.
+  const longWords = (value) => exactProductName(value).toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е').match(/\p{L}{5,}/gu) ?? [];
+  const shownWords = longWords(displayed);
+  const sourceWords = longWords(source);
+  if (!shownWords.length || shownWords.some((shown) => !sourceWords.some((word) =>
+    shown === word || (Math.min(shown.length, word.length) >= 5 &&
+      (shown.startsWith(word) || word.startsWith(shown)))))) return false;
+  const numbers = (value) => (String(value).match(/\d+(?:[.,]\d+)?/gu) ?? [])
+    .map((part) => String(Number(part.replace(',', '.')))).sort();
+  const shownNumbers = numbers(displayed);
+  const sourceNumbers = numbers(source);
+  return shownNumbers.length > 0 && shownNumbers.length === sourceNumbers.length &&
+    shownNumbers.every((part, index) => part === sourceNumbers[index]);
+}
+
 export function evaluate(expect = {}, response, { requireVerifiedPages = false, previousVerifiedSkus = new Set() } = {}) {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_every_product_page);
@@ -735,30 +802,45 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
   }
   if (expect.require_new_product_skus === true) {
     for (const link of response.links) {
-      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
-      if (proof?.verified && previousVerifiedSkus.has(proof.sku)) {
-        failures.push(`previously shown SKU repeated as a new alternative: ${proof.sku}`);
+      const identity = productUrlIdentity(link.url);
+      const proof = response.verifiedProductPages?.get(identity);
+      if (proof?.verified && previousVerifiedSkus.has(verifiedProductKey(proof, identity))) {
+        failures.push(proof.sku
+          ? `previously shown SKU repeated as a new alternative: ${proof.sku}`
+          : `previously shown canonical product repeated as a new alternative: ${identity}`);
       }
     }
   }
   if (requireVerifiedPages) {
-    const seenSkus = new Set();
+    const seenProducts = new Set();
     for (const link of response.links) {
-      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
+      const identity = productUrlIdentity(link.url);
+      const proof = response.verifiedProductPages?.get(identity);
       if (!proof?.verified) continue;
-      if (seenSkus.has(proof.sku)) failures.push(`duplicate verified SKU: ${proof.sku}`);
-      seenSkus.add(proof.sku);
-      if (nameTokenRecall(link.title, proof.name) < 0.6) {
-        failures.push(`rendered product name disagrees with source SKU ${proof.sku}`);
+      const productKey = verifiedProductKey(proof, identity);
+      if (seenProducts.has(productKey)) failures.push(proof.sku
+        ? `duplicate verified SKU: ${proof.sku}`
+        : `duplicate verified canonical product: ${identity}`);
+      seenProducts.add(productKey);
+      const sourceLabel = proof.sku ? `SKU ${proof.sku}` : `canonical product ${identity}`;
+      const skuNameExpansionIsProven = Boolean(proof.sku && proof.canonicalUrl &&
+        productUrlIdentity(proof.canonicalUrl) === identity &&
+        Number.isFinite(link.price) && link.price === proof.offerPrice &&
+        /^https?:\/\/schema\.org\/InStock$/iu.test(proof.availability ?? '') &&
+        sourceNameAllowsLexicalExpansion(link.title, proof.name));
+      if (proof.sku
+        ? nameTokenRecall(link.title, proof.name) < 0.6 && !skuNameExpansionIsProven
+        : exactProductName(link.title) !== exactProductName(proof.name)) {
+        failures.push(`rendered product name disagrees with source ${sourceLabel}`);
       }
       if (!Number.isFinite(link.price) || !Number.isFinite(proof.offerPrice) ||
-          Math.abs(link.price - proof.offerPrice) > 0.51) {
-        failures.push(`rendered price disagrees with source SKU ${proof.sku}: ${link.price} vs ${proof.offerPrice}`);
+          (proof.sku ? Math.abs(link.price - proof.offerPrice) > 0.51 : link.price !== proof.offerPrice)) {
+        failures.push(`rendered price disagrees with source ${sourceLabel}: ${link.price} vs ${proof.offerPrice}`);
       }
       if (!/\/InStock$/iu.test(proof.availability ?? '')) {
-        failures.push(`source SKU ${proof.sku} is not confirmed in stock`);
+        failures.push(`source ${sourceLabel} is not confirmed in stock`);
       }
-      if (!link.stockLine) failures.push(`rendered stock is missing for source SKU ${proof.sku}`);
+      if (!link.stockLine) failures.push(`rendered stock is missing for source ${sourceLabel}`);
     }
     if (!response.terminalDiagnosticSeen) failures.push('terminal diagnostic is missing');
     if (!response.logId) failures.push('request log ID is missing');
@@ -1122,7 +1204,7 @@ async function runTurn({ message, expect }, state) {
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   for (const proof of parsed.verifiedProductPages?.values() ?? []) {
-    if (proof.verified) state.previousVerifiedSkus.add(proof.sku);
+    if (proof.verified) state.previousVerifiedSkus.add(verifiedProductKey(proof, proof.identity));
   }
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
@@ -1134,9 +1216,11 @@ async function runTurn({ message, expect }, state) {
     diagnostic_error: parsed.diagnosticError,
     products_count: parsed.links.length,
     unique_products_count: linkEvidence.uniqueCount,
-    product_identity_mode: strictFullSuite
-      ? 'live_jsonld_product_sku_name_price_stock'
-      : requiresLiveProductProof ? 'live_jsonld_product_sku' : 'url_shape_only_not_sku_verified',
+    product_identity_mode: [...(parsed.verifiedProductPages?.values() ?? [])].some((proof) =>
+      proof.verified && proof.identityMode === 'jsonld_no_sku_canonical_name_price_stock')
+      ? 'live_jsonld_product_sku_or_no_sku_canonical_name_price_stock'
+      : strictFullSuite ? 'live_jsonld_product_sku_name_price_stock'
+        : requiresLiveProductProof ? 'live_jsonld_product_sku' : 'url_shape_only_not_sku_verified',
     product_identity_evidence: requiresLiveProductProof
       ? [...(parsed.verifiedProductPages ?? new Map()).values()].map(({ description, ...evidence }) => ({
           ...evidence,
@@ -1165,7 +1249,9 @@ export async function main() {
     endpoint,
     strict_full_suite: strictFullSuite,
     strict_inventory: strictManifest,
-    product_identity_mode: strictFullSuite ? 'live_jsonld_product_sku_name_price_stock' : 'url_shape_only_not_sku_verified',
+    product_identity_mode: strictFullSuite
+      ? 'live_jsonld_product_sku_or_no_sku_canonical_name_price_stock'
+      : 'url_shape_only_not_sku_verified',
     selected_count: selected.length,
     requested_repetitions: Object.fromEntries(runPlan.map(({ testCase, repeat }) => [testCase.id, repeat])),
     cases: [],
