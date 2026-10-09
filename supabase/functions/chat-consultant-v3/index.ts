@@ -13347,6 +13347,13 @@ async function runExpertLoop(
             source_proven_count: eligible.length,
             minimum_results: resultCardinality.minimum,
           });
+          send({
+            type: "tool_event",
+            tool: "selection_recovery",
+            phase: "result",
+            summary:
+              `plan=${shortfallPlan.length}; initial=${eligible.length}; minimum=${resultCardinality.minimum}; application=${sourceProofCriteria.filter((criterion) => criterion.proof_scope === "application_suitability").length}; customer_eq=${sourceProofCriteria.filter((criterion) => criterion.op === "eq" && criterion.evidence === "user_explicit" && criterion.proof_scope !== "application_suitability").length}`,
+          });
           for (const attempt of shortfallPlan) {
             // The catalog may retry 429 twice, so its own per-request 8 s
             // timer is not an end-to-end cap. Abort this optional recovery
@@ -13384,6 +13391,13 @@ async function runExpertLoop(
               eligible,
               sourceProvenRecovered,
             );
+            send({
+              type: "tool_event",
+              tool: "selection_recovery",
+              phase: "result",
+              summary:
+                `retrieved=${recovered.ok && recovered.tool === "search_catalog" ? recovered.results.length : 0}; candidate=${candidatePool.length}; proven=${sourceProvenRecovered.length}; pooled=${eligible.length}; error=${recovered.ok ? "none" : recovered.error_code}`,
+            });
             steps.push({
               step: "v3_source_proven_cardinality_recovery",
               ms: now(),
