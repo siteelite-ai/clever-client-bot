@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import type { ProductFull } from "./types.ts";
+import { runWithDeadline } from "./turn-deadline.ts";
 
 const TTL_SECONDS = 30 * 60;
 const MAX_PRODUCTS = 8;
@@ -238,13 +239,17 @@ ${safeJson}
 export async function loadRecentProductEvidence(
   supabase: SupabaseClient,
   sessionId: string,
+  timeoutMs = 2_500,
 ): Promise<RecentProductEvidence[]> {
   try {
-    const { data, error } = await supabase
-      .from("chat_cache_v2")
-      .select("cache_value, expires_at")
-      .eq("cache_key", `product-evidence:v3:${sessionId}`)
-      .maybeSingle();
+    const { data, error } = await runWithDeadline(
+      () => supabase
+        .from("chat_cache_v2")
+        .select("cache_value, expires_at")
+        .eq("cache_key", `product-evidence:v3:${sessionId}`)
+        .maybeSingle(),
+      timeoutMs,
+    );
     if (error || !data || new Date(data.expires_at).getTime() <= Date.now()) return [];
     const raw = (data.cache_value as { products?: unknown })?.products;
     return Array.isArray(raw) ? raw.filter(isEvidence).slice(0, MAX_PRODUCTS) : [];
@@ -257,21 +262,32 @@ export async function persistRecentProductEvidence(
   supabase: SupabaseClient,
   sessionId: string,
   products: ProductFull[],
+  timeoutMs = 4_000,
+  canPersist: () => boolean = () => true,
 ): Promise<void> {
-  if (!products.length) return;
+  if (!products.length || !canPersist()) return;
   try {
-    const current = compactRecentProducts(products);
-    if (!current.length) return;
-    const previous = await loadRecentProductEvidence(supabase, sessionId);
-    const currentIds = new Set(current.map((product) => product.id));
-    const merged = [...current, ...previous.filter((product) => !currentIds.has(product.id))].slice(0, MAX_PRODUCTS);
-    const expiresAt = new Date(Date.now() + TTL_SECONDS * 1000).toISOString();
-    await supabase.from("chat_cache_v2").upsert({
-      cache_key: `product-evidence:v3:${sessionId}`,
-      cache_value: { products: merged, persisted_at: new Date().toISOString() },
-      expires_at: expiresAt,
-      hit_count: 0,
-    }, { onConflict: "cache_key" });
+    await runWithDeadline(async (signal) => {
+      const current = compactRecentProducts(products);
+      if (!current.length) return;
+      const previous = await loadRecentProductEvidence(
+        supabase,
+        sessionId,
+        Math.min(2_500, timeoutMs),
+      );
+      // Do not begin a cache write after the accepted turn has already moved
+      // on. Cache is optional context, never a reason to hold the SSE open.
+      if (signal.aborted || !canPersist()) return;
+      const currentIds = new Set(current.map((product) => product.id));
+      const merged = [...current, ...previous.filter((product) => !currentIds.has(product.id))].slice(0, MAX_PRODUCTS);
+      const expiresAt = new Date(Date.now() + TTL_SECONDS * 1000).toISOString();
+      await supabase.from("chat_cache_v2").upsert({
+        cache_key: `product-evidence:v3:${sessionId}`,
+        cache_value: { products: merged, persisted_at: new Date().toISOString() },
+        expires_at: expiresAt,
+        hit_count: 0,
+      }, { onConflict: "cache_key" });
+    }, timeoutMs);
   } catch {
     // Best-effort context must never break the chat response.
   }

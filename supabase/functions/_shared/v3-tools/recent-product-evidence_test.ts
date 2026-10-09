@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
@@ -10,6 +11,8 @@ import {
   isRecentProductPriceSelectionFollowup,
   latestRenderedSelectionRequest,
   latestRecentProductEvidenceSet,
+  loadRecentProductEvidence,
+  persistRecentProductEvidence,
 } from "./recent-product-evidence.ts";
 import type { ProductFull } from "./types.ts";
 
@@ -167,4 +170,65 @@ Deno.test("prior reasoning excludes rendered product blocks and their numeric me
     ].join("\n"),
   }]);
   assertEquals(prose, "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.");
+});
+
+Deno.test("hanging optional context read cannot hold a customer turn", async () => {
+  const never = new Promise<never>(() => {});
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: () => never }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+  const evidence = await loadRecentProductEvidence(supabase, "session", 10);
+  assertEquals(evidence, []);
+});
+
+Deno.test("hanging context read does not start a late cache write", async () => {
+  const never = new Promise<never>(() => {});
+  let upserts = 0;
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: () => never }),
+      }),
+      upsert: () => {
+        upserts++;
+        return Promise.resolve({ error: null });
+      },
+    }),
+  } as unknown as SupabaseClient;
+  await persistRecentProductEvidence(supabase, "session", [product()], 10);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assertEquals(upserts, 0);
+});
+
+Deno.test("a completed turn cannot start a cache write after its read settles", async () => {
+  let finishRead!: (value: { data: null; error: null }) => void;
+  const read = new Promise<{ data: null; error: null }>((resolve) => {
+    finishRead = resolve;
+  });
+  let upserts = 0;
+  let turnActive = true;
+  const supabase = {
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle: () => read }) }),
+      upsert: () => {
+        upserts++;
+        return Promise.resolve({ error: null });
+      },
+    }),
+  } as unknown as SupabaseClient;
+  const pending = persistRecentProductEvidence(
+    supabase,
+    "session",
+    [product()],
+    100,
+    () => turnActive,
+  );
+  turnActive = false;
+  finishRead({ data: null, error: null });
+  await pending;
+  assertEquals(upserts, 0);
 });

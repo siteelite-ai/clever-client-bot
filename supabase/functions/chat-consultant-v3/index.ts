@@ -9,6 +9,11 @@ import {
   type SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
+  createDeadlineFetch,
+  retryBoundedTerminalWrite,
+  runWithDeadline,
+} from "../_shared/v3-tools/turn-deadline.ts";
+import {
   buildSystemPrompt,
   TOOL_SCHEMAS,
 } from "../_shared/v3-tools/schemas.ts";
@@ -281,7 +286,7 @@ import {
   latestRecentProductEvidenceSet,
   latestRenderedSelectionRequest,
   loadRecentProductEvidence,
-  persistRecentProductEvidence,
+  persistRecentProductEvidence as persistRecentProductEvidenceUnchecked,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import {
@@ -525,6 +530,7 @@ const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
 const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
 const TURN_TIMEOUT_MS = 32_000;
+const DB_FETCH_TIMEOUT_MS = 5_000;
 // Stop starting remote model calls before the hard abort so the ordinary
 // evidence-gated recovery below has time to render a proven pool and close SSE.
 const TURN_SOFT_DEADLINE_MS = 13_000;
@@ -655,7 +661,10 @@ interface AppSettings {
   v3_criteria_gate_enabled: boolean;
 }
 
-async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
+async function loadSettings(
+  supabase: SupabaseClient,
+  signal: AbortSignal,
+): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
@@ -692,6 +701,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_criteria_gate_enabled: Boolean(row?.v3_criteria_gate_enabled),
     };
   } catch {
+    if (signal.aborted) throw signal.reason;
     return {
       openrouter_api_key: Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
@@ -5531,17 +5541,26 @@ type TurnClaim =
 async function readReplayLog(
   supabase: SupabaseClient,
   messageId: string,
+  timeoutMs = 3_000,
 ): Promise<ReplayLogRow | null> {
-  const { data, error } = await supabase
-    .from("chat_request_logs")
-    .select("id,session_id,user_query,error,response_events")
-    .eq("message_id", messageId)
-    .maybeSingle();
-  if (error) {
-    console.error("[v3] replay log read failed:", error.message);
+  try {
+    const { data, error } = await runWithDeadline(
+      () => supabase
+        .from("chat_request_logs")
+        .select("id,session_id,user_query,error,response_events")
+        .eq("message_id", messageId)
+        .maybeSingle(),
+      timeoutMs,
+    );
+    if (error) {
+      console.error("[v3] replay log read failed:", error.message);
+      return null;
+    }
+    return data as ReplayLogRow | null;
+  } catch (error) {
+    console.error("[v3] replay log read timed out or failed:", error);
     return null;
   }
-  return data as ReplayLogRow | null;
 }
 
 async function claimTurnLogStart(
@@ -5598,13 +5617,17 @@ async function waitForReplayCompletion(
   supabase: SupabaseClient,
   messageId: string,
   initial: ReplayLogRow,
-  timeoutMs = 85_000,
+  timeoutMs = 55_000,
 ): Promise<ReplayLogRow> {
   let current = initial;
   const deadline = Date.now() + timeoutMs;
   while (current.error === "in_progress" && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 750));
-    const refreshed = await readReplayLog(supabase, messageId);
+    const refreshed = await readReplayLog(
+      supabase,
+      messageId,
+      Math.min(3_000, Math.max(1, deadline - Date.now())),
+    );
     if (refreshed) current = refreshed;
   }
   return current;
@@ -5620,22 +5643,30 @@ async function updateTurnLogEnd(
   errorMsg: string | null,
   responseEvents: SseEvent[],
 ) {
-  try {
-    const { error } = await supabase
-      .from("chat_request_logs")
-      .update({
-        steps,
-        final_products_count: finalProductsCount,
-        final_response: finalResponse || null,
-        total_ms: totalMs,
-        error: errorMsg,
-        response_events: responseEvents,
-      })
-      .eq("id", logId);
-    if (error) console.error("[v3] log update failed:", error.message);
-  } catch (e) {
-    console.error("[v3] log update exception:", e);
-  }
+  // A terminal UPDATE is idempotent. Retry once if the first network response
+  // stalls: the first write may have committed, while its HTTP reply was lost.
+  const updated = await retryBoundedTerminalWrite(
+    async () => {
+      const { error } = await supabase
+        .from("chat_request_logs")
+        .update({
+          steps,
+          final_products_count: finalProductsCount,
+          final_response: finalResponse || null,
+          total_ms: totalMs,
+          error: errorMsg,
+          response_events: responseEvents,
+        })
+        .eq("id", logId);
+      if (error) throw error;
+    },
+    DB_FETCH_TIMEOUT_MS,
+    (error, attempt) => console.error(
+      `[v3] terminal log update attempt ${attempt} failed:`,
+      error,
+    ),
+  );
+  if (!updated) console.error("[v3] terminal log update unavailable:", logId);
 }
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
@@ -17943,6 +17974,9 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
+    // This pinned Supabase client has no per-query abortSignal method. Bound
+    // every database HTTP request centrally, including cache and log writes.
+    global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
   });
 
   const t0 = Date.now();
@@ -17952,6 +17986,9 @@ Deno.serve(async (req) => {
   let finalTextAccum = "";
   let productsCount = 0;
   const responseEvents: SseEvent[] = [];
+  let streamCompleted = false;
+  let workTimedOut = false;
+  let sendingTerminalFailure = false;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -17963,6 +18000,9 @@ Deno.serve(async (req) => {
         }
       };
       const send = (ev: SseEvent) => {
+        // An uncooperative remote promise may settle after the turn deadline.
+        // It must not append a second answer or mutate the persisted replay.
+        if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) return;
         // GUARD: единственный выход текста наружу. Служебная лексика механики
         // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
@@ -18038,14 +18078,20 @@ Deno.serve(async (req) => {
           message_id: body.messageId,
         },
       });
-      const claim = await claimTurnLogStart(
-        supabase,
-        sessionId,
-        body.messageId,
-        userMessage,
-        [...steps],
-        body.resumeOnly,
-      );
+      const claim = await runWithDeadline(
+        () => claimTurnLogStart(
+          supabase,
+          sessionId,
+          body.messageId,
+          userMessage,
+          [...steps],
+          body.resumeOnly,
+        ),
+        6_000,
+      ).catch((error): TurnClaim => {
+        console.error("[v3] turn claim timed out or failed:", error);
+        return { kind: "unavailable" };
+      });
       steps.push({
         step: "v3_turn_claim_resolved",
         ms: Date.now() - t0,
@@ -18148,10 +18194,6 @@ Deno.serve(async (req) => {
       // lifecycles. A browser/proxy disconnect must not cancel paid catalog and
       // model work: a resume-only request will replay the persisted result.
       const executionController = new AbortController();
-      const executionTimer = setTimeout(
-        () => executionController.abort(),
-        TURN_TIMEOUT_MS + 10_000,
-      );
       let logFinalized = false;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
@@ -18175,45 +18217,44 @@ Deno.serve(async (req) => {
         }
       };
 
-      const settings = await loadSettings(supabase);
-      steps.push({
-        step: "v3_settings_loaded",
-        ms: Date.now() - t0,
-        meta: {
-          has_openrouter_key: Boolean(settings.openrouter_api_key),
-          has_catalog_token: Boolean(settings.volt220_api_token),
-        },
-      });
-      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
-        errorMsg = !settings.openrouter_api_key
-          ? "missing_openrouter_key"
-          : "missing_catalog_token";
-        publicDiagnosticError = "internal_error";
-        send({
-          type: "delta",
-          content:
-            "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером.",
-        });
-        const completeEvent: SseEvent = {
-          type: "diagnostic",
-          log_id: logId,
-          phase: "complete",
-          products_count: 0,
-          error: publicDiagnosticError,
-        };
-        responseEvents.push(completeEvent, { type: "done" });
-        await finalizeLogAwait();
-        clearInterval(keepAliveTimer);
-        clearTimeout(executionTimer);
-        emit(completeEvent);
-        emit({ type: "done" });
-        try {
-          controller.close();
-        } catch { /* already closed */ }
-        return;
-      }
-
       try {
+        await runWithDeadline(async (turnSignal) => {
+          const persistRecentProductEvidence = (
+            database: SupabaseClient,
+            evidenceSessionId: string,
+            products: ProductFull[],
+          ) => persistRecentProductEvidenceUnchecked(
+            database,
+            evidenceSessionId,
+            products,
+            4_000,
+            () => !workTimedOut && !streamCompleted && !turnSignal.aborted,
+          );
+          const settings = await loadSettings(supabase, turnSignal);
+          // A slow settings response must not start paid catalog/model work
+          // after the outer deadline has already closed the accepted turn.
+          if (turnSignal.aborted) return;
+          steps.push({
+            step: "v3_settings_loaded",
+            ms: Date.now() - t0,
+            meta: {
+              has_openrouter_key: Boolean(settings.openrouter_api_key),
+              has_catalog_token: Boolean(settings.volt220_api_token),
+            },
+          });
+          if (!settings.openrouter_api_key || !settings.volt220_api_token) {
+            errorMsg = !settings.openrouter_api_key
+              ? "missing_openrouter_key"
+              : "missing_catalog_token";
+            publicDiagnosticError = "internal_error";
+            send({
+              type: "delta",
+              content:
+                "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером.",
+            });
+            return;
+          }
+
         const priorHistory = stripCurrentUserEcho(history, userMessage);
         const pendingSlot = slots.pending_clarification;
         const pendingRecord = pendingSlot && typeof pendingSlot === "object" &&
@@ -19117,6 +19158,12 @@ Deno.serve(async (req) => {
             shownProducts,
           );
         }
+        }, TURN_TIMEOUT_MS + 10_000, () => {
+          workTimedOut = true;
+          executionController.abort(
+            new DOMException("turn_deadline_exceeded", "TimeoutError"),
+          );
+        });
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
         const publicFailure = classifyPublicFailure(e);
@@ -19136,14 +19183,16 @@ Deno.serve(async (req) => {
           },
         });
         try {
+          sendingTerminalFailure = true;
           send({
             type: "delta",
             content: `\n\n${publicFailure.customer_message}`,
           });
         } catch { /* stream may be closed */ }
+        finally { sendingTerminalFailure = false; }
       } finally {
         clearInterval(keepAliveTimer);
-        clearTimeout(executionTimer);
+        streamCompleted = true;
         const completeEvent: SseEvent = {
           type: "diagnostic",
           log_id: logId,
