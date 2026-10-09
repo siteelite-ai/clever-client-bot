@@ -43,20 +43,53 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+function absolutePricePhrases(text: string): Array<{ direction: CatalogPriceExtreme; negated: boolean }> {
+  const matches: Array<{ direction: CatalogPriceExtreme; start: number; end: number }> = [];
+  for (const [direction, patterns] of [
+    ["cheapest", CHEAPEST], ["expensive", EXPENSIVE],
+  ] as const) {
+    for (const pattern of patterns) {
+      const repeated = new RegExp(pattern.source, `${pattern.flags}g`);
+      for (const match of text.matchAll(repeated)) {
+        if (match.index === undefined) continue;
+        matches.push({ direction, start: match.index, end: match.index + match[0].length });
+      }
+    }
+  }
+  matches.sort((a, b) => a.start - b.start || a.end - b.end);
+  const classified: Array<{ direction: CatalogPriceExtreme; start: number; end: number; negated: boolean }> = [];
+  for (const phrase of matches) {
+    const before = text.slice(0, phrase.start);
+    const after = text.slice(phrase.end).split(/[.!?;,—]/u, 1)[0];
+    const prefixNegated = /(?<![\p{L}\p{N}])не\s+(?:(?:обязательно|нужен|нужна|нужно|нужны|хочу|ищу|надо|должен|должна|должно)\s+(?:быть\s+)?(?:именно\s+)?(?:(?:вариант|товар|модель)\s+(?:с|по)\s+)?)?$/u
+      .test(before);
+    const suffixNegated = /^(?:\s+(?!(?:и|или|а|но|зато)(?!\p{L}))[\p{L}\p{N}-]+){0,3}\s+не\s+(?:нужен|нужна|нужно|нужны|подходит|хочу)(?!\p{L})/u
+      .test(after);
+    const previous = classified.at(-1);
+    // "Не хочу самый дешёвый или самый дорогой" negates both members of a
+    // coordinate phrase. A contrast (", а ...") starts a new positive request.
+    const coordinatedNegation = previous?.negated === true &&
+      /^(?:\s*,?\s*(?:или|и)\s*)$/u.test(text.slice(previous.end, phrase.start));
+    classified.push({ ...phrase, negated: prefixNegated || suffixNegated || coordinatedNegation });
+  }
+  for (let index = classified.length - 2; index >= 0; index--) {
+    const current = classified[index];
+    const next = classified[index + 1];
+    if (next.negated && /^(?:\s*,?\s*(?:или|и)\s*)$/u.test(text.slice(current.end, next.start))) {
+      current.negated = true;
+    }
+  }
+  return classified.map(({ direction, negated }) => ({ direction, negated }));
+}
+
 /** An explicit absolute price request, distinct from a budget or preference. */
 export function classifyCatalogPriceExtreme(
   message: string,
 ): CatalogPriceExtreme | null {
   const text = normalized(message);
-  if (/(?<![\p{L}\p{N}])не\s+сам(?:ый|ая|ое|ые)(?![\p{L}])/u.test(text)) {
-    return null;
-  }
-  if (
-    /(?<![\p{L}\p{N}])не\s+(?:обязательно|нужен|нужна|хочу|ищу)\s+(?:именно\s+)?сам(?:ый|ая|ое|ые)(?![\p{L}])/u
-      .test(text)
-  ) return null;
-  const cheapest = matchesAny(text, CHEAPEST);
-  const expensive = matchesAny(text, EXPENSIVE);
+  const phrases = absolutePricePhrases(text);
+  const cheapest = phrases.some((phrase) => phrase.direction === "cheapest" && !phrase.negated);
+  const expensive = phrases.some((phrase) => phrase.direction === "expensive" && !phrase.negated);
   // An ambiguous request must not silently pick an order.
   if (cheapest === expensive) return null;
   return cheapest ? "cheapest" : "expensive";
@@ -65,10 +98,6 @@ export function classifyCatalogPriceExtreme(
 /** A budget never erases a separately requested order or comparison. */
 export function detectPriceDirection(message: string): PriceIntent | null {
   const text = normalized(message);
-  if (/не\s+сам(?:ый|ая|ое|ые)\s+(?:дешев|недорог|дорог)/u.test(text)) {
-    return null;
-  }
-
   const explicit = classifyCatalogPriceExtreme(message);
   if (explicit) {
     return {
@@ -77,18 +106,21 @@ export function detectPriceDirection(message: string): PriceIntent | null {
     };
   }
   // "Не дороже 5000" is a cap, not a request for a comparative ranking.
-  if (/не\s+(?:подороже|дороже|подешевле|дешевле)/u.test(text)) return null;
+  const comparativeText = text.replace(
+    /(?<![\p{L}\p{N}])не\s+(?:подороже|дороже|подешевле|дешевле)(?![\p{L}])/gu,
+    "",
+  );
 
   if (
     /(?:в том же.*(?:сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u
-      .test(text)
+      .test(comparativeText)
   ) {
     return { kind: "comparative", direction: "same" };
   }
-  if (/(?:подешевле|дешевле)/u.test(text)) {
+  if (/(?:подешевле|дешевле)/u.test(comparativeText)) {
     return { kind: "comparative", direction: "cheaper" };
   }
-  if (/(?:подороже|дороже)/u.test(text)) {
+  if (/(?:подороже|дороже)/u.test(comparativeText)) {
     return { kind: "comparative", direction: "more_expensive" };
   }
   // Relative price-tier preferences remain candidate ranking only; the

@@ -658,6 +658,194 @@ test('Notion v3 keeps historical v2 intact and checks catalog-backed cable and o
   });
 });
 
+function analogReply(products, text = '') {
+  return {
+    text, productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'bt924-source-proof', serverProductsCount: products.length,
+    links: products.map(({ url, name, price }) => ({
+      url, title: name, price, stockLine: 'Караганда (5 шт)',
+    })),
+    verifiedProductPages: new Map(products.map(({ url, sku, name, price, facets }) => [
+      productUrlIdentity(url), {
+        identity: productUrlIdentity(url), verified: true, sku, name, facets,
+        offerPrice: price, availability: 'https://schema.org/InStock', description: '',
+      },
+    ])),
+  };
+}
+
+test('BT-924 DN027B accepts a source-backed Meson downlight, not unrelated recessed-looking items', () => {
+  const expect = notionV3Suite.cases.find((item) => item.id === 'bt924-dn027b-analogs').turns[0].expect;
+  const meson = {
+    url: 'https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/',
+    sku: '915005746001',
+    name: '915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse',
+    price: 1334,
+    facets: {
+      'Категория': 'Светильники', 'Вид светильника': 'даунлайт',
+      'Способ монтажа': 'встраиваемый', 'Тип лампы': 'LED',
+      'Тип цоколя': 'нет', 'ПРА': 'в комплекте',
+      'Мощность ламп, Вт': '6', 'Световой поток, Лм': '400',
+      'Диаметр, см': '8', 'Напряжение, В': '220', 'Степень защиты, IP': '20',
+    },
+  };
+  assert.deepEqual(evaluate(expect, analogReply([meson]), { requireVerifiedPages: true }), []);
+  assert(evaluate(expect, analogReply([{ ...meson, name: 'Светильник DN027B G2 LED6/NW 7W D90' }]),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('forbidden product title')));
+  const disguisedSource = analogReply([{ ...meson, name: 'Светильник DN027B G2 LED6/NW 7W D90' }]);
+  disguisedSource.links[0].title = meson.name;
+  assert(evaluate(expect, disguisedSource)
+    .some((failure) => failure.includes('forbidden source fragment DN027B')));
+  for (const [facet, incompatible] of [
+    ['Категория', 'Лампы'], ['Вид светильника', 'трековые светильники'],
+    ['Способ монтажа', 'накладной'], ['Тип лампы', 'галогенная'],
+    ['Тип цоколя', 'GX53'], ['ПРА', 'не в комплекте'],
+    ['Мощность ламп, Вт', '30'], ['Мощность ламп, Вт', '7-100'],
+    ['Мощность ламп, Вт', '7/100'], ['Световой поток, Лм', '1800'],
+    ['Световой поток, Лм', '400-1800'],
+    ['Диаметр, см', '22.5'], ['Напряжение, В', '12'],
+    ['Напряжение, В', '150-170'], ['Напряжение, В', '240-260'],
+    ['Степень защиты, IP', '10'],
+  ]) {
+    const altered = { ...meson, facets: { ...meson.facets, [facet]: incompatible } };
+    assert(evaluate(expect, analogReply([altered]), { requireVerifiedPages: true })
+      .some((failure) => failure.includes(`facet ${facet}`)), `${facet}: ${incompatible}`);
+  }
+  assert(evaluate(expect, analogReply([{ ...meson, facets: { ...meson.facets, 'ПРА': undefined } }]),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('facet ПРА')));
+  assert(evaluate(expect, analogReply([{ ...meson, facets: { ...meson.facets, 'Напряжение, В': undefined } }]),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('facet Напряжение, В')));
+  assert.deepEqual(evaluate(expect, analogReply([{ ...meson, facets: { ...meson.facets, 'Напряжение, В': '180-265' } }]),
+    { requireVerifiedPages: true }), []);
+  assert(evaluate(expect, { ...analogReply([meson]), verifiedProductPages: new Map() },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('unverified product page')));
+});
+
+test('BT-924 GX53 requires distinct, verified tablet lamps with the actual GX53 interface', () => {
+  const expect = notionV3Suite.cases.find((item) => item.id === 'bt924-gx53-analogs').turns[0].expect;
+  const tablet8 = {
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/lampa-svetodiodnaya-t75-tabletka-8vt-230v-6500k-gx53-iek/',
+    sku: 'LLE-T80-8-230-65-GX53',
+    name: 'Лампа светодиодная T75 таблетка 8Вт 230В 6500К GX53 IEK',
+    price: 528,
+    facets: {
+      'Категория': 'Лампы', 'Тип цоколя': 'GX53',
+      'Вид лампы (принцип работы)': 'светодиодная', 'Тип напряжения': 'АС',
+      'Форма колбы': 'таблетка', 'Диаметр, мм': '74',
+      'Напряжение, В': '170-264', 'Мощность, Вт': '8',
+    },
+  };
+  const cool = {
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/lampa-svetodiodnaya-t80-tabletka-15vt-230v-6500k-gx53-generica-iek/',
+    sku: 'LL-T80-15-230-65-GX53-G',
+    name: 'Лампа светодиодная T80 таблетка 15Вт 230В 6500К GX53 GENERICA ИЭК',
+    price: 521,
+    facets: { ...tablet8.facets, 'Диаметр, мм': '73', 'Напряжение, В': '220-240', 'Мощность, Вт': '15' },
+  };
+  const fitCaveat = 'Перед заменой проверьте максимально допустимую мощность светильника и посадочные размеры лампы.';
+  assert.deepEqual(evaluate(expect, analogReply([tablet8, cool], fitCaveat), { requireVerifiedPages: true }), []);
+  assert.deepEqual(evaluate(expect, analogReply([tablet8, cool],
+    'Проверьте максимально допустимую мощность светильника. Также сверьте габариты и посадочное место лампы.'),
+  { requireVerifiedPages: true }), [], 'two direct safety requests may be separate sentences');
+  assert(evaluate(expect, analogReply([tablet8, cool]), { requireVerifiedPages: true })
+    .some((failure) => failure.includes('user-directed compatibility caveat')));
+  assert(evaluate(expect, analogReply([tablet8, cool], 'Проверьте мощность лампы.'), { requireVerifiedPages: true })
+    .some((failure) => failure.includes('user-directed compatibility caveat')));
+  assert(evaluate(expect, analogReply([tablet8, cool],
+    'Сверил максимально допустимую мощность светильника и посадочные размеры лампы.'),
+  { requireVerifiedPages: true }).some((failure) => failure.includes('user-directed compatibility caveat')),
+  'unsupported assurance is not a request for the customer to verify fixture limits');
+  assert(evaluate(expect, analogReply([tablet8]), { requireVerifiedPages: true })
+    .some((failure) => failure.includes('products 1 < 2')));
+  const sixNeutral = {
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/lampa-svetodiodnaya-eco-t75-tabletka-6vt-230v-4000k-gx53-iek/',
+    sku: 'LLE-T80-6-230-40-GX53',
+    name: 'Лампа светодиодная ECO T75 таблетка 6Вт 230В 4000К GX53 IEK',
+    price: 447,
+    facets: { ...tablet8.facets, 'Напряжение, В': '175-250', 'Мощность, Вт': '6' },
+  };
+  const sixWarm = {
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/lampa-svetodiodnaya-eco-t75-tabletka-6vt-230v-3000k-gx53-iek/',
+    sku: 'LLE-T80-6-230-30-GX53',
+    name: 'Лампа светодиодная ECO T75 таблетка 6Вт 230В 3000К GX53 IEK',
+    price: 358,
+    facets: { ...tablet8.facets, 'Напряжение, В': '175-250', 'Мощность, Вт': '6' },
+  };
+  assert.deepEqual(evaluate(expect, analogReply([sixNeutral, sixWarm]), { requireVerifiedPages: true }), []);
+  for (const [facet, incompatible] of [
+    ['Категория', 'Светильники'], ['Тип цоколя', 'E27'], ['Тип цоколя', 'GX70'],
+    ['Вид лампы (принцип работы)', 'люминесцентная'], ['Тип напряжения', 'DC'],
+    ['Форма колбы', 'шар'], ['Диаметр, мм', '95'], ['Диаметр, мм', '74-95'],
+    ['Напряжение, В', '12'], ['Напряжение, В', '150-170'],
+    ['Напряжение, В', '240-260'], ['Мощность, Вт', '30'], ['Мощность, Вт', '8-30'],
+  ]) {
+    const altered = { ...tablet8, facets: { ...tablet8.facets, [facet]: incompatible } };
+    assert(evaluate(expect, analogReply([altered, cool]), { requireVerifiedPages: true })
+      .some((failure) => failure.includes(`facet ${facet}`)), `${facet}: ${incompatible}`);
+  }
+  const original = {
+    ...tablet8,
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/lampa-svetodiodnaya-eco-t75-tabletka-6vt-230v-6500k-gx53-iek/',
+    sku: 'LLE-T80-6-230-65-GX53',
+    name: 'Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK',
+    facets: { ...tablet8.facets, 'Мощность, Вт': '6' },
+  };
+  assert(evaluate(expect, analogReply([original, cool]), { requireVerifiedPages: true })
+    .some((failure) => failure.includes('forbidden product title')));
+  assert(evaluate(expect, analogReply([original, cool]), { requireVerifiedPages: true })
+    .some((failure) => failure.includes('forbidden source fragment')));
+  assert(evaluate(expect, analogReply([{ ...tablet8, facets: { ...tablet8.facets, 'Тип цоколя': undefined } }, cool]),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('facet Тип цоколя')));
+  assert(evaluate(expect, analogReply([{ ...tablet8, facets: { ...tablet8.facets, 'Напряжение, В': undefined } }, cool]),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('facet Напряжение, В')));
+  assert(evaluate(expect, analogReply([{ ...tablet8, facets: { ...tablet8.facets, 'Мощность, Вт': '6-15' } }, cool], fitCaveat),
+    { requireVerifiedPages: true }).some((failure) => failure.includes('source scalar value is missing or malformed')));
+});
+
+test('conditional source-facet caveat contract is validated before a live request', () => {
+  const valid = { require_higher_product_facet_caveat: {
+    facet_name: 'Мощность, Вт', baseline_numeric: 6,
+    text_groups: [['проверь'], ['мощн']],
+  } };
+  assert.doesNotThrow(() => validateExpectationObject(valid));
+  for (const contract of [
+    { ...valid.require_higher_product_facet_caveat, facet_name: '' },
+    { ...valid.require_higher_product_facet_caveat, baseline_numeric: '6' },
+    { ...valid.require_higher_product_facet_caveat, text_groups: [] },
+    { ...valid.require_higher_product_facet_caveat, typo: true },
+  ]) {
+    assert.throws(() => validateExpectationObject({ require_higher_product_facet_caveat: contract }),
+      /require_higher_product_facet_caveat/);
+  }
+});
+
+test('generic source range coverage rejects partial and malformed voltage evidence', () => {
+  const expect = { require_every_product_page: {
+    facets: [{ name: 'Напряжение, В', range_covers_numeric: 230 }],
+  } };
+  assert.doesNotThrow(() => validateExpectationObject(expect));
+  assert.throws(() => validateExpectationObject({ require_every_product_page: {
+    facets: [{ name: 'Напряжение, В', range_covers_numeric: '230' }],
+  } }), /range_covers_numeric|source rule/u);
+  assert.throws(() => validateExpectationObject({ require_every_product_page: {
+    facets: [{ name: 'Мощность, Вт', min_numeric: 6, require_scalar_numeric: 'true' }],
+  } }), /require_scalar_numeric/u);
+  const item = {
+    url: 'https://220volt.kz/catalog/svetotexnika/lampyi/generic-voltage-proof/',
+    sku: 'TEST-230', name: 'Лампа GX53 тест напряжения', price: 500,
+    facets: { 'Напряжение, В': '230' },
+  };
+  const run = (value) => evaluate(expect, analogReply([{
+    ...item, facets: { 'Напряжение, В': value },
+  }]), { requireVerifiedPages: true });
+  for (const value of ['230', '220-240', '180–265 В', '170...264', 'от 150 до 264']) {
+    assert.deepEqual(run(value), [], value);
+  }
+  for (const value of ['220', '150-170', '240-260', '12/230', '220-240/12', '230 В 50 Гц', undefined]) {
+    assert(run(value).some((failure) => failure.includes('facet Напряжение, В')), String(value));
+  }
+});
+
 test('asked-detail contract needs user-directed questions, not diagnostic keyword mentions', () => {
   const expect = notionV3Suite.cases.find((item) => item.id === 'bt928-boiler-breaker-diagnostic').turns[0].expect;
   const response = (text) => ({
@@ -1932,6 +2120,20 @@ test('BT-925 v3 requires source-backed lamp cards with exact axes or a complete,
   assert.deepEqual(evaluate(expectation, split), []);
   assert(evaluate(expectation, { ...exact, verifiedProductPages: new Map() })
     .some((failure) => failure.includes('unverified product page')));
+  const embellished = axisReply([['Лампа LED CORN E27 10W', lamp('corn-e27-10w')]]);
+  embellished.verifiedProductPages.get(productUrlIdentity(lamp('corn-e27-10w'))).name = 'Лампа LED E27 10W';
+  assert(evaluate(expectation, embellished).some((failure) =>
+    failure.includes('neither all exact axis intersections')),
+  'displayed CORN must not pass when the verified product name has no CORN');
+  const disguisedExact = axisReply([
+    ['Лампа LED CORN 10W', lamp('corn-e27-10w')],
+    ['Лампа LED A60 E27', lamp('a60-e27')],
+  ], splitText);
+  disguisedExact.verifiedProductPages.get(productUrlIdentity(lamp('corn-e27-10w'))).name =
+    'Лампа LED CORN E27 10W';
+  assert(evaluate(expectation, disguisedExact).some((failure) =>
+    failure.includes('neither all exact axis intersections')),
+  'a verified exact intersection must not be hidden in a claimed disjoint split');
 });
 
 test('BT-925 v3 rejects wrong products, code collisions, mixed cards, and unbounded split claims', () => {

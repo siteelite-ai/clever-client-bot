@@ -72,6 +72,51 @@ Deno.test("catalog price extreme keeps budget and absolute order as separate con
   });
 });
 
+Deno.test("negated price phrases do not erase a later positive price request", () => {
+  equal(classifyCatalogPriceExtreme("Не самый дорогой, а самый дешевый кабель"), "cheapest");
+  equal(detectPriceDirection("Не самый дорогой, а самый дешевый кабель"), {
+    kind: "superlative",
+    direction: "cheaper",
+  });
+  equal(classifyCatalogPriceExtreme("Не самый дешёвый, а самый дорогой кабель"), "expensive");
+  equal(detectPriceDirection("Не самый дешёвый, а самый дорогой кабель"), {
+    kind: "superlative",
+    direction: "more_expensive",
+  });
+  equal(classifyCatalogPriceExtreme("Не нужен именно самый дорогой, покажи самый дешёвый"), "cheapest");
+  equal(classifyCatalogPriceExtreme("Не самый быстрый, нужен самый дешевый кабель"), "cheapest");
+  equal(classifyCatalogPriceExtreme("Не самый дешёвый и не самый дорогой"), null);
+  equal(
+    classifyCatalogPriceExtreme("Не хочу самый дешёвый или самый дорогой кабель — нужен средний по цене"),
+    null,
+  );
+  equal(
+    detectPriceDirection("Не хочу самый дешёвый или самый дорогой кабель — нужен средний по цене"),
+    null,
+  );
+  equal(classifyCatalogPriceExtreme("Не самый дешёвый, а самый дорогой кабель"), "expensive");
+  for (const rejection of [
+    "Самый дешёвый не нужен",
+    "Не нужен вариант с минимальной ценой",
+    "Не должен быть самым дорогим",
+    "Самый дешёвый или самый дорогой не нужен",
+  ]) {
+    equal(classifyCatalogPriceExtreme(rejection), null);
+    equal(detectPriceDirection(rejection), null);
+  }
+  equal(classifyCatalogPriceExtreme("Самый дешёвый не нужен, а самый дорогой покажи"), "expensive");
+  equal(classifyCatalogPriceExtreme("Мне нужен самый дешёвый кабель и не нужны услуги монтажа"), "cheapest");
+  equal(detectPriceDirection("Мне нужен самый дешёвый кабель и не нужны услуги монтажа"), {
+    kind: "superlative",
+    direction: "cheaper",
+  });
+  equal(classifyCatalogPriceExtreme("Мне нужен самый дорогой светильник и не нужна доставка"), "expensive");
+  equal(detectPriceDirection("Не дороже 5000 ₸, но дешевле этой модели"), {
+    kind: "comparative",
+    direction: "cheaper",
+  });
+});
+
 Deno.test("bounded or apparently complete search results never prove catalog-wide price", () => {
   equal(classifyPriceSearchCoverage(null), "not_attempted");
   equal(classifyPriceSearchCoverage({ ok: false }), "failed");

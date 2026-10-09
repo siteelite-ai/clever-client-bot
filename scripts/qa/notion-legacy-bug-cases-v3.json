@@ -446,20 +446,69 @@
     },
     {
       "id": "bt924-dn027b-analogs",
-      "title": "BT-924: DN027B analogs exclude source",
+      "title": "BT-924: DN027B analogs match the recessed LED downlight, not only its name",
       "turns": [{
         "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
-        "expect": {"min_products": 1, "forbid_product_title": ["DN027B"]}
+        "expect": {
+          "min_products": 1,
+          "forbid_product_title": ["DN027B"],
+          "require_every_product_page": {
+            "name": { "forbid_any": ["DN027B"] },
+            "facets": [
+              { "name": "Категория", "exact_any": ["Светильники"] },
+              { "name": "Вид светильника", "exact_any": ["даунлайт"] },
+              { "name": "Способ монтажа", "exact_any": ["встраиваемый"] },
+              { "name": "Тип лампы", "exact_any": ["LED"] },
+              { "name": "Тип цоколя", "exact_any": ["нет"] },
+              { "name": "ПРА", "exact_any": ["в комплекте"] },
+              { "name": "Мощность ламп, Вт", "min_numeric": 6, "less_than": 8.01, "require_scalar_numeric": true },
+              { "name": "Световой поток, Лм", "min_numeric": 400, "less_than": 801, "require_scalar_numeric": true },
+              { "name": "Диаметр, см", "min_numeric": 8, "less_than": 10.01, "require_scalar_numeric": true },
+              { "name": "Степень защиты, IP", "min_numeric": 20, "require_scalar_numeric": true }
+            ],
+            "any_of": [
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 220 }] },
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 230 }] }
+            ]
+          }
+        }
       }]
     },
     {
       "id": "bt924-gx53-analogs",
-      "title": "BT-924: GX53 tablet lamp analogs",
+      "title": "BT-924: GX53 tablet lamp analogs preserve lamp class and socket",
       "turns": [{
         "message": "Подбери аналоги для лампы ECO T75 таблетка GX53",
         "expect": {
-          "min_products": 1,
-          "require_every_product_title_groups": [["GX53"], ["ламп", "ECO", "LED"]]
+          "min_products": 2,
+          "forbid_product_title": ["Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK"],
+          "require_every_product_title_groups": [["GX53"], ["ламп"]],
+          "require_every_product_page": {
+            "name": { "forbid_any": ["Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK"] },
+            "facets": [
+              { "name": "Категория", "exact_any": ["Лампы"] },
+              { "name": "Тип цоколя", "exact_any": ["GX53"] },
+              { "name": "Вид лампы (принцип работы)", "exact_any": ["светодиодная"] },
+              { "name": "Тип напряжения", "exact_any": ["АС", "AC"] },
+              { "name": "Форма колбы", "exact_any": ["таблетка"] },
+              { "name": "Диаметр, мм", "min_numeric": 70, "less_than": 81, "require_scalar_numeric": true },
+              { "name": "Мощность, Вт", "min_numeric": 6, "less_than": 15.01, "require_scalar_numeric": true }
+            ],
+            "any_of": [
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 220 }] },
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 230 }] }
+            ]
+          },
+          "require_higher_product_facet_caveat": {
+            "facet_name": "Мощность, Вт",
+            "baseline_numeric": 6,
+            "text_groups": [
+              ["проверь", "уточн", "свер"],
+              ["максимальн", "допустим", "предельн"],
+              ["мощн", "Вт"],
+              ["габарит", "размер", "посадоч", "помест"]
+            ]
+          }
         }
       }]
     },

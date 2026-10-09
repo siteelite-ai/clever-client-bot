@@ -164,7 +164,7 @@ const FULL_SUITE_MANIFESTS = {
 // satisfy this stricter candidate inventory by filename or SHA substitution.
 FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'] = {
   ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v2.json'],
-  sha256: 'a13c4322a9161897ca7e62ef16a10082270fceb9182ce671a634c04f3539a49e',
+  sha256: '3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009',
   turns: 52,
   runs: 40,
   evaluatedTurns: 60,
@@ -330,6 +330,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_every_product_card_groups',
   'require_every_product_measurement',
   'require_every_product_page',
+  'require_higher_product_facet_caveat',
   'require_every_product_pair_around',
   'require_every_product_stock_unit',
   'require_every_product_title_any',
@@ -412,13 +413,16 @@ function expectationInteger(value, location, minimum = 0) {
   }
 }
 
-const SOURCE_RULE_KEYS = new Set(['require_any', 'forbid_any', 'exact_any', 'min_numeric', 'greater_than', 'less_than']);
+const SOURCE_RULE_KEYS = new Set(['require_any', 'forbid_any', 'exact_any', 'min_numeric', 'greater_than', 'less_than', 'range_covers_numeric', 'require_scalar_numeric']);
 const PAGE_RULE_KEYS = new Set(['facets', 'description', 'name', 'all_of', 'any_of']);
 
 function validateSourceRuleKeys(rule, location, facet = false) {
   expectationKeys(rule, facet ? new Set([...SOURCE_RULE_KEYS, 'name']) : SOURCE_RULE_KEYS, location);
   if (facet && (typeof rule.name !== 'string' || !rule.name.trim())) {
     throw new Error(`${location}.name: must be a non-empty string`);
+  }
+  if (rule.require_scalar_numeric !== undefined && typeof rule.require_scalar_numeric !== 'boolean') {
+    throw new Error(`${location}.require_scalar_numeric: must be a boolean`);
   }
   if (!validSourceRule(rule)) {
     throw new Error(`${location}: source rule must contain at least one valid operator`);
@@ -559,6 +563,16 @@ export function validateExpectationObject(expect, location = 'expect') {
     if (!validProductPageRules(expect.require_every_product_page)) {
       throw new Error(`${pageLocation}: invalid product-page source evidence contract`);
     }
+  }
+  if (expect.require_higher_product_facet_caveat !== undefined) {
+    const contract = expect.require_higher_product_facet_caveat;
+    const contractLocation = `${location}.require_higher_product_facet_caveat`;
+    expectationKeys(contract, new Set(['facet_name', 'baseline_numeric', 'text_groups']), contractLocation);
+    if (typeof contract.facet_name !== 'string' || !contract.facet_name.trim() ||
+        !Number.isFinite(contract.baseline_numeric)) {
+      throw new Error(`${contractLocation}: requires a facet name and finite baseline_numeric`);
+    }
+    expectationGroups(contract.text_groups, `${contractLocation}.text_groups`);
   }
   if (expect.require_every_product_measurement !== undefined) {
     const contract = expect.require_every_product_measurement;
@@ -843,6 +857,27 @@ function sameSourceLabel(left, right) {
   return normalize(left) === normalize(right);
 }
 
+// Treat a scalar as a one-point range. Reject compound/malformed catalog
+// values instead of taking their first number (e.g. "150-170" cannot prove
+// operation at 230 V, and "12/220" is not one continuous range).
+function sourceRangeCoversNumeric(actual, target) {
+  const match = String(actual).normalize('NFKC').trim().match(
+    /^(?:от\s*)?(-?\d+(?:[.,]\d+)?)(?:\s*(?:[-–—−]|\.{2,3}|…|до)\s*(-?\d+(?:[.,]\d+)?))?(?:\s*[^\d/;|]+)?$/iu,
+  );
+  if (!match) return false;
+  const start = Number(match[1].replace(',', '.'));
+  const end = match[2] === undefined ? start : Number(match[2].replace(',', '.'));
+  return Number.isFinite(start) && Number.isFinite(end) && start <= end &&
+    start <= target && target <= end;
+}
+
+function sourceScalarNumeric(actual) {
+  const match = String(actual).normalize('NFKC').trim().match(
+    /^(-?\d+(?:[.,]\d+)?)(?:\s*[^\d/;|]+)?$/iu,
+  );
+  return match ? Number(match[1].replace(',', '.')) : NaN;
+}
+
 function sourceRuleFailures(rule, actual, location) {
   const failures = [];
   if (!actual) return [`${location}: source field is missing`];
@@ -859,7 +894,9 @@ function sourceRuleFailures(rule, actual, location) {
     }
   }
   if (Number.isFinite(rule.min_numeric) || Number.isFinite(rule.greater_than) || Number.isFinite(rule.less_than)) {
-    const measured = Number(String(actual).match(/-?\d+(?:[.,]\d+)?/u)?.[0]?.replace(',', '.'));
+    const measured = rule.require_scalar_numeric === true
+      ? sourceScalarNumeric(actual)
+      : Number(String(actual).match(/-?\d+(?:[.,]\d+)?/u)?.[0]?.replace(',', '.'));
     if (Number.isFinite(rule.min_numeric) && (!Number.isFinite(measured) || measured < rule.min_numeric)) {
       failures.push(`${location}: source numeric value ${actual} < ${rule.min_numeric}`);
     }
@@ -870,6 +907,13 @@ function sourceRuleFailures(rule, actual, location) {
       failures.push(`${location}: source numeric value ${actual} is not < ${rule.less_than}`);
     }
   }
+  if (rule.require_scalar_numeric === true && !Number.isFinite(sourceScalarNumeric(actual))) {
+    failures.push(`${location}: source scalar numeric value ${actual} is missing or malformed`);
+  }
+  if (Number.isFinite(rule.range_covers_numeric) &&
+      !sourceRangeCoversNumeric(actual, rule.range_covers_numeric)) {
+    failures.push(`${location}: source range ${actual} does not cover ${rule.range_covers_numeric}`);
+  }
   return failures;
 }
 
@@ -878,9 +922,12 @@ function validSourceRule(rule) {
   if (rule.min_numeric !== undefined && !Number.isFinite(rule.min_numeric)) return false;
   if (rule.greater_than !== undefined && !Number.isFinite(rule.greater_than)) return false;
   if (rule.less_than !== undefined && !Number.isFinite(rule.less_than)) return false;
+  if (rule.range_covers_numeric !== undefined && !Number.isFinite(rule.range_covers_numeric)) return false;
+  if (rule.require_scalar_numeric !== undefined && typeof rule.require_scalar_numeric !== 'boolean') return false;
   const groups = [rule.require_any, rule.forbid_any, rule.exact_any].filter((group) => group !== undefined);
   return (groups.length > 0 || Number.isFinite(rule.min_numeric) ||
-    Number.isFinite(rule.greater_than) || Number.isFinite(rule.less_than)) && groups.every((group) =>
+    Number.isFinite(rule.greater_than) || Number.isFinite(rule.less_than) ||
+    Number.isFinite(rule.range_covers_numeric)) && groups.every((group) =>
     Array.isArray(group) && group.length > 0 &&
     group.every((value) => typeof value === 'string' && value.trim())
   );
@@ -949,7 +996,7 @@ function matchesTitleAxis(title, axis) {
   return axis.some(({ term, match }) => {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const suffix = match === 'word_prefix' ? '\\p{L}*' : '';
-    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}${suffix}(?![\\p{L}\\p{N}])`, 'iu').test(title);
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}${suffix}(?![\\p{L}\\p{N}])`, 'iu').test(String(title ?? ''));
   });
 }
 
@@ -970,7 +1017,7 @@ function askedTextSpans(text) {
   return (String(text ?? '').match(/[^.!?]+[.!?]?/gu) ?? [])
     .map((span) => span.trim())
     .filter((span) => span.endsWith('?') ||
-      /(?:^|[^\p{L}])(?:уточните|подскажите|скажите|сообщите|напишите|укажите|назовите|ответьте)(?!\p{L})/iu.test(span));
+      /(?:^|[^\p{L}])(?:уточните|подскажите|скажите|сообщите|напишите|укажите|назовите|ответьте|проверьте|проверь|сверьте|сверь)(?!\p{L})/iu.test(span));
 }
 
 function includesStandalonePhrase(haystack, phrase) {
@@ -1440,7 +1487,8 @@ export function evaluate(expect = {}, response, {
   message = null,
 } = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_every_product_page || expect.require_catalog_minimum ||
+  const requireSourceProof = Boolean(expect.require_every_product_page ||
+    expect.require_higher_product_facet_caveat || expect.require_catalog_minimum ||
     expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
     verifiedPages: response.verifiedProductPages,
@@ -1524,6 +1572,26 @@ export function evaluate(expect = {}, response, {
         if (!proof?.verified) continue; // The unverified-page failure above is authoritative.
         failures.push(...productPageRuleFailures(rules, proof));
       }
+    }
+  }
+  if (expect.require_higher_product_facet_caveat) {
+    const { facet_name: facetName, baseline_numeric: baseline, text_groups: textGroups } =
+      expect.require_higher_product_facet_caveat;
+    let requiresCaveat = false;
+    for (const link of response.links) {
+      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
+      if (!proof?.verified) continue; // The unverified-page failure above is authoritative.
+      const field = Object.entries(proof.facets ?? {})
+        .find(([name]) => sameSourceLabel(name, facetName));
+      const value = sourceScalarNumeric(field?.[1] ?? '');
+      if (!Number.isFinite(value)) {
+        failures.push(`product ${proof.sku ?? proof.identity} facet ${facetName}: source scalar value is missing or malformed`);
+      } else if (value > baseline) {
+        requiresCaveat = true;
+      }
+    }
+    if (requiresCaveat && !matchesEveryGroup(askedTextSpans(response.text).join(' '), textGroups)) {
+      failures.push(`higher ${facetName} than ${baseline} requires a user-directed compatibility caveat`);
     }
   }
   if (expect.conversation_boundary === 'new_task' && response.conversationBoundary?.mode !== 'new_task') {
@@ -1760,10 +1828,22 @@ export function evaluate(expect = {}, response, {
       failures.push(`product links outside required category ${contract.category_path}: ${outsideCategory.map((link) => link.url ?? '(missing URL)').join(' | ')}`);
     }
 
-    const titleAxes = response.links.map((link) => contract.axes.map((axis) => matchesTitleAxis(link.title, axis)));
-    const allExact = titleAxes.length > 0 && titleAxes.every((axes) => axes.every(Boolean));
-    const allSplit = titleAxes.length > 0 && titleAxes.every((axes) => axes.filter(Boolean).length === 1) &&
-      contract.axes.every((_, index) => titleAxes.some((axes) => axes[index]));
+    // Classify the rendered and verified titles separately. Their intersection
+    // alone could disguise an exact source product as a split alternative when
+    // the rendered title omits one requested axis.
+    const axisProof = response.links.map((link) => {
+      const sourceName = response.verifiedProductPages?.get(productUrlIdentity(link.url))?.name;
+      return {
+        rendered: contract.axes.map((axis) => matchesTitleAxis(link.title, axis)),
+        source: contract.axes.map((axis) => matchesTitleAxis(sourceName, axis)),
+      };
+    });
+    const allExact = axisProof.length > 0 && axisProof.every(({ rendered, source }) =>
+      rendered.every(Boolean) && source.every(Boolean));
+    const allSplit = axisProof.length > 0 && axisProof.every(({ rendered, source }) =>
+      rendered.filter(Boolean).length === 1 && source.filter(Boolean).length === 1 &&
+      rendered.every((present, index) => present === source[index])) &&
+      contract.axes.every((_, index) => axisProof.some(({ source }) => source[index]));
     if (!allExact && !allSplit) {
       failures.push('product titles are neither all exact axis intersections nor a complete disjoint axis split');
     }
@@ -1974,6 +2054,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
   const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+    Boolean(expect.require_higher_product_facet_caveat) ||
     Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
     expect.require_new_product_skus === true || expect.require_previous_product_link === true;
