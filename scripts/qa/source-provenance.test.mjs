@@ -39,15 +39,19 @@ test('recorded source-paragraph hashes still match the first prompt in the pinne
   assert.equal(counts.get('customer-acceptance-cases.json'), 2);
 });
 
-test('all 30 legacy cases have a ticket-page attribution without claiming block-level proof', () => {
+test('all 30 legacy cases have ticket attribution and both BT-923 prompts match the ticket text', () => {
   const index = JSON.parse(fs.readFileSync(
     new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
   const suites = ['notion-legacy-bug-cases.json', 'notion-legacy-bug-cases-v2.json']
     .map((file) => JSON.parse(fs.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')));
   assert.equal(index.tickets.length, 9);
   assert(suites.every((suite) => suite.cases.length === 30));
-  assert.deepEqual(suites[1].cases.map((item) => [item.id, item.turns.map((turn) => turn.message)]),
-    suites[0].cases.map((item) => [item.id, item.turns.map((turn) => turn.message)]));
+  assert.deepEqual(suites[1].cases.map((item) => item.id), suites[0].cases.map((item) => item.id));
+  for (const oldCase of suites[0].cases) {
+    if (oldCase.id.startsWith('bt923-')) continue;
+    const nextCase = suites[1].cases.find((item) => item.id === oldCase.id);
+    assert.deepEqual(nextCase.turns.map((turn) => turn.message), oldCase.turns.map((turn) => turn.message));
+  }
   const ticketIds = new Set();
   for (const ticket of index.tickets) {
     assert(!ticketIds.has(ticket.ticket));
@@ -79,9 +83,21 @@ test('all 30 legacy cases have a ticket-page attribution without claiming block-
     assert.match(item.qa_policy, /team reliability criterion/u);
   }
   assert.match(index.observed_instability_comments[2].observation, /no stated number/u);
-  const unitFact = index.clarified_source_facts.find((item) => item.ticket === 'BT-923');
+  const unitFact = index.clarified_source_facts.find((item) => item.ticket === 'BT-923' && item.expected_catalog_unit === 'шт');
   assert.equal(unitFact.page_url, index.tickets.find((item) => item.ticket === 'BT-923').page_url);
   assert.equal(unitFact.expected_catalog_unit, 'шт');
   assert.match(unitFact.source_product_url, /nbt-cr2025-bp5-94-764-navigator\/$/u);
   assert.match(unitFact.source_meaning, /does not establish how many battery cells/u);
+  const cableFact = index.clarified_source_facts.find((item) => item.ticket === 'BT-923' && item.expected_catalog_unit === 'м');
+  assert.match(cableFact.source_product_url, /kabel-vvg-3\*1,5\/$/u);
+  for (const [caseId, fact] of [
+    ['bt923-battery-unit', unitFact],
+    ['bt923-vvg-3x1_5-unit', cableFact],
+  ]) {
+    const testCase = suites[1].cases.find((item) => item.id === caseId);
+    assert.equal(testCase.turns[0].message, fact.source_prompt);
+    assert.equal(testCase.turns[0].expect.require_every_product_page.facets[0].name, 'Единица измерения');
+  }
+  assert.equal(suites[1].cases.find((item) => item.id === 'bt923-vvg-3x1_5-unit')
+    .turns[0].expect.require_every_product_stock_unit, 'м');
 });

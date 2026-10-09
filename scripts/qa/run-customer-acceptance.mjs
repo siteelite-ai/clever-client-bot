@@ -124,7 +124,7 @@ const FULL_SUITE_MANIFESTS = {
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'notion-legacy-bug-cases-v2.json': {
-    sha256: 'e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8',
+    sha256: '4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7',
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -303,6 +303,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_every_product_measurement',
   'require_every_product_page',
   'require_every_product_pair_around',
+  'require_every_product_stock_unit',
   'require_every_product_title_any',
   'require_every_product_title_groups',
   'require_exact_or_split',
@@ -419,6 +420,12 @@ export function validateExpectationObject(expect, location = 'expect') {
       (typeof expect.require_every_product_exact_identifier !== 'string' ||
        !/^[\p{L}\p{N}][\p{L}\p{N}\s._/-]{3,79}$/u.test(expect.require_every_product_exact_identifier))) {
     throw new Error(`${location}.require_every_product_exact_identifier: must be a bounded product identifier`);
+  }
+  if (expect.require_every_product_stock_unit !== undefined &&
+      (typeof expect.require_every_product_stock_unit !== 'string' ||
+       expect.require_every_product_stock_unit.trim() !== expect.require_every_product_stock_unit ||
+       !/^[\p{L}\p{N}²³./%\- ]{1,30}$/u.test(expect.require_every_product_stock_unit))) {
+    throw new Error(`${location}.require_every_product_stock_unit: must be a non-empty bounded catalog unit`);
   }
   for (const field of ['min_products', 'max_products', 'min_text_chars', 'min_text_before_products_chars']) {
     if (expect[field] !== undefined) expectationInteger(expect[field], `${location}.${field}`);
@@ -1220,6 +1227,45 @@ function clarificationChoiceEvidence(response) {
   return { mode: 'options', facet_key: pending.facet_key, options_count: event.replies.length };
 }
 
+function normalizeCatalogUnit(unit) {
+  return String(unit).normalize('NFKC').toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е').trim().replace(/\.$/u, '');
+}
+
+function renderedStockUnitFailures(links, expectedUnit) {
+  if (links.length === 0) return ['stock-unit check requires at least one rendered product card'];
+  const failures = [];
+  const expected = normalizeCatalogUnit(expectedUnit);
+  for (const link of links) {
+    const label = link.title || link.url || 'unnamed product';
+    const stockLine = link.stockLine;
+    if (!stockLine) {
+      failures.push(`product card has no stock line: ${label}`);
+      continue;
+    }
+    // The widget renders one quantified warehouse as "City (80 м.)". The
+    // following "и ещё 2 города" is a city count, not a stock quantity.
+    const quantities = [...stockLine.matchAll(/\(([^()]*)\)/gu)]
+      .map((match) => match[1].trim()).filter((part) => /\d/u.test(part));
+    if (quantities.length === 0) {
+      failures.push(`product stock line has no quantified warehouse: ${label}`);
+      continue;
+    }
+    for (const quantity of quantities) {
+      const parsed = quantity.match(/^\d(?:[\d\s.,]*\d)?\s*([\p{L}][^()]*)$/u);
+      if (!parsed || normalizeCatalogUnit(parsed[1]) !== expected) {
+        failures.push(`product stock quantity unit is not ${expectedUnit}: ${label} (${quantity})`);
+      }
+    }
+    const remainder = stockLine.replace(/\([^()]*\)/gu, ' ')
+      .replace(/(?:^|\s)(?:и\s+)?ещё\s+\d+\s+город\p{L}*/giu, ' ');
+    if (/(?:^|[^\p{L}\p{N}])\d(?:[\d\s.,]*\d)?\s*[\p{L}]/u.test(remainder)) {
+      failures.push(`product stock line has an unparsed quantity: ${label}`);
+    }
+  }
+  return failures;
+}
+
 export function evaluate(expect = {}, response, { requireVerifiedPages = false, previousVerifiedSkus = new Set() } = {}) {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_every_product_page);
@@ -1390,6 +1436,9 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
         failures.push(`product card/source misses exact identifier: ${expect.require_every_product_exact_identifier}`);
       }
     }
+  }
+  if (typeof expect.require_every_product_stock_unit === 'string') {
+    failures.push(...renderedStockUnitFailures(response.links, expect.require_every_product_stock_unit));
   }
   if (Array.isArray(expect.require_every_product_card_groups)) {
     const invalidCards = response.links

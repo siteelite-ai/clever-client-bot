@@ -34,7 +34,7 @@
     },
     {
       "basename": "notion-legacy-bug-cases-v2.json",
-      "sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "role": "case_suite"
     },
     {
@@ -11344,9 +11344,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-pump-cable-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-pump-cable-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-pump-cable-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11358,10 +11358,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-pump-cable-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-pump-cable-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-pump-cable-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-pump-cable-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-pump-cable-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11400,9 +11400,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-outdoor-floodlight-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-outdoor-floodlight-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-outdoor-floodlight-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11414,10 +11414,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-outdoor-floodlight-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-outdoor-floodlight-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-outdoor-floodlight-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-outdoor-floodlight-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-outdoor-floodlight-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11452,9 +11452,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-motor-breaker-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-motor-breaker-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-motor-breaker-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11466,10 +11466,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-motor-breaker-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-motor-breaker-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-motor-breaker-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-motor-breaker-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-motor-breaker-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11502,9 +11502,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-underground-cable-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-underground-cable-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-underground-cable-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11516,10 +11516,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-underground-cable-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-underground-cable-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-underground-cable-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-underground-cable-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-underground-cable-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11558,9 +11558,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-heat-shrink-12mm\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-heat-shrink-12mm\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-heat-shrink-12mm",
       "variant": "base",
       "repeat_index": 1,
@@ -11572,10 +11572,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-heat-shrink-12mm\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-heat-shrink-12mm\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-heat-shrink-12mm\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-heat-shrink-12mm\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-heat-shrink-12mm",
           "variant": "base",
           "repeat_index": 1,
@@ -11595,9 +11595,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-lugs-35mm-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-lugs-35mm-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-lugs-35mm-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11609,10 +11609,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-lugs-35mm-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-lugs-35mm-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-lugs-35mm-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-lugs-35mm-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-lugs-35mm-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11646,9 +11646,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-surveillance-cable-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-surveillance-cable-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-surveillance-cable-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11660,10 +11660,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-surveillance-cable-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-surveillance-cable-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-surveillance-cable-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-surveillance-cable-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-surveillance-cable-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11697,9 +11697,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-warm-led-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-warm-led-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-warm-led-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11711,10 +11711,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-warm-led-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-warm-led-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-warm-led-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-warm-led-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-warm-led-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11746,9 +11746,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-parking-floodlight-clarification\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-parking-floodlight-clarification\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt929-parking-floodlight-clarification",
       "variant": "base",
       "repeat_index": 1,
@@ -11760,10 +11760,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-parking-floodlight-clarification\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt929-parking-floodlight-clarification\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-parking-floodlight-clarification\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt929-parking-floodlight-clarification\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt929-parking-floodlight-clarification",
           "variant": "base",
           "repeat_index": 1,
@@ -11794,9 +11794,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-living-room-25m2\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-living-room-25m2\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt928-living-room-25m2",
       "variant": "base",
       "repeat_index": 1,
@@ -11808,10 +11808,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-living-room-25m2\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-living-room-25m2\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-living-room-25m2\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-living-room-25m2\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt928-living-room-25m2",
           "variant": "base",
           "repeat_index": 1,
@@ -11860,9 +11860,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt928-boiler-breaker-diagnostic",
       "variant": "base",
       "repeat_index": 1,
@@ -11874,10 +11874,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt928-boiler-breaker-diagnostic",
           "variant": "base",
           "repeat_index": 1,
@@ -11914,9 +11914,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",2]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",2]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt928-boiler-breaker-diagnostic",
       "variant": "base",
       "repeat_index": 2,
@@ -11928,10 +11928,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",2,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",2]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",2,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",2]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt928-boiler-breaker-diagnostic",
           "variant": "base",
           "repeat_index": 2,
@@ -11968,9 +11968,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",3]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",3]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt928-boiler-breaker-diagnostic",
       "variant": "base",
       "repeat_index": 3,
@@ -11982,10 +11982,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",3,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt928-boiler-breaker-diagnostic\",\"base\",3]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",3,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt928-boiler-breaker-diagnostic\",\"base\",3]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt928-boiler-breaker-diagnostic",
           "variant": "base",
           "repeat_index": 3,
@@ -12022,9 +12022,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt927-copper-fire-resistant-2x1_5",
       "variant": "base",
       "repeat_index": 1,
@@ -12036,10 +12036,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-copper-fire-resistant-2x1_5\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt927-copper-fire-resistant-2x1_5",
           "variant": "base",
           "repeat_index": 1,
@@ -12074,9 +12074,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-led-floodlights-100w\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-led-floodlights-100w\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt927-led-floodlights-100w",
       "variant": "base",
       "repeat_index": 1,
@@ -12088,10 +12088,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-led-floodlights-100w\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt927-led-floodlights-100w\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-led-floodlights-100w\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt927-led-floodlights-100w\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt927-led-floodlights-100w",
           "variant": "base",
           "repeat_index": 1,
@@ -12132,9 +12132,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt925-corn-e27",
       "variant": "base",
       "repeat_index": 1,
@@ -12146,10 +12146,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt925-corn-e27",
           "variant": "base",
           "repeat_index": 1,
@@ -12207,9 +12207,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",2]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",2]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt925-corn-e27",
       "variant": "base",
       "repeat_index": 2,
@@ -12221,10 +12221,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",2,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",2]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",2,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",2]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt925-corn-e27",
           "variant": "base",
           "repeat_index": 2,
@@ -12282,9 +12282,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",3]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",3]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt925-corn-e27",
       "variant": "base",
       "repeat_index": 3,
@@ -12296,10 +12296,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",3,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt925-corn-e27\",\"base\",3]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",3,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt925-corn-e27\",\"base\",3]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt925-corn-e27",
           "variant": "base",
           "repeat_index": 3,
@@ -12357,9 +12357,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-dn027b-analogs\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-dn027b-analogs\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-dn027b-analogs",
       "variant": "base",
       "repeat_index": 1,
@@ -12371,10 +12371,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-dn027b-analogs\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-dn027b-analogs\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-dn027b-analogs\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-dn027b-analogs\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-dn027b-analogs",
           "variant": "base",
           "repeat_index": 1,
@@ -12396,9 +12396,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-gx53-analogs\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-gx53-analogs\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-gx53-analogs",
       "variant": "base",
       "repeat_index": 1,
@@ -12410,10 +12410,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-gx53-analogs\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-gx53-analogs\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-gx53-analogs\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-gx53-analogs\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-gx53-analogs",
           "variant": "base",
           "repeat_index": 1,
@@ -12442,9 +12442,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-apartment-breaker-25a\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-apartment-breaker-25a\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-apartment-breaker-25a",
       "variant": "base",
       "repeat_index": 1,
@@ -12456,10 +12456,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-apartment-breaker-25a\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-apartment-breaker-25a\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-apartment-breaker-25a\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-apartment-breaker-25a\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-apartment-breaker-25a",
           "variant": "base",
           "repeat_index": 1,
@@ -12493,9 +12493,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-schneider-cheaper-analogs\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-schneider-cheaper-analogs\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-schneider-cheaper-analogs",
       "variant": "base",
       "repeat_index": 1,
@@ -12507,10 +12507,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-schneider-cheaper-analogs\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-schneider-cheaper-analogs\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-schneider-cheaper-analogs\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-schneider-cheaper-analogs\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-schneider-cheaper-analogs",
           "variant": "base",
           "repeat_index": 1,
@@ -12549,9 +12549,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-replace-kg-cable\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-replace-kg-cable\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-replace-kg-cable",
       "variant": "base",
       "repeat_index": 1,
@@ -12563,10 +12563,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-replace-kg-cable\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-replace-kg-cable\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-replace-kg-cable\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-replace-kg-cable\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-replace-kg-cable",
           "variant": "base",
           "repeat_index": 1,
@@ -12602,9 +12602,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-conditioner-3kw\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-conditioner-3kw\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-conditioner-3kw",
       "variant": "base",
       "repeat_index": 1,
@@ -12616,10 +12616,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-conditioner-3kw\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-conditioner-3kw\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-conditioner-3kw\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-conditioner-3kw\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-conditioner-3kw",
           "variant": "base",
           "repeat_index": 1,
@@ -12649,9 +12649,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-acti9-followup-show\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-acti9-followup-show\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt924-acti9-followup-show",
       "variant": "base",
       "repeat_index": 1,
@@ -12663,10 +12663,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-acti9-followup-show\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-acti9-followup-show\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-acti9-followup-show\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-acti9-followup-show\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-acti9-followup-show",
           "variant": "base",
           "repeat_index": 1,
@@ -12689,10 +12689,10 @@
           "candidate_status": "NOT_RUN"
         },
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-acti9-followup-show\",\"base\",1,2]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt924-acti9-followup-show\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-acti9-followup-show\",\"base\",1,2]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt924-acti9-followup-show\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt924-acti9-followup-show",
           "variant": "base",
           "repeat_index": 1,
@@ -12731,9 +12731,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt923-battery-unit",
       "variant": "base",
       "repeat_index": 1,
@@ -12745,15 +12745,15 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt923-battery-unit",
           "variant": "base",
           "repeat_index": 1,
           "turn_index": 1,
-          "message": "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+          "message": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
           "effective_expectation": {
             "max_duration_ms": 45000,
             "min_products": 1,
@@ -12803,9 +12803,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",2]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",2]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt923-battery-unit",
       "variant": "base",
       "repeat_index": 2,
@@ -12817,15 +12817,15 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",2,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",2]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",2,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",2]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt923-battery-unit",
           "variant": "base",
           "repeat_index": 2,
           "turn_index": 1,
-          "message": "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+          "message": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
           "effective_expectation": {
             "max_duration_ms": 45000,
             "min_products": 1,
@@ -12875,9 +12875,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",3]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",3]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt923-battery-unit",
       "variant": "base",
       "repeat_index": 3,
@@ -12889,15 +12889,15 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",3,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-battery-unit\",\"base\",3]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",3,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-battery-unit\",\"base\",3]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt923-battery-unit",
           "variant": "base",
           "repeat_index": 3,
           "turn_index": 1,
-          "message": "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+          "message": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
           "effective_expectation": {
             "max_duration_ms": 45000,
             "min_products": 1,
@@ -12947,9 +12947,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-vvg-3x1_5-unit\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-vvg-3x1_5-unit\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt923-vvg-3x1_5-unit",
       "variant": "base",
       "repeat_index": 1,
@@ -12961,15 +12961,15 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-vvg-3x1_5-unit\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt923-vvg-3x1_5-unit\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-vvg-3x1_5-unit\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt923-vvg-3x1_5-unit\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt923-vvg-3x1_5-unit",
           "variant": "base",
           "repeat_index": 1,
           "turn_index": 1,
-          "message": "найди самый дешевый кабель ВВГ 3*1,5",
+          "message": "найди кабель ввг 3*1,5 самый дешевый",
           "effective_expectation": {
             "max_duration_ms": 45000,
             "min_products": 1,
@@ -12982,6 +12982,18 @@
                 "3х1,5"
               ]
             ],
+            "require_every_product_page": {
+              "facets": [
+                {
+                  "name": "Единица измерения",
+                  "exact_any": [
+                    "м",
+                    "метр"
+                  ]
+                }
+              ]
+            },
+            "require_every_product_stock_unit": "м",
             "require_any_text": [
               "метр",
               "/м",
@@ -12997,9 +13009,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt922-breaker-replacement-under-1000",
       "variant": "base",
       "repeat_index": 1,
@@ -13011,10 +13023,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt922-breaker-replacement-under-1000",
           "variant": "base",
           "repeat_index": 1,
@@ -13063,9 +13075,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",2]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",2]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt922-breaker-replacement-under-1000",
       "variant": "base",
       "repeat_index": 2,
@@ -13077,10 +13089,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",2,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",2]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",2,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",2]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt922-breaker-replacement-under-1000",
           "variant": "base",
           "repeat_index": 2,
@@ -13129,9 +13141,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",3]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",3]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt922-breaker-replacement-under-1000",
       "variant": "base",
       "repeat_index": 3,
@@ -13143,10 +13155,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",3,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt922-breaker-replacement-under-1000\",\"base\",3]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",3,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt922-breaker-replacement-under-1000\",\"base\",3]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt922-breaker-replacement-under-1000",
           "variant": "base",
           "repeat_index": 3,
@@ -13195,9 +13207,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-dku-100w-replacement\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-dku-100w-replacement\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt821-dku-100w-replacement",
       "variant": "base",
       "repeat_index": 1,
@@ -13209,10 +13221,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-dku-100w-replacement\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-dku-100w-replacement\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-dku-100w-replacement\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-dku-100w-replacement\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt821-dku-100w-replacement",
           "variant": "base",
           "repeat_index": 1,
@@ -13246,9 +13258,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-stabilizer-analogs\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-stabilizer-analogs\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt821-stabilizer-analogs",
       "variant": "base",
       "repeat_index": 1,
@@ -13260,10 +13272,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-stabilizer-analogs\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt821-stabilizer-analogs\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-stabilizer-analogs\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt821-stabilizer-analogs\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt821-stabilizer-analogs",
           "variant": "base",
           "repeat_index": 1,
@@ -13291,9 +13303,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-extension-50m\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-extension-50m\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt746-extension-50m",
       "variant": "base",
       "repeat_index": 1,
@@ -13305,10 +13317,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-extension-50m\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-extension-50m\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-extension-50m\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-extension-50m\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt746-extension-50m",
           "variant": "base",
           "repeat_index": 1,
@@ -13337,9 +13349,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-white-extension-3-sockets\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-white-extension-3-sockets\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt746-white-extension-3-sockets",
       "variant": "base",
       "repeat_index": 1,
@@ -13351,10 +13363,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-white-extension-3-sockets\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-white-extension-3-sockets\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-white-extension-3-sockets\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-white-extension-3-sockets\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt746-white-extension-3-sockets",
           "variant": "base",
           "repeat_index": 1,
@@ -13387,9 +13399,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-black-double-socket\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-black-double-socket\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt746-black-double-socket",
       "variant": "base",
       "repeat_index": 1,
@@ -13401,10 +13413,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-black-double-socket\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-black-double-socket\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-black-double-socket\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-black-double-socket\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt746-black-double-socket",
           "variant": "base",
           "repeat_index": 1,
@@ -13437,9 +13449,9 @@
       ]
     },
     {
-      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-garmoniya-sockets\",\"base\",1]",
+      "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-garmoniya-sockets\",\"base\",1]",
       "suite_basename": "notion-legacy-bug-cases-v2.json",
-      "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+      "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
       "case_id": "bt746-garmoniya-sockets",
       "variant": "base",
       "repeat_index": 1,
@@ -13451,10 +13463,10 @@
       "candidate_status": "NOT_RUN",
       "turns": [
         {
-          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-garmoniya-sockets\",\"base\",1,1]",
-          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8\",\"bt746-garmoniya-sockets\",\"base\",1]",
+          "turn_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-garmoniya-sockets\",\"base\",1,1]",
+          "run_key": "[\"notion-legacy-bug-cases-v2.json\",\"4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7\",\"bt746-garmoniya-sockets\",\"base\",1]",
           "suite_basename": "notion-legacy-bug-cases-v2.json",
-          "suite_sha256": "e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8",
+          "suite_sha256": "4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7",
           "case_id": "bt746-garmoniya-sockets",
           "variant": "base",
           "repeat_index": 1,

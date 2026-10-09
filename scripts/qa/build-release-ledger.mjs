@@ -30,7 +30,7 @@ export const MATRIX_MANIFESTS = [
   },
   {
     file: 'notion-legacy-bug-cases-v2.json',
-    sha256: 'e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8',
+    sha256: '4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7',
     caseCount: 30, sourceTurnCount: 31, runCount: 38, evaluatedTurnCount: 39,
     repeat: 1,
     repeatById: {

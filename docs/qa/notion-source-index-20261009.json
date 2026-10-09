@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Ticket-page attribution for the same 30 source prompts in legacy Notion QA v1 and v2, not exact block or screenshot provenance.",
+  "scope": "Ticket-page attribution for 30 scenario identities in legacy Notion QA v1 and v2; v2 uses exact source text for both BT-923 prompts. Most other prompts are paraphrases, and block/screenshot provenance is incomplete.",
   "project_url": "https://app.notion.com/p/220volt-kz-e5f02f251f234a1eb71c3f90fea21394",
   "tickets": [
     { "ticket": "BT-929", "page_url": "https://app.notion.com/p/37bcf8d369ba80ba99afcfeaa1b0713b", "case_count": 9 },
@@ -21,6 +21,7 @@
     {
       "ticket": "BT-923",
       "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7",
+      "source_prompt": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
       "source_product_url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/batarejki/element-pitaniya-nbt-cr2025-bp5-94-764-navigator/",
       "expected_catalog_unit": "шт",
       "live_page_check": {
@@ -33,6 +34,23 @@
         "note": "Read-only productProofFromHtml on live page; price and stock are time-sensitive, so acceptance re-fetches the page rather than pinning these values."
       },
       "source_meaning": "The ticket says the site lists the product unit as шт and the bot must not reinterpret that catalog unit as упаковка. It does not establish how many battery cells are inside one sellable SKU."
+    },
+    {
+      "ticket": "BT-923",
+      "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7",
+      "source_prompt": "найди кабель ввг 3*1,5 самый дешевый",
+      "source_product_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5/",
+      "expected_catalog_unit": "м",
+      "live_page_check": {
+        "checked_at_utc": "2026-10-09T18:33:00Z",
+        "source_product_name": "Кабель ВВГ 3*1,5",
+        "source_sku": "000000227",
+        "source_unit_facet": "м",
+        "observed_offer_price_kzt": 462,
+        "observed_availability": "https://schema.org/InStock",
+        "note": "Read-only productProofFromHtml on live page. The ticket spells out метр; the current page's unit abbreviation is м."
+      },
+      "source_meaning": "A VVG 3*1,5 stock line must use a length unit, not штуки; the cheapest-product claim still requires separate catalog-wide price proof."
     }
   ],
   "observed_instability_comments": [

@@ -508,7 +508,7 @@ test('Notion v2 preserves the v1 case inventory and adds only scoped reliability
   assert.deepEqual(notionV2Suite.cases.map((item) => item.id), notionSuite.cases.map((item) => item.id));
   for (const oldCase of notionSuite.cases) {
     const nextCase = notionV2Suite.cases.find((item) => item.id === oldCase.id);
-    if (!['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit'].includes(oldCase.id)) {
+    if (!['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit', 'bt923-vvg-3x1_5-unit'].includes(oldCase.id)) {
       assert.deepEqual(nextCase, oldCase);
     }
   }
@@ -524,7 +524,58 @@ test('Notion v2 preserves the v1 case inventory and adds only scoped reliability
   assert.deepEqual(battery.turns[0].expect.require_every_product_page.facets,
     [{ name: 'Единица измерения', exact_any: ['шт'] }]);
   assert(!JSON.stringify(battery.turns[0].expect).includes('5 шт'));
+  const cable = notionV2Suite.cases.find((item) => item.id === 'bt923-vvg-3x1_5-unit');
+  assert.equal(cable.turns[0].message, 'найди кабель ввг 3*1,5 самый дешевый');
+  assert.equal(cable.turns[0].expect.require_every_product_stock_unit, 'м');
+  assert.deepEqual(cable.turns[0].expect.require_every_product_page.facets,
+    [{ name: 'Единица измерения', exact_any: ['м', 'метр'] }]);
   assert.throws(() => validateExpectationObject({ require_quoted_price_per_piece: 'true' }), /must be a boolean/);
+});
+
+function stockReply(stockLines) {
+  return parseSse([
+    ...stockLines.map((stockLine, index) => data({ v3_event: {
+      type: 'products_block',
+      markdown: `- **[Кабель ВВГ 3×1,5 № ${index + 1}](https://220volt.kz/catalog/kabeli/vvg/kabel-${index + 1}/)**\n  Цена: *123* ₸\n  Наличие: ${stockLine}`,
+    } })),
+    'data: [DONE]',
+  ].join('\n'));
+}
+
+test('stock-unit assertion checks each quantified warehouse in every rendered card', () => {
+  const expectation = { require_every_product_stock_unit: 'м' };
+  assert.deepEqual(evaluate(expectation, stockReply([
+    'Астана (80 м.), Алматы (110 м.) и ещё 2 города',
+    'Караганда (2 м)',
+  ])), []);
+  for (const [lines, description] of [
+    [['Астана (80 шт.)'], 'wrong unit in sole warehouse'],
+    [['Астана (80 м.), Алматы (110 шт.)'], 'wrong unit in second warehouse'],
+    [['Астана (80 м.)', 'Караганда (2 шт.)'], 'wrong unit in second card'],
+    [['Астана (80 м.), Алматы (шт. 110)'], 'malformed second warehouse quantity'],
+    [['Астана (80 м.), Алматы 110 шт.'], 'unparsed unparenthesized quantity'],
+    [['Астана (есть)'], 'stock with no numeric quantity'],
+  ]) {
+    assert(evaluate(expectation, stockReply(lines)).some((failure) => failure.includes('stock')),
+      description);
+  }
+  const missingStock = stockReply(['Астана (80 м.)']);
+  missingStock.links[0].stockLine = null;
+  assert(evaluate(expectation, missingStock).some((failure) => failure.includes('no stock line')));
+  assert(evaluate(expectation, { ...missingStock, links: [] })
+    .some((failure) => failure.includes('at least one rendered product card')));
+});
+
+test('stock-unit assertion uses only stock quantities, not price or free text', () => {
+  const parsed = stockReply(['Астана (80 шт.)']);
+  parsed.text = 'Цена указана за метр, 80 м в наличии';
+  parsed.productsMarkdown += '\nЦена: 123 ₸/м';
+  assert(evaluate({ require_every_product_stock_unit: 'м' }, parsed)
+    .some((failure) => failure.includes('unit is not м')));
+  for (const value of ['', '  ', 'м ', 'м\n', 'м|шт', {}, null]) {
+    assert.throws(() => validateExpectationObject({ require_every_product_stock_unit: value }),
+      /must be a non-empty bounded catalog unit/);
+  }
 });
 
 test('quoted-price unit assertion accepts the deterministic source-unit reply', () => {
