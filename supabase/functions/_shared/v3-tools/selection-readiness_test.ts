@@ -123,6 +123,19 @@ Deno.test("a measured load guidance question reaches visible reasoning before ca
   assertEquals(selectReadinessClarification(message), null);
 });
 
+Deno.test("single-phase breaker installation questions reach measured guidance", () => {
+  for (
+    const message of [
+      "Какой автомат поставить в однофазной квартире при нагрузке 7 кВт?",
+      "Какой автомат лучше ставить в однофазной квартире при нагрузке 7 кВт?",
+      "Какой автомат установить в однофазной квартире на 7 кВт?",
+    ]
+  ) {
+    assertEquals(measuredLoadGuidanceCanProceed(message), true, message);
+    assertEquals(selectReadinessClarification(message), null, message);
+  }
+});
+
 Deno.test("a direct catalog order with the same load remains readiness-protected", () => {
   const message = "Подбери автомат для квартиры с нагрузкой 7 кВт";
   assertEquals(measuredLoadGuidanceCanProceed(message), false);
@@ -132,6 +145,31 @@ Deno.test("a direct catalog order with the same load remains readiness-protected
   );
 });
 
+Deno.test("catalog imperatives stay readiness-protected despite installation wording", () => {
+  const message =
+    "Подбери, какой автомат поставить в однофазной квартире при нагрузке 7 кВт";
+  assertEquals(measuredLoadGuidanceCanProceed(message), false);
+  assertEquals(
+    selectReadinessClarification(message)?.profile,
+    "apartment_breaker",
+  );
+});
+
+Deno.test("Russian prepositions are not evidence of a breaker trip curve", () => {
+  for (
+    const message of [
+      "Подбери автомат 25 А для однофазной квартиры в щит",
+      "Подбери автомат 25 А для однофазной квартиры с нагрузкой 5 кВт",
+    ]
+  ) {
+    assertEquals(
+      selectReadinessClarification(message)?.profile,
+      "apartment_breaker",
+      message,
+    );
+  }
+});
+
 Deno.test("a question without a measured load still receives an essential clarification", () => {
   const message = "Какой кабель подойдет для прокладки в земле?";
   assertEquals(measuredLoadGuidanceCanProceed(message), false);
@@ -139,6 +177,12 @@ Deno.test("a question without a measured load still receives an essential clarif
     selectReadinessClarification(message)?.profile,
     "underground_cable",
   );
+});
+
+Deno.test("bare power does not newly bypass non-breaker compatibility readiness", () => {
+  const message = "Какой кабель нужен для насоса 7 кВт?";
+  assertEquals(measuredLoadGuidanceCanProceed(message), false);
+  assertEquals(selectReadinessClarification(message)?.profile, "pump_cable");
 });
 
 Deno.test("specified availability browse proceeds without optional preference questions", () => {
@@ -211,6 +255,12 @@ Deno.test("apartment breaker proceeds after current, pole count and curve are cu
       "Мне нужен автоматический выключатель на 25 А для квартиры\nУточнение клиента: характеристика С, 1 полюс",
       "Мне нужен автоматический выключатель на 25 А для квартиры\nхарактеристика С, 1 полюс",
       { progressive: true },
+    ),
+    null,
+  );
+  assertEquals(
+    selectReadinessClarification(
+      "Подбери автомат C25 1P для квартиры",
     ),
     null,
   );

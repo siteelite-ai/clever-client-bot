@@ -154,14 +154,22 @@ export function specifiedAvailabilityBrowseIsActionable(
 export function measuredLoadGuidanceCanProceed(message: string): boolean {
   const source = String(message ?? "").trim();
   if (!source) return false;
+  const breaker = /автомат\p{L}*/iu.test(source);
   const asksGuidance =
     /(?:какой|какая|какое|какие)[^.!?\n]{0,120}(?:нужен|нужна|нужно|нужны|подойдет|подойдут)/iu
-      .test(source);
-  const measuredLoad =
-    /нагрузк\p{L}*[^.!?\n]{0,40}\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])|\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])[^.!?\n]{0,40}нагрузк\p{L}*/iu
+      .test(source) ||
+    (breaker &&
+      /(?:какой|какая|какое|какие)[^.!?\n]{0,120}(?:поставить|ставить|установить|выбрать|посовет\p{L}*|рекоменд\p{L}*)/iu
+        .test(source));
+  // Keep the existing measured-load rule for other product domains. Breaker
+  // guidance also accepts a bare kW/A value, which the calculation router can
+  // actually parse, without relaxing readiness for cable or equipment picks.
+  const measuredLoad = breaker
+    ? /\d+(?:[.,]\d+)?\s*(?:к\s*вт|а)(?=$|[^\p{L}\p{N}])/iu.test(source)
+    : /нагрузк\p{L}*[^.!?\n]{0,40}\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])|\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])[^.!?\n]{0,40}нагрузк\p{L}*/iu
       .test(source);
   const catalogImperative =
-    /(?:^|[^\p{L}])(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/iu
+    /(?:^|[^\p{L}])(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|купи\p{L}*)(?=$|[^\p{L}])/iu
       .test(source);
   return asksGuidance && measuredLoad && !catalogImperative;
 }
@@ -307,7 +315,7 @@ const PROFILES: ReadinessProfile[] = [
       /автомат\p{L}*[^.!?\n]{0,80}(?:квартир\p{L}*|квартир\p{L}*[^.!?\n]{0,80}автомат\p{L}*)/iu,
     required: [
       /(?:полюс\p{L}*|\b[1234]\s*[pрп]\b|фаз\p{L}*)/iu,
-      /(?:характерист\p{L}*|крив\p{L}*|(?:^|\s)[bcdвсд](?:\s|$))/iu,
+      /(?:характерист\p{L}*|крив\p{L}*|тип\p{L}*)\s*[:–-]?\s*[bcdвсд](?=$|[^\p{L}\p{N}])|(?<![\p{L}\p{N}])[bcdвсд]\d{1,3}(?=$|[^\p{L}\p{N}])/iu,
     ],
     missing_labels: [
       "полюсность или число фаз",
