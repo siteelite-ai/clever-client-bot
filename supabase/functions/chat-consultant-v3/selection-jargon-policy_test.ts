@@ -385,6 +385,15 @@ Deno.test("a customer cm dimension cannot silently bypass a live mm pair", () =>
   );
   assertEquals(decision.state, "unproven");
   assertEquals(
+    terminalPairedFitDecision(
+      { value: 12, unit: "cm" },
+      "подбери изделие для кабеля диаметром 12 cm",
+      "",
+      pairedFacets,
+    ).state,
+    "unproven",
+  );
+  assertEquals(
     enforceTerminalPairedFit(
       [item("wrong-scale", "Изделие 16/8")],
       decision,

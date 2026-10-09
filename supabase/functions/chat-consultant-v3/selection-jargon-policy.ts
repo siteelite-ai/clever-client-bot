@@ -494,8 +494,19 @@ function graphNamesProperty(
  * Keep the pair obligation and fail closed instead of treating it as absent. */
 function sameLengthDimension(left: string, right: string): boolean {
   const lengthUnits = new Set(["мм", "см", "дм", "м", "км"]);
-  return lengthUnits.has(normalizeUnit(left)) &&
-    lengthUnits.has(normalizeUnit(right));
+  const aliases: Record<string, string> = {
+    mm: "мм",
+    cm: "см",
+    dm: "дм",
+    m: "м",
+    km: "км",
+  };
+  const canonical = (unit: string) => {
+    const normalized = normalizeUnit(unit);
+    return aliases[normalized] ?? normalized;
+  };
+  return lengthUnits.has(canonical(left)) &&
+    lengthUnits.has(canonical(right));
 }
 
 function customerPropertiesBeforeReferences(
