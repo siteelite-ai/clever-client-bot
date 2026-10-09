@@ -102,6 +102,21 @@ export function retainRequiredCatalogAlias(
   return grounded || null;
 }
 
+/** Preserve the original customer-owned alias across repeated render attempts.
+ * A failed attempt may clear transient state; a later model declaration cannot
+ * supersede an already grounded requirement. */
+export function resolveRenderAliasClaim(
+  required: string | null,
+  freshlyDeclared: string | null,
+  transient: string | null,
+): string | null {
+  for (const value of [required, freshlyDeclared, transient]) {
+    const claim = String(value ?? "").trim();
+    if (claim) return claim;
+  }
+  return null;
+}
+
 /** A qualifier is not an alias when it merely repeats the already grounded
  * product class with another inflection (for example plural customer wording
  * versus singular catalog titles). Real colloquial names remain distinct. */

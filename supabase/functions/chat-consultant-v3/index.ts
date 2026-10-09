@@ -188,6 +188,7 @@ import {
   extractUnrepresentedPostNominalCatalogQualifier,
   filterProductsByDeclaredAlias,
   retainRequiredCatalogAlias,
+  resolveRenderAliasClaim,
   titleContainsDeclaredAlias,
 } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -7417,7 +7418,13 @@ async function runExpertLoop(
     // that one card (or the list of cards) supplies an installation total.
     // Bind the output axis and lower bound to the reasoning actually shown
     // to the customer and the current live category schema.
-    if (derivedSelectionMeasurementScope !== "system_total") {
+    // A customer-owned cheapest/most-expensive order is stronger than our
+    // advisory output ranking. Keep the price contract intact and disclose
+    // that no counted system-capacity plan has been verified.
+    if (
+      derivedSelectionMeasurementScope !== "system_total" ||
+      detectPriceDirection(userMessage)?.kind === "superlative"
+    ) {
       return classificationSafe;
     }
     const totalRequirement = resolveVisibleSystemTotalRequirement({
@@ -11157,7 +11164,14 @@ async function runExpertLoop(
             `${firstAssistantText}\n${assistantReasoning}`,
             liveTaxonomyDeclaration,
           );
-          let lexicalClaim: string | null = aliasClaim ?? declaredAliasQuery;
+          // A failed render must not erase the customer-owned alias before
+          // the next model attempt. The persistent obligation also outranks
+          // any new label coined by the model later in the same turn.
+          let lexicalClaim: string | null = resolveRenderAliasClaim(
+            requiredCatalogAlias,
+            aliasClaim,
+            declaredAliasQuery,
+          );
           if (
             lexicalClaim && liveTaxonomyDeclaration &&
             !declaredAliasIsStructurallyCustomerOwned(
@@ -11214,16 +11228,27 @@ async function runExpertLoop(
               .filter((product): product is ProductFull => Boolean(product));
             const groundedSearchLabel = semanticBackedSearch?.label?.trim() ??
               "";
-            const aliasProvenProducts = finalProducts.filter((product) =>
-              titleContainsDeclaredAlias(product.pagetitle, lexicalClaim) ||
-              Boolean(
-                groundedSearchLabel &&
-                  titleSupportsGroundedJargonQuery(
-                    product.pagetitle,
-                    groundedSearchLabel,
-                  ),
-              )
+            const numericAliasProof = proveCustomerNumericAxisAliasFromProducts(
+              lexicalClaim,
+              userMessage,
+              lastDiscover?.facets ?? [],
+              finalProducts,
             );
+            const numericAxisCustomerGrounded =
+              numericAliasProof.status === "proven" ||
+              numericAliasProof.status === "product_axis_unproven";
+            const aliasProvenProducts = numericAxisCustomerGrounded
+              ? numericAliasProof.products
+              : finalProducts.filter((product) =>
+                titleContainsDeclaredAlias(product.pagetitle, lexicalClaim) ||
+                Boolean(
+                  groundedSearchLabel &&
+                    titleSupportsGroundedJargonQuery(
+                      product.pagetitle,
+                      groundedSearchLabel,
+                    ),
+                )
+              );
             if (aliasProvenProducts.length === 0) {
               declaredAliasQuery = lexicalClaim;
               gateShortCircuit = {
@@ -11240,6 +11265,7 @@ async function runExpertLoop(
                   alias: lexicalClaim,
                   search_label: groundedSearchLabel || null,
                   candidates: finalProducts.length,
+                  numeric_axis_status: numericAliasProof.status,
                 },
               });
             } else {
@@ -11256,6 +11282,7 @@ async function runExpertLoop(
                     alias: lexicalClaim,
                     before: finalIds.length,
                     after: filteredIds.length,
+                    numeric_axis_status: numericAliasProof.status,
                   },
                 });
               }
@@ -12666,7 +12693,12 @@ async function runExpertLoop(
           const afterFinalVisibility = guardFinalRenderIds(
             beforeFinalVisibility,
           );
-          if (afterFinalVisibility.length !== beforeFinalVisibility.length) {
+          if (
+            afterFinalVisibility.length !== beforeFinalVisibility.length ||
+            afterFinalVisibility.some((id, index) =>
+              id !== beforeFinalVisibility[index]
+            )
+          ) {
             (tc.args as Record<string, unknown>).product_ids =
               afterFinalVisibility;
             steps.push({
