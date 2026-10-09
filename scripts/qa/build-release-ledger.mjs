@@ -6,14 +6,14 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-20261009.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v2-20261009.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
-    sha256: '111e1ca0ffdad1b4865a04e4594b98df1de0ecc71d179f6277aa6083abe4ed74',
+    sha256: '3e83af0d0859636af91896a0dd34517aaf81a9d275e7babcdda812f99cb9d91d',
     caseCount: 27, sourceTurnCount: 42, runCount: 81, evaluatedTurnCount: 126,
     repeat: 3,
   },
@@ -29,12 +29,14 @@ export const MATRIX_MANIFESTS = [
     },
   },
   {
-    file: 'notion-legacy-bug-cases.json',
-    sha256: '92d323e84399dce920e10b37575e20c67f71e6e6dfe7851adac3e3000fa7f367',
-    caseCount: 30, sourceTurnCount: 31, runCount: 34, evaluatedTurnCount: 35,
+    file: 'notion-legacy-bug-cases-v2.json',
+    sha256: 'e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8',
+    caseCount: 30, sourceTurnCount: 31, runCount: 38, evaluatedTurnCount: 39,
     repeat: 1,
     repeatById: {
+      'bt928-boiler-breaker-diagnostic': 3,
       'bt925-corn-e27': 3,
+      'bt923-battery-unit': 3,
       'bt922-breaker-replacement-under-1000': 3,
     },
   },
@@ -218,7 +220,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
     runs: runs.length,
     ordered_turns: runs.reduce((count, run) => count + run.turns.length, 0),
   };
-  assert.deepEqual(counts, { matrix_files: 5, runs: 184, ordered_turns: 254 });
+  assert.deepEqual(counts, { matrix_files: 5, runs: 188, ordered_turns: 258 });
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
@@ -254,7 +256,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else {
       assert.equal(fs.readFileSync(outputFile, 'utf8'), serialized,
         'release inventory is stale; rebuild with --write after reviewing matrix changes');
-      process.stdout.write('Release inventory matches the pinned five-file matrix (184 runs, 254 turns).\n');
+      process.stdout.write('Release inventory matches the pinned five-file matrix (188 runs, 258 turns).\n');
     }
   }
 }

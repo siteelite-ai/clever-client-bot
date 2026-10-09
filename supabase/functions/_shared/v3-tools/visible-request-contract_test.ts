@@ -606,6 +606,46 @@ Deno.test("an unmeasured mounting destination remains a visible requirement", ()
   );
 });
 
+Deno.test("an opaque same-class model does not prove a requested mounting destination", () => {
+  for (const destination of ["стену", "потолок", "стойку"]) {
+    const explicitTitle = `Кронштейн на ${destination}`;
+    const opaqueTitle = "Кронштейн K123";
+    const contract = buildVisibleRequestContract(
+      `подбери кронштейн на ${destination}`,
+      {
+        productClass: "кронштейн",
+        taxonomyClass: "Кронштейны",
+        candidateTitles: [explicitTitle, opaqueTitle],
+      },
+    );
+    assertEquals(contract.map((requirement) => requirement.label), [
+      destination,
+    ]);
+    assertEquals(
+      titleSupportsVisibleRequestContract(explicitTitle, contract),
+      true,
+    );
+    assertEquals(
+      titleSupportsVisibleRequestContract(opaqueTitle, contract),
+      false,
+    );
+    assertEquals(
+      productSupportsVisibleRequestContract({
+        pagetitle: opaqueTitle,
+        short_traits: ["Место установки: другое"],
+      }, contract),
+      false,
+    );
+    assertEquals(
+      productSupportsVisibleRequestContract({
+        pagetitle: opaqueTitle,
+        short_traits: [`Место установки: ${destination}`],
+      }, contract),
+      true,
+    );
+  }
+});
+
 Deno.test("a mounting destination remains mandatory even beside an ambiguous physical number", () => {
   const contract = buildVisibleRequestContract(
     "подбери кронштейн на стену 12 мм",

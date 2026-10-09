@@ -8,6 +8,7 @@ import {
   namedSeriesClassCoverage,
   productProvesNamedSeriesClass,
   resolveRequestedNamedSeriesClasses,
+  shouldSearchNextNamedSeriesClassPage,
   stratifyNamedSeriesProducts,
 } from "./named-series-class-coverage.ts";
 import type { ProductFull } from "./types.ts";
@@ -40,6 +41,12 @@ Deno.test("named-series class list comes from the customer's bare nouns, not a b
   );
   assertEquals(
     extractRequestedNamedSeriesClasses(
+      "Расскажи о серии Gallant по розеткам",
+    ),
+    ["розеткам"],
+  );
+  assertEquals(
+    extractRequestedNamedSeriesClasses(
       "Покажи серию Gallant до 5000 тенге и только в Алматы",
     ),
     [],
@@ -47,6 +54,24 @@ Deno.test("named-series class list comes from the customer's bare nouns, not a b
   assertEquals(
     extractRequestedNamedSeriesClasses(
       "Расскажи о серии Nova по лампам и светильникам с датчиком движения",
+    ),
+    [],
+  );
+  assertEquals(
+    extractRequestedNamedSeriesClasses(
+      "Расскажи о серии Gallant по белым розеткам",
+    ),
+    [],
+  );
+  assertEquals(
+    extractRequestedNamedSeriesClasses(
+      "Расскажи о серии Gallant по розеткам с USB",
+    ),
+    [],
+  );
+  assertEquals(
+    extractRequestedNamedSeriesClasses(
+      "Расскажи о серии Gallant с рамкой для розеток",
     ),
     [],
   );
@@ -72,6 +97,14 @@ Deno.test("named-series class list comes from the customer's bare nouns, not a b
     ),
     [],
   );
+  assertEquals(
+    resolveRequestedNamedSeriesClasses(
+      "Покажи товары этой серии.",
+      [{ role: "user", content: "Расскажи о серии Gallant по розеткам" }],
+      "gallant",
+    ),
+    ["розеткам"],
+  );
 });
 
 Deno.test("series coverage requires independent live product-class proof", () => {
@@ -83,6 +116,11 @@ Deno.test("series coverage requires independent live product-class proof", () =>
   assertEquals(productProvesNamedSeriesClass(switchProduct, "выключателям"), true);
   assertEquals(productProvesNamedSeriesClass(frame, "выключателям"), false);
   assertEquals(productProvesNamedSeriesClass(unclassified, "выключателям"), true);
+  assertEquals(productProvesNamedSeriesClass(unclassified, "выключателям", true), false);
+  assertEquals(
+    namedSeriesClassCoverage(["выключателям"], [unclassified])[0].products,
+    [],
+  );
 });
 
 Deno.test("series selection shows each requested class before filling one class", () => {
@@ -117,4 +155,62 @@ Deno.test("missing requested series class is disclosed without unrelated product
   const text = appendNamedSeriesClassCoverage("Розетки представлены.", coverage, false);
   assertStringIncludes(text, "«выключателям»");
   assertStringIncludes(text, "в проверенной части каталога не нашёл");
+});
+
+Deno.test("single named-series class scans a bounded window past unrelated first-page classes", () => {
+  const otherClasses = [
+    product("frame", "Рамка для розетки Gallant", "Рамки"),
+    product("switch", "Выключатель Gallant", "Выключатели"),
+  ];
+  const socket = product("socket", "Розетка Gallant", "Розетки");
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage(["розеткам"], otherClasses, 120, 50, 1),
+    true,
+  );
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage(["розеткам"], [...otherClasses, socket], 120, 50, 2),
+    false,
+  );
+  assertEquals(
+    stratifyNamedSeriesProducts(
+      namedSeriesClassCoverage(["розеткам"], [...otherClasses, socket]),
+      10,
+    ).map((item) => item.id),
+    ["socket"],
+  );
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage(["розеткам"], otherClasses, 50, 50, 1),
+    false,
+  );
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage(["розеткам"], otherClasses, 200, 50, 3),
+    false,
+  );
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage([], otherClasses, 200, 50, 1),
+    false,
+  );
+  assertEquals(
+    shouldSearchNextNamedSeriesClassPage(["розеткам", "выключателям"], [socket], 120, 50, 1),
+    true,
+  );
+});
+
+Deno.test("single bare modifier has no class proof, unrelated cards, or catalog-wide absence claim", () => {
+  const products = [
+    product("socket", "Розетка Gallant", "Розетки"),
+    product("frame", "Рамка Gallant", "Рамки"),
+  ];
+  for (const message of [
+    "Расскажи о серии Gallant по скидкам",
+    "Расскажи о серии Gallant по характеристикам",
+  ]) {
+    const candidates = extractRequestedNamedSeriesClasses(message);
+    const coverage = namedSeriesClassCoverage(candidates, products);
+    assertEquals(stratifyNamedSeriesProducts(coverage, 8), []);
+    const text = appendNamedSeriesClassCoverage("", coverage, true);
+    assertStringIncludes(text, "в проверенной части каталога");
+    assertStringIncludes(text, "Уточните, какой тип товара");
+    assertEquals(text.includes("в каталоге не нашёл"), false);
+  }
 });

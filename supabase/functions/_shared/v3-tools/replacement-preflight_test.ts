@@ -11,6 +11,7 @@ import {
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
+  productContainsExactModelCode,
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
@@ -525,6 +526,38 @@ Deno.test("source model exclusion is structural", () => {
     ]),
     false,
   );
+});
+
+Deno.test("exact-item model code excludes sibling package and revision suffixes", () => {
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5 (блистер)" },
+    "NBT-CR2025-BP5",
+  ), true);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT CR2025 BP5, блистер" },
+    "NBT-CR2025-BP5",
+  ), true);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5-10 (иная комплектация)" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP50" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5+10" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка Panasonic CR2025, аналог NBT-CR2025-BP5" },
+    "NBT-CR2025-BP5",
+  ), false);
+  // Analogue family exclusion intentionally remains broader than exact-item lookup.
+  assertEquals(productContainsSourceModel(
+    { pagetitle: "Батарейка NBT-CR2025-BP5-10" },
+    ["NBT-CR2025-BP5"],
+  ), true);
 });
 
 Deno.test("replacement source identity does not consume later technical title codes", () => {

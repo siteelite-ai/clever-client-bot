@@ -194,15 +194,27 @@ Deno.test("uncovered obligation never starts measured direct catalog work", asyn
 Deno.test("fallback cards need independent LED, site, area and warehouse proof", () => {
   const cards = [
     product("good", "Люстра светодиодная 96W", "кухня; гостиная", "30"),
+    {
+      ...product("no-warehouse-rows", "Люстра светодиодная 60W", "гостиная", "30", 0),
+      warehouse_evidence: "missing" as const,
+    },
     product("office", "Офисная панель светодиодная 48W", "офис", "30"),
     product("bulb", "Люстра E14 под светодиодные лампы", "гостиная", "30"),
     product("small", "Люстра светодиодная 20W", "гостиная", "12"),
     product("no-area", "Люстра светодиодная 40W", "гостиная", ""),
-    product("no-stock", "Люстра светодиодная 40W", "гостиная", "30", 0),
+    { ...product("explicit-out", "Люстра светодиодная 40W", "гостиная", "30", 0), stock: "out" as const },
+    {
+      ...product("explicit-zero", "Люстра светодиодная 40W", "гостиная", "30", 0),
+      warehouse_evidence: "explicit_zero" as const,
+    },
+    {
+      ...product("unknown-rows", "Люстра светодиодная 40W", "гостиная", "30", 0),
+      warehouse_evidence: "unverified" as const,
+    },
   ];
   assertEquals(
     verifiedMeasuredLedReplacementProducts(request, cards).map(({ id }) => id),
-    ["good"],
+    ["good", "no-warehouse-rows"],
   );
 });
 
@@ -214,6 +226,8 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     product("good1", "Люстра светодиодная 100W", "гостиная", "30"),
     product("good2", "Люстра светодиодная 96W", "кухня; гостиная", "30"),
     product("good3", "Люстра светодиодная 72W", "гостиная", "25"),
+    product("no-warehouse-rows", "Люстра светодиодная 60W", "гостиная", "30", 0),
+    product("explicit-zero", "Люстра светодиодная 55W", "гостиная", "30", 0),
     product("office", "Офисная панель светодиодная 48W", "офис", "30"),
     product("old", "Люстра E14 под лампы", "гостиная", "30"),
   ];
@@ -223,7 +237,11 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     price: entry.price,
     url: entry.url,
     category: { pagetitle: entry.leaf_category },
-    warehouses: [{ city: "Алматы", amount: 3 }],
+    ...(entry.id === "no-warehouse-rows"
+      ? {}
+      : entry.id === "explicit-zero"
+      ? { warehouses: [{ city: "Алматы", amount: 0 }] }
+      : { warehouses: [{ city: "Алматы", amount: 3 }] }),
     options: entry.short_traits.map((trait, index) => {
       const [caption, ...value] = trait.split(":");
       return {
@@ -258,7 +276,7 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     } else if (url.pathname.endsWith("/categories/options")) {
       data = {
         data: {
-          category: { id: 1, pagetitle: "Люстры", total_products: 5 },
+          category: { id: 1, pagetitle: "Люстры", total_products: 7 },
           options: [{
             key: "purpose",
             caption_ru: "Назначение",
@@ -291,6 +309,7 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     "good1",
     "good2",
     "good3",
+    "no-warehouse-rows",
   ]);
   assertEquals(calls.filter((call) => call.includes("/products?")).length, 2);
   assertEquals(
@@ -313,6 +332,7 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     "good1",
     "good2",
     "good3",
+    "no-warehouse-rows",
   ]);
 
   targetTimeout = false;
@@ -329,6 +349,7 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     "good1",
     "good2",
     "good3",
+    "no-warehouse-rows",
   ]);
 });
 

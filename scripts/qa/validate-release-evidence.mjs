@@ -14,7 +14,7 @@ import { MATRIX_MANIFESTS, buildReleaseLedger, serializeReleaseLedger } from './
 // preview_function_version, preview_endpoint, and deployment_observed_at (UTC ISO).
 // These fields are an operator assertion, not cryptographic deployment proof.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const inventoryFile = path.join(root, 'docs/qa/release-inventory-20261009.json');
+const inventoryFile = path.join(root, 'docs/qa/release-inventory-v2-20261009.json');
 const STRICT_PRODUCT_IDENTITY_MODE = 'live_jsonld_product_sku_or_no_sku_canonical_name_price_stock';
 // Dimensions come from the independently pinned manifests, not from a pass subset.
 // A reviewed matrix re-pin can change run/turn counts without changing this gate.

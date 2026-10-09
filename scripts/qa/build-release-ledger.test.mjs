@@ -13,7 +13,7 @@ import {
 } from './build-release-ledger.mjs';
 import { resolveCaseExecutions, resolveExpectations } from './run-customer-acceptance.mjs';
 
-const ledgerFile = new URL('../../docs/qa/release-inventory-20261009.json', import.meta.url);
+const ledgerFile = new URL('../../docs/qa/release-inventory-v2-20261009.json', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function withChangedJson(filename, change, manifestChange = (manifest) => manifest) {
@@ -34,7 +34,7 @@ function withChangedJson(filename, change, manifestChange = (manifest) => manife
 
 test('the pinned five matrix hashes and release dimensions match the actual files', () => {
   const ledger = buildReleaseLedger();
-  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 184, ordered_turns: 254 });
+  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 188, ordered_turns: 258 });
   for (const file of ledger.matrix_files) {
     assert.equal(sha256(fs.readFileSync(new URL(`./${file.basename}`, import.meta.url))), file.sha256);
   }
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases.json', 34, 35],
+      ['notion-legacy-bug-cases-v2.json', 38, 39],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -99,7 +99,7 @@ test('all 117 base source turns declare a substantive explicit acceptance assert
   assert.equal(checked, 117);
 });
 
-test('all 254 messages and effective expectations match the acceptance runner plan', () => {
+test('all 258 messages and effective expectations match the acceptance runner plan', () => {
   const ledger = buildReleaseLedger();
   let cursor = 0;
   for (const manifest of MATRIX_MANIFESTS) {
@@ -125,7 +125,7 @@ test('all 254 messages and effective expectations match the acceptance runner pl
       }
     }
   }
-  assert.equal(cursor, 184);
+  assert.equal(cursor, 188);
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

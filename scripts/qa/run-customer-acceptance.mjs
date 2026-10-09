@@ -93,7 +93,7 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: '111e1ca0ffdad1b4865a04e4594b98df1de0ecc71d179f6277aa6083abe4ed74',
+    sha256: '3e83af0d0859636af91896a0dd34517aaf81a9d275e7babcdda812f99cb9d91d',
     repeat: 3,
     turns: 42,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
@@ -119,6 +119,22 @@ const FULL_SUITE_MANIFESTS = {
     turns: 31,
     runs: 34,
     evaluatedTurns: 35,
+    defaultTurnsPerCase: 1,
+    turnsById: { 'bt924-acti9-followup-show': 2 },
+    ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
+  },
+  'notion-legacy-bug-cases-v2.json': {
+    sha256: 'e86c2eb79cebc78e15966445764fe17995ac0e31d10513c2d65f24f086f801d8',
+    repeat: 1,
+    repeatById: {
+      'bt928-boiler-breaker-diagnostic': 3,
+      'bt925-corn-e27': 3,
+      'bt923-battery-unit': 3,
+      'bt922-breaker-replacement-under-1000': 3,
+    },
+    turns: 31,
+    runs: 38,
+    evaluatedTurns: 39,
     defaultTurnsPerCase: 1,
     turnsById: { 'bt924-acti9-followup-show': 2 },
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
@@ -294,6 +310,9 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_product_groups_or_gap',
   'require_product_title',
   'require_products_or_text_groups',
+  'require_every_product_exact_identifier',
+  'require_quoted_price_per_piece',
+  'require_clarification_choice',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
   'require_selection_criteria_groups',
@@ -396,6 +415,11 @@ function validateProductPageRuleKeys(rule, location) {
 export function validateExpectationObject(expect, location = 'expect') {
   expectationKeys(expect, SUPPORTED_EXPECTATION_KEYS, location);
   expectationMinMax(expect, 'min_products', 'max_products', location);
+  if (expect.require_every_product_exact_identifier !== undefined &&
+      (typeof expect.require_every_product_exact_identifier !== 'string' ||
+       !/^[\p{L}\p{N}][\p{L}\p{N}\s._/-]{3,79}$/u.test(expect.require_every_product_exact_identifier))) {
+    throw new Error(`${location}.require_every_product_exact_identifier: must be a bounded product identifier`);
+  }
   for (const field of ['min_products', 'max_products', 'min_text_chars', 'min_text_before_products_chars']) {
     if (expect[field] !== undefined) expectationInteger(expect[field], `${location}.${field}`);
   }
@@ -423,6 +447,7 @@ export function validateExpectationObject(expect, location = 'expect') {
   }
   for (const field of [
     'require_new_product_skus', 'require_selection_criteria_evidence', 'forbid_unrendered_catalog_facts',
+    'require_quoted_price_per_piece',
   ]) {
     if (expect[field] !== undefined && typeof expect[field] !== 'boolean') {
       throw new Error(`${location}.${field}: must be a boolean`);
@@ -431,6 +456,10 @@ export function validateExpectationObject(expect, location = 'expect') {
   if (expect.conversation_boundary !== undefined &&
       !['new_task', 'continuation'].includes(expect.conversation_boundary)) {
     throw new Error(`${location}.conversation_boundary: must be new_task or continuation`);
+  }
+  if (expect.require_clarification_choice !== undefined &&
+      !['options', 'freeform', 'either'].includes(expect.require_clarification_choice)) {
+    throw new Error(`${location}.require_clarification_choice: must be options, freeform or either`);
   }
   if (expect.require_every_product_page !== undefined) {
     const pageLocation = `${location}.require_every_product_page`;
@@ -590,6 +619,8 @@ export function parseSse(body) {
   let conversationBoundary = null;
   let dialogSlots = null;
   let selectionContract = null;
+  let quickReplies = null;
+  const priceUnitEvidence = [];
   const toolEvents = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
@@ -608,6 +639,14 @@ export function parseSse(body) {
         selectionContract = event.selection_contract;
       }
     }
+    if (event?.type === 'price_unit_evidence') {
+      priceUnitEvidence.push({
+        productUrl: typeof event.product_url === 'string' ? event.product_url : null,
+        price: Number.isFinite(event.price) ? event.price : null,
+        unit: typeof event.unit === 'string' ? event.unit : null,
+        basis: typeof event.basis === 'string' ? event.basis : null,
+      });
+    }
     if (event?.type === 'diagnostic') {
       logId = event.log_id || logId;
       diagnosticError = event.error || diagnosticError;
@@ -621,6 +660,11 @@ export function parseSse(body) {
     }
     if (event?.type === 'slot_update' && event.slots && typeof event.slots === 'object' && !Array.isArray(event.slots)) {
       dialogSlots = event.slots;
+    }
+    if (event?.type === 'quick_replies') {
+      // Keep the last raw event, including malformed ones: the widget replaces
+      // its active quick-reply state on every such event.
+      quickReplies = event;
     }
     if (event?.type === 'tool_event') {
       toolEvents.push({
@@ -651,7 +695,7 @@ export function parseSse(body) {
       cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, quickReplies, priceUnitEvidence, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -1071,6 +1115,111 @@ function sourceNameAllowsLexicalExpansion(displayed, source) {
     shownNumbers.every((part, index) => part === sourceNumbers[index]);
 }
 
+// An exact customer model must end at a model boundary: BP5-10 is not BP5.
+// Separator variants in the catalog title are accepted, but a verified page
+// and the rendered card must independently name the same requested model.
+function hasExactProductIdentifier(value, identifier) {
+  const parts = String(identifier).match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (!parts.length) return false;
+  const escaped = parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
+  const pattern = new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped.join('[\\s._/–—−-]+')}(?![\\p{L}\\p{N}._/+–—−-])`, 'iu');
+  const title = String(value ?? '');
+  const match = pattern.exec(title);
+  if (!match) return false;
+  const prefix = title.slice(0, match.index);
+  // Mentioning the requested code as an analogue/compatibility target is not
+  // identity. Nor is a later code after a different primary model code.
+  if (/(?:аналог|замен\p{L}*|совместим\p{L}*|подход\p{L}*\s+для|для\s+модел\p{L}*)[^,.()]{0,100}$/iu.test(prefix)) return false;
+  const priorCodes = prefix.match(/[\p{L}\p{N}._/–—−+-]{4,}/gu) ?? [];
+  return !priorCodes.some((token) => /\p{L}/u.test(token) && /\d/u.test(token));
+}
+
+// This release assertion checks a bounded server-authored contract, not the
+// semantics of arbitrary Russian prose. A source-derived unit event and the
+// exact deterministic user-visible sentence must agree with the rendered card.
+// Free-form variants are deliberately not accepted as proof of this contract.
+function quotedPricePerPieceFailures(response) {
+  const links = response.links ?? [];
+  if (links.length !== 1) return ['quoted price per piece requires exactly one displayed product card'];
+  const link = links[0];
+  if (!Number.isFinite(link.price) || link.price <= 0) {
+    return ['quoted price per piece requires a numeric product-card price'];
+  }
+  const evidence = response.priceUnitEvidence ?? [];
+  const identity = productUrlIdentity(link.url);
+  if (evidence.length !== 1 || !identity ||
+      productUrlIdentity(evidence[0]?.productUrl) !== identity ||
+      evidence[0]?.price !== link.price || evidence[0]?.basis !== 'piece' ||
+      !/^(?:шт\.?|штук\p{L}*)$/iu.test(String(evidence[0]?.unit ?? '').replace(/\s+/gu, ''))) {
+    return ['quoted price per piece lacks matching catalog-unit evidence'];
+  }
+  const title = String(link.title ?? '').replace(/[<>\p{Cc}]/gu, ' ')
+    .replace(/\s+/gu, ' ').trim().slice(0, 240);
+  const price = link.price.toLocaleString('ru-RU')
+    .replace(/\u00a0/gu, ' ').replace(/\u202f/gu, ' ');
+  const canonical = `Товар «${title}». Цена ${price} ₸ за одну штуку по единице каталога «${evidence[0].unit}». Сама единица цены не раскрывает количество элементов внутри упаковки.`;
+  const failures = [];
+  if (String(response.text ?? '').trim() !== canonical) {
+    failures.push('assistant did not provide the deterministic catalog-backed per-piece answer');
+  }
+  const priceLine = String(link.cardText ?? '').split(/\r?\n/u)
+    .find((line) => /Цена:/iu.test(line)) ?? '';
+  if (/(?:₸|тг\.?|тенге|KZT)\s*(?:\/\s*|за\s+|\(\s*)(?:уп\.?|упак\p{L}*|блистер\p{L}*|пачк\p{L}*)/iu.test(priceLine) ||
+      /(?:единица\s+(?:продажи|измерения))\s*[:—-]?\s*(?:уп\.?|упак\p{L}*|блистер\p{L}*|пачк\p{L}*)/iu.test(String(link.cardText ?? ''))) {
+    failures.push('rendered card contradicts catalog-unit evidence: per package');
+  }
+  return failures;
+}
+
+function isSseRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Mirror the public widget's choice binding: prose that merely lists options
+// is not a clickable choice. A quick_replies event must match a pending server
+// slot in this same response; an empty pending options list is the backend's
+// explicit free-form clarification mode, not an inferred UI fallback.
+function clarificationChoiceEvidence(response) {
+  const pending = response.dialogSlots?.pending_clarification;
+  if (!isSseRecord(pending) || pending.status !== 'pending' ||
+      typeof pending.slot_id !== 'string' || !pending.slot_id || pending.slot_id.length > 128 ||
+      typeof pending.facet_key !== 'string' || !pending.facet_key.trim() || pending.facet_key.length > 128 ||
+      typeof pending.question !== 'string' || !pending.question.trim() ||
+      !Array.isArray(pending.options)) {
+    return { mode: null, reason: 'no valid server-issued pending clarification slot' };
+  }
+  const visibleText = String(response.text ?? '').replace(/\s+/gu, ' ').trim();
+  const visibleQuestion = pending.question.replace(/\s+/gu, ' ').trim();
+  if (!visibleText.includes(visibleQuestion) || visibleText.length > 8000) {
+    return { mode: null, reason: 'pending clarification question is not visible in the assistant turn' };
+  }
+  if (pending.options.length === 0) {
+    if (response.quickReplies !== null && response.quickReplies !== undefined) {
+      return { mode: null, reason: 'free-form slot conflicts with quick-reply event' };
+    }
+    return { mode: 'freeform', facet_key: pending.facet_key, options_count: 0 };
+  }
+  const event = response.quickReplies;
+  if (!isSseRecord(event) || event.facet_key !== pending.facet_key ||
+      !Array.isArray(event.replies) || event.replies.length < 2 || event.replies.length > 5 ||
+      pending.options.length !== event.replies.length) {
+    return { mode: null, reason: 'quick replies are missing or do not match the pending slot' };
+  }
+  const values = new Set();
+  for (const [index, reply] of event.replies.entries()) {
+    const option = pending.options[index];
+    if (!isSseRecord(reply) || !isSseRecord(option) ||
+        typeof reply.value !== 'string' || !reply.value.trim() || reply.value !== reply.value.trim() ||
+        reply.value.length > 2000 || values.has(reply.value) ||
+        typeof reply.label !== 'string' || !reply.label.trim() || reply.label.length > 160 ||
+        option.value !== reply.value || option.label !== reply.label) {
+      return { mode: null, reason: 'quick-reply values or labels are invalid or disagree with the pending slot' };
+    }
+    values.add(reply.value);
+  }
+  return { mode: 'options', facet_key: pending.facet_key, options_count: event.replies.length };
+}
+
 export function evaluate(expect = {}, response, { requireVerifiedPages = false, previousVerifiedSkus = new Set() } = {}) {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_every_product_page);
@@ -1152,6 +1301,15 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
   if (expect.conversation_boundary === 'continuation' && response.conversationBoundary) {
     failures.push(`unexpected conversation boundary: ${response.conversationBoundary.mode}`);
   }
+  if (expect.require_clarification_choice !== undefined) {
+    const evidence = clarificationChoiceEvidence(response);
+    if (!evidence.mode) {
+      failures.push(`clarification choice is not backed by renderable SSE: ${evidence.reason}`);
+    } else if (expect.require_clarification_choice !== 'either' &&
+               evidence.mode !== expect.require_clarification_choice) {
+      failures.push(`clarification choice mode ${evidence.mode} != ${expect.require_clarification_choice}`);
+    }
+  }
   if (Number.isFinite(expect.min_products) && linkEvidence.uniqueCount < expect.min_products) {
     failures.push(`products ${linkEvidence.uniqueCount} < ${expect.min_products}`);
   }
@@ -1209,6 +1367,9 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
   if (Array.isArray(expect.require_text_groups) && !matchesEveryGroup(response.text, expect.require_text_groups)) {
     failures.push(`assistant text misses one or more required groups: ${expect.require_text_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
   }
+  if (expect.require_quoted_price_per_piece === true) {
+    failures.push(...quotedPricePerPieceFailures(response));
+  }
   if (Array.isArray(expect.require_product_title) && !includesAny(productTitles, expect.require_product_title)) {
     failures.push(`none of required product-title fragments found: ${expect.require_product_title.join(', ')}`);
   }
@@ -1220,6 +1381,15 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
       .filter((link) => !matchesEveryGroup(link.title, expect.require_every_product_title_groups))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
+  }
+  if (typeof expect.require_every_product_exact_identifier === 'string') {
+    for (const link of response.links) {
+      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
+      if (!hasExactProductIdentifier(link.title, expect.require_every_product_exact_identifier) ||
+          !proof?.verified || !hasExactProductIdentifier(proof.name, expect.require_every_product_exact_identifier)) {
+        failures.push(`product card/source misses exact identifier: ${expect.require_every_product_exact_identifier}`);
+      }
+    }
   }
   if (Array.isArray(expect.require_every_product_card_groups)) {
     const invalidCards = response.links
@@ -1461,6 +1631,7 @@ async function runTurn({ message, expect }, state) {
       completed: false,
       conversation_boundary: null,
       selection_contract: null,
+      clarification_choice: null,
       tool_events: [],
       passed: false,
       failures: [failure],
@@ -1521,6 +1692,7 @@ async function runTurn({ message, expect }, state) {
     completed: parsed.completed,
     conversation_boundary: parsed.conversationBoundary,
     selection_contract: parsed.selectionContract,
+    clarification_choice: clarificationChoiceEvidence(parsed),
     tool_events: parsed.toolEvents,
     passed: failures.length === 0,
     failures,

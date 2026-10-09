@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Ticket-page attribution for the 30 legacy Notion QA cases, not exact block or screenshot provenance.",
+  "scope": "Ticket-page attribution for the same 30 source prompts in legacy Notion QA v1 and v2, not exact block or screenshot provenance.",
   "project_url": "https://app.notion.com/p/220volt-kz-e5f02f251f234a1eb71c3f90fea21394",
   "tickets": [
     { "ticket": "BT-929", "page_url": "https://app.notion.com/p/37bcf8d369ba80ba99afcfeaa1b0713b", "case_count": 9 },
@@ -17,6 +17,44 @@
     "bt746-black-double-socket": "336cf8d3-69ba-8016-9d74-001dfbdf0737",
     "bt746-garmoniya-sockets": "336cf8d3-69ba-8093-8d93-001db3f63d3d"
   },
+  "clarified_source_facts": [
+    {
+      "ticket": "BT-923",
+      "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7",
+      "source_product_url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/batarejki/element-pitaniya-nbt-cr2025-bp5-94-764-navigator/",
+      "expected_catalog_unit": "шт",
+      "live_page_check": {
+        "checked_at_utc": "2026-10-09T18:30:00Z",
+        "source_product_name": "Элемент питания NBT-CR2025-BP5 94 764 Navigator",
+        "source_sku": "Ем000003738",
+        "source_unit_facet": "шт",
+        "observed_offer_price_kzt": 225,
+        "observed_availability": "https://schema.org/InStock",
+        "note": "Read-only productProofFromHtml on live page; price and stock are time-sensitive, so acceptance re-fetches the page rather than pinning these values."
+      },
+      "source_meaning": "The ticket says the site lists the product unit as шт and the bot must not reinterpret that catalog unit as упаковка. It does not establish how many battery cells are inside one sellable SKU."
+    }
+  ],
+  "observed_instability_comments": [
+    {
+      "ticket": "BT-928",
+      "comment_id": "6b7cf8d3-69ba-82f9-ae75-031378691bb7",
+      "observation": "The boiler-breaker diagnostic succeeded only once in three observed attempts on 2026-08-25.",
+      "qa_policy": "Retest three times; this is a team reliability criterion, not a quoted prospective customer requirement."
+    },
+    {
+      "ticket": "BT-923",
+      "comment_id": "7a0cf8d3-69ba-82e0-8f32-03b6a176995d",
+      "observation": "The CR2025 unit/packaging answer succeeded only once in three observed attempts on 2026-08-25.",
+      "qa_policy": "Retest three times; this is a team reliability criterion, not a quoted prospective customer requirement."
+    },
+    {
+      "ticket": "BT-924",
+      "comment_id": "3c7cf8d3-69ba-81d1-851a-001c770a8701",
+      "observation": "The Acti9 continuation was described as unstable, with no stated number of attempts.",
+      "qa_policy": "Do not attribute a three-run requirement to this customer comment."
+    }
+  ],
   "limitations": [
     "Most case prompts are paraphrases, not exact quotes of a Notion block.",
     "No prose block IDs or screenshot URLs are recorded per case in the existing QA matrix.",

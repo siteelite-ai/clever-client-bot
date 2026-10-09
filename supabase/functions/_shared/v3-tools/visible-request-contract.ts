@@ -157,7 +157,9 @@ const WORKFLOW_WORDS = new Set([
 // A relation can introduce a measured fit object ("трубка на кабель 12 мм")
 // or a product requirement ("кронштейн на стену 12 мм"). Only the former can
 // be omitted after independent paired-fit proof; the wording alone is not
-// enough. An equipped-product relation ("с кабелем") is not included.
+// enough. In particular, "на" may name a mounting/compatibility destination
+// even when the other live titles expose only opaque model codes. An
+// equipped-product relation ("с кабелем") is not included.
 const MEASURED_OBJECT_RELATIONS = new Set([
   "для",
   "на",
@@ -415,8 +417,11 @@ function literalRequestModifiers(
       const stem = tokenStem(token);
       const measuredRelationObject = isMeasuredRelationObject(modifierIndex);
       const relation = normalizeToken(sourceTokens[modifierIndex - 1] ?? "");
-      const uncontrastedRelationalObject =
-        MEASURED_OBJECT_RELATIONS.has(relation) &&
+      // An uncontrasted "для" application can be contextual, but an
+      // unverified "на <object>" remains customer-owned until each card
+      // proves it. Opaque model codes are not evidence of that destination.
+      const uncontrastedApplicationObject =
+        relation !== "на" && MEASURED_OBJECT_RELATIONS.has(relation) &&
         !hasContrastingRelationalVariant(stem, relation);
       const taxonomyProvesModifierIsClass = taxonomyClassTokens.some((
         taxonomyToken,
@@ -426,7 +431,7 @@ function literalRequestModifiers(
         mappedStems.has(stem) ||
         taxonomyBackedClassStems.has(stem) ||
         taxonomyProvesModifierIsClass || measuredRelationObject ||
-        uncontrastedRelationalObject ||
+        uncontrastedApplicationObject ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
         describesMeasurement(modifierIndex) ||

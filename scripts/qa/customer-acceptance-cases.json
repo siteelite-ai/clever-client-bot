@@ -656,7 +656,8 @@
           "message": "покажи ассортимент Gallant на сайте",
           "expect": {
             "max_products": 0,
-            "require_any_text": ["уточните", "раздел", "розет", "выключател"]
+            "require_any_text": ["уточните", "раздел", "розет", "выключател"],
+            "require_clarification_choice": "options"
           }
         },
         {

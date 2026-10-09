@@ -197,11 +197,31 @@ function hasPositiveWarehouseProof(product: ProductFull): boolean {
     product.warehouses.some(({ qty }) => Number.isFinite(qty) && qty > 0);
 }
 
+function hasUsableStockEvidence(product: ProductFull): boolean {
+  if (product.stock === "out") return false;
+  switch (product.warehouse_evidence) {
+    case "positive":
+      return true;
+    case "missing":
+      // The ordinary catalog treats active products without warehouse rows
+      // as available; no city-specific quantity may be claimed from them.
+      return product.stock === "in_stock";
+    case "explicit_zero":
+    case "unverified":
+      return false;
+    default:
+      // Fail closed for legacy or manually constructed cards lacking the
+      // raw-payload provenance, unless a positive warehouse row survives.
+      return hasPositiveWarehouseProof(product);
+  }
+}
+
 /**
  * Both original-target hits and source-class fallback hits must independently
  * prove the destination application, measured capacity, LED construction and
- * positive stock. An office-only sibling cannot pass through its title or
- * broad category alone.
+ * usable stock evidence. Missing warehouse rows on an active catalog card
+ * are distinct from explicit zero stock. An office-only sibling cannot pass
+ * through its title or broad category alone.
  */
 export function verifiedMeasuredLedReplacementProducts(
   message: string,
@@ -213,7 +233,7 @@ export function verifiedMeasuredLedReplacementProducts(
   return products.filter((product) =>
     fittingIds.has(product.id) &&
     Number.isFinite(product.price) && product.price > 0 &&
-    hasPositiveWarehouseProof(product) &&
+    hasUsableStockEvidence(product) &&
     hasSourceBackedLed(product)
   );
 }

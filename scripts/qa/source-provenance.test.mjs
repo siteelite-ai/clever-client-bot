@@ -42,23 +42,46 @@ test('recorded source-paragraph hashes still match the first prompt in the pinne
 test('all 30 legacy cases have a ticket-page attribution without claiming block-level proof', () => {
   const index = JSON.parse(fs.readFileSync(
     new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
-  const suite = JSON.parse(fs.readFileSync(
-    new URL('./notion-legacy-bug-cases.json', import.meta.url), 'utf8'));
+  const suites = ['notion-legacy-bug-cases.json', 'notion-legacy-bug-cases-v2.json']
+    .map((file) => JSON.parse(fs.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')));
   assert.equal(index.tickets.length, 9);
-  assert.equal(suite.cases.length, 30);
+  assert(suites.every((suite) => suite.cases.length === 30));
+  assert.deepEqual(suites[1].cases.map((item) => [item.id, item.turns.map((turn) => turn.message)]),
+    suites[0].cases.map((item) => [item.id, item.turns.map((turn) => turn.message)]));
   const ticketIds = new Set();
   for (const ticket of index.tickets) {
     assert(!ticketIds.has(ticket.ticket));
     ticketIds.add(ticket.ticket);
     assert.match(ticket.page_url, /^https:\/\/app\.notion\.com\/p\/[a-f0-9]{32}$/u);
     const casePrefix = ticket.ticket.toLowerCase().replace('-', '');
-    assert.equal(suite.cases.filter((item) => item.id.startsWith(casePrefix)).length, ticket.case_count);
+    for (const suite of suites) {
+      assert.equal(suite.cases.filter((item) => item.id.startsWith(casePrefix)).length, ticket.case_count);
+    }
   }
   assert.equal(index.tickets.reduce((count, ticket) => count + ticket.case_count, 0), 30);
-  for (const testCase of suite.cases) {
-    const ticket = testCase.id.match(/^(bt\d+)/u)?.[1];
-    assert(ticketIds.has(ticket?.replace(/^bt/u, 'BT-')), `${testCase.id}: no ticket page`);
+  for (const suite of suites) {
+    for (const testCase of suite.cases) {
+      const ticket = testCase.id.match(/^(bt\d+)/u)?.[1];
+      assert(ticketIds.has(ticket?.replace(/^bt/u, 'BT-')), `${testCase.id}: no ticket page`);
+    }
   }
   assert.deepEqual(Object.keys(index.comment_only_cases).sort(),
     ['bt746-black-double-socket', 'bt746-garmoniya-sockets']);
+  assert.deepEqual(index.observed_instability_comments.map((item) => item.ticket),
+    ['BT-928', 'BT-923', 'BT-924']);
+  for (const item of index.observed_instability_comments) {
+    assert.match(item.comment_id, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u);
+    assert(item.observation.length > 30);
+    assert(item.qa_policy.length > 30);
+  }
+  for (const item of index.observed_instability_comments.slice(0, 2)) {
+    assert.match(item.observation, /once in three/u);
+    assert.match(item.qa_policy, /team reliability criterion/u);
+  }
+  assert.match(index.observed_instability_comments[2].observation, /no stated number/u);
+  const unitFact = index.clarified_source_facts.find((item) => item.ticket === 'BT-923');
+  assert.equal(unitFact.page_url, index.tickets.find((item) => item.ticket === 'BT-923').page_url);
+  assert.equal(unitFact.expected_catalog_unit, 'шт');
+  assert.match(unitFact.source_product_url, /nbt-cr2025-bp5-94-764-navigator\/$/u);
+  assert.match(unitFact.source_meaning, /does not establish how many battery cells/u);
 });

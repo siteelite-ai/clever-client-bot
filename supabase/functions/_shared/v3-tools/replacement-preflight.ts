@@ -944,3 +944,26 @@ export function productContainsSourceModel(
     return needle.length >= 4 && title.includes(needle);
   });
 }
+
+/** Exact-item inquiry must not silently substitute a sibling kit or revision.
+ * The broader source-family matcher above remains unchanged for analogues. */
+export function productContainsExactModelCode(
+  product: Pick<ProductRef, "pagetitle">,
+  code: string,
+): boolean {
+  const parts = String(code).match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (codeNorm(code).length < 4 || !parts.length) return false;
+  const escaped = parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+  const exact = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${escaped.join("[\\s._/–—−-]+")}(?![\\p{L}\\p{N}._/+–—−-])`,
+    "iu",
+  );
+  const match = exact.exec(product.pagetitle);
+  if (!match) return false;
+  const prefix = product.pagetitle.slice(0, match.index);
+  if (/(?:аналог|замен\p{L}*|совместим\p{L}*|подход\p{L}*\s+для|для\s+модел\p{L}*)[^,.()]{0,100}$/iu.test(prefix)) {
+    return false;
+  }
+  const priorCodes = prefix.match(/[\p{L}\p{N}._/–—−+-]{4,}/gu) ?? [];
+  return !priorCodes.some((token) => /\p{L}/u.test(token) && /\d/u.test(token));
+}

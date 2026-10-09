@@ -53,8 +53,82 @@ Deno.test("recent evidence prompt neutralizes markup and forbids stale render", 
   ]);
   const prompt = buildRecentProductEvidencePrompt(evidence);
   assert(!prompt.includes("<script>"));
+  assert(!prompt.includes("https://220volt.kz/catalog/"));
   assert(prompt.includes("untrusted data"));
   assert(prompt.includes("search_catalog confirms"));
+});
+
+Deno.test("recent evidence prompt has a hard budget and keeps late question-relevant facts", () => {
+  const evidence = compactRecentProducts(Array.from({ length: 8 }, (_, index) =>
+    product({
+      id: `fixture-${index + 1}`,
+      pagetitle: `Светильник ${index + 1} ${"потолочный ".repeat(12)}`,
+      short_traits: [
+        ...Array.from({ length: 39 }, (_, traitIndex) =>
+          `Не относящаяся к вопросу характеристика ${traitIndex + 1}: ${"прочие сведения ".repeat(12)}`
+        ),
+        "Максимальная площадь освещения, м2: 30",
+      ],
+    })
+  ));
+  const question = "Подходят ли они для освещения 30 квадратных метров?";
+  const prompt = buildRecentProductEvidencePrompt(evidence, question);
+  const match = prompt.match(/\n(\[[\s\S]*\])\n<\/recent_product_evidence>$/u);
+  assert(match, "prompt must contain parseable JSON inside its evidence boundary");
+  assert(match[1].length <= 12_000, "catalog context must stay under its JSON budget");
+  const rows = JSON.parse(match[1]) as Array<{
+    id: string;
+    short_traits: string[];
+  }>;
+  assertEquals(rows.length, 8);
+  assert(rows.every((row) => row.short_traits.some((trait) =>
+    trait.includes("Максимальная площадь освещения, м2: 30")
+  )));
+  assert(rows.every((row) => row.short_traits.length < 40));
+  assertEquals(buildRecentProductEvidencePrompt(evidence, question), prompt);
+});
+
+Deno.test("recent evidence prompt budget survives escaped catalog metadata", () => {
+  const escaped = `"\\${"<".repeat(40)}`;
+  const evidence = compactRecentProducts(Array.from({ length: 8 }, (_, index) =>
+    product({
+      id: `${index}${escaped.repeat(4)}`,
+      pagetitle: escaped.repeat(10),
+      article: escaped.repeat(4),
+      vendor: escaped.repeat(4),
+      unit: escaped,
+      short_traits: Array.from({ length: 40 }, () =>
+        `Поле: ${escaped.repeat(5)}`
+      ),
+    })
+  ));
+  const prompt = buildRecentProductEvidencePrompt(evidence);
+  const match = prompt.match(/\n(\[[\s\S]*\])\n<\/recent_product_evidence>$/u);
+  assert(match);
+  assert(match[1].length <= 12_000);
+  assertEquals((JSON.parse(match[1]) as unknown[]).length, 8);
+  assert(!match[1].includes("<"));
+});
+
+Deno.test("recent evidence prompt ranks a late qualitative facet by the current question", () => {
+  const evidence = compactRecentProducts(Array.from({ length: 8 }, (_, index) =>
+    product({
+      id: `item-${index}`,
+      short_traits: [
+        ...Array.from({ length: 39 }, (_, traitIndex) =>
+          `Параметр ${traitIndex + 1}: значение ${index + traitIndex} ${"длинное описание ".repeat(8)}`
+        ),
+        "Материал корпуса: алюминий",
+      ],
+    })
+  ));
+  const withQuestion = buildRecentProductEvidencePrompt(
+    evidence,
+    "Из какого материала корпус у этих вариантов?",
+  );
+  const withoutQuestion = buildRecentProductEvidencePrompt(evidence);
+  assert(withQuestion.includes("Материал корпуса: алюминий"));
+  assert(!withoutQuestion.includes("Материал корпуса: алюминий"));
 });
 
 Deno.test("evidence follow-up classifier separates questions from a new selection", () => {

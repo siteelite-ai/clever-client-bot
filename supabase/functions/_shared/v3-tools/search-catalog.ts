@@ -151,14 +151,38 @@ function extractWarehouses(p: Record<string, unknown>): Array<{ city: string; qt
   for (const w of wh) {
     const city = typeof w?.city === "string" ? w.city.trim() : "";
     // API 220volt отдаёт `amount`; на всякий случай поддерживаем и `qty`.
-    const qtyRaw = typeof w?.amount === "number" ? w.amount
-      : typeof w?.qty === "number" ? w.qty
-      : 0;
-    if (!city || !Number.isFinite(qtyRaw) || qtyRaw <= 0) continue;
+    const qtyRaw = rawWarehouseQuantity(w);
+    if (!city || qtyRaw === null || qtyRaw <= 0) continue;
     out.push({ city, qty: qtyRaw });
   }
   out.sort((a, b) => b.qty - a.qty);
   return out;
+}
+
+function rawWarehouseQuantity(row: unknown): number | null {
+  if (!row || typeof row !== "object") return null;
+  const warehouse = row as { amount?: unknown; qty?: unknown };
+  const value = typeof warehouse.amount === "number" ? warehouse.amount
+    : typeof warehouse.qty === "number" ? warehouse.qty
+    : null;
+  return value !== null && Number.isFinite(value) ? value : null;
+}
+
+function warehouseEvidence(
+  p: Record<string, unknown>,
+): "missing" | "positive" | "explicit_zero" | "unverified" {
+  // Preserve this distinction only in the internal cache. Existing public
+  // stock behaviour intentionally treats active products without rows as
+  // available; strict selection still needs to reject an explicit all-zero
+  // payload rather than mistaking it for missing data.
+  const rows = p.warehouses;
+  if (rows === undefined || rows === null) return "missing";
+  if (!Array.isArray(rows)) return "unverified";
+  if (rows.length === 0) return "missing";
+  const quantities = rows.map(rawWarehouseQuantity);
+  if (quantities.some((qty) => qty !== null && qty > 0)) return "positive";
+  if (quantities.every((qty) => qty === 0)) return "explicit_zero";
+  return "unverified";
 }
 
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
@@ -382,6 +406,7 @@ async function singleSearch(
       cache.set(id, {
         ...ref,
         url: u,
+        warehouse_evidence: warehouseEvidence(raw),
         ...(Object.keys(facetValues).length > 0 ? { facet_values: facetValues } : {}),
       });
       results.push(ref);

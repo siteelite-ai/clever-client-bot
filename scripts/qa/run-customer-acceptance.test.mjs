@@ -14,11 +14,13 @@ const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.jso
 const septemberBytes = fs.readFileSync(new URL('./customer-audit-20260921-cases.json', import.meta.url));
 const septemberVariationBytes = fs.readFileSync(new URL('./customer-audit-20260921-variations.json', import.meta.url));
 const notionBytes = fs.readFileSync(new URL('./notion-legacy-bug-cases.json', import.meta.url));
+const notionV2Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v2.json', import.meta.url));
 const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
 const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
 const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
 const septemberVariations = JSON.parse(septemberVariationBytes.toString('utf8'));
 const notionSuite = JSON.parse(notionBytes.toString('utf8'));
+const notionV2Suite = JSON.parse(notionV2Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
@@ -88,6 +90,23 @@ function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
 }
 
+function batteryReply(reply, cardPrice = 1234) {
+  const priceLine = cardPrice === null ? '' : `\n  Цена: *${String(cardPrice).replace(/\B(?=(\d{3})+(?!\d))/gu, ' ')}* ₸`;
+  return parseSse([
+    data({ choices: [{ delta: { content: reply } }] }),
+    ...(cardPrice === null ? [] : [data({ v3_event: {
+      type: 'price_unit_evidence',
+      product_url: 'https://220volt.kz/catalog/batareiki/litievye/nbt-cr2025-bp5/',
+      price: cardPrice, unit: 'шт', basis: 'piece',
+    } })]),
+    data({ v3_event: {
+      type: 'products_block',
+      markdown: `- **[Батарейка NBT-CR2025-BP5](https://220volt.kz/catalog/batareiki/litievye/nbt-cr2025-bp5/)**${priceLine}\n  Наличие: Алматы (1 шт)`,
+    } }),
+    'data: [DONE]',
+  ].join('\n'));
+}
+
 test('resolveEndpoint keeps production by default and accepts an isolated preview function', () => {
   assert.equal(resolveEndpoint(['node', 'runner']), DEFAULT_ENDPOINT);
   assert.equal(
@@ -135,7 +154,7 @@ test('suite defaults are inherited and explicit turn expectations win', () => {
 });
 
 test('all current acceptance matrices have recognized expectations', () => {
-  for (const suite of [acceptanceSuite, notionSuite, cardinalitySuite]) {
+  for (const suite of [acceptanceSuite, notionSuite, notionV2Suite, cardinalitySuite]) {
     assert.doesNotThrow(() => validateExpectationSuite(suite));
   }
   assert.doesNotThrow(() => validateExpectationSuite(septemberSuite, septemberVariations));
@@ -405,6 +424,16 @@ test('strict full-suite verifies all Notion legacy and systemic cardinality runs
     variantsBytes: null,
   });
   assert.deepEqual([notion.expected_cases, notion.expected_turns_per_base_suite, notion.expected_runs, notion.expected_evaluated_turns], [30, 31, 34, 35]);
+  const notionV2 = validateStrictFullSuite({
+    argv: strictArgs,
+    suite: notionV2Suite,
+    variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases-v2.json',
+    variantsPath: null,
+    suiteBytes: notionV2Bytes,
+    variantsBytes: null,
+  });
+  assert.deepEqual([notionV2.expected_cases, notionV2.expected_turns_per_base_suite, notionV2.expected_runs, notionV2.expected_evaluated_turns], [30, 31, 38, 39]);
   const cardinality = validateStrictFullSuite({
     argv: strictArgs,
     suite: cardinalitySuite,
@@ -438,6 +467,26 @@ test('strict full-suite rejects missing, swapped, or changed-repeat Notion and c
     ...notionSuite,
     cases: notionSuite.cases.map((item) => item.id === 'bt924-acti9-followup-show' ? { ...item, turns: item.turns.slice(0, 1) } : item),
   } }), /invalid turns=bt924-acti9-followup-show/);
+  const notionV2Args = {
+    ...notionArgs,
+    suite: notionV2Suite,
+    casesPath: '/qa/notion-legacy-bug-cases-v2.json',
+    suiteBytes: notionV2Bytes,
+  };
+  assert.throws(() => validateStrictFullSuite({ ...notionV2Args, suite: {
+    ...notionV2Suite, cases: notionV2Suite.cases.slice(1),
+  } }), /expected 30 unique IDs/);
+  for (const id of ['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit']) {
+    assert.throws(() => validateStrictFullSuite({ ...notionV2Args, suite: {
+      ...notionV2Suite,
+      cases: notionV2Suite.cases.map((item) => item.id === id ? { ...item, repeat: 1 } : item),
+    } }), new RegExp(`invalid repeats=${id}`));
+  }
+  const weakenedV2 = structuredClone(notionV2Suite);
+  delete weakenedV2.cases.find((item) => item.id === 'bt923-battery-unit').turns[0].expect.require_quoted_price_per_piece;
+  assert.throws(() => validateStrictFullSuite({
+    ...notionV2Args, suite: weakenedV2, suiteBytes: Buffer.from(JSON.stringify(weakenedV2)),
+  }), /SHA256 mismatch/);
   const cardinalityArgs = {
     ...notionArgs,
     suite: cardinalitySuite,
@@ -451,6 +500,163 @@ test('strict full-suite rejects missing, swapped, or changed-repeat Notion and c
     ...cardinalitySuite,
     cases: cardinalitySuite.cases.map((item) => item.id === 'cardinality-multiple-sockets' ? { ...item, repeat: 1 } : item),
   } }), /invalid repeats=cardinality-multiple-sockets/);
+});
+
+test('Notion v2 preserves the v1 case inventory and adds only scoped reliability and BT-923 assertions', () => {
+  assert.equal(notionSuite.schema_version, 1);
+  assert.equal(notionV2Suite.schema_version, 2);
+  assert.deepEqual(notionV2Suite.cases.map((item) => item.id), notionSuite.cases.map((item) => item.id));
+  for (const oldCase of notionSuite.cases) {
+    const nextCase = notionV2Suite.cases.find((item) => item.id === oldCase.id);
+    if (!['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit'].includes(oldCase.id)) {
+      assert.deepEqual(nextCase, oldCase);
+    }
+  }
+  const boiler = notionV2Suite.cases.find((item) => item.id === 'bt928-boiler-breaker-diagnostic');
+  const battery = notionV2Suite.cases.find((item) => item.id === 'bt923-battery-unit');
+  assert.equal(boiler.repeat, 3);
+  assert.equal(battery.repeat, 3);
+  assert.equal(battery.turns[0].expect.require_quoted_price_per_piece, true);
+  assert.equal(battery.turns[0].expect.min_products, 1);
+  assert.equal(battery.turns[0].expect.max_products, 1);
+  assert.equal(battery.turns[0].expect.require_every_product_exact_identifier, 'NBT-CR2025-BP5');
+  assert.equal(battery.turns[0].expect.require_every_product_page.name.require_any[0], 'NBT-CR2025-BP5');
+  assert.deepEqual(battery.turns[0].expect.require_every_product_page.facets,
+    [{ name: 'Единица измерения', exact_any: ['шт'] }]);
+  assert(!JSON.stringify(battery.turns[0].expect).includes('5 шт'));
+  assert.throws(() => validateExpectationObject({ require_quoted_price_per_piece: 'true' }), /must be a boolean/);
+});
+
+test('quoted-price unit assertion accepts the deterministic source-unit reply', () => {
+  const parsed = batteryReply('Товар «Батарейка NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.', 1234);
+  assert.deepEqual(evaluate({ require_quoted_price_per_piece: true }, parsed), []);
+  assert.equal(parsed.priceUnitEvidence[0].unit, 'шт');
+});
+
+test('source unit event must match the rendered product identity, amount, and piece basis', () => {
+  const parsed = batteryReply('Товар «Батарейка NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.');
+  const contract = { require_quoted_price_per_piece: true };
+  for (const mutation of [
+    (reply) => { reply.priceUnitEvidence = []; },
+    (reply) => { reply.priceUnitEvidence[0].price = 999; },
+    (reply) => { reply.priceUnitEvidence[0].unit = 'уп'; },
+    (reply) => { reply.priceUnitEvidence[0].basis = 'package'; },
+    (reply) => { reply.priceUnitEvidence[0].productUrl = 'https://220volt.kz/catalog/other/'; },
+  ]) {
+    const reply = structuredClone(parsed);
+    mutation(reply);
+    assert(evaluate(contract, reply).length > 0);
+  }
+});
+
+test('quoted-price unit assertion fails closed on absent, echoed, negated and contradictory claims', () => {
+  const invalid = [
+    ['Батарейка NBT-CR2025-BP5 поставляется в блистере.', 'missing unit answer'],
+    ['Цена 1 234 ₸. В упаковке есть батарейка.', 'price and packaging without unit'],
+    ['Цена 1 234 ₸ за штуку или упаковку?', 'question echo'],
+    ['Цена 1 234 ₸ за штуку или упаковку.', 'unresolved alternative'],
+    ['Цена 1 234 ₸ не за штуку, а за упаковку.', 'negated per-piece claim'],
+    ['Не 1 234 ₸ за штуку.', 'negated quoted amount'],
+    ['Цена 1 234 ₸ за упаковку.', 'affirmative per-package claim'],
+    ['Цена 1 234 ₸ за штуку. Указанная цена за упаковку.', 'contradictory claim'],
+    ['Цена 1 234 ₸ за батарейки.', 'plural product is not a per-piece unit'],
+    ['Цена 999 ₸ за штуку.', 'different quote from card'],
+  ];
+  for (const [reply, scenario] of invalid) {
+    const failures = evaluate({ require_quoted_price_per_piece: true }, batteryReply(reply, 1234));
+    assert(failures.length > 0, `${scenario} must not PASS`);
+  }
+  assert(evaluate({ require_quoted_price_per_piece: true }, batteryReply('1 234 ₸ за штуку', null)).length > 0);
+  assert(evaluate({ require_quoted_price_per_piece: true }, { ...batteryReply('1 234 ₸ за штуку', 1234), links: [] }).length > 0);
+  const contradictoryCard = batteryReply('Цена 1 234 ₸ за штуку.', 1234);
+  contradictoryCard.links[0].cardText = contradictoryCard.links[0].cardText.replace('₸', '₸/уп');
+  assert(evaluate({ require_quoted_price_per_piece: true }, contradictoryCard)
+    .some((failure) => failure.includes('per package')));
+});
+
+test('quoted-price unit assertion does not pass a correction, uncertainty, or a package sales unit', () => {
+  for (const reply of [
+    'Цена 1 234 ₸ за штуку. Нет, это за упаковку.',
+    'Цена 1 234 ₸ не указана за штуку. Есть блистер.',
+    'Не могу подтвердить, что цена 1 234 ₸ за штуку. Упаковку надо уточнить.',
+    'Одна батарейка стоит 1 234 ₸/уп.',
+    'Цена 1 234 ₸ за штуку. На самом деле 1 234 ₸/уп.',
+  ]) {
+    assert(evaluate({ require_quoted_price_per_piece: true }, batteryReply(reply)).length > 0, reply);
+  }
+  const packageCard = batteryReply('Цена 1 234 ₸ за штуку.');
+  packageCard.links[0].cardText += '\n  Единица продажи: упаковка';
+  assert(evaluate({ require_quoted_price_per_piece: true }, packageCard).length > 0);
+});
+
+test('release assertion does not guess the meaning of free-form unit prose', () => {
+  for (const reply of [
+    'Одна батарейка стоит 1 234 ₸. Упаковка — блистер.',
+    'Стоимость 1 шт. — 1 234 ₸. Упаковка — блистер.',
+    'Цена — 1 234 ₸. Это за одну штуку, в блистере.',
+  ]) {
+    assert(evaluate({ require_quoted_price_per_piece: true }, batteryReply(reply)).length > 0, reply);
+  }
+});
+
+test('exact product identifier rejects another pack/model suffix even with verified page', () => {
+  const parsed = batteryReply('Товар «Батарейка NBT-CR2025-BP5-10 (другая комплектация)». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.');
+  const identity = productUrlIdentity(parsed.links[0].url);
+  parsed.links[0].title = 'Батарейка NBT-CR2025-BP5-10 (другая комплектация)';
+  parsed.verifiedProductPages = new Map([[identity, {
+    identity, verified: true, sku: 'OTHER-SKU',
+    name: 'Батарейка NBT-CR2025-BP5-10 (другая комплектация)',
+    offerPrice: 1234, availability: 'https://schema.org/InStock',
+  }]]);
+  parsed.terminalDiagnosticSeen = true;
+  parsed.logId = 'exact-identifier-fixture';
+  const expect = {
+    require_every_product_exact_identifier: 'NBT-CR2025-BP5',
+    require_quoted_price_per_piece: true,
+  };
+  assert(evaluate(expect, parsed, { requireVerifiedPages: true }).some((failure) => failure.includes('exact identifier')));
+  parsed.links[0].title = 'Батарейка NBT-CR2025-BP5';
+  parsed.verifiedProductPages.get(identity).name = 'Батарейка NBT-CR2025-BP5';
+  parsed.text = 'Товар «Батарейка NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.';
+  assert.deepEqual(evaluate(expect, parsed, { requireVerifiedPages: true }), []);
+});
+
+test('exact product identifier is primary identity, not an analogue reference', () => {
+  const parsed = batteryReply('Товар «Батарейка Panasonic CR2025, аналог NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.');
+  parsed.links[0].title = 'Батарейка Panasonic CR2025, аналог NBT-CR2025-BP5';
+  const identity = productUrlIdentity(parsed.links[0].url);
+  parsed.verifiedProductPages = new Map([[identity, {
+    identity, verified: true, sku: 'PANASONIC-CR2025',
+    name: parsed.links[0].title,
+    offerPrice: 1234, availability: 'https://schema.org/InStock',
+  }]]);
+  assert(evaluate({ require_every_product_exact_identifier: 'NBT-CR2025-BP5' }, parsed)
+    .some((failure) => failure.includes('exact identifier')));
+  parsed.links[0].title = 'Батарейка NBT-CR2025-BP5+10';
+  parsed.verifiedProductPages.get(identity).name = parsed.links[0].title;
+  assert(evaluate({ require_every_product_exact_identifier: 'NBT-CR2025-BP5' }, parsed)
+    .some((failure) => failure.includes('exact identifier')));
+});
+
+test('BT-923 v2 rejects a v1 false PASS even with the correct card and verified source identity', () => {
+  const oldExpect = notionSuite.cases.find((item) => item.id === 'bt923-battery-unit').turns[0].expect;
+  const nextExpect = notionV2Suite.cases.find((item) => item.id === 'bt923-battery-unit').turns[0].expect;
+  const parsed = batteryReply('Батарейка CR2025 в блистере. Цена 1 234 ₸ за упаковку.', 1234);
+  const identity = productUrlIdentity(parsed.links[0].url);
+  parsed.verifiedProductPages = new Map([[identity, {
+    identity, verified: true, sku: 'source-sku', name: 'Батарейка NBT-CR2025-BP5',
+    offerPrice: 1234, availability: 'https://schema.org/InStock',
+    facets: { 'Единица измерения': 'шт' },
+  }]]);
+  assert.deepEqual(evaluate(oldExpect, parsed), []);
+  assert(evaluate(nextExpect, parsed).some((failure) => failure.includes('deterministic catalog-backed')));
+  assert.deepEqual(evaluate(nextExpect, {
+    ...parsed, text: 'Товар «Батарейка NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.',
+  }), []);
+  parsed.verifiedProductPages.get(identity).facets['Единица измерения'] = 'уп';
+  assert(evaluate(nextExpect, {
+    ...parsed, text: 'Товар «Батарейка NBT-CR2025-BP5». Цена 1 234 ₸ за одну штуку по единице каталога «шт». Сама единица цены не раскрывает количество элементов внутри упаковки.',
+  }).some((failure) => failure.includes('facet Единица измерения')));
 });
 
 test('acceptance transport retries one transient stream interruption with the same payload', async () => {
@@ -1011,6 +1217,98 @@ test('parseSse preserves server-issued slots for the next acceptance turn', () =
     'data: [DONE]',
   ].join('\n'));
   assert.deepEqual(result.dialogSlots, slots);
+});
+
+function clarificationReply({
+  text = 'Какой вариант вам нужен?',
+  question = 'Какой вариант вам нужен?',
+  replies = [{ value: 'проводная', label: 'Проводная' }, { value: 'беспроводная', label: 'Беспроводная' }],
+  options = replies,
+  quickEvent = true,
+  slotEvent = true,
+  facetKey = 'connection',
+  slotFacetKey = facetKey,
+  additionalEvents = [],
+} = {}) {
+  const pending = {
+    status: 'pending', slot_id: 'server-issued-slot', facet_key: slotFacetKey,
+    question, options,
+  };
+  return parseSse([
+    data({ choices: [{ delta: { content: text } }] }),
+    ...(quickEvent ? [data({ v3_event: { type: 'quick_replies', facet_key: facetKey, replies } })] : []),
+    ...(slotEvent ? [data({ v3_event: { type: 'slot_update', slots: { pending_clarification: pending } } })] : []),
+    ...additionalEvents.map((event) => data({ v3_event: event })),
+    'data: [DONE]',
+  ].join('\n'));
+}
+
+test('a visible clarification with server-bound quick replies passes the options contract', () => {
+  const response = clarificationReply();
+  assert.equal(response.quickReplies.type, 'quick_replies');
+  assert.deepEqual(evaluate({ require_clarification_choice: 'options' }, response), []);
+  assert.deepEqual(evaluate({ require_clarification_choice: 'either' }, response), []);
+});
+
+test('the Gallant release case requires actual section chips before a follow-up', () => {
+  const gallant = acceptanceSuite.cases.find((item) => item.id === 'customer-new-gallant-catalog-section-chip');
+  assert.equal(gallant.turns[0].expect.require_clarification_choice, 'options');
+  assert.equal(gallant.turns[1].message, 'Розетки');
+});
+
+test('prose options and legacy-looking JSON cannot impersonate clickable SSE chips', () => {
+  const prose = parseSse([
+    data({ choices: [{ delta: { content: 'Какой вариант вам нужен? 1. Проводная 2. Беспроводная' } }] }),
+    data({ quick_replies: [{ value: 'проводная', label: 'Проводная' }] }),
+    'data: [DONE]',
+  ].join('\n'));
+  assert(evaluate({ require_clarification_choice: 'options' }, prose)
+    .some((failure) => failure.includes('not backed by renderable SSE')));
+  assert(evaluate({ require_clarification_choice: 'either' }, clarificationReply({ quickEvent: false, slotEvent: false }))
+    .some((failure) => failure.includes('not backed by renderable SSE')));
+});
+
+test('orphan quick replies or an option slot without matching replies cannot pass', () => {
+  for (const response of [
+    clarificationReply({ slotEvent: false }),
+    clarificationReply({ quickEvent: false }),
+    clarificationReply({ facetKey: 'mounting', slotFacetKey: 'connection' }),
+    clarificationReply({ text: 'Покажу товары.' }),
+    clarificationReply({ additionalEvents: [{ type: 'slot_update', slots: {} }] }),
+  ]) {
+    assert(evaluate({ require_clarification_choice: 'options' }, response)
+      .some((failure) => failure.includes('not backed by renderable SSE')));
+  }
+});
+
+test('mismatched, duplicate and malformed quick-reply values are not widget-renderable', () => {
+  const valid = [{ value: 'проводная', label: 'Проводная' }, { value: 'беспроводная', label: 'Беспроводная' }];
+  for (const response of [
+    clarificationReply({ replies: [{ ...valid[0], label: 'Другое' }, valid[1]], options: valid }),
+    clarificationReply({ replies: [valid[0], valid[0]], options: [valid[0], valid[0]] }),
+    clarificationReply({ replies: [{ ...valid[0], value: ' проводная ' }, valid[1]], options: [{ ...valid[0], value: ' проводная ' }, valid[1]] }),
+    clarificationReply({ replies: [valid[0]], options: [valid[0]] }),
+  ]) {
+    assert(evaluate({ require_clarification_choice: 'options' }, response)
+      .some((failure) => failure.includes('not backed by renderable SSE')));
+  }
+});
+
+test('free-form clarification is accepted only from an explicit empty server slot', () => {
+  const explicit = clarificationReply({ quickEvent: false, options: [] });
+  assert.deepEqual(evaluate({ require_clarification_choice: 'freeform' }, explicit), []);
+  assert.deepEqual(evaluate({ require_clarification_choice: 'either' }, explicit), []);
+  assert(evaluate({ require_clarification_choice: 'options' }, explicit)
+    .includes('clarification choice mode freeform != options'));
+  assert(evaluate({ require_clarification_choice: 'freeform' }, clarificationReply({ quickEvent: false }))
+    .some((failure) => failure.includes('not backed by renderable SSE')));
+  assert(evaluate({ require_clarification_choice: 'freeform' }, clarificationReply({ options: [] }))
+    .some((failure) => failure.includes('conflicts with quick-reply event')));
+});
+
+test('clarification choice expectations reject unsupported modes before a live request', () => {
+  assert.throws(() => validateExpectationObject({ require_clarification_choice: 'chips-or-text' }),
+    /require_clarification_choice: must be options, freeform or either/);
 });
 
 test('evaluate checks every product title group and maximum price', () => {

@@ -1086,8 +1086,12 @@ function checkApplicationSuitability(
   }
   const wanted = criterion.value;
   const description = String(product.description_excerpt ?? "");
-  const sentences = description.split(/[.!?;\n]+/u).map((part) => part.trim())
-    .filter(Boolean);
+  // An adversative joins independent claims: "for the living room, but not
+  // for the bathroom" must not negate living-room suitability. Keep denial
+  // and affirmative proof within the same clause, without product-type rules.
+  const sentences = description.split(/[.!?;\n]+/u)
+    .flatMap((part) => part.split(/(?:,\s*|\s+)(?:но|однако)\s+/iu))
+    .map((part) => part.trim()).filter(Boolean);
   const denying = sentences.find((sentence) =>
     stringEvidenceMatches(wanted, sentence) &&
     /(?:(?:^|[^\p{L}])не\s+(?:(?:\p{L}+)\s+){0,3}(?:подход\p{L}*|предназнач\p{L}*|рекоменд\p{L}*|допуска\p{L}*|совместим\p{L}*)|(?:^|[^\p{L}])не\s+для(?:[^\p{L}]|$)|(?:^|[^\p{L}])исключа\p{L}*)/iu

@@ -313,6 +313,12 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import {
+  buildExactPriceUnitAnswer,
+  isExactPriceUnitQuestion,
+  type PriceUnitBasis,
+} from "../_shared/v3-tools/exact-price-unit.ts";
+import { replayableSseEvents } from "../_shared/v3-tools/sse-replay.ts";
+import {
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   META_DECLINE_TEXT,
@@ -384,6 +390,7 @@ import {
   extractRequestedNamedSeriesClasses,
   namedSeriesClassCoverage,
   resolveRequestedNamedSeriesClasses,
+  shouldSearchNextNamedSeriesClassPage,
   stratifyNamedSeriesProducts,
 } from "../_shared/v3-tools/named-series-class-coverage.ts";
 import {
@@ -403,6 +410,7 @@ import {
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
+  productContainsExactModelCode,
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
@@ -592,6 +600,13 @@ const MIN_AGENT_STEP_BUDGET_MS = 2_500;
 type SseEvent =
   | { type: "delta"; content: string }
   | {
+    type: "price_unit_evidence";
+    product_url: string;
+    price: number;
+    unit: string | null;
+    basis: PriceUnitBasis;
+  }
+  | {
     type: "diagnostic";
     log_id: string | null;
     phase: "start" | "complete";
@@ -665,31 +680,6 @@ function encodeSse(ev: SseEvent): Uint8Array {
   if (ev.type === "done") return new TextEncoder().encode(`data: [DONE]\n\n`);
   return new TextEncoder().encode(
     `data: ${JSON.stringify({ v3_event: ev })}\n\n`,
-  );
-}
-
-const SSE_EVENT_TYPES = new Set<SseEvent["type"]>([
-  "delta",
-  "diagnostic",
-  "conversation_boundary",
-  "assistant_turn_break",
-  "tool_event",
-  "products_block",
-  "contacts",
-  "quick_replies",
-  "slot_update",
-  "done",
-]);
-
-function replayableSseEvents(value: unknown): SseEvent[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((event): event is SseEvent =>
-    Boolean(
-      event && typeof event === "object" &&
-        SSE_EVENT_TYPES.has(
-          (event as { type?: SseEvent["type"] }).type as SseEvent["type"],
-        ),
-    )
   );
 }
 
@@ -3399,7 +3389,7 @@ async function loadVerifiedNamedSeriesProducts(
     searchedAllPages: boolean;
   }
 > {
-  const pageSize = requestedClasses.length > 1 ? 50 : perPage;
+  const pageSize = requestedClasses.length > 0 ? 50 : perPage;
   const search = await executeSearchCatalog(
     {
       mode: "by_query",
@@ -3416,18 +3406,19 @@ async function loadVerifiedNamedSeriesProducts(
   );
   let pagesScanned = search.ok ? 1 : 0;
   let searchedAllPages = search.ok && search.total <= pageSize;
-  // Search ranking can place all of one type before the first item of the
-  // second. Scan a bounded additional window only when the customer explicitly
-  // named multiple product classes and live cards have not covered them yet.
+  // Search ranking can place the requested type behind other series products.
+  // Scan a bounded additional window for any explicit class candidate that
+  // has not yet been proved by live class evidence.
   while (
-    search.ok && requestedClasses.length > 1 && pagesScanned < 3 &&
-    search.total > pagesScanned * pageSize &&
-    namedSeriesClassCoverage(
+    search.ok && shouldSearchNextNamedSeriesClassPage(
       requestedClasses,
       [...groundedRefs.keys()].map((id) => ctx.cache.get(id)).filter((
         product,
       ): product is ProductFull => Boolean(product)),
-    ).some((group) => group.products.length === 0)
+      search.total,
+      pageSize,
+      pagesScanned,
+    )
   ) {
     const page = await executeSearchCatalog(
       {
@@ -3521,7 +3512,7 @@ async function answerVerifiedNamedSeriesInquiry(
       type: "delta",
       content: coverage.length > 0 && grounded.products.length > 0
         ? appendNamedSeriesClassCoverage(
-          "Серию нашёл, но среди проверенных карточек не подтвердил запрошенные типы товаров.",
+          "Серию нашёл, но по вашему уточнению среди проверенных карточек нет подтверждённого совпадения.",
           coverage,
           grounded.searchedAllPages,
         )
@@ -3611,7 +3602,7 @@ async function selectVerifiedNamedSeriesRequest(
       type: "delta",
       content: coverage.length > 0 && grounded.products.length > 0
         ? appendNamedSeriesClassCoverage(
-          "Серию нашёл, но запрошенные типы товаров не подтвердились.",
+          "Серию нашёл, но по вашему уточнению среди проверенных карточек нет подтверждённого совпадения.",
           coverage,
           grounded.searchedAllPages,
         )
@@ -3783,7 +3774,7 @@ async function answerVerifiedExactProductInquiry(
       }, ctx.cache);
       const exact = found.ok
         ? found.results.filter((product) =>
-          productContainsSourceModel(product, [code])
+          productContainsExactModelCode(product, code)
         )
         : [];
       // A shared family code is not enough to identify one product. Let the
@@ -3817,16 +3808,29 @@ async function answerVerifiedExactProductInquiry(
   if (!product) return { handled: false, products: [] };
   const evidence = compactRecentProducts([product]);
   let answer: string;
-  try {
-    answer = (await callOpenRouterEvidenceFollowup(
-      apiKey,
-      userMessage,
-      evidence,
-      signal,
-      true,
-    )).text;
-  } catch {
-    answer = buildDeterministicEvidenceAnswer(evidence, userMessage);
+  const exactUnitQuestion = isExactPriceUnitQuestion(userMessage);
+  if (exactUnitQuestion) {
+    const unitAnswer = buildExactPriceUnitAnswer(product);
+    answer = unitAnswer.text;
+    send({
+      type: "price_unit_evidence",
+      product_url: product.url,
+      price: product.price,
+      unit: unitAnswer.unit,
+      basis: unitAnswer.basis,
+    });
+  } else {
+    try {
+      answer = (await callOpenRouterEvidenceFollowup(
+        apiKey,
+        userMessage,
+        evidence,
+        signal,
+        true,
+      )).text;
+    } catch {
+      answer = buildDeterministicEvidenceAnswer(evidence, userMessage);
+    }
   }
   send({ type: "delta", content: answer });
 
@@ -3855,6 +3859,7 @@ async function answerVerifiedExactProductInquiry(
       product_id: product.id,
       rendered: shownProducts.length,
       lookup_ms: duration,
+      deterministic_price_unit: exactUnitQuestion,
     },
   });
   return { handled: true, products: shownProducts };
@@ -5472,7 +5477,9 @@ async function answerBroadAssortmentRequest(
           slot_id: crypto.randomUUID(),
           facet_key: "catalog_section",
           question: answer,
-          options: leaves,
+          // A single leaf is not a choice. Empty options is the widget's
+          // explicit free-form mode, preserving the named-series scope.
+          options: [],
           scope: { kind: "broad_assortment", token: seriesToken },
         },
       },
@@ -7666,6 +7673,7 @@ async function runExpertLoop(
   );
   const recentEvidencePrompt = buildRecentProductEvidencePrompt(
     recentProductEvidence,
+    userMessage,
   );
   const selectionPlanPrompt = selectionPlanSystemHint(selectionPlan);
   const cardinalityPrompt = resultCardinalitySystemHint(resultCardinality);
@@ -18932,7 +18940,7 @@ Deno.serve(async (req) => {
           claim.row,
           Math.max(1, t0 + RESPONSE_TARGET_MS - Date.now()),
         );
-        const events = replayableSseEvents(replay.response_events);
+        const events = replayableSseEvents<SseEvent>(replay.response_events);
         clearInterval(keepAliveTimer);
         if (events.length > 0 && replay.error !== "in_progress") {
           for (const event of events) emit(event);

@@ -14,10 +14,10 @@ function classStem(value: string): string {
 }
 
 /**
- * Preserve a customer's explicit list of bare product types across a later
- * deictic series browse. This is grammar, not a list of brands or SKUs. We do
- * not turn arbitrary conjunctions or descriptive attributes into classes:
- * every candidate still needs independent live category/title evidence.
+ * Preserve a customer's explicit bare product-type wording across a later
+ * deictic series browse. A single term is only a candidate: grammar alone
+ * cannot distinguish "по розеткам" from "по скидкам". No candidate becomes
+ * a confirmed class without independent live category evidence.
  */
 export function extractRequestedNamedSeriesClasses(message: string): string[] {
   const normalized = normalize(message);
@@ -25,7 +25,7 @@ export function extractRequestedNamedSeriesClasses(message: string): string[] {
   if (!series) return [];
   const list = series[1].match(
     /(?:^| )(?:по|для) ([\p{L}]{4,}(?: (?:и|или) [\p{L}]{4,}){1,3})$/u,
-  );
+  ) ?? series[1].match(/^ (?:по|для) ([\p{L}]{4,})$/u);
   if (!list) return [];
   const terms = list[1].split(/ (?:и|или) /u);
   const distinct = new Set<string>();
@@ -61,18 +61,20 @@ export interface NamedSeriesClassCoverage {
   products: ProductFull[];
 }
 
-/** The live leaf category is the strongest class proof; a title head is used
- * only when the API omitted the leaf. A relation such as "рамка для розетки"
- * cannot become a socket by mentioning the word after a preposition. */
+/** The live leaf category is the strongest class proof; for multi-class
+ * requests a title head is a fallback when the API omitted the leaf. A
+ * relation such as "рамка для розетки" cannot become a socket by mentioning
+ * the word after a preposition. */
 export function productProvesNamedSeriesClass(
   product: ProductFull,
   requested: string,
+  requireLeaf = false,
 ): boolean {
   const wanted = classStem(requested);
   if (!wanted) return false;
   const leaf = normalize(product.leaf_category ?? "");
   if (leaf) return leaf.split(" ").some((token) => classStem(token) === wanted);
-  return classStem(product.pagetitle) === wanted;
+  return !requireLeaf && classStem(product.pagetitle) === wanted;
 }
 
 export function namedSeriesClassCoverage(
@@ -81,7 +83,13 @@ export function namedSeriesClassCoverage(
 ): NamedSeriesClassCoverage[] {
   return requestedClasses.map((requested) => {
     const matching = products.filter((product) =>
-      productProvesNamedSeriesClass(product, requested)
+      // A lone syntactic candidate may be an attribute ("по скидкам").
+      // Only live taxonomy, not a suggestive title, can promote it to class.
+      productProvesNamedSeriesClass(
+        product,
+        requested,
+        requestedClasses.length === 1,
+      )
     );
     const leaf = normalize(
       matching.find((product) => product.leaf_category)?.leaf_category ?? "",
@@ -92,6 +100,22 @@ export function namedSeriesClassCoverage(
       products: matching,
     };
   });
+}
+
+/** Search only a bounded next page while an explicit candidate still lacks
+ * live class proof. With no candidate the ordinary one-page route is intact. */
+export function shouldSearchNextNamedSeriesClassPage(
+  requestedClasses: string[],
+  products: ProductFull[],
+  total: number,
+  pageSize: number,
+  pagesScanned: number,
+): boolean {
+  return requestedClasses.length > 0 && pagesScanned < 3 &&
+    total > pagesScanned * pageSize &&
+    namedSeriesClassCoverage(requestedClasses, products).some((group) =>
+      group.products.length === 0
+    );
 }
 
 /** One card per requested class before any second card of the same class. */
@@ -132,6 +156,12 @@ export function appendNamedSeriesClassCoverage(
           `В этой серии также подтверждены товары раздела «${group.label}».`,
         );
       }
+    } else if (coverage.length === 1) {
+      // A lone "по X" may describe a property, not a product class. Avoid
+      // asserting that the class is absent from the whole catalog.
+      notes.push(
+        `По уточнению «${group.requested}» не нашёл подтверждённых карточек серии в проверенной части каталога. Уточните, какой тип товара серии вас интересует.`,
+      );
     } else {
       notes.push(
         `По запросу «${group.requested}» подтверждённых карточек серии ${

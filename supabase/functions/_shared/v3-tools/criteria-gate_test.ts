@@ -259,6 +259,30 @@ Deno.test("customer application proof remains an OR alternative beside exact liv
   );
 });
 
+Deno.test("application denial is scoped to its own adversative clause", () => {
+  const criterion: Criterion = {
+    key: "Назначение",
+    op: "eq",
+    value: "гостиная",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const withDescription = (description: string): ProductRef => ({
+    ...product("room", []),
+    description_excerpt: description,
+  });
+  assertEquals(checkCriterion(withDescription(
+    "Предназначен для гостиной, но не подходит для ванной.",
+  ), criterion).verdict, "pass");
+  assertEquals(checkCriterion(withDescription(
+    "Не подходит для гостиной, но подходит для ванной.",
+  ), criterion).verdict, "fail");
+  assertEquals(checkCriterion(withDescription(
+    "Подходит для гостиной, но не рекомендован для гостиной.",
+  ), criterion).verdict, "fail");
+});
+
 Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
   const first = [{
     key: "Connector",
