@@ -14,6 +14,7 @@ import {
   retryBoundedTerminalWrite,
   runWithDeadline,
 } from "../_shared/v3-tools/turn-deadline.ts";
+import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import {
   buildSystemPrompt,
   TOOL_SCHEMAS,
@@ -683,21 +684,28 @@ interface AppSettings {
   v3_jargon_category_context_enabled: boolean;
   v3_jargon_axial_modifiers_enabled: boolean;
   v3_criteria_gate_enabled: boolean;
+  settings_read_status: "ok" | "unavailable";
+  settings_read_failure: "query_error" | "timeout" | "missing_row" | null;
+  settings_read_attempts: number;
 }
 
 async function loadSettings(
   supabase: SupabaseClient,
   signal: AbortSignal,
 ): Promise<AppSettings> {
-  try {
-    const { data } = await supabase
-      .from("app_settings")
-      .select(
-        "openrouter_api_key, volt220_api_token, classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled",
-      )
-      .limit(1)
-      .single();
-    const row = data as {
+  const read = await readSettingsRowWithRetry(
+    (attemptSignal) =>
+      supabase
+        .from("app_settings")
+        .select(
+          "openrouter_api_key, volt220_api_token, classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled",
+        )
+        .limit(1)
+        .abortSignal(attemptSignal)
+        .single(),
+    signal,
+  );
+  const row = read.data as {
       openrouter_api_key?: string;
       volt220_api_token?: string;
       classifier_model?: string;
@@ -706,37 +714,27 @@ async function loadSettings(
       v3_jargon_category_context_enabled?: boolean;
       v3_jargon_axial_modifiers_enabled?: boolean;
       v3_criteria_gate_enabled?: boolean;
-    } | null;
-    return {
-      openrouter_api_key: row?.openrouter_api_key ??
-        Deno.env.get("OPENROUTER_API_KEY") ?? null,
-      volt220_api_token: row?.volt220_api_token ??
-        Deno.env.get("VOLT220_API_TOKEN") ?? null,
-      classifier_model: row?.classifier_model?.trim() ||
-        "google/gemini-2.5-flash",
-      v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
-      v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
-      v3_jargon_category_context_enabled: Boolean(
-        row?.v3_jargon_category_context_enabled,
-      ),
-      v3_jargon_axial_modifiers_enabled: Boolean(
-        row?.v3_jargon_axial_modifiers_enabled,
-      ),
-      v3_criteria_gate_enabled: Boolean(row?.v3_criteria_gate_enabled),
-    };
-  } catch {
-    if (signal.aborted) throw signal.reason;
-    return {
-      openrouter_api_key: Deno.env.get("OPENROUTER_API_KEY") ?? null,
-      volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
-      classifier_model: "google/gemini-2.5-flash",
-      v3_anchor_filter_enabled: false,
-      v3_relaxation_hints_enabled: false,
-      v3_jargon_category_context_enabled: false,
-      v3_jargon_axial_modifiers_enabled: false,
-      v3_criteria_gate_enabled: false,
-    };
-  }
+  } | null;
+  return {
+    openrouter_api_key: row?.openrouter_api_key ??
+      Deno.env.get("OPENROUTER_API_KEY") ?? null,
+    volt220_api_token: row?.volt220_api_token ??
+      Deno.env.get("VOLT220_API_TOKEN") ?? null,
+    classifier_model: row?.classifier_model?.trim() ||
+      "google/gemini-2.5-flash",
+    v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
+    v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
+    v3_jargon_category_context_enabled: Boolean(
+      row?.v3_jargon_category_context_enabled,
+    ),
+    v3_jargon_axial_modifiers_enabled: Boolean(
+      row?.v3_jargon_axial_modifiers_enabled,
+    ),
+    v3_criteria_gate_enabled: Boolean(row?.v3_criteria_gate_enabled),
+    settings_read_status: read.status,
+    settings_read_failure: read.failure,
+    settings_read_attempts: read.attempts,
+  };
 }
 
 // ─── Tool dispatch ──────────────────────────────────────────────────────────
@@ -18730,10 +18728,15 @@ Deno.serve(async (req) => {
               meta: {
                 has_openrouter_key: Boolean(settings.openrouter_api_key),
                 has_catalog_token: Boolean(settings.volt220_api_token),
+                read_status: settings.settings_read_status,
+                read_failure: settings.settings_read_failure,
+                read_attempts: settings.settings_read_attempts,
               },
             });
             if (!settings.openrouter_api_key || !settings.volt220_api_token) {
-              errorMsg = !settings.openrouter_api_key
+              errorMsg = settings.settings_read_status === "unavailable"
+                ? "settings_read_unavailable"
+                : !settings.openrouter_api_key
                 ? "missing_openrouter_key"
                 : "missing_catalog_token";
               publicDiagnosticError = "internal_error";
