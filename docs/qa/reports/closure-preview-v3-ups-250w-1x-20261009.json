@@ -1,0 +1,72 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T14:34:46.762Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-ups-boiler-250w": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-ups-boiler-250w",
+      "title": "ИБП для котла 250 Вт не подменяется АВР/ATS",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-ups-boiler-250w_base_1791556486766_1",
+          "turns": [
+            {
+              "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
+              "status": 200,
+              "duration_ms": 1279,
+              "network_attempts": 1,
+              "log_id": "e5517fc3-185d-417d-a8d8-f44a12123205",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для газового котла нужен ИБП с явно указанной чистой синусоидой на выходе: ступенчатая или аппроксимированная форма может нарушать работу электроники, розжига и циркуляционного насоса.\n\nПри нагрузке 250 Вт ориентир по активной мощности ИБП — не менее 400 Вт с учётом 50%-го запаса; по полной мощности это примерно от 600 ВА. Отдельно сверьте пусковой ток циркуляционного насоса: кратковременная допустимая мощность ИБП должна покрывать его пуск.\n\nДля времени автономной работы проверьте ёмкость и напряжение батарей, возможность подключения внешнего аккумулятора и допустимый ток заряда. Перед покупкой сопоставьте эти параметры с паспортом конкретной модели котла.\n\nВ каталоге я сейчас не могу подтвердить наличие карточки ИБП с доказанной чистой синусоидой и достаточной мощностью. Показывать карточку без подтверждённой формы выходного сигнала небезопасно. Если укажете желаемое время автономной работы и модель котла, расчёт батареи можно уточнить.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T14:34:48.047Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "e5517fc3-185d-417d-a8d8-f44a12123205"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

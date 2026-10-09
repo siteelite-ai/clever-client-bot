@@ -1,0 +1,299 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T14:32:01.868Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-black-double-sockets": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-black-double-sockets",
+      "title": "Чёрные двойные электрические розетки сохраняют оба признака",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-black-double-sockets_base_1791556321873_1",
+          "turns": [
+            {
+              "message": "Найди двойные черные розетки электрические",
+              "status": 200,
+              "duration_ms": 10939,
+              "network_attempts": 1,
+              "log_id": "f2e42bb9-cccf-4998-bc9f-bdbfbea6fc14",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)",
+                  "verified": true,
+                  "sku": "Ем000028744",
+                  "name": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Florence",
+                    "Напряжение, В": "250",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик; поликарбонат",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "КИТАЙ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.086",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0006",
+                    "Наличие заземления": "Да",
+                    "Бренд": "OneKeyElectro",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "description_excerpt": "Двойная розетка OneKeyElectro с заземлением, винтовые контакты - это гармония эстетики и эргономики, которая позволяет удвоить количество розеток в случае ограниченного пространства или при проведении косметического ремонта в помещении. Двойная розетка OneKeyElectro устанавливается в одинарный подрозетник (монтажную коробку), что позволяет увеличить количество точек питания без проведения работ по штроблению стен."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026162",
+                  "name": "Розетка 2-местная открытой установки, серия ПРАЛЕСКА, РА16-260 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.073",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0002",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026163",
+                  "name": "Розетка 2-местная открытой установки с заземляющим контактом, серия ПРАЛЕСКА, РА16-261 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.089",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0003",
+                    "Наличие заземления": "Да",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij",
+                  "verified": true,
+                  "sku": "Ем000028175",
+                  "name": "Розетка РС 16-343 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Уют",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.09",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0004",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "description_excerpt": "Серия «Уют» отличается от других очень интересным дизайном. Благодаря цветным декоративным рамкам можно удачно вписать эти розетки и выключатели практически в любой интерьер. Высочайшее качество продукции обеспечивается благодаря тому, что компания «Светоприбор», на заводах которой выпускается данная продукция, осуществляет весь производственный цикл от изготовления оснастки до выпуска готовой продукции. Преимущества серии «Уют»: Большой выбор функциональных возможностей Современный дизайн Эколо"
+                }
+              ],
+              "products": [
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 2923,
+                  "stockLine": "Караганда (56 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *2 923* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (56 шт)"
+                },
+                {
+                  "title": "Розетка РА 16-260 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "price": 692,
+                  "stockLine": "Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-260 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/)**\n  Цена: *692* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РА 16-261 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "price": 932,
+                  "stockLine": "Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-261 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/)**\n  Цена: *932* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РС 16-343 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "price": 964,
+                  "stockLine": "Караганда (1091 шт)",
+                  "cardText": "- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/)**\n  Цена: *964* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1091 шт)"
+                }
+              ],
+              "text": "Ищу электрические розетки: двойные (2 разъёма), чёрного цвета. По вашему обязательному классу допускаю одно из: «Вид розетки: электрическая»; «Вид розетки: электрическая с USB»; значения вне этого класса исключаю. Внутри вашего класса в первую очередь проверяю «электрическая» как предпочтение, не исключая другие допустимые варианты.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-5895c054",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая с USB",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  },
+                  {
+                    "kind": "literal_modifier",
+                    "label": "черные",
+                    "op": "eq",
+                    "value": "черные"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 4333
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 35",
+                  "duration_ms": 1620
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T14:32:16.172Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "f2e42bb9-cccf-4998-bc9f-bdbfbea6fc14"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 4,
+    "verified": 4,
+    "unverified": 0
+  },
+  "passed": true
+}
