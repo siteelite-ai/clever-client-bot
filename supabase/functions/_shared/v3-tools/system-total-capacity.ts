@@ -296,7 +296,8 @@ function parseExactMeasuredOutput(
   return { value, unit };
 }
 
-function verifiedPerUnitOutput(
+/** Exact live-facet output proof shared by plan verification and ranking. */
+export function verifyPerUnitSystemOutput(
   product: SystemPlanProductEvidence,
   facet: SystemOutputFacet,
   requiredUnit: string,
@@ -422,7 +423,7 @@ export function verifySystemTotalCapacityPlan(
       continue;
     }
     if (!requiredUnit) continue;
-    const perUnit = verifiedPerUnitOutput(
+    const perUnit = verifyPerUnitSystemOutput(
       line.product,
       requirement.outputFacet,
       requiredUnit,
