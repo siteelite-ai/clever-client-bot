@@ -314,6 +314,10 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import {
+  exactRecentPriceSkuFromSearch,
+  proveRecentPriceSet,
+} from "../_shared/v3-tools/recent-price-proof.ts";
+import {
   buildExactPriceUnitAnswer,
   isExactPriceUnitQuestion,
   type PriceUnitBasis,
@@ -5413,6 +5417,27 @@ async function refreshRecentProductSet(
   );
 }
 
+/** Price comparison must refresh the exact previously shown SKU, not the first
+ * search hit with the same title. Keep the ordinary show-followup unchanged. */
+async function refreshExactRecentPriceSet(
+  latestEvidence: RecentProductEvidence[],
+  ctx: ToolContext,
+): Promise<Array<ProductFull | null>> {
+  return await Promise.all(latestEvidence.map(async (previous) => {
+    const result = await executeSearchCatalog(
+      {
+        mode: "by_pagetitle",
+        pagetitle: previous.pagetitle,
+        per_page: 50,
+      },
+      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+      ctx.cache,
+    );
+    if (!result.ok) return null;
+    return exactRecentPriceSkuFromSearch(previous, result.results, ctx.cache);
+  }));
+}
+
 async function selectVerifiedRecentShowFollowup(
   userMessage: string,
   evidence: RecentProductEvidence[],
@@ -5493,13 +5518,13 @@ async function selectVerifiedRecentPriceFollowup(
 
   const started = Date.now();
   const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const liveProducts = (await refreshRecentProductSet(evidence, ctx))
-    .sort((left, right) =>
-      intent.direction === "more_expensive"
-        ? right.price - left.price
-        : left.price - right.price
-    );
-  const selected = liveProducts.slice(0, 1);
+  const refreshed = await refreshExactRecentPriceSet(latestEvidence, ctx);
+  const proof = proveRecentPriceSet(
+    latestEvidence,
+    refreshed,
+    intent.direction === "more_expensive" ? "expensive" : "cheapest",
+  );
+  const refreshedCount = refreshed.filter(Boolean).length;
   const elapsed = Date.now() - started;
 
   send({
@@ -5508,21 +5533,34 @@ async function selectVerifiedRecentPriceFollowup(
     phase: "result",
     duration_ms: elapsed,
     summary:
-      `Recent product price follow-up: подтверждено ${liveProducts.length}`,
+      `Recent product price follow-up: подтверждено ${refreshedCount}/${latestEvidence.length}`,
   });
 
-  if (selected.length === 0) {
+  if (!proof.ok) {
+    const priceBound = intent.direction === "more_expensive"
+      ? "максимальной"
+      : "минимальной";
+    const notice = proof.reason === "mixed_units"
+      ? "У ранее показанных товаров разные единицы продажи, поэтому их цены нельзя сравнить напрямую. Уточните нужную единицу."
+      : proof.reason === "unverified_unit"
+      ? "Не у всех ранее показанных товаров указана единица продажи. Уточните нужную единицу, чтобы сравнить цены."
+      : proof.reason === "unverified_stock"
+      ? `Не удалось подтвердить наличие всех ранее показанных товаров. Поэтому не могу назвать позицию с ${priceBound} ценой из всего списка. Могу повторить подбор.`
+      : proof.reason === "insufficient_set"
+      ? "В последнем списке только один товар — сравнивать цены не с чем. Могу подобрать другие варианты."
+      : `Не все ранее показанные товары удалось заново подтвердить в каталоге. Поэтому не могу назвать позицию с ${priceBound} ценой из всего списка. Могу повторить подбор.`;
     send({
       type: "delta",
-      content:
-        "Не удалось заново подтвердить ранее показанные карточки в актуальном каталоге. Не буду выдавать устаревшую цену или ссылку — могу повторить подбор.",
+      content: notice,
     });
     steps.push({
-      step: "v3_recent_price_followup_empty",
+      step: "v3_recent_price_followup_unverified",
       ms: Date.now() - t0,
       meta: {
         evidence_count: evidence.length,
         latest_evidence_count: latestEvidence.length,
+        refreshed_count: refreshedCount,
+        reason: proof.reason,
         direction: intent.direction,
         duration_ms: elapsed,
       },
@@ -5531,8 +5569,8 @@ async function selectVerifiedRecentPriceFollowup(
   }
 
   const rendered = executeRenderProducts({
-    product_ids: selected.map((product) => product.id),
-    total_available: liveProducts.length,
+    product_ids: [proof.winner.id],
+    total_available: proof.compared_count,
   }, ctx.cache);
   if (!rendered.ok) {
     steps.push({
@@ -5540,13 +5578,26 @@ async function selectVerifiedRecentPriceFollowup(
       ms: Date.now() - t0,
       meta: { error_code: rendered.error_code },
     });
+    send({
+      type: "delta",
+      content:
+        "Цены удалось сравнить, но карточка выбранного товара не загрузилась. Попробуйте ещё раз.",
+    });
     return { handled: true, products: [] };
   }
+  send({
+    type: "delta",
+    content: `Среди ${proof.compared_count} ранее показанных товаров с подтверждённым наличием ${
+      intent.direction === "more_expensive"
+        ? "максимальная"
+        : "минимальная"
+    } цена сейчас у этой позиции.`,
+  });
   send({
     type: "products_block",
     markdown: rendered.markdown,
     count: rendered.rendered_count,
-    total_available: liveProducts.length,
+    total_available: proof.compared_count,
   });
   steps.push({
     step: "v3_recent_price_followup_rendered",
@@ -5554,14 +5605,15 @@ async function selectVerifiedRecentPriceFollowup(
     meta: {
       evidence_count: evidence.length,
       latest_evidence_count: latestEvidence.length,
-      refreshed_count: liveProducts.length,
+      refreshed_count: refreshedCount,
       direction: intent.direction,
-      selected_id: selected[0].id,
-      selected_price: selected[0].price,
+      compared_count: proof.compared_count,
+      selected_id: proof.winner.id,
+      selected_price: proof.winner.price,
       duration_ms: elapsed,
     },
   });
-  return { handled: true, products: selected };
+  return { handled: true, products: [proof.winner] };
 }
 
 async function answerBroadAssortmentRequest(
