@@ -1,7 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  extractVisibleSystemTotalMinimum,
+  resolveVisibleSystemTotalRequirement,
+  type SystemCapacityPlanLine,
   type SystemTotalCapacityRequirement,
-  verifySystemTotalCapacityPlan,
+  verifySystemTotalCapacityPlan as verifyRawSystemTotalCapacityPlan,
+  visiblePlanProvesSkuQuantity,
 } from "./system-total-capacity.ts";
 
 const fluxRequirement: SystemTotalCapacityRequirement = {
@@ -16,10 +20,207 @@ const fluxRequirement: SystemTotalCapacityRequirement = {
 function fluxProduct(id: string, value: string) {
   return {
     id,
+    pagetitle: `Fixture ${id} ${value} lm`,
     facet_values: { flux: [value] },
     short_traits: [`Световой поток: ${value} лм`],
   };
 }
+
+function verifySystemTotalCapacityPlan(
+  requirement: SystemTotalCapacityRequirement,
+  lines: SystemCapacityPlanLine[],
+) {
+  const visiblePlanText = lines
+    .filter((line) =>
+      line.quantitySource === "visible_plan" && line.quantity !== null &&
+      Boolean(line.product.pagetitle)
+    )
+    .map((line) => `${line.quantity} шт × ${line.product.pagetitle}`)
+    .join(". ");
+  return verifyRawSystemTotalCapacityPlan(
+    requirement,
+    lines,
+    visiblePlanText,
+  );
+}
+
+Deno.test("visible hard system minimum wins over a higher advisory range", () => {
+  const reasoning =
+    "Для двора площадью 120 м² нужен световой поток. Световой поток = 120 м² × 150 лк = 18 000 лм (минимум). С учётом высоты рекомендую световой поток не менее 20 000–24 000 лм. Это суммарная потребность всей системы.";
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      measurementScope: "system_total",
+      reasoningText: reasoning,
+      outputFacet: fluxRequirement.outputFacet,
+      unit: "lm",
+    }),
+    {
+      minimumTotal: 18000,
+      unit: "лм",
+      strictMinimum: false,
+      evidence: "Световой поток = 120 м² × 150 лк = 18 000 лм (минимум)",
+    },
+  );
+});
+
+Deno.test("system minimum parser does not promote advice, ranges or wrong axes", () => {
+  const input = {
+    measurementScope: "system_total",
+    outputFacet: fluxRequirement.outputFacet,
+    unit: "лм",
+  };
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      ...input,
+      reasoningText: "Рекомендую световой поток не менее 20 000 лм.",
+    }),
+    null,
+  );
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      ...input,
+      reasoningText: "Ориентир: световой поток 20 000–24 000 лм.",
+    }),
+    null,
+  );
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      ...input,
+      reasoningText: "Нужна мощность не менее 2000 Вт.",
+    }),
+    null,
+  );
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      ...input,
+      measurementScope: "per_product",
+      reasoningText: "Нужен световой поток не менее 2000 лм.",
+    }),
+    null,
+  );
+});
+
+Deno.test("system minimum parser is generic and distinguishes physical roles", () => {
+  const outputFacet = {
+    key: "throughput",
+    caption: "Выходная производительность, кг",
+    unit: "кг",
+  };
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      measurementScope: "system_total",
+      reasoningText:
+        "Для установки нужна входная производительность не менее 60 кг. Выходная производительность должна быть более 35 кг суммарно.",
+      outputFacet,
+      unit: "кг",
+    }),
+    {
+      minimumTotal: 35,
+      unit: "кг",
+      strictMinimum: true,
+      evidence: "Выходная производительность должна быть более 35 кг суммарно",
+    },
+  );
+  assertEquals(
+    extractVisibleSystemTotalMinimum({
+      measurementScope: "system_total",
+      reasoningText: "Нужна входная производительность не менее 60 кг.",
+      outputFacet,
+      unit: "кг",
+    }),
+    null,
+  );
+});
+
+Deno.test("visible total binds only to a unique live output facet", () => {
+  const reasoning =
+    "Для объекта световой поток должен быть не менее 5000 лм суммарно.";
+  const facet = { key: "flux", caption: "Световой поток, лм", unit: null };
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      measurementScope: "system_total",
+      reasoningText: reasoning,
+      facets: [
+        { key: "area", caption: "Площадь, м²", unit: "м²" },
+        facet,
+      ],
+      minimumUnits: 2,
+    }),
+    {
+      measurementScope: "system_total",
+      outputFacet: facet,
+      unit: "лм",
+      minimumTotal: 5000,
+      strictMinimum: false,
+      minimumUnits: 2,
+    },
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      measurementScope: "system_total",
+      reasoningText: reasoning,
+      facets: [facet, { ...facet, key: "other_flux" }],
+    }),
+    null,
+  );
+});
+
+Deno.test("visible plan counts must be tied to the exact live SKU title", () => {
+  const title = "Прожектор СДО 06-30 светодиодный IP65";
+  assertEquals(
+    visiblePlanProvesSkuQuantity(
+      `Для системы: 8 шт × ${title}; суммарную мощность нужно проверить отдельно.`,
+      title,
+      8,
+    ),
+    true,
+  );
+  assertEquals(
+    visiblePlanProvesSkuQuantity(`8 × ${title}`, title, 8),
+    true,
+  );
+  assertEquals(
+    visiblePlanProvesSkuQuantity(
+      `- **[${title}](https://example.test/item)** Цена: 2390 ₸. Наличие: 8 шт.`,
+      title,
+      8,
+    ),
+    false,
+  );
+  assertEquals(
+    visiblePlanProvesSkuQuantity(
+      `8 шт × другой прожектор. ${title}`,
+      title,
+      8,
+    ),
+    false,
+  );
+  assertEquals(
+    visiblePlanProvesSkuQuantity(
+      `Наличие предыдущего товара: 8 шт. ${title}`,
+      title,
+      8,
+    ),
+    false,
+  );
+  assertEquals(
+    visiblePlanProvesSkuQuantity(`8 шт × ${title}`, title, 2),
+    false,
+  );
+  const missingVisiblePlan = verifyRawSystemTotalCapacityPlan(
+    fluxRequirement,
+    [{
+      product: fluxProduct("A", "1000"),
+      quantity: 2,
+      quantitySource: "visible_plan",
+    }],
+  );
+  assertEquals(missingVisiblePlan.status, "unverified");
+  assertEquals(missingVisiblePlan.issues, [{
+    code: "unverified_quantity",
+    productId: "A",
+  }]);
+});
 
 Deno.test("a visible two-SKU plan proves its summed output from live cards", () => {
   const result = verifySystemTotalCapacityPlan(fluxRequirement, [
@@ -124,7 +325,7 @@ Deno.test("strict and inclusive system thresholds remain distinct", () => {
 
 Deno.test("missing, conflicting and non-scalar catalog outputs never prove a plan", () => {
   const missing = verifySystemTotalCapacityPlan(fluxRequirement, [{
-    product: { id: "A", short_traits: [] },
+    product: { id: "A", pagetitle: "Fixture A", short_traits: [] },
     quantity: 2,
     quantitySource: "visible_plan",
   }]);
@@ -134,6 +335,7 @@ Deno.test("missing, conflicting and non-scalar catalog outputs never prove a pla
   const conflicting = verifySystemTotalCapacityPlan(fluxRequirement, [{
     product: {
       id: "A",
+      pagetitle: "Fixture A",
       facet_values: { flux: ["1000"] },
       short_traits: ["Световой поток: 800 лм"],
     },
@@ -147,7 +349,11 @@ Deno.test("missing, conflicting and non-scalar catalog outputs never prove a pla
   }]);
 
   const range = verifySystemTotalCapacityPlan(fluxRequirement, [{
-    product: { id: "A", facet_values: { flux: ["800–1000 лм"] } },
+    product: {
+      id: "A",
+      pagetitle: "Fixture A",
+      facet_values: { flux: ["800–1000 лм"] },
+    },
     quantity: 2,
     quantitySource: "visible_plan",
   }]);
@@ -157,7 +363,11 @@ Deno.test("missing, conflicting and non-scalar catalog outputs never prove a pla
 
 Deno.test("capacity proof requires matching units and an authorized additive system", () => {
   const wrongUnit = verifySystemTotalCapacityPlan(fluxRequirement, [{
-    product: { id: "A", facet_values: { flux: ["1800 Вт"] } },
+    product: {
+      id: "A",
+      pagetitle: "Fixture A",
+      facet_values: { flux: ["1800 Вт"] },
+    },
     quantity: 2,
     quantitySource: "visible_plan",
   }]);
@@ -185,6 +395,7 @@ Deno.test("a same-card explicit trait unit can qualify a unitless live facet val
   const evidenced = verifySystemTotalCapacityPlan(requirement, [{
     product: {
       id: "A",
+      pagetitle: "Fixture A",
       facet_values: { flux: ["1000"] },
       short_traits: ["Световой поток: 1000 лм"],
     },
@@ -195,7 +406,11 @@ Deno.test("a same-card explicit trait unit can qualify a unitless live facet val
   assertEquals(evidenced.totalCapacity, 2000);
 
   const unitless = verifySystemTotalCapacityPlan(requirement, [{
-    product: { id: "A", facet_values: { flux: ["1000"] } },
+    product: {
+      id: "A",
+      pagetitle: "Fixture A",
+      facet_values: { flux: ["1000"] },
+    },
     quantity: 2,
     quantitySource: "visible_plan",
   }]);
@@ -217,6 +432,7 @@ Deno.test("the contract is unit- and category-neutral", () => {
   }, [{
     product: {
       id: "machine",
+      pagetitle: "Machine 12 kg",
       short_traits: ["Производительность: 12 кг"],
     },
     quantity: 3,

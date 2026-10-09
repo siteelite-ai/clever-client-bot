@@ -1,10 +1,101 @@
 import { canonicalMeasurementUnit } from "./criteria-reasoning.ts";
+import { isPhysicalMeasurementUnit } from "./criteria-consistency.ts";
 
 /** The additive output axis must come from the current live category schema. */
 export interface SystemOutputFacet {
   key: string;
   caption: string;
   unit: string | null;
+}
+
+export interface VisibleSystemTotalMinimum {
+  minimumTotal: number;
+  unit: string;
+  strictMinimum: boolean;
+  /** Exact visible clause that supplied the hard lower bound. */
+  evidence: string;
+}
+
+/**
+ * Compile only an explicit hard lower bound for the same live output meaning.
+ * Advisory targets, ranges, maxima, and unlabelled arithmetic are not proof.
+ * The caller must pass reasoning already shown to the customer, not hidden
+ * model scratch text or a catalog search result.
+ */
+export function extractVisibleSystemTotalMinimum(input: {
+  measurementScope: string | null;
+  reasoningText: string;
+  outputFacet: SystemOutputFacet;
+  unit: string;
+}): VisibleSystemTotalMinimum | null {
+  if (input.measurementScope !== "system_total") return null;
+  const wantedUnit = canonicalMeasurementUnit(input.unit);
+  if (!wantedUnit || !isPhysicalMeasurementUnit(wantedUnit)) return null;
+  const meaningTokens = normalizedCaption(input.outputFacet.caption).split(" ")
+    .filter((token) => token.length >= 4);
+  if (meaningTokens.length === 0) return null;
+  const normalizedText = String(input.reasoningText ?? "")
+    .replace(/[\u00a0\u202f]/gu, " ");
+  const clauses = normalizedText.split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
+    .map((clause) => clause.trim()).filter(Boolean);
+  const quantity =
+    /(?<![\p{L}\p{N}])((?:\d{1,3}(?: \d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}°²³/]{1,12})(?![\p{L}])/gu;
+  const candidates: VisibleSystemTotalMinimum[] = [];
+  for (const clause of clauses) {
+    const words = normalizedCaption(clause).split(" ");
+    if (
+      !meaningTokens.every((token) =>
+        words.some((word) =>
+          word === token ||
+          word.length >= 4 && word.slice(0, 4) === token.slice(0, 4)
+        )
+      )
+    ) continue;
+    for (const match of clause.matchAll(quantity)) {
+      const unit = canonicalMeasurementUnit(match[2]);
+      if (unit !== wantedUnit) continue;
+      const position = match.index ?? 0;
+      const before = clause.slice(Math.max(0, position - 100), position);
+      const after = clause.slice(
+        position + match[0].length,
+        position + match[0].length + 45,
+      );
+      // In `20 000–24 000 лм` only the second number has a unit. It is not
+      // a standalone hard minimum, even when a nearby word says "не менее".
+      if (/\d[\d\s]*[–—-]\s*$/u.test(before) || /^\s*[–—-]\s*\d/u.test(after)) {
+        continue;
+      }
+      const localPrefix = before.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+      const localSuffix = after.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+      if (
+        /(?:рекоменду\p{L}*|ориентир\p{L}*|комфорт\p{L}*|предпочт\p{L}*|приблиз\p{L}*|около)(?!\p{L})/iu
+          .test(localPrefix) ||
+        /(?:не\s+более|не\s+выше|максимум|(?:^|\s)до\s*)$/iu.test(localPrefix)
+      ) continue;
+      const suffixMinimum =
+        /^\s*(?:\(\s*)?(?:минимум|как\s+минимум)(?:\s*\))?/iu.test(localSuffix);
+      const prefixMinimum =
+        /(?:не\s+менее|как\s+минимум|минимум|требу\p{L}*|необходим\p{L}*|нуж\p{L}*|долж\p{L}*|более|свыше|больше)\s*$/iu
+          .test(localPrefix);
+      if (!suffixMinimum && !prefixMinimum) continue;
+      const minimumTotal = Number(
+        match[1].replace(/ /gu, "").replace(",", "."),
+      );
+      if (!Number.isFinite(minimumTotal) || minimumTotal <= 0) continue;
+      const strictMinimum = /(?:более|свыше|больше)\s*$/iu.test(localPrefix);
+      candidates.push({
+        minimumTotal,
+        unit,
+        strictMinimum,
+        evidence: clause,
+      });
+    }
+  }
+  if (candidates.length === 0) return null;
+  return candidates.sort((left, right) =>
+    right.minimumTotal - left.minimumTotal ||
+    Number(right.strictMinimum) - Number(left.strictMinimum)
+  )[0];
 }
 
 /**
@@ -27,6 +118,7 @@ export interface SystemTotalCapacityRequirement {
 
 export interface SystemPlanProductEvidence {
   id: string;
+  pagetitle?: string;
   short_traits?: string[];
   facet_values?: Record<string, string[]>;
 }
@@ -37,6 +129,47 @@ export interface SystemCapacityPlanLine {
   quantity: number | null;
   /** `visible_plan` must actually be shown to the customer by the caller. */
   quantitySource?: "customer_explicit" | "visible_plan" | "unverified";
+}
+
+function normalizedVisiblePlanText(value: string): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/[^\p{L}\p{N}×]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+/**
+ * A render list names SKUs but supplies no installation quantities. Before a
+ * caller marks a count as `visible_plan`, require a count expression directly
+ * before that exact live title in customer-visible plan prose. Stock counts,
+ * prices, numbers inside a title and unrelated generic product nouns cannot
+ * supply this proof.
+ */
+export function visiblePlanProvesSkuQuantity(
+  visiblePlanText: string,
+  productTitle: string,
+  quantity: number,
+): boolean {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return false;
+  const title = normalizedVisiblePlanText(productTitle);
+  const plan = normalizedVisiblePlanText(visiblePlanText);
+  if (!title || title.length < 8 || !plan) return false;
+  let position = plan.indexOf(title);
+  while (position >= 0) {
+    const before = plan.slice(Math.max(0, position - 40), position);
+    const count = String(quantity);
+    if (
+      new RegExp(
+        String
+          .raw`(?<!\d)${count}\s*(?:(?:шт\p{L}*|единиц\p{L}*|pieces?)\s*)?×\s*$`,
+        "u",
+      ).test(before)
+    ) return true;
+    position = plan.indexOf(title, position + title.length);
+  }
+  return false;
 }
 
 export type SystemCapacityIssueCode =
@@ -100,6 +233,40 @@ function facetUnit(facet: SystemOutputFacet): string {
     /[,;(]\s*([\p{L}°²³/]{1,12})\)?\s*$/u,
   )?.[1] ?? "";
   return canonicalMeasurementUnit(facet.unit || captionUnit);
+}
+
+/**
+ * Bind a visible hard total to exactly one current live output facet. If the
+ * schema exposes several plausible axes, the caller must clarify the meaning
+ * rather than silently choosing one. Additivity is deliberately not inferred.
+ */
+export function resolveVisibleSystemTotalRequirement(input: {
+  measurementScope: string | null;
+  reasoningText: string;
+  facets: SystemOutputFacet[];
+  minimumUnits?: number;
+}): SystemTotalCapacityRequirement | null {
+  const matches = input.facets.flatMap((facet) => {
+    const unit = facetUnit(facet);
+    if (!facet.key || !unit) return [];
+    const minimum = extractVisibleSystemTotalMinimum({
+      measurementScope: input.measurementScope,
+      reasoningText: input.reasoningText,
+      outputFacet: facet,
+      unit,
+    });
+    return minimum
+      ? [{
+        measurementScope: "system_total" as const,
+        outputFacet: facet,
+        unit: minimum.unit,
+        minimumTotal: minimum.minimumTotal,
+        strictMinimum: minimum.strictMinimum,
+        ...(input.minimumUnits ? { minimumUnits: input.minimumUnits } : {}),
+      }]
+      : [];
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function parseExactMeasuredOutput(
@@ -200,6 +367,7 @@ function verifiedPerUnitOutput(
 export function verifySystemTotalCapacityPlan(
   requirement: SystemTotalCapacityRequirement,
   plan: SystemCapacityPlanLine[],
+  visiblePlanText = "",
 ): SystemTotalCapacityVerdict {
   const requiredUnit = canonicalMeasurementUnit(requirement.unit);
   const issues: SystemCapacityIssue[] = [];
@@ -238,6 +406,17 @@ export function verifySystemTotalCapacityPlan(
     if (
       line.quantitySource !== "customer_explicit" &&
       line.quantitySource !== "visible_plan"
+    ) {
+      issues.push({ code: "unverified_quantity", productId });
+      continue;
+    }
+    if (
+      line.quantitySource === "visible_plan" &&
+      !visiblePlanProvesSkuQuantity(
+        visiblePlanText,
+        line.product.pagetitle ?? "",
+        line.quantity,
+      )
     ) {
       issues.push({ code: "unverified_quantity", productId });
       continue;
