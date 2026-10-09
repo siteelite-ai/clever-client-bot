@@ -1,7 +1,25 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveCaseExecutions, resolveEndpoint, resolveExpectations, selectCaseExecutions } from './run-customer-acceptance.mjs';
+import {
+  ACCEPTANCE_TURN_TIMEOUT_MS, DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn,
+  parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
+  resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
+  validateCliArgs, verifyProductLinks, verifyProductPage,
+} from './run-customer-acceptance.mjs';
+
+const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.json', import.meta.url));
+const septemberBytes = fs.readFileSync(new URL('./customer-audit-20260921-cases.json', import.meta.url));
+const septemberVariationBytes = fs.readFileSync(new URL('./customer-audit-20260921-variations.json', import.meta.url));
+const notionBytes = fs.readFileSync(new URL('./notion-legacy-bug-cases.json', import.meta.url));
+const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
+const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
+const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
+const septemberVariations = JSON.parse(septemberVariationBytes.toString('utf8'));
+const notionSuite = JSON.parse(notionBytes.toString('utf8'));
+const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
+const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -17,12 +35,32 @@ test('resolveEndpoint keeps production by default and accepts an isolated previe
 
 test('resolveEndpoint rejects unsafe or non-function targets', () => {
   assert.throws(
+    () => resolveEndpoint(['node', 'runner', '--endpoint=']),
+    /non-empty URL/,
+  );
+  assert.throws(
     () => resolveEndpoint(['node', 'runner', '--endpoint=http://example.com/functions/v1/preview']),
     /HTTPS/,
   );
   assert.throws(
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
+  );
+});
+
+test('CLI help and unknown options never start a live production acceptance run', () => {
+  assert.equal(validateCliArgs(['node', 'runner', '--help']), 'help');
+  assert.throws(
+    () => validateCliArgs(['node', 'runner']),
+    /explicit --endpoint=/,
+  );
+  assert.throws(
+    () => validateCliArgs(['node', 'runner', '--hepl']),
+    /Unknown or incomplete acceptance option/,
+  );
+  assert.equal(
+    validateCliArgs(['node', 'runner', '--endpoint=https://example.com/functions/v1/preview', '--case=one']),
+    'run',
   );
 });
 
@@ -94,6 +132,161 @@ test('one variation can be selected without rerunning the base case', () => {
   );
 });
 
+test('strict full-suite inventory accepts both complete customer matrices', () => {
+  assert.equal(validateStrictFullSuite({
+    argv: strictArgs,
+    suite: acceptanceSuite,
+    variationSuite: null,
+    casesPath: '/qa/customer-acceptance-cases.json',
+    variantsPath: null,
+    suiteBytes: acceptanceBytes,
+    variantsBytes: null,
+  }).expected_cases, 27);
+  const september = validateStrictFullSuite({
+    argv: strictArgs,
+    suite: septemberSuite,
+    variationSuite: septemberVariations,
+    casesPath: '/qa/customer-audit-20260921-cases.json',
+    variantsPath: '/qa/customer-audit-20260921-variations.json',
+    suiteBytes: septemberBytes,
+    variantsBytes: septemberVariationBytes,
+  });
+  assert.deepEqual([
+    september.expected_turns_per_base_suite,
+    september.expected_runs,
+    september.expected_evaluated_turns,
+  ], [39, 54, 78]);
+});
+
+test('strict full-suite rejects filters, shortened repeats, missing IDs and incomplete September variations', () => {
+  const base = {
+    argv: strictArgs,
+    suite: acceptanceSuite,
+    variationSuite: null,
+    casesPath: '/qa/customer-acceptance-cases.json',
+    variantsPath: null,
+    suiteBytes: acceptanceBytes,
+    variantsBytes: null,
+  };
+  for (const flag of ['--case=customer-dn027b-analogs', '--variant=base', '--repeat=1', '--stop-on-failure']) {
+    assert.throws(() => validateStrictFullSuite({ ...base, argv: [...strictArgs, flag] }), /forbids/);
+  }
+  assert.throws(() => validateStrictFullSuite({
+    ...base,
+    argv: ['node', 'runner', '--strict-full-suite'],
+  }), /requires an explicit --endpoint=/);
+  assert.throws(() => validateStrictFullSuite({ ...base, suite: {
+    ...acceptanceSuite,
+    cases: acceptanceSuite.cases.slice(1),
+  } }), /expected 27 unique IDs/);
+  assert.throws(() => validateStrictFullSuite({ ...base, suite: {
+    ...acceptanceSuite,
+    cases: [acceptanceSuite.cases[0], ...acceptanceSuite.cases.slice(0, -1)],
+  } }), /expected 27 unique IDs/);
+  const septemberBase = {
+    argv: strictArgs,
+    suite: septemberSuite,
+    variationSuite: septemberVariations,
+    casesPath: '/qa/customer-audit-20260921-cases.json',
+    variantsPath: '/qa/customer-audit-20260921-variations.json',
+    suiteBytes: septemberBytes,
+    variantsBytes: septemberVariationBytes,
+  };
+  assert.throws(() => validateStrictFullSuite({ ...septemberBase, variantsPath: null }), /requires/);
+  assert.throws(() => validateStrictFullSuite({ ...septemberBase, variationSuite: {
+    ...septemberVariations,
+    variants: septemberVariations.variants.slice(1),
+  } }), /expected 27 unique variations/);
+  assert.throws(() => validateStrictFullSuite({ ...septemberBase, variationSuite: {
+    ...septemberVariations,
+    variants: [{ ...septemberVariations.variants[0], case_id: septemberSuite.cases[1].id }, ...septemberVariations.variants.slice(1)],
+  } }), /must cover/);
+});
+
+test('strict full-suite detects changed assertions and semantic variation messages by source hash', () => {
+  const changedExpectations = structuredClone(acceptanceSuite);
+  changedExpectations.cases[0].turns[0].expect = {};
+  assert.throws(() => validateStrictFullSuite({
+    argv: strictArgs,
+    suite: changedExpectations,
+    variationSuite: null,
+    casesPath: '/qa/customer-acceptance-cases.json',
+    variantsPath: null,
+    suiteBytes: Buffer.from(JSON.stringify(changedExpectations)),
+    variantsBytes: null,
+  }), /SHA256 mismatch/);
+  const changedVariations = structuredClone(septemberVariations);
+  changedVariations.variants[0].messages = ['Найди что-нибудь'];
+  assert.throws(() => validateStrictFullSuite({
+    argv: strictArgs,
+    suite: septemberSuite,
+    variationSuite: changedVariations,
+    casesPath: '/qa/customer-audit-20260921-cases.json',
+    variantsPath: '/qa/customer-audit-20260921-variations.json',
+    suiteBytes: septemberBytes,
+    variantsBytes: Buffer.from(JSON.stringify(changedVariations)),
+  }), /variations\.json SHA256 mismatch/);
+});
+
+test('strict full-suite verifies all Notion legacy and systemic cardinality runs', () => {
+  const notion = validateStrictFullSuite({
+    argv: strictArgs,
+    suite: notionSuite,
+    variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases.json',
+    variantsPath: null,
+    suiteBytes: notionBytes,
+    variantsBytes: null,
+  });
+  assert.deepEqual([notion.expected_cases, notion.expected_turns_per_base_suite, notion.expected_runs, notion.expected_evaluated_turns], [30, 31, 34, 35]);
+  const cardinality = validateStrictFullSuite({
+    argv: strictArgs,
+    suite: cardinalitySuite,
+    variationSuite: null,
+    casesPath: '/qa/systemic-cardinality-cases.json',
+    variantsPath: null,
+    suiteBytes: cardinalityBytes,
+    variantsBytes: null,
+  });
+  assert.deepEqual([cardinality.expected_cases, cardinality.expected_turns_per_base_suite, cardinality.expected_runs, cardinality.expected_evaluated_turns], [5, 5, 15, 15]);
+});
+
+test('strict full-suite rejects missing, swapped, or changed-repeat Notion and cardinality cases', () => {
+  const notionArgs = {
+    argv: strictArgs,
+    suite: notionSuite,
+    variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases.json',
+    variantsPath: null,
+    suiteBytes: notionBytes,
+    variantsBytes: null,
+  };
+  assert.throws(() => validateStrictFullSuite({ ...notionArgs, suite: {
+    ...notionSuite, cases: notionSuite.cases.slice(1),
+  } }), /expected 30 unique IDs/);
+  assert.throws(() => validateStrictFullSuite({ ...notionArgs, suite: {
+    ...notionSuite,
+    cases: notionSuite.cases.map((item) => item.id === 'bt925-corn-e27' ? { ...item, repeat: 1 } : item),
+  } }), /invalid repeats=bt925-corn-e27/);
+  assert.throws(() => validateStrictFullSuite({ ...notionArgs, suite: {
+    ...notionSuite,
+    cases: notionSuite.cases.map((item) => item.id === 'bt924-acti9-followup-show' ? { ...item, turns: item.turns.slice(0, 1) } : item),
+  } }), /invalid turns=bt924-acti9-followup-show/);
+  const cardinalityArgs = {
+    ...notionArgs,
+    suite: cardinalitySuite,
+    casesPath: '/qa/systemic-cardinality-cases.json',
+    suiteBytes: cardinalityBytes,
+  };
+  assert.throws(() => validateStrictFullSuite({ ...cardinalityArgs, suite: {
+    ...cardinalitySuite, cases: cardinalitySuite.cases.slice(1),
+  } }), /expected 5 unique IDs/);
+  assert.throws(() => validateStrictFullSuite({ ...cardinalityArgs, suite: {
+    ...cardinalitySuite,
+    cases: cardinalitySuite.cases.map((item) => item.id === 'cardinality-multiple-sockets' ? { ...item, repeat: 1 } : item),
+  } }), /invalid repeats=cardinality-multiple-sockets/);
+});
+
 test('acceptance transport retries one transient stream interruption with the same payload', async () => {
   const calls = [];
   const payload = { message: 'test', messageId: 'stable-id' };
@@ -112,6 +305,228 @@ test('acceptance transport retries one transient stream interruption with the sa
   assert.equal(result.attempts, 2);
   assert.equal(result.raw, 'data: [DONE]\n\n');
   assert.deepEqual(calls, [payload, payload]);
+});
+
+test('acceptance transport bounds a hung fetch and aborts it', async () => {
+  assert.equal(ACCEPTANCE_TURN_TIMEOUT_MS, 55_000);
+  let signal;
+  await assert.rejects(fetchAcceptanceTurn({ message: 'test' }, {
+    timeoutMs: 20,
+    fetchImpl: async (_url, init) => {
+      signal = init.signal;
+      return await new Promise(() => {});
+    },
+  }), (error) => error.code === 'ACCEPTANCE_TURN_TIMEOUT' && error.attempts === 1);
+  assert.equal(signal.aborted, true);
+});
+
+test('acceptance transport bounds a response body reader that ignores abort', async () => {
+  await assert.rejects(fetchAcceptanceTurn({ message: 'test' }, {
+    timeoutMs: 20,
+    fetchImpl: async () => ({ text: async () => await new Promise(() => {}) }),
+  }), (error) => error.code === 'ACCEPTANCE_TURN_TIMEOUT');
+});
+
+test('catalog URL candidates are unique and external hosts never count', () => {
+  assert.equal(productUrlIdentity('https://www.220volt.kz/catalog/a/b/item/?utm_source=qa#details'), '220volt.kz/catalog/a/b/item');
+  assert.equal(productUrlIdentity('https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn/'), '220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn');
+  assert.equal(productUrlIdentity('https://220volt.kz/catalog/kabeli/prokladka/trubki/trubka-termo-nst-14-7/'), '220volt.kz/catalog/kabeli/prokladka/trubki/trubka-termo-nst-14-7');
+  assert.equal(productUrlIdentity('https://220volt.kz/catalog/svetotexnika/svetilniki/'), null);
+  assert.equal(productUrlIdentity('https://220volt.kz/catalog/svetotexnika/'), null);
+  assert.equal(productUrlIdentity('https://220volt.kz/dostavka/'), null);
+  assert.equal(productUrlIdentity('https://220volt.kz.evil.example/catalog/a/item/'), null);
+  assert.equal(productUrlIdentity('http://220volt.kz/catalog/a/item/'), null);
+  const response = {
+    text: '', productsMarkdown: '', completed: true, diagnosticError: null, serverProductsCount: 3,
+    links: [
+      { title: 'Первый', url: 'https://220volt.kz/catalog/a/b/item/' },
+      { title: 'Тот же', url: 'https://www.220volt.kz/catalog/a/b/item/?tracking=1' },
+      { title: 'Внешний', url: 'https://220volt.kz.evil.example/catalog/other/' },
+    ],
+  };
+  const failures = evaluate({ min_products: 2 }, response);
+  assert(failures.includes('products 1 < 2'));
+  assert(failures.some((failure) => failure.startsWith('duplicate product URL(s):')));
+  assert(failures.some((failure) => failure.startsWith('invalid 220volt.kz product URL(s):')));
+});
+
+test('strict product proof requires matching JSON-LD Product/@id/name/sku, not a deep category URL', () => {
+  const productUrl = 'https://220volt.kz/catalog/kabeli/prokladka/trubki/trubka-nst-14-7/';
+  const identity = productUrlIdentity(productUrl);
+  const productHtml = `<script type="application/ld+json">${JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'Product', '@id': productUrl,
+    name: 'Трубка NST 14/7', sku: 'Ем000000001',
+  })}</script>`;
+  const categoryHtml = `<script type="application/ld+json">${JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'ItemList', '@id': productUrl,
+    itemListElement: [{ '@type': 'Product', name: 'Related item', sku: 'other' }],
+  })}</script>`;
+  assert.deepEqual(productProofFromHtml(productHtml, identity), {
+    sku: 'Ем000000001', name: 'Трубка NST 14/7', facets: {}, description: '',
+  });
+  assert.equal(productProofFromHtml(categoryHtml, identity), null);
+  assert.equal(productProofFromHtml(productHtml.replace('Ем000000001', ''), identity), null);
+  assert.equal(productProofFromHtml(productHtml.replace(productUrl, 'https://220volt.kz/catalog/other/item/'), identity), null);
+});
+
+test('live product verification is bounded, cached and fails closed on categories or redirects', async () => {
+  const productUrl = 'https://220volt.kz/catalog/a/b/item/';
+  const categoryUrl = 'https://220volt.kz/catalog/a/b/deep-category/';
+  const productHtml = `<script type="application/ld+json">${JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'Product', '@id': productUrl,
+    name: 'Розетка двойная', sku: 'SKU-123',
+  })}</script>`;
+  const categoryHtml = `<script type="application/ld+json">${JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: [],
+  })}</script>`;
+  let fetches = 0;
+  const fetchImpl = async (url, options) => {
+    fetches++;
+    assert.equal(options.redirect, 'manual');
+    assert.equal(options.credentials, 'omit');
+    return new Response(url === productUrl ? productHtml : categoryHtml, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  };
+  const cache = new Map();
+  const links = [
+    { title: 'Розетка двойная', url: productUrl },
+    { title: 'Та же розетка', url: 'https://www.220volt.kz/catalog/a/b/item/?utm_source=qa' },
+    { title: 'Раздел трубок', url: categoryUrl },
+  ];
+  const proof = await verifyProductLinks(links, { fetchImpl, cache });
+  assert.equal(fetches, 2);
+  assert.equal(proof.get(productUrlIdentity(productUrl)).sku, 'SKU-123');
+  assert.equal(proof.get(productUrlIdentity(categoryUrl)).verified, false);
+  await verifyProductLinks(links, { fetchImpl, cache });
+  assert.equal(fetches, 2);
+  const failures = evaluate({ min_products: 2 }, {
+    text: '', productsMarkdown: '', links, completed: true, diagnosticError: null,
+    serverProductsCount: 3, verifiedProductPages: proof,
+  }, { requireVerifiedPages: true });
+  assert(failures.includes('products 1 < 2'));
+  assert(failures.some((failure) => failure.startsWith('unverified product page(s):')));
+  assert(failures.some((failure) => failure.startsWith('duplicate product URL(s):')));
+  const redirect = await verifyProductPage(productUrl, {
+    fetchImpl: async () => new Response(null, { status: 302, headers: { Location: 'https://example.com/' } }),
+  });
+  assert.equal(redirect.verified, false);
+  assert.match(redirect.reason, /HTTP 302/u);
+  const hanging = await verifyProductPage(productUrl, {
+    timeoutMs: 15,
+    fetchImpl: async () => await new Promise(() => {}),
+  });
+  assert.equal(hanging.verified, false);
+  assert.match(hanging.reason, /deadline/u);
+});
+
+test('source-backed household and motion contract rejects acoustic-only and ЖКХ cards', async () => {
+  const rule = {
+    facets: [{ name: 'Вид светильника', require_any: ['бытов'] }],
+    description: { require_any: ['движущ', 'движен', 'motion', 'PIR'] },
+  };
+  const productHtml = ({ url, sku, type, description }) => `
+    <script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'Product', '@id': url,
+      name: `Светильник ${sku}`, sku,
+    })}</script>
+    <div class="product__tab-description-item">
+      <div class="product__description-title">Вид светильника:</div>
+      <p class="product__tab-description-text">${type}</p>
+    </div>
+    <div class="product__tab-description-item">
+      <div class="product__description-title">С датчиком движения:</div>
+      <p class="product__tab-description-text">да</p>
+    </div>
+    <div class="product-item__tab-content" data-tab-content="description">${description}</div>
+  `;
+  const entries = [
+    { url: 'https://220volt.kz/catalog/svetotexnika/svetilniki/gauss-hall/', sku: 'GAUSS',
+      type: 'бытовые светильники накладные',
+      description: 'Микроволновый сенсор включает светильник при появлении движущихся объектов.' },
+    { url: 'https://220volt.kz/catalog/svetotexnika/svetilniki/iek-acoustic/', sku: 'IEK',
+      type: 'бытовые светильники накладные',
+      description: 'Оптико-акустический датчик, реагирующий на звук.' },
+    { url: 'https://220volt.kz/catalog/svetotexnika/svetilniki/utility/', sku: 'UTILITY',
+      type: 'светильники для ЖКХ',
+      description: 'Включается при обнаружении движения.' },
+  ];
+  const htmlByUrl = new Map(entries.map((entry) => [entry.url, productHtml(entry)]));
+  const links = entries.map((entry) => ({ title: `Светильник ${entry.sku}`, url: entry.url }));
+  const verifiedProductPages = await verifyProductLinks(links, {
+    fetchImpl: async (url) => new Response(htmlByUrl.get(url), { headers: { 'Content-Type': 'text/html' } }),
+  });
+  const gaussOnly = evaluate({ min_products: 1, require_every_product_page: rule }, {
+    text: '', productsMarkdown: '', links: links.slice(0, 1),
+    completed: true, diagnosticError: null, serverProductsCount: 1,
+    verifiedProductPages,
+  });
+  assert.deepEqual(gaussOnly, []);
+  const mixed = evaluate({ min_products: 3, require_every_product_page: rule }, {
+    text: '', productsMarkdown: '', links,
+    completed: true, diagnosticError: null, serverProductsCount: 3,
+    verifiedProductPages,
+  });
+  assert(mixed.some((failure) => failure.includes('product IEK description')));
+  assert(mixed.some((failure) => failure.includes('product UTILITY facet Вид светильника')));
+  assert(!mixed.some((failure) => failure.startsWith('products 2 <')));
+  const missingPageProof = evaluate({ min_products: 1, require_every_product_page: rule }, {
+    text: '', productsMarkdown: '', links: links.slice(0, 1),
+    completed: true, diagnosticError: null, serverProductsCount: 1,
+  });
+  assert(missingPageProof.some((failure) => failure.startsWith('unverified product page(s):')));
+  const emptyRule = evaluate({ min_products: 1, require_every_product_page: {} }, {
+    text: '', productsMarkdown: '', links: links.slice(0, 1),
+    completed: true, diagnosticError: null, serverProductsCount: 1,
+    verifiedProductPages,
+  });
+  assert(emptyRule.includes('invalid product-page source evidence contract'));
+});
+
+test('source-backed numeric and exact facet checks reject underpowered and non-copper products', () => {
+  const floodlightUrl = 'https://220volt.kz/catalog/svetotexnika/prozhektoryi/floodlight/';
+  const cableUrl = 'https://220volt.kz/catalog/kabeli/prokladka/cable/';
+  const proofs = new Map([
+    [productUrlIdentity(floodlightUrl), {
+      verified: true, sku: 'FLOOD-10', facets: { 'Световой поток, Лм': '800' }, description: '',
+    }],
+    [productUrlIdentity(cableUrl), {
+      verified: true, sku: 'CCA-PVC', facets: { 'Материал проводника': 'CCA', 'Оболочка': 'PVC' }, description: '',
+    }],
+  ]);
+  const base = { text: '', productsMarkdown: '', completed: true, diagnosticError: null, serverProductsCount: 1, verifiedProductPages: proofs };
+  const floodlightFailures = evaluate({ require_every_product_page: {
+    facets: [{ name: 'Световой поток, Лм', min_numeric: 1800 }],
+  } }, { ...base, links: [{ title: 'Прожектор 10 W', url: floodlightUrl }] });
+  assert(floodlightFailures.some((failure) => failure.includes('FLOOD-10 facet Световой поток, Лм: source numeric value 800 < 1800')));
+  const cableFailures = evaluate({ require_every_product_page: {
+    facets: [
+      { name: 'Материал проводника', exact_any: ['медь'] },
+      { name: 'Оболочка', exact_any: ['PE', 'LDPE'] },
+    ],
+  } }, { ...base, links: [{ title: 'Кабель витая пара', url: cableUrl }] });
+  assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Материал проводника')));
+  assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Оболочка')));
+});
+
+test('product-or-explicit-gap and class-or-gap contracts cannot pass vacuously', () => {
+  const empty = { text: 'Для котла нужен ИБП с чистой синусоидой.', productsMarkdown: '', links: [], completed: true, diagnosticError: null };
+  const ups = { require_products_or_text_groups: {
+    min_products: 1,
+    text_groups: [['не нашёл', 'не найден'], ['ИБП'], ['каталог']],
+  } };
+  assert(evaluate(ups, empty).some((failure) => failure.includes('without an explicit evidence gap')));
+  assert.deepEqual(evaluate(ups, { ...empty, text: 'Не нашёл в каталоге подтверждённый ИБП для котла.' }), []);
+  const gallant = { require_product_groups_or_gap: [
+    { title_groups: [['розет']], gap_text_groups: [['розет'], ['не нашёл']] },
+    { title_groups: [['выключател']], gap_text_groups: [['выключател'], ['не нашёл']] },
+  ] };
+  const sockets = [{ title: 'Розетка Gallant' }];
+  assert(evaluate(gallant, { ...empty, links: sockets, serverProductsCount: 1 }).some((failure) => failure.includes('missing product class or explicit gap')));
+  assert.deepEqual(evaluate(gallant, {
+    ...empty, links: sockets, serverProductsCount: 1,
+    text: 'Выключатели Gallant не нашёл в каталоге.',
+  }), []);
 });
 
 test('parseSse keeps pre-product text and parses card prices', () => {
@@ -263,7 +678,7 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   const parsed = parseSse([
     data({ v3_event: {
       type: 'products_block',
-      markdown: '- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/item/)**\n  Цена: *900* ₸',
+      markdown: '- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektrika/rozetki/rozetka-rs-16-343/)**\n  Цена: *900* ₸',
       selection_contract: contract,
     } }),
     data({ v3_event: { type: 'diagnostic', phase: 'complete', products_count: 1 } }),

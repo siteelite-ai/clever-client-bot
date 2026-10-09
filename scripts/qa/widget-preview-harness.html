@@ -9,7 +9,10 @@
     </style>
     <script>
       (() => {
-        const preview = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview';
+        const previewFunction = new URLSearchParams(location.search).get('function') === 'closure'
+          ? 'chat-consultant-v3-closure-preview'
+          : 'chat-consultant-v3-preview';
+        const preview = `https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/${previewFunction}`;
         const nativeFetch = window.fetch.bind(window);
         window.fetch = (input, init) => {
           const url = typeof input === 'string' ? input : input.url;

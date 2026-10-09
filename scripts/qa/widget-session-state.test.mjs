@@ -134,6 +134,26 @@ test('recent stored dialogue is restored visibly instead of becoming hidden mode
   dom.window.close();
 });
 
+test('restored assistant content cannot inject HTML or event handlers through markdown links', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  state.history[2].content = '<img src=x onerror="globalThis.__xss=1"> [ссылка](https://example.com/" onmouseover="bad) [товар](https://220volt.kz/catalog/item/?a=1&b=2)';
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__xss, undefined);
+  assert.match(messages.textContent, /<img src=x onerror=/u);
+  const link = messages.querySelector('a[href^="https://example.com/"]');
+  assert.ok(link);
+  assert.equal(link.getAttribute('onmouseover'), null);
+  assert.equal(
+    messages.querySelector('a[href^="https://220volt.kz/"]')?.getAttribute('href'),
+    'https://220volt.kz/catalog/item/?a=1&b=2',
+  );
+  dom.window.close();
+});
+
 test('expired dialogue is discarded on initialization', () => {
   const now = 1_800_000_000_000;
   const dom = bootWidget({ state: savedDialogue(now - SESSION_TTL_MS - 1), now });

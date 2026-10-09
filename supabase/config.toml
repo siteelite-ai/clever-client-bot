@@ -12,6 +12,9 @@ verify_jwt = false
 [functions.chat-consultant-v3-preview]
 verify_jwt = true
 
+[functions.chat-consultant-v3-closure-preview]
+verify_jwt = true
+
 [functions.widget-config]
 verify_jwt = false
 

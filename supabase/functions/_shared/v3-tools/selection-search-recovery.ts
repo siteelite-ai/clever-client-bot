@@ -2,6 +2,7 @@ import type { Facet } from "./discover-category.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import {
   applyCriteriaGate,
+  filterProductsByExcludedCriteria,
   projectCriteriaFacetOptions,
 } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
@@ -61,6 +62,64 @@ export function filterSelectionRecoveryPool<T extends ProductRef>(
   if (required.length === 0) return [...products];
   const safe = new Set(applyCriteriaGate(products, required).passed_ids);
   return products.filter((product) => safe.has(String(product.id)));
+}
+
+/**
+ * Count only source-proven cards when deciding whether a nonempty upstream
+ * boolean intersection has actually met the customer's selection request.
+ * Compact catalog rows may omit a true boolean facet, so the relaxed lookup
+ * is permitted, but neither a conflicting facet nor an unknown feature can
+ * make a card eligible. Customer exclusions and budget remain monotonic.
+ */
+export function sourceProvenSelectionPool<T extends ProductRef>(
+  products: T[],
+  mandatoryCriteria: Criterion[],
+  budgetCap: number | null,
+  excludedCriteria: Criterion[] = [],
+): T[] {
+  const withinBudget = products.filter((product) =>
+    budgetCap === null ||
+    (Number.isFinite(product.price) && product.price > 0 &&
+      product.price <= budgetCap)
+  );
+  const notExcluded = filterProductsByExcludedCriteria(
+    withinBudget,
+    excludedCriteria,
+  );
+  const passed = new Set(
+    applyCriteriaGate(notExcluded, mandatoryCriteria).passed_ids,
+  );
+  return notExcluded.filter((product) => passed.has(String(product.id)));
+}
+
+/** A recovered pool supplements, rather than displaces, distinct proven
+ * cards from the initial search. No unproven result enters this union. */
+export function mergeSourceProvenSelectionPools<T extends ProductRef>(
+  original: T[],
+  recovered: T[],
+): T[] {
+  const seen = new Set<string>();
+  return [...original, ...recovered].filter((product) => {
+    const id = String(product.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/** Trigger a bounded category/filter recovery even if the first HTTP result
+ * is nonempty, but only for a live affirmative boolean whose source-proven
+ * cards remain below the explicit result-cardinality minimum. */
+export function isRecoverableSparseBooleanProofShortfall(
+  args: Record<string, unknown>,
+  facets: Facet[],
+  sourceProvenCount: number,
+  minimumResults: number,
+): boolean {
+  if (args.mode !== "by_filter") return false;
+  const minimum = Math.max(1, Math.floor(Number(minimumResults) || 1));
+  if (sourceProvenCount >= minimum) return false;
+  return dropAffirmativeBooleanFilters(args, facets).removed.length > 0;
 }
 
 export interface SelectionSearchRecoveryPlanInput {
@@ -497,9 +556,29 @@ export function buildSelectionSearchRecoveryPlan(
   // requirements. When their intersection is empty, relax them before live
   // category scope or explicit user filters. This is data-agnostic: the exact
   // keys and values come from the current live taxonomy projection.
-  const classAdvisoryOptions = input.advisory_evidence_options ?? {};
+  // A model's preferred subtype may share a live facet with a customer-owned
+  // OR family. It did not shape that mandatory facet in the original search,
+  // so recovery must not "relax" one of the customer's sibling values.
+  const userOwnedFacetKeys = new Set(Object.keys(
+    projectCriteriaFacetOptions(
+      input.reasoning_criteria.filter((criterion) =>
+        criterion.evidence === "user_explicit"
+      ),
+      input.facets,
+    ).options,
+  ));
+  const safeAdvisoryOptions = Object.fromEntries(
+    Object.entries(input.advisory_options ?? {}).filter(([key]) =>
+      !userOwnedFacetKeys.has(key)
+    ),
+  );
+  const classAdvisoryOptions = Object.fromEntries(
+    Object.entries(input.advisory_evidence_options ?? {}).filter(([key]) =>
+      !userOwnedFacetKeys.has(key)
+    ),
+  );
   const sparseSuitabilityOptions = Object.fromEntries(
-    Object.entries(input.advisory_options ?? {}).flatMap(([key, values]) => {
+    Object.entries(safeAdvisoryOptions).flatMap(([key, values]) => {
       const classValues = new Set(
         (classAdvisoryOptions[key] ?? []).map(normalizeFacetValue),
       );
@@ -513,7 +592,7 @@ export function buildSelectionSearchRecoveryPlan(
     Object.keys(sparseSuitabilityOptions).length > 0;
   const advisoryFallback = dropModelAdvisoryFacetOptions(
     original,
-    preservesClassFilter ? sparseSuitabilityOptions : input.advisory_options,
+    preservesClassFilter ? sparseSuitabilityOptions : safeAdvisoryOptions,
   );
   if (advisoryFallback.removed.length > 0) {
     // A model-owned option may be removed from the upstream request only to

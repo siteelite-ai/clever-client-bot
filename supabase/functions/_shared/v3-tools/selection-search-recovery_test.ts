@@ -11,11 +11,14 @@ import {
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
+  isRecoverableSparseBooleanProofShortfall,
+  mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
   shouldAppendCatalogEmpty,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
+  sourceProvenSelectionPool,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -155,6 +158,191 @@ Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
       { ok: true, total: 1, results_count: 1 },
       3,
       undefined,
+    ),
+    false,
+  );
+});
+
+Deno.test("a nonempty acoustic-only boolean result cannot block source-proven recovery", () => {
+  const motion = {
+    key: "С датчиком движения",
+    op: "eq" as const,
+    value: "да",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  };
+  const household = {
+    key: "Вид светильника",
+    op: "eq" as const,
+    value: "Бытовые светильники накладные",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  };
+  const raw = [{
+    id: "iek-acoustic",
+    pagetitle: "Светильник LED ДПО с акустическим датчиком",
+    vendor: null,
+    price: 2900,
+    stock: "in_stock" as const,
+    short_traits: [
+      "Вид светильника: Бытовые светильники накладные",
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Оптико-акустический датчик реагирует на звук.",
+  }];
+  const gauss = {
+    id: "gauss-hall",
+    pagetitle: "Светильник Gauss HALL с микроволновым сенсором",
+    vendor: "Gauss",
+    price: 3878,
+    stock: "in_stock" as const,
+    short_traits: ["Вид светильника: Бытовые светильники накладные"],
+    description_excerpt:
+      "Микроволновый датчик реагирует на движение в помещении.",
+  };
+  const args = {
+    mode: "by_filter",
+    options: { kind: [household.value], sensor: ["да"] },
+    max_price: 4000,
+  };
+  const live = [{
+    key: "kind",
+    caption: "Вид светильника",
+    type: "string",
+    unit: null,
+    values: [
+      { value: household.value },
+      { value: "Бытовые светильники подвесные" },
+    ],
+  }, {
+    key: "sensor",
+    caption: motion.key,
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }],
+  }];
+  const criteria = [household, {
+    ...household,
+    value: "Бытовые светильники подвесные",
+  }, motion];
+  const initial = sourceProvenSelectionPool(raw, criteria, 4000);
+  assertEquals(initial, []);
+  assertEquals(
+    isRecoverableSparseBooleanProofShortfall(
+      args,
+      live,
+      initial.length,
+      2,
+    ),
+    true,
+  );
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: args,
+    facets: live,
+    leaf_categories: ["Светильники"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+    advisory_options: { kind: [household.value] },
+    advisory_evidence_options: { kind: [household.value] },
+  });
+  assertEquals(
+    plan.some(({ kind }) => kind === "relax_model_advisory_facets"),
+    false,
+  );
+  const booleanAttempt = plan.find(({ kind }) =>
+    kind === "preserve_scope_verify_sparse_boolean_as_evidence"
+  );
+  if (!booleanAttempt) throw new Error("expected boolean recovery");
+  assertEquals(booleanAttempt.args.options, { kind: [household.value] });
+  const proofSafe = filterSelectionRecoveryPool(
+    [gauss, ...raw],
+    booleanAttempt,
+  );
+  assertEquals(proofSafe.map(({ id }) => id), ["gauss-hall"]);
+  const recovered = sourceProvenSelectionPool(proofSafe, criteria, 4000);
+  assertEquals(
+    mergeSourceProvenSelectionPools(initial, recovered).map(({ id }) => id),
+    [
+      "gauss-hall",
+    ],
+  );
+  assertEquals(sourceProvenSelectionPool(raw, criteria, 4000), []);
+});
+
+Deno.test("generic sparse boolean recovery preserves other customer axes and honest zero", () => {
+  const criteria = [{
+    key: "С защитой от перегрузки",
+    op: "eq" as const,
+    value: "да",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }, {
+    key: "Тип оборудования",
+    op: "eq" as const,
+    value: "Бытовой ИБП",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const live = [{
+    key: "overload",
+    caption: criteria[0].key,
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }, { value: "нет" }],
+  }, {
+    key: "type",
+    caption: criteria[1].key,
+    type: "string",
+    unit: null,
+    values: [{ value: "Бытовой ИБП" }],
+  }];
+  const args = {
+    mode: "by_filter",
+    options: { overload: ["да"], type: ["Бытовой ИБП"] },
+  };
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: args,
+    facets: live,
+    leaf_categories: ["ИБП"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+  });
+  const fallback = plan.find(({ kind }) =>
+    kind === "preserve_scope_verify_sparse_boolean_as_evidence"
+  );
+  if (!fallback) throw new Error("expected generic boolean recovery");
+  assertEquals(fallback.args.options, { type: ["Бытовой ИБП"] });
+  const wrongType = {
+    id: "industrial",
+    pagetitle: "ИБП с защитой от перегрузки",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock" as const,
+    short_traits: [
+      "С защитой от перегрузки: да",
+      "Тип оборудования: Промышленный ИБП",
+    ],
+  };
+  const unproven = {
+    ...wrongType,
+    id: "unknown",
+    short_traits: ["Тип оборудования: Бытовой ИБП"],
+    pagetitle: "ИБП без указания защиты",
+  };
+  assertEquals(
+    sourceProvenSelectionPool(
+      filterSelectionRecoveryPool([wrongType, unproven], fallback),
+      criteria,
+      null,
+    ),
+    [],
+  );
+  assertEquals(
+    isRecoverableSparseBooleanProofShortfall(
+      { mode: "by_filter", options: { overload: ["нет"] } },
+      live,
+      0,
+      2,
     ),
     false,
   );

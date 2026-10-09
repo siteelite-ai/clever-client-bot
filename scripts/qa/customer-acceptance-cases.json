@@ -59,6 +59,10 @@
           "expect": {
             "min_products": 1,
             "require_product_title": ["Gauss", "HALL", "сенсор"],
+            "require_every_product_page": {
+              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
+              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+            },
             "forbid_product_title": ["для ЖКХ"],
             "forbid_text": ["свежих карточек", "внутренняя механика", "search_catalog", "discover_category", "render_products"]
           }
@@ -202,7 +206,8 @@
             "min_text_before_products_chars": 120,
             "require_text_groups": [
               ["Gallant", "Галант", "серия"],
-              ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн", "надёж", "безопас", "заземл", "шторк", "техническ"]
+              ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн", "надёж", "безопас", "заземл", "шторк", "техническ"],
+              ["выключател"]
             ],
             "forbid_text": ["свежих карточек", "снята с производства", "не представлена", "Schneider Electric", "Не нашёл подходящие товары", "開", "ось ", "це ", "знайшов", "вимикач", "якість", "ціна", "наявність", "search_catalog", "discover_category", "render_products"]
           }
@@ -213,6 +218,10 @@
             "conversation_boundary": "continuation",
             "min_products": 1,
             "require_every_product_title_any": ["Gallant", "Галант"],
+            "require_product_groups_or_gap": [
+              { "title_groups": [["розет"]], "gap_text_groups": [["розет"], ["не наш", "нет в каталоге", "не подтвержд", "не могу подтвердить"]] },
+              { "title_groups": [["выключател"]], "gap_text_groups": [["выключател"], ["не наш", "нет в каталоге", "не подтвержд", "не могу подтвердить"]] }
+            ],
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
         }
@@ -339,6 +348,12 @@
             "conversation_boundary": "continuation",
             "min_products": 1,
             "require_product_title": ["LDPE", "Cat.5E", "кат.5E"],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Материал проводника", "exact_any": ["медь", "медный", "Cu"] },
+                { "name": "Оболочка", "exact_any": ["PE", "LDPE", "полиэтилен"] }
+              ]
+            },
             "forbid_product_title": ["CCA", "PVC", "LSZH"],
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
@@ -365,6 +380,10 @@
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
+              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+            },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
@@ -387,6 +406,10 @@
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
+              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+            },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
@@ -408,6 +431,9 @@
             "min_products": 3,
             "max_products": 5,
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+            },
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
@@ -459,6 +485,9 @@
             "min_products": 3,
             "max_products": 5,
             "require_every_product_title_any": ["прожектор"],
+            "require_every_product_page": {
+              "facets": [{ "name": "Световой поток, Лм", "min_numeric": 1800 }]
+            },
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -543,6 +572,38 @@
       ]
     },
     {
+      "id": "customer-new-gallant-catalog-section-chip",
+      "title": "Выбор раздела после широкого ассортимента сохраняет серию и категорию",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "покажи ассортимент Gallant на сайте",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["уточните", "раздел", "розет", "выключател"]
+          }
+        },
+        {
+          "message": "Розетки",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"]
+            ],
+            "require_selection_criteria_groups": [
+              ["Gallant", "Галант"],
+              ["розет"]
+            ],
+            "require_selection_criteria_evidence": true,
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
       "id": "customer-new-black-double-sockets",
       "title": "Чёрные двойные электрические розетки сохраняют оба признака",
       "repeat": 3,
@@ -603,6 +664,10 @@
         {
           "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
           "expect": {
+            "require_products_or_text_groups": {
+              "min_products": 1,
+              "text_groups": [["не нашёл", "не нашел", "не найден", "не могу подобрать", "не могу подтвердить наличие"], ["ИБП", "UPS"], ["каталог", "карточк"]]
+            },
             "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
             "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
             "require_text_groups": [

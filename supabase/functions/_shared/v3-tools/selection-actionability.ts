@@ -14,6 +14,7 @@ import {
   type SearchFacet,
 } from "./search-filter-guard.ts";
 import { projectReasoningRangeCriteria } from "./criteria-reasoning.ts";
+import type { Criterion } from "./criteria-gate.ts";
 import { extractCustomerApplicationContexts } from "./selection-contract.ts";
 
 /**
@@ -698,6 +699,26 @@ export interface ResolvedDerivedSelectionReasoning {
   >;
 }
 
+/**
+ * Convert every customer-grounded live classification, including all sibling
+ * values in an OR family, into the immutable hard contract. The index uses
+ * this same result for search options, recovery state and final-card checks.
+ */
+export function compileCustomerClassificationCriteria(
+  declaration: Pick<
+    ResolvedDerivedSelectionReasoning,
+    "customerGroundedCompatible"
+  >,
+): Criterion[] {
+  return declaration.customerGroundedCompatible.map(({ key, value }) => ({
+    key,
+    op: "eq",
+    value,
+    level: "A",
+    evidence: "user_explicit",
+  }));
+}
+
 function visibleFacetText(value: string): string {
   return String(value ?? "")
     .replace(/[\u0000-\u001f\u007f]+/gu, " ")
@@ -941,7 +962,7 @@ export function resolveDerivedSelectionReasoning(
       choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim(),
     );
   }
-  const providerRefinedIds = new Set<string>();
+  const providerPreferredIds = new Set<string>();
   for (const choice of resolveIds(args.compatible_classifications, 6)) {
     const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(
       /\s+/gu,
@@ -952,20 +973,11 @@ export function resolveDerivedSelectionReasoning(
         .trim() === facetIdentity
     );
     if (groundedFamily.length > 1) {
-      // A model-selected subtype may refine, but never replace, a customer-
-      // owned family. The selected value must already be a member of that
-      // family; it remains model-owned so later importance validation still
-      // decides whether it is a hard requirement or retrieval guidance.
+      // A model-selected subtype is only a preference within the customer's
+      // OR family. Removing the other siblings here would erase the explicit
+      // use class before search, recovery and the final card gate.
       if (!groundedFamily.some(({ id }) => id === choice.id)) continue;
-      for (let index = compatibleChoices.length - 1; index >= 0; index--) {
-        const candidateFacet = compatibleChoices[index].facet
-          .toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim();
-        if (candidateFacet === facetIdentity) {
-          compatibleChoices.splice(index, 1);
-        }
-      }
-      compatibleChoices.push(choice);
-      providerRefinedIds.add(choice.id);
+      providerPreferredIds.add(choice.id);
       continue;
     }
     if (seenCompatibleFacets.has(facetIdentity)) continue;
@@ -973,9 +985,7 @@ export function resolveDerivedSelectionReasoning(
     compatibleChoices.push(choice);
   }
   const groundedIds = new Set(
-    groundedChoices
-      .filter(({ id }) => !providerRefinedIds.has(id))
-      .map(({ id }) => id),
+    groundedChoices.map(({ id }) => id),
   );
   const compatibleCountsByFacet = new Map<string, number>();
   for (const choice of compatibleChoices) {
@@ -1272,14 +1282,24 @@ export function resolveDerivedSelectionReasoning(
   }
   if (familyCompatibleChoices.length > 0) {
     sentences.push(
-      `По классу ${
+      `По вашему обязательному классу допускаю одно из: ${
         familyCompatibleChoices.map(({ facet, value }) =>
-          `«${visibleFacetText(facet)}» в первую очередь проверяю «${
-            visibleFacetText(value)
-          }»`
+          `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
         ).join("; ")
-      }; другие значения этого класса исключаю только при доказанной несовместимости.`,
+      }; значения вне этого класса исключаю.`,
     );
+    const preferred = familyCompatibleChoices.filter(({ id }) =>
+      providerPreferredIds.has(id)
+    );
+    if (preferred.length > 0) {
+      sentences.push(
+        `Внутри вашего класса в первую очередь проверяю ${
+          preferred.map(({ value }) => `«${visibleFacetText(value)}»`).join(
+            ", ",
+          )
+        } как предпочтение, не исключая другие допустимые варианты.`,
+      );
+    }
   }
   if (groundedExcludedChoices.length > 0) {
     sentences.push(

@@ -1,7 +1,19 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  applyCriteriaGate,
+  type Criterion,
+  extendSelectionCriteriaPlan,
+  overlayMandatoryFacetOptions,
+  projectAdvisoryCriteriaFacetOptions,
+  projectCriteriaFacetOptions,
+  relaxModelDerivedSelectionCriteriaPlan,
+  resolveTerminalSelectionCriteria,
+} from "./criteria-gate.ts";
+import type { ProductRef } from "./types.ts";
+import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  compileCustomerClassificationCriteria,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -1273,9 +1285,9 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   ]);
   assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
   assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
-  assertEquals(resolved?.text.includes("в первую очередь проверяю"), true);
+  assertEquals(resolved?.text.includes("обязательному классу"), true);
   assertEquals(
-    resolved?.text.includes("исключаю только при доказанной несовместимости"),
+    resolved?.text.includes("значения вне этого класса исключаю"),
     true,
   );
   assertEquals(
@@ -1308,12 +1320,16 @@ Deno.test("a model may refine a customer-owned family only to one member of that
     liveFacets,
     "Нужны бытовые изделия",
   );
-  assertEquals(refined?.compatible, [{
-    key: "Класс применения",
-    value: "бытовые изделия подвесные",
-  }]);
-  assertEquals(refined?.customerGroundedCompatible, []);
-  assertEquals(refined?.familyCompatibleFacetKeys, []);
+  assertEquals(refined?.compatible, [
+    { key: "Класс применения", value: "бытовые изделия накладные" },
+    { key: "Класс применения", value: "бытовые изделия подвесные" },
+  ]);
+  assertEquals(refined?.customerGroundedCompatible, refined?.compatible);
+  assertEquals(refined?.familyCompatibleFacetKeys, ["класс применения"]);
+  assertEquals(
+    refined?.text.includes("как предпочтение, не исключая другие"),
+    true,
+  );
 
   const rejectedSibling = resolveDerivedSelectionReasoning(
     {
@@ -1327,6 +1343,163 @@ Deno.test("a model may refine a customer-owned family only to one member of that
   assertEquals(rejectedSibling?.compatible, [
     { key: "Класс применения", value: "бытовые изделия накладные" },
     { key: "Класс применения", value: "бытовые изделия подвесные" },
+  ]);
+});
+
+Deno.test("customer household light class remains mandatory OR despite a model subtype", () => {
+  const liveFacets = [{
+    key: "luminaire_use",
+    caption: "Вид светильника",
+    type: "string",
+    values: [
+      { value: "Бытовые светильники накладные" },
+      { value: "Бытовые светильники подвесные" },
+      { value: "Светильники для ЖКХ" },
+      { value: "Промышленные светильники" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для бытового помещения сначала проверю накладной светильник с датчиком движения.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    liveFacets,
+    "Нужен бытовой светильник с датчиком движения",
+    "Светильники",
+  );
+  const family = [
+    { key: "Вид светильника", value: "Бытовые светильники накладные" },
+    { key: "Вид светильника", value: "Бытовые светильники подвесные" },
+  ];
+  assertEquals(resolved?.customerGroundedCompatible, family);
+  assertEquals(resolved?.compatible, family);
+  assertEquals(resolved?.familyCompatibleFacetKeys, ["вид светильника"]);
+});
+
+Deno.test("customer class OR survives search, sparse recovery and final cards", () => {
+  const facets = [{
+    key: "luminaire_use",
+    caption: "Вид светильника",
+    type: "string",
+    unit: null,
+    values: [
+      { value: "Бытовые светильники накладные" },
+      { value: "Бытовые светильники подвесные" },
+      { value: "Светильники для ЖКХ" },
+    ],
+  }];
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для дома сначала проверю накладные модели; датчик движения обязателен.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен бытовой светильник с датчиком движения",
+    "Светильники",
+  );
+  if (!declaration) throw new Error("expected a grounded live declaration");
+  const customerClass = compileCustomerClassificationCriteria(declaration);
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const mandatory = [...customerClass, motion];
+  const projected = projectCriteriaFacetOptions(mandatory, facets);
+  assertEquals(projected.options, {
+    luminaire_use: [
+      "Бытовые светильники накладные",
+      "Бытовые светильники подвесные",
+    ],
+  });
+  const subtypeAdvice: Criterion = {
+    key: "Вид светильника",
+    op: "eq",
+    value: "Бытовые светильники накладные",
+    level: "B",
+    evidence: "model_assumption",
+  };
+  const advised = projectAdvisoryCriteriaFacetOptions([subtypeAdvice], facets);
+  assertEquals(
+    overlayMandatoryFacetOptions(projected.options, advised.options),
+    projected.options,
+  );
+
+  const modelDetail: Criterion = {
+    key: "Монтаж",
+    op: "eq",
+    value: "накладной",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const plan = extendSelectionCriteriaPlan(
+    null,
+    [...mandatory, modelDetail],
+    "reasoning_projection",
+  );
+  const recovered = relaxModelDerivedSelectionCriteriaPlan(
+    plan,
+    [modelDetail],
+    customerClass,
+  );
+  assertEquals(recovered.relaxed, [modelDetail]);
+  assertEquals(recovered.plan?.mandatory_criteria, mandatory);
+  const terminal = resolveTerminalSelectionCriteria(
+    [],
+    [],
+    [...(recovered.plan?.mandatory_criteria ?? [])],
+  );
+  const candidate = (
+    id: string,
+    use: string,
+    response: string,
+    indexedSensor = true,
+  ): ProductRef => ({
+    id,
+    pagetitle: indexedSensor
+      ? `Светильник ${id}`
+      : `Светильник ${id} с микроволновым сенсором`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: [
+      `Вид светильника: ${use}`,
+      ...(indexedSensor ? ["С датчиком движения: да"] : []),
+    ],
+    description_excerpt: response,
+  });
+  const products = [
+    candidate(
+      "gauss-hall",
+      "Бытовые светильники накладные",
+      "Микроволновый датчик реагирует на движение.",
+      false,
+    ),
+    candidate(
+      "household-pendant",
+      "Бытовые светильники подвесные",
+      "Сенсор реагирует на движение.",
+    ),
+    candidate(
+      "iek-acoustic",
+      "Бытовые светильники накладные",
+      "Оптико-акустический датчик реагирует на звук.",
+    ),
+    candidate(
+      "plato-jkh",
+      "Светильники для ЖКХ",
+      "Датчик реагирует на движение.",
+    ),
+  ];
+  assertEquals(applyCriteriaGate(products, terminal).passed_ids, [
+    "gauss-hall",
+    "household-pendant",
   ]);
 });
 

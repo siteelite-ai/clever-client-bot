@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-553f288944a37b22';
+  var WIDGET_VERSION = 'widget-85698adad59601d5';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -1269,6 +1269,13 @@
     return div.innerHTML;
   }
 
+  // escapeHtml() protects text nodes, but quotes remain literal there. A
+  // markdown URL is later interpolated into a quoted href attribute, so its
+  // quotes must be escaped separately before assigning the formatted HTML.
+  function escapeQuotedAttribute(text) {
+    return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   // Strip repeated greetings from assistant responses
   function stripGreeting(text) {
     return text.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '').trim();
@@ -1283,7 +1290,7 @@
     // Handle links [text](url) - validate URL protocol (http, https, tel, mailto, viber)
     result = result.replace(/\[([^\]]+)\]\(((https?:\/\/|tel:|mailto:|viber:\/\/)[^)]+)\)/g, function(match, text, url) {
       var isExternal = url.startsWith('http');
-      return '<a href="' + url + '"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
+      return '<a href="' + escapeQuotedAttribute(url) + '"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
     });
     
     // Handle bold **text**

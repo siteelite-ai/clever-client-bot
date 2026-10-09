@@ -104,16 +104,20 @@ import {
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
+  isRecoverableSparseBooleanProofShortfall,
+  mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
   type SelectionSearchRecoveryAttempt,
   shouldAppendCatalogEmpty,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
+  sourceProvenSelectionPool,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  compileCustomerClassificationCriteria,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -166,7 +170,6 @@ import {
 } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
-  buildPairedCompatibilityReasoning,
   commonCompatibilityReference,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
@@ -189,10 +192,25 @@ import {
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
+  collectVerifiedBroadAssortmentProducts,
   extractBroadAssortmentScope,
   isBroadAssortmentRequest,
+  rehydrateVerifiedBroadAssortmentProducts,
+  resolveBroadAssortmentChoiceAfterReadRace,
   resolvePendingBroadAssortmentScope,
+  shouldResetUnverifiedBroadAssortmentTask,
+  type VerifiedBroadAssortmentChoice,
 } from "../_shared/v3-tools/broad-assortment.ts";
+import {
+  admitDirectSelectionRoute,
+  customerOwnedJargonModifiers,
+  directProductProvesLiteralWords,
+  enforceTerminalPairedFit,
+  isPureNamedSeriesBrowse,
+  isPureRecentPriceFollowup,
+  shouldDeferQueuedLexicalSearch,
+  terminalPairedFitDecision,
+} from "./selection-jargon-policy.ts";
 import {
   dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
@@ -278,6 +296,7 @@ import {
 } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
+  agentStepTimeoutDecision,
   boundedAgentStepTimeout,
   buildInquiryKnowledgeSynthesisMessages,
   canFinalizeTimedOutAgentStep,
@@ -289,7 +308,6 @@ import {
   isServerCompiledInitialDiscoveryCall,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
-  requiresCatalogPlanningBudget,
   resolveTerminalLexicalRecoverySource,
   shouldAllowCorrectiveDiscovery,
   shouldAttemptTerminalLexicalRecovery,
@@ -4169,12 +4187,30 @@ async function selectVerifiedOrdinaryReplacement(
     };
   }
 
-  const axes = selectExplicitAnchorAxes(
+  const axisLimit = equivalentOnly ? 6 : 3;
+  const allExplicitAxes = selectExplicitAnchorAxes(
     anchor,
     discovery.facets,
     userMessage,
-    equivalentOnly ? 6 : 3,
+    Number.MAX_SAFE_INTEGER,
   );
+  if (allExplicitAxes.length > axisLimit) {
+    steps.push({
+      step: "v3_replacement_direct_axes_overflow_delegated",
+      ms: Date.now() - t0,
+      meta: {
+        explicit_axes: allExplicitAxes.length,
+        direct_limit: axisLimit,
+      },
+    });
+    return {
+      handled: false,
+      products: [],
+      outcome: "query_inconsistent",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
+  }
+  const axes = allExplicitAxes;
   if (axes.length < 2) {
     send({
       type: "tool_event",
@@ -4380,6 +4416,43 @@ async function selectVerifiedOrdinaryReplacement(
     }
   }
 
+  if (nearMatch) {
+    // A split-axis intersection can recommend a card that misses one hard
+    // customer condition. Let the reasoning/criteria route explain the gap.
+    steps.push({
+      step: "v3_replacement_direct_partial_axes_delegated",
+      ms: Date.now() - t0,
+      meta: { explicit_axes: axes.length },
+    });
+    return {
+      handled: false,
+      products: [],
+      outcome: "query_inconsistent",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
+  }
+  // Mandatory portable codes remain customer requirements; only source
+  // identity codes may be omitted from a cross-brand analogue.
+  const identityWords = [anchor.vendor, ...sourceModels].filter(
+    (value): value is string => typeof value === "string" && Boolean(value),
+  );
+  const lexicallyProven = selected.filter((product) =>
+    directProductProvesLiteralWords(sourceDescription, product, identityWords)
+  );
+  if (lexicallyProven.length !== selected.length) {
+    steps.push({
+      step: "v3_replacement_direct_literal_unproven_delegated",
+      ms: Date.now() - t0,
+      meta: { selected: selected.length, proven: lexicallyProven.length },
+    });
+    return {
+      handled: false,
+      products: [],
+      outcome: "query_inconsistent",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
+  }
+
   const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(
     ", ",
   );
@@ -4523,7 +4596,10 @@ async function selectVerifiedExactCompoundProducts(
       break;
     }
   }
-  const verified = selectExactCompoundMarkedProducts(candidates, request);
+  const verified = selectExactCompoundMarkedProducts(candidates, request)
+    .filter((product) =>
+      directProductProvesLiteralWords(request.query, product)
+    );
   const elapsed = Date.now() - started;
 
   send({
@@ -4747,6 +4823,9 @@ async function selectVerifiedSemanticCompoundProducts(
       titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
     )
     : [];
+  verified = verified.filter((product) =>
+    directProductProvesLiteralWords(sourceQuery, product)
+  );
   const priceIntent = detectPriceDirection(userMessage);
   if (priceIntent?.kind === "superlative") {
     verified = [...verified].sort((left, right) =>
@@ -5089,6 +5168,260 @@ async function answerBroadAssortmentRequest(
       duration_ms: Date.now() - started,
     },
   });
+}
+
+async function loadVerifiedBroadAssortmentChoice(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  slots: Record<string, unknown>,
+  userMessage: string,
+): Promise<{
+  choice: VerifiedBroadAssortmentChoice | null;
+  verifiedSlot: Record<string, unknown> | null;
+  matchedIssuedOption: boolean;
+  lookupFailed: boolean;
+}> {
+  const pending = slots.pending_clarification;
+  if (
+    !pending || typeof pending !== "object" || Array.isArray(pending) ||
+    (pending as Record<string, unknown>).facet_key !== "catalog_section"
+  ) {
+    return {
+      choice: null,
+      verifiedSlot: null,
+      matchedIssuedOption: false,
+      lookupFailed: false,
+    };
+  }
+  try {
+    // Only the immediately previous completed turn may authorise a choice.
+    // [DONE] follows a durable update; a short read race is retried centrally.
+    return await resolveBroadAssortmentChoiceAfterReadRace(
+      slots,
+      userMessage,
+      sessionId,
+      async () => {
+        let { data, error } = await supabase.from("chat_request_logs")
+          .select("session_id,user_query,error,response_events")
+          .eq("session_id", sessionId)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!error && !data) {
+          // A self-contained new task rotates the widget session inside its
+          // response, but the durable log keeps the original transport session
+          // for idempotent replay. The boundary event is the only valid link.
+          const rotated = await supabase.from("chat_request_logs")
+            .select("session_id,user_query,error,response_events")
+            .eq("pipeline", "v3")
+            .neq("id", currentLogId)
+            .contains("response_events", [{
+              type: "conversation_boundary",
+              mode: "new_task",
+              session_id: sessionId,
+            }])
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          data = rotated.data;
+          error = rotated.error;
+        }
+        if (error) {
+          console.error(
+            "[v3] broad assortment clarification lookup failed:",
+            error.message,
+          );
+        }
+        return { row: data, error: Boolean(error) };
+      },
+    );
+  } catch (error) {
+    console.error(
+      "[v3] broad assortment clarification lookup exception:",
+      error,
+    );
+    return {
+      choice: null,
+      verifiedSlot: null,
+      matchedIssuedOption: false,
+      lookupFailed: true,
+    };
+  }
+}
+
+/**
+ * Once a customer chooses a live catalog leaf, run a bounded two-axis lookup
+ * instead of asking the model to reconstruct the scope from conversation
+ * prose. Each recovery query and every rendered card must prove both axes.
+ */
+async function answerVerifiedBroadAssortmentChoice(
+  choice: VerifiedBroadAssortmentChoice,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const deadlineAt = started + 12_000;
+  const deadlineController = new AbortController();
+  const deadlineTimer = setTimeout(() => deadlineController.abort(), 12_000);
+  const guardedFetch: typeof fetch = (input, init) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, deadlineController.signal])
+        : deadlineController.signal,
+    });
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "start",
+    summary: "Проверяю выбранный раздел и серию в каталоге…",
+  });
+  let lookup: Awaited<
+    ReturnType<typeof collectVerifiedBroadAssortmentProducts<ProductFull>>
+  >;
+  try {
+    lookup = await collectVerifiedBroadAssortmentProducts(
+      choice,
+      ({ mode, page, category }) =>
+        executeSearchCatalog({
+          mode,
+          ...(mode === "by_query" ? { query: choice.entity } : {}),
+          ...(category ? { category } : {}),
+          min_price: 1,
+          per_page: 50,
+          page,
+        }, {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+          fetchImpl: guardedFetch,
+          timeoutMs: 2_500,
+        }, ctx.cache),
+      (ref) => ctx.cache.get(ref.id) ?? null,
+      () => Date.now() < deadlineAt,
+    );
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+  const qualified = lookup.products;
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: Date.now() - started,
+    summary: `Подтверждённых товаров: ${qualified.length}`,
+  });
+  if (qualified.length === 0) {
+    const answer = lookup.catalog_error
+      ? "Не удалось надёжно проверить товары в выбранном разделе: каталог ответил с ошибкой. Повторите запрос позже."
+      : lookup.coverage_incomplete
+      ? `Проверил только часть товаров серии «${choice.entity}» в разделе «${choice.leaf}», но не смог подтвердить карточки в этом окне. Это не означает, что товаров нет; уточните запрос или повторите поиск позже.`
+      : choice.exact
+      ? `Не удалось подтвердить доступные товары серии «${choice.entity}» именно в разделе «${choice.leaf}». Уточните тип товара или обратитесь к менеджеру.`
+      : `В разделе «${choice.leaf}» не удалось подтвердить товары серии «${choice.entity}» со всеми указанными дополнительными свойствами. Попробуйте уточнить запрос.`;
+    send({ type: "delta", content: answer });
+    steps.push({
+      step: lookup.catalog_error
+        ? "v3_broad_assortment_selection_catalog_error"
+        : "v3_broad_assortment_selection_empty",
+      ms: Date.now() - t0,
+      meta: {
+        entity: choice.entity,
+        leaf: choice.leaf,
+        exact: choice.exact,
+        completed_searches: lookup.completed_searches,
+        catalog_error: lookup.catalog_error,
+        coverage_incomplete: lookup.coverage_incomplete,
+        reported_total: lookup.reported_total,
+      },
+    });
+    return [];
+  }
+  // Recheck full cached records: a broad search or later recovery may have
+  // overwritten the cache, but never gets to weaken the selected leaf.
+  const finalProducts = rehydrateVerifiedBroadAssortmentProducts(
+    qualified,
+    ctx.cache,
+    choice,
+  );
+  const rendered = executeRenderProducts({
+    product_ids: finalProducts.map((product) => product.id),
+    total_available: finalProducts.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    send({
+      type: "delta",
+      content:
+        "Не удалось безопасно вывести подтверждённые товары. Повторите запрос позже.",
+    });
+    steps.push({
+      step: "v3_broad_assortment_selection_render_failed",
+      ms: Date.now() - t0,
+      meta: { error_code: rendered.error_code },
+    });
+    return [];
+  }
+  const plan = extendSelectionCriteriaPlan(null, [
+    {
+      key: "Серия",
+      op: "eq",
+      value: choice.entity,
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "Раздел каталога",
+      op: "eq",
+      value: choice.leaf,
+      level: "A",
+      evidence: "user_explicit",
+    },
+  ], "selection_target");
+  send({
+    type: "delta",
+    content: lookup.coverage_incomplete
+      ? `Показываю подтверждённые товары серии «${choice.entity}» в разделе «${choice.leaf}» из проверенной части каталога; полный ассортимент пока не подтверждён.`
+      : `Показываю подтверждённые товары серии «${choice.entity}» в разделе «${choice.leaf}».`,
+  });
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: finalProducts.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map(
+        ({ key, op, value, unit, exclusive, evidence }) => ({
+          key,
+          op,
+          value,
+          ...(unit ? { unit } : {}),
+          ...(exclusive ? { exclusive } : {}),
+          ...(evidence ? { evidence } : {}),
+        }),
+      ),
+    },
+  });
+  steps.push({
+    step: "v3_broad_assortment_selection_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      entity: choice.entity,
+      leaf: choice.leaf,
+      exact: choice.exact,
+      completed_searches: lookup.completed_searches,
+      catalog_error: lookup.catalog_error,
+      coverage_incomplete: lookup.coverage_incomplete,
+      reported_total: lookup.reported_total,
+      rendered: rendered.rendered_count,
+      duration_ms: Date.now() - started,
+    },
+  });
+  return finalProducts;
 }
 
 async function selectVerifiedOutdoorPoeProducts(
@@ -6784,48 +7117,55 @@ async function runExpertLoop(
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
       let knowledgeHitsThisStep = 0;
-      // Классификация фазы для выбора таймаута. Эвристика:
-      //  • step 0 — всегда intro (LLM ещё не видел tool_results).
-      //  • последний msg = tool_result И контекст «тяжёлый» (>15KB JSON) —
-      //    финальный рендеринг карточек поверх большой выдачи каталога.
-      //  • иначе — промежуточное решение о следующем туле.
+      if (
+        shouldDeferQueuedLexicalSearch(
+          selectionReasoningOnlyRequired,
+          queuedServerGroundedSearch?.name,
+        )
+      ) {
+        // Discovery can reveal a measured fit problem after the earlier
+        // lexical plan was queued. Let the consultant derive its criteria in
+        // visible prose first; any search it compiles supersedes that stale
+        // pre-derivation query. Lexical recovery remains available later.
+        steps.push({
+          step: "v3_pre_reasoning_lexical_search_deferred",
+          ms: now(),
+          meta: { query: queuedServerGroundedSearch?.args.query ?? null },
+        });
+        queuedServerGroundedSearch = null;
+      }
+      // Protocol progress determines whether this is still a required search
+      // plan. A large discovery payload alone must never turn a corrective
+      // search into final rendering with the shorter soft deadline.
       const lastMsg = messages[messages.length - 1];
       const lastIsToolResult = lastMsg?.role === "tool";
       const ctxBytes = JSON.stringify(messages).length;
-      const HEAVY_CTX_BYTES = 15_000;
       const derivedReasoningStep = selectionReasoningOnlyRequired &&
         Boolean(lastDiscover);
-      const catalogPlanningStep = requiresCatalogPlanningBudget({
+      const timeoutDecision = agentStepTimeoutDecision({
         intentMode,
         phase: agentPhase,
         catalogLookupCompleted,
         requiredReasoningPending: derivedReasoningStep,
+        stepIndex: step,
+        lastIsToolResult,
+        contextBytes: ctxBytes,
       });
-      let phase: LLMPhase;
-      let phaseTimeoutMs: number;
-      if (derivedReasoningStep) {
-        phase = "derived_reasoning";
-        phaseTimeoutMs = LLM_TIMEOUT_DERIVED_REASONING_MS;
-      } else if (catalogPlanningStep) {
-        phase = "catalog_planning";
-        phaseTimeoutMs = LLM_TIMEOUT_CATALOG_PLANNING_MS;
-      } else if (step === 0) {
-        phase = "intro";
-        phaseTimeoutMs = LLM_TIMEOUT_INTRO_MS;
-      } else if (lastIsToolResult && ctxBytes > HEAVY_CTX_BYTES) {
-        phase = "final_render";
-        phaseTimeoutMs = LLM_TIMEOUT_FINAL_RENDER_MS;
-      } else {
-        phase = "tool_decision";
-        phaseTimeoutMs = LLM_TIMEOUT_TOOL_DECISION_MS;
-      }
+      const phase: LLMPhase = timeoutDecision.phase;
+      let phaseTimeoutMs = {
+        intro: LLM_TIMEOUT_INTRO_MS,
+        tool_decision: LLM_TIMEOUT_TOOL_DECISION_MS,
+        catalog_planning: LLM_TIMEOUT_CATALOG_PLANNING_MS,
+        derived_reasoning: LLM_TIMEOUT_DERIVED_REASONING_MS,
+        final_render: LLM_TIMEOUT_FINAL_RENDER_MS,
+      }[phase];
 
       const boundedPhaseTimeoutMs = boundedAgentStepTimeout(
         phaseTimeoutMs,
         now(),
-        derivedReasoningStep
+        timeoutDecision.softDeadlineProfile === "derived_reasoning"
           ? DERIVED_REASONING_SOFT_DEADLINE_MS
-          : catalogPlanningStep
+          : timeoutDecision.softDeadlineProfile === "catalog_planning"
           ? CATALOG_PLANNING_SOFT_DEADLINE_MS
           : TURN_SOFT_DEADLINE_MS,
         MIN_AGENT_STEP_BUDGET_MS,
@@ -7314,10 +7654,10 @@ async function runExpertLoop(
               declaration.measurementScope,
             );
           const measuredReference = extractSingleMeasuredReference(userMessage);
-          const visibleDeclarationText =
-            pairedCompatibilityOwned && measuredReference
-              ? buildPairedCompatibilityReasoning(measuredReference)
-              : declaration.text;
+          // The consultant's own validated declaration is the visible proof.
+          // The live schema may create a fit obligation, but the server must
+          // not manufacture the missing second side of its reasoning.
+          const visibleDeclarationText = declaration.text;
           const measurementDeclarationEvidence =
             pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
@@ -7408,16 +7748,8 @@ async function runExpertLoop(
                     : "model_assumption" as const,
                 };
               });
-          const customerGroundedClassificationCriteria: Criterion[] =
-            declaration.customerGroundedCompatible
-              .filter(({ key }) => !isFamilyCompatibleFacet(key))
-              .map(({ key, value }) => ({
-                key,
-                op: "eq",
-                value,
-                level: "A",
-                evidence: "user_explicit",
-              }));
+          const customerGroundedClassificationCriteria =
+            compileCustomerClassificationCriteria(declaration);
           derivedExcludedClassificationCriteria =
             mergeMandatorySelectionCriteria([
               ...derivedExcludedClassificationCriteria,
@@ -7434,9 +7766,15 @@ async function runExpertLoop(
             visibleDeclarationText,
             customerGroundedClassificationCriteria,
           );
-          const declaredClassificationCriteria = classificationImportance
-            .criteria
-            .filter((criterion) => (criterion.level ?? "A") === "A");
+          const declaredClassificationCriteria =
+            mergeMandatorySelectionCriteria([
+              ...classificationImportance.criteria.filter((criterion) =>
+                (criterion.level ?? "A") === "A"
+              ),
+              // A model-owned subtype may guide retrieval, but it cannot erase
+              // the customer's sibling OR family at search/recovery/render.
+              ...customerGroundedClassificationCriteria,
+            ]);
           if (classificationImportance.demoted.length > 0) {
             steps.push({
               step: "v3_derived_classification_advice_demoted",
@@ -11714,6 +12052,55 @@ async function runExpertLoop(
               } as unknown as ToolResult;
             }
           }
+          // The live two-state facet graph obligates a fit check, but cannot
+          // itself supply the consultant's reasoning. Apply the same policy at
+          // the model's render boundary, not just terminal recovery: otherwise
+          // a direct render can bypass an absent or one-sided model proof.
+          const visiblePairReasoning =
+            `${firstAssistantText}\n${derivedSelectionReasoningEvidence}`
+              .trim();
+          const modelPairDecision = terminalPairedFitDecision(
+            extractSingleMeasuredReference(userMessage),
+            userMessage,
+            visiblePairReasoning,
+            lastDiscover?.facets ?? [],
+          );
+          if (modelPairDecision.state !== "not_applicable") {
+            const beforeModelPairGate = Array.isArray(tc.args.product_ids)
+              ? (tc.args.product_ids as unknown[]).map(String)
+              : [];
+            const currentProducts = beforeModelPairGate
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is ProductFull => Boolean(product));
+            const safeIds = enforceTerminalPairedFit(
+              currentProducts,
+              modelPairDecision,
+              visiblePairReasoning,
+            ).map((product) => product.id);
+            (tc.args as Record<string, unknown>).product_ids = safeIds;
+            steps.push({
+              step: "v3_final_model_paired_fit_gate",
+              ms: now(),
+              meta: {
+                proof_state: modelPairDecision.state,
+                reference: modelPairDecision.reference,
+                before: beforeModelPairGate.length,
+                after: safeIds.length,
+              },
+            });
+            if (safeIds.length === 0) {
+              gateShortCircuit ??= {
+                tool: "render_products",
+                ok: false,
+                error_code: modelPairDecision.state === "unproven"
+                  ? "compatibility_pair_reasoning_unproven"
+                  : "compatibility_pair_mismatch",
+                message: modelPairDecision.state === "unproven"
+                  ? "не подтверждена модельная проверка обеих сторон измерения"
+                  : "итоговые карточки не подтверждают совместимость до и после изменения",
+              } as unknown as ToolResult;
+            }
+          }
           // Criteria and compatibility recoveries above may replace or expand
           // the ID set after the early visibility guard has already run. The
           // final invariant therefore applies to every selection, not only to
@@ -12425,7 +12812,10 @@ async function runExpertLoop(
         // Individual branches may no longer replace each other or silently
         // choose a different relaxation order. Every recovered pool is still
         // revalidated by target, mandatory criteria, compatibility and budget
-        // before a card can be rendered.
+        // before a card can be rendered. A nonempty upstream boolean result
+        // can still have zero source-proven cards (for example a catalog flag
+        // contradicting its own description), so compare the final gate's
+        // eligible pool rather than the HTTP row count before declaring done.
         const advisoryRecoveryOptions = currentModelAdvisoryOptions(
           lastDiscover?.facets ?? [],
         );
@@ -12433,6 +12823,37 @@ async function runExpertLoop(
             result.tool === "search_catalog"
           ? result.results.length
           : 0;
+        const sourceProofCriteria = resolveTerminalSelectionCriteria(
+          [
+            ...(currentSelectionCriteriaPlan()?.mandatory_criteria ??
+              enforcedSearchCriteria),
+          ],
+          latestRenderCriteria,
+          userBackedSearchCriteria,
+          Boolean(namedSeriesToken),
+        );
+        const sourceProofBudget = extractBudgetCap(userMessage);
+        const sourceProofProducts = result.ok &&
+            result.tool === "search_catalog"
+          ? result.results
+          : [];
+        const sourceProvenOriginal = sourceProvenSelectionPool(
+          sourceProofProducts,
+          sourceProofCriteria,
+          sourceProofBudget,
+          derivedExcludedClassificationCriteria,
+        );
+        const sparseBooleanProofShortfall = tc.name === "search_catalog" &&
+          result.ok &&
+          result.tool === "search_catalog" &&
+          intentMode === "select" && !replacementIntent &&
+          !seriesTurnRequiresGrounding &&
+          isRecoverableSparseBooleanProofShortfall(
+            runArgs,
+            lastDiscover?.facets ?? [],
+            sourceProvenOriginal.length,
+            resultCardinality.minimum,
+          );
         const recoverableCardinalityShortfall = tc.name === "search_catalog" &&
           isRecoverableSelectionSearchShortfall(
             runArgs,
@@ -12457,7 +12878,8 @@ async function runExpertLoop(
               error_code?: string;
               message?: string;
             },
-          ) || recoverableCardinalityShortfall)
+          ) || recoverableCardinalityShortfall ||
+            sparseBooleanProofShortfall)
         ) {
           const reasoningEvidence =
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
@@ -12481,7 +12903,7 @@ async function runExpertLoop(
               ...criterion,
             }))
             : rangeCriteria;
-          const recoveryPlan = buildSelectionSearchRecoveryPlan({
+          const fullRecoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: runArgs,
             facets: lastDiscover?.facets ?? [],
             leaf_categories: lastDiscover?.leaf_categories.map((category) =>
@@ -12496,12 +12918,29 @@ async function runExpertLoop(
               lastDiscover?.facets ?? [],
             ),
           });
+          // A proof shortfall on an otherwise nonempty boolean result gets
+          // only the sparse-boolean attempt(s). This avoids a broad unrelated
+          // recovery ladder and caps the extra catalog work at two calls.
+          const recoveryPlan = sparseBooleanProofShortfall &&
+              originalSelectionResultCount > 0
+            ? fullRecoveryPlan.filter(({ kind }) =>
+              kind ===
+                "relax_model_advisory_facets_verify_sparse_boolean_as_evidence" ||
+              kind === "preserve_scope_verify_sparse_boolean_as_evidence"
+            ).slice(0, 2)
+            : fullRecoveryPlan;
           let bestRecovery: {
             attempt: SelectionSearchRecoveryAttempt;
             result: SearchCatalogOk & { tool: "search_catalog" };
             evidenceSafeResults: ProductRef[];
+            sourceProofCount: number;
           } | null = null;
           for (const attempt of recoveryPlan) {
+            if (
+              sparseBooleanProofShortfall && now() > TURN_TIMEOUT_MS - 2_000
+            ) {
+              break;
+            }
             const recovered = await runTool(
               "search_catalog",
               attempt.args,
@@ -12515,6 +12954,20 @@ async function runExpertLoop(
               recovered.ok && recovered.tool === "search_catalog"
                 ? filterSelectionRecoveryPool(recovered.results, attempt)
                 : [];
+            const sourceProvenRecovered = sparseBooleanProofShortfall
+              ? sourceProvenSelectionPool(
+                evidenceSafeResults,
+                sourceProofCriteria,
+                sourceProofBudget,
+                derivedExcludedClassificationCriteria,
+              )
+              : [];
+            const sourceProvenCombined = sparseBooleanProofShortfall
+              ? mergeSourceProvenSelectionPools(
+                sourceProvenOriginal,
+                sourceProvenRecovered,
+              )
+              : [];
             steps.push({
               step: "v3_selection_search_recovery_attempt",
               ms: now(),
@@ -12533,21 +12986,35 @@ async function runExpertLoop(
                   ? recovered.results.length
                   : 0,
                 evidence_safe: evidenceSafeResults.length,
+                source_proven: sparseBooleanProofShortfall
+                  ? sourceProvenCombined.length
+                  : null,
                 total: recoveredTotal,
               },
             });
             if (
               recovered.ok && recovered.tool === "search_catalog" &&
-              evidenceSafeResults.length >
-                (bestRecovery?.evidenceSafeResults.length ??
-                  originalSelectionResultCount)
+              (sparseBooleanProofShortfall
+                ? sourceProvenCombined.length >
+                  (bestRecovery?.sourceProofCount ??
+                    sourceProvenOriginal.length)
+                : evidenceSafeResults.length >
+                  (bestRecovery?.evidenceSafeResults.length ??
+                    originalSelectionResultCount))
             ) {
               bestRecovery = {
                 attempt,
                 result: recovered,
-                evidenceSafeResults,
+                evidenceSafeResults: sparseBooleanProofShortfall
+                  ? sourceProvenCombined
+                  : evidenceSafeResults,
+                sourceProofCount: sourceProvenCombined.length,
               };
-              if (evidenceSafeResults.length >= resultCardinality.minimum) {
+              if (
+                (sparseBooleanProofShortfall
+                  ? sourceProvenCombined.length
+                  : evidenceSafeResults.length) >= resultCardinality.minimum
+              ) {
                 break;
               }
             }
@@ -12596,6 +13063,19 @@ async function runExpertLoop(
                 meta: {
                   before: originalSelectionResultCount,
                   after: evidenceSafeResults.length,
+                  minimum: resultCardinality.minimum,
+                  relaxed_inputs: attempt.relaxed_inputs,
+                },
+              });
+            }
+            if (sparseBooleanProofShortfall) {
+              steps.push({
+                step: "v3_sparse_boolean_source_proof_recovery",
+                ms: now(),
+                meta: {
+                  raw_before: originalSelectionResultCount,
+                  source_proven_before: sourceProvenOriginal.length,
+                  source_proven_after: evidenceSafeResults.length,
                   minimum: resultCardinality.minimum,
                   relaxed_inputs: attempt.relaxed_inputs,
                 },
@@ -13806,6 +14286,15 @@ async function runExpertLoop(
                     : [String(criterion.value)]
                 ),
               ];
+              const independentLiteralModifiers = customerOwnedJargonModifiers(
+                directCustomerCriteria,
+                [
+                  lastDiscover.category.pagetitle,
+                  ...lastDiscover.leaf_categories.map(({ pagetitle }) =>
+                    pagetitle
+                  ),
+                ],
+              );
               const unresolvedCompactCode = unresolvedCompactCodeTokens(
                 // Scan tokens only in the customer's current reply. The
                 // controlled question is disambiguation context, not a source
@@ -13826,35 +14315,43 @@ async function runExpertLoop(
                 );
               if (unresolvedLexicalQualifier) {
                 declaredAliasQuery ??= unresolvedLexicalQualifier;
-                const callId = crypto.randomUUID();
-                queuedServerGroundedSearch = {
-                  id: callId,
-                  name: "jargon_recover_catalog",
-                  args: {
-                    query: unresolvedLexicalQualifier,
-                    literal_only: Boolean(unresolvedCompactCode),
-                    // An unresolved compact identifier is already an atomic
-                    // customer token. Adding the category title or scalar
-                    // criteria to full-text modifiers would turn the lookup
-                    // into an accidental AND query; those constraints remain
-                    // enforced by the normal category/criteria gates.
-                    modifiers: unresolvedCompactCode
-                      ? []
-                      : representedCustomerEvidence,
-                    category: lastDiscover.category.pagetitle,
-                    category_in: lastDiscover.leaf_categories.map((
-                      { pagetitle },
-                    ) => pagetitle),
-                    per_page: 50,
-                  },
-                };
+                const deferForReasoning = shouldDeferQueuedLexicalSearch(
+                  selectionReasoningOnlyRequired,
+                  "jargon_recover_catalog",
+                );
+                if (!deferForReasoning) {
+                  const callId = crypto.randomUUID();
+                  queuedServerGroundedSearch = {
+                    id: callId,
+                    name: "jargon_recover_catalog",
+                    args: {
+                      query: unresolvedLexicalQualifier,
+                      literal_only: Boolean(unresolvedCompactCode),
+                      // Taxonomy is already represented by category/category_in.
+                      // Only independent customer-owned equality values belong
+                      // to the lexical modifier axis (e.g. CORN plus E27).
+                      modifiers: unresolvedCompactCode
+                        ? []
+                        : independentLiteralModifiers,
+                      category: lastDiscover.category.pagetitle,
+                      category_in: lastDiscover.leaf_categories.map((
+                        { pagetitle },
+                      ) => pagetitle),
+                      per_page: 50,
+                    },
+                  };
+                }
                 steps.push({
-                  step: "v3_customer_lexical_qualifier_search_queued",
+                  step: deferForReasoning
+                    ? "v3_customer_lexical_qualifier_waiting_for_reasoning"
+                    : "v3_customer_lexical_qualifier_search_queued",
                   ms: now(),
                   meta: {
                     qualifier: unresolvedLexicalQualifier,
                     compact_code: unresolvedCompactCode,
                     represented_evidence: representedCustomerEvidence,
+                    literal_modifiers: independentLiteralModifiers,
+                    derived_reasoning_pending: deferForReasoning,
                   },
                 });
               } else if (
@@ -14900,6 +15397,40 @@ async function runExpertLoop(
         Boolean(namedSeriesToken),
       )
       : [];
+    const terminalPairedReference = extractSingleMeasuredReference(userMessage);
+    const terminalVisibleModelReasoning =
+      `${firstAssistantText}\n${derivedSelectionReasoningEvidence}`.trim();
+    const terminalPairDecision = terminalPairedFitDecision(
+      terminalPairedReference,
+      userMessage,
+      terminalVisibleModelReasoning,
+      terminalDiscover?.facets ?? [],
+    );
+    const terminalPairedSafeIds = (
+      ids: string[],
+      source: string,
+    ): string[] => {
+      if (terminalPairDecision.state === "not_applicable") return ids;
+      const products = ids.map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product));
+      const safe = enforceTerminalPairedFit(
+        products,
+        terminalPairDecision,
+        terminalVisibleModelReasoning,
+      ).map((product) => product.id);
+      steps.push({
+        step: "v3_terminal_paired_fit_gate",
+        ms: now(),
+        meta: {
+          source,
+          reference: terminalPairDecision.reference,
+          proof_state: terminalPairDecision.state,
+          before: ids.length,
+          after: safe.length,
+        },
+      });
+      return safe;
+    };
     const verifyTerminalSelectionTarget = (
       target: string,
       products: ProductRef[],
@@ -14967,17 +15498,15 @@ async function runExpertLoop(
           source.trim().toLocaleLowerCase("ru-RU");
       const modifiers = sourceIsAtomicCompactCode
         ? []
-        : terminalCriteria.flatMap((criterion) => {
-          if (
-            (criterion.level ?? "A") !== "A" || criterion.op !== "eq"
-          ) return [];
-          const values = Array.isArray(criterion.value)
-            ? criterion.value
-            : [criterion.value];
-          return values.map(String).map((value) => value.trim()).filter(
-            Boolean,
-          );
-        });
+        : customerOwnedJargonModifiers(
+          userBackedSearchCriteria,
+          [
+            terminalDiscover.category.pagetitle,
+            ...terminalDiscover.leaf_categories.map(({ pagetitle }) =>
+              pagetitle
+            ),
+          ],
+        );
       send({
         type: "tool_event",
         tool: "jargon_recover_catalog",
@@ -15067,6 +15596,7 @@ async function runExpertLoop(
           extractBudgetCap(userMessage),
         ).ids,
       );
+      safeIds = terminalPairedSafeIds(safeIds, "terminal_jargon_exact");
       safeIds = capResultCandidateIds(safeIds, resultCardinality);
       if (safeIds.length === 0) {
         return null;
@@ -15092,7 +15622,8 @@ async function runExpertLoop(
     ): Promise<boolean> => {
       if (
         !terminalDiscover || !terminalSelectionTarget ||
-        split.modifiers.length === 0
+        split.modifiers.length === 0 ||
+        terminalPairDecision.state !== "not_applicable"
       ) return false;
       const target = terminalSelectionTarget;
       const budgetCap = extractBudgetCap(userMessage);
@@ -15350,7 +15881,9 @@ async function runExpertLoop(
         ctx.cache,
         extractBudgetCap(userMessage),
       ).ids;
-      safeIds = finalizeTerminalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(
+        terminalPairedSafeIds(safeIds, "visible_reasoning_guided_search"),
+      );
       if (safeIds.length > 0) {
         announceResultCardinalityShortfall(
           safeIds.length,
@@ -15475,7 +16008,9 @@ async function runExpertLoop(
           }
         }
       }
-      safeIds = finalizeTerminalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(
+        terminalPairedSafeIds(safeIds, "terminal_compatibility_recovery"),
+      );
       if (
         safeIds.length > 0 &&
         compatibilityPool.ok &&
@@ -15764,6 +16299,10 @@ async function runExpertLoop(
         ctx.cache,
         extractBudgetCap(userMessage),
       ).ids;
+      safeIds = terminalPairedSafeIds(
+        safeIds,
+        "terminal_anchor_missing_recovery",
+      );
       safeIds = capResultCandidateIds(safeIds, resultCardinality);
       if (safeIds.length > 0) {
         const rendered = executeRenderProducts(
@@ -16018,7 +16557,9 @@ async function runExpertLoop(
             ctx.cache,
             extractBudgetCap(userMessage),
           ).ids;
-          safeIds = finalizeTerminalRenderIds(safeIds);
+          safeIds = finalizeTerminalRenderIds(
+            terminalPairedSafeIds(safeIds, "terminal_catalog_recheck"),
+          );
           send({
             type: "tool_event",
             tool: "search_catalog",
@@ -16144,11 +16685,14 @@ async function runExpertLoop(
           if (recoveredIds.length >= resultCardinality.target) break;
         }
         const budgetSafeIds = finalizeTerminalRenderIds(
-          filterProductIdsByBudgetCap(
-            recoveredIds,
-            ctx.cache,
-            extractBudgetCap(userMessage),
-          ).ids,
+          terminalPairedSafeIds(
+            filterProductIdsByBudgetCap(
+              recoveredIds,
+              ctx.cache,
+              extractBudgetCap(userMessage),
+            ).ids,
+            "terminal_category_recovery",
+          ),
         );
         send({
           type: "tool_event",
@@ -16332,7 +16876,9 @@ async function runExpertLoop(
         extractBudgetCap(userMessage),
       );
       safeIds = budgetGuard.ids;
-      safeIds = finalizeTerminalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(
+        terminalPairedSafeIds(safeIds, "terminal_final_render"),
+      );
       steps.push({
         step: "v3_terminal_final_render_guard_summary",
         ms: now(),
@@ -16638,7 +17184,9 @@ async function runExpertLoop(
         extractBudgetCap(userMessage),
       );
       safeIds = budgetGuard.ids;
-      safeIds = finalizeTerminalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(
+        terminalPairedSafeIds(safeIds, "semantic_terminal_recovery"),
+      );
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -16795,6 +17343,10 @@ async function runExpertLoop(
             ctx.cache,
             extractBudgetCap(userMessage),
           ).ids;
+          safeIds = terminalPairedSafeIds(
+            safeIds,
+            "terminal_visible_request_recovery_initial",
+          );
           safeIds = capResultCandidateIds(safeIds, resultCardinality);
 
           // `category=` is exact-leaf-only in the catalog API. A non-empty leaf
@@ -16857,6 +17409,10 @@ async function runExpertLoop(
                 ctx.cache,
                 extractBudgetCap(userMessage),
               ).ids;
+              querySafeIds = terminalPairedSafeIds(
+                querySafeIds,
+                "terminal_visible_request_recovery_query",
+              );
               querySafeIds = capResultCandidateIds(
                 querySafeIds,
                 resultCardinality,
@@ -17418,26 +17974,61 @@ Deno.serve(async (req) => {
 
       try {
         const priorHistory = stripCurrentUserEcho(history, userMessage);
+        const pendingSlot = slots.pending_clarification;
+        const pendingRecord = pendingSlot && typeof pendingSlot === "object" &&
+            !Array.isArray(pendingSlot)
+          ? pendingSlot as Record<string, unknown>
+          : null;
+        const pendingScope = pendingRecord?.scope;
+        const clientCatalogClarification = Boolean(
+          pendingRecord?.facet_key === "catalog_section" ||
+            (pendingScope && typeof pendingScope === "object" &&
+              !Array.isArray(pendingScope) &&
+              (pendingScope as Record<string, unknown>).kind ===
+                "broad_assortment"),
+        );
+        const verifiedBroadChoiceState =
+          await loadVerifiedBroadAssortmentChoice(
+            supabase,
+            sessionId,
+            logId,
+            slots,
+            userMessage,
+          );
+        const verifiedBroadChoice = verifiedBroadChoiceState.choice;
+        // A broad slot is deliberately absent from boundary classification.
+        // Otherwise the existing "server-scoped clarification" shortcut turns
+        // even a complete unrelated request into a Gallant continuation.
+        const boundarySlots = clientCatalogClarification
+          ? {
+            ...slots,
+            pending_clarification: undefined,
+          }
+          : slots;
+        const boundary = verifiedBroadChoiceState.matchedIssuedOption
+          ? {
+            mode: "continuation" as const,
+            confidence: 1,
+            source: "local" as const,
+            reason: "server_verified_catalog_option",
+          }
+          : await classifyConversationBoundary(
+            userMessage,
+            priorHistory,
+            boundarySlots,
+            {
+              apiKey: settings.openrouter_api_key!,
+              model: settings.classifier_model,
+            },
+            executionController.signal,
+          );
         const scopedSelectionRequest = resolveSelectionReadinessRequest(
           userMessage,
-          slots,
-        );
-        const boundary = await classifyConversationBoundary(
-          userMessage,
-          priorHistory,
-          slots,
-          {
-            apiKey: settings.openrouter_api_key!,
-            model: settings.classifier_model,
-          },
-          executionController.signal,
+          boundarySlots,
         );
         const matchedPendingClarification = Boolean(
-          resolvePendingClarificationChoice(slots, userMessage),
-        );
-        const pendingBroadAssortmentScope = resolvePendingBroadAssortmentScope(
-          slots,
-          priorHistory,
+          verifiedBroadChoiceState.matchedIssuedOption ||
+            resolvePendingClarificationChoice(boundarySlots, userMessage),
         );
         const referencesRenderedProducts =
           extractRenderedProductTitles(priorHistory, 1).length > 0 && (
@@ -17447,16 +18038,32 @@ Deno.serve(async (req) => {
           );
         const startsNewTask = shouldStartNewConversation(boundary, {
           matchedPendingClarification,
-          activeScopedClarification: Boolean(
-            pendingBroadAssortmentScope || scopedSelectionRequest.scoped,
-          ),
+          activeScopedClarification: scopedSelectionRequest.scoped,
           referencesRenderedProducts,
-        });
+        }) || shouldResetUnverifiedBroadAssortmentTask(
+          userMessage,
+          clientCatalogClarification,
+          verifiedBroadChoiceState.verifiedSlot,
+        );
+        // Only after a continuation decision may a server-verified free-form
+        // broad scope reach the old expert route. Exact chips take the bounded
+        // deterministic route below. A stale/forged scope is never restored.
+        const trustedSlots = !startsNewTask && clientCatalogClarification &&
+            verifiedBroadChoiceState.verifiedSlot
+          ? {
+            ...slots,
+            pending_clarification: verifiedBroadChoiceState.verifiedSlot,
+          }
+          : boundarySlots;
+        const pendingBroadAssortmentScope = resolvePendingBroadAssortmentScope(
+          trustedSlots,
+          priorHistory,
+        );
         const effectiveSessionId = startsNewTask
           ? `session_${crypto.randomUUID()}`
           : sessionId;
         const effectiveHistory = startsNewTask ? [] : priorHistory;
-        const effectiveSlots = startsNewTask ? {} : slots;
+        const effectiveSlots = startsNewTask ? {} : trustedSlots;
         const electricalTripDiagnostic =
           resolveElectricalProtectionTripDiagnostic(
             userMessage,
@@ -17476,6 +18083,10 @@ Deno.serve(async (req) => {
             reason: boundary.reason,
             matched_pending_clarification: matchedPendingClarification,
             pending_broad_assortment_scope: pendingBroadAssortmentScope,
+            verified_broad_assortment_choice: Boolean(verifiedBroadChoice),
+            catalog_slot_validation_failed: clientCatalogClarification &&
+              !verifiedBroadChoiceState.verifiedSlot,
+            catalog_slot_lookup_failed: verifiedBroadChoiceState.lookupFailed,
             references_rendered_products: referencesRenderedProducts,
             history_echo_removed: priorHistory.length !== history.length,
           },
@@ -17562,8 +18173,13 @@ Deno.serve(async (req) => {
             meta: { count: recentProductEvidence.length },
           });
         }
+        const constrainedRecentPriceFollowup =
+          recentProductEvidence.length > 0 &&
+          isRecentProductPriceSelectionFollowup(userMessage) &&
+          !isPureRecentPriceFollowup(userMessage);
         const ellipticalBaseRequest = recentProductEvidence.length > 0 &&
-            isEllipticalAttributeFollowup(userMessage)
+            (isEllipticalAttributeFollowup(userMessage) ||
+              constrainedRecentPriceFollowup)
           ? latestRenderedSelectionRequest(effectiveHistory)
           : null;
         const ellipticalContinuation: EllipticalSelectionContinuation | null =
@@ -17588,10 +18204,28 @@ Deno.serve(async (req) => {
         const explicitCompoundMarking = extractExplicitCompoundMarking(
           userMessage,
         );
-        const semanticCompoundMarking = explicitCompoundMarking &&
+        const semanticCompoundMarking =
+          detectUserIntentMode(userMessage) === "select" &&
+            explicitCompoundMarking &&
             requiresSemanticCompoundEvidence(userMessage)
-          ? explicitCompoundMarking
-          : null;
+            ? explicitCompoundMarking
+            : null;
+        const semanticCompoundDirectAdmitted = Boolean(
+          semanticCompoundMarking && admitDirectSelectionRoute({
+            route: "compound",
+            userMessage,
+            coveredCompound: semanticCompoundMarking,
+          }),
+        );
+        const exactCompoundDirectAdmitted = Boolean(
+          exactCompoundMarkingRequest && admitDirectSelectionRoute({
+            route: "compound",
+            userMessage,
+            coveredCompound: exactCompoundMarkingRequest,
+          }),
+        );
+        const outdoorPoeDirectAdmitted = outdoorPoeIntent === "selection" &&
+          admitDirectSelectionRoute({ route: "outdoor_poe", userMessage });
         // Routing and the expert loop must resolve the same dialogue intent.
         // Otherwise a short continuation such as `покажи` enters the ordinary
         // branch before the loop can inherit the already proven replacement.
@@ -17612,6 +18246,10 @@ Deno.serve(async (req) => {
           detectUserIntentMode(userMessage) === "select"
             ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
             : null;
+        const pureNamedSeriesBrowse = Boolean(
+          namedSeriesSelectionToken &&
+            isPureNamedSeriesBrowse(userMessage, namedSeriesSelectionToken),
+        );
         const exactProductInquiryLookup =
           detectUserIntentMode(userMessage) === "inquire"
             ? extractReplacementLookupKeys(userMessage)
@@ -17619,6 +18257,8 @@ Deno.serve(async (req) => {
         const hasExactProductInquiry = !namedSeriesInquiryToken &&
           (exactProductInquiryLookup.articles.length > 0 ||
             exactProductInquiryLookup.modelCodes.length > 0);
+        const exactProductInquiryDirectAdmitted = hasExactProductInquiry &&
+          admitDirectSelectionRoute({ route: "exact_inquiry", userMessage });
         const generalInquiryDirect = shouldAnswerGeneralInquiryDirectly({
           intentMode: detectUserIntentMode(userMessage),
           exactProductInquiry: hasExactProductInquiry,
@@ -17651,7 +18291,37 @@ Deno.serve(async (req) => {
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
         // Так утечка внутреннего устройства невозможна в принципе.
-        if (readinessClarification) {
+        if (verifiedBroadChoice && !startsNewTask) {
+          const products = await answerVerifiedBroadAssortmentChoice(
+            verifiedBroadChoice,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          productsCount = products.length;
+          await persistRecentProductEvidence(
+            supabase,
+            effectiveSessionId,
+            products,
+          );
+        } else if (
+          clientCatalogClarification &&
+          !verifiedBroadChoiceState.verifiedSlot && !startsNewTask
+        ) {
+          send({
+            type: "delta",
+            content: verifiedBroadChoiceState.lookupFailed
+              ? "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже."
+              : "Этот выбор раздела уже недействителен. Напишите серию и нужный раздел заново.",
+          });
+          productsCount = 0;
+          steps.push({
+            step: "v3_broad_assortment_selection_unverified",
+            ms: Date.now() - t0,
+            meta: { lookup_failed: verifiedBroadChoiceState.lookupFailed },
+          });
+        } else if (readinessClarification) {
           const { profile, ...clarificationInput } = readinessClarification;
           send({ type: "delta", content: clarificationInput.question });
           const clarification = executeProposeClarification(clarificationInput);
@@ -17662,6 +18332,47 @@ Deno.serve(async (req) => {
             meta: { profile, facet_key: clarificationInput.facet_key },
           });
           productsCount = 0;
+        } else if (
+          verifiedBroadChoiceState.matchedIssuedOption &&
+          !verifiedBroadChoice && !startsNewTask
+        ) {
+          // A real chip from a constrained or ambiguous broad request must
+          // retain the original turn's requirements. No other direct selector
+          // is allowed to bypass the existing criteria-aware expert route.
+          steps.push({
+            step: "v3_broad_assortment_constrained_chip_expert_route",
+            ms: Date.now() - t0,
+          });
+          const out = await runExpertLoop(
+            scopedSelectionRequest.message,
+            effectiveHistory,
+            effectiveSlots,
+            settings.openrouter_api_key!,
+            ctx,
+            send,
+            steps,
+            t0,
+            {
+              anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+              relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+              criteriaGateEnabled: true,
+            },
+            recentProductEvidence,
+            [],
+            null,
+            ellipticalContinuation,
+          );
+          productsCount = out.productsRendered;
+          const shownProducts = out.shownProductIds
+            .map((id) => ctx.cache.get(id))
+            .filter((product): product is NonNullable<typeof product> =>
+              Boolean(product)
+            );
+          await persistRecentProductEvidence(
+            supabase,
+            effectiveSessionId,
+            shownProducts,
+          );
         } else if (isMetaSelfQuestion(userMessage)) {
           steps.push({
             step: "v3_meta_question_declined",
@@ -17731,7 +18442,7 @@ Deno.serve(async (req) => {
             t0,
           );
           productsCount = 0;
-        } else if (hasExactProductInquiry) {
+        } else if (exactProductInquiryDirectAdmitted) {
           const direct = await answerVerifiedExactProductInquiry(
             userMessage,
             settings.openrouter_api_key!,
@@ -17792,7 +18503,7 @@ Deno.serve(async (req) => {
             executionController.signal,
           );
           productsCount = 0;
-        } else if (namedSeriesSelectionToken) {
+        } else if (namedSeriesSelectionToken && pureNamedSeriesBrowse) {
           const products = await selectVerifiedNamedSeriesRequest(
             namedSeriesSelectionToken,
             ctx,
@@ -17826,7 +18537,7 @@ Deno.serve(async (req) => {
           );
         } else if (
           recentProductEvidence.length > 0 &&
-          isRecentProductPriceSelectionFollowup(userMessage)
+          isPureRecentPriceFollowup(userMessage)
         ) {
           const selection = await selectVerifiedRecentPriceFollowup(
             userMessage,
@@ -17842,7 +18553,7 @@ Deno.serve(async (req) => {
             effectiveSessionId,
             selection.products,
           );
-        } else if (semanticCompoundMarking) {
+        } else if (semanticCompoundMarking && semanticCompoundDirectAdmitted) {
           send({
             type: "delta",
             content:
@@ -17897,7 +18608,7 @@ Deno.serve(async (req) => {
               shownProducts,
             );
           }
-        } else if (exactCompoundMarkingRequest) {
+        } else if (exactCompoundMarkingRequest && exactCompoundDirectAdmitted) {
           send({
             type: "delta",
             content: exactCompoundMarkingIntro(exactCompoundMarkingRequest),
@@ -17929,7 +18640,9 @@ Deno.serve(async (req) => {
           });
           send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
           productsCount = 0;
-        } else if (outdoorPoeIntent === "selection") {
+        } else if (
+          outdoorPoeIntent === "selection" && outdoorPoeDirectAdmitted
+        ) {
           send({ type: "delta", content: OUTDOOR_POE_SELECTION_INTRO });
           const selectedProducts = await selectVerifiedOutdoorPoeProducts(
             ctx,
@@ -17945,7 +18658,9 @@ Deno.serve(async (req) => {
           );
         } else if (
           recentProductEvidence.length > 0 &&
-          isEvidenceOnlyFollowup(userMessage)
+          isEvidenceOnlyFollowup(userMessage) &&
+          !constrainedRecentPriceFollowup &&
+          !(namedSeriesSelectionToken && !pureNamedSeriesBrowse)
         ) {
           const answer = buildDeterministicEvidenceAnswer(
             recentProductEvidence,
@@ -18009,7 +18724,22 @@ Deno.serve(async (req) => {
           }
         } else if (replacementSourceRequest) {
           let direct: DirectReplacementResult | null = null;
-          if (pendingScopedCatalogContinuation) {
+          const replacementDirectAdmitted = admitDirectSelectionRoute({
+            route: "replacement",
+            userMessage: replacementSourceRequest,
+          });
+          if (!replacementDirectAdmitted) {
+            direct = {
+              handled: false,
+              products: [],
+              outcome: "query_inconsistent",
+            };
+            steps.push({
+              step: "v3_replacement_direct_unproven_delegated",
+              ms: Date.now() - t0,
+            });
+          }
+          if (replacementDirectAdmitted && pendingScopedCatalogContinuation) {
             const preservedDiscovery = await executeDiscoverCategory({
               noun: pendingScopedCatalogContinuation.category,
               semantic_query: pendingScopedCatalogContinuation.message,
