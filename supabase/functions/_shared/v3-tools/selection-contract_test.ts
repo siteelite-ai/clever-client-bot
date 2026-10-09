@@ -174,6 +174,30 @@ Deno.test("replacement site proof is grammatical, first-party, and category-neut
   assertEquals(report.rejected_ids, ["negated", "unmeasured"]);
 });
 
+Deno.test("home hall shares living-room proof but an unspecified hall does not", () => {
+  const products = [{
+    ...product("living-room", "Люстра светодиодная MATEO", "Люстры"),
+    short_traits: [
+      "Назначение: Гостиная",
+      "Максимальная площадь освещения: 35 м²",
+    ],
+  }];
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу поменять дома люстру в зале 30 квадратов. Что предложишь?",
+      products,
+    ).passed_ids,
+    ["living-room"],
+  );
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу поменять люстру в зале 30 квадратов. Что предложишь?",
+      products,
+    ).passed_ids,
+    [],
+  );
+});
+
 Deno.test("unmeasured replacement and ordinary selection keep their existing routes", () => {
   const products = [product("ordinary", "Светильник")];
   assertEquals(

@@ -1686,10 +1686,18 @@ export function verifyReplacementDestinationFit(
   };
   const siteTokens = normalize(place).split(/\s+/u).filter(Boolean)
     .map(siteStem);
+  // In a home context, Russian «зал» is the living room. Do not apply this
+  // equivalence to an unqualified hall (e.g. a conference or assembly hall).
+  const residentialHall = siteTokens.length === 1 && siteTokens[0] === "зал" &&
+    /(?:^|[^\p{L}])(?:дома|домаш\p{L}*|квартир\p{L}*)(?:$|[^\p{L}])/iu
+      .test(request);
+  const matchesSiteTokens = (tokens: string[]): boolean =>
+    siteTokens.every((token) => tokens.includes(token) ||
+      (residentialHall && token === "зал" && tokens.includes("гостин")));
   const hasSiteTokens = (value: string): boolean => {
     const tokens = normalize(value).split(/\s+/u).filter(Boolean)
       .map(siteStem);
-    return siteTokens.every((token) => tokens.includes(token));
+    return matchesSiteTokens(tokens);
   };
   const hasUnnegatedSiteRelation = (value: string): boolean =>
     String(value ?? "").split(/[.!?;\n]/u).some((sentence) => {
@@ -1701,7 +1709,7 @@ export function verifyReplacementDestinationFit(
         }
         const governed = words.slice(index + 1, index + 5)
           .map(siteStem);
-        return siteTokens.every((token) => governed.includes(token));
+        return matchesSiteTokens(governed);
       });
     });
   const hasSiteProof = (product: ProductRef): boolean =>
