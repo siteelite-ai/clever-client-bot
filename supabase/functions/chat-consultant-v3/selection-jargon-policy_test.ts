@@ -806,6 +806,75 @@ Deno.test("a global property mention cannot lend unrelated strict bounds to the 
   );
 });
 
+Deno.test("an immediately adjacent after-state clause may inherit its physical property", () => {
+  const reference = { value: 12, unit: "мм" };
+  const reasoning =
+    "Для кабеля диаметром 12 мм необходима термоусадочная трубка, внутренний диаметр которой до усадки должен быть строго больше 12 мм, а после усадки — строго меньше 12 мм, чтобы обеспечить плотное облегание кабеля.";
+  const decision = terminalPairedFitDecision(
+    reference,
+    "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+    reasoning,
+    pairedFacets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(
+    enforceTerminalPairedFit(
+      [item("too-small", "Изделие 12/6"), item("fitting", "Изделие 14/7")],
+      decision,
+      reasoning,
+    ).map((product) => product.id),
+    ["fitting"],
+  );
+});
+
+Deno.test("paired anaphora is property-generic but cannot cross an unrelated clause or sentence", () => {
+  const lengthFacets: CompatibilityFacet[] = [
+    {
+      key: "length_before",
+      caption: "Длина до изменения, мм",
+      unit: "мм",
+      values: [],
+    },
+    {
+      key: "length_after",
+      caption: "Длина после изменения, мм",
+      unit: "мм",
+      values: [],
+    },
+  ];
+  assertEquals(
+    terminalPairedFitDecision(
+      { value: 10, unit: "мм" },
+      "кабель длиной 10 мм",
+      "Длина до изменения строго больше 10 мм, а после изменения — строго меньше 10 мм.",
+      lengthFacets,
+    ).state,
+    "required",
+  );
+  for (
+    const reasoning of [
+      "Диаметр до усадки строго больше 12 мм. После усадки строго меньше 12 мм.",
+      "Диаметр до усадки строго больше 12 мм, описание длины, после усадки строго меньше 12 мм.",
+      "Диаметр до усадки строго больше 12 мм, а после усадки длина строго меньше 12 мм.",
+      "Диаметр до усадки строго больше 12 мм, а после усадки не менее 12 мм.",
+      "Диаметр до усадки строго больше 12 мм, а после усадки не должен быть меньше 12 мм.",
+      "Диаметр до усадки строго больше 12 мм, а до усадки строго меньше 12 мм.",
+    ]
+  ) {
+    assertEquals(
+      terminalPairedFitDecision(
+        { value: 12, unit: "мм" },
+        "кабель диаметром 12 мм",
+        reasoning,
+        pairedFacets,
+      ).state,
+      "unproven",
+      reasoning,
+    );
+  }
+});
+
 Deno.test("reversed before/after directions cannot prove the selected pair", () => {
   const reference = { value: 10, unit: "мм" };
   const reversed =

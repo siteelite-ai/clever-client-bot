@@ -578,38 +578,60 @@ function modelProvesBothSelectedSides(
   propertyStemValue: string,
   reference: { value: number; unit: string },
 ): boolean {
-  const clauses = String(reasoning ?? "").split(
-    /[!?;\n]+|,(?!\d)|(?<!\d),|\.(?!\d)|(?<!\d)\.|\s+(?:а|и)\s+(?=(?:до|после|исходн|конечн))/iu,
-  );
   const states = new Set<"before" | "after">();
-  for (const clause of clauses) {
-    const words = normalize(clause).split(" ").filter(Boolean);
-    const bounds = extractReasoningBounds(clause).filter((bound) =>
-      bound.strict && bound.value === reference.value &&
-      normalize(bound.unit) === normalize(reference.unit)
+  // Keep sentence boundaries: an omitted noun in "а после — меньше" may
+  // inherit only the uniquely named physical property of the immediately
+  // preceding clause, never a global mention or a different measurement.
+  const sentences = String(reasoning ?? "").split(
+    /[!?;\n]+|\.(?!\d)|(?<!\d)\./u,
+  );
+  for (const sentence of sentences) {
+    let precedingExplicitProperty: string | null = null;
+    const clauses = sentence.split(
+      /,(?!\d)|(?<!\d),|\s+(?:а|и)\s+(?=(?:до|после|исходн|конечн))/iu,
     );
-    if (bounds.length === 0) continue;
-    const namesProperty = words.some((word) =>
-      propertyStem(word) === propertyStemValue
-    );
-    if (!namesProperty) return false;
-    // Another physical quantity in the same claim makes attribution unsafe.
-    if (
-      words.some((word) =>
-        /^(?:диам|длин|ширин|высот|толщин|глубин|радиус|масс|вес|объем|площад)/u
+    for (const clause of clauses) {
+      const words = normalize(clause).split(" ").filter(Boolean);
+      if (words.length === 0) continue;
+      const bounds = extractReasoningBounds(clause).filter((bound) =>
+        bound.strict && bound.value === reference.value &&
+        normalize(bound.unit) === normalize(reference.unit)
+      );
+      if (bounds.length === 0) {
+        precedingExplicitProperty = null;
+        continue;
+      }
+      const namesProperty = words.some((word) =>
+        propertyStem(word) === propertyStemValue
+      );
+      const hasOtherProperty = words.some((word) =>
+        /^(?:диам|длин|ширин|высот|толщин|глубин|радиус|масс|вес|объем|площад|мощн|напряж|ток|темпер|давлен|емкост|сопротивл|скорост|частот)/u
           .test(word) && propertyStem(word) !== propertyStemValue
-      )
-    ) return false;
-    const before = words.some((word) =>
-      word === "до" || /^(?:исходн|начальн|входн|before|initial)/u.test(word)
-    );
-    const after = words.some((word) =>
-      word === "после" || /^(?:конечн|финальн|выходн|after|final)/u.test(word)
-    );
-    if (before === after) return false; // Missing or conflicting state attribution.
-    const expected = before ? "min" : "max";
-    if (bounds.some((bound) => bound.op !== expected)) return false;
-    states.add(before ? "before" : "after");
+      );
+      if (
+        hasOtherProperty ||
+        !namesProperty && precedingExplicitProperty !== propertyStemValue
+      ) {
+        return false;
+      }
+      // "Не должен быть меньше" is a negated claim, not proof of a strict
+      // maximum, even if the lower-level numeric extractor sees "меньше".
+      if (
+        /(?:^|\s)не\s+(?:\p{L}+\s+){0,4}(?:больше|более|свыше|выше|меньше|менее|ниже|превыша\p{L}*)(?:\s|$)/iu
+          .test(normalize(clause))
+      ) return false;
+      const before = words.some((word) =>
+        word === "до" || /^(?:исходн|начальн|входн|before|initial)/u.test(word)
+      );
+      const after = words.some((word) =>
+        word === "после" || /^(?:конечн|финальн|выходн|after|final)/u.test(word)
+      );
+      if (before === after) return false; // Missing or conflicting state attribution.
+      const expected = before ? "min" : "max";
+      if (bounds.some((bound) => bound.op !== expected)) return false;
+      states.add(before ? "before" : "after");
+      precedingExplicitProperty = namesProperty ? propertyStemValue : null;
+    }
   }
   return states.has("before") && states.has("after");
 }
