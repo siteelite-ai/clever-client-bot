@@ -92,6 +92,7 @@ Deno.test("additional options are a short selection continuation, not a complete
     const message of [
       "А есть другие варианты?",
       "Есть ещё варианты?",
+      "А другие варианты есть?",
       "Покажи еще подходящие варианты",
       "Дай другие модели",
       "Какие ещё варианты есть?",
@@ -274,6 +275,50 @@ Deno.test("repeated additional-option batches preserve the original proven selec
     "https://220volt.kz/catalog/light/second/",
     "https://220volt.kz/catalog/light/third/",
   ]);
+});
+
+Deno.test("a failed standalone request blocks inheritance from an older card batch", () => {
+  const olderBatch = [
+    { role: "user" as const, content: "Найди светильник для гостиной 25 м²" },
+    {
+      role: "assistant" as const,
+      content: "- **[Первый](https://220volt.kz/catalog/light/first/)**",
+    },
+  ];
+  assertEquals(
+    latestRenderedSelectionRequest([
+      ...olderBatch,
+      { role: "user", content: "Найди автоматический выключатель 16 А" },
+      { role: "assistant", content: "Извините, произошла ошибка соединения." },
+      { role: "user", content: "А есть другие варианты?" },
+    ]),
+    null,
+  );
+  assertEquals(
+    latestRenderedSelectionRequest([
+      ...olderBatch,
+      { role: "user", content: "Новая тема: почему эти варианты?" },
+      { role: "assistant", content: "Не смог ответить." },
+      { role: "user", content: "А есть другие варианты?" },
+    ]),
+    null,
+  );
+});
+
+Deno.test("an evidence-only question between a rendered batch and more options keeps scope", () => {
+  assertEquals(
+    latestRenderedSelectionRequest([
+      { role: "user", content: "Найди светильник для гостиной 25 м²" },
+      {
+        role: "assistant",
+        content: "- **[Первый](https://220volt.kz/catalog/light/first/)**",
+      },
+      { role: "user", content: "Почему эти варианты?" },
+      { role: "assistant", content: "По ранее показанной карточке..." },
+      { role: "user", content: "А есть другие варианты?" },
+    ]),
+    "Найди светильник для гостиной 25 м²",
+  );
 });
 
 Deno.test("rendered URL exclusions use only controlled product cards and canonical paths", () => {

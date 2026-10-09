@@ -115,6 +115,16 @@ export function latestRenderedSelectionRequest(
     const message = history[assistantIndex];
     if (message.role !== "assistant") continue;
     if (extractRenderedProductTitles([message], 1).length === 0) continue;
+    // A later standalone request owns the current dialogue scope even if its
+    // answer failed or had no cards. Never revive a successful older search
+    // just because the new request did not produce a rendered batch. Only
+    // structurally dependent follow-ups and neutral acknowledgements may sit
+    // between the batch and an additional-options request.
+    if (
+      history.slice(assistantIndex + 1).some((later) =>
+        later.role === "user" && !isRenderedSelectionContinuation(later.content)
+      )
+    ) return null;
     for (let userIndex = assistantIndex - 1; userIndex >= 0; userIndex--) {
       const candidate = history[userIndex];
       if (candidate.role !== "user") continue;
@@ -127,6 +137,21 @@ export function latestRenderedSelectionRequest(
     }
   }
   return null;
+}
+
+function isRenderedSelectionContinuation(message: string): boolean {
+  const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
+  if (/^(?:новая\s+тема|новый\s+вопрос)(?:\s|[?!:;.,-]|$)/u.test(normalized)) {
+    return false;
+  }
+  if (
+    isAdditionalProductSelectionFollowup(normalized) ||
+    isEvidenceOnlyFollowup(normalized) ||
+    isRecentProductShowFollowup(normalized) ||
+    isRecentProductPriceSelectionFollowup(normalized)
+  ) return true;
+  return /^(?:спасибо|благодарю|понятно|хорошо|ок|ладно)[!.,\s]*$/u
+    .test(normalized);
 }
 
 /**
@@ -190,7 +215,7 @@ export function isEvidenceOnlyFollowup(message: string): boolean {
 export function isAdditionalProductSelectionFollowup(message: string): boolean {
   const normalized = cleanText(message, 160).toLowerCase().replace(/ё/g, "е")
     .replace(/[?!.,;:]+$/u, "").trim();
-  return /^(?:(?:а|ну|тогда|пожалуйста)\s+)*(?:(?:есть(?:\s+ли)?|найди(?:те)?|покажи(?:те)?|дай(?:те)?|предложи(?:те)?|можно(?:\s+показать)?)\s+)?(?:еще(?:\s+другие)?|другие|альтернативные|дополнительные)\s+(?:подходящие\s+)?(?:варианты|товары|модели)$/u
+  return /^(?:(?:а|ну|тогда|пожалуйста)\s+)*(?:(?:есть(?:\s+ли)?|найди(?:те)?|покажи(?:те)?|дай(?:те)?|предложи(?:те)?|можно(?:\s+показать)?)\s+)?(?:еще(?:\s+другие)?|другие|альтернативные|дополнительные)\s+(?:подходящие\s+)?(?:варианты|товары|модели)(?:\s+есть)?$/u
     .test(normalized) ||
     /^(?:(?:а|ну|тогда|пожалуйста)\s+)*какие\s+(?:еще|другие)\s+(?:подходящие\s+)?варианты\s+есть$/u
       .test(normalized);
