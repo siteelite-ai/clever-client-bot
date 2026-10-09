@@ -32,7 +32,7 @@ export const MATRIX_MANIFESTS = [
   },
   {
     file: 'notion-legacy-bug-cases-v3.json',
-    sha256: '001226d4d04bcf2370526aa7e250c25d3e0c52db890c571815afadc826ab5ed0',
+    sha256: 'a13c4322a9161897ca7e62ef16a10082270fceb9182ce671a634c04f3539a49e',
     caseCount: 32, sourceTurnCount: 52, runCount: 40, evaluatedTurnCount: 60,
     repeat: 1,
     repeatById: {
@@ -244,7 +244,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'This inventory stores suite-level claims only. V3 preserves the first prompts from the pinned Notion v2 suite; exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json. The first 15 explicitly marked BT-929/BT-924 synthetic turns are indexed in docs/qa/notion-source-index-20261009.json; five further v3 turns are marked synthetic API continuations, not customer quotations or browser clicks. The BT-746 “дай ссылку” continuation is source-observed, but its product identity is tested against the prior verified catalog URL. The BT-929 20% reserve versus 14/7 example remains unresolved.',
+    provenance_note: 'This inventory stores suite-level claims only. V3 preserves the first prompts from the pinned Notion v2 suite; exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json. The first 15 explicitly marked BT-929/BT-924 synthetic turns are indexed in docs/qa/notion-source-index-20261009.json; six further v3 turns are marked synthetic API continuations, not customer quotations or browser clicks. The BT-746 “дай ссылку” wording is a synthetic paraphrase of a source-observed request for a link (Notion comment 336cf8d3-69ba-8092-ad9a-001d3f23aee6); the exact second user message was not preserved. Its product identity is tested against the prior verified catalog URL. The BT-929 20% reserve versus 14/7 example remains unresolved.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,

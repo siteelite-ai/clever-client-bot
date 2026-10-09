@@ -164,7 +164,7 @@ const FULL_SUITE_MANIFESTS = {
 // satisfy this stricter candidate inventory by filename or SHA substitution.
 FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'] = {
   ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v2.json'],
-  sha256: '001226d4d04bcf2370526aa7e250c25d3e0c52db890c571815afadc826ab5ed0',
+  sha256: 'a13c4322a9161897ca7e62ef16a10082270fceb9182ce671a634c04f3539a49e',
   turns: 52,
   runs: 40,
   evaluatedTurns: 60,
@@ -326,6 +326,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'min_text_before_products_chars',
   'min_text_chars',
   'require_any_text',
+  'require_asked_text_groups',
   'require_every_product_card_groups',
   'require_every_product_measurement',
   'require_every_product_page',
@@ -333,6 +334,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_every_product_stock_unit',
   'require_every_product_title_any',
   'require_every_product_title_groups',
+  'require_axis_exact_or_split',
   'require_exact_or_split',
   'require_new_product_skus',
   'require_previous_product_link',
@@ -392,6 +394,15 @@ function expectationGroups(value, location) {
   }
   for (const [index, group] of value.entries()) {
     expectationStringList(group, `${location}[${index}]`);
+  }
+}
+
+function expectationAskedGroups(value, location) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${location}: must be a non-empty array of requested-detail groups`);
+  }
+  for (const [index, groups] of value.entries()) {
+    expectationGroups(groups, `${location}[${index}]`);
   }
 }
 
@@ -489,6 +500,9 @@ export function validateExpectationObject(expect, location = 'expect') {
     'require_every_product_card_groups', 'require_selection_criteria_groups',
   ]) {
     if (expect[field] !== undefined) expectationGroups(expect[field], `${location}.${field}`);
+  }
+  if (expect.require_asked_text_groups !== undefined) {
+    expectationAskedGroups(expect.require_asked_text_groups, `${location}.require_asked_text_groups`);
   }
   for (const field of [
     'require_new_product_skus', 'require_selection_criteria_evidence', 'forbid_unrendered_catalog_facts',
@@ -599,6 +613,38 @@ export function validateExpectationObject(expect, location = 'expect') {
     for (const field of ['exact_title_groups', 'split_title_groups', 'split_text_groups']) {
       if (contract[field] !== undefined) expectationGroups(contract[field], `${contractLocation}.${field}`);
     }
+  }
+  if (expect.require_axis_exact_or_split !== undefined) {
+    const contract = expect.require_axis_exact_or_split;
+    const contractLocation = `${location}.require_axis_exact_or_split`;
+    expectationKeys(contract, new Set([
+      'category_path', 'axes', 'split_disclosure_groups', 'split_priority_question_groups',
+    ]), contractLocation);
+    if (typeof contract.category_path !== 'string' ||
+        !/^\/catalog\/(?:[\p{L}\p{N}-]+\/)+$/u.test(contract.category_path)) {
+      throw new Error(`${contractLocation}.category_path: must be a catalog category path ending in /`);
+    }
+    if (!Array.isArray(contract.axes) || contract.axes.length !== 2) {
+      throw new Error(`${contractLocation}.axes: must contain exactly two title axes`);
+    }
+    for (const [axisIndex, axis] of contract.axes.entries()) {
+      if (!Array.isArray(axis) || axis.length === 0) {
+        throw new Error(`${contractLocation}.axes[${axisIndex}]: must contain title terms`);
+      }
+      for (const [termIndex, item] of axis.entries()) {
+        const termLocation = `${contractLocation}.axes[${axisIndex}][${termIndex}]`;
+        expectationKeys(item, new Set(['term', 'match']), termLocation);
+        if (typeof item.term !== 'string' || !item.term.trim() ||
+            item.term !== item.term.trim() || item.term.length > 80) {
+          throw new Error(`${termLocation}.term: must be a bounded non-empty title term`);
+        }
+        if (!['code', 'word_prefix'].includes(item.match)) {
+          throw new Error(`${termLocation}.match: must be code or word_prefix`);
+        }
+      }
+    }
+    expectationGroups(contract.split_disclosure_groups, `${contractLocation}.split_disclosure_groups`);
+    expectationGroups(contract.split_priority_question_groups, `${contractLocation}.split_priority_question_groups`);
   }
   if (expect.require_products_or_text_groups !== undefined) {
     const contract = expect.require_products_or_text_groups;
@@ -897,6 +943,34 @@ function productPageRuleFailures(rules, proof) {
 
 function matchesEveryGroup(value, groups) {
   return groups.every((group) => Array.isArray(group) && group.length > 0 && includesAny(value, group));
+}
+
+function matchesTitleAxis(title, axis) {
+  return axis.some(({ term, match }) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const suffix = match === 'word_prefix' ? '\\p{L}*' : '';
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}${suffix}(?![\\p{L}\\p{N}])`, 'iu').test(title);
+  });
+}
+
+function hasGlobalAbsenceClaim(text) {
+  return (String(text ?? '').match(/[^.!?\n]+/gu) ?? []).some((sentence) => {
+    const globalScope = /(?:^|[^\p{L}])(?:вообще|нигде|в\s+(?:нашем\s+)?каталоге|на\s+сайте|в\s+продаже)(?!\p{L})/iu.test(sentence);
+    const absence = /(?:^|[^\p{L}])(?:нет|не\s+наш\p{L}*|не\s+существ\p{L}*|не\s+быва\p{L}*)(?!\p{L})/iu.test(sentence);
+    const boundedScope = /(?:^|[^\p{L}])(?:среди|в)\s+(?:найденных|показанных|проверенных|рассмотренных)(?!\p{L})/iu.test(sentence);
+    const assertedOverlapAbsence = /(?:^|[^\p{L}])(?:сочетан\p{L}*|совпаден\p{L}*|оба|обоими|таких|подобных|подходящ\p{L}*)(?!\p{L})/iu.test(sentence);
+    return (globalScope && absence) || (absence && assertedOverlapAbsence && !boundedScope) ||
+      /(?:^|[^\p{L}])не\s+(?:существ\p{L}*|быва\p{L}*)(?!\p{L})/iu.test(sentence);
+  });
+}
+
+// Only a direct question or request to the user can satisfy an asked-detail
+// contract. A diagnostic paragraph that merely mentions the same terms cannot.
+function askedTextSpans(text) {
+  return (String(text ?? '').match(/[^.!?]+[.!?]?/gu) ?? [])
+    .map((span) => span.trim())
+    .filter((span) => span.endsWith('?') ||
+      /(?:^|[^\p{L}])(?:уточните|подскажите|скажите|сообщите|напишите|укажите|назовите|ответьте)(?!\p{L})/iu.test(span));
 }
 
 function includesStandalonePhrase(haystack, phrase) {
@@ -1366,7 +1440,8 @@ export function evaluate(expect = {}, response, {
   message = null,
 } = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_every_product_page || expect.require_catalog_minimum);
+  const requireSourceProof = Boolean(expect.require_every_product_page || expect.require_catalog_minimum ||
+    expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
     verifiedPages: response.verifiedProductPages,
     requireVerifiedPages: requireVerifiedPages || requireSourceProof,
@@ -1404,7 +1479,8 @@ export function evaluate(expect = {}, response, {
       failures.push('follow-up does not link a previously verified product');
     }
   }
-  if (requireVerifiedPages || Boolean(expect.require_catalog_minimum)) {
+  if (requireVerifiedPages || Boolean(expect.require_catalog_minimum) ||
+      Boolean(expect.require_axis_exact_or_split)) {
     const seenProducts = new Set();
     for (const link of response.links) {
       const identity = productUrlIdentity(link.url);
@@ -1557,6 +1633,14 @@ export function evaluate(expect = {}, response, {
   if (Array.isArray(expect.require_text_groups) && !matchesEveryGroup(response.text, expect.require_text_groups)) {
     failures.push(`assistant text misses one or more required groups: ${expect.require_text_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
   }
+  if (Array.isArray(expect.require_asked_text_groups)) {
+    const askedSpans = askedTextSpans(response.text);
+    for (const groups of expect.require_asked_text_groups) {
+      if (!askedSpans.some((span) => matchesEveryGroup(span, groups))) {
+        failures.push(`assistant did not ask for required detail: ${groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+      }
+    }
+  }
   if (expect.require_quoted_price_per_piece === true) {
     failures.push(...quotedPricePerPieceFailures(response));
   }
@@ -1663,6 +1747,38 @@ export function evaluate(expect = {}, response, {
     const splitText = Array.isArray(contract.split_text_groups) && matchesEveryGroup(response.text, contract.split_text_groups);
     if (!exact && !(splitTitles && splitText)) {
       failures.push('neither exact product nor evidence-labelled split alternatives were returned');
+    }
+  }
+  if (expect.require_axis_exact_or_split && typeof expect.require_axis_exact_or_split === 'object') {
+    const contract = expect.require_axis_exact_or_split;
+    const categoryPrefix = `220volt.kz${contract.category_path.normalize('NFC').toLowerCase()}`;
+    const outsideCategory = response.links.filter((link) => {
+      const identity = productUrlIdentity(link.url);
+      return !identity || !identity.startsWith(categoryPrefix) || identity.length <= categoryPrefix.length;
+    });
+    if (outsideCategory.length > 0) {
+      failures.push(`product links outside required category ${contract.category_path}: ${outsideCategory.map((link) => link.url ?? '(missing URL)').join(' | ')}`);
+    }
+
+    const titleAxes = response.links.map((link) => contract.axes.map((axis) => matchesTitleAxis(link.title, axis)));
+    const allExact = titleAxes.length > 0 && titleAxes.every((axes) => axes.every(Boolean));
+    const allSplit = titleAxes.length > 0 && titleAxes.every((axes) => axes.filter(Boolean).length === 1) &&
+      contract.axes.every((_, index) => titleAxes.some((axes) => axes[index]));
+    if (!allExact && !allSplit) {
+      failures.push('product titles are neither all exact axis intersections nor a complete disjoint axis split');
+    }
+    if (allSplit) {
+      const disclosureSentences = String(response.text ?? '').match(/[^.!?\n]+[.!?]?/gu) ?? [];
+      if (!disclosureSentences.some((sentence) => matchesEveryGroup(sentence, contract.split_disclosure_groups))) {
+        failures.push('split alternatives lack a scoped, cautious overlap disclosure');
+      }
+      const priorityQuestions = disclosureSentences.filter((sentence) => sentence.trim().endsWith('?'));
+      if (!priorityQuestions.some((question) => matchesEveryGroup(question, contract.split_priority_question_groups))) {
+        failures.push('split alternatives lack an explicit axis-priority question');
+      }
+    }
+    if (hasGlobalAbsenceClaim(response.text)) {
+      failures.push('assistant asserts global absence from bounded product evidence');
     }
   }
   if (Array.isArray(expect.forbid_every_product_title_any)) {
@@ -1858,6 +1974,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
   const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+    Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
     expect.require_new_product_skus === true || expect.require_previous_product_link === true;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof

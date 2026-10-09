@@ -631,7 +631,14 @@ test('Notion v3 keeps historical v2 intact and checks catalog-backed cable and o
   assert.equal(v3('bt746-white-extension-3-sockets').turns[0].expect.require_every_product_page.facets[0].name,
     'Цвет');
   assert.equal(v3('bt746-extension-50m').turns[1].message, 'дай ссылку');
+  assert.equal(v3('bt746-extension-50m').turns[1].synthetic, true,
+    'the comment preserves the request for a link, not the exact second user message');
   assert.equal(v3('bt746-extension-50m').turns[1].expect.require_previous_product_link, true);
+  const boiler = v3('bt928-boiler-breaker-diagnostic');
+  assert.equal(boiler.repeat, 3);
+  assert.equal(boiler.turns[0].expect.max_products, 0);
+  assert.equal(boiler.turns[0].expect.require_asked_text_groups.length, 3);
+  assert(boiler.turns[0].expect.forbid_assistant_text.some((phrase) => phrase.includes('товар')));
   for (const id of ['bt924-schneider-cheaper-analogs', 'bt924-acti9-followup-show']) {
     const final = v3(id).turns.at(-1).expect;
     assert(!final.forbid_product_title.includes('Schneider'), id);
@@ -649,6 +656,48 @@ test('Notion v3 keeps historical v2 intact and checks catalog-backed cable and o
     expected_turns_per_base_suite: 52, expected_repeat: 1,
     expected_runs: 40, expected_evaluated_turns: 60,
   });
+});
+
+test('asked-detail contract needs user-directed questions, not diagnostic keyword mentions', () => {
+  const expect = notionV3Suite.cases.find((item) => item.id === 'bt928-boiler-breaker-diagnostic').turns[0].expect;
+  const response = (text) => ({
+    text, textBeforeProducts: text, productsMarkdown: '', links: [],
+    completed: true, diagnosticError: null, serverProductsCount: 0,
+  });
+  const possibleCauses = 'Возможны перегрузка по мощности и току либо короткое замыкание; номинал автомата пока неизвестен. ';
+  const questions = 'Автомат выбивает сразу или через несколько минут? Какой сейчас номинал автомата в амперах? Какая мощность бойлера?';
+
+  assert.deepEqual(evaluate(expect, response(possibleCauses + questions)), []);
+  assert.equal(evaluate(expect, response(
+    `${possibleCauses}Время срабатывания: сразу или через несколько минут. Номинал автомата и мощность бойлера неизвестны. В чём причина?`,
+  )).filter((failure) => failure.startsWith('assistant did not ask for required detail')).length, 3);
+  assert(evaluate(expect, response(possibleCauses + questions.replace('Какая мощность бойлера?', '')))
+    .some((failure) => failure.includes('[мощн, кВт, ватт]')));
+  assert(evaluate(expect, response(possibleCauses + questions.replace('Какой сейчас номинал автомата в амперах? ', '')))
+    .some((failure) => failure.includes('[номинал, ампер, маркировк]')));
+  assert(evaluate(expect, response(possibleCauses + questions.replace('Какой сейчас номинал автомата в амперах?', 'Какой номинал автомата выбрать?')))
+    .some((failure) => failure.includes('[сейчас, текущ, установлен, стоит, у вас, вашего]')));
+  assert(evaluate(expect, response(possibleCauses + questions.replace('Автомат выбивает сразу или через несколько минут? ', '')))
+    .some((failure) => failure.includes('[сразу, немедленно, моментально]')));
+  assert(evaluate(expect, response(`${possibleCauses}${questions}\n\nНе нашёл подходящие товары по этому сочетанию параметров.`))
+    .some((failure) => failure.includes('forbidden assistant text')));
+});
+
+test('asked-detail contract accepts direct requests and validates nested groups generically', () => {
+  const expect = { require_asked_text_groups: [
+    [['велосипед'], ['скрип', 'звук']],
+    [['когда', 'после'], ['дожд', 'езды']],
+  ] };
+  const response = (text) => ({
+    text, textBeforeProducts: text, productsMarkdown: '', links: [],
+    completed: true, diagnosticError: null, serverProductsCount: 0,
+  });
+  assert.deepEqual(evaluate(expect, response('Уточните, где скрипит велосипед и когда это случается после дождя.')), []);
+  assert.equal(evaluate(expect, response('Скрип велосипеда бывает после дождя. Уточните детали.'))
+    .filter((failure) => failure.startsWith('assistant did not ask for required detail')).length, 2);
+  for (const invalid of [[], [[]], [[[]]], [[['']]], 'скрип']) {
+    assert.throws(() => validateExpectationObject({ require_asked_text_groups: invalid }), /require_asked_text_groups/);
+  }
 });
 
 test('Easy9 under the Schneider brand remains eligible while Acti 9 is excluded', () => {
@@ -1846,6 +1895,99 @@ test('evaluate accepts either a true exact intersection or an explicitly labelle
     links: [{ title: 'Лампа LED CORN G4' }, { title: 'Лампа LED A60 E27' }],
     serverProductsCount: 2,
   }).includes('neither exact product nor evidence-labelled split alternatives were returned'));
+});
+
+function axisReply(cards, text = '') {
+  const links = cards.map(([title, url]) => ({ title, url, price: 500, stockLine: 'Алматы (5 шт)' }));
+  const verifiedProductPages = new Map(links.map((link, index) => {
+    const identity = productUrlIdentity(link.url);
+    return [identity, {
+      identity, verified: true, sku: `TEST-${index}`, name: link.title, offerPrice: 500,
+      availability: 'https://schema.org/InStock',
+    }];
+  }).filter(([identity]) => identity));
+  return {
+    text, textBeforeProducts: text, productsMarkdown: '', links, verifiedProductPages,
+    completed: true, diagnosticError: null, serverProductsCount: links.length,
+    terminalDiagnosticSeen: true, logId: 'axis-proof',
+  };
+}
+
+test('BT-925 v3 requires source-backed lamp cards with exact axes or a complete, cautiously explained split', () => {
+  const expectation = notionV3Suite.cases.find((item) => item.id === 'bt925-corn-e27').turns[0].expect;
+  assert.equal(expectation.require_axis_exact_or_split.category_path, '/catalog/svetotexnika/lampyi/');
+  assert.doesNotThrow(() => validateExpectationObject(expectation));
+  const lamp = (slug) => `https://220volt.kz/catalog/svetotexnika/lampyi/${slug}/`;
+  const exact = axisReply([
+    ['Лампа LED CORN E27', lamp('corn-e27')],
+    ['Лампа кукуруза Е27', lamp('kukuruza-e27')],
+  ], 'Вот лампы с обоими параметрами.');
+  assert.deepEqual(evaluate(expectation, exact), []);
+
+  const splitText = 'Среди найденных товаров сочетание CORN и E27 не удалось подтвердить. Что важнее — форма CORN или цоколь E27?';
+  const split = axisReply([
+    ['Лампа LED CORN G4', lamp('corn-g4')],
+    ['Лампа LED A60 E27', lamp('a60-e27')],
+  ], splitText);
+  assert.deepEqual(evaluate(expectation, split), []);
+  assert(evaluate(expectation, { ...exact, verifiedProductPages: new Map() })
+    .some((failure) => failure.includes('unverified product page')));
+});
+
+test('BT-925 v3 rejects wrong products, code collisions, mixed cards, and unbounded split claims', () => {
+  const expectation = notionV3Suite.cases.find((item) => item.id === 'bt925-corn-e27').turns[0].expect;
+  const lamp = (slug) => `https://220volt.kz/catalog/svetotexnika/lampyi/${slug}/`;
+  const exact = ['Лампа LED CORN E27', lamp('corn-e27')];
+  const corn = ['Лампа LED CORN G4', lamp('corn-g4')];
+  const e27 = ['Лампа LED A60 E27', lamp('a60-e27')];
+  const disclosure = 'Среди найденных товаров сочетание CORN и E27 не удалось подтвердить.';
+  const question = 'Что важнее — форма CORN или цоколь E27?';
+  const invalid = [
+    ['wrong host', [exact, ['Лампа LED CORN E27', 'https://evil.example/catalog/svetotexnika/lampyi/corn-e27/']], '', 'invalid 220volt.kz product URL'],
+    ['fixture branch', [['Светильник CORN E27', 'https://220volt.kz/catalog/svetotexnika/svetilniki/corn-e27/']], '', 'outside required category'],
+    ['adhesive remover', [['Спрей CORN E27 для удаления наклеек', 'https://220volt.kz/catalog/bytovaya-himiya/sredstva/sprey-corn-e27/']], '', 'outside required category'],
+    ['lookalike category', [['Лампа CORN E27', 'https://220volt.kz/catalog/svetotexnika/lampyi-fake/corn-e27/']], '', 'outside required category'],
+    ['unrelated lamp', [exact, ['Лампа LED A60 G4', lamp('a60-g4')]], '', 'neither all exact axis intersections'],
+    ['CORN is not CORNER', [['Лампа LED CORNER E27', lamp('corner-e27')]], '', 'neither all exact axis intersections'],
+    ['E27 is not E270', [['Лампа LED CORN E270', lamp('corn-e270')]], '', 'neither all exact axis intersections'],
+    ['exact plus partial', [exact, e27], '', 'neither all exact axis intersections'],
+    ['one axis only', [corn], `${disclosure} ${question}`, 'neither all exact axis intersections'],
+    ['split without scoped disclosure', [corn, e27], `Такого сочетания не нашлось. ${question}`, 'scoped, cautious overlap disclosure'],
+    ['split without priority question', [corn, e27], disclosure, 'axis-priority question'],
+    ['priority statement is not a question', [corn, e27], `${disclosure} Приоритет — форма CORN или цоколь E27.`, 'axis-priority question'],
+    ['global absence', [corn, e27], `${disclosure} В каталоге таких товаров нет. ${question}`, 'global absence'],
+    ['unscoped absence', [corn, e27], `${disclosure} Такого сочетания нет. ${question}`, 'global absence'],
+  ];
+  for (const [name, cards, text, expectedFailure] of invalid) {
+    assert(evaluate(expectation, axisReply(cards, text)).some((failure) => failure.includes(expectedFailure)), name);
+  }
+});
+
+test('axis contract is parameterized and rejects malformed category, terms, and disclosure', () => {
+  const original = notionV3Suite.cases.find((item) => item.id === 'bt925-corn-e27').turns[0].expect.require_axis_exact_or_split;
+  const contract = {
+    category_path: '/catalog/elektrika/klemmniki/',
+    axes: [[{ term: 'WAGO', match: 'code' }], [{ term: '2P', match: 'code' }]],
+    split_disclosure_groups: [['среди найденных'], ['сочетание'], ['не удалось подтвердить']],
+    split_priority_question_groups: [['важнее'], ['WAGO'], ['2P']],
+  };
+  const expectation = { min_products: 1, require_axis_exact_or_split: contract };
+  assert.deepEqual(evaluate(expectation, axisReply([
+    ['Клемма WAGO 2P', 'https://220volt.kz/catalog/elektrika/klemmniki/wago-2p/'],
+  ])), []);
+  const invalid = [
+    [{ ...original, category_path: '/catalog/svetotexnika/lampyi' }, /category_path/],
+    [{ ...original, axes: [original.axes[0]] }, /exactly two title axes/],
+    [{ ...original, axes: [[], original.axes[1]] }, /must contain title terms/],
+    [{ ...original, axes: [[{ term: 'CORN', match: 'substring' }], original.axes[1]] }, /must be code or word_prefix/],
+    [{ ...original, axes: [[{ term: '', match: 'code' }], original.axes[1]] }, /bounded non-empty title term/],
+    [{ ...original, split_disclosure_groups: [] }, /split_disclosure_groups/],
+    [{ ...original, split_priority_question_groups: [] }, /split_priority_question_groups/],
+    [{ ...original, unexpected: true }, /unexpected/],
+  ];
+  for (const [value, message] of invalid) {
+    assert.throws(() => validateExpectationObject({ require_axis_exact_or_split: value }), message);
+  }
 });
 
 test('evaluate can forbid unsupported prose without rejecting evidence in product titles', () => {

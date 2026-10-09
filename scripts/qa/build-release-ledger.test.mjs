@@ -85,7 +85,7 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   }
 });
 
-test('all 138 base turns, including 20 synthetic turns, have explicit acceptance', () => {
+test('all 138 base turns, including 21 synthetic turns, have explicit acceptance', () => {
   let checked = 0;
   for (const manifest of MATRIX_MANIFESTS) {
     const suite = JSON.parse(fs.readFileSync(new URL(`./${manifest.file}`, import.meta.url), 'utf8'));
@@ -136,7 +136,7 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   assert.equal(sourceIndex.synthetic_api_continuations.length, 15);
   const syntheticTurns = ledger.runs.flatMap((run) => run.turns)
     .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v3.json' && turn.synthetic_scenario);
-  assert.equal(syntheticTurns.length, 20);
+  assert.equal(syntheticTurns.length, 21);
   for (const source of sourceIndex.synthetic_api_continuations) {
     const turn = syntheticTurns.find((item) => item.case_id === source.case_id && item.turn_index === source.turn_index);
     assert(turn, `${source.case_id} turn ${source.turn_index}`);
@@ -150,17 +150,21 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
     `${source.case_id}:${source.turn_index}`));
   assert.deepEqual(syntheticTurns.filter((turn) => !indexed.has(`${turn.case_id}:${turn.turn_index}`))
     .map((turn) => `${turn.case_id}:${turn.turn_index}`).sort(), [
+    'bt746-extension-50m:2',
     'bt929-lugs-35mm-clarification:4',
     'bt929-surveillance-cable-clarification:5',
     'bt929-warm-led-clarification:2',
     'bt929-warm-led-clarification:3',
     'bt929-warm-led-clarification:4',
   ]);
-  const observedLinkFollowUp = ledger.runs.flatMap((run) => run.turns)
+  const paraphrasedLinkFollowUp = ledger.runs.flatMap((run) => run.turns)
     .find((turn) => turn.case_id === 'bt746-extension-50m' && turn.turn_index === 2);
-  assert(observedLinkFollowUp);
-  assert.equal(observedLinkFollowUp.synthetic_scenario, false);
-  assert.equal(observedLinkFollowUp.message, 'дай ссылку');
+  assert(paraphrasedLinkFollowUp);
+  assert.equal(paraphrasedLinkFollowUp.synthetic_scenario, true);
+  assert.equal(paraphrasedLinkFollowUp.provenance_level, 'synthetic_scenario');
+  assert.equal(paraphrasedLinkFollowUp.message, 'дай ссылку');
+  assert.match(ledger.provenance_note, /336cf8d3-69ba-8092-ad9a-001d3f23aee6/u,
+    'link-request paraphrase must retain its exact source-comment locator');
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {
