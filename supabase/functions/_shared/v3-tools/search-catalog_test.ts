@@ -218,6 +218,29 @@ Deno.test("catalog retries a rate-limited single request instead of returning a 
   assertEquals(result.warnings, ["rate_limit_retry_recovered"]);
 });
 
+Deno.test("an outer recovery deadline prevents further catalog retries", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "motion",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    signal: controller.signal,
+    fetchImpl: (_input, init) => {
+      calls += 1;
+      assertEquals(init?.signal?.aborted, false);
+      controller.abort();
+      return Promise.resolve(new Response("", { status: 429 }));
+    },
+  }, new Map());
+
+  assertEquals(calls, 1);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "catalog_timeout");
+});
+
 Deno.test("catalog materializes a bounded later-page window when upstream total has no usable first-page cards", async () => {
   const calls: Array<{ page: number; perPage: number }> = [];
   const fetchImpl: typeof fetch = (input) => {

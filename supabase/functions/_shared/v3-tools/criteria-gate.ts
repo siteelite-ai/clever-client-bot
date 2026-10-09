@@ -794,13 +794,27 @@ export function resolveRenderCriteria(
   userBacked: Criterion[],
   strictUserEvidenceOnly: boolean,
 ): Criterion[] {
+  const isCustomerApplicationAlternative = (criterion: Criterion) =>
+    criterion.op === "eq" &&
+    criterion.proof_scope === "application_suitability" &&
+    criterion.evidence === "user_explicit" &&
+    (criterion.level ?? "A") === "A";
+  const sameApplicationAlternative = (left: Criterion, right: Criterion) =>
+    isCustomerApplicationAlternative(left) &&
+    isCustomerApplicationAlternative(right) &&
+    normalizeKey(left.key) === normalizeKey(right.key) &&
+    normalizeKey(String(left.value)) === normalizeKey(String(right.value));
   const userKeys = new Set(
     userBacked.map((criterion) => normalizeKey(criterion.key)),
   );
   const base = strictUserEvidenceOnly ? userBacked : [
     ...userBacked,
     ...enforced.filter((criterion) =>
-      !userKeys.has(normalizeKey(criterion.key))
+      !userKeys.has(normalizeKey(criterion.key)) ||
+      (isCustomerApplicationAlternative(criterion) &&
+        !userBacked.some((owned) =>
+          sameApplicationAlternative(owned, criterion)
+        ))
     ),
   ];
   const baseKeys = new Set(
@@ -811,7 +825,11 @@ export function resolveRenderCriteria(
     ...(strictUserEvidenceOnly
       ? []
       : raw.filter((criterion) =>
-        !baseKeys.has(normalizeKey(String(criterion?.key ?? "")))
+        !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))) ||
+        (criterion && isCustomerApplicationAlternative(criterion) &&
+          !base.some((existing) =>
+            sameApplicationAlternative(existing, criterion)
+          ))
       )),
   ].filter((criterion) =>
     criterion && typeof criterion.key === "string" &&

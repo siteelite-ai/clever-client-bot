@@ -13348,14 +13348,33 @@ async function runExpertLoop(
             minimum_results: resultCardinality.minimum,
           });
           for (const attempt of shortfallPlan) {
-            // search_catalog has its own 8 s cap. Leave another bounded
-            // interval for evidence rendering and terminal persistence.
+            // The catalog may retry 429 twice, so its own per-request 8 s
+            // timer is not an end-to-end cap. Abort this optional recovery
+            // independently and leave room for final evidence rendering.
             if (now() > TURN_TIMEOUT_MS - 12_000) break;
-            const recovered = await runTool(
-              "search_catalog",
-              attempt.args,
-              ctx,
+            const recoveryBudgetMs = Math.min(
+              8_500,
+              Math.max(1, TURN_TIMEOUT_MS - now() - 4_000),
             );
+            const recovered: ToolResult = await runWithDeadline(
+              (signal) =>
+                executeSearchCatalog(
+                  attempt.args as unknown as SearchCatalogInput,
+                  {
+                    baseUrl: CATALOG_BASE_URL,
+                    apiToken: ctx.catalogToken,
+                    timeoutMs: Math.min(6_000, recoveryBudgetMs),
+                    signal,
+                  },
+                  ctx.cache,
+                ),
+              recoveryBudgetMs,
+            ).catch((): ToolResult => ({
+              tool: "search_catalog",
+              ok: false,
+              error_code: "catalog_timeout",
+              message: "bounded cardinality recovery timed out",
+            }));
             const candidatePool = recovered.ok &&
                 recovered.tool === "search_catalog"
               ? filterSelectionRecoveryPool(recovered.results, attempt)
@@ -16055,6 +16074,9 @@ async function runExpertLoop(
               Boolean(
                 product &&
                   Number.isFinite(product.price) && product.price > 0 &&
+                  !preExcludedProductUrlSet.has(
+                    productUrlIdentity(product.url) ?? "",
+                  ) &&
                   titleSupportsGroundedAxis(product.pagetitle, modifier),
               )
             );

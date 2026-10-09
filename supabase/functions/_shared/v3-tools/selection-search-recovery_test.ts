@@ -22,6 +22,7 @@ import {
   sourceProvenSelectionPool,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
+import { type Criterion, resolveTerminalSelectionCriteria } from "./criteria-gate.ts";
 
 Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
   const messages = buildCatalogEmptySynthesisMessages(
@@ -455,6 +456,55 @@ Deno.test("a nonempty short selection gets bounded literal recovery in the live 
     sourceProvenSelectionPool(recovered, criteria, 4000).map(({ id }) => id),
     ["household"],
   );
+});
+
+Deno.test("frozen application alternative survives final composition and activates generic shortfall recovery", () => {
+  const exact: Criterion[] = ["Бытовые устройства настольные", "Бытовые устройства подвесные"]
+    .map((value) => ({
+      key: "Класс применения",
+      op: "eq",
+      value,
+      evidence: "user_explicit",
+    }));
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const sensor: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    evidence: "derived_required",
+  };
+  const mandatory = resolveTerminalSelectionCriteria(
+    [...exact, application, sensor],
+    [],
+    exact,
+  );
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: {
+      mode: "by_filter",
+      max_price: 4000,
+      options: { class: [exact[0].value], sensor: ["да"] },
+    },
+    customer_message: "Нужны бытовые устройства с датчиком движения до 4000, несколько вариантов",
+    mandatory_criteria: mandatory,
+    leaf_categories: ["Устройства"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  });
+  assertEquals(plan.length > 0, true);
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "движения",
+    category_in: ["Устройства"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(plan[0].evidence_required_criteria, mandatory);
 });
 
 Deno.test("cardinality recovery never widens an explicit narrow class", () => {

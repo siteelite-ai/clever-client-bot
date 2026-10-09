@@ -106,6 +106,8 @@ export interface CatalogClientDeps {
   apiToken: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Optional turn-level deadline for bounded recovery searches. */
+  signal?: AbortSignal;
 }
 
 export interface SearchCatalogInput {
@@ -323,10 +325,15 @@ async function singleSearch(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    if (deps.signal?.aborted) {
+      return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
+    }
     const res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
-      signal: controller.signal,
+      signal: deps.signal
+        ? AbortSignal.any([controller.signal, deps.signal])
+        : controller.signal,
     });
 
     if (!res.ok) {
@@ -381,7 +388,8 @@ async function singleSearch(
     }
     return { ok: true, total, results };
   } catch (e) {
-    const isAbort = (e as { name?: string })?.name === "AbortError";
+    const isAbort = controller.signal.aborted || deps.signal?.aborted ||
+      (e as { name?: string })?.name === "AbortError";
     return { ok: false, error_code: isAbort ? "catalog_timeout" : "transport_5xx", message: (e as Error)?.message ?? "fetch failed" };
   } finally {
     clearTimeout(timer);
@@ -577,7 +585,9 @@ async function searchWithRateLimitRetry(
 ): Promise<SingleSearchResult> {
   let result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
   for (let attempt = 1; !result.ok && result.error_code === "rate_limited" && attempt <= 2; attempt++) {
+    if (deps.signal?.aborted) return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
     await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    if (deps.signal?.aborted) return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
     result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
     if (result.ok && !warnings.includes("rate_limit_retry_recovered")) warnings.push("rate_limit_retry_recovered");
   }

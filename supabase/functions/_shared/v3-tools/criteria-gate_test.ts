@@ -197,6 +197,68 @@ Deno.test("render criteria: explicit user filters override inferred filters on t
   );
 });
 
+Deno.test("customer application proof remains an OR alternative beside exact live classes", () => {
+  const exact = ["Бытовые приборы настольные", "Бытовые приборы подвесные"]
+    .map((value): Criterion => ({
+      key: "Класс применения",
+      op: "eq",
+      value,
+      level: "A",
+      evidence: "user_explicit",
+    }));
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const feature: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const modelClass: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "Промышленные приборы",
+    level: "A",
+    evidence: "model_assumption",
+  };
+  const criteria = resolveTerminalSelectionCriteria(
+    [...exact, application, feature],
+    [modelClass, application],
+    exact,
+  );
+  assertEquals(criteria, [...exact, application, feature]);
+  const candidate = (id: string, description: string): ProductRef => ({
+    ...product(id, [
+      "Класс применения: Приборы для учреждений",
+      "С датчиком движения: да",
+    ]),
+    description_excerpt: description,
+  });
+  assertEquals(
+    applyCriteriaGate([
+      candidate("home", "Предназначен для бытового применения."),
+      candidate("factory", "Предназначен только для промышленного применения."),
+    ], criteria).passed_ids,
+    ["home"],
+  );
+  assertEquals(
+    resolveTerminalSelectionCriteria(
+      [...exact, application],
+      [modelClass],
+      exact,
+      true,
+    ),
+    exact,
+  );
+});
+
 Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
   const first = [{
     key: "Connector",
