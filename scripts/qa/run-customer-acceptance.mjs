@@ -264,6 +264,295 @@ export function resolveExpectations(defaults = {}, expect = {}) {
   return { ...defaults, ...expect };
 }
 
+// Keep this independent of the JSON suites: evaluate() ignores unknown keys,
+// which otherwise lets a typo silently weaken even a non-strict/ad-hoc run.
+const SUPPORTED_EXPECTATION_KEYS = new Set([
+  'conversation_boundary',
+  'deprioritized_warehouses',
+  'forbid_assistant_text',
+  'forbid_every_product_title_any',
+  'forbid_product_title',
+  'forbid_selection_criteria_any',
+  'forbid_text',
+  'forbid_tool_summary',
+  'forbid_unrendered_catalog_facts',
+  'max_duration_ms',
+  'max_product_price',
+  'max_products',
+  'min_products',
+  'min_text_before_products_chars',
+  'min_text_chars',
+  'require_any_text',
+  'require_every_product_card_groups',
+  'require_every_product_measurement',
+  'require_every_product_page',
+  'require_every_product_pair_around',
+  'require_every_product_title_any',
+  'require_every_product_title_groups',
+  'require_exact_or_split',
+  'require_new_product_skus',
+  'require_product_groups_or_gap',
+  'require_product_title',
+  'require_products_or_text_groups',
+  'require_result_cardinality',
+  'require_selection_criteria_evidence',
+  'require_selection_criteria_groups',
+  'require_text_groups',
+]);
+
+function expectationRecord(value, location) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${location}: expectation must be an object`);
+  }
+}
+
+function expectationKeys(value, allowed, location) {
+  expectationRecord(value, location);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`${location}: unknown expectation key ${key}`);
+  }
+}
+
+function expectationMinMax(value, minimum, maximum, location) {
+  if (value[minimum] !== undefined && !Number.isFinite(value[minimum])) {
+    throw new Error(`${location}.${minimum}: must be a finite number`);
+  }
+  if (value[maximum] !== undefined && !Number.isFinite(value[maximum])) {
+    throw new Error(`${location}.${maximum}: must be a finite number`);
+  }
+  if (value[minimum] > value[maximum]) {
+    throw new Error(`${location}: ${minimum} cannot exceed ${maximum}`);
+  }
+}
+
+function expectationStringList(value, location, { allowEmpty = false } = {}) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) ||
+      value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error(`${location}: must be ${allowEmpty ? 'an array' : 'a non-empty array'} of non-empty strings`);
+  }
+}
+
+function expectationGroups(value, location) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${location}: must be a non-empty array of phrase groups`);
+  }
+  for (const [index, group] of value.entries()) {
+    expectationStringList(group, `${location}[${index}]`);
+  }
+}
+
+function expectationInteger(value, location, minimum = 0) {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${location}: must be an integer >= ${minimum}`);
+  }
+}
+
+const SOURCE_RULE_KEYS = new Set(['require_any', 'forbid_any', 'exact_any', 'min_numeric', 'greater_than', 'less_than']);
+const PAGE_RULE_KEYS = new Set(['facets', 'description', 'name', 'all_of', 'any_of']);
+
+function validateSourceRuleKeys(rule, location, facet = false) {
+  expectationKeys(rule, facet ? new Set([...SOURCE_RULE_KEYS, 'name']) : SOURCE_RULE_KEYS, location);
+  if (facet && (typeof rule.name !== 'string' || !rule.name.trim())) {
+    throw new Error(`${location}.name: must be a non-empty string`);
+  }
+  if (!validSourceRule(rule)) {
+    throw new Error(`${location}: source rule must contain at least one valid operator`);
+  }
+  expectationMinMax(rule, 'min_numeric', 'less_than', location);
+  expectationMinMax(rule, 'greater_than', 'less_than', location);
+  if (Number.isFinite(rule.greater_than) && Number.isFinite(rule.less_than) &&
+      rule.greater_than >= rule.less_than) {
+    throw new Error(`${location}: greater_than must be less than less_than`);
+  }
+  if (Number.isFinite(rule.min_numeric) && Number.isFinite(rule.less_than) &&
+      rule.min_numeric >= rule.less_than) {
+    throw new Error(`${location}: min_numeric must be less than less_than`);
+  }
+}
+
+function validateProductPageRuleKeys(rule, location) {
+  expectationKeys(rule, PAGE_RULE_KEYS, location);
+  if (rule.facets !== undefined) {
+    if (!Array.isArray(rule.facets)) throw new Error(`${location}.facets: must be an array`);
+    for (const [index, facet] of rule.facets.entries()) {
+      validateSourceRuleKeys(facet, `${location}.facets[${index}]`, true);
+    }
+  }
+  for (const field of ['description', 'name']) {
+    if (rule[field] !== undefined) validateSourceRuleKeys(rule[field], `${location}.${field}`);
+  }
+  for (const field of ['all_of', 'any_of']) {
+    if (rule[field] !== undefined) {
+      if (!Array.isArray(rule[field]) || rule[field].length === 0) {
+        throw new Error(`${location}.${field}: must be a non-empty array`);
+      }
+      for (const [index, branch] of rule[field].entries()) {
+        validateProductPageRuleKeys(branch, `${location}.${field}[${index}]`);
+      }
+    }
+  }
+}
+
+export function validateExpectationObject(expect, location = 'expect') {
+  expectationKeys(expect, SUPPORTED_EXPECTATION_KEYS, location);
+  expectationMinMax(expect, 'min_products', 'max_products', location);
+  for (const field of ['min_products', 'max_products', 'min_text_chars', 'min_text_before_products_chars']) {
+    if (expect[field] !== undefined) expectationInteger(expect[field], `${location}.${field}`);
+  }
+  for (const field of ['max_duration_ms', 'max_product_price', 'require_every_product_pair_around']) {
+    if (expect[field] !== undefined && (!Number.isFinite(expect[field]) || expect[field] < 0)) {
+      throw new Error(`${location}.${field}: must be a non-negative finite number`);
+    }
+  }
+  for (const field of [
+    'require_any_text', 'require_product_title', 'require_every_product_title_any',
+  ]) {
+    if (expect[field] !== undefined) expectationStringList(expect[field], `${location}.${field}`);
+  }
+  for (const field of [
+    'forbid_text', 'forbid_assistant_text', 'forbid_tool_summary', 'forbid_product_title',
+    'forbid_every_product_title_any', 'forbid_selection_criteria_any', 'deprioritized_warehouses',
+  ]) {
+    if (expect[field] !== undefined) expectationStringList(expect[field], `${location}.${field}`, { allowEmpty: true });
+  }
+  for (const field of [
+    'require_text_groups', 'require_every_product_title_groups',
+    'require_every_product_card_groups', 'require_selection_criteria_groups',
+  ]) {
+    if (expect[field] !== undefined) expectationGroups(expect[field], `${location}.${field}`);
+  }
+  for (const field of [
+    'require_new_product_skus', 'require_selection_criteria_evidence', 'forbid_unrendered_catalog_facts',
+  ]) {
+    if (expect[field] !== undefined && typeof expect[field] !== 'boolean') {
+      throw new Error(`${location}.${field}: must be a boolean`);
+    }
+  }
+  if (expect.conversation_boundary !== undefined &&
+      !['new_task', 'continuation'].includes(expect.conversation_boundary)) {
+    throw new Error(`${location}.conversation_boundary: must be new_task or continuation`);
+  }
+  if (expect.require_every_product_page !== undefined) {
+    const pageLocation = `${location}.require_every_product_page`;
+    validateProductPageRuleKeys(expect.require_every_product_page, pageLocation);
+    if (!validProductPageRules(expect.require_every_product_page)) {
+      throw new Error(`${pageLocation}: invalid product-page source evidence contract`);
+    }
+  }
+  if (expect.require_every_product_measurement !== undefined) {
+    const contract = expect.require_every_product_measurement;
+    const contractLocation = `${location}.require_every_product_measurement`;
+    expectationKeys(contract, new Set(['units', 'min', 'max', 'allow_compact_numeric']), contractLocation);
+    expectationStringList(contract.units, `${contractLocation}.units`);
+    expectationMinMax(contract, 'min', 'max', contractLocation);
+    if (contract.allow_compact_numeric !== undefined && typeof contract.allow_compact_numeric !== 'boolean') {
+      throw new Error(`${contractLocation}.allow_compact_numeric: must be a boolean`);
+    }
+  }
+  for (const [field, keys] of [
+    ['require_result_cardinality', ['target', 'minimum', 'mode', 'explicit']],
+    ['require_exact_or_split', ['exact_title_groups', 'split_title_groups', 'split_text_groups']],
+    ['require_products_or_text_groups', ['min_products', 'text_groups']],
+  ]) {
+    if (expect[field] !== undefined) {
+      expectationKeys(expect[field], new Set(keys), `${location}.${field}`);
+      if (field === 'require_result_cardinality' && Object.keys(expect[field]).length === 0) {
+        throw new Error(`${location}.${field}: must constrain at least one cardinality field`);
+      }
+    }
+  }
+  if (expect.require_result_cardinality !== undefined) {
+    const contract = expect.require_result_cardinality;
+    const contractLocation = `${location}.require_result_cardinality`;
+    for (const field of ['target', 'minimum']) {
+      if (contract[field] !== undefined) expectationInteger(contract[field], `${contractLocation}.${field}`);
+    }
+    if (contract.minimum > contract.target) {
+      throw new Error(`${contractLocation}: minimum cannot exceed target`);
+    }
+    if (contract.mode !== undefined && (typeof contract.mode !== 'string' || !contract.mode.trim())) {
+      throw new Error(`${contractLocation}.mode: must be a non-empty string`);
+    }
+    if (contract.explicit !== undefined && typeof contract.explicit !== 'boolean') {
+      throw new Error(`${contractLocation}.explicit: must be a boolean`);
+    }
+  }
+  if (expect.require_exact_or_split !== undefined) {
+    const contract = expect.require_exact_or_split;
+    const contractLocation = `${location}.require_exact_or_split`;
+    const hasExact = contract.exact_title_groups !== undefined;
+    const hasSplitTitles = contract.split_title_groups !== undefined;
+    const hasSplitText = contract.split_text_groups !== undefined;
+    if (!hasExact && !hasSplitTitles && !hasSplitText) {
+      throw new Error(`${contractLocation}: requires an exact or split alternative`);
+    }
+    if (hasSplitTitles !== hasSplitText) {
+      throw new Error(`${contractLocation}: split alternative requires both title and text groups`);
+    }
+    for (const field of ['exact_title_groups', 'split_title_groups', 'split_text_groups']) {
+      if (contract[field] !== undefined) expectationGroups(contract[field], `${contractLocation}.${field}`);
+    }
+  }
+  if (expect.require_products_or_text_groups !== undefined) {
+    const contract = expect.require_products_or_text_groups;
+    const contractLocation = `${location}.require_products_or_text_groups`;
+    expectationInteger(contract.min_products, `${contractLocation}.min_products`, 1);
+    expectationGroups(contract.text_groups, `${contractLocation}.text_groups`);
+  }
+  if (expect.require_product_groups_or_gap !== undefined) {
+    if (!Array.isArray(expect.require_product_groups_or_gap) || expect.require_product_groups_or_gap.length === 0) {
+      throw new Error(`${location}.require_product_groups_or_gap: must be a non-empty array`);
+    }
+    for (const [index, contract] of expect.require_product_groups_or_gap.entries()) {
+      const contractLocation = `${location}.require_product_groups_or_gap[${index}]`;
+      expectationKeys(contract, new Set(['title_groups', 'gap_text_groups']), contractLocation);
+      if (contract.title_groups === undefined && contract.gap_text_groups === undefined) {
+        throw new Error(`${contractLocation}: requires product or gap groups`);
+      }
+      for (const field of ['title_groups', 'gap_text_groups']) {
+        if (contract[field] !== undefined) expectationGroups(contract[field], `${contractLocation}.${field}`);
+      }
+    }
+  }
+}
+
+/** Validate every source contract, not just turns selected by --case/--variant. */
+export function validateExpectationSuite(suiteToValidate, variationSuiteToValidate = null) {
+  if (!Array.isArray(suiteToValidate?.cases)) throw new Error('Acceptance suite must contain cases');
+  if (suiteToValidate.default_expectations !== undefined) {
+    validateExpectationObject(suiteToValidate.default_expectations, 'suite.default_expectations');
+  }
+  const defaults = suiteToValidate.default_expectations ?? {};
+  const variants = variationSuiteToValidate?.variants ?? [];
+  if (!Array.isArray(variants)) throw new Error('Variation suite must contain a variants array');
+  const knownCaseIds = new Set(suiteToValidate.cases.map((testCase) => testCase.id));
+  const unknownVariantCases = [...new Set(variants.map((variant) => variant.case_id).filter((id) => !knownCaseIds.has(id)))];
+  if (unknownVariantCases.length > 0) {
+    throw new Error(`Unknown variation case: ${unknownVariantCases.join(', ')}`);
+  }
+  for (const testCase of suiteToValidate.cases) {
+    if (!Array.isArray(testCase.turns)) throw new Error(`${testCase.id}: turns must be an array`);
+    for (const [index, turn] of testCase.turns.entries()) {
+      const location = `${testCase.id}.turns[${index}].expect`;
+      if (turn.expect !== undefined) validateExpectationObject(turn.expect, location);
+      validateExpectationObject(resolveExpectations(defaults, turn.expect), `${location} (effective)`);
+    }
+    const executions = resolveCaseExecutions(testCase, variants);
+    for (const execution of executions.slice(1)) {
+      for (const [index, override] of (execution.expect_overrides ?? []).entries()) {
+        if (override === null) continue;
+        const location = `${testCase.id}/${execution.id}.expect_overrides[${index}]`;
+        validateExpectationObject(override, location);
+        validateExpectationObject(resolveExpectations(
+          resolveExpectations(defaults, testCase.turns[index].expect), override,
+        ), `${location} (effective)`);
+      }
+    }
+  }
+}
+
+validateExpectationSuite(suite, variationSuite);
+
 const strictManifest = validateStrictFullSuite({
   argv: process.argv,
   suite,

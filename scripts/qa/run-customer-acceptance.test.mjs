@@ -6,7 +6,8 @@ import {
   ACCEPTANCE_TURN_TIMEOUT_MS, DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn,
   parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
   resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
-  validateCliArgs, verifyProductLinks, verifyProductPage,
+  validateCliArgs, validateExpectationObject, validateExpectationSuite,
+  verifyProductLinks, verifyProductPage,
 } from './run-customer-acceptance.mjs';
 
 const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.json', import.meta.url));
@@ -131,6 +132,109 @@ test('suite defaults are inherited and explicit turn expectations win', () => {
     resolveExpectations({ max_duration_ms: 30_000, max_products: 5 }, { max_products: 1 }),
     { max_duration_ms: 30_000, max_products: 1 },
   );
+});
+
+test('all current acceptance matrices have recognized expectations', () => {
+  for (const suite of [acceptanceSuite, notionSuite, cardinalitySuite]) {
+    assert.doesNotThrow(() => validateExpectationSuite(suite));
+  }
+  assert.doesNotThrow(() => validateExpectationSuite(septemberSuite, septemberVariations));
+});
+
+test('expectation typos in defaults and unselected base cases fail before planning requests', () => {
+  const suite = {
+    default_expectations: { max_products: 5 },
+    cases: [
+      { id: 'selected', turns: [{ message: 'first', expect: { min_products: 1 } }] },
+      { id: 'unselected', turns: [{ message: 'second', expect: { min_produts: 2 } }] },
+    ],
+  };
+  assert.throws(() => validateExpectationSuite(suite), /unselected\.turns\[0\]\.expect: unknown expectation key min_produts/);
+  suite.cases[1].turns[0].expect = { min_products: 2 };
+  suite.default_expectations = { max_produts: 5 };
+  assert.throws(() => validateExpectationSuite(suite), /suite\.default_expectations: unknown expectation key max_produts/);
+});
+
+test('expectation typo in a variation override fails even when another variant is selected', () => {
+  const suite = {
+    default_expectations: { min_products: 1 },
+    cases: [{ id: 'example', turns: [{ message: 'products', expect: { max_products: 5 } }] }],
+  };
+  const variationSuite = { variants: [
+    { id: 'selected', case_id: 'example', messages: ['products, please'] },
+    { id: 'unselected', case_id: 'example', messages: ['show products'], expect_overrides: [{ max_produts: 3 }] },
+  ] };
+  assert.throws(() => validateExpectationSuite(suite, variationSuite),
+    /example\/unselected\.expect_overrides\[0\]: unknown expectation key max_produts/);
+});
+
+test('effective expectations reject contradictory limits introduced across layers', () => {
+  const suite = {
+    default_expectations: { min_products: 3 },
+    cases: [{ id: 'example', turns: [{ message: 'products', expect: { max_products: 5 } }] }],
+  };
+  const variationSuite = { variants: [{
+    id: 'one-only', case_id: 'example', messages: ['one product'], expect_overrides: [{ max_products: 1 }],
+  }] };
+  assert.throws(() => validateExpectationSuite(suite, variationSuite),
+    /one-only\.expect_overrides\[0\] \(effective\): min_products cannot exceed max_products/);
+  assert.throws(() => validateExpectationObject({ min_products: 4, max_products: 2 }),
+    /min_products cannot exceed max_products/);
+});
+
+test('nested source, measurement, cardinality, and split contracts reject ignored keys', () => {
+  const cases = [
+    [{ require_every_product_page: { facets: [{ name: 'Мощность', require_an: ['100'] }] } }, /require_an/],
+    [{ require_every_product_measurement: { units: ['Вт'], minn: 100 } }, /minn/],
+    [{ require_result_cardinality: { target: 3, minimun: 2 } }, /minimun/],
+    [{ require_exact_or_split: { exact_title_group: [['Кабель']] } }, /exact_title_group/],
+  ];
+  for (const [expect, error] of cases) {
+    assert.throws(() => validateExpectationObject(expect), error);
+  }
+  assert.throws(() => validateExpectationObject({
+    require_every_product_measurement: { units: ['Вт'], min: 100, max: 50 },
+  }), /min cannot exceed max/);
+});
+
+test('empty groups and incomplete alternatives cannot make an active assertion vacuously pass', () => {
+  const invalid = [
+    [{ require_text_groups: [] }, /require_text_groups: must be a non-empty array/],
+    [{ require_every_product_title_groups: [[]] }, /require_every_product_title_groups\[0\]/],
+    [{ require_selection_criteria_groups: [] }, /require_selection_criteria_groups: must be a non-empty array/],
+    [{ require_product_groups_or_gap: [] }, /require_product_groups_or_gap: must be a non-empty array/],
+    [{ require_product_groups_or_gap: [{ title_groups: [] }] }, /title_groups: must be a non-empty array/],
+    [{ require_exact_or_split: { split_title_groups: [], split_text_groups: [] } }, /split_title_groups: must be a non-empty array/],
+    [{ require_exact_or_split: { exact_title_groups: [['CORN']], split_title_groups: [['E27']] } }, /requires both title and text groups/],
+    [{ require_exact_or_split: {} }, /requires an exact or split alternative/],
+    [{ require_products_or_text_groups: { min_products: 1, text_groups: [] } }, /text_groups: must be a non-empty array/],
+  ];
+  for (const [expect, error] of invalid) {
+    assert.throws(() => validateExpectationObject(expect), error);
+  }
+  assert.doesNotThrow(() => validateExpectationObject({
+    require_exact_or_split: { exact_title_groups: [['CORN'], ['E27']] },
+  }));
+  assert.doesNotThrow(() => validateExpectationObject({
+    require_exact_or_split: { split_title_groups: [['CORN']], split_text_groups: [['отдельно']] },
+  }));
+});
+
+test('nested evidence contracts reject missing operators, empty branches, and invalid measurements or cardinality', () => {
+  const invalid = [
+    [{ require_every_product_page: { facets: [{ name: 'Мощность' }] } }, /source rule must contain at least one valid operator/],
+    [{ require_every_product_page: { facets: [{ name: 'Мощность', require_any: [] }] } }, /source rule must contain at least one valid operator/],
+    [{ require_every_product_page: { all_of: [] } }, /all_of: must be a non-empty array/],
+    [{ require_every_product_measurement: { units: [], min: 100 } }, /units: must be a non-empty array/],
+    [{ require_every_product_measurement: { units: ['Вт'], min: '100' } }, /min: must be a finite number/],
+    [{ require_every_product_measurement: { units: ['Вт'], allow_compact_numeric: 'yes' } }, /allow_compact_numeric: must be a boolean/],
+    [{ require_result_cardinality: { target: 2, minimum: 3 } }, /minimum cannot exceed target/],
+    [{ require_result_cardinality: { target: '2' } }, /target: must be an integer/],
+    [{ require_result_cardinality: { explicit: 'true' } }, /explicit: must be a boolean/],
+  ];
+  for (const [expect, error] of invalid) {
+    assert.throws(() => validateExpectationObject(expect), error);
+  }
 });
 
 test('case variations reuse turn contracts without changing the base execution', () => {
