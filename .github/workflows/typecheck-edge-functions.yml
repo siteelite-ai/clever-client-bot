@@ -12,14 +12,10 @@ on:
       - 'public/widget.js'
       - 'public/widget-version.js'
       - 'public/widget-version.json'
-      - 'scripts/qa/check-widget-release-contract.mjs'
-      - 'scripts/qa/customer-acceptance-cases.json'
-      - 'scripts/qa/run-customer-acceptance.mjs'
-      - 'scripts/qa/run-customer-acceptance.test.mjs'
-      - 'scripts/qa/widget-browser-smoke.mjs'
-      - 'scripts/qa/widget-browser-smoke.test.mjs'
-      - 'scripts/qa/widget-loader-contract.test.mjs'
-      - 'scripts/qa/widget-session-state.test.mjs'
+      - 'scripts/qa/**'
+      - 'docs/qa/release-inventory-v2-20261009.json'
+      - 'docs/qa/source-provenance-20261009.json'
+      - 'docs/qa/notion-source-index-20261009.json'
       - '.github/workflows/typecheck-edge-functions.yml'
   pull_request:
     paths:
@@ -32,14 +28,10 @@ on:
       - 'public/widget.js'
       - 'public/widget-version.js'
       - 'public/widget-version.json'
-      - 'scripts/qa/check-widget-release-contract.mjs'
-      - 'scripts/qa/customer-acceptance-cases.json'
-      - 'scripts/qa/run-customer-acceptance.mjs'
-      - 'scripts/qa/run-customer-acceptance.test.mjs'
-      - 'scripts/qa/widget-browser-smoke.mjs'
-      - 'scripts/qa/widget-browser-smoke.test.mjs'
-      - 'scripts/qa/widget-loader-contract.test.mjs'
-      - 'scripts/qa/widget-session-state.test.mjs'
+      - 'scripts/qa/**'
+      - 'docs/qa/release-inventory-v2-20261009.json'
+      - 'docs/qa/source-provenance-20261009.json'
+      - 'docs/qa/notion-source-index-20261009.json'
       - '.github/workflows/typecheck-edge-functions.yml'
 
 jobs:
@@ -79,8 +71,11 @@ jobs:
       - name: Check widget release contract
         run: node scripts/qa/check-widget-release-contract.mjs
 
-      - name: Test customer acceptance and browser evaluators
-        run: node --test scripts/qa/run-customer-acceptance.test.mjs scripts/qa/widget-browser-smoke.test.mjs scripts/qa/widget-loader-contract.test.mjs scripts/qa/widget-session-state.test.mjs
+      - name: Test all QA evaluators and widget contracts
+        run: node --test scripts/qa/*.test.mjs
+
+      - name: Verify pinned release inventory
+        run: node scripts/qa/build-release-ledger.mjs --check
 
       - name: Test shared v3 safeguards
         run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts
