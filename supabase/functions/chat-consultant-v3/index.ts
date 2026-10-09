@@ -117,6 +117,7 @@ import {
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  compileApplicationSuitabilityAlternatives,
   compileCustomerClassificationCriteria,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
@@ -157,6 +158,7 @@ import {
   verifySelectionTargetWithGroundedSearch,
   verifySelectionTargetWithNamedEntityCategory,
   verifySelectionTargetWithVisibleTitle,
+  verifyReplacementDestinationFit,
 } from "../_shared/v3-tools/selection-contract.ts";
 import {
   aliasDuplicatesIndependentCatalogClass,
@@ -6186,6 +6188,33 @@ async function runExpertLoop(
       });
     }
     const compoundRemoved = afterVisibleRequest - guarded.length;
+    // Terminal render recoveries do not pass through the model's structured
+    // selection-target gate. Keep the customer-owned installation contract at
+    // this shared final-card boundary as well.
+    const destinationFit = verifyReplacementDestinationFit(
+      userMessage,
+      guarded.map((id) => ctx.cache.get(id)).filter((product): product is ProductFull =>
+        Boolean(product)
+      ),
+    );
+    if (destinationFit.required) {
+      const accepted = new Set(destinationFit.passed_ids);
+      const beforeDestination = guarded.length;
+      guarded = guarded.filter((id) => accepted.has(id));
+      if (guarded.length !== beforeDestination) {
+        steps.push({
+          step: "v3_replacement_destination_fit_final_card_gate",
+          ms: now(),
+          meta: {
+            place: destinationFit.place,
+            minimum_area_m2: destinationFit.minimum_area_m2,
+            before: beforeDestination,
+            after: guarded.length,
+            rejected: destinationFit.rejected_ids,
+          },
+        });
+      }
+    }
     const priceIntent = detectPriceDirection(userMessage);
     const superlative = priceIntent?.kind === "superlative"
       ? priceIntent
@@ -7819,7 +7848,10 @@ async function runExpertLoop(
                 };
               });
           const customerGroundedClassificationCriteria =
-            compileCustomerClassificationCriteria(declaration);
+            [
+              ...compileCustomerClassificationCriteria(declaration),
+              ...compileApplicationSuitabilityAlternatives(declaration),
+            ];
           derivedExcludedClassificationCriteria =
             mergeMandatorySelectionCriteria([
               ...derivedExcludedClassificationCriteria,
@@ -10650,9 +10682,27 @@ async function runExpertLoop(
                 });
               }
             }
-            const passed = ids.filter((id) =>
-              targetReport.passed_ids.includes(id)
+            const destinationFit = verifyReplacementDestinationFit(
+              userMessage,
+              products,
             );
+            const passed = ids.filter((id) =>
+              targetReport.passed_ids.includes(id) &&
+              destinationFit.passed_ids.includes(id)
+            );
+            if (destinationFit.required) {
+              steps.push({
+                step: "v3_replacement_destination_fit_gate",
+                ms: now(),
+                meta: {
+                  place: destinationFit.place,
+                  minimum_area_m2: destinationFit.minimum_area_m2,
+                  before: ids.length,
+                  after: destinationFit.passed_ids.length,
+                  rejected: destinationFit.rejected_ids,
+                },
+              });
+            }
             if (passed.length === 0) {
               gateShortCircuit ??= {
                 tool: "render_products",
@@ -10661,6 +10711,9 @@ async function runExpertLoop(
                 message:
                   "ни одна карточка не подтверждает целевой класс товара и контекст применения из твоего рассуждения; выполни новый поиск по исходной цели либо честно сообщи, что подходящих позиций нет",
                 report: targetReport,
+                destination_fit: destinationFit.required
+                  ? destinationFit
+                  : undefined,
               } as unknown as ToolResult;
             } else if (passed.length !== ids.length) {
               (tc.args as Record<string, unknown>).product_ids = passed;
@@ -13003,6 +13056,7 @@ async function runExpertLoop(
             : rangeCriteria;
           const fullRecoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: runArgs,
+            customer_message: userMessage,
             facets: lastDiscover?.facets ?? [],
             leaf_categories: lastDiscover?.leaf_categories.map((category) =>
               category.pagetitle
@@ -13022,6 +13076,7 @@ async function runExpertLoop(
           const recoveryPlan = sparseBooleanProofShortfall &&
               originalSelectionResultCount > 0
             ? fullRecoveryPlan.filter(({ kind }) =>
+              kind === "verify_literal_feature_under_broad_application" ||
               kind ===
                 "relax_model_advisory_facets_verify_sparse_boolean_as_evidence" ||
               kind === "preserve_scope_verify_sparse_boolean_as_evidence"
@@ -13142,7 +13197,8 @@ async function runExpertLoop(
               results: evidenceSafeResults,
               // Once a relaxed input needs per-card proof, the upstream total
               // no longer describes the eligible result set.
-              total: attempt.evidence_required_criteria.length > 0
+              total: sparseBooleanProofShortfall ||
+                  attempt.evidence_required_criteria.length > 0
                 ? evidenceSafeResults.length
                 : recovered.total,
               warnings: [
