@@ -477,15 +477,22 @@ Deno.test("a complete class proven by live taxonomy is not duplicated as a title
 });
 
 Deno.test("a contextual measured object is not promoted from a mixed live-title cache", () => {
-  for (const relation of ["для", "на"]) {
+  for (
+    const relation of [
+      "для кабеля диаметром 12 мм",
+      "на кабель 10 мм",
+      "на кабель 10,5 мм",
+    ]
+  ) {
     const contract = buildVisibleRequestContract(
-      `подбери трубку ${relation} кабель 12 мм`,
+      `подбери трубку ${relation}`,
       {
         productClass: "трубка",
         taxonomyClass: "Трубки",
         candidateTitles: [
           "Трубка ТТУ 16/8 мм",
           "Трубка для кабеля 16/8 мм",
+          "Трубка на кабель 16/8 мм",
           "Кабель 12 мм",
         ],
       },
@@ -496,6 +503,46 @@ Deno.test("a contextual measured object is not promoted from a mixed live-title 
       true,
     );
   }
+});
+
+Deno.test("an unmeasured mounting destination remains a visible requirement", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери кронштейн на стену",
+    {
+      productClass: "кронштейн",
+      taxonomyClass: "Кронштейны",
+      candidateTitles: ["Кронштейн на стену", "Кронштейн потолочный"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["стену"]);
+  assertEquals(
+    titleSupportsVisibleRequestContract("Кронштейн на стену", contract),
+    true,
+  );
+  assertEquals(
+    titleSupportsVisibleRequestContract("Кронштейн потолочный", contract),
+    false,
+  );
+});
+
+Deno.test("an unmeasured compatibility object remains a visible requirement", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери чехол для планшета",
+    {
+      productClass: "чехол",
+      taxonomyClass: "Чехлы",
+      candidateTitles: ["Чехол для планшета", "Чехол для телефона"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["планшета"]);
+  assertEquals(
+    titleSupportsVisibleRequestContract("Чехол для планшета", contract),
+    true,
+  );
+  assertEquals(
+    titleSupportsVisibleRequestContract("Чехол для телефона", contract),
+    false,
+  );
 });
 
 Deno.test("a directly requested measured class remains the class, not a contextual object", () => {

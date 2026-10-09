@@ -1,5 +1,6 @@
 import {
   extractClientQuantities,
+  isPhysicalMeasurementUnit,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { selectionTargetIsDeclared } from "./selection-contract.ts";
@@ -148,10 +149,11 @@ const WORKFLOW_WORDS = new Set([
   "дешевле",
 ]);
 
-// These prepositions govern an application object, not a refinement of the
-// selected product class: "трубка для кабеля", "держатель на кабель". An
-// equipped-product relation ("с кабелем") is deliberately not included.
-const APPLICATION_RELATIONS = new Set([
+// A relation can introduce a measured fit object ("трубка на кабель 12 мм")
+// or a product requirement ("кронштейн на стену"). Only the former can be
+// omitted from the literal title contract. An equipped-product relation
+// ("с кабелем") is deliberately not included.
+const MEASURED_OBJECT_RELATIONS = new Set([
   "для",
   "на",
   "к",
@@ -313,7 +315,8 @@ function literalRequestModifiers(
     ? (String(context.taxonomyClass).match(/[a-zа-я0-9]+/giu) ?? [])
       .filter((token) => tokenStem(token) !== classHead)
     : [];
-  const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
+  const sourceTokenMatches = [...source.matchAll(/[a-zа-я0-9]+/giu)];
+  const sourceTokens = sourceTokenMatches.map((match) => match[0]);
   const mappedStems = new Set(
     (context.semanticallyMappedCustomerPhrases ?? [])
       .flatMap((phrase) => String(phrase).match(/[a-zа-я0-9]+/giu) ?? [])
@@ -342,15 +345,33 @@ function literalRequestModifiers(
     return /^\d+(?:[.,]\d+)?$/u.test(quantity) &&
       /^[a-zа-я°]{1,10}[²³]?\d?$/iu.test(unit);
   };
+  const isMeasuredRelationObject = (index: number): boolean => {
+    if (
+      !MEASURED_OBJECT_RELATIONS.has(
+        normalizeToken(sourceTokens[index - 1] ?? ""),
+      )
+    ) return false;
+    const match = sourceTokenMatches[index];
+    if (!match) return false;
+    const tail = source.slice((match.index ?? 0) + match[0].length);
+    // A quantity directly after the governed noun, or after one instrumental
+    // measurement descriptor, belongs to that external fit object. Without
+    // this local quantity the noun may name a mount or compatibility variant.
+    const measured = tail.match(
+      /^\s*(?:([\p{L}]{4,})\s+)?\d+(?:[.,]\d+)?\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/iu,
+    );
+    if (!measured) return false;
+    const descriptor = normalizeToken(measured[1] ?? "");
+    return (!descriptor || /(?:ом|ем|ью)$/u.test(descriptor)) &&
+      isPhysicalMeasurementUnit(measured[2]);
+  };
   for (let index = 0; index < sourceTokens.length; index += 1) {
     if (tokenStem(sourceTokens[index]) !== classHead) continue;
     for (const offset of [-2, -1, 1, 2]) {
       const modifierIndex = index + offset;
       const token = normalizeToken(sourceTokens[modifierIndex] ?? "");
       const stem = tokenStem(token);
-      const governsApplicationObject = APPLICATION_RELATIONS.has(
-        normalizeToken(sourceTokens[modifierIndex - 1] ?? ""),
-      );
+      const measuredRelationObject = isMeasuredRelationObject(modifierIndex);
       const taxonomyProvesModifierIsClass = taxonomyClassTokens.some((
         taxonomyToken,
       ) => sameTaxonomyModifier(token, taxonomyToken));
@@ -358,7 +379,7 @@ function literalRequestModifiers(
         !stem || stem.length < 4 || stem === classHead ||
         mappedStems.has(stem) ||
         taxonomyBackedClassStems.has(stem) ||
-        taxonomyProvesModifierIsClass || governsApplicationObject ||
+        taxonomyProvesModifierIsClass || measuredRelationObject ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
         describesMeasurement(modifierIndex) ||
