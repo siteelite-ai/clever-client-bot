@@ -413,6 +413,55 @@ const CLASSIFICATION_GLUE_STEMS = new Set([
   "the",
 ]);
 
+// A broad place/use adjective is not identical to a catalog sales class.
+// These roots describe application across product families, not product or
+// category names. Exact variants (mounting, size, series) remain facet-bound.
+const APPLICATION_USE_ROOT =
+  /^(?:бытов|домаш|жил|офис|промыш|производ|улич|наруж|внутрен|обществен|склад)/u;
+
+function broadApplicationAlternatives(
+  family: DerivedClassificationChoice[],
+  customerEvidence: string,
+  productClass: string,
+): Array<{ key: string; value: string }> {
+  const byFacet = new Map<string, DerivedClassificationChoice[]>();
+  for (const choice of family) {
+    const key = choice.facet.toLocaleLowerCase("ru-RU").trim();
+    byFacet.set(key, [...(byFacet.get(key) ?? []), choice]);
+  }
+  const source = String(customerEvidence ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  const productClassStems = new Set(classificationLexicalTokens(productClass));
+  const sourceTokens = source.match(/[a-zа-я0-9]{3,}/giu) ?? [];
+  const results: Array<{ key: string; value: string }> = [];
+  for (const choices of byFacet.values()) {
+    if (choices.length < 2) continue;
+    // An explicit demand for this exact facet/class is still an exact class.
+    const facetName = choices[0].facet.toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е");
+    if (source.includes(facetName)) continue;
+    const shared = classificationLexicalTokens(choices[0].value).filter((
+      stem,
+    ) =>
+      APPLICATION_USE_ROOT.test(stem) &&
+      !productClassStems.has(stem) &&
+      choices.every((choice) =>
+        classificationLexicalTokens(choice.value).includes(stem)
+      )
+    );
+    const matched = sourceTokens.find((token, index) => {
+      const stem = classificationLexicalStem(token);
+      if (!shared.includes(stem)) return false;
+      const before = sourceTokens.slice(Math.max(0, index - 2), index);
+      return !before.some((word) =>
+        /^(?:не|без|только|строго|именно|исключительно)$/u.test(word)
+      );
+    });
+    if (matched) results.push({ key: choices[0].facet, value: matched });
+  }
+  return results;
+}
+
 function classificationDiscriminativeStems(
   choice: DerivedClassificationChoice,
   allChoices: DerivedClassificationChoice[],
@@ -730,6 +779,9 @@ export interface ResolvedDerivedSelectionReasoning {
   customerGroundedCompatible: Array<{ key: string; value: string }>;
   customerGroundedExcluded: Array<{ key: string; value: string }>;
   familyCompatibleFacetKeys: string[];
+  /** A broad use adjective can be proved outside the catalog's sales class
+   * only when the individual card explicitly names that same application. */
+  applicationSuitabilityAlternatives: Array<{ key: string; value: string }>;
   excluded: Array<{ key: string; value: string }>;
   requiredFacetValues: Array<{ key: string; value: string }>;
   explicitCustomerMappings: Array<
@@ -935,6 +987,28 @@ export function compileCustomerClassificationCriteria(
     value,
     level: "A",
     evidence: "user_explicit",
+  }));
+}
+
+/** Keep exact live class values as the primary OR family, but allow a card in
+ * another sales taxonomy branch when its own title/traits/description proves
+ * the customer's broad application word. This is an additional proof route,
+ * not a relaxation of the requested property. */
+export function compileApplicationSuitabilityAlternatives(
+  declaration: Pick<
+    ResolvedDerivedSelectionReasoning,
+    "applicationSuitabilityAlternatives"
+  >,
+): Criterion[] {
+  return declaration.applicationSuitabilityAlternatives.map((
+    { key, value },
+  ) => ({
+    key,
+    op: "eq",
+    value,
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
   }));
 }
 
@@ -1523,6 +1597,16 @@ export function resolveDerivedSelectionReasoning(
       facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim(),
     )
   );
+  const applicationSuitabilityAlternatives = broadApplicationAlternatives(
+    familyCompatibleChoices.filter(({ id }) => groundedIds.has(id)),
+    customerClassificationEvidence,
+    productClass,
+  );
+  const applicationAlternativeFacets = new Set(
+    applicationSuitabilityAlternatives.map(({ key }) =>
+      key.toLocaleLowerCase("ru-RU").trim()
+    ),
+  );
   const aggregateScopeEvidence = measurementScope === "system_total"
     ? "Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки."
     : "";
@@ -1567,13 +1651,30 @@ export function resolveDerivedSelectionReasoning(
     );
   }
   if (familyCompatibleChoices.length > 0) {
-    sentences.push(
-      `По вашему обязательному классу допускаю одно из: ${
-        familyCompatibleChoices.map(({ facet, value }) =>
-          `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
-        ).join("; ")
-      }; значения вне этого класса исключаю.`,
+    const exactFamily = familyCompatibleChoices.filter(({ facet }) =>
+      !applicationAlternativeFacets.has(facet.toLocaleLowerCase("ru-RU").trim())
     );
+    const useFamily = familyCompatibleChoices.filter(({ facet }) =>
+      applicationAlternativeFacets.has(facet.toLocaleLowerCase("ru-RU").trim())
+    );
+    if (exactFamily.length > 0) {
+      sentences.push(
+        `По вашему обязательному классу допускаю одно из: ${
+          exactFamily.map(({ facet, value }) =>
+            `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
+          ).join("; ")
+        }; значения вне этого класса исключаю.`,
+      );
+    }
+    if (useFamily.length > 0) {
+      sentences.push(
+        `Для указанного применения сначала проверяю ${
+          useFamily.map(({ facet, value }) =>
+            `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
+          ).join("; ")
+        }; товар из другой рубрики допустим только если его собственная карточка прямо подтверждает то же применение.`,
+      );
+    }
     const preferred = familyCompatibleChoices.filter(({ id }) =>
       providerPreferredIds.has(id)
     );
@@ -1616,6 +1717,7 @@ export function resolveDerivedSelectionReasoning(
     customerGroundedExcluded: groundedExcludedChoices
       .map(({ facet, value }) => ({ key: facet, value })),
     familyCompatibleFacetKeys,
+    applicationSuitabilityAlternatives,
     excluded: excludedChoices.map(({ facet, value }) => ({
       key: facet,
       value,

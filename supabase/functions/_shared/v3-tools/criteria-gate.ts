@@ -51,6 +51,10 @@ export interface Criterion {
   level?: "A" | "B";
   /** Why this criterion is allowed to influence the selection contract. */
   evidence?: CriterionEvidence;
+  /** A use-class adjective may be proved by explicit product application text,
+   * not only by its catalog taxonomy leaf. Never applies to exact model/facet
+   * values, dimensions, or technical features. */
+  proof_scope?: "application_suitability";
   /**
    * Строгое неравенство для min/max: «больше 12» (а не «не менее 12»).
    * Ставится Слоем 5 по прозе модели (criteria-reasoning.ts).
@@ -240,6 +244,7 @@ export function mergeUserBackedCriteria(
       value,
       normalizeKey(String(criterion.unit ?? "")),
       criterion.exclusive === true ? "exclusive" : "inclusive",
+      criterion.proof_scope ?? "exact_facet",
     ].join("\u0001");
     if (seen.has(signature)) continue;
     seen.add(signature);
@@ -575,6 +580,7 @@ function mandatoryCriterionSignature(criterion: Criterion): string {
     value,
     normalizeKey(String(criterion.unit ?? "")),
     criterion.exclusive === true ? "exclusive" : "inclusive",
+    criterion.proof_scope ?? "exact_facet",
   ].join("\u0001");
 }
 
@@ -1046,6 +1052,44 @@ function productEvidenceText(product: ProductRef): string {
   ].join(" "));
 }
 
+/** Catalog taxonomies often name one sales channel while the product prose
+ * explicitly permits another application. An application adjective is proved
+ * only by the current card's own text; an unrelated taxonomy label is neither
+ * proof nor a contradiction. Negated or other-model descriptions cannot be
+ * borrowed as suitability evidence. */
+function checkApplicationSuitability(
+  product: ProductRef,
+  criterion: Criterion,
+): CriterionCheck {
+  const expected = expectedLabel(criterion);
+  if (criterion.op !== "eq" || typeof criterion.value !== "string") {
+    return { key: criterion.key, verdict: "unknown", expected, actual: null };
+  }
+  const wanted = criterion.value;
+  const description = String(product.description_excerpt ?? "");
+  const sentences = description.split(/[.!?;\n]+/u).map((part) => part.trim())
+    .filter(Boolean);
+  const denying = sentences.find((sentence) =>
+    stringEvidenceMatches(wanted, sentence) &&
+    /(?:(?:^|[^\p{L}])не\s+(?:(?:\p{L}+)\s+){0,3}(?:подход\p{L}*|предназнач\p{L}*|рекоменд\p{L}*|допуска\p{L}*|совместим\p{L}*)|(?:^|[^\p{L}])не\s+для(?:[^\p{L}]|$)|(?:^|[^\p{L}])исключа\p{L}*)/iu
+      .test(sentence)
+  );
+  if (denying) {
+    return { key: criterion.key, verdict: "fail", expected, actual: denying };
+  }
+  const evidence = [
+    product.pagetitle,
+    ...(product.short_traits ?? []),
+    ...sentences.filter((sentence) =>
+      !/(?:в\s+линейке\s+есть|другие\s+модели|отдельные\s+модели)/iu
+        .test(sentence)
+    ),
+  ].find((part) => stringEvidenceMatches(wanted, part));
+  return evidence
+    ? { key: criterion.key, verdict: "pass", expected, actual: evidence }
+    : { key: criterion.key, verdict: "unknown", expected, actual: null };
+}
+
 function looseStem(token: string): string {
   if (token.length < 5) return token;
   return token.replace(
@@ -1242,6 +1286,9 @@ export function checkCriterion(
   product: ProductRef,
   c: Criterion,
 ): CriterionCheck {
+  if (c.proof_scope === "application_suitability") {
+    return checkApplicationSuitability(product, c);
+  }
   const expected = expectedLabel(c);
   const trait = findTrait(product, c.key);
   if (!trait) {

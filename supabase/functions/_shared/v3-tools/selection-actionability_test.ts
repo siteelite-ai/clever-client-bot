@@ -13,6 +13,7 @@ import type { ProductRef } from "./types.ts";
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  compileApplicationSuitabilityAlternatives,
   compileCustomerClassificationCriteria,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
@@ -1702,11 +1703,11 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   ]);
   assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
   assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
-  assertEquals(resolved?.text.includes("обязательному классу"), true);
-  assertEquals(
-    resolved?.text.includes("значения вне этого класса исключаю"),
-    true,
-  );
+  assertEquals(resolved?.text.includes("другой рубрики допустим"), true);
+  assertEquals(resolved?.applicationSuitabilityAlternatives, [{
+    key: "Класс применения",
+    value: "бытовые",
+  }]);
   assertEquals(
     resolved?.measurementEvidence,
     "Подбираю подходящий вариант по явно указанному применению.",
@@ -1793,6 +1794,83 @@ Deno.test("customer household light class remains mandatory OR despite a model s
   assertEquals(resolved?.customerGroundedCompatible, family);
   assertEquals(resolved?.compatible, family);
   assertEquals(resolved?.familyCompatibleFacetKeys, ["вид светильника"]);
+  assertEquals(resolved?.applicationSuitabilityAlternatives, [{
+    key: "Вид светильника",
+    value: "бытовой",
+  }]);
+});
+
+Deno.test("broad application stays mandatory across catalog sales classes when each card proves it", () => {
+  const facets = [{
+    key: "kind",
+    caption: "Вид светильника",
+    type: "string",
+    unit: null,
+    values: [
+      { value: "Бытовые светильники накладные" },
+      { value: "Бытовые светильники подвесные" },
+      { value: "Светильники для ЖКХ" },
+      { value: "Промышленные светильники" },
+    ],
+  }];
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Сначала проверю бытовые светильники с датчиком движения.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен бытовой светильник с датчиком движения",
+    "Светильники",
+  );
+  if (!declaration) throw new Error("expected a grounded declaration");
+  const criteria = [
+    ...compileCustomerClassificationCriteria(declaration),
+    ...compileApplicationSuitabilityAlternatives(declaration),
+    {
+      key: "С датчиком движения",
+      op: "eq" as const,
+      value: "да",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  assertEquals(projectCriteriaFacetOptions(criteria, facets).options, {
+    kind: ["Бытовые светильники накладные", "Бытовые светильники подвесные"],
+  });
+  const item = (id: string, kind: string, description: string): ProductRef => ({
+    id,
+    pagetitle: `Светильник ${id} с датчиком движения`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: [`Вид светильника: ${kind}`],
+    description_excerpt: description,
+  });
+  const passed = applyCriteriaGate([
+    item("domestic", "Бытовые светильники накладные", "Реагирует на движение."),
+    item(
+      "cross-class",
+      "Светильники для ЖКХ",
+      "Для общественного и бытового освещения. Реагирует на движение.",
+    ),
+    item(
+      "industry",
+      "Промышленные светильники",
+      "Только для промышленного освещения. Реагирует на движение.",
+    ),
+    item(
+      "negated",
+      "Светильники для ЖКХ",
+      "Не предназначен для бытового освещения. Реагирует на движение.",
+    ),
+    item(
+      "acoustic",
+      "Бытовые светильники накладные",
+      "Датчик реагирует только на звук.",
+    ),
+  ], criteria).passed_ids;
+  assertEquals(passed, ["domestic", "cross-class"]);
 });
 
 Deno.test("customer class OR survives search, sparse recovery and final cards", () => {

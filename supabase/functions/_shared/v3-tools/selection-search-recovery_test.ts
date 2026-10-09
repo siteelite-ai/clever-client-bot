@@ -269,6 +269,102 @@ Deno.test("a nonempty acoustic-only boolean result cannot block source-proven re
   assertEquals(sourceProvenSelectionPool(raw, criteria, 4000), []);
 });
 
+Deno.test("literal functional-feature recovery crosses a sales class only with final per-card proof", () => {
+  const facets = [{
+    key: "kind",
+    caption: "Вид изделия",
+    type: "string",
+    unit: null,
+    values: [
+      { value: "Бытовые изделия накладные" },
+      { value: "Бытовые изделия подвесные" },
+      { value: "Изделия для ЖКХ" },
+    ],
+  }, {
+    key: "feature",
+    caption: "С датчиком движения",
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }],
+  }];
+  const criteria = [
+    ...["Бытовые изделия накладные", "Бытовые изделия подвесные"].map((
+      value,
+    ) => ({
+      key: "Вид изделия",
+      op: "eq" as const,
+      value,
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Вид изделия",
+      op: "eq" as const,
+      value: "бытовое",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq" as const,
+      value: "да",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      category_in: ["Изделия"],
+      options: {
+        kind: ["Бытовые изделия накладные", "Бытовые изделия подвесные"],
+        feature: ["да"],
+      },
+      max_price: 4000,
+    },
+    customer_message: "Нужно бытовое изделие с датчиком движения до 4000",
+    facets,
+    leaf_categories: ["Изделия"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+  });
+  assertEquals(plan[0].kind, "verify_literal_feature_under_broad_application");
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "движения",
+    category_in: ["Изделия"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  const card = (id: string, description: string): ProductRef => ({
+    id,
+    pagetitle: `Изделие ${id} с датчиком движения`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Вид изделия: Изделия для ЖКХ"],
+    description_excerpt: description,
+  });
+  assertEquals(
+    sourceProvenSelectionPool(
+      [
+        card(
+          "proved",
+          "Для общественного и бытового применения. Датчик реагирует на движение.",
+        ),
+        card(
+          "unproved",
+          "Для промышленного применения. Датчик реагирует на движение.",
+        ),
+      ],
+      criteria,
+      4000,
+    ).map(({ id }) => id),
+    ["proved"],
+  );
+});
+
 Deno.test("generic sparse boolean recovery preserves other customer axes and honest zero", () => {
   const criteria = [{
     key: "С защитой от перегрузки",

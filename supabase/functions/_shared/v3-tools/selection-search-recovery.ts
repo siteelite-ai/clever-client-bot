@@ -14,6 +14,7 @@ import {
 } from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
+  | "verify_literal_feature_under_broad_application"
   | "relax_model_advisory_facets"
   | "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
   | "preserve_filters_expand_category_scope"
@@ -141,6 +142,43 @@ export interface SelectionSearchRecoveryPlanInput {
    * sparse catalog metadata would otherwise force a false empty result.
    */
   advisory_evidence_options?: Record<string, string[]>;
+  /** Exact customer text, used only to retry a literal functional feature
+   * already present in the frozen mandatory contract. */
+  customer_message?: string;
+}
+
+function literalFunctionalFeatureQueries(
+  customerMessage: string,
+  criteria: Criterion[],
+): string[] {
+  // A broad use class is a preference in the catalog taxonomy, but its
+  // customer-owned application remains hard at the per-card evidence gate.
+  // Only this situation warrants searching beyond the taxonomy OR family.
+  if (
+    !criteria.some((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit"
+    )
+  ) return [];
+  const userTokens = String(customerMessage ?? "")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[a-zа-я]{6,}/giu) ?? [];
+  const featureTokens = new Set(
+    criteria
+    .filter((criterion) =>
+      criterion.proof_scope !== "application_suitability" &&
+      (criterion.evidence === "user_explicit" ||
+        criterion.evidence === "derived_required") &&
+        criterion.op === "eq" &&
+        /^(?:да|yes|true)$/iu.test(String(criterion.value).trim())
+      )
+      .flatMap((criterion) =>
+        String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+          .match(/[a-zа-я]{6,}/giu) ?? []
+      ),
+  );
+  return [...new Set(userTokens.filter((token) => featureTokens.has(token)))]
+    .reverse().slice(0, 2);
 }
 
 /**
@@ -549,6 +587,40 @@ export function buildSelectionSearchRecoveryPlan(
     attempts.push(attempt);
   };
 
+  // The source's boolean facet can omit valid cards while a customer use
+  // adjective also spans sales categories. Retry only literal feature words
+  // from the customer/mandatory criterion, then recheck *every* hard
+  // requirement against each candidate. No synonym or SKU list is injected.
+  for (
+    const query of literalFunctionalFeatureQueries(
+      input.customer_message ?? "",
+      input.reasoning_criteria,
+    )
+  ) {
+    add({
+      kind: "verify_literal_feature_under_broad_application",
+      args: {
+        mode: "by_query",
+        query,
+        ...(input.leaf_categories.length > 0
+          ? { category_in: [...input.leaf_categories] }
+          : {}),
+        ...(typeof original.max_price === "number"
+          ? { max_price: original.max_price }
+          : {}),
+        per_page: pageSize(original),
+      },
+      relaxed_inputs: [
+        "taxonomy_class_retrieval_only",
+        "sparse_boolean_retrieval_only",
+      ],
+      proven_criteria: [],
+      evidence_required_criteria: [],
+      unverified_criteria: [],
+      revalidate: [...REVALIDATE],
+    });
+  }
+
   const options = original.options && typeof original.options === "object"
     ? original.options as Record<string, unknown>
     : {};
@@ -849,6 +921,7 @@ export function buildSelectionSearchRecoveryPlan(
     // cards, keep the smaller correct pool (or an honest empty result) instead
     // of crossing into a sibling class.
     return attempts.filter(({ kind }) =>
+      kind === "verify_literal_feature_under_broad_application" ||
       kind === "relax_model_advisory_facets" ||
       kind ===
         "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
