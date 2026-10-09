@@ -309,16 +309,18 @@ export function discoveryResultPreservesCustomerIntent(
   liveFacetSchemaResolution = false,
   resolverGroundedFrom = "",
   independentSchemaResolution = false,
-  serverCompiledLiveTaxonomyResolution = false,
+  serverCompiledVerifiedLiveCategory = false,
 ): boolean {
   // A server-compiled call may send the customer's complete sentence as noun.
   // For an explicit `replace X with Y` request, X is the thing being removed:
   // neither its occurrence in the sentence nor a later model declaration may
   // ground the destination category. The live taxonomy has already proven
   // that `resolvedCategory` exists; require *every* substantive word in that
-  // label to derive from customer-owned Y. Unproved modifiers remain a hard
-  // rejection even if the category itself is real.
-  if (serverCompiledLiveTaxonomyResolution) {
+  // label to derive from customer-owned Y. A model may nominate the category,
+  // but cannot prove this lexical relation itself. This is a provisional
+  // discovery scope, not product approval: later per-card gates remain binding.
+  // Unproved modifiers remain a hard rejection even when the category is real.
+  if (serverCompiledVerifiedLiveCategory) {
     const destination = extractCustomerOwnedDiscoveryTarget(requestedNoun);
     if (destination) {
       const grounded = norm(

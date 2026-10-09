@@ -488,7 +488,7 @@ Deno.test("semantic discovery uses only the explicit customer destination of a t
   );
 });
 
-Deno.test("server-compiled live discovery evaluates the destination, never the replaced source", () => {
+Deno.test("server-compiled discovery evaluates a verified live category against the destination, not model provenance or the replaced source", () => {
   const request =
     "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
   for (const category of ["Светильники", "Светодиодные светильники"]) {

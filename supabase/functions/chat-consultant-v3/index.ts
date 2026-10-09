@@ -12505,8 +12505,8 @@ async function runExpertLoop(
                 resp.finishReason,
                 requestedNoun,
                 selectionDiscoveryMessage,
-              ) && ["live_taxonomy", "live_facet_schema"].includes(
-                (result as DiscoverCategoryOk).resolution_method ?? "",
+              ) && (result as DiscoverCategoryOk).leaf_categories.some(
+                (leaf) => Number.isInteger(leaf.id) && leaf.id > 0,
               ),
             )
           ) {
