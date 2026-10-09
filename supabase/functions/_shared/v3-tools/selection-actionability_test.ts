@@ -401,6 +401,21 @@ Deno.test("paired declaration rejects an affirmed incompatible live range and ne
   );
   assertEquals(mixed, null);
 
+  const adjacentWithoutPunctuation = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        `${strict} Диапазон 12.8-24 мм подходит и диапазон 6.8-12 мм не подходит.`,
+      required_facet_values: ["f2v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект размером 12 мм",
+    "Изделия",
+    paired,
+  );
+  assertEquals(adjacentWithoutPunctuation, null);
+
   const abbreviated = resolveDerivedSelectionReasoning(
     {
       reasoning: `${strict} Диапазон 12.8-24 мм подходит.`,
@@ -1032,6 +1047,48 @@ Deno.test("system total drops a derived per-card measurement", () => {
   );
 });
 
+Deno.test("a visible minimum capacity outranks an exact model ID copied from the application's size", () => {
+  const facets = [{
+    key: "area",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Максимальная площадь освещения должна быть не менее 30 м², чтобы прибор покрывал помещение.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужен прибор для комнаты площадью 30 м²",
+  );
+  assertEquals(resolved?.requiredFacetValues, []);
+  assertEquals(resolved?.text.includes("Обязательные параметры"), false);
+
+  const explicitlyExact = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Максимальная площадь освещения изделия ровно 30 м².",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Нужна максимальная площадь освещения товара ровно 30 м²",
+  );
+  assertEquals(explicitlyExact?.requiredFacetValues, [{
+    key: "Максимальная площадь освещения, м²",
+    value: "30",
+  }]);
+});
+
 Deno.test("a spatial calculation cannot masquerade as one-product evidence", () => {
   const customer =
     "Нужен светодиодный светильник для гостиной площадью 25 кв. м";
@@ -1039,7 +1096,7 @@ Deno.test("a spatial calculation cannot masquerade as one-product evidence", () 
     "Световой поток = 25 м² × 150 лк = 3750 лм. Нужен поток не менее 3750 лм.";
   assertEquals(
     reasoningComputesSystemTotalFromSpatialExtent(customer, reasoning),
-    true,
+    false,
   );
   assertEquals(
     reasoningComputesSystemTotalFromSpatialExtent(
@@ -1061,11 +1118,58 @@ Deno.test("a spatial calculation cannot masquerade as one-product evidence", () 
     [],
     customer,
   );
-  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(resolved?.measurementScope, "per_product");
   assertEquals(
     resolved?.text.includes("суммарная потребность всей системы"),
+    false,
+  );
+});
+
+Deno.test("one-to-one replacement keeps calculated demand per target while a multi-item system remains aggregate", () => {
+  const reasoning = "Нужно не менее 4000 лм: 25 м² × 160 лк = 4000 лм.";
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+      reasoning,
+    ),
+    false,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Нужно несколько светильников для гостиной 25 м²",
+      reasoning,
+    ),
     true,
   );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Нужно заменить одно изделие на три изделия для комнаты 25 м²",
+      reasoning,
+    ),
+    true,
+  );
+  const single = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "system_total",
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    [],
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+  );
+  assertEquals(single?.measurementScope, "per_product");
+  const noMeasurement = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Нужна совместимая замена с подходящими условиями монтажа.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    [],
+    "Хочу заменить старое изделие на новое",
+  );
+  assertEquals(noMeasurement?.measurementScope, "not_applicable");
 });
 
 Deno.test("a retrieval query is accepted only when it is already visible in reasoning", () => {
@@ -1462,7 +1566,7 @@ Deno.test("classification schema excludes metadata whose word only starts with a
   assertEquals(properties.compatible_classifications.items?.enum, ["f1v0"]);
 });
 
-Deno.test("a uniquely customer-grounded live class overrides a broader model choice", () => {
+Deno.test("a replacement source class cannot become the customer-owned target class", () => {
   const liveFacets = [{
     caption: "Класс применения",
     type: "string",
@@ -1484,17 +1588,48 @@ Deno.test("a uniquely customer-grounded live class overrides a broader model cho
 
   assertEquals(resolved?.compatible, [{
     key: "Класс применения",
-    value: "подвесные изделия; бра; ночники",
+    value: "бытовые изделия накладные",
   }]);
-  assertEquals(resolved?.customerGroundedCompatible, [{
-    key: "Класс применения",
-    value: "подвесные изделия; бра; ночники",
-  }]);
+  assertEquals(resolved?.customerGroundedCompatible, []);
   assertEquals(
     resolved?.text.includes("подвесные изделия; бра; ночники"),
-    true,
+    false,
   );
-  assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
+  assertEquals(resolved?.text.includes("бытовые изделия накладные"), true);
+});
+
+Deno.test("a transformation target can still own a composite live class when it is explicitly requested", () => {
+  const facets = [{
+    caption: "Вид изделия",
+    type: "string",
+    values: [
+      { value: "настольные изделия; бра; ночники" },
+      { value: "потолочные изделия" },
+    ],
+  }];
+  const sourceOnly = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Ищу функциональную замену по назначению помещения.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Хочу заменить бра на светодиодное изделие в комнате",
+  );
+  assertEquals(sourceOnly?.customerGroundedCompatible, []);
+  const targetOwned = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Ищу функциональную замену по назначению помещения.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Хочу заменить люстру на бра в комнате",
+  );
+  assertEquals(targetOwned?.customerGroundedCompatible, [{
+    key: "Вид изделия",
+    value: "настольные изделия; бра; ночники",
+  }]);
 });
 
 Deno.test("a customer-grounded class family preserves all matching live variants", () => {
@@ -1849,7 +1984,7 @@ Deno.test("a negated class term cannot become customer-grounded evidence", () =>
   );
 });
 
-Deno.test("visible prose cannot contradict the customer-grounded live class", () => {
+Deno.test("visible prose cannot resurrect a discarded source class or unrelated sibling", () => {
   const liveFacets = [{
     caption: "Класс применения",
     type: "string",
@@ -1872,11 +2007,12 @@ Deno.test("visible prose cannot contradict the customer-grounded live class", ()
 
   assertEquals(resolved?.compatible, [{
     key: "Класс применения",
-    value: "подвесные изделия; бра; ночники",
+    value: "бытовые изделия накладные",
   }]);
+  assertEquals(resolved?.customerGroundedCompatible, []);
   assertEquals(resolved?.text.includes("3000–4000"), true);
   assertEquals(resolved?.text.includes("трековые"), false);
-  assertEquals(resolved?.text.includes("накладные"), false);
+  assertEquals(resolved?.text.includes("Как рабочую гипотезу"), true);
   assertEquals(resolved?.text.includes("не подвесные"), false);
 });
 

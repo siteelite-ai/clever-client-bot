@@ -175,7 +175,6 @@ import {
   completePairedCompatibilityRelations,
   completeSchemaBackedCompatibilityRelations,
   enforceFinalPairedCompatibility,
-  extractSingleMeasuredReference,
   filterProductsByPairedTitleFit,
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
@@ -206,6 +205,7 @@ import {
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
   enforceTerminalPairedFit,
+  extractSchemaBackedMeasuredReference,
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
   omitPairedObjectReferenceExactCriteria,
@@ -6110,7 +6110,7 @@ async function runExpertLoop(
     ids: string[],
     visibleContext: Pick<
       VisibleRequestContractContext,
-      "productClass" | "taxonomyClass"
+      "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ) => {
     const visibleRequestContract = buildVisibleRequestContract(userMessage, {
@@ -6118,6 +6118,7 @@ async function runExpertLoop(
         lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: visibleContext.taxonomyClass ??
         lastDiscover?.category?.pagetitle ?? "",
+      verifiedPairedFitReference: visibleContext.verifiedPairedFitReference,
       // A modifier proven by an earlier narrow pool remains monotonic even if
       // a later recovery pool contains only broader sibling cards.
       candidateTitles: [...ctx.cache.values()].map((product) =>
@@ -6993,7 +6994,7 @@ async function runExpertLoop(
     ids: string[],
     visibleContext: Pick<
       VisibleRequestContractContext,
-      "productClass" | "taxonomyClass"
+      "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ): string[] => {
     const structurallySafe = guardReplacementRenderIds(
@@ -7336,7 +7337,6 @@ async function runExpertLoop(
       if (!serverCompiledStepAvailable) remoteAgentSteps += 1;
       let resp: ORResponse;
       let serverCompiledGroundedSearch = false;
-      let serverValidatedDerivedReasoning = false;
       try {
         if (queuedServerGroundedSearch) {
           const queued = queuedServerGroundedSearch;
@@ -7410,7 +7410,6 @@ async function runExpertLoop(
           derivedStructuredSearchGuidedByVisibleReasoning = true;
           derivedStructuredSearchDiscovery = lastDiscover;
           structuredSearchSource = "derived_reasoning";
-          serverValidatedDerivedReasoning = true;
           resp = {
             text: compiledAdjacentApplicationSearch.text,
             toolCalls: [{
@@ -7552,7 +7551,11 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) =>
             terminalPairedFitDecision(
-              extractSingleMeasuredReference(userMessage),
+              extractSchemaBackedMeasuredReference(
+                userMessage,
+                lastDiscover?.facets ?? [],
+                lastDiscover?.category?.pagetitle ?? "",
+              ),
               userMessage,
               String(args.reasoning ?? ""),
               lastDiscover?.facets ?? [],
@@ -7700,7 +7703,6 @@ async function runExpertLoop(
             });
             throw new Error("derived_selection_reasoning_contract_invalid");
           }
-          serverValidatedDerivedReasoning = true;
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
@@ -7717,7 +7719,11 @@ async function runExpertLoop(
               declaration.text,
               declaration.measurementScope,
             );
-          const measuredReference = extractSingleMeasuredReference(userMessage);
+          const measuredReference = extractSchemaBackedMeasuredReference(
+            userMessage,
+            lastDiscover?.facets ?? [],
+            lastDiscover?.category?.pagetitle ?? "",
+          );
           // The consultant's own validated declaration is the visible proof.
           // The live schema may create a fit obligation, but the server must
           // not manufacture the missing second side of its reasoning.
@@ -8407,13 +8413,17 @@ async function runExpertLoop(
           userMessage,
         )
         : { text: missingAnchorIntroGuard.text, removed: [] as string[] };
-      const introAttributeGuard =
-        introSafetyApplies && !serverValidatedDerivedReasoning
-          ? stripUngroundedIntroTechnicalAttributes(
-            introAliasGuard.text,
-            userMessage,
-          )
-          : { text: resp.text, removed: [] as string[] };
+      // A structured selection declaration proves that the model supplied
+      // reasoning; it does not prove every technical value in its prose.
+      // Apply the same customer-evidence boundary to both ordinary and
+      // derived first-visible reasoning. Otherwise a declared alias can still
+      // smuggle an unrequested "typical" base/size into the visible answer.
+      const introAttributeGuard = introSafetyApplies
+        ? stripUngroundedIntroTechnicalAttributes(
+          introAliasGuard.text,
+          userMessage,
+        )
+        : { text: introAliasGuard.text, removed: [] as string[] };
       // Taxonomy discovery proves that a broad category exists, not that the
       // customer's exact subtype is available. Keep catalog assertions closed
       // until an actual product search has run.
@@ -10831,9 +10841,12 @@ async function runExpertLoop(
             initialCompatibilityEvidence,
           );
           const rawCriteria = renderRawCriteria;
-          const customerMeasuredReference = extractSingleMeasuredReference(
-            userMessage,
-          );
+          const customerMeasuredReference =
+            extractSchemaBackedMeasuredReference(
+              userMessage,
+              lastDiscover?.facets ?? [],
+              lastDiscover?.category?.pagetitle ?? "",
+            );
           const completedCompatibility =
             completeSchemaBackedCompatibilityRelations(
               alignedCompatibility.relations,
@@ -10893,7 +10906,7 @@ async function runExpertLoop(
           let pairedTitleContractProven = false;
           if (minimumRelations >= 2 || relationReference) {
             const reference = relationReference ??
-              extractSingleMeasuredReference(userMessage);
+              customerMeasuredReference;
             if (reference) {
               const candidateIds = Array.isArray(tc.args.product_ids)
                 ? (tc.args.product_ids as unknown[]).map(String)
@@ -12129,7 +12142,11 @@ async function runExpertLoop(
             firstAssistantText,
           );
           const modelPairDecision = terminalPairedFitDecision(
-            extractSingleMeasuredReference(userMessage),
+            extractSchemaBackedMeasuredReference(
+              userMessage,
+              lastDiscover?.facets ?? [],
+              lastDiscover?.category?.pagetitle ?? "",
+            ),
             userMessage,
             visiblePairReasoning,
             lastDiscover?.facets ?? [],
@@ -14077,7 +14094,11 @@ async function runExpertLoop(
               // size. Resolve the unique paired graph before any literal
               // facet projector freezes the scalar into search criteria.
               const discoveryPairedDecision = terminalPairedFitDecision(
-                extractSingleMeasuredReference(userMessage),
+                extractSchemaBackedMeasuredReference(
+                  userMessage,
+                  lastDiscover.facets,
+                  lastDiscover.category?.pagetitle ?? "",
+                ),
                 userMessage,
                 measuredSelectionContractEvidence(
                   derivedSelectionReasoningEvidence,
@@ -15505,7 +15526,11 @@ async function runExpertLoop(
         Boolean(namedSeriesToken),
       )
       : [];
-    const terminalPairedReference = extractSingleMeasuredReference(userMessage);
+    const terminalPairedReference = extractSchemaBackedMeasuredReference(
+      userMessage,
+      terminalDiscover?.facets ?? [],
+      terminalDiscover?.category?.pagetitle ?? "",
+    );
     const terminalVisibleModelReasoning = measuredSelectionContractEvidence(
       derivedSelectionReasoningEvidence,
       firstAssistantText,
@@ -15979,13 +16004,22 @@ async function runExpertLoop(
           terminalCategoryEvidence,
         )
         : candidateProducts;
+      // This fast terminal path must obey the same title-grounded alias
+      // obligation as the later recovery paths. A consultant's metalinguistic
+      // label is not proven by a broad category match or by a facet alone.
+      const aliasGroundedProducts = terminalAliasRequirement
+        ? filterProductsByDeclaredAlias(
+          categoryGroundedProducts,
+          terminalAliasRequirement,
+        )
+        : categoryGroundedProducts;
       const targetReport = verifyTerminalSelectionTarget(
         terminalSelectionTarget,
-        categoryGroundedProducts,
+        aliasGroundedProducts,
       );
       const targetIds = new Set(targetReport.passed_ids);
       const evidenced = projectCatalogFilterEvidence(
-        categoryGroundedProducts,
+        aliasGroundedProducts,
         terminalSelectionCriteria,
       );
       const criteriaGate = applyCriteriaGate(
@@ -15993,7 +16027,7 @@ async function runExpertLoop(
         terminalSelectionCriteria,
       );
       const criteriaIds = new Set(criteriaGate.passed_ids);
-      let safeIds = categoryGroundedProducts
+      let safeIds = aliasGroundedProducts
         .filter((product) =>
           targetIds.has(product.id) && criteriaIds.has(product.id)
         )
@@ -16031,6 +16065,7 @@ async function runExpertLoop(
             meta: {
               candidates: candidateProducts.length,
               category_grounded: categoryGroundedProducts.length,
+              alias_grounded: aliasGroundedProducts.length,
               target_passed: targetIds.size,
               criteria_passed: criteriaIds.size,
               rendered: rendered.rendered_count,
@@ -16049,6 +16084,7 @@ async function runExpertLoop(
         meta: {
           candidates: candidateProducts.length,
           category_grounded: categoryGroundedProducts.length,
+          alias_grounded: aliasGroundedProducts.length,
           target_passed: targetIds.size,
           criteria_passed: criteriaIds.size,
         },
@@ -16056,10 +16092,12 @@ async function runExpertLoop(
     }
     const terminalCompatibilityEvidence =
       `${terminalReasoningEvidence}\n${assistantReasoning}`;
-    const terminalCompatibilityReference = extractSingleMeasuredReference(
-      userMessage,
-    );
     const terminalCompatibilityDiscover = terminalDiscover ?? lastDiscover;
+    const terminalCompatibilityReference = extractSchemaBackedMeasuredReference(
+      userMessage,
+      terminalCompatibilityDiscover?.facets ?? [],
+      terminalCompatibilityDiscover?.category?.pagetitle ?? "",
+    );
     if (
       productsRendered === 0 &&
       terminalCompatibilityDiscover &&
@@ -17401,6 +17439,10 @@ async function runExpertLoop(
       const terminalVisibleContext = {
         productClass: terminalSelectionTarget,
         taxonomyClass: terminalDiscover.category.pagetitle,
+        verifiedPairedFitReference: terminalPairDecision.state === "required" &&
+            terminalPairDecision.selected_pair
+          ? terminalPairDecision.reference
+          : null,
       };
       const visibleContract = buildVisibleRequestContract(userMessage, {
         ...terminalVisibleContext,

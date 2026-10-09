@@ -478,10 +478,10 @@ Deno.test("a complete class proven by live taxonomy is not duplicated as a title
 
 Deno.test("a contextual measured object is not promoted from a mixed live-title cache", () => {
   for (
-    const relation of [
-      "для кабеля диаметром 12 мм",
-      "на кабель 10 мм",
-      "на кабель 10,5 мм",
+    const { relation, value } of [
+      { relation: "для кабеля диаметром 12 мм", value: 12 },
+      { relation: "на кабель 10 мм", value: 10 },
+      { relation: "на кабель 10,5 мм", value: 10.5 },
     ]
   ) {
     const contract = buildVisibleRequestContract(
@@ -489,6 +489,7 @@ Deno.test("a contextual measured object is not promoted from a mixed live-title 
       {
         productClass: "трубка",
         taxonomyClass: "Трубки",
+        verifiedPairedFitReference: { value, unit: "мм" },
         candidateTitles: [
           "Трубка ТТУ 16/8 мм",
           "Трубка для кабеля 16/8 мм",
@@ -505,6 +506,48 @@ Deno.test("a contextual measured object is not promoted from a mixed live-title 
   }
 });
 
+Deno.test("an uncontrasted application object is not a literal variant requirement", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери трубку для кабеля",
+    {
+      productClass: "трубка",
+      taxonomyClass: "Трубки",
+      candidateTitles: ["Трубка ТТУ 16/8", "Трубка для кабеля 16/8"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), []);
+  assertEquals(
+    titleSupportsVisibleRequestContract("Трубка ТТУ 16/8", contract),
+    true,
+  );
+});
+
+Deno.test("contrasting relation objects stay visible without independent paired-fit proof", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери трубку на кабель 10 мм",
+    {
+      productClass: "трубка",
+      taxonomyClass: "Трубки",
+      candidateTitles: ["Трубка на кабель 16/8 мм", "Трубка на трубу 16/8 мм"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["кабель"]);
+  assertEquals(
+    titleSupportsVisibleRequestContract("Трубка на трубу 16/8 мм", contract),
+    false,
+  );
+  const paired = buildVisibleRequestContract(
+    "подбери трубку на кабель 10 мм",
+    {
+      productClass: "трубка",
+      taxonomyClass: "Трубки",
+      candidateTitles: ["Трубка на кабель 16/8 мм", "Трубка на трубу 16/8 мм"],
+      verifiedPairedFitReference: { value: 10, unit: "мм" },
+    },
+  );
+  assertEquals(paired.map((requirement) => requirement.label), []);
+});
+
 Deno.test("an unmeasured mounting destination remains a visible requirement", () => {
   const contract = buildVisibleRequestContract(
     "подбери кронштейн на стену",
@@ -519,6 +562,22 @@ Deno.test("an unmeasured mounting destination remains a visible requirement", ()
     titleSupportsVisibleRequestContract("Кронштейн на стену", contract),
     true,
   );
+  assertEquals(
+    titleSupportsVisibleRequestContract("Кронштейн потолочный", contract),
+    false,
+  );
+});
+
+Deno.test("a mounting destination remains mandatory even beside an ambiguous physical number", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери кронштейн на стену 12 мм",
+    {
+      productClass: "кронштейн",
+      taxonomyClass: "Кронштейны",
+      candidateTitles: ["Кронштейн на стену", "Кронштейн потолочный"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["стену"]);
   assertEquals(
     titleSupportsVisibleRequestContract("Кронштейн потолочный", contract),
     false,
@@ -603,6 +662,7 @@ Deno.test("a real colour refinement remains visible beside a contextual object",
     {
       productClass: "трубка",
       taxonomyClass: "Трубки",
+      verifiedPairedFitReference: { value: 12, unit: "мм" },
       candidateTitles: ["Трубка черная 16/8 мм", "Трубка для кабеля 16/8 мм"],
     },
   );

@@ -15,6 +15,7 @@ import {
 } from "./search-filter-guard.ts";
 import {
   canonicalMeasurementUnit,
+  customerOwnsDerivedExactFacetValue,
   projectReasoningRangeCriteria,
 } from "./criteria-reasoning.ts";
 import type { Criterion } from "./criteria-gate.ts";
@@ -85,6 +86,10 @@ export function reasoningComputesSystemTotalFromSpatialExtent(
   customerEvidence: string,
   reasoningText: string,
 ): boolean {
+  // An area calculation describes demand, not how many catalog items supply
+  // it. Only customer-owned multiplicity may turn it into a distributed sum;
+  // a single replacement must satisfy the demand with the target item.
+  if (!customerRequestsMultipleProducts(customerEvidence)) return false;
   const customerExtents = extractClientQuantities(customerEvidence)
     .map((quantity) => ({ ...quantity, unit: normalizeUnit(quantity.unit) }))
     .filter(({ unit }) => /[²³]/u.test(unit));
@@ -103,6 +108,32 @@ export function reasoningComputesSystemTotalFromSpatialExtent(
   );
   return derivesAnotherDimension &&
     /[×xх*][^.!?\n]{0,120}(?:=|≈)/u.test(String(reasoningText ?? ""));
+}
+
+function replacementTargetSideEvidence(customerEvidence: string): {
+  evidence: string;
+  oneToOne: boolean;
+} {
+  const source = String(customerEvidence ?? "");
+  const transformation =
+    /(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)[^.!?\n]{0,120}?\s+на\s+/iu
+      .exec(source);
+  if (!transformation || transformation.index === undefined) {
+    return { evidence: source, oneToOne: false };
+  }
+  const target = source.slice(transformation.index + transformation[0].length);
+  const evidence = `${source.slice(0, transformation.index)} ${target}`.trim();
+  return {
+    evidence,
+    oneToOne: !customerRequestsMultipleProducts(target),
+  };
+}
+
+function customerRequestsMultipleProducts(customerEvidence: string): boolean {
+  const source = String(customerEvidence ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  return /(?:^|\s)(?:нескольк\p{L}*|(?:двое|два|две|три|четыре|пять|[2-9]\d?)\s+(?:шт\p{L}*|единиц\p{L}*|издел\p{L}*|товар\p{L}*|прибор\p{L}*))(?=\s|$)/iu
+    .test(source);
 }
 
 /**
@@ -838,10 +869,10 @@ function affirmsIncompatiblePairedRange(
   ranges: ReturnType<typeof pairedObjectRangeChoices>,
 ): boolean {
   if (ranges.length === 0) return false;
-  const sentences = String(reasoning).split(
+  const clauses = String(reasoning).split(
     /[!?;\n]+|\.(?!\d)|(?<!\d)\.|,(?!\d)|(?<!\d),/u,
-  );
-  for (const sentence of sentences) {
+  ).flatMap((sentence) => sentence.split(/\s+(?:и|а|но)\s+/iu));
+  for (const sentence of clauses) {
     const stems = new Set(
       (sentence.match(/[a-zа-я]{3,}/giu) ?? []).map((word) =>
         word.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").slice(0, 4)
@@ -867,6 +898,9 @@ function affirmsIncompatiblePairedRange(
         !namesAxis && !(matchingRanges.length === 1 &&
             /(?:диапазон|range)/iu.test(sentence))
       ) continue;
+      // Scope the predicate and its negation to this coordinated clause.
+      // The negation of the next interval must not cancel an affirmed claim
+      // about the current, incompatible interval.
       const local = sentence.slice(
         Math.max(0, (match.index ?? 0) - 80),
         (match.index ?? 0) + match[0].length + 80,
@@ -996,11 +1030,15 @@ export function resolveDerivedSelectionReasoning(
   const declaredMeasurementScope = String(
     args.measurement_scope ?? "per_product",
   );
+  const customerReplacement = replacementTargetSideEvidence(customerEvidence);
   const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
     customerEvidence,
     originalReasoning,
   );
-  const measurementScope = computedSystemTotal
+  const measurementScope = customerReplacement.oneToOne &&
+      declaredMeasurementScope === "system_total"
+    ? "per_product"
+    : computedSystemTotal
     ? "system_total"
     : declaredMeasurementScope === "system_total" ||
         declaredMeasurementScope === "not_applicable"
@@ -1043,7 +1081,7 @@ export function resolveDerivedSelectionReasoning(
     }
     return resolved;
   };
-  const normalizedCustomerEvidence = normalizeLiteralEvidence(customerEvidence);
+  const customerClassificationEvidence = customerReplacement.evidence;
   const normalizedProductClass = new Set(
     classificationLexicalTokens(productClass),
   );
@@ -1079,7 +1117,11 @@ export function resolveDerivedSelectionReasoning(
         }(?:$|\\s)`,
         "u",
       );
-      if (!phrasePattern.test(normalizedCustomerEvidence)) continue;
+      if (
+        !phrasePattern.test(
+          normalizeLiteralEvidence(customerClassificationEvidence),
+        )
+      ) continue;
       const phraseTokens = classificationLexicalTokens(phrase);
       if (
         phraseTokens.length > 0 &&
@@ -1139,7 +1181,7 @@ export function resolveDerivedSelectionReasoning(
   const groundedChoices = [
     ...explicitCustomerMappings.map(({ choice }) => choice),
     ...customerGroundedClassificationChoices(
-      customerEvidence,
+      customerClassificationEvidence,
       facets,
       productClass,
     )
@@ -1200,7 +1242,7 @@ export function resolveDerivedSelectionReasoning(
     .map(([facetIdentity]) => facetIdentity);
   const compatibleIds = new Set(compatibleChoices.map(({ id }) => id));
   const groundedExcludedChoices = customerGroundedExcludedClassificationChoices(
-    customerEvidence,
+    customerClassificationEvidence,
     facets,
     productClass,
   )
@@ -1238,18 +1280,19 @@ export function resolveDerivedSelectionReasoning(
   const customerOwnedRequiredIds = new Set(
     derivedRequiredFacetChoices(facets, customerEvidence).map(({ id }) => id),
   );
+  const liveMeasuredFacets = facets.map((facet) => ({
+    key: String(facet.key || facet.caption || ""),
+    caption: String(facet.caption || facet.key || ""),
+    type: String(facet.type || ""),
+    unit: facet.unit == null ? null : String(facet.unit),
+    values: (facet.values ?? []).map(({ value }) => ({
+      value: String(value ?? ""),
+    })),
+  }));
   const visibleReasoningRanges = projectReasoningRangeCriteria(
     [],
     originalReasoning,
-    facets.map((facet) => ({
-      key: String(facet.key || facet.caption || ""),
-      caption: String(facet.caption || facet.key || ""),
-      type: String(facet.type || ""),
-      unit: facet.unit == null ? null : String(facet.unit),
-      values: (facet.values ?? []).map(({ value }) => ({
-        value: String(value ?? ""),
-      })),
-    })),
+    liveMeasuredFacets,
   );
   const declaredRequiredIds = new Set(
     (Array.isArray(args.required_facet_values)
@@ -1342,17 +1385,25 @@ export function resolveDerivedSelectionReasoning(
     const facetIdentities = new Set(
       [machineKey, captionKey, choice.facet].map(normalizeLiteralEvidence),
     );
-    const coveredByVisibleRange = !customerOwned &&
+    const customerOwnsExactProductValue = Number.isFinite(exactNumericValue) &&
+      customerOwnsDerivedExactFacetValue(
+        { key: machineKey, op: "eq", value: choice.value, level: "A" },
+        customerEvidence,
+        originalReasoning,
+        liveMeasuredFacets,
+      );
+    const coveredByVisibleRange = !customerOwnsExactProductValue &&
       Number.isFinite(exactNumericValue) &&
       visibleReasoningRanges.added.some((criterion) =>
-        criterion.op === "range" && Array.isArray(criterion.value) &&
         facetIdentities.has(normalizeLiteralEvidence(criterion.key)) &&
-        exactNumericValue >= Number(criterion.value[0]) &&
-        exactNumericValue <= Number(criterion.value[1])
+        (criterion.op === "min" || criterion.op === "max" ||
+          criterion.op === "range" && Array.isArray(criterion.value) &&
+            exactNumericValue >= Number(criterion.value[0]) &&
+            exactNumericValue <= Number(criterion.value[1]))
       );
-    // A structured exact ID cannot collapse the visible range that owns the
-    // same live facet. The range projector remains authoritative; an exact
-    // value explicitly supplied by the customer is unaffected.
+    // A structured exact ID cannot collapse the visible directional or range
+    // contract that owns this live axis. An exact value explicitly requested
+    // for the product by the customer remains binding.
     if (coveredByVisibleRange) continue;
     if (
       !customerOwned && !declaredRequiredIds.has(choice.id) &&

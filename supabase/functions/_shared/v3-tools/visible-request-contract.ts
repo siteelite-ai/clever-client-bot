@@ -35,10 +35,15 @@ export interface VisibleRequestContractContext {
    * the bounded reasoning contract. They remain mandatory through that facet
    * and must not also require one particular title-language spelling. */
   semanticallyMappedCustomerPhrases?: string[];
+  /** Customer-object measurement proved by a live, two-sided paired-fit
+   * contract and the consultant's visible reasoning. Never infer this from
+   * the mere presence of a number in the request. */
+  verifiedPairedFitReference?: { value: number; unit: string } | null;
 }
 
 const RU_ADJECTIVE_TOKEN = String
   .raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
+const RU_ADJECTIVE_WORD = new RegExp(`^${RU_ADJECTIVE_TOKEN}$`, "iu");
 
 function hasDoubleSocketPhrase(source: string): boolean {
   const between = `(?:\\s+${RU_ADJECTIVE_TOKEN}){0,3}`;
@@ -150,9 +155,9 @@ const WORKFLOW_WORDS = new Set([
 ]);
 
 // A relation can introduce a measured fit object ("трубка на кабель 12 мм")
-// or a product requirement ("кронштейн на стену"). Only the former can be
-// omitted from the literal title contract. An equipped-product relation
-// ("с кабелем") is deliberately not included.
+// or a product requirement ("кронштейн на стену 12 мм"). Only the former can
+// be omitted after independent paired-fit proof; the wording alone is not
+// enough. An equipped-product relation ("с кабелем") is not included.
 const MEASURED_OBJECT_RELATIONS = new Set([
   "для",
   "на",
@@ -317,17 +322,17 @@ function literalRequestModifiers(
     : [];
   const sourceTokenMatches = [...source.matchAll(/[a-zа-я0-9]+/giu)];
   const sourceTokens = sourceTokenMatches.map((match) => match[0]);
+  const sourceStems = new Set(sourceTokens.map(tokenStem));
   const mappedStems = new Set(
     (context.semanticallyMappedCustomerPhrases ?? [])
       .flatMap((phrase) => String(phrase).match(/[a-zа-я0-9]+/giu) ?? [])
       .map(tokenStem)
       .filter(Boolean),
   );
+  const liveTitleTokens = (context.candidateTitles ?? [])
+    .map((title) => title.match(/[a-zа-я0-9]+/giu) ?? []);
   const liveTitleStems = new Set(
-    (context.candidateTitles ?? [])
-      .flatMap((title) => title.match(/[a-zа-я0-9]+/giu) ?? [])
-      .map(tokenStem)
-      .filter(Boolean),
+    liveTitleTokens.flat().map(tokenStem).filter(Boolean),
   );
   const modifiers = new Map<string, string>();
   const precedesDirectionalMeasurement = (index: number): boolean => {
@@ -346,6 +351,8 @@ function literalRequestModifiers(
       /^[a-zа-я°]{1,10}[²³]?\d?$/iu.test(unit);
   };
   const isMeasuredRelationObject = (index: number): boolean => {
+    const pairedReference = context.verifiedPairedFitReference;
+    if (!pairedReference) return false;
     if (
       !MEASURED_OBJECT_RELATIONS.has(
         normalizeToken(sourceTokens[index - 1] ?? ""),
@@ -358,13 +365,48 @@ function literalRequestModifiers(
     // measurement descriptor, belongs to that external fit object. Without
     // this local quantity the noun may name a mount or compatibility variant.
     const measured = tail.match(
-      /^\s*(?:([\p{L}]{4,})\s+)?\d+(?:[.,]\d+)?\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/iu,
+      /^\s*(?:([\p{L}]{4,})\s+)?(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/iu,
     );
     if (!measured) return false;
     const descriptor = normalizeToken(measured[1] ?? "");
     return (!descriptor || /(?:ом|ем|ью)$/u.test(descriptor)) &&
-      isPhysicalMeasurementUnit(measured[2]);
+      isPhysicalMeasurementUnit(measured[3]) &&
+      Number(measured[2].replace(",", ".")) === pairedReference.value &&
+      canonicalUnit(measured[3]) === canonicalUnit(pairedReference.unit);
   };
+  const hasContrastingRelationalVariant = (
+    requestedStem: string,
+    relation: string,
+  ): boolean =>
+    liveTitleTokens.some((tokens) => {
+      const stems = tokens.map(tokenStem);
+      const classIndex = stems.findIndex((stem, index) =>
+        stem === classHead &&
+        !MEASURED_OBJECT_RELATIONS.has(normalizeToken(tokens[index - 1] ?? ""))
+      );
+      if (classIndex < 0 || stems.includes(requestedStem)) return false;
+      const otherRelationObject = tokens.some((token, index) =>
+        MEASURED_OBJECT_RELATIONS.has(normalizeToken(token)) &&
+        Boolean(stems[index + 1]) && stems[index + 1].length >= 4 &&
+        stems[index + 1] !== classHead
+      );
+      if (otherRelationObject) return true;
+      // "На" can introduce a mount. A competing same-class card with its own
+      // visible adjectival variant ("кронштейн потолочный") is positive
+      // contrast; an opaque model code ("трубка ТТУ") is not. "Для" needs an
+      // explicit alternative object, because an unrelated colour/material
+      // adjective does not distinguish application objects.
+      if (relation !== "на") return false;
+      return tokens.some((token, index) =>
+        Math.abs(index - classIndex) <= 2 &&
+        RU_ADJECTIVE_WORD.test(token) &&
+        !sourceStems.has(stems[index]) &&
+        !taxonomyBackedClassStems.has(stems[index]) &&
+        !taxonomyClassTokens.some((taxonomyToken) =>
+          sameTaxonomyModifier(token, taxonomyToken)
+        )
+      );
+    });
   for (let index = 0; index < sourceTokens.length; index += 1) {
     if (tokenStem(sourceTokens[index]) !== classHead) continue;
     for (const offset of [-2, -1, 1, 2]) {
@@ -372,6 +414,10 @@ function literalRequestModifiers(
       const token = normalizeToken(sourceTokens[modifierIndex] ?? "");
       const stem = tokenStem(token);
       const measuredRelationObject = isMeasuredRelationObject(modifierIndex);
+      const relation = normalizeToken(sourceTokens[modifierIndex - 1] ?? "");
+      const uncontrastedRelationalObject =
+        MEASURED_OBJECT_RELATIONS.has(relation) &&
+        !hasContrastingRelationalVariant(stem, relation);
       const taxonomyProvesModifierIsClass = taxonomyClassTokens.some((
         taxonomyToken,
       ) => sameTaxonomyModifier(token, taxonomyToken));
@@ -380,6 +426,7 @@ function literalRequestModifiers(
         mappedStems.has(stem) ||
         taxonomyBackedClassStems.has(stem) ||
         taxonomyProvesModifierIsClass || measuredRelationObject ||
+        uncontrastedRelationalObject ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
         describesMeasurement(modifierIndex) ||
