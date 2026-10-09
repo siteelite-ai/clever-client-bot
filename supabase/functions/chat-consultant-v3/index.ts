@@ -493,6 +493,7 @@ import type {
 import {
   type ChatHistoryMessage,
   MAX_REQUEST_BODY_BYTES,
+  readRequestTextBounded,
   validateChatRequestBody,
 } from "../_shared/v3-tools/request-validation.ts";
 import {
@@ -18551,21 +18552,21 @@ Deno.serve(async (req) => {
     });
   }
 
-  let rawText: string;
-  try {
-    rawText = await req.text();
-  } catch {
-    return new Response(JSON.stringify({ error: "invalid_json" }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  const readResult = await readRequestTextBounded(req);
+  if (!readResult.ok) {
+    return new Response(
+      JSON.stringify({
+        error: readResult.reason === "too_large"
+          ? "payload_too_large"
+          : "invalid_json",
+      }),
+      {
+        status: readResult.reason === "too_large" ? 413 : 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
-  if (new TextEncoder().encode(rawText).byteLength > MAX_REQUEST_BODY_BYTES) {
-    return new Response(JSON.stringify({ error: "payload_too_large" }), {
-      status: 413,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  const rawText = readResult.text;
 
   let rawBody: unknown;
   try {

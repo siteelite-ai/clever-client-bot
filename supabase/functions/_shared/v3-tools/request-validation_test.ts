@@ -2,9 +2,50 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { validateChatRequestBody } from "./request-validation.ts";
+import {
+  readRequestTextBounded,
+  validateChatRequestBody,
+} from "./request-validation.ts";
 
 const VALID_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+Deno.test("bounded ingress: accepts a streamed body at its exact byte limit", async () => {
+  const bytes = new TextEncoder().encode("абв");
+  const request = new Request("https://example.test/chat", {
+    method: "POST",
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, 1));
+        controller.enqueue(bytes.subarray(1));
+        controller.close();
+      },
+    }),
+  });
+  assertEquals(await readRequestTextBounded(request, bytes.length), {
+    ok: true,
+    text: "абв",
+  });
+});
+
+Deno.test("bounded ingress: rejects a body beyond its byte limit without Content-Length", async () => {
+  let cancelled = false;
+  const request = new Request("https://example.test/chat", {
+    method: "POST",
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(5));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  });
+  assertEquals(await readRequestTextBounded(request, 4), {
+    ok: false,
+    reason: "too_large",
+  });
+  assert(cancelled);
+});
 
 function validRequest(
   overrides: Record<string, unknown> = {},
@@ -69,14 +110,18 @@ Deno.test("request validation: accepts the bounded legacy widget ID during compa
 });
 
 Deno.test("request validation: rejects malformed legacy widget IDs", () => {
-  for (const messageId of [
-    "msg_123",
-    "msg_1786968314008_0bo58dj!",
-    "msg_17869683140080_0bo58djt",
-    `msg_1786968314008_${"a".repeat(200)}`,
-  ]) {
+  for (
+    const messageId of [
+      "msg_123",
+      "msg_1786968314008_0bo58dj!",
+      "msg_17869683140080_0bo58djt",
+      `msg_1786968314008_${"a".repeat(200)}`,
+    ]
+  ) {
     assert(
-      issueCodes(validRequest({ messageId })).includes("messageId:invalid_format"),
+      issueCodes(validRequest({ messageId })).includes(
+        "messageId:invalid_format",
+      ),
     );
   }
 });
