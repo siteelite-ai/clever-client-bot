@@ -1691,38 +1691,89 @@ export function verifyReplacementDestinationFit(
   const residentialHall = siteTokens.length === 1 && siteTokens[0] === "зал" &&
     /(?:^|[^\p{L}])(?:дома|домаш\p{L}*|квартир\p{L}*)(?:$|[^\p{L}])/iu
       .test(request);
-  const matchesSiteTokens = (tokens: string[]): boolean =>
-    siteTokens.every((token) => tokens.includes(token) ||
-      (residentialHall && token === "зал" && tokens.includes("гостин")));
-  const hasSiteTokens = (value: string): boolean => {
-    const tokens = normalize(value).split(/\s+/u).filter(Boolean)
-      .map(siteStem);
-    return matchesSiteTokens(tokens);
-  };
-  const hasUnnegatedSiteRelation = (value: string): boolean =>
-    String(value ?? "").split(/[.!?;\n]/u).some((sentence) => {
-      const words = normalize(sentence).split(/\s+/u).filter(Boolean);
-      return words.some((word, index) => {
-        if (!["для", "в", "во"].includes(word)) return false;
-        if (words.slice(Math.max(0, index - 3), index).includes("не")) {
-          return false;
+  const siteTokenMatches = (actual: string, expected: string): boolean =>
+    actual === expected ||
+    (residentialHall && expected === "зал" && actual === "гостин");
+  const siteSpans = (words: string[]): number[] =>
+    words.flatMap((_, index) =>
+      siteTokens.every((token, offset) =>
+          siteTokenMatches(siteStem(words[index + offset] ?? ""), token)
+        )
+        ? [index]
+        : []
+    );
+  // A source may say «для гостиной, но не для офиса». Keep those clauses
+  // separate so a negation for a different place cannot erase positive proof.
+  // Conversely, one negative clause for the requested place vetoes a positive
+  // title or trait elsewhere on the same card: contradictory source data is
+  // not safe evidence for a recommendation.
+  const siteClauses = (value: string): string[] =>
+    String(value ?? "").split(
+      /[.!?;\n]+|,\s*(?=(?:но|однако|зато|а|не|для|в|во|кроме|исключая|за\s+исключением)(?:\s|$))|\s+(?:но|однако|зато)\s+/iu,
+    );
+  const negativeCue = (word: string): boolean =>
+    word === "не" || word === "нельзя" || word === "кроме" ||
+    word === "без" || /^(?:исключ|запрещ|непригод|невозмож|противопоказ)/u
+      .test(word);
+  const sitePolarity = (
+    value: string,
+    standaloneSiteIsProof: boolean,
+  ): { positive: boolean; negative: boolean } => {
+    let positive = false;
+    let negative = false;
+    for (const clause of siteClauses(value)) {
+      const words = normalize(clause).split(/\s+/u).filter(Boolean);
+      for (const start of siteSpans(words)) {
+        const relation = words.findLastIndex((word, index) =>
+          index < start && index >= start - 5 &&
+          ["для", "в", "во"].includes(word)
+        );
+        // A new relation after «и/или» starts a new scope: «не для офиса и
+        // для гостиной» must not inherit the office negation.
+        const previousConjunction = relation < 0 ? -1 : words.findLastIndex(
+          (word, index) => index < relation && ["и", "или", "а"].includes(word),
+        );
+        const prefixStart = Math.max(
+          0,
+          relation < 0 ? start - 5 : relation - 5,
+          previousConjunction + 1,
+        );
+        const prefix = words.slice(prefixStart, start);
+        const after = words.slice(
+          start + siteTokens.length,
+          start + siteTokens.length + 3,
+        );
+        const postposedNegative = after[0] === "не" &&
+          /^(?:подход|рекоменд|предназнач|год|использ|примен|рассчит|разреш)/u
+            .test(after[1] ?? "");
+        if (prefix.some(negativeCue) || postposedNegative) {
+          negative = true;
+        } else if (relation >= 0 || standaloneSiteIsProof) {
+          positive = true;
         }
-        const governed = words.slice(index + 1, index + 5)
-          .map(siteStem);
-        return matchesSiteTokens(governed);
-      });
-    });
-  const hasSiteProof = (product: ProductRef): boolean =>
-    product.short_traits.some((trait) => {
+      }
+    }
+    return { positive, negative };
+  };
+  const hasSiteProof = (product: ProductRef): boolean => {
+    const traits = product.short_traits.map((trait) => {
       const [caption, ...parts] = String(trait).split(":");
-      return parts.length > 0 &&
+      const destinationCaption = parts.length > 0 &&
         /(?:назначен|помещен|комнат|место\s+применен|область\s+применен|использован)/iu
-          .test(normalize(caption)) &&
-        hasSiteTokens(parts.join(":")) &&
-        !/\bне\s+(?:для|в|во)\b/iu.test(parts.join(":"));
-    }) ||
-    hasUnnegatedSiteRelation(product.pagetitle) ||
-    hasUnnegatedSiteRelation(product.description_excerpt ?? "");
+          .test(normalize(caption));
+      return sitePolarity(
+        parts.length > 0 ? parts.join(":") : trait,
+        destinationCaption,
+      );
+    });
+    const proofs = [
+      ...traits,
+      sitePolarity(product.pagetitle, false),
+      sitePolarity(product.description_excerpt ?? "", false),
+    ];
+    return proofs.some((proof) => proof.positive) &&
+      !proofs.some((proof) => proof.negative);
+  };
   const provenArea = (product: ProductRef): number[] => {
     const evidence = [
       ...product.short_traits,
