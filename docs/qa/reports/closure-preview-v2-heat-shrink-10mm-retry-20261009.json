@@ -1,0 +1,152 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T14:07:50.189Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-heat-shrink-10mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1791554870193_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "status": 200,
+              "duration_ms": 12867,
+              "network_attempts": 1,
+              "log_id": "c80e915b-4a2e-43c9-beec-04d8d345eaf7",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Трубка ТТУ 12/6 черная 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "price": 133,
+                  "stockLine": "Астана (460 м), Караганда (330 м), Актобе (191 м) и ещё 3 городов",
+                  "cardText": "- **[Трубка ТТУ 12/6 черная 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/)**\n  Цена: *133* ₸/м\n  Бренд: IEK\n  Наличие: Астана (460 м), Караганда (330 м), Актобе (191 м) и ещё 3 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 белая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Шымкент (294 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 белая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (294 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Актобе (161 м), Шымкент (65 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 желтая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (161 м), Шымкент (65 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "price": 114,
+                  "stockLine": "Шымкент (78 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 зеленая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/)**\n  Цена: *114* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (78 м)"
+                }
+              ],
+              "text": "Клиент указал диаметр кабеля 10 мм. Для термоусаживаемой трубки (ТТУ) критичны два размера: внутренний диаметр до усадки должен быть строго больше диаметра кабеля (чтобы трубка свободно надевалась), а после усадки — строго меньше (для плотной фиксации). Условия: диаметр до усадки › 10 мм, диаметр после усадки ‹ 10 мм. В схеме есть значение «Внутр диаметр до термоусадки,мм» = 10 мм, но оно равно диаметру кабеля и не обеспечит свободного надевания. Подходящие варианты должны иметь диаметр до усадки больше 10 мм (например, 12 мм или из диапазонов,,,,,, где встречаются значения ≥10 мм) и диаметр после усадки меньше 10 мм. Точное значение (10 мм до усадки) не является обязательным, так как не удовлетворяет строгому неравенству. Ищем трубки с подходящим диапазоном усадки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-224e7743",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 1663
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 415",
+                  "duration_ms": 604
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T14:08:03.063Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "c80e915b-4a2e-43c9-beec-04d8d345eaf7"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}
