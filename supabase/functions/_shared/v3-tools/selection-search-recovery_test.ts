@@ -16,6 +16,7 @@ import {
   mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
+  shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldAppendCatalogEmpty,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
@@ -515,6 +516,200 @@ Deno.test("frozen application alternative survives final composition and activat
   });
   assertEquals(unscoped.evidence_required_criteria, mandatory);
   assertEquals(unscoped.revalidate, plan[0].revalidate);
+});
+
+Deno.test("nonempty acoustic-only scoped rows still permit one source-verified unscoped retry", () => {
+  const classValues = [
+    "Бытовые светильники накладные",
+    "Бытовые светильники подвесные",
+  ];
+  const criteria: Criterion[] = [
+    ...classValues.map((value) => ({
+      key: "Вид светильника",
+      op: "eq" as const,
+      value,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Вид светильника",
+      op: "eq",
+      value: "бытовое",
+      evidence: "user_explicit",
+      proof_scope: "application_suitability",
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      evidence: "user_explicit",
+    },
+  ];
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Нужны бытовые светильники с датчиком движения до 4000",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Светильники"],
+    source_proven_count: 0,
+    minimum_results: 2,
+  });
+  assert(plan.length > 0);
+  const attempt = plan[0];
+  const acoustic: ProductRef = {
+    id: "acoustic",
+    pagetitle: "Светильник с акустическим датчиком",
+    vendor: null,
+    price: 2900,
+    stock: "in_stock",
+    short_traits: [
+      `Вид светильника: ${classValues[0]}`,
+      "С датчиком движения: да",
+    ],
+    description_excerpt:
+      "Для бытового применения. Акустический датчик реагирует на звук.",
+  };
+  const scopedRows = [acoustic];
+  const verifiedScoped = sourceProvenSelectionPool(
+    filterSelectionRecoveryPool(scopedRows, attempt),
+    criteria,
+    4000,
+  );
+  assertEquals(scopedRows.length, 1);
+  assertEquals(verifiedScoped, []);
+  const decision = {
+    scoped_attempt: attempt,
+    scoped_search_succeeded: true,
+    source_verified_eligible_count: verifiedScoped.length,
+    minimum_results: 2,
+    unscoped_attempted: false,
+  };
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery(decision),
+    true,
+  );
+  const unscoped = unscopedSourceProvenCardinalityAttempt(attempt);
+  assertEquals(unscoped.args, {
+    mode: "by_query",
+    query: attempt.args.query,
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(unscoped.evidence_required_criteria, criteria);
+  assertEquals(unscoped.revalidate, attempt.revalidate);
+  const wrongClass: ProductRef = {
+    id: "industrial",
+    pagetitle: "Промышленный светильник с датчиком движения",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Вид светильника: Промышленные светильники"],
+    description_excerpt: "Для промышленного применения. Датчик реагирует на движение.",
+  };
+  const valid: ProductRef = {
+    id: "motion",
+    pagetitle: "Бытовой светильник с датчиком движения",
+    vendor: null,
+    price: 3100,
+    stock: "in_stock",
+    short_traits: [
+      `Вид светильника: ${classValues[0]}`,
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Датчик реагирует на движение в помещении.",
+  };
+  assertEquals(
+    sourceProvenSelectionPool(
+      filterSelectionRecoveryPool([acoustic, wrongClass, valid], unscoped),
+      criteria,
+      4000,
+    ).map(({ id }) => id),
+    ["motion"],
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      unscoped_attempted: true,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      scoped_search_succeeded: false,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      scoped_attempt: {
+        ...attempt,
+        args: { ...attempt.args, per_page: 51 },
+      },
+    }),
+    false,
+  );
+});
+
+Deno.test("enough distinct verified cards prevent unscoped widening", () => {
+  const classCriterion: Criterion = {
+    key: "Вид светильника",
+    op: "eq",
+    value: "Бытовые светильники накладные",
+    evidence: "user_explicit",
+  };
+  const criteria: Criterion[] = [
+    classCriterion,
+    { ...classCriterion, value: "Бытовые светильники подвесные" },
+    {
+      ...classCriterion,
+      value: "бытовое",
+      proof_scope: "application_suitability",
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      evidence: "user_explicit",
+    },
+  ];
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Нужны бытовые светильники с датчиком движения до 4000",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Светильники"],
+    source_proven_count: 0,
+    minimum_results: 2,
+  });
+  assert(plan.length > 0);
+  const valid = (id: string): ProductRef => ({
+    id,
+    pagetitle: `Бытовой светильник ${id} с датчиком движения`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: [
+      "Вид светильника: Бытовые светильники накладные",
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Датчик реагирует на движение в помещении.",
+  });
+  const scopedRows = [valid("one"), valid("two")];
+  const verified = sourceProvenSelectionPool(
+    filterSelectionRecoveryPool(scopedRows, plan[0]),
+    criteria,
+    4000,
+  );
+  assertEquals(verified.map(({ id }) => id), ["one", "two"]);
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      scoped_attempt: plan[0],
+      scoped_search_succeeded: true,
+      source_verified_eligible_count: verified.length,
+      minimum_results: 2,
+      unscoped_attempted: false,
+    }),
+    false,
+  );
 });
 
 Deno.test("cardinality recovery never widens an explicit narrow class", () => {

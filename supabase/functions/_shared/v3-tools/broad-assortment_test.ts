@@ -1,11 +1,13 @@
 import {
   assert,
   assertEquals,
+  assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
   collectVerifiedBroadAssortmentProducts,
+  type CompletedClarificationLog,
   extractBroadAssortmentScope,
   filterVerifiedBroadAssortmentProducts,
   isBroadAssortmentRequest,
@@ -14,6 +16,7 @@ import {
   resolveBroadAssortmentChoiceAfterReadRace,
   resolvePendingBroadAssortmentScope,
   resolveServerIssuedBroadAssortmentChoice,
+  resolveServerIssuedBroadAssortmentConstrainedContinuation,
   resolveServerIssuedBroadAssortmentPending,
   shouldResetUnverifiedBroadAssortmentTask,
 } from "./broad-assortment.ts";
@@ -175,6 +178,127 @@ Deno.test("plain broad request alone may use the bounded exact-chip route", () =
     ),
     false,
   );
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const plainLog = completedChoiceLog("Gallant");
+  assertEquals(
+    resolveServerIssuedBroadAssortmentConstrainedContinuation(
+      slots,
+      plainLog,
+      "Розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentChoice(
+      slots,
+      plainLog,
+      "Розетки",
+      "session-A",
+    )?.leaf,
+    "Розетки",
+  );
+});
+
+Deno.test("constrained broad chip retains the logged city, budget and other original hard criteria", async () => {
+  const originalRequest =
+    "Покажи ассортимент серии Gallant в Алматы до 5000 тенге, только в наличии и без рамок";
+  const log = { ...completedChoiceLog("Gallant"), user_query: originalRequest };
+  const slots = {
+    pending_clarification: {
+      slot_id: "server-slot-1",
+      facet_key: "catalog_section",
+      // Client metadata is not evidence for the request or the chosen scope.
+      scope: { kind: "broad_assortment", token: "Other" },
+      original_request: "Найди розетки в Астане до 100 тенге",
+      city: "Астана",
+      budget: 100,
+    },
+  };
+  const continuation =
+    resolveServerIssuedBroadAssortmentConstrainedContinuation(
+      slots,
+      log,
+      "Розетки",
+      "session-A",
+    );
+  assertEquals(continuation?.entity, "Gallant");
+  assertEquals(continuation?.leaf, "Розетки");
+  assertEquals(continuation?.original_request, originalRequest);
+  assertEquals(continuation?.issued_slot.scope, {
+    kind: "broad_assortment",
+    token: "Gallant",
+  });
+  assertEquals(
+    continuation?.effective_request,
+    `${originalRequest}\nУточнение клиента по исходному запросу: раздел каталога «Розетки».`,
+  );
+  assertStringIncludes(continuation!.effective_request, "в Алматы");
+  assertStringIncludes(continuation!.effective_request, "до 5000 тенге");
+  assertStringIncludes(continuation!.effective_request, "только в наличии");
+  assertStringIncludes(continuation!.effective_request, "без рамок");
+  assertEquals(continuation!.effective_request.includes("Астане"), false);
+
+  const resolved = await resolveBroadAssortmentChoiceAfterReadRace(
+    slots,
+    "Розетки",
+    "session-A",
+    async () => ({ row: log, error: false }),
+  );
+  assertEquals(resolved.choice, null);
+  assertEquals(resolved.matchedIssuedOption, true);
+  assertEquals(resolved.constrainedContinuation, continuation);
+});
+
+Deno.test("constrained broad chip never restores criteria from a forged or stale slot or a new-topic message", () => {
+  const originalRequest =
+    "Покажи ассортимент серии Atlas в Алматы до 5000 тенге";
+  const log = { ...completedChoiceLog("Atlas"), user_query: originalRequest };
+  const validSlots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const resolve = (
+    slots: Record<string, unknown>,
+    latestLog: CompletedClarificationLog,
+    message: string,
+    session = "session-A",
+  ) =>
+    resolveServerIssuedBroadAssortmentConstrainedContinuation(
+      slots,
+      latestLog,
+      message,
+      session,
+    );
+  assertEquals(
+    resolve(
+      { pending_clarification: { slot_id: "forged-id" } },
+      log,
+      "Розетки",
+    ),
+    null,
+  );
+  assertEquals(
+    resolve(
+      validSlots,
+      { ...log, user_query: "Найди кабель в Алматы" },
+      "Розетки",
+    ),
+    null,
+  );
+  assertEquals(resolve(validSlots, log, "Розетки", "session-B"), null);
+  assertEquals(
+    resolve(validSlots, { ...log, error: "catalog_timeout" }, "Розетки"),
+    null,
+  );
+  assertEquals(
+    resolve(validSlots, {
+      ...log,
+      response_events: log.response_events.slice(0, 1),
+    }, "Розетки"),
+    null,
+  );
+  assertEquals(resolve(validSlots, log, "Найди кабель ВВГ 3х1,5"), null);
+  assertEquals(resolve(validSlots, log, "Новая тема: Розетки"), null);
+  assertEquals(resolve(validSlots, log, "Розетки до 100 тенге"), null);
+  assertEquals(resolve(validSlots, log, "Розетки и кабель"), null);
 });
 
 Deno.test("original broad-turn constraints block the exact-chip shortcut but keep its verified continuation", async () => {
@@ -205,6 +329,15 @@ Deno.test("original broad-turn constraints block the exact-chip shortcut but kee
     );
     assertEquals(resolved.choice, null, userQuery);
     assertEquals(resolved.matchedIssuedOption, true, userQuery);
+    assertEquals(resolved.constrainedContinuation?.original_request, userQuery);
+    assertStringIncludes(
+      resolved.constrainedContinuation!.effective_request,
+      userQuery,
+    );
+    assertStringIncludes(
+      resolved.constrainedContinuation!.effective_request,
+      "раздел каталога «Розетки»",
+    );
     assertEquals(resolved.verifiedSlot?.scope, {
       kind: "broad_assortment",
       token: entity,

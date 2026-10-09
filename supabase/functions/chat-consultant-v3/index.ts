@@ -125,6 +125,7 @@ import {
   resolveSelectionSearchEvidence,
   type SelectionSearchRecoveryAttempt,
   shouldAppendCatalogEmpty,
+  shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
   sourceProvenSelectionPool,
@@ -177,6 +178,7 @@ import {
   verifySelectionTargetWithVisibleTitle,
 } from "../_shared/v3-tools/selection-contract.ts";
 import {
+  admitMeasuredSourceClassDirectRoute,
   parseMeasuredSourceClassRecoveryRequest,
   recoverMeasuredSourceClassSelection,
 } from "../_shared/v3-tools/measured-source-class-recovery.ts";
@@ -222,6 +224,7 @@ import {
   resolvePendingBroadAssortmentScope,
   shouldResetUnverifiedBroadAssortmentTask,
   type VerifiedBroadAssortmentChoice,
+  type VerifiedBroadAssortmentConstrainedContinuation,
 } from "../_shared/v3-tools/broad-assortment.ts";
 import {
   admitDirectSelectionRoute,
@@ -5469,6 +5472,7 @@ async function loadVerifiedBroadAssortmentChoice(
   userMessage: string,
 ): Promise<{
   choice: VerifiedBroadAssortmentChoice | null;
+  constrainedContinuation: VerifiedBroadAssortmentConstrainedContinuation | null;
   verifiedSlot: Record<string, unknown> | null;
   matchedIssuedOption: boolean;
   lookupFailed: boolean;
@@ -5480,6 +5484,7 @@ async function loadVerifiedBroadAssortmentChoice(
   ) {
     return {
       choice: null,
+      constrainedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
       lookupFailed: false,
@@ -5536,6 +5541,7 @@ async function loadVerifiedBroadAssortmentChoice(
     );
     return {
       choice: null,
+      constrainedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
       lookupFailed: true,
@@ -13789,21 +13795,6 @@ async function runExpertLoop(
               error_code: "catalog_timeout",
               message: "bounded cardinality recovery timed out",
             }));
-            if (
-              scope === "leaf" && !unscopedAttempted && recovered.ok &&
-              recovered.tool === "search_catalog" &&
-              recovered.results.length === 0
-            ) {
-              // An empty catalog full-text × leaf intersection does not prove
-              // that the literal feature is absent. Try the same word once
-              // unscoped; every candidate still faces the original frozen
-              // application, feature, target, visible and budget gates.
-              recoveryQueue.splice(i + 1, 0, {
-                attempt: unscopedSourceProvenCardinalityAttempt(attempt),
-                scope: "unscoped",
-              });
-              unscopedAttempted = true;
-            }
             const candidatePool = recovered.ok &&
                 recovered.tool === "search_catalog"
               ? filterSelectionRecoveryPool(recovered.results, attempt)
@@ -13813,6 +13804,31 @@ async function runExpertLoop(
               eligible,
               sourceProvenRecovered,
             );
+            const scopedSearchSucceeded = recovered.ok &&
+              recovered.tool === "search_catalog";
+            const emptyScopedRows = scopedSearchSucceeded &&
+              recovered.results.length === 0;
+            const verifiedLiteralShortfall =
+              shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+                scoped_attempt: attempt,
+                scoped_search_succeeded: scopedSearchSucceeded,
+                source_verified_eligible_count: eligible.length,
+                minimum_results: resultCardinality.minimum,
+                unscoped_attempted: unscopedAttempted,
+              });
+            if (
+              scope === "leaf" && !unscopedAttempted &&
+              (emptyScopedRows || verifiedLiteralShortfall)
+            ) {
+              // A nonempty retrieval can still contain zero *proved* cards.
+              // Widen the literal lookup only once; the frozen source, class,
+              // target, visible and budget gates still apply to every card.
+              recoveryQueue.splice(i + 1, 0, {
+                attempt: unscopedSourceProvenCardinalityAttempt(attempt),
+                scope: "unscoped",
+              });
+              unscopedAttempted = true;
+            }
             send({
               type: "tool_event",
               tool: "selection_recovery",
@@ -19257,7 +19273,8 @@ Deno.serve(async (req) => {
               ) ??
                 extractBroadAssortmentScope(userMessage)
               : null;
-            const readinessClarification = additionalSelectionRequest
+            const readinessClarification = additionalSelectionRequest ||
+                verifiedBroadChoiceState.matchedIssuedOption
               ? null
               : selectReadinessClarification(
                 scopedSelectionRequest.message,
@@ -19317,43 +19334,60 @@ Deno.serve(async (req) => {
               verifiedBroadChoiceState.matchedIssuedOption &&
               !verifiedBroadChoice && !startsNewTask
             ) {
-              // A real chip from a constrained or ambiguous broad request must
-              // retain the original turn's requirements. No other direct selector
-              // is allowed to bypass the existing criteria-aware expert route.
-              steps.push({
-                step: "v3_broad_assortment_constrained_chip_expert_route",
-                ms: Date.now() - t0,
-              });
-              const out = await runExpertLoop(
-                scopedSelectionRequest.message,
-                effectiveHistory,
-                effectiveSlots,
-                settings.openrouter_api_key!,
-                ctx,
-                send,
-                steps,
-                t0,
-                {
-                  anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-                  relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-                  criteriaGateEnabled: true,
-                },
-                recentProductEvidence,
-                [],
-                null,
-                ellipticalContinuation,
-              );
-              productsCount = out.productsRendered;
-              const shownProducts = out.shownProductIds
-                .map((id) => ctx.cache.get(id))
-                .filter((product): product is NonNullable<typeof product> =>
-                  Boolean(product)
+              const constrained = verifiedBroadChoiceState.constrainedContinuation;
+              if (!constrained) {
+                // A verified chip without its durable original request cannot
+                // safely become an unconstrained standalone selection.
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось проверить исходные условия выбора. Повторите запрос с нужными параметрами.",
+                });
+                productsCount = 0;
+                steps.push({
+                  step: "v3_broad_assortment_constrained_chip_unavailable",
+                  ms: Date.now() - t0,
+                });
+              } else {
+                // The original text comes from the completed server log, not
+                // browser slots. Preserve all customer constraints in the
+                // existing criteria-aware expert route.
+                steps.push({
+                  step: "v3_broad_assortment_constrained_chip_expert_route",
+                  ms: Date.now() - t0,
+                  meta: { leaf: constrained.leaf },
+                });
+                const out = await runExpertLoop(
+                  constrained.effective_request,
+                  effectiveHistory,
+                  effectiveSlots,
+                  settings.openrouter_api_key!,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  {
+                    anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                    relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                    criteriaGateEnabled: true,
+                  },
+                  recentProductEvidence,
+                  [],
+                  null,
+                  ellipticalContinuation,
                 );
-              await persistRecentProductEvidence(
-                supabase,
-                effectiveSessionId,
-                shownProducts,
-              );
+                productsCount = out.productsRendered;
+                const shownProducts = out.shownProductIds
+                  .map((id) => ctx.cache.get(id))
+                  .filter((product): product is NonNullable<typeof product> =>
+                    Boolean(product)
+                  );
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  shownProducts,
+                );
+              }
             } else if (isMetaSelfQuestion(userMessage)) {
               steps.push({
                 step: "v3_meta_question_declined",
@@ -19738,7 +19772,8 @@ Deno.serve(async (req) => {
                 });
               }
             } else if (
-              parseMeasuredSourceClassRecoveryRequest(scopedSelectionRequest.message)
+              parseMeasuredSourceClassRecoveryRequest(scopedSelectionRequest.message) &&
+              admitMeasuredSourceClassDirectRoute(scopedSelectionRequest.message)
             ) {
               const measuredRecovery = await answerMeasuredSourceClassRecovery(
                 scopedSelectionRequest.message,

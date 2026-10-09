@@ -329,10 +329,46 @@ export function buildSourceProvenCardinalityRecoveryPlan(
   }));
 }
 
+export interface UnscopedSourceProvenCardinalityDecisionInput {
+  scoped_attempt: SelectionSearchRecoveryAttempt;
+  scoped_search_succeeded: boolean;
+  /** Distinct cards after all source, class, target, visible and budget gates. */
+  source_verified_eligible_count: number;
+  minimum_results: number;
+  unscoped_attempted: boolean;
+}
+
+/** A nonempty scoped HTTP response can contain no eligible cards. Decide from
+ * the source-verified pool, never the catalog row count, whether the one
+ * bounded unscoped literal retry is still warranted. The caller must compute
+ * this count after the complete per-card eligibility gate. */
+export function shouldAttemptUnscopedSourceProvenCardinalityRecovery(
+  input: UnscopedSourceProvenCardinalityDecisionInput,
+): boolean {
+  const attempt = input.scoped_attempt;
+  const minimum = Math.floor(input.minimum_results);
+  const count = input.source_verified_eligible_count;
+  const pageSize = attempt.args.per_page;
+  return input.scoped_search_succeeded && !input.unscoped_attempted &&
+    attempt.kind === "verify_literal_feature_under_broad_application" &&
+    attempt.args.mode === "by_query" &&
+    typeof attempt.args.query === "string" &&
+    attempt.args.query.trim().length > 0 &&
+    Array.isArray(attempt.args.category_in) &&
+    attempt.args.category_in.some((category) =>
+      typeof category === "string" && category.trim().length > 0
+    ) &&
+    typeof pageSize === "number" && Number.isInteger(pageSize) &&
+    pageSize >= 1 && pageSize <= 50 &&
+    Number.isFinite(minimum) && minimum > 1 &&
+    Number.isInteger(count) && count >= 0 && count < minimum;
+}
+
 /** Some catalog indexes do not combine full-text and leaf category filters.
- * If the scoped literal lookup returns no rows, retry the identical literal
- * once without that retrieval hint. Eligibility does not widen: the caller
- * must reapply the unchanged source, target, visible and budget gates. */
+ * If the scoped literal lookup leaves a verified-card shortfall, retry the
+ * identical literal once without that retrieval hint. Eligibility does not
+ * widen: the caller must reapply the unchanged source, target, visible and
+ * budget gates. */
 export function unscopedSourceProvenCardinalityAttempt(
   scoped: SelectionSearchRecoveryAttempt,
 ): SelectionSearchRecoveryAttempt {

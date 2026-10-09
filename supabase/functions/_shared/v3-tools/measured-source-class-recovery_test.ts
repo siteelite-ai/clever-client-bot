@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  admitMeasuredSourceClassDirectRoute,
   parseMeasuredSourceClassRecoveryRequest,
   recoverMeasuredSourceClassSelection,
   verifiedMeasuredLedReplacementProducts,
@@ -83,6 +84,113 @@ Deno.test("measured source class comes only from an explicit replacement relatio
   );
 });
 
+Deno.test("measured direct admission preserves plain source, LED, site and area requests", () => {
+  for (
+    const message of [
+      request,
+      "Хочу заменить старый торшер на светодиодное освещение в спальне 18 м²",
+      "Нужно заменить старую люстру на светодиодный свет в спальне 18 м². Что подойдёт?",
+      "Хочу поменять люстру на LED освещение для гостиной площадью 25 кв. м. Подберите варианты.",
+    ]
+  ) {
+    assertEquals(admitMeasuredSourceClassDirectRoute(message), true, message);
+  }
+});
+
+Deno.test("measured direct admission delegates every uncovered customer obligation", () => {
+  const cases = [
+    [
+      "budget",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² до 50 000 ₸. Что подойдет?",
+    ],
+    [
+      "count",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Покажите 2 варианта.",
+    ],
+    [
+      "colour",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² белого цвета.",
+    ],
+    [
+      "symbol-only colour",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² ⚪️",
+    ],
+    [
+      "sensor",
+      "Хочу заменить люстру на светодиодное освещение с датчиком движения в гостиной 25 м².",
+    ],
+    [
+      "city-specific stock",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м², в наличии в Астане.",
+    ],
+    [
+      "exclusion",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м², но не китайского производства.",
+    ],
+    [
+      "mounting",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² с креплением на натяжной потолок.",
+    ],
+    [
+      "power",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² мощностью от 50 Вт.",
+    ],
+    [
+      "unlisted product feature",
+      "Хочу заменить люстру на светодиодное освещение в гостиной 25 м² без мерцания.",
+    ],
+    [
+      "target modifier",
+      "Хочу заменить люстру на светодиодное освещение теплого света в гостиной 25 м².",
+    ],
+    [
+      "source property",
+      "Хочу заменить потолочную люстру на светодиодное освещение в гостиной 25 м².",
+    ],
+    [
+      "site-adjacent condition",
+      "Хочу заменить люстру на светодиодное освещение в гостиной с детьми 25 м².",
+    ],
+    [
+      "site-absorbed colour",
+      "Хочу заменить люстру на светодиодное освещение в гостиной белое 25 м².",
+    ],
+    [
+      "ambiguous multiword site",
+      "Хочу заменить люстру на светодиодное освещение в детской комнате 18 м².",
+    ],
+  ] as const;
+  for (const [reason, message] of cases) {
+    assertEquals(
+      parseMeasuredSourceClassRecoveryRequest(message)?.source_class,
+      "люстру",
+      `${reason} should remain parseable for the expert route`,
+    );
+    assertEquals(admitMeasuredSourceClassDirectRoute(message), false, reason);
+  }
+});
+
+Deno.test("uncovered obligation never starts measured direct catalog work", async () => {
+  let fetched = false;
+  const message =
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м², но только белое. Что подойдет?";
+  assertEquals(
+    parseMeasuredSourceClassRecoveryRequest(message)?.source_class,
+    "люстру",
+  );
+  const result = await recoverMeasuredSourceClassSelection(message, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    cache: new Map(),
+    fetchImpl: () => {
+      fetched = true;
+      throw new Error("unexpected fetch");
+    },
+  });
+  assertEquals(result, null);
+  assertEquals(fetched, false);
+});
+
 Deno.test("fallback cards need independent LED, site, area and warehouse proof", () => {
   const cards = [
     product("good", "Люстра светодиодная 96W", "кухня; гостиная", "30"),
@@ -162,10 +270,12 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
     } else {
       throw new Error(`Unexpected URL: ${url}`);
     }
-    return Promise.resolve(new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }));
+    return Promise.resolve(
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
   };
   const cache: ProductCache = new Map();
   const recovered = await recoverMeasuredSourceClassSelection(request, {
@@ -177,9 +287,18 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
   assertEquals(recovered?.origin, "source_class_fallback");
   assertEquals(recovered?.source_category, "Люстры");
   assertEquals(recovered?.source_pages, 1);
-  assertEquals(recovered?.products.map(({ id }) => id), ["good1", "good2", "good3"]);
+  assertEquals(recovered?.products.map(({ id }) => id), [
+    "good1",
+    "good2",
+    "good3",
+  ]);
   assertEquals(calls.filter((call) => call.includes("/products?")).length, 2);
-  assertEquals(calls.some((call) => call.includes("category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B")), true);
+  assertEquals(
+    calls.some((call) =>
+      call.includes("category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B")
+    ),
+    true,
+  );
 
   targetTimeout = true;
   const timedOut = await recoverMeasuredSourceClassSelection(request, {
@@ -190,7 +309,11 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
   });
   assertEquals(timedOut?.target_status, "catalog_timeout");
   assertEquals(timedOut?.origin, "source_class_fallback");
-  assertEquals(timedOut?.products.map(({ id }) => id), ["good1", "good2", "good3"]);
+  assertEquals(timedOut?.products.map(({ id }) => id), [
+    "good1",
+    "good2",
+    "good3",
+  ]);
 
   targetTimeout = false;
   targetSufficient = true;
@@ -202,7 +325,11 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
   });
   assertEquals(targetMatched?.origin, "target_query");
   assertEquals(targetMatched?.source_status, "not_needed");
-  assertEquals(targetMatched?.products.map(({ id }) => id), ["good1", "good2", "good3"]);
+  assertEquals(targetMatched?.products.map(({ id }) => id), [
+    "good1",
+    "good2",
+    "good3",
+  ]);
 });
 
 Deno.test("destination-only request never opens source-class fallback", async () => {

@@ -112,6 +112,18 @@ export interface VerifiedBroadAssortmentChoice {
   issued_slot: Record<string, unknown>;
 }
 
+/** A constrained chip answer, grounded entirely in the completed server turn. */
+export interface VerifiedBroadAssortmentConstrainedContinuation {
+  entity: string;
+  leaf: string;
+  /** The previous customer's request as recorded in the durable server log. */
+  original_request: string;
+  /** Self-contained expert input retaining every original customer criterion. */
+  effective_request: string;
+  slot_id: string;
+  issued_slot: Record<string, unknown>;
+}
+
 /**
  * The exact-chip shortcut has no general criteria compiler. Admit it only for
  * an unqualified, structurally plain assortment request. Any extra wording
@@ -383,17 +395,70 @@ export function resolveServerIssuedBroadAssortmentChoice(
       pending.entity,
     )
   ) return null;
-  const options = pending.options;
-  const answer = normalize(currentMessage);
   // Direct deterministic selection is limited to the exact issued chip text.
   // A typed refinement may include price, count, negation or compatibility;
   // it must travel through the existing expert path with its full evidence.
-  const matching = options.filter((option) => normalize(option) === answer);
-  if (matching.length !== 1) return null;
+  const leaf = resolveExactIssuedBroadAssortmentLeaf(
+    pending.options,
+    currentMessage,
+  );
+  if (!leaf) return null;
   return {
     entity: pending.entity,
-    leaf: matching[0],
+    leaf,
     exact: true,
+    slot_id: pending.slot_id,
+    issued_slot: pending.issued_slot,
+  };
+}
+
+function resolveExactIssuedBroadAssortmentLeaf(
+  options: string[],
+  currentMessage: string,
+): string | null {
+  const answer = normalize(currentMessage);
+  const matching = options.filter((option) => normalize(option) === answer);
+  return matching.length === 1 ? matching[0] : null;
+}
+
+/**
+ * An exact chip from a constrained assortment request must not become a new,
+ * unconstrained request for that leaf. The browser's slots/history can be
+ * forged or stale, so only the already-verified, completed server log supplies
+ * the original text. Keep it verbatim: a partial criteria extractor could lose
+ * a city, price ceiling, stock requirement or compatibility clause.
+ */
+export function resolveServerIssuedBroadAssortmentConstrainedContinuation(
+  clientSlots: Record<string, unknown>,
+  latestCompletedLog: CompletedClarificationLog | null,
+  currentMessage: string,
+  sessionId: string,
+): VerifiedBroadAssortmentConstrainedContinuation | null {
+  const pending = resolveServerIssuedBroadAssortmentPending(
+    clientSlots,
+    latestCompletedLog,
+    currentMessage,
+    sessionId,
+  );
+  if (!pending || pending.options.length < 2) return null;
+  const originalRequest = latestCompletedLog?.user_query;
+  if (typeof originalRequest !== "string" || !originalRequest.trim()) {
+    return null;
+  }
+  if (isPlainBroadAssortmentRequest(originalRequest, pending.entity)) {
+    return null;
+  }
+  const leaf = resolveExactIssuedBroadAssortmentLeaf(
+    pending.options,
+    currentMessage,
+  );
+  if (!leaf) return null;
+  return {
+    entity: pending.entity,
+    leaf,
+    original_request: originalRequest,
+    effective_request:
+      `${originalRequest}\nУточнение клиента по исходному запросу: раздел каталога «${leaf}».`,
     slot_id: pending.slot_id,
     issued_slot: pending.issued_slot,
   };
@@ -412,6 +477,9 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
     new Promise((resolve) => setTimeout(resolve, 80)),
 ): Promise<{
   choice: VerifiedBroadAssortmentChoice | null;
+  constrainedContinuation:
+    | VerifiedBroadAssortmentConstrainedContinuation
+    | null;
   verifiedSlot: Record<string, unknown> | null;
   matchedIssuedOption: boolean;
   lookupFailed: boolean;
@@ -432,6 +500,13 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
           currentMessage,
           sessionId,
         ),
+        constrainedContinuation:
+          resolveServerIssuedBroadAssortmentConstrainedContinuation(
+            clientSlots,
+            row,
+            currentMessage,
+            sessionId,
+          ),
         verifiedSlot: pending?.issued_slot ?? null,
         matchedIssuedOption: Boolean(
           pending &&
@@ -445,6 +520,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
     if (attempt === 2) {
       return {
         choice: null,
+        constrainedContinuation: null,
         verifiedSlot: null,
         matchedIssuedOption: false,
         lookupFailed: true,
@@ -454,6 +530,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
   }
   return {
     choice: null,
+    constrainedContinuation: null,
     verifiedSlot: null,
     matchedIssuedOption: false,
     lookupFailed: true,

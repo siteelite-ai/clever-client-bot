@@ -54,6 +54,127 @@ export function parseMeasuredSourceClassRecoveryRequest(
   };
 }
 
+function normalizedRequestWords(value: string): string[] {
+  return String(value ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+const DIRECT_REQUEST_FRAME_WORDS = new Set([
+  "хочу",
+  "хотел",
+  "хотела",
+  "бы",
+  "мне",
+  "пожалуйста",
+  "можете",
+  "можешь",
+  "нужно",
+  "нужен",
+  "нужна",
+  "нужны",
+  "подбери",
+  "подберите",
+  "предложи",
+  "предложите",
+  "покажи",
+  "покажите",
+  "найди",
+  "найдите",
+  "посоветуй",
+  "посоветуйте",
+  "что",
+  "какой",
+  "какая",
+  "какие",
+  "подойдет",
+  "подойдут",
+  "подходят",
+  "вариант",
+  "варианты",
+  "товар",
+  "товары",
+  "есть",
+  "ли",
+  "у",
+  "вас",
+]);
+
+/**
+ * The measured direct path can prove only the removed source class, a *bare*
+ * generic LED target, the customer's stated place and the minimum area. Its
+ * response cannot honor a further price, quantity, feature, availability
+ * location, exclusion or installation condition. Admit by consuming the full
+ * request structure, then reject every unexplained word rather than trying to
+ * enumerate all possible product criteria.
+ */
+export function admitMeasuredSourceClassDirectRoute(message: string): boolean {
+  const parsed = parseMeasuredSourceClassRecoveryRequest(message);
+  if (!parsed) return false;
+  const request = String(message ?? "").replace(/\s+/gu, " ").trim();
+  const relation = request.match(
+    /(?:^|[^\p{L}])(?:замен|поменя|смен)\p{L}*\s+((?:[\p{L}-]+\s+){0,3}[\p{L}-]+)\s+на\s+/iu,
+  );
+  if (!relation || relation.index === undefined) return false;
+
+  // The removed object is a scope for the live-category fallback, not a
+  // promise to preserve its unverified design, mounting or other properties.
+  // A simple age adjective is harmless; any other source modifier is not.
+  const sourceWords = normalizedRequestWords(relation[1]);
+  if (
+    sourceWords.at(-1) !== normalizedRequestWords(parsed.source_class)[0] ||
+    (sourceWords.length !== 1 &&
+      !(sourceWords.length === 2 &&
+        /^(?:старый|старая|старую|старое|старые)$/u.test(sourceWords[0])))
+  ) return false;
+
+  const destinationWords = normalizedRequestWords(parsed.destination);
+  if (
+    destinationWords.length !== 2 ||
+    !destinationWords.some((word) => /^(?:светодиод\p{L}*|led)$/u.test(word)) ||
+    !destinationWords.some((word) => /^(?:освещен\p{L}*|свет)$/u.test(word))
+  ) return false;
+
+  const relationEnd = relation.index + relation[0].length;
+  const tail = request.slice(relationEnd);
+  if (
+    !tail.toLocaleLowerCase("ru-RU").startsWith(
+      parsed.destination.toLocaleLowerCase("ru-RU"),
+    ) ||
+    /^[\p{L}\p{N}-]/u.test(tail.slice(parsed.destination.length))
+  ) return false;
+  const destinationEnd = relationEnd + parsed.destination.length;
+
+  const siteArea = request.match(
+    /(?:^|[\s,;])(?:в|во|для)\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2}?)\s+(?:площад\p{L}*\s+)?(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*)/iu,
+  );
+  if (!siteArea || siteArea.index === undefined) return false;
+  const placeWords = normalizedRequestWords(siteArea[1]);
+  if (
+    siteArea.index < destinationEnd ||
+    siteArea[1].toLocaleLowerCase("ru-RU") !==
+      parsed.place.toLocaleLowerCase("ru-RU") ||
+    Number(siteArea[2].replace(",", ".")) !== parsed.minimum_area_m2 ||
+    // The fit parser can absorb adjacent modifiers into a multiword place
+    // ("в гостиной белое 25 м²"). Without a distinct modifier proof, even a
+    // plausible room phrase must take the criteria-aware route.
+    placeWords.length !== 1
+  ) return false;
+
+  // Only non-substantive request framing may remain. An unknown term is an
+  // uncovered obligation, even when it is not on a hand-maintained blacklist.
+  const residual = request.slice(0, relation.index) + " " +
+    request.slice(destinationEnd, siteArea.index) + " " +
+    request.slice(siteArea.index + siteArea[0].length);
+  // Symbols can carry a criterion without a word (for example a colour
+  // swatch emoji). Do not let tokenization erase that instruction.
+  if (/\p{S}/u.test(residual)) return false;
+  return normalizedRequestWords(residual).every((word) =>
+    DIRECT_REQUEST_FRAME_WORDS.has(word)
+  );
+}
+
 function hasSourceBackedLed(product: ProductFull): boolean {
   // A bulb-compatible chandelier is not necessarily an LED fixture. Require
   // an affirmative product-title claim or a dedicated live source-type trait.
@@ -66,7 +187,7 @@ function hasSourceBackedLed(product: ProductFull): boolean {
   return (product.short_traits ?? []).some((trait) => {
     const [caption, ...value] = trait.split(":");
     return /(?:тип|вид)\s+источник\p{L}*\s+свет\p{L}*|технологи\p{L}*\s+освещен\p{L}*/iu
-        .test(caption) &&
+      .test(caption) &&
       /(?:светодиод\p{L}*|\bLED\b)/iu.test(value.join(":"));
   });
 }
@@ -130,6 +251,7 @@ export async function recoverMeasuredSourceClassSelection(
     sourceTimeoutMs?: number;
   },
 ): Promise<MeasuredSourceClassRecoveryResult | null> {
+  if (!admitMeasuredSourceClassDirectRoute(message)) return null;
   const request = parseMeasuredSourceClassRecoveryRequest(message);
   if (!request) return null;
   const targetStarted = Date.now();
@@ -147,7 +269,9 @@ export async function recoverMeasuredSourceClassSelection(
   const targetProducts = target.ok
     ? verifiedMeasuredLedReplacementProducts(
       message,
-      target.results.map(({ id }) => deps.cache.get(id)).filter((product): product is ProductFull => Boolean(product)),
+      target.results.map(({ id }) => deps.cache.get(id)).filter((
+        product,
+      ): product is ProductFull => Boolean(product)),
     )
     : [];
   const base = {
@@ -199,7 +323,9 @@ export async function recoverMeasuredSourceClassSelection(
       origin: targetProducts.length > 0 ? "target_query" : "unverified",
       products: targetProducts.slice(0, 5),
       source_category: null,
-      source_status: discovered.ok ? "unproven_source_leaf" : discovered.error_code,
+      source_status: discovered.ok
+        ? "unproven_source_leaf"
+        : discovered.error_code,
       source_pages: 0,
       source_verified: 0,
       source_discovery_duration_ms: sourceDiscoveryDuration,
@@ -207,7 +333,9 @@ export async function recoverMeasuredSourceClassSelection(
     };
   }
 
-  const selected = new Map(targetProducts.map((product) => [product.id, product]));
+  const selected = new Map(
+    targetProducts.map((product) => [product.id, product]),
+  );
   const sourceSearchStarted = Date.now();
   let sourceStatus = "ok";
   let sourcePages = 0;
@@ -244,8 +372,11 @@ export async function recoverMeasuredSourceClassSelection(
   const products = [...selected.values()].slice(0, 5);
   return {
     ...base,
-    origin: sourceVerified > 0 ? "source_class_fallback" :
-      products.length > 0 ? "target_query" : "unverified",
+    origin: sourceVerified > 0
+      ? "source_class_fallback"
+      : products.length > 0
+      ? "target_query"
+      : "unverified",
     products,
     source_category: sourceCategory,
     source_status: sourceStatus,
