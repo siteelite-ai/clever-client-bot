@@ -13,7 +13,7 @@ import {
 } from './build-release-ledger.mjs';
 import { resolveCaseExecutions, resolveExpectations } from './run-customer-acceptance.mjs';
 
-const ledgerFile = new URL('../../docs/qa/release-inventory-v2-20261009.json', import.meta.url);
+const ledgerFile = new URL('../../docs/qa/release-inventory-v3-20261009.json', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function withChangedJson(filename, change, manifestChange = (manifest) => manifest) {
@@ -34,7 +34,7 @@ function withChangedJson(filename, change, manifestChange = (manifest) => manife
 
 test('the pinned five matrix hashes and release dimensions match the actual files', () => {
   const ledger = buildReleaseLedger();
-  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 190, ordered_turns: 273 });
+  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 190, ordered_turns: 279 });
   for (const file of ledger.matrix_files) {
     assert.equal(sha256(fs.readFileSync(new URL(`./${file.basename}`, import.meta.url))), file.sha256);
   }
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases-v2.json', 40, 54],
+      ['notion-legacy-bug-cases-v3.json', 40, 60],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -85,7 +85,7 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   }
 });
 
-test('all 132 base turns, including 15 synthetic turns, have explicit acceptance', () => {
+test('all 138 base turns, including 20 synthetic turns, have explicit acceptance', () => {
   let checked = 0;
   for (const manifest of MATRIX_MANIFESTS) {
     const suite = JSON.parse(fs.readFileSync(new URL(`./${manifest.file}`, import.meta.url), 'utf8'));
@@ -98,10 +98,10 @@ test('all 132 base turns, including 15 synthetic turns, have explicit acceptance
       }
     }
   }
-  assert.equal(checked, 132);
+  assert.equal(checked, 138);
 });
 
-test('all 273 messages and effective expectations match the acceptance runner plan', () => {
+test('all 279 messages and effective expectations match the acceptance runner plan', () => {
   const ledger = buildReleaseLedger();
   let cursor = 0;
   for (const manifest of MATRIX_MANIFESTS) {
@@ -135,8 +135,8 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   const sourceIndex = JSON.parse(fs.readFileSync(new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
   assert.equal(sourceIndex.synthetic_api_continuations.length, 15);
   const syntheticTurns = ledger.runs.flatMap((run) => run.turns)
-    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v2.json' && turn.synthetic_scenario);
-  assert.equal(syntheticTurns.length, 15);
+    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v3.json' && turn.synthetic_scenario);
+  assert.equal(syntheticTurns.length, 20);
   for (const source of sourceIndex.synthetic_api_continuations) {
     const turn = syntheticTurns.find((item) => item.case_id === source.case_id && item.turn_index === source.turn_index);
     assert(turn, `${source.case_id} turn ${source.turn_index}`);
@@ -146,6 +146,21 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   }
   assert.equal(new Set(sourceIndex.synthetic_api_continuations.map((source) =>
     `${source.case_id}:${source.turn_index}`)).size, 15);
+  const indexed = new Set(sourceIndex.synthetic_api_continuations.map((source) =>
+    `${source.case_id}:${source.turn_index}`));
+  assert.deepEqual(syntheticTurns.filter((turn) => !indexed.has(`${turn.case_id}:${turn.turn_index}`))
+    .map((turn) => `${turn.case_id}:${turn.turn_index}`).sort(), [
+    'bt929-lugs-35mm-clarification:4',
+    'bt929-surveillance-cable-clarification:5',
+    'bt929-warm-led-clarification:2',
+    'bt929-warm-led-clarification:3',
+    'bt929-warm-led-clarification:4',
+  ]);
+  const observedLinkFollowUp = ledger.runs.flatMap((run) => run.turns)
+    .find((turn) => turn.case_id === 'bt746-extension-50m' && turn.turn_index === 2);
+  assert(observedLinkFollowUp);
+  assert.equal(observedLinkFollowUp.synthetic_scenario, false);
+  assert.equal(observedLinkFollowUp.message, 'дай ссылку');
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

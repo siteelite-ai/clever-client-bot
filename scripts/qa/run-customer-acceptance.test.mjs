@@ -15,12 +15,14 @@ const septemberBytes = fs.readFileSync(new URL('./customer-audit-20260921-cases.
 const septemberVariationBytes = fs.readFileSync(new URL('./customer-audit-20260921-variations.json', import.meta.url));
 const notionBytes = fs.readFileSync(new URL('./notion-legacy-bug-cases.json', import.meta.url));
 const notionV2Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v2.json', import.meta.url));
+const notionV3Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v3.json', import.meta.url));
 const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
 const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
 const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
 const septemberVariations = JSON.parse(septemberVariationBytes.toString('utf8'));
 const notionSuite = JSON.parse(notionBytes.toString('utf8'));
 const notionV2Suite = JSON.parse(notionV2Bytes.toString('utf8'));
+const notionV3Suite = JSON.parse(notionV3Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
@@ -607,6 +609,127 @@ test('Notion v2 preserves source prompts while adding scoped reliability, chips 
   assert.deepEqual(cable.turns[0].expect.require_every_product_page.facets,
     [{ name: 'Единица измерения', exact_any: ['м', 'метр'] }]);
   assert.throws(() => validateExpectationObject({ require_quoted_price_per_piece: 'true' }), /must be a boolean/);
+});
+
+test('Notion v3 keeps historical v2 intact and checks catalog-backed cable and outlet properties', () => {
+  assert.equal(notionV3Suite.schema_version, 3);
+  assert.deepEqual(notionV3Suite.cases.map((item) => item.id), notionV2Suite.cases.map((item) => item.id));
+  const v3 = (id) => notionV3Suite.cases.find((item) => item.id === id);
+  const v2 = (id) => notionV2Suite.cases.find((item) => item.id === id);
+  for (const oldCase of notionV2Suite.cases) {
+    assert.equal(v3(oldCase.id).turns[0].message, oldCase.turns[0].message, oldCase.id);
+  }
+  assert.deepEqual(v3('bt927-copper-fire-resistant-2x1_5').turns[0].expect.require_every_product_page.facets,
+    [
+      { name: 'Материал проводника', exact_any: ['медь'] },
+      { name: 'Негорючесть', exact_any: ['Да'] },
+      { name: 'Количество жил', exact_any: ['2'] },
+      { name: 'Сечение кабеля, мм2', min_numeric: 1.5, less_than: 1.51 },
+    ]);
+  assert.equal(v3('bt746-black-double-socket').turns[0].expect.require_every_product_page.facets[2].name,
+    'Вид розетки');
+  assert.equal(v3('bt746-white-extension-3-sockets').turns[0].expect.require_every_product_page.facets[0].name,
+    'Цвет');
+  assert.equal(v3('bt746-extension-50m').turns[1].message, 'дай ссылку');
+  assert.equal(v3('bt746-extension-50m').turns[1].expect.require_previous_product_link, true);
+  for (const id of ['bt924-schneider-cheaper-analogs', 'bt924-acti9-followup-show']) {
+    const final = v3(id).turns.at(-1).expect;
+    assert(!final.forbid_product_title.includes('Schneider'), id);
+    assert(final.forbid_product_title.includes('Acti9'), id);
+    assert(final.forbid_product_title.includes('Acti 9'), id);
+    assert(v2(id).turns.at(-1).expect.forbid_product_title.includes('Schneider'), 'v2 remains historical');
+  }
+  validateExpectationSuite(notionV3Suite);
+  assert.deepEqual(validateStrictFullSuite({
+    argv: strictArgs, suite: notionV3Suite, variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases-v3.json', variantsPath: null,
+    suiteBytes: notionV3Bytes, variantsBytes: null,
+  }), {
+    name: 'notion-legacy-bug-cases-v3.json', expected_cases: 32,
+    expected_turns_per_base_suite: 52, expected_repeat: 1,
+    expected_runs: 40, expected_evaluated_turns: 60,
+  });
+});
+
+test('Easy9 under the Schneider brand remains eligible while Acti 9 is excluded', () => {
+  const expect = notionV3Suite.cases.find((item) => item.id === 'bt924-schneider-cheaper-analogs').turns[0].expect;
+  const url = 'https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/easy9/';
+  const identity = productUrlIdentity(url);
+  const title = 'Автомат Schneider Electric EASY 9 1P 16A C 4,5кА';
+  const response = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-easy9', serverProductsCount: 1,
+    links: [{ title, url, price: 1520, stockLine: 'Астана (5 шт)' }],
+    verifiedProductPages: new Map([[identity, {
+      identity, verified: true, sku: 'EZ9F34116', name: title, offerPrice: 1520,
+      availability: 'https://schema.org/InStock', facets: {
+        'Количество полюсов': '1', 'Номинальный ток': '16',
+        'Характеристика срабатывания': 'C',
+      }, description: '',
+    }]]),
+  };
+  assert.deepEqual(evaluate(expect, response), []);
+  response.links[0].title = 'Автомат Schneider Electric Acti 9 1P 16A C 4,5кА';
+  assert(evaluate(expect, response).some((failure) => failure.includes('forbidden')));
+});
+
+test('product-link follow-up must reference a verified prior SKU, not just any new catalog link', () => {
+  const prior = 'https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/udliniteli/uk50/';
+  const unrelated = 'https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/udliniteli/uk25/';
+  const base = {
+    text: `Вот ссылка: ${prior}`, productsMarkdown: '', links: [],
+    completed: true, terminalDiagnosticSeen: true, logId: 'trace-follow-up', serverProductsCount: 0,
+  };
+  const previousVerifiedProductUrls = new Set([productUrlIdentity(prior)]);
+  assert.deepEqual(evaluate({ require_previous_product_link: true }, base, { previousVerifiedProductUrls }), []);
+  assert(evaluate({ require_previous_product_link: true }, { ...base, text: `Вот ссылка: ${unrelated}` },
+    { previousVerifiedProductUrls }).some((failure) => failure.includes('previously verified product')));
+  assert(evaluate({ require_previous_product_link: true }, { ...base, text: `Вот ссылка: ${prior} и ${unrelated}` },
+    { previousVerifiedProductUrls }).some((failure) => failure.includes('previously verified product')));
+  assert(evaluate({ require_previous_product_link: true }, base)
+    .some((failure) => failure.includes('previously verified product')));
+  assert.throws(() => validateExpectationObject({ require_previous_product_link: 'true' }), /must be a boolean/u);
+});
+
+test('v3 source facets reject aluminium, network sockets and non-white three-way strips', () => {
+  const v3 = (id) => notionV3Suite.cases.find((item) => item.id === id).turns[0].expect;
+  const card = (url, title, facets) => {
+    const identity = productUrlIdentity(url);
+    return {
+      text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+      logId: 'trace-facets', serverProductsCount: 1,
+      links: [{ title, url, price: 1234, stockLine: 'Астана (5 шт)' }],
+      verifiedProductPages: new Map([[identity, {
+        identity, verified: true, sku: 'SOURCE-1', name: title, offerPrice: 1234,
+        availability: 'https://schema.org/InStock', facets, description: '',
+      }]]),
+    };
+  };
+  const cable = card('https://220volt.kz/catalog/kabeli/vvg/copper-ng-2-1-5/',
+    'Кабель ВВГ нг 2*1,5', {
+      'Материал проводника': 'медь', Негорючесть: 'Да', 'Количество жил': '2',
+      'Сечение кабеля, мм2': '1.5',
+    });
+  assert.deepEqual(evaluate(v3('bt927-copper-fire-resistant-2x1_5'), cable), []);
+  cable.verifiedProductPages.values().next().value.facets['Материал проводника'] = 'алюминий';
+  assert(evaluate(v3('bt927-copper-fire-resistant-2x1_5'), cable)
+    .some((failure) => failure.includes('Материал проводника')));
+  const socket = card('https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/black-double/',
+    'Розетка двойная чёрная', {
+      'Количество разъемов': '2', Цвет: 'чёрный', 'Вид розетки': 'электрическая',
+    });
+  assert.deepEqual(evaluate(v3('bt746-black-double-socket'), socket), []);
+  socket.verifiedProductPages.values().next().value.facets['Вид розетки'] = 'компьютерная RJ45';
+  assert(evaluate(v3('bt746-black-double-socket'), socket)
+    .some((failure) => failure.includes('Вид розетки')));
+  const strip = card('https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/udliniteli/three-way/',
+    'Удлинитель У3 3 места', {
+      Цвет: 'белый', 'Количество розеток евростандарта': '3',
+    });
+  assert.deepEqual(evaluate(v3('bt746-white-extension-3-sockets'), strip), []);
+  strip.verifiedProductPages.values().next().value.facets.Цвет = 'чёрный';
+  assert(evaluate(v3('bt746-white-extension-3-sockets'), strip)
+    .some((failure) => failure.includes('Цвет')));
 });
 
 function stockReply(stockLines) {

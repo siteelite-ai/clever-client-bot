@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-v2-20261009.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v3-20261009.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
@@ -31,9 +31,9 @@ export const MATRIX_MANIFESTS = [
     },
   },
   {
-    file: 'notion-legacy-bug-cases-v2.json',
-    sha256: '360d633e61a8ba0eaac83b85e77afcaf460e9dc09587acb6ca6384037ea87d0d',
-    caseCount: 32, sourceTurnCount: 46, runCount: 40, evaluatedTurnCount: 54,
+    file: 'notion-legacy-bug-cases-v3.json',
+    sha256: '001226d4d04bcf2370526aa7e250c25d3e0c52db890c571815afadc826ab5ed0',
+    caseCount: 32, sourceTurnCount: 52, runCount: 40, evaluatedTurnCount: 60,
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -233,7 +233,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
     runs: runs.length,
     ordered_turns: runs.reduce((count, run) => count + run.turns.length, 0),
   };
-  assert.deepEqual(counts, { matrix_files: 5, runs: 190, ordered_turns: 273 });
+  assert.deepEqual(counts, { matrix_files: 5, runs: 190, ordered_turns: 279 });
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
@@ -244,7 +244,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content. Fifteen explicitly marked BT-929/BT-924 turns are synthetic API continuations or geometry scenarios (docs/qa/notion-source-index-20261009.json), not customer quotations or browser clicks.',
+    provenance_note: 'This inventory stores suite-level claims only. V3 preserves the first prompts from the pinned Notion v2 suite; exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json. The first 15 explicitly marked BT-929/BT-924 synthetic turns are indexed in docs/qa/notion-source-index-20261009.json; five further v3 turns are marked synthetic API continuations, not customer quotations or browser clicks. The BT-746 “дай ссылку” continuation is source-observed, but its product identity is tested against the prior verified catalog URL. The BT-929 20% reserve versus 14/7 example remains unresolved.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,
@@ -269,7 +269,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else {
       assert.equal(fs.readFileSync(outputFile, 'utf8'), serialized,
         'release inventory is stale; rebuild with --write after reviewing matrix changes');
-      process.stdout.write('Release inventory matches the pinned five-file matrix (190 runs, 273 turns).\n');
+      process.stdout.write('Release inventory matches the pinned five-file matrix (190 runs, 279 turns).\n');
     }
   }
 }

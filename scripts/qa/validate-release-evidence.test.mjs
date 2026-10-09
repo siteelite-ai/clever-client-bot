@@ -149,7 +149,7 @@ test('every synthetic marker must be explicit and agree with the pinned turn', (
 
   const mismatched = syntheticEvidence();
   const notion = mismatched.reports.find((report) =>
-    report.suite_file === 'notion-legacy-bug-cases-v2.json');
+    report.suite_file === 'notion-legacy-bug-cases-v3.json');
   const syntheticTurn = notion.cases.flatMap((testCase) => testCase.repeats.flatMap((repeat) => repeat.turns))
     .find((turn) => turn.synthetic_scenario === true);
   assert(syntheticTurn);

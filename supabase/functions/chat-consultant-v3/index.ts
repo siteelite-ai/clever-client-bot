@@ -111,6 +111,15 @@ import {
   extractBudgetCap,
 } from "../_shared/v3-tools/budget-cap.ts";
 import {
+  classifyCatalogPriceExtreme,
+  classifyPriceSearchCoverage,
+  detectPriceDirection,
+  guardGenericExpertFinalPriceText,
+  stripUnprovenPriceClaimSentences,
+  type PriceDirection,
+  unprovenCatalogPriceNotice,
+} from "../_shared/v3-tools/price-scope-policy.ts";
+import {
   buildAnchorMissingRecoveryQueries,
   buildCatalogEmptySynthesisMessages,
   buildCategoryVerificationSearchInput,
@@ -481,7 +490,10 @@ import {
   unprovenSemanticCompoundSuperlativeNotice,
 } from "../_shared/v3-tools/semantic-compound-superlative-policy.ts";
 import {
+  acceptedClarificationDelivery,
+  classifyClarificationToolBatch,
   executeProposeClarification,
+  priorVisibleQuestionMayDuplicateClarification,
   type ProposeClarificationInput,
 } from "../_shared/v3-tools/propose-clarification.ts";
 import {
@@ -1653,59 +1665,6 @@ function promiseRealityCheck(
     )
     .join("; ");
   return { corrective: `Уточнение: ${lines}.`, mismatches };
-}
-
-// ── Step 5: Price Direction Guard ────────────────────────────────────────
-type PriceDirection = "cheaper" | "more_expensive" | "same";
-type PriceIntentKind = "superlative" | "comparative";
-interface PriceIntent {
-  kind: PriceIntentKind;
-  direction: PriceDirection;
-}
-
-// Возвращает намерение клиента про цену:
-//   - "superlative" — абсолютная сортировка по уже найденному пулу
-//     ("самый дешёвый", "самый дорогой", "бюджетный", "премиум"). Якорь
-//     не требуется, ничего из найденного выбрасывать нельзя — только
-//     отсортировать по цене.
-//   - "comparative" — относительное сравнение с конкретным якорем
-//     ("дешевле этой", "подороже того", "в том же сегменте"). Без якоря
-//     гард молчит и оставляет ответ LLM-у.
-function detectPriceDirection(msg: string): PriceIntent | null {
-  const m = msg.toLowerCase();
-  // Явный потолок бюджета ("до X тг") — это max_price constraint, не direction.
-  if (extractBudgetCap(msg) !== null) return null;
-  // Отрицание ("не дороже", "не дешевле") — направление сбрасываем.
-  if (/\bне\s+(под?ороже|дороже|подешевле|дешевле)\b/u.test(m)) return null;
-
-  // Comparative: явное сравнение с подразумеваемым/упомянутым якорем.
-  if (
-    /\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u
-      .test(m)
-  ) {
-    return { kind: "comparative", direction: "same" };
-  }
-  if (/(подешевле|дешевле)/u.test(m)) {
-    return { kind: "comparative", direction: "cheaper" };
-  }
-  if (/(подороже|дороже)/u.test(m)) {
-    return { kind: "comparative", direction: "more_expensive" };
-  }
-
-  // Superlative: абсолютная сортировка по найденному пулу, без якоря.
-  if (
-    /(самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|самый\s+недорог|бюджетн|поэконом|подоступн|самый\s+доступн)/u
-      .test(m)
-  ) {
-    return { kind: "superlative", direction: "cheaper" };
-  }
-  if (
-    /(самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн|флагман)/u
-      .test(m)
-  ) {
-    return { kind: "superlative", direction: "more_expensive" };
-  }
-  return null;
 }
 
 type CachedProd = {
@@ -6287,6 +6246,20 @@ async function runExpertLoop(
     userMessage;
   let finalText = "";
   let productsRendered = 0;
+  // The generic expert route has candidate search, not a complete catalog
+  // price proof. Exact compound and complete recent-set price requests are
+  // verified by their separate direct routes before reaching this loop.
+  const catalogPriceExtreme = classifyCatalogPriceExtreme(userMessage);
+  let priceScopeNoticeSent = false;
+  let priceSearchCoverage = classifyPriceSearchCoverage(null);
+  // Even a budget-only or ordinary request can prompt the model to volunteer
+  // an absolute cheapest/most-expensive claim. This expert route has no full
+  // price proof for any of them; direct proven routes never enter this loop.
+  const safeVisiblePriceProse = stripUnprovenPriceClaimSentences;
+  const safeSelectionRenderCaption = (
+    target: unknown,
+    criteria: Criterion[],
+  ): string => safeVisiblePriceProse(buildSelectionRenderCaption(target, criteria));
   const preExcludedReplacementIdSet = new Set(preExcludedReplacementIds);
   const preExcludedProductUrlSet = new Set(preExcludedProductUrls);
   let firstAssistantText = "";
@@ -6489,7 +6462,7 @@ async function runExpertLoop(
       ...(exclusive ? { exclusive } : {}),
     }));
     if (intentMode === "select" && !finalText.trim() && activeSelectionTarget) {
-      const caption = buildSelectionRenderCaption(
+      const caption = safeSelectionRenderCaption(
         activeSelectionTarget,
         [...emittedPlan.mandatory_criteria],
       );
@@ -6555,6 +6528,21 @@ async function runExpertLoop(
         });
       }
       systemTotalCaveatSent = true;
+    }
+    if (catalogPriceExtreme && !priceScopeNoticeSent) {
+      const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, true);
+      rawSend({ type: "delta", content: `\n\n${notice}` });
+      finalText += `${finalText ? "\n\n" : ""}${notice}`;
+      priceScopeNoticeSent = true;
+      steps.push({
+        step: "v3_catalog_price_extreme_unverified",
+        ms: now(),
+        meta: {
+          direction: catalogPriceExtreme,
+          search_coverage: priceSearchCoverage,
+          rendered_candidates: event.count,
+        },
+      });
     }
     rawSend({
       ...event,
@@ -7176,7 +7164,7 @@ async function runExpertLoop(
     if (intentMode !== "select" || finalText.trim() || !activeSelectionTarget) {
       return;
     }
-    const caption = buildSelectionRenderCaption(
+    const caption = safeSelectionRenderCaption(
       activeSelectionTarget,
       criteria,
     );
@@ -9094,6 +9082,41 @@ async function runExpertLoop(
           throw error;
         }
       }
+      const clarificationBatch = classifyClarificationToolBatch(
+        resp.toolCalls.map((toolCall) => toolCall.name),
+      );
+      if (clarificationBatch === "conflict") {
+        // A clarification is terminal and cannot share a response with a
+        // render, another clarification, or any other tool. Discard the whole
+        // batch before model prose or a tool can become customer-visible.
+        steps.push({
+          step: "v3_clarification_batch_rejected",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            tool_names: resp.toolCalls.map((toolCall) => toolCall.name),
+          },
+        });
+        messages.push({
+          role: "system",
+          content:
+            "В одном ответе propose_clarification должен быть единственным вызовом инструмента. Предыдущий пакет полностью отклонён: его текст, карточки и варианты не показаны. Продолжи с одним допустимым инструментом или ответь без вызова инструмента.",
+        });
+        continue;
+      }
+      if (clarificationBatch === "single") {
+        // The model may put a duplicate question or unverified product claims
+        // next to its tool call. Only the validated tool result owns this
+        // turn's visible question and quick replies.
+        if (resp.text.trim()) {
+          steps.push({
+            step: "v3_clarification_model_cotext_suppressed",
+            ms: now(),
+            meta: { fragment_index: step, chars: resp.text.length },
+          });
+        }
+        resp = { ...resp, text: "" };
+      }
       const rawModelResponseText = resp.text;
       const rejectedClarificationCall = resp.toolCalls.find((toolCall) => {
         if (toolCall.name !== "propose_clarification") return false;
@@ -9343,7 +9366,10 @@ async function runExpertLoop(
           const safeReasoning = sanitizeIntermediateReasoning(
             reasoningTextForContracts,
           );
-          const introText = safeReasoning.text.trim();
+          const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
+            (catalogPriceExtreme
+              ? "Проверяю подходящую категорию, наличие и цены в каталоге."
+              : "");
           if (safeReasoning.suppressed) {
             steps.push({
               step: "v3_assistant_text_suppressed_internals",
@@ -9433,6 +9459,30 @@ async function runExpertLoop(
               outText = replaced;
             }
           }
+          // A model-authored final sentence cannot turn a bounded search
+          // into a catalog-wide minimum/maximum, even if the customer only
+          // requested a budget or an ordinary selection.
+          const guardedPriceFinal = guardGenericExpertFinalPriceText({
+            modelText: outText,
+            requestedExtreme: catalogPriceExtreme,
+            noticeAlreadySent: priceScopeNoticeSent,
+            catalogSearchAttempted,
+            renderedCandidates: productsRendered,
+          });
+          outText = guardedPriceFinal.text;
+          if (guardedPriceFinal.noticeAdded) {
+            priceScopeNoticeSent = true;
+            steps.push({
+              step: "v3_catalog_price_extreme_unverified",
+              ms: now(),
+              meta: {
+                direction: catalogPriceExtreme,
+                search_coverage: priceSearchCoverage,
+                rendered_candidates: productsRendered,
+                source: "final_text",
+              },
+            });
+          }
           if (outText.trim()) {
             if (!isFirstTurn) {
               send({ type: "assistant_turn_break", reason: "final_text" });
@@ -9481,10 +9531,11 @@ async function runExpertLoop(
                 reason: "text_before_render",
               });
             }
-            send({ type: "delta", content: resp.text });
-            finalText += resp.text;
+            const visibleText = safeVisiblePriceProse(resp.text);
+            if (visibleText) send({ type: "delta", content: visibleText });
+            finalText += visibleText;
             if (isFirstTurn) {
-              firstAssistantText = resp.text.trim();
+              firstAssistantText = visibleText.trim();
             }
             steps.push({
               step: intentMode === "inquire"
@@ -9504,7 +9555,7 @@ async function runExpertLoop(
           // while using its numbers for retrieval would make the machine
           // contract unverifiable from the conversation.
           const safeReasoning = sanitizeIntermediateReasoning(resp.text);
-          const derivedText = safeReasoning.text.trim();
+          const derivedText = safeVisiblePriceProse(safeReasoning.text.trim());
           if (derivedText) {
             send({ type: "assistant_turn_break", reason: "intro_late" });
             send({ type: "delta", content: derivedText });
@@ -9545,7 +9596,10 @@ async function runExpertLoop(
           // тулом — поднимаем его как intro bubble, чтобы пользователь видел,
           // что эксперт рассуждает, а не молча «думает».
           const safeReasoning = sanitizeIntermediateReasoning(resp.text);
-          const introText = safeReasoning.text.trim();
+          const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
+            (catalogPriceExtreme
+              ? "Проверяю подходящую категорию, наличие и цены в каталоге."
+              : "");
           if (introText) {
             send({ type: "assistant_turn_break", reason: "intro_late" });
             send({ type: "delta", content: introText });
@@ -14973,6 +15027,19 @@ async function runExpertLoop(
         const inferredFallback: Array<{ key: string; value: string }> | null =
           null;
 
+        if (catalogPriceExtreme && tc.name === "search_catalog") {
+          const latestCoverage = classifyPriceSearchCoverage(
+            result.ok && result.tool === "search_catalog"
+              ? { ok: true, warnings: result.warnings }
+              : { ok: false },
+          );
+          // Never promote a later successful bounded query above an earlier
+          // truncated one. Neither state proves a catalog-wide extreme.
+          priceSearchCoverage = priceSearchCoverage === "truncated"
+            ? "truncated"
+            : latestCoverage;
+        }
+
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
@@ -14993,6 +15060,58 @@ async function runExpertLoop(
             result: summariseToolResultMeta(tc.name, result),
           },
         });
+
+        if (
+          tc.name === "propose_clarification" && result.ok &&
+          result.tool === "propose_clarification"
+        ) {
+          const delivery = acceptedClarificationDelivery(result);
+          if (delivery) {
+            if (priorVisibleQuestionMayDuplicateClarification(finalText)) {
+              // Earlier intro prose was already streamed and cannot be
+              // retracted here. Keep it visible, but record the residual
+              // double-question risk instead of silently claiming exclusivity.
+              steps.push({
+                step: "v3_clarification_prior_question_visible",
+                ms: now(),
+                meta: {
+                  fragment_index: step,
+                  prior_visible_chars: finalText.length,
+                },
+              });
+            }
+            send({ type: "delta", content: delivery.question });
+            finalText += `${finalText ? "\n\n" : ""}${delivery.question}`;
+            emitSideEffects(result, send);
+            steps.push({
+              step: "v3_turn_end",
+              ms: now(),
+              meta: {
+                reason: "clarification",
+                step_count: step + 1,
+                facet_key: (tc.args as Partial<ProposeClarificationInput>)
+                  .facet_key ?? null,
+              },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          }
+          // A malformed success must not expose half a question/chip pair.
+          result = {
+            tool: "propose_clarification",
+            ok: false,
+            error_code: "internal",
+            message: "clarification delivery is incomplete",
+          };
+          steps.push({
+            step: "v3_clarification_delivery_rejected",
+            ms: now(),
+            meta: { fragment_index: step },
+          });
+        }
 
         // [removed per spec v2 2026-06-29] v3_guard_inferred_fallback:
         // LLM сам решает (rule 3c), какие фасеты передавать и что делать при 0.
@@ -16197,7 +16316,7 @@ async function runExpertLoop(
               Array.isArray((tc.args as Record<string, unknown>).criteria)
                 ? (tc.args as Record<string, unknown>).criteria as Criterion[]
                 : [];
-            const caption = buildSelectionRenderCaption(
+            const caption = safeSelectionRenderCaption(
               tc.args.selection_target,
               criteria,
             );
@@ -17338,7 +17457,7 @@ async function runExpertLoop(
       if (recoveredAlias?.kind === "exact") {
         for (const id of recoveredAlias.safeIds) shownIds.add(id);
         if (!finalText.trim()) {
-          const caption = buildSelectionRenderCaption({
+          const caption = safeSelectionRenderCaption({
             product_class: recoveredAlias.matchedQuery,
             application_context: [],
           }, []);
@@ -18257,7 +18376,7 @@ async function runExpertLoop(
       if (recoveredJargon?.kind === "exact") {
         for (const id of recoveredJargon.safeIds) shownIds.add(id);
         if (!finalText.trim()) {
-          const caption = buildSelectionRenderCaption({
+          const caption = safeSelectionRenderCaption({
             product_class: recoveredJargon.matchedQuery,
             application_context: [],
           }, []);
@@ -18814,7 +18933,9 @@ async function runExpertLoop(
           const catalogFree = guarded.suppressed
             ? { text: "", removed: [] as string[] }
             : stripUnrenderedCatalogFactSegments(guarded.text);
-          const visibleReasoning = catalogFree.text.trim();
+          const visibleReasoning = safeVisiblePriceProse(
+            catalogFree.text.trim(),
+          );
           if (visibleReasoning) {
             send({ type: "delta", content: visibleReasoning });
             finalText = visibleReasoning;
@@ -18887,6 +19008,25 @@ async function runExpertLoop(
             "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
         });
       }
+    }
+    if (
+      catalogPriceExtreme && !priceScopeNoticeSent &&
+      (catalogSearchAttempted || catalogLookupCompleted)
+    ) {
+      const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, false);
+      send({ type: "delta", content: `\n\n${notice}` });
+      finalText += `${finalText ? "\n\n" : ""}${notice}`;
+      priceScopeNoticeSent = true;
+      steps.push({
+        step: "v3_catalog_price_extreme_unverified",
+        ms: now(),
+        meta: {
+          direction: catalogPriceExtreme,
+          search_coverage: priceSearchCoverage,
+          rendered_candidates: 0,
+          source: "terminal_empty",
+        },
+      });
     }
 
     return { finalText, productsRendered, shownProductIds: [...shownIds] };

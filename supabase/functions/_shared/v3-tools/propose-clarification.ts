@@ -22,6 +22,48 @@ export interface ProposeClarificationInput {
   };
 }
 
+/** A clarification owns the terminal customer-visible turn, not a tool batch. */
+export function classifyClarificationToolBatch(
+  toolNames: readonly string[],
+): "none" | "single" | "conflict" {
+  const proposed =
+    toolNames.filter((name) => name === "propose_clarification").length;
+  if (proposed === 0) return "none";
+  return proposed === 1 && toolNames.length === 1 ? "single" : "conflict";
+}
+
+/** Previously streamed prose cannot be retracted when a later tool asks. */
+export function priorVisibleQuestionMayDuplicateClarification(
+  visibleText: string,
+): boolean {
+  return /[?？]/u.test(visibleText);
+}
+
+/** Read the question from the validated server result, never model co-text. */
+export function acceptedClarificationDelivery(
+  result: ProposeClarificationOk & { tool: "propose_clarification" },
+): { question: string; side_effects: ToolSideEffect[] } | null {
+  const effects = result.side_effects;
+  if (!Array.isArray(effects) || effects.length !== 2) return null;
+  const [replies, slot] = effects;
+  if (replies.type !== "quick_replies" || slot.type !== "slot_update") {
+    return null;
+  }
+  const pending = slot.slots.pending_clarification;
+  if (!pending || typeof pending !== "object") return null;
+  const clarification = pending as Record<string, unknown>;
+  const question = clarification.question;
+  if (
+    clarification.status !== "pending" ||
+    clarification.slot_id !== result.slot_id ||
+    clarification.facet_key !== replies.facet_key ||
+    !Array.isArray(clarification.options) ||
+    JSON.stringify(clarification.options) !== JSON.stringify(replies.replies) ||
+    typeof question !== "string" || !question.trim()
+  ) return null;
+  return { question, side_effects: effects };
+}
+
 export function executeProposeClarification(
   input: ProposeClarificationInput,
 ):
@@ -63,7 +105,8 @@ export function executeProposeClarification(
       tool: "propose_clarification",
       ok: false,
       error_code: "bad_input",
-      message: "options must be 2-5 distinct, nonblank widget-compatible choices",
+      message:
+        "options must be 2-5 distinct, nonblank widget-compatible choices",
     };
   }
 

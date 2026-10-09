@@ -159,6 +159,24 @@ const FULL_SUITE_MANIFESTS = {
   },
 };
 
+// V2 stays pinned as historical evidence. V3 has the same 32 source case
+// identities plus independently attributable follow-ups; a v2 report cannot
+// satisfy this stricter candidate inventory by filename or SHA substitution.
+FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'] = {
+  ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v2.json'],
+  sha256: '001226d4d04bcf2370526aa7e250c25d3e0c52db890c571815afadc826ab5ed0',
+  turns: 52,
+  runs: 40,
+  evaluatedTurns: 60,
+  turnsById: {
+    ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v2.json'].turnsById,
+    'bt929-lugs-35mm-clarification': 4,
+    'bt929-surveillance-cable-clarification': 5,
+    'bt929-warm-led-clarification': 4,
+    'bt746-extension-50m': 2,
+  },
+};
+
 export function validateStrictFullSuite({ argv, suite, variationSuite, casesPath, variantsPath, suiteBytes, variantsBytes }) {
   if (!argv.includes('--strict-full-suite')) return null;
   if (!argv.some((arg) => arg.startsWith('--endpoint=') && arg.slice('--endpoint='.length).trim())) {
@@ -317,6 +335,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_every_product_title_groups',
   'require_exact_or_split',
   'require_new_product_skus',
+  'require_previous_product_link',
   'require_product_groups_or_gap',
   'require_product_title',
   'require_products_or_text_groups',
@@ -473,7 +492,7 @@ export function validateExpectationObject(expect, location = 'expect') {
   }
   for (const field of [
     'require_new_product_skus', 'require_selection_criteria_evidence', 'forbid_unrendered_catalog_facts',
-    'require_quoted_price_per_piece',
+    'require_quoted_price_per_piece', 'require_previous_product_link',
   ]) {
     if (expect[field] !== undefined && typeof expect[field] !== 'boolean') {
       throw new Error(`${location}.${field}: must be a boolean`);
@@ -1342,6 +1361,7 @@ function renderedStockUnitFailures(links, expectedUnit) {
 export function evaluate(expect = {}, response, {
   requireVerifiedPages = false,
   previousVerifiedSkus = new Set(),
+  previousVerifiedProductUrls = new Set(),
   previousClarificationChoice = null,
   message = null,
 } = {}) {
@@ -1371,6 +1391,17 @@ export function evaluate(expect = {}, response, {
           ? `previously shown SKU repeated as a new alternative: ${proof.sku}`
           : `previously shown canonical product repeated as a new alternative: ${identity}`);
       }
+    }
+  }
+  if (expect.require_previous_product_link === true) {
+    const urls = `${response.text}\n${response.productsMarkdown}`
+      .match(/https?:\/\/(?:www\.)?220volt\.kz\/catalog\/[^\s)<>]+/giu) ?? [];
+    const referenced = urls.map((url) => productUrlIdentity(url.replace(/[.,;!?]+$/u, '')))
+      .filter(Boolean);
+    if (previousVerifiedProductUrls.size === 0 || referenced.length === 0 ||
+        referenced.some((identity) => !previousVerifiedProductUrls.has(identity)) ||
+        response.links.some((link) => !previousVerifiedProductUrls.has(productUrlIdentity(link.url)))) {
+      failures.push('follow-up does not link a previously verified product');
     }
   }
   if (requireVerifiedPages || Boolean(expect.require_catalog_minimum)) {
@@ -1828,7 +1859,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   parsed.durationMs = Date.now() - startedAt;
   const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
     Boolean(expect.require_catalog_minimum) ||
-    expect.require_new_product_skus === true;
+    expect.require_new_product_skus === true || expect.require_previous_product_link === true;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
     ? await verifyProductLinks(parsed.links, { cache: productPageCache })
     : null;
@@ -1843,6 +1874,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
       ? evaluate(expect, parsed, {
         requireVerifiedPages: requiresLiveProductProof,
         previousVerifiedSkus: state.previousVerifiedSkus,
+        previousVerifiedProductUrls: state.previousVerifiedProductUrls,
         previousClarificationChoice: state.previousClarificationChoice,
         message,
       })
@@ -1853,12 +1885,16 @@ async function runTurn({ message, expect, synthetic = false }, state) {
     state.history = [];
     state.dialogSlots = {};
     state.previousVerifiedSkus = new Set();
+    state.previousVerifiedProductUrls = new Set();
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   const priorChoiceEvidence = state.previousClarificationChoice;
   state.previousClarificationChoice = clarificationChoiceEvidence(parsed);
   for (const proof of parsed.verifiedProductPages?.values() ?? []) {
-    if (proof.verified) state.previousVerifiedSkus.add(verifiedProductKey(proof, proof.identity));
+    if (proof.verified) {
+      state.previousVerifiedSkus.add(verifiedProductKey(proof, proof.identity));
+      state.previousVerifiedProductUrls.add(proof.identity);
+    }
   }
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
@@ -1924,6 +1960,7 @@ export async function main() {
           history: [],
           dialogSlots: {},
           previousVerifiedSkus: new Set(),
+          previousVerifiedProductUrls: new Set(),
           previousClarificationChoice: null,
         };
         const turns = [];
