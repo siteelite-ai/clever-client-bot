@@ -170,6 +170,10 @@ import {
   verifySelectionTargetWithVisibleTitle,
 } from "../_shared/v3-tools/selection-contract.ts";
 import {
+  parseMeasuredSourceClassRecoveryRequest,
+  recoverMeasuredSourceClassSelection,
+} from "../_shared/v3-tools/measured-source-class-recovery.ts";
+import {
   aliasDuplicatesIndependentCatalogClass,
   declaredAliasIsStructurallyCustomerOwned,
   extractDeclaredCatalogAlias,
@@ -3824,6 +3828,139 @@ async function answerVerifiedExactProductInquiry(
     },
   });
   return { handled: true, products: shownProducts };
+}
+
+async function answerMeasuredSourceClassRecovery(
+  userMessage: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<{ handled: boolean; products: ProductFull[] }> {
+  if (!parseMeasuredSourceClassRecoveryRequest(userMessage)) {
+    return { handled: false, products: [] };
+  }
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "start",
+    summary: "Проверяю целевой тип и подтверждённую применимость товаров…",
+  });
+  const recovered = await recoverMeasuredSourceClassSelection(userMessage, {
+    baseUrl: CATALOG_BASE_URL,
+    apiToken: ctx.catalogToken,
+    cache: ctx.cache,
+  });
+  if (!recovered) return { handled: false, products: [] };
+  steps.push({
+    step: "v3_measured_replacement_target_probe",
+    ms: Date.now() - t0,
+    meta: {
+      destination: recovered.request.destination,
+      status: recovered.target_status,
+      verified: recovered.target_verified,
+      duration_ms: recovered.target_duration_ms,
+    },
+  });
+  steps.push({
+    step: "v3_measured_replacement_source_class_fallback",
+    ms: Date.now() - t0,
+    meta: {
+      source_class: recovered.request.source_class,
+      live_category: recovered.source_category,
+      status: recovered.source_status,
+      pages: recovered.source_pages,
+      verified: recovered.source_verified,
+      discovery_ms: recovered.source_discovery_duration_ms,
+      search_ms: recovered.source_search_duration_ms,
+    },
+  });
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: recovered.target_duration_ms +
+      recovered.source_discovery_duration_ms +
+      recovered.source_search_duration_ms,
+    summary:
+      `Проверено подходящих карточек: ${recovered.products.length}; целевой поиск: ${recovered.target_status}; исходный класс: ${recovered.source_status}`,
+  });
+  if (recovered.products.length === 0) {
+    send({
+      type: "delta",
+      content:
+        `Не смог подтвердить светодиодные товары для «${recovered.request.place}» с заявленной площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Это не доказывает, что таких товаров нет в каталоге; для точного подбора можно уточнить вариант у менеджера.`,
+    });
+    return { handled: true, products: [] };
+  }
+  const rendered = executeRenderProducts({
+    product_ids: recovered.products.map(({ id }) => id),
+    total_available: recovered.products.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    send({
+      type: "delta",
+      content: "Подтверждённые товары не удалось вывести. Повторите запрос позже.",
+    });
+    steps.push({
+      step: "v3_measured_replacement_render_failed",
+      ms: Date.now() - t0,
+      meta: { error_code: rendered.error_code },
+    });
+    return { handled: true, products: [] };
+  }
+  const classCaveat = recovered.origin === "source_class_fallback"
+    ? `Для расширения поиска проверил названный вами исходный класс «${recovered.source_category}»; это не обзор всех видов светодиодного освещения. `
+    : "";
+  const caption = `${classCaveat}У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «${recovered.request.place}», максимальная площадь освещения не менее ${recovered.request.minimum_area_m2} м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.`;
+  send({ type: "delta", content: caption });
+  const plan = extendSelectionCriteriaPlan(null, [{
+    key: "Максимальная площадь освещения, м2",
+    op: "min",
+    value: recovered.request.minimum_area_m2,
+    unit: "м²",
+    level: "A",
+    evidence: "derived_required",
+  }], "guarded_search");
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: recovered.products.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map((criterion) => ({
+        key: criterion.key,
+        op: criterion.op,
+        value: criterion.value,
+        ...(criterion.unit ? { unit: criterion.unit } : {}),
+        ...(criterion.evidence ? { evidence: criterion.evidence } : {}),
+      })),
+      visible_requirements: [
+        { kind: "application", label: "Назначение", value: recovered.request.place },
+        { kind: "technology", label: "Светодиодное исполнение" },
+        { kind: "availability", label: "Положительный складской остаток" },
+      ],
+      result_cardinality: resolveResultCardinality(userMessage, {
+        selection: true,
+      }),
+    },
+  });
+  steps.push({
+    step: "v3_measured_replacement_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      origin: recovered.origin,
+      live_source_category: recovered.source_category,
+      rendered: rendered.rendered_count,
+      minimum_area_m2: recovered.request.minimum_area_m2,
+      plan_hash: plan.hash,
+    },
+  });
+  return {
+    handled: true,
+    products: recovered.products.slice(0, rendered.rendered_count),
+  };
 }
 
 const OUTDOOR_POE_CATALOG_QUERIES = [
@@ -19411,6 +19548,22 @@ Deno.serve(async (req) => {
                   ms: Date.now() - t0,
                 });
               }
+            } else if (
+              parseMeasuredSourceClassRecoveryRequest(scopedSelectionRequest.message)
+            ) {
+              const measuredRecovery = await answerMeasuredSourceClassRecovery(
+                scopedSelectionRequest.message,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = measuredRecovery.products.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                measuredRecovery.products,
+              );
             } else if (replacementSourceRequest) {
               let direct: DirectReplacementResult | null = null;
               const replacementDirectAdmitted = admitDirectSelectionRoute({
