@@ -216,6 +216,7 @@ import {
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
+  buildBroadAssortmentFreeformSlot,
   collectVerifiedBroadAssortmentProducts,
   extractBroadAssortmentScope,
   isBroadAssortmentRequest,
@@ -466,6 +467,15 @@ import {
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
+import {
+  exactCompoundClassPhrase,
+  selectCompleteCategoryPrice,
+} from "../_shared/v3-tools/complete-category-price.ts";
+import {
+  mustStopUnprovenSemanticCompoundSuperlative,
+  semanticCompoundSuperlativeIntent,
+  unprovenSemanticCompoundSuperlativeNotice,
+} from "../_shared/v3-tools/semantic-compound-superlative-policy.ts";
 import {
   executeProposeClarification,
   type ProposeClarificationInput,
@@ -4874,6 +4884,132 @@ async function selectVerifiedExactCompoundProducts(
   t0: number,
 ): Promise<ProductFull[]> {
   const started = Date.now();
+  if (request.priceDirection) {
+    // A by_query response (including sort_cheapest) is only a bounded search
+    // window, not proof of a catalog-wide minimum or maximum. Keep this route
+    // separate from ordinary/exhaustive exact-compound selection.
+    const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+    const classPhrase = exactCompoundClassPhrase(request);
+    const discovery = classPhrase
+      ? await executeDiscoverCategory(
+        { noun: classPhrase },
+        {
+          ...catalogDeps,
+          openrouterApiKey: ctx.openrouterKey,
+          forceFreshTaxonomy: true,
+          requireExactPagetitle: true,
+          // Taxonomy and options each have a bounded request budget; reserve
+          // time for the independent 18 s raw-price proof and SSE completion.
+          timeoutMs: 5_000,
+        },
+      )
+      : null;
+    const proof = discovery?.ok
+      ? await selectCompleteCategoryPrice({ request, discovery }, catalogDeps, ctx.cache)
+      : null;
+    const reason = proof && !proof.ok ? proof.reason
+      : !classPhrase ? "invalid_scope"
+      : discovery && !discovery.ok ? `discovery_${discovery.error_code}`
+      : proof?.ok ? "complete" : "catalog_failure";
+    const elapsed = Date.now() - started;
+    steps.push({
+      step: "v3_exact_compound_complete_price_proof",
+      ms: Date.now() - t0,
+      meta: {
+        outcome: proof?.ok ? "complete" : "unverified",
+        reason,
+        direction: request.priceDirection,
+        raw_rows: proof?.ok ? proof.evidence.raw_rows : 0,
+        matching_available: proof?.ok ? proof.evidence.matching_available : 0,
+        taxonomy_leaf_count: proof?.ok ? proof.evidence.taxonomy_leaf_count : 0,
+        scanned_leaf_count: proof?.ok ? proof.evidence.leaf_categories.length : 0,
+        duration_ms: elapsed,
+      },
+    });
+    send({
+      type: "tool_event",
+      tool: "search_catalog",
+      phase: "result",
+      duration_ms: elapsed,
+      summary: proof?.ok
+        ? "Точная маркировка: цена проверена по полной категории"
+        : "Точная маркировка: полную категорию проверить не удалось",
+    });
+    if (!proof?.ok) {
+      send({
+        type: "delta",
+        content: proof?.reason === "mixed_units"
+          ? "Товары с этой точной маркировкой продаются в разных единицах. Их цены напрямую сравнивать нельзя — уточните нужную единицу продажи."
+          : proof?.reason === "no_candidate"
+          ? "В проверенной категории нет доступной карточки с этой точной маркировкой и подтверждённой ценой. Минимум или максимум цены сейчас назвать не могу."
+          : `Не удалось полностью проверить каталог для маркировки «${request.query}», поэтому ${request.priceDirection === "cheapest" ? "минимальную" : "максимальную"} цену сейчас надёжно назвать нельзя. Попробуйте позже или уточните у менеджера.`,
+      });
+      return [];
+    }
+    const winner = ctx.cache.get(proof.product.id);
+    const rendered = winner
+      ? executeRenderProducts({
+        product_ids: [winner.id],
+        total_available: proof.evidence.matching_available,
+      }, ctx.cache)
+      : null;
+    if (!winner || !rendered?.ok) {
+      steps.push({
+        step: "v3_exact_compound_complete_price_render_failed",
+        ms: Date.now() - t0,
+        meta: {
+          reason: !winner ? "winner_not_cached"
+            : rendered && !rendered.ok ? rendered.error_code : "unknown",
+        },
+      });
+      send({
+        type: "delta",
+        content: "Цену удалось проверить, но карточка товара не загрузилась. Попробуйте позже.",
+      });
+      return [];
+    }
+    const exactMarking = `${request.first}×${String(request.second).replace(".", ",")}`;
+    const exactPlan = extendSelectionCriteriaPlan(null, [{
+      key: "Точная составная маркировка",
+      op: "eq",
+      value: exactMarking,
+      level: "A",
+      evidence: "user_explicit",
+    }], "guarded_search");
+    send({
+      type: "products_block",
+      markdown: rendered.markdown,
+      count: rendered.rendered_count,
+      total_available: proof.evidence.matching_available,
+      selection_contract: {
+        hash: exactPlan.hash,
+        mandatory_criteria: exactPlan.mandatory_criteria.map((
+          { key, op, value, unit, exclusive, evidence },
+        ) => ({
+          key,
+          op,
+          value,
+          ...(unit ? { unit } : {}),
+          ...(exclusive ? { exclusive } : {}),
+          ...(evidence ? { evidence } : {}),
+        })),
+      },
+    });
+    steps.push({
+      step: "v3_exact_compound_complete_price_rendered",
+      ms: Date.now() - t0,
+      meta: {
+        direction: request.priceDirection,
+        verified_unit: proof.evidence.unit,
+        selected_price: proof.evidence.selected_price,
+        tied_count: proof.evidence.tied_count,
+        candidate_count: proof.evidence.matching_available,
+        rendered: rendered.rendered_count,
+      },
+    });
+    return [winner];
+  }
+
   let effectiveQuery = request.query;
   let search = await executeSearchCatalog(
     {
@@ -5029,6 +5165,23 @@ async function selectVerifiedSemanticCompoundProducts(
   steps: StepLog[],
   t0: number,
 ): Promise<{ handled: boolean; products: ProductFull[] }> {
+  const priceIntent = semanticCompoundSuperlativeIntent(
+    userMessage,
+    detectPriceDirection(userMessage),
+  );
+  const unprovenExtremeNotice = unprovenSemanticCompoundSuperlativeNotice(priceIntent);
+  if (unprovenExtremeNotice) {
+    // The semantic recovery pool is bounded and may omit a cheaper exact item.
+    // `handled: true` is essential: falling through to the expert loop would
+    // reintroduce an unverified superlative through another render path.
+    send({ type: "delta", content: unprovenExtremeNotice });
+    steps.push({
+      step: "v3_semantic_compound_superlative_unverified",
+      ms: Date.now() - t0,
+      meta: { direction: priceIntent?.direction, reason: "no_complete_semantic_price_scope" },
+    });
+    return { handled: true, products: [] };
+  }
   const sourceQuery = semanticCompoundSourceQuery(userMessage);
   if (!sourceQuery) return { handled: false, products: [] };
   if (isExhaustiveCompoundRequest(userMessage)) {
@@ -5151,16 +5304,7 @@ async function selectVerifiedSemanticCompoundProducts(
   verified = verified.filter((product) =>
     directProductProvesLiteralWords(sourceQuery, product)
   );
-  const priceIntent = detectPriceDirection(userMessage);
-  if (priceIntent?.kind === "superlative") {
-    verified = [...verified].sort((left, right) =>
-      priceIntent.direction === "more_expensive"
-        ? right.price - left.price
-        : left.price - right.price
-    ).slice(0, 1);
-  } else {
-    verified = verified.slice(0, 5);
-  }
+  verified = verified.slice(0, 5);
   const elapsed = Date.now() - started;
   send({
     type: "tool_event",
@@ -5472,16 +5616,11 @@ async function answerBroadAssortmentRequest(
     send({
       type: "slot_update",
       slots: {
-        pending_clarification: {
-          status: "pending",
-          slot_id: crypto.randomUUID(),
-          facet_key: "catalog_section",
-          question: answer,
-          // A single leaf is not a choice. Empty options is the widget's
-          // explicit free-form mode, preserving the named-series scope.
-          options: [],
-          scope: { kind: "broad_assortment", token: seriesToken },
-        },
+        pending_clarification: buildBroadAssortmentFreeformSlot(
+          answer,
+          seriesToken,
+          crypto.randomUUID(),
+        ),
       },
     });
   }
@@ -10554,6 +10693,34 @@ async function runExpertLoop(
             );
             send({ type: "delta", content: clarification });
             finalText += `${finalText ? "\n\n" : ""}${clarification}`;
+            const leafChoices = [...new Set(
+              (lastDiscover!.leaf_categories ?? [])
+                .map((leaf) => String(leaf.pagetitle ?? "").trim())
+                .filter((title) => title.length > 0 && title.length <= 160),
+            )].slice(0, 5);
+            if (namedSeriesToken && leafChoices.length >= 2) {
+              // Only catalog-proven leaves become choices. Their original
+              // series stays in the server-issued slot for a safe continuation.
+              emitSideEffects(executeProposeClarification({
+                question: clarification,
+                facet_key: "catalog_section",
+                options: leafChoices.map((value) => ({ value, label: value })),
+                scope: { kind: "broad_assortment", token: namedSeriesToken },
+              }), send);
+            } else if (namedSeriesToken) {
+              // Mirror the preflight path: a prose-only question loses the
+              // series when the customer replies with a short product type.
+              send({
+                type: "slot_update",
+                slots: {
+                  pending_clarification: buildBroadAssortmentFreeformSlot(
+                    clarification,
+                    namedSeriesToken,
+                    crypto.randomUUID(),
+                  ),
+                },
+              });
+            }
             steps.push({
               step: "v3_broad_assortment_clarification",
               ms: now(),
@@ -10563,6 +10730,7 @@ async function runExpertLoop(
                 leaf_categories: lastDiscover?.leaf_categories?.map((leaf) =>
                   leaf.pagetitle
                 ) ?? [],
+                choice_count: namedSeriesToken ? leafChoices.length : 0,
               },
             });
             return {
@@ -19398,6 +19566,15 @@ Deno.serve(async (req) => {
                 coveredCompound: semanticCompoundMarking,
               }),
             );
+            const semanticCompoundUnprovenSuperlative =
+              mustStopUnprovenSemanticCompoundSuperlative(
+                Boolean(explicitCompoundMarking),
+                requiresSemanticCompoundEvidence(userMessage),
+                semanticCompoundSuperlativeIntent(
+                  userMessage,
+                  detectPriceDirection(userMessage),
+                ),
+              );
             const exactCompoundDirectAdmitted = Boolean(
               exactCompoundMarkingRequest && admitDirectSelectionRoute({
                 route: "compound",
@@ -19525,14 +19702,37 @@ Deno.serve(async (req) => {
             } else if (readinessClarification) {
               const { profile, ...clarificationInput } = readinessClarification;
               send({ type: "delta", content: clarificationInput.question });
-              const clarification = executeProposeClarification(
-                clarificationInput,
-              );
-              emitSideEffects(clarification, send);
+              if (clarificationInput.options.length >= 2) {
+                const clarification = executeProposeClarification(
+                  clarificationInput,
+                );
+                emitSideEffects(clarification, send);
+              } else {
+                // Exact engineering values are not honest finite choices.
+                // Preserve the server-verifiable task scope for free text, but
+                // do not show invented values or loop on an already-filled chip.
+                send({
+                  type: "slot_update",
+                  slots: {
+                    pending_clarification: {
+                      status: "pending",
+                      slot_id: crypto.randomUUID(),
+                      facet_key: clarificationInput.facet_key,
+                      question: clarificationInput.question,
+                      options: [],
+                      scope: clarificationInput.scope,
+                    },
+                  },
+                });
+              }
               steps.push({
                 step: "v3_selection_readiness_clarification",
                 ms: Date.now() - t0,
-                meta: { profile, facet_key: clarificationInput.facet_key },
+                meta: {
+                  profile,
+                  facet_key: clarificationInput.facet_key,
+                  choice_count: clarificationInput.options.length,
+                },
               });
               productsCount = 0;
             } else if (
@@ -19800,18 +20000,22 @@ Deno.serve(async (req) => {
                 selection.products,
               );
             } else if (
-              semanticCompoundMarking && semanticCompoundDirectAdmitted
+              (semanticCompoundMarking && semanticCompoundDirectAdmitted) ||
+              (semanticCompoundUnprovenSuperlative && explicitCompoundMarking)
             ) {
-              send({
-                type: "delta",
-                content:
-                  `Понял требования: сохраняю точный размер ${semanticCompoundMarking.first}×${
-                    String(semanticCompoundMarking.second).replace(".", ",")
-                  } и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
-              });
+              const semanticMarking = semanticCompoundMarking ?? explicitCompoundMarking!;
+              if (!semanticCompoundUnprovenSuperlative) {
+                send({
+                  type: "delta",
+                  content:
+                    `Понял требования: сохраняю точный размер ${semanticMarking.first}×${
+                      String(semanticMarking.second).replace(".", ",")
+                    } и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
+                });
+              }
               const direct = await selectVerifiedSemanticCompoundProducts(
                 userMessage,
-                semanticCompoundMarking,
+                semanticMarking,
                 ctx,
                 send,
                 steps,

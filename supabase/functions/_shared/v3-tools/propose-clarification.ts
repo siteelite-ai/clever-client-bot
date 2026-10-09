@@ -31,7 +31,10 @@ export function executeProposeClarification(
   const facet_key = (input.facet_key ?? "").trim();
   const opts = Array.isArray(input.options) ? input.options : [];
 
-  if (!question || !facet_key || opts.length < 2 || opts.length > 5) {
+  if (
+    !question || !facet_key || facet_key.length > 128 ||
+    opts.length < 2 || opts.length > 5
+  ) {
     return {
       tool: "propose_clarification",
       ok: false,
@@ -40,19 +43,27 @@ export function executeProposeClarification(
     };
   }
 
-  const replies = opts
-    .filter((o) => typeof o?.value === "string" && o.value.trim())
-    .map((o) => ({
-      value: String(o.value),
-      label: String(o.label ?? o.value),
-    }));
-
-  if (replies.length < 2) {
+  const replies = opts.map((option) => ({
+    value: option?.value,
+    label: option?.label ?? option?.value,
+  }));
+  const values = new Set<string>();
+  if (
+    replies.some(({ value, label }) => {
+      if (
+        typeof value !== "string" || typeof label !== "string" ||
+        !value.trim() || !label.trim() || value !== value.trim() ||
+        value.length > 2000 || label.length > 160 || values.has(value)
+      ) return true;
+      values.add(value);
+      return false;
+    })
+  ) {
     return {
       tool: "propose_clarification",
       ok: false,
       error_code: "bad_input",
-      message: "need ≥2 valid options",
+      message: "options must be 2-5 distinct, nonblank widget-compatible choices",
     };
   }
 

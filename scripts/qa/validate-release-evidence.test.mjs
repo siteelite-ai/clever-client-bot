@@ -28,6 +28,7 @@ function syntheticEvidence() {
         passed: true,
         turns: run.turns.map((turn) => ({
           message: turn.message,
+          synthetic_scenario: turn.synthetic_scenario,
           status: 200,
           log_id: `synthetic-log-${++logNumber}`,
           passed: true,
@@ -137,6 +138,23 @@ test('one wrong turn message is rejected without echoing it', () => {
   const evidence = syntheticEvidence();
   evidence.reports[0].cases[0].repeats[0].turns[0].message = 'SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY';
   expectFailure(evidence, 'turn_message_mismatch');
+});
+
+test('every synthetic marker must be explicit and agree with the pinned turn', () => {
+  const missing = syntheticEvidence();
+  const firstTurn = missing.reports[0].cases[0].repeats[0].turns[0];
+  assert.equal(firstTurn.synthetic_scenario, false);
+  delete firstTurn.synthetic_scenario;
+  expectFailure(missing, 'turn_synthetic_scenario_mismatch');
+
+  const mismatched = syntheticEvidence();
+  const notion = mismatched.reports.find((report) =>
+    report.suite_file === 'notion-legacy-bug-cases-v2.json');
+  const syntheticTurn = notion.cases.flatMap((testCase) => testCase.repeats.flatMap((repeat) => repeat.turns))
+    .find((turn) => turn.synthetic_scenario === true);
+  assert(syntheticTurn);
+  syntheticTurn.synthetic_scenario = false;
+  expectFailure(mismatched, 'turn_synthetic_scenario_mismatch');
 });
 
 test('empty log ID is rejected for a recorded turn', () => {

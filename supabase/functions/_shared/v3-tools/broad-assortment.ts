@@ -725,3 +725,20 @@ export function buildBroadAssortmentClarification(
   const suffix = leaves.length >= 2 ? ` Например: ${leaves.join(", ")}.` : "";
   return `В этом ассортименте несколько товарных групп, поэтому несколько случайных карточек не будут честно представлять весь выбор. Уточните нужный раздел или тип товара.${suffix}`;
 }
+
+/** A single (or absent) catalog leaf is not a genuine choice, but the next
+ * free-text answer must still retain the server-issued named-series scope. */
+export function buildBroadAssortmentFreeformSlot(
+  question: string,
+  seriesToken: string,
+  slotId: string,
+) {
+  return {
+    status: "pending" as const,
+    slot_id: slotId,
+    facet_key: "catalog_section" as const,
+    question,
+    options: [] as Array<{ value: string; label: string }>,
+    scope: { kind: "broad_assortment" as const, token: seriesToken },
+  };
+}

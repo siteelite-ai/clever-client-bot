@@ -6,6 +6,7 @@ import {
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
+  buildBroadAssortmentFreeformSlot,
   collectVerifiedBroadAssortmentProducts,
   type CompletedClarificationLog,
   extractBroadAssortmentScope,
@@ -44,6 +45,17 @@ Deno.test("broad assortment is structural and does not capture an exact all-item
   );
   assert(broadAssortmentNeedsClarification(true, discover, 3));
   assert(buildBroadAssortmentClarification(discover).includes("Розетки"));
+});
+
+Deno.test("a one-leaf broad assortment fallback keeps the named series in a server-issued free-text slot", () => {
+  const oneLeaf = { ...discover, leaf_categories: [{ id: 2, pagetitle: "Розетки" }], category: { ...discover.category, total_products: 20 } };
+  assertEquals(broadAssortmentNeedsClarification(true, oneLeaf, 2), true);
+  const slot = buildBroadAssortmentFreeformSlot(
+    buildBroadAssortmentClarification(oneLeaf), "Gallant", "server-slot-1",
+  );
+  assertEquals(slot.facet_key, "catalog_section");
+  assertEquals(slot.options, []);
+  assertEquals(slot.scope, { kind: "broad_assortment", token: "Gallant" });
 });
 
 Deno.test("broad assortment scope is extracted structurally without a brand dictionary", () => {

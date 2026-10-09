@@ -307,6 +307,10 @@ export function validateReleaseEvidence({ inventory, reports, attestation }) {
             continue;
           }
           if (expectedTurn && turn.message !== expectedTurn.message) fail('turn_message_mismatch', turnLocation);
+          if (expectedTurn && (typeof turn.synthetic_scenario !== 'boolean' ||
+            turn.synthetic_scenario !== expectedTurn.synthetic_scenario)) {
+            fail('turn_synthetic_scenario_mismatch', turnLocation);
+          }
           if (!nonEmpty(turn.log_id)) {
             fail('turn_log_id_missing', turnLocation);
           } else {
