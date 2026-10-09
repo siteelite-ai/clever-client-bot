@@ -258,7 +258,16 @@ function textHasExactCompoundMarking(
   for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
     const first = number(match[1]);
     const second = number(match[2]);
-    if (first === marking.first && second === marking.second) return true;
+    if (first !== marking.first || second !== marking.second) continue;
+    // A member of an additive construction is not the whole requested
+    // marking (N×S + M×T). Independent surrounding title words are fine,
+    // but an adjacent numeric addend changes the product configuration.
+    const before = evidence.slice(0, match.index);
+    const after = evidence.slice((match.index ?? 0) + match[0].length);
+    if (/\d\s*\+\s*$/u.test(before) || /^\s*\+\s*\d/u.test(after)) {
+      continue;
+    }
+    return true;
   }
   return false;
 }

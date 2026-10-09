@@ -3,6 +3,16 @@
   "source_suite": "customer-audit-20260921-cases.json",
   "variants": [
     {
+      "case_id": "audit-09b-breaker-25a-novice-guidance",
+      "id": "novice-wording",
+      "messages": [
+        "Подберите для квартиры автоматический выключатель на 25 ампер",
+        "Я не разбираюсь в этом, объясните варианты",
+        "1P",
+        "C"
+      ]
+    },
+    {
       "case_id": "audit-01-vvg-3x1_5-cheapest",
       "id": "word-order-and-cyrillic-size",
       "messages": ["Найди самый дешёвый кабель ВВГ 3х1,5"]

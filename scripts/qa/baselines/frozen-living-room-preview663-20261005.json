@@ -1,0 +1,94 @@
+{
+  "http": 200,
+  "duration_ms": 4232,
+  "text": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток всех источников должен составлять не менее 3750 Лм. Выбирайте один мощный светодиодный светильник или комбинацию приборов с общим значением параметра Световой поток не ниже этого порога. По классу «Вид светильника» выбираю «люстры; бра; ночники».",
+  "textBeforeProducts": "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток всех источников должен составлять не менее 3750 Лм. Выбирайте один мощный светодиодный светильник или комбинацию приборов с общим значением параметра Световой поток не ниже этого порога. По классу «Вид светильника» выбираю «люстры; бра; ночники».",
+  "productsMarkdown": "- **[Светильник светодиод (потолочный) LE LED CLL ARIS-B 60W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-aris-b-60w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (8 шт)\n\n- **[Светильник светодиод (потолочный) LE LED CLL BLISS-B 45W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-bliss-b-45w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (7 шт)\n\n- **[Светильник светодиод (потолочный) LE LED CLL DAINERIS-B 48W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-daineris-b-48w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (8 шт)",
+  "links": [
+    {
+      "title": "Светильник светодиод (потолочный) LE LED CLL ARIS-B 60W WHITE (1)",
+      "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-aris-b-60w-white-%281%29/",
+      "price": 10000,
+      "stockLine": "Караганда (8 шт)",
+      "cardText": "- **[Светильник светодиод (потолочный) LE LED CLL ARIS-B 60W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-aris-b-60w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (8 шт)"
+    },
+    {
+      "title": "Светильник светодиод (потолочный) LE LED CLL BLISS-B 45W WHITE (1)",
+      "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-bliss-b-45w-white-%281%29/",
+      "price": 10000,
+      "stockLine": "Караганда (7 шт)",
+      "cardText": "- **[Светильник светодиод (потолочный) LE LED CLL BLISS-B 45W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-bliss-b-45w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (7 шт)"
+    },
+    {
+      "title": "Светильник светодиод (потолочный) LE LED CLL DAINERIS-B 48W WHITE (1)",
+      "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-daineris-b-48w-white-%281%29/",
+      "price": 10000,
+      "stockLine": "Караганда (8 шт)",
+      "cardText": "- **[Светильник светодиод (потолочный) LE LED CLL DAINERIS-B 48W WHITE (1)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-svetodiod-%28potolochnyij%29-le-led-cll-daineris-b-48w-white-%281%29/)**\n  Цена: *10 000* ₸\n  Бренд: Leek\n  Наличие: Караганда (8 шт)"
+    }
+  ],
+  "logId": "7eb267ac-e2fa-48bf-9eed-f1d14d5491cc",
+  "completed": true,
+  "serverProductsCount": 3,
+  "diagnosticError": null,
+  "conversationBoundary": null,
+  "dialogSlots": {},
+  "selectionContract": {
+    "hash": "selection-f1bf202d",
+    "mandatory_criteria": [
+      {
+        "key": "Вид светильника",
+        "op": "eq",
+        "value": "люстры; бра; ночники",
+        "evidence": "user_explicit"
+      },
+      {
+        "key": "Световой поток, Лм",
+        "op": "min",
+        "value": 3750,
+        "unit": "лм",
+        "evidence": "derived_required"
+      }
+    ],
+    "visible_requirements": [
+      {
+        "kind": "literal_modifier",
+        "label": "светодиодный",
+        "op": "eq",
+        "value": "светодиодный"
+      }
+    ],
+    "result_cardinality": {
+      "target": 4,
+      "minimum": 3,
+      "mode": "selection",
+      "explicit": false
+    }
+  },
+  "toolEvents": [
+    {
+      "tool": "discover_category",
+      "phase": "start",
+      "summary": "discover_category…",
+      "duration_ms": null
+    },
+    {
+      "tool": "discover_category",
+      "phase": "result",
+      "summary": "категория «Светильники»: 1307 тов., фасетов 38, листьев 1",
+      "duration_ms": 1387
+    },
+    {
+      "tool": "search_catalog",
+      "phase": "start",
+      "summary": "search_catalog…",
+      "duration_ms": null
+    },
+    {
+      "tool": "search_catalog",
+      "phase": "result",
+      "summary": "найдено 92",
+      "duration_ms": 553
+    }
+  ]
+}

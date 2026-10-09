@@ -1,0 +1,226 @@
+[
+  {
+    "id": "f6f4d80f-0372-4115-907a-0d7a069059ae",
+    "error": "derived_selection_reasoning_contract_invalid",
+    "steps": [
+      {
+        "ms": 0,
+        "meta": {
+          "message_id": "b562914c-4f86-4701-b157-fdcfc0aaa1a0",
+          "session_id": "customer_acceptance_audit-15-analog-cctv-outdoor-cable_base_1791214548855_1",
+          "user_message": "аналоговая, на улице, расстояние 30 метров"
+        },
+        "step": "v3_turn_start"
+      },
+      {
+        "ms": 167,
+        "meta": {
+          "kind": "created"
+        },
+        "step": "v3_turn_claim_resolved"
+      },
+      {
+        "ms": 253,
+        "meta": {
+          "has_catalog_token": true,
+          "has_openrouter_key": true
+        },
+        "step": "v3_settings_loaded"
+      },
+      {
+        "ms": 265,
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": true,
+          "pending_broad_assortment_scope": null
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "ms": 413,
+        "meta": {
+          "score": 1,
+          "chosen": "Аналоговая",
+          "relaxed": [
+            "Цифровая/IP"
+          ]
+        },
+        "step": "v3_dialogue_choice_resolved"
+      },
+      {
+        "ms": 427,
+        "meta": {
+          "strategy": "live_taxonomy_full_message",
+          "forced_tool": "discover_category"
+        },
+        "step": "v3_initial_discovery_compiled"
+      },
+      {
+        "ms": 435,
+        "meta": {
+          "phase": "intro",
+          "finish": "server_compiled_initial_discovery",
+          "has_text": false,
+          "provider": "server_compiled",
+          "ctx_bytes": 57504,
+          "step_index": 0,
+          "timeout_ms": 10000,
+          "tool_calls": 1,
+          "agent_phase": "open",
+          "duration_ms": 21,
+          "forced_tool": "discover_category",
+          "available_tools": [
+            "discover_category",
+            "search_catalog",
+            "lookup_knowledge",
+            "lookup_contacts",
+            "escalate_to_manager",
+            "note_state"
+          ],
+          "remote_agent_steps": 0
+        },
+        "step": "v3_llm_call"
+      },
+      {
+        "ms": 443,
+        "meta": {
+          "strategy": "live_taxonomy_then_target_guard"
+        },
+        "step": "v3_customer_query_discovery_allowed"
+      },
+      {
+        "ms": 1642,
+        "meta": {
+          "ok": true,
+          "args": {
+            "noun": "Есть ли у вас кабель для видеонаблюдения? Уточнение клиента: аналоговая, на улице, расстояние 30 метров"
+          },
+          "tool": "discover_category",
+          "result": {
+            "pagetitle": "Кабель и провод",
+            "facet_keys": [
+              "brend__brend",
+              "bronirovannyy__sauytty",
+              "diapazon_rabochih_temperatur__ghұmys_temperaturalarynyң_diapozony",
+              "edinica_izmereniya__Өlsheu_bіrlіgі",
+              "ekranirovannyy__ekrandalғan",
+              "garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_",
+              "izolyaciya__oқshaulau",
+              "kod_tn_ved__seҚ_tn_kody",
+              "kolichestvo_ghil__taram_sany",
+              "material_provodnika__Өtkіzgіsh_materialy",
+              "narughnyy_diametr_kabelya__mm__kabelydің_syrtқy_diametrі__mm",
+              "naznachenie__maқsaty_",
+              "negoryuchesty__ghanatyn_қasietі_ghoқ",
+              "nominalynoe_napryaghenie__kv__nominaldy_kerneuі__kb",
+              "obolochka__Қabyқsha",
+              "obyem__kөlemі",
+              "ogranichennyy_prosmotr",
+              "opisaniefayla",
+              "opisanie_na_kazahskom_yazyke",
+              "prodaetsya_tolyko_v_gruppovoy_upakovke__toptyқ_ghiyntyғynda_ғana_satylady"
+            ],
+            "facets_count": 29,
+            "resolved_from": "кабель",
+            "total_products": 741,
+            "resolution_method": "live_taxonomy"
+          },
+          "error_code": null,
+          "duration_ms": 1207
+        },
+        "step": "v3_tool_call"
+      },
+      {
+        "ms": 1748,
+        "meta": {
+          "category": "Кабель и провод",
+          "measured_contexts": true,
+          "direct_measured_criteria": 0,
+          "direct_application_criteria": 0
+        },
+        "step": "v3_unprojected_selection_context_requires_reasoning"
+      },
+      {
+        "ms": 1748,
+        "meta": {
+          "source": "initial_reasoning_and_live_taxonomy",
+          "target": "кабель"
+        },
+        "step": "v3_selection_target_bootstrapped"
+      },
+      {
+        "ms": 1764,
+        "meta": {
+          "to": "search_after_discovery",
+          "from": "open",
+          "tool": "discover_category"
+        },
+        "step": "v3_agent_phase_transition"
+      },
+      {
+        "ms": 4724,
+        "meta": {
+          "finish": "tool_calls",
+          "array_sizes": {
+            "mandatory_properties": 1,
+            "required_facet_values": 0,
+            "excluded_classifications": 4,
+            "compatible_classifications": 1,
+            "explicit_customer_classifications": 0
+          },
+          "tool_call_names": [
+            "declare_selection_reasoning"
+          ],
+          "declaration_keys": [
+            "clarification_question",
+            "compatible_classifications",
+            "excluded_classifications",
+            "explicit_customer_classifications",
+            "mandatory_properties",
+            "measurement_scope",
+            "per_product_measurement_evidence",
+            "reasoning",
+            "required_facet_values",
+            "retrieval_query"
+          ],
+          "declaration_found": true,
+          "response_text_chars": 0,
+          "property_obligation_errors": [
+            {
+              "index": 0,
+              "reason": "source_not_visible_or_key_not_grounded"
+            }
+          ],
+          "declaration_reasoning_chars": 333,
+          "property_obligation_sources": [
+            {
+              "op": "min",
+              "key": "Длина кабеля",
+              "unit": "м",
+              "scope": "per_product",
+              "value": "30",
+              "source_span": "расстояние 30 метров"
+            }
+          ]
+        },
+        "step": "v3_derived_selection_reasoning_contract_rejected"
+      },
+      {
+        "ms": 4734,
+        "meta": {
+          "error": "derived_selection_reasoning_contract_invalid",
+          "reason": "error",
+          "retryable": false,
+          "public_error": "internal_error"
+        },
+        "step": "v3_turn_end"
+      }
+    ]
+  }
+]

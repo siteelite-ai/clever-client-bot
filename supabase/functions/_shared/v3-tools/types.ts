@@ -78,9 +78,33 @@ export interface SearchCatalogOk {
   mode: string;
   total: number;
   results: ProductRef[];
+  /** Raw-row coverage of the requested price sort, not proof of a global price minimum. */
+  price_sort_coverage?: SearchCatalogPriceSortCoverage;
   /** Серверные предупреждения (например, anchor_leaf_category_injected:<L₀>). */
   warnings?: string[];
   side_effects?: ToolSideEffect[];
+}
+
+export type SearchCatalogPriceSortPartialReason =
+  | "raw_row_cap"
+  | "unknown_total"
+  | "page_timeout"
+  | "page_error"
+  | "incomplete_raw_window"
+  | "pagination_total_changed"
+  | "overlapping_raw_ids"
+  | "canonical_retry_error"
+  | "branch_timeout"
+  | "branch_error"
+  | "branch_skipped";
+
+export interface SearchCatalogPriceSortCoverage {
+  status: "full" | "partial";
+  /** Raw rows returned by successfully fetched pages, before product eligibility filtering. */
+  scanned: number;
+  /** Sum of upstream raw-row totals across attempted branches/variants; null when any is unknown or inconsistent. */
+  total: number | null;
+  reasons: SearchCatalogPriceSortPartialReason[];
 }
 
 export interface DiscoverCategoryOk {

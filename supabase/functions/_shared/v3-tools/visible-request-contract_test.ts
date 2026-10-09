@@ -1,16 +1,73 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildVisibleRequestContract,
+  deriveCustomerOwnedVisibleFacetProofs,
   productSupportsVisibleRequestContract,
+  productSupportsVisibleRequestRequirement,
+  recordVerifiedCustomerFacetFilterEvidence,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
   titleSupportsVisibleRequestContract,
+  withVerifiedCustomerFacetEvidence,
 } from "./visible-request-contract.ts";
+
+const motionFacet = {
+  key: "motion_sensor_catalog_key",
+  caption: "С датчиком движения",
+  unit: null,
+  values: [{ value: "да" }, { value: "нет" }],
+};
+
+function frozenMotionProofs(message: string) {
+  return deriveCustomerOwnedVisibleFacetProofs(
+    message,
+    [motionFacet],
+    [{
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      evidence: "user_explicit",
+      level: "A",
+    }],
+    [{ key: motionFacet.key, value: "да" }],
+  );
+}
 
 Deno.test("literal linear length requires an actual unit in the title", () => {
   const contract = buildVisibleRequestContract("подбери удлинитель на 50 м");
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель УК-50 /50м", contract), true);
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель EB-50-007", contract), false);
+});
+
+Deno.test("a complete relational noun beside the product head proves the adjective", () => {
+  for (const [request, head, full, compact] of [
+    ["светодиодный светильник", "Светильники", "Светильник светодиодный 48W", "Светильник светодиод (потолочный) 48W"],
+    ["лазерный уровень", "Уровень", "Лазерный уровень", "Уровень лазер"],
+  ]) {
+    const contract = buildVisibleRequestContract(request, {
+      productClass: head, candidateTitles: [full, compact],
+    });
+    assertEquals(contract.length, 1);
+    assertEquals(titleSupportsVisibleRequestContract(compact, contract), true);
+    assertEquals(titleSupportsVisibleRequestContract(full, contract), true);
+  }
+});
+
+Deno.test("relational noun proof is not arbitrary prefix matching or trait-word coincidence", () => {
+  const contract = buildVisibleRequestContract("светодиодный светильник", {
+    productClass: "Светильники", candidateTitles: ["Светильник светодиодный", "Светильник светодиод"],
+  });
+  for (const title of [
+    "Светильник светло-серый",
+    "Светильник светодиодрайвер",
+    "Светильник без светодиод",
+    "Светильник для светодиод",
+    "Светильник\nКомплект: светодиод",
+  ]) assertEquals(titleSupportsVisibleRequestContract(title, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник потолочный",
+    short_traits: ["Описание: светильник светодиод"],
+  }, contract), false);
 });
 
 Deno.test("room area is not treated as a product length", () => {
@@ -188,6 +245,191 @@ Deno.test("a validated semantic facet mapping replaces only the duplicate litera
   );
   assertEquals(contract.map((requirement) => requirement.label), ["от 100 Вт"]);
   assertEquals(titleSupportsVisibleRequestContract("Прибор LX 150 Вт", contract), true);
+});
+
+Deno.test("only the complete customer-owned live facet and frozen exact option grant spelling reconciliation", () => {
+  const source = "Нужен светильник с датчиком движения";
+  const valid = frozenMotionProofs(source);
+  assertEquals(valid, [{
+    facetKey: motionFacet.key,
+    facetCaption: motionFacet.caption,
+    value: "да",
+  }]);
+  assertEquals(frozenMotionProofs("Нужен светильник с датчиком звука"), []);
+  assertEquals(deriveCustomerOwnedVisibleFacetProofs(
+    source,
+    [motionFacet],
+    [{ key: motionFacet.caption, op: "eq", value: "да", evidence: "model_assumption" }],
+    [{ key: motionFacet.key, value: "да" }],
+  ), []);
+  assertEquals(deriveCustomerOwnedVisibleFacetProofs(
+    source,
+    [motionFacet],
+    [{ key: motionFacet.caption, op: "eq", value: "да", evidence: "user_explicit" }],
+    [{ key: motionFacet.key, value: "нет" }],
+  ), []);
+  assertEquals(deriveCustomerOwnedVisibleFacetProofs(
+    source,
+    [motionFacet],
+    [{ key: motionFacet.caption, op: "eq", value: "да", evidence: "user_explicit" }],
+    [{ key: "motion_sensor_neighbor_key", value: "да" }],
+  ), []);
+});
+
+Deno.test("successful exact filtered pool proves only its returned IDs and preserves raw contradictions", () => {
+  const proof = frozenMotionProofs("Нужен светильник с датчиком движения");
+  const lineage = new Map<string, Record<string, string[]>>();
+  const criterion = [{ key: motionFacet.caption, op: "eq" as const,
+    value: "да", level: "A" as const, evidence: "user_explicit" as const }];
+  const exact = { mode: "by_filter", options: { [motionFacet.key]: ["да"] } };
+  assertEquals(recordVerifiedCustomerFacetFilterEvidence(
+    lineage, ["gauss"], exact, criterion, proof,
+  ), 1);
+  assertEquals(recordVerifiedCustomerFacetFilterEvidence(
+    lineage, ["query-id"], {
+      mode: "by_query", query: "светильник",
+      options: { [motionFacet.key]: ["да"] },
+    }, criterion, proof,
+  ), 1);
+  assertEquals(lineage.get("query-id"), { [motionFacet.key]: ["да"] });
+  assertEquals(lineage.has("sibling"), false);
+  assertEquals(withVerifiedCustomerFacetEvidence({
+    id: "gauss", pagetitle: "Светильник Gauss с микроволновым сенсором",
+  }, lineage).facet_values, { [motionFacet.key]: ["да"] });
+  assertEquals(withVerifiedCustomerFacetEvidence({
+    id: "gauss", pagetitle: "Светильник Gauss с микроволновым сенсором",
+    facet_values: { [motionFacet.key]: ["нет"] },
+  }, lineage).facet_values, { [motionFacet.key]: ["нет", "да"] });
+  for (const [query, proven] of [
+    [{ mode: "by_filter", options: { [motionFacet.key]: ["да", "нет"] } }, criterion],
+    [{ mode: "by_filter", options: { [motionFacet.key]: ["нет"] } }, criterion],
+    [{ mode: "by_filter", options: { neighbor: ["да"] } }, criterion],
+    [{ mode: "by_query", query: "светильник" }, criterion],
+    [exact, []],
+  ] as const) {
+    assertEquals(recordVerifiedCustomerFacetFilterEvidence(
+      lineage, ["sibling"], query, [...proven], proof,
+    ), 0);
+    assertEquals(lineage.has("sibling"), false);
+  }
+});
+
+Deno.test("exact motion-sensor facet proves a differently worded product per card, but not acoustic or negative evidence", () => {
+  const source = "Нужен светильник с датчиком движения";
+  const contract = buildVisibleRequestContract(source, {
+    productClass: "Светильники",
+    candidateTitles: [
+      "Светильник с датчиком движения",
+      "Светильник Gauss с микроволновым сенсором",
+    ],
+    customerOwnedFacetProofs: frozenMotionProofs(source),
+  });
+  assertEquals(contract.map((requirement) => requirement.label), ["датчиком"]);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    short_traits: [],
+    facet_values: { [motionFacet.key]: ["да"] },
+  }, contract), true);
+  assertEquals(productSupportsVisibleRequestRequirement({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    short_traits: [],
+    facet_values: { [motionFacet.key]: ["да"] },
+  }, contract[0]), true);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник с акустическим датчиком",
+    short_traits: [],
+    facet_values: { [motionFacet.key]: ["да"] },
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    short_traits: [],
+    facet_values: { [motionFacet.key]: ["нет"] },
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    short_traits: [],
+    facet_values: { motion_sensor_neighbor_key: ["да"] },
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    short_traits: [],
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+  }, contract), true);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+    short_traits: ["С датчиком движения: нет"],
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник Gauss",
+    description_excerpt: "Совместим с датчиком движения",
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник с датчиком движения",
+  }, contract), true);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник с датчиком движения",
+    short_traits: ["С датчиком движения: нет"],
+  }, contract), false);
+});
+
+Deno.test("other literal qualifiers remain mandatory when a separate exact facet has alternate title wording", () => {
+  const source = "Нужен светодиодный светильник с датчиком движения";
+  const contract = buildVisibleRequestContract(source, {
+    productClass: "Светильники",
+    candidateTitles: [
+      "Светильник светодиодный с датчиком движения",
+      "Светильник обычный с микроволновым сенсором",
+    ],
+    customerOwnedFacetProofs: frozenMotionProofs(source),
+  });
+  assertEquals(contract.map((requirement) => requirement.label), ["светодиодный", "датчиком"]);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник обычный с микроволновым сенсором",
+    facet_values: { [motionFacet.key]: ["да"] },
+  }, contract), false);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Светильник светодиодный с микроволновым сенсором",
+    facet_values: { [motionFacet.key]: ["да"] },
+  }, contract), true);
+});
+
+Deno.test("cross-category live facet proof is per-product and cannot erase a sibling class modifier", () => {
+  const source = "Нужна бытовая розетка с крышкой";
+  const coverFacet = {
+    key: "cover_option",
+    caption: "С крышкой",
+    unit: null,
+    values: [{ value: "да" }, { value: "нет" }],
+  };
+  const proofs = deriveCustomerOwnedVisibleFacetProofs(
+    source,
+    [coverFacet],
+    [{ key: "С крышкой", op: "eq", value: "да", evidence: "user_explicit" }],
+    [{ key: "cover_option", value: "да" }],
+  );
+  const contract = buildVisibleRequestContract(source, {
+    productClass: "Розетки",
+    candidateTitles: [
+      "Бытовая розетка с крышкой",
+      "Розетка для ЖКХ с защитным колпачком",
+    ],
+    customerOwnedFacetProofs: proofs,
+  });
+  assertEquals(contract.map((requirement) => requirement.label), ["бытовая", "крышкой"]);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Бытовая розетка с защитным колпачком",
+    facet_values: { cover_option: ["да"] },
+  }, contract), true);
+  assertEquals(productSupportsVisibleRequestContract({
+    pagetitle: "Розетка для ЖКХ с защитным колпачком",
+    facet_values: { cover_option: ["да"] },
+  }, contract), false);
 });
 
 Deno.test("a measurement descriptor is not duplicated as a literal title modifier", () => {

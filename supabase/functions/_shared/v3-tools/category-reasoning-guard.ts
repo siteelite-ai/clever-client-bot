@@ -348,6 +348,55 @@ function leafSupported(
   evidence: string,
 ): boolean {
   const distinctive = distinctiveLeafTokens(leaf, umbrella);
+  const umbrellaTokens = norm(umbrella).split(" ");
+  const shortModifiers = (leaf.match(/[a-zа-я0-9]+/giu) ?? []).filter((raw) => {
+    const token = norm(raw);
+    if (token.length >= 4 || umbrellaTokens.includes(token)) return false;
+    // Short grammatical connectors are not taxonomy assertions. Uppercase
+    // codes (including one-letter codes) and numbers must not disappear with
+    // the long-word tokenizer, however.
+    const codeLike = /[0-9]/u.test(raw) ||
+      raw === raw.toUpperCase() && raw !== raw.toLowerCase();
+    return codeLike || token.length >= 2 &&
+        ![
+          "для",
+          "без",
+          "при",
+          "под",
+          "над",
+          "или",
+          "из",
+          "на",
+          "по",
+          "со",
+          "во",
+        ].includes(token);
+  });
+  if (shortModifiers.length > 0) {
+    // Require the whole live label, not a stray single letter or code in an
+    // unrelated clause. Reuse the existing rejection/source-side checks on
+    // the matched phrase, preserving its surrounding evidence.
+    const labelTokens = norm(leaf).split(" ");
+    const rawEvidenceTokens = evidence.match(/[a-zа-я0-9]+/giu) ?? [];
+    const evidenceTokens = rawEvidenceTokens.map(norm);
+    const marker = "groundedcategoryphrase";
+    const marked: string[] = [];
+    for (let index = 0; index < evidenceTokens.length; index += 1) {
+      const matches = labelTokens.every((token, offset) => {
+        const candidate = evidenceTokens[index + offset] ?? "";
+        if (token.length === 1 && shortModifiers.some((raw) => norm(raw) === token)) {
+          const rawCandidate = rawEvidenceTokens[index + offset] ?? "";
+          if (rawCandidate !== rawCandidate.toUpperCase()) return false;
+        }
+        return token === candidate || tokenMatches(token, candidate);
+      });
+      if (matches) {
+        marked.push(marker);
+        index += labelTokens.length - 1;
+      } else marked.push(evidenceTokens[index]);
+    }
+    if (!evidenceAffirmsToken(marked.join(" "), marker)) return false;
+  }
   // A leaf whose name is indistinguishable from the umbrella provides no
   // semantic assertion to verify and is safe to keep.
   if (distinctive.length === 0) return true;

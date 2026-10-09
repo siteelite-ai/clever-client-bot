@@ -1,5 +1,80 @@
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+import {
+  checkCriterion,
+  type CriteriaFacet,
+  type Criterion,
+} from "./criteria-gate.ts";
 import { selectionTargetIsDeclared } from "./selection-contract.ts";
+
+export interface CustomerOwnedVisibleFacetProof {
+  /** Exact live facet, not a model-authored alias or a product-class guess. */
+  facetKey: string;
+  facetCaption: string;
+  value: string;
+}
+
+export type VerifiedCustomerFacetLineage = Map<
+  string, Record<string, string[]>
+>;
+
+/** The caller passes IDs from one *successful* catalog result only. An exact,
+ * singleton live filter and an independently proven frozen criterion must
+ * agree before that product ID inherits omitted compact-card facet evidence. */
+export function recordVerifiedCustomerFacetFilterEvidence(
+  lineage: VerifiedCustomerFacetLineage,
+  ids: string[],
+  search: { mode?: unknown; query?: unknown; options?: unknown },
+  provenCriteria: Criterion[],
+  proofs: CustomerOwnedVisibleFacetProof[],
+): number {
+  if (search.mode !== "by_filter" && search.mode !== "by_query") return 0;
+  if (!search.options ||
+    typeof search.options !== "object" || Array.isArray(search.options)) return 0;
+  const options = search.options as Record<string, unknown>;
+  let recorded = 0;
+  for (const proof of proofs) {
+    const option = options[proof.facetKey];
+    if (!Array.isArray(option) || option.length !== 1 ||
+      normalizedVisiblePhrase(String(option[0])) !==
+        normalizedVisiblePhrase(proof.value)) continue;
+    if (!provenCriteria.some((criterion) =>
+      (criterion.key === proof.facetKey ||
+        normalizedVisiblePhrase(criterion.key) ===
+          normalizedVisiblePhrase(proof.facetCaption)) &&
+      criterion.op === "eq" &&
+      normalizedVisiblePhrase(String(criterion.value)) ===
+        normalizedVisiblePhrase(proof.value)
+    )) continue;
+    for (const id of ids) {
+      if (!id) continue;
+      const byKey = lineage.get(id) ?? {};
+      const existing = byKey[proof.facetKey] ?? [];
+      if (!existing.some((value) =>
+        normalizedVisiblePhrase(value) ===
+          normalizedVisiblePhrase(proof.value)
+      )) {
+        byKey[proof.facetKey] = [...existing, proof.value];
+        lineage.set(id, byKey);
+        recorded += 1;
+      }
+    }
+  }
+  return recorded;
+}
+
+/** Overlay only exact per-ID filter lineage; preserve conflicting raw values
+ * so the normal card guard can fail closed. */
+export function withVerifiedCustomerFacetEvidence<
+  T extends VisibleRequestProductEvidence & { id: string }
+>(product: T, lineage: VerifiedCustomerFacetLineage): T & VisibleRequestProductEvidence {
+  const proven = lineage.get(product.id);
+  if (!proven) return product;
+  const facet_values = { ...product.facet_values };
+  for (const [key, values] of Object.entries(proven)) {
+    facet_values[key] = [...new Set([...(facet_values[key] ?? []), ...values])];
+  }
+  return { ...product, facet_values };
+}
 
 export interface VisibleRequestRequirement {
   kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
@@ -9,11 +84,16 @@ export interface VisibleRequestRequirement {
   unit?: string;
   exclusive?: boolean;
   matches: (title: string) => boolean;
+  /** A literal spelling may be replaced only by this same frozen customer
+   * facet, independently proven on the particular product. */
+  customerFacetProofs?: CustomerOwnedVisibleFacetProof[];
 }
 
 export interface VisibleRequestProductEvidence {
   pagetitle: string;
   short_traits?: string[];
+  description_excerpt?: string | null;
+  facet_values?: Record<string, string[]>;
 }
 
 export interface VisibleRequestContractContext {
@@ -27,6 +107,65 @@ export interface VisibleRequestContractContext {
    * the bounded reasoning contract. They remain mandatory through that facet
    * and must not also require one particular title-language spelling. */
   semanticallyMappedCustomerPhrases?: string[];
+  /** Obtained from exact live facets, frozen user-explicit criteria and their
+   * immutable projected options. A candidate still has to prove its own value. */
+  customerOwnedFacetProofs?: CustomerOwnedVisibleFacetProof[];
+}
+
+function normalizedVisiblePhrase(value: string): string {
+  return String(value ?? "").normalize("NFKC")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function messageContainsPhrase(message: string, phrase: string): boolean {
+  const source = normalizedVisiblePhrase(message);
+  const target = normalizedVisiblePhrase(phrase);
+  return Boolean(target && (` ${source} `).includes(` ${target} `));
+}
+
+/**
+ * Bind a customer's literal wording to a live facet only if all three
+ * independent facts agree: the complete caption occurs in the current turn,
+ * the criterion is frozen as user-explicit, and the exact option was projected
+ * into the authoritative catalog filter. A model mapping or a similarly named
+ * neighboring facet cannot grant this exception to title spelling.
+ */
+export function deriveCustomerOwnedVisibleFacetProofs(
+  userMessage: string,
+  liveFacets: CriteriaFacet[],
+  frozenCriteria: Criterion[],
+  frozenFacetValues: Array<{ key: string; value: string }>,
+): CustomerOwnedVisibleFacetProof[] {
+  const proofs: CustomerOwnedVisibleFacetProof[] = [];
+  for (const facet of liveFacets ?? []) {
+    if (!facet.key || !facet.caption ||
+      !messageContainsPhrase(userMessage, facet.caption)) continue;
+    const facetKey = facet.key;
+    const caption = normalizedVisiblePhrase(facet.caption);
+    for (const option of facet.values ?? []) {
+      const value = normalizedVisiblePhrase(String(option.value ?? ""));
+      if (!value || !frozenFacetValues.some((frozen) =>
+        frozen.key === facetKey &&
+        normalizedVisiblePhrase(frozen.value) === value
+      )) continue;
+      if (!frozenCriteria.some((criterion) =>
+        criterion.evidence === "user_explicit" &&
+        (criterion.level ?? "A") === "A" &&
+        criterion.op === "eq" &&
+        typeof criterion.value === "string" &&
+        normalizedVisiblePhrase(criterion.value) === value &&
+        (criterion.key === facetKey ||
+          normalizedVisiblePhrase(criterion.key) === caption)
+      )) continue;
+      proofs.push({
+        facetKey: facet.key,
+        facetCaption: facet.caption,
+        value: String(option.value),
+      });
+    }
+  }
+  return proofs;
 }
 
 const RU_ADJECTIVE_TOKEN = String.raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
@@ -61,6 +200,90 @@ function tokenStem(value: string): string {
     "",
   );
   return stripped.length >= 4 ? stripped : token;
+}
+
+/** Catalog titles sometimes put the underlying noun beside the product head
+ * instead of its relational adjective. Accept only the complete noun root
+ * obtained by removing the single adjectival -н suffix, directly adjacent to
+ * the established head. Never accept a prefix elsewhere in prose/traits:
+ * that can describe an accessory, an excluded feature, or a different item.
+ * No product names, aliases, brands or category IDs are involved. */
+function titleOwnsRelationalModifier(
+  title: string,
+  modifierStem: string,
+  productClass: string,
+): boolean {
+  if (!/^[а-я]{5,}н$/u.test(modifierStem)) return false;
+  const noun = modifierStem.slice(0, -1);
+  const head = tokenStem((productClass.match(/[a-zа-я0-9]+/giu) ?? []).at(-1) ?? "");
+  if (!head || head === noun) return false;
+  const tokens = (title.split(/\n/u)[0].match(/[a-zа-я0-9]+/giu) ?? []).map(normalizeToken);
+  return tokens.some((token, index) =>
+    token === noun &&
+    (tokenStem(tokens[index - 1] ?? "") === head ||
+      tokenStem(tokens[index + 1] ?? "") === head)
+  );
+}
+
+function productProvesExactCustomerFacet(
+  product: VisibleRequestProductEvidence,
+  proof: CustomerOwnedVisibleFacetProof,
+  literalSupported: boolean,
+): boolean {
+  const labels = new Set([
+    normalizedVisiblePhrase(proof.facetKey),
+    normalizedVisiblePhrase(proof.facetCaption),
+  ]);
+  const exactValues = [
+    ...Object.entries(product.facet_values ?? {})
+      .filter(([key]) => key === proof.facetKey)
+      .flatMap(([, values]) => Array.isArray(values) ? values : []),
+    ...(product.short_traits ?? []).flatMap((line) => {
+      const separator = String(line).indexOf(":");
+      return separator > 0 &&
+          labels.has(normalizedVisiblePhrase(String(line).slice(0, separator)))
+        ? [String(line).slice(separator + 1).trim()]
+        : [];
+    }),
+  ].map((value) => normalizedVisiblePhrase(String(value))).filter(Boolean);
+  const wanted = normalizedVisiblePhrase(proof.value);
+  if (exactValues.length > 0 && !exactValues.includes(wanted)) return false;
+  // Ambiguous opposite boolean values are not a positive proof even when one
+  // duplicate source happens to say yes.
+  if (
+    ["да", "нет", "yes", "no", "true", "false"].includes(wanted) &&
+    exactValues.some((value) =>
+      ["да", "нет", "yes", "no", "true", "false"].includes(value) &&
+      value !== wanted
+    )
+  ) return false;
+  const criterion: Criterion = {
+    key: proof.facetCaption,
+    op: "eq",
+    value: proof.value,
+    evidence: "user_explicit",
+    level: "A",
+  };
+  const verdict = checkCriterion({
+    id: "",
+    pagetitle: product.pagetitle,
+    vendor: null,
+    price: 0,
+    stock: "unknown",
+    short_traits: product.short_traits ?? [],
+    description_excerpt: product.description_excerpt,
+  }, criterion).verdict;
+  // The criteria gate reads original title/description before any projected
+  // catalog filter proof. An explicit contradiction there vetoes a broad yes
+  // flag, including acoustic-only rather than motion activation.
+  if (verdict === "fail") return false;
+  // Only the criteria gate's intrinsic ownership/activation verdict may stand
+  // in for a sparse affirmative catalog facet. A reference to a compatible or
+  // optional accessory remains unknown there, and exact negative values still
+  // veto the card above. Preserve literal title support for other modifiers.
+  return exactValues.includes(wanted) ||
+    (verdict === "pass" && exactValues.length === 0) ||
+    (literalSupported && exactValues.length === 0);
 }
 
 function canonicalUnit(raw: string): string {
@@ -119,7 +342,11 @@ function titleSatisfiesBound(
 function literalRequestModifiers(
   source: string,
   context: VisibleRequestContractContext,
-): Array<{ stem: string; label: string }> {
+): Array<{
+  stem: string;
+  label: string;
+  facetProofs: CustomerOwnedVisibleFacetProof[];
+}> {
   const classTokens = String(context.productClass ?? "")
     .match(/[a-zа-я0-9]+/giu) ?? [];
   // Only the final class head is exempt. Earlier class words can themselves
@@ -148,6 +375,17 @@ function literalRequestModifiers(
       .map(tokenStem)
       .filter(Boolean),
   );
+  const facetProofsByStem = new Map<string, CustomerOwnedVisibleFacetProof[]>();
+  for (const proof of context.customerOwnedFacetProofs ?? []) {
+    if (!messageContainsPhrase(source, proof.facetCaption)) continue;
+    for (const token of proof.facetCaption.match(/[a-zа-я0-9]+/giu) ?? []) {
+      const stem = tokenStem(token);
+      if (stem.length < 4) continue;
+      const known = facetProofsByStem.get(stem) ?? [];
+      known.push(proof);
+      facetProofsByStem.set(stem, known);
+    }
+  }
   const liveTitleStems = new Set(
     (context.candidateTitles ?? [])
       .flatMap((title) => title.match(/[a-zа-я0-9]+/giu) ?? [])
@@ -167,7 +405,7 @@ function literalRequestModifiers(
       const stem = tokenStem(token);
       if (
         !stem || stem.length < 4 || stem === classHead ||
-        mappedStems.has(stem) ||
+        (mappedStems.has(stem) && !facetProofsByStem.has(stem)) ||
         taxonomyBackedClassStems.has(stem) ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
@@ -176,7 +414,11 @@ function literalRequestModifiers(
       modifiers.set(stem, token);
     }
   }
-  return [...modifiers].map(([stem, label]) => ({ stem, label }));
+  return [...modifiers].map(([stem, label]) => ({
+    stem,
+    label,
+    facetProofs: facetProofsByStem.get(stem) ?? [],
+  }));
 }
 
 /**
@@ -293,7 +535,12 @@ export function buildVisibleRequestContract(
       label: modifier.label,
       op: "eq",
       value: modifier.label,
-      matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
+      ...(modifier.facetProofs.length > 0
+        ? { customerFacetProofs: modifier.facetProofs }
+        : {}),
+      matches: (title) =>
+        (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem) ||
+        titleOwnsRelationalModifier(title, modifier.stem, String(context.productClass ?? "")),
     });
   }
 
@@ -318,11 +565,42 @@ export function productSupportsVisibleRequestContract(
   product: VisibleRequestProductEvidence,
   requirements: VisibleRequestRequirement[],
 ): boolean {
+  return requirements.every((requirement) =>
+    productSupportsVisibleRequestRequirement(product, requirement)
+  );
+}
+
+/** Evaluates one requirement with the same per-card proof semantics as the
+ * complete guard; diagnostics must not count only literal title spelling. */
+export function productSupportsVisibleRequestRequirement(
+  product: VisibleRequestProductEvidence,
+  requirement: VisibleRequestRequirement,
+): boolean {
   const evidence = [
     String(product?.pagetitle ?? ""),
     ...(Array.isArray(product?.short_traits) ? product.short_traits.map(String) : []),
   ].join("\n");
-  return requirements.every((requirement) => requirement.matches(evidence));
+  if (requirement.kind === "literal_modifier" &&
+    requirement.customerFacetProofs?.length) {
+    const byFacet = new Map<string, CustomerOwnedVisibleFacetProof[]>();
+    for (const proof of requirement.customerFacetProofs) {
+      const key = proof.facetKey;
+      byFacet.set(key, [...(byFacet.get(key) ?? []), proof]);
+    }
+    // Values on one live axis are alternatives; independent axes remain an
+    // intersection. Neither a global mapping nor one sibling's evidence
+    // can make another product pass.
+    return [...byFacet.values()].every((alternatives) =>
+      alternatives.some((proof) =>
+        productProvesExactCustomerFacet(
+          product,
+          proof,
+          requirement.matches(evidence),
+        )
+      )
+    );
+  }
+  return requirement.matches(evidence);
 }
 
 /**

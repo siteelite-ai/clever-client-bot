@@ -2,17 +2,145 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
+export interface VerifiedClarificationAnswer {
+  facet_key: string;
+  question: string;
+  selected_value: string;
+}
+
+function boundedAnswered(value: unknown): VerifiedClarificationAnswer[] {
+  if (!Array.isArray(value)) return [];
+  const result: VerifiedClarificationAnswer[] = [];
+  for (const entry of value.slice(-6)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const facet_key = typeof item.facet_key === "string"
+      ? item.facet_key.trim().slice(0, 80) : "";
+    const question = typeof item.question === "string"
+      ? item.question.trim().slice(0, 350) : "";
+    const selected_value = typeof item.selected_value === "string"
+      ? item.selected_value.trim().slice(0, 80) : "";
+    if (!facet_key || !question || !selected_value) continue;
+    const prior = result.findIndex((answer) => answer.facet_key === facet_key);
+    if (prior >= 0) result.splice(prior, 1);
+    result.push({ facet_key, question, selected_value });
+  }
+  return result;
+}
+
+function normalizedChoice(value: string): string {
+  const ordinary = value.normalize("NFKC").trim().toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/[.!?]+$/u, "").trim();
+  if (!/^[0-9a-zа-я]{1,4}$/iu.test(ordinary)) return ordinary;
+  return ordinary.replace(/с/gu, "c").replace(/р/gu, "p");
+}
+
+/** Call only with the server-recovered pending clarification, never a client
+ * scope. A selected option becomes one bounded evidence atom; the menu and
+ * assistant history do not become customer requirements. */
+export function verifiedClarificationAnswers(
+  slots: Record<string, unknown>,
+  currentMessage: string,
+): VerifiedClarificationAnswer[] {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return [];
+  }
+  const item = pending as Record<string, unknown>;
+  const scope = item.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== SELECTION_READINESS_SCOPE) {
+    return [];
+  }
+  const options = Array.isArray(item.options) ? item.options : [];
+  const answer = normalizedChoice(String(currentMessage ?? ""));
+  const matching = options.filter((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+    const record = option as Record<string, unknown>;
+    return [record.value, record.label].some((choice) =>
+      typeof choice === "string" && normalizedChoice(choice) === answer
+    );
+  });
+  if (matching.length !== 1) return [];
+  const chosen = matching[0] as Record<string, unknown>;
+  const facet_key = typeof item.facet_key === "string"
+    ? item.facet_key.trim().slice(0, 80) : "";
+  const question = typeof item.question === "string"
+    ? item.question.trim().slice(0, 350) : "";
+  const selected_value = typeof chosen.value === "string"
+    ? chosen.value.trim().slice(0, 80) : "";
+  if (!facet_key || !question || !selected_value) return [];
+  return boundedAnswered([
+    ...boundedAnswered((scope as Record<string, unknown>).answered),
+    { facet_key, question, selected_value },
+  ]);
+}
+
 export function selectionReadinessScope(
   token: string,
-  context: { resolved_category?: string } = {},
-): { kind: string; token: string; resolved_category?: string } {
+  context: {
+    resolved_category?: string;
+    assistance_level?: number;
+    reasoning_checkpoint?:
+      import("./selection-actionability.ts").SelectionReasoningCheckpoint;
+    answered?: VerifiedClarificationAnswer[];
+  } = {},
+): {
+  kind: string;
+  token: string;
+  resolved_category?: string;
+  assistance_level?: number;
+  reasoning_checkpoint?:
+    import("./selection-actionability.ts").SelectionReasoningCheckpoint;
+  answered?: VerifiedClarificationAnswer[];
+} {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
+  const assistanceLevel = Number.isInteger(context.assistance_level) &&
+      Number(context.assistance_level) > 0
+    ? Math.min(Number(context.assistance_level), 2)
+    : 0;
   return {
     kind: SELECTION_READINESS_SCOPE,
     token: String(token ?? "").trim().slice(0, 500),
     ...(resolvedCategory ? { resolved_category: resolvedCategory } : {}),
+    ...(assistanceLevel ? { assistance_level: assistanceLevel } : {}),
+    ...(context.reasoning_checkpoint
+      ? { reasoning_checkpoint: context.reasoning_checkpoint }
+      : {}),
+    ...(boundedAnswered(context.answered).length > 0
+      ? { answered: boundedAnswered(context.answered) }
+      : {}),
   };
+}
+
+/** The browser carries the slot only to identify the question it answered.
+ * Its token, category and reasoning are never authority: recover those from
+ * the last completed server response in the same session. */
+export function serverIssuedClarificationSlots(
+  submitted: Record<string, unknown>,
+  responseEvents: unknown,
+  previousTurnError: unknown = null,
+): Record<string, unknown> {
+  const requested = submitted?.pending_clarification;
+  const requestedId = requested && typeof requested === "object"
+    ? (requested as { slot_id?: unknown }).slot_id
+    : null;
+  if (previousTurnError !== null ||
+    typeof requestedId !== "string" || !requestedId ||
+    !Array.isArray(responseEvents)) return {};
+  if (responseEvents.at(-1)?.type !== "done") return {};
+  const lastUpdate = [...responseEvents].reverse().find((event) =>
+    event && typeof event === "object" && event.type === "slot_update"
+  );
+  const pending = lastUpdate?.slots?.pending_clarification;
+  if (
+    !pending || typeof pending !== "object" ||
+    pending.status !== "pending" || pending.slot_id !== requestedId ||
+    typeof pending.question !== "string" ||
+    typeof pending.facet_key !== "string"
+  ) return {};
+  return { pending_clarification: pending };
 }
 
 /**
@@ -53,10 +181,195 @@ export interface SelectionReadinessClarification
   profile: string;
 }
 
+export interface SelectionReadinessAssistance
+  extends ProposeClarificationInput {
+  assistance_level: number;
+}
+
+interface PendingClarificationRecord {
+  status?: unknown;
+  question?: unknown;
+  facet_key?: unknown;
+  options?: unknown;
+  scope?: unknown;
+}
+
+const UNCERTAIN_CLARIFICATION_REPLY =
+  /(?:не\s+(?:знаю|понимаю|разбираюсь|уверен\p{L}*)|без\s+понятия|затрудняюсь|какие\s+(?:есть\s+)?варианты|что\s+лучше|посовет\p{L}*|подскаж\p{L}*|выбер\p{L}*\s+(?:сам\p{L}*|за\s+меня))/iu;
+const REPEATED_SELECTION_REPLY =
+  /^(?:подбер\p{L}*|покаж\p{L}*|найд\p{L}*)\s+(?:их|эти|такие|варианты)(?:\s+(?:в\s+каталог\p{L}*|пожалуйста))*[.!?]*$/iu;
+
+const FACET_PLAIN_LANGUAGE: Record<string, string> = {
+  supply_phase:
+    "Посмотрите на паспорт оборудования или вводной щит: 220–230 В обычно означает одну фазу, 380–400 В — три фазы.",
+  line_length:
+    "Нужна примерная длина трассы от источника питания до оборудования; точность до метра не обязательна.",
+  installation_method:
+    "Важно только, будет ли кабель защищён трубой/ПНД или ляжет непосредственно в грунт.",
+  motor_start_method:
+    "Прямой пуск — двигатель подключается без частотника; частотник или софтстартер обычно указан в схеме или стоит рядом с двигателем.",
+  pole_count:
+    "Обозначения числа полюсов: 1P применяют для обычной однофазной линии; 2P одновременно отключает фазу и ноль; 3P предназначен для трёхфазной линии, 4P — для трёхфазной линии с отключением нейтрали. Для замены ориентируйтесь на маркировку существующего аппарата или проект.",
+  trip_curve:
+    "B выбирают для нагрузок с небольшими пусковыми токами, C — наиболее распространённый бытовой вариант, D — для больших пусковых токов. Если проекта нет, окончательный выбор лучше сверить с электриком.",
+  installation_mode:
+    "Подвижное подключение требует гибкого кабеля; для неподвижно закреплённой линии выбирают стационарную прокладку.",
+  conductor_material:
+    "Материал жилы обычно виден на срезе или указан в маркировке кабеля: медь имеет красноватый цвет, алюминий — серебристый.",
+  camera_system:
+    "IP-камера подключается к компьютерной сети (часто по Ethernet/PoE), аналоговая — коаксиальным или комбинированным кабелем к регистратору.",
+  socket_type:
+    "Маркировка цоколя обычно напечатана на старой лампе или патроне — например E27, E14 или GU10.",
+  mounting_height:
+    "Достаточно примерной высоты от земли до места крепления; точность до сантиметра не нужна.",
+};
+
+const FACET_OPTION_LABELS: Record<string, Record<string, string>> = {
+  supply_phase: {
+    "220 в, 1 фаза": "220 В — обычная однофазная сеть",
+    "380 в, 3 фазы": "380 В — трёхфазная сеть",
+  },
+  pole_count: {
+    "1p": "1P — обычная однофазная линия",
+    "2p": "2P — отключать фазу и ноль",
+    "3p": "3P — трёхфазная линия",
+    "4p": "4P — три фазы и нейтраль",
+  },
+  trip_curve: {
+    b: "B — небольшие пусковые токи",
+    c: "C — типичный бытовой вариант",
+    d: "D — большие пусковые токи",
+  },
+};
+
+function normalizedClarificationOptions(
+  value: unknown,
+): ProposeClarificationInput["options"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      return [{ value: entry.trim(), label: entry.trim() }];
+    }
+    if (!entry || typeof entry !== "object") return [];
+    const option = entry as { value?: unknown; label?: unknown };
+    const optionValue = typeof option.value === "string"
+      ? option.value.trim()
+      : "";
+    if (!optionValue) return [];
+    return [{
+      value: optionValue,
+      label: typeof option.label === "string" && option.label.trim()
+        ? option.label.trim()
+        : optionValue,
+    }];
+  }).slice(0, 5);
+}
+
+/**
+ * Turns an explicit "I do not know" reply into guided, observable choices.
+ * The rule is scoped to any server-issued readiness clarification, so it does
+ * not depend on a product category and cannot hijack an ordinary request for
+ * more products.  The original selection scope is preserved for the next
+ * turn, while a bounded assistance level prevents verbatim question loops.
+ */
+export function selectReadinessAssistance(
+  currentMessage: string,
+  slots: Record<string, unknown>,
+): SelectionReadinessAssistance | null {
+  const current = String(currentMessage ?? "").trim();
+  if (
+    !current ||
+    (!UNCERTAIN_CLARIFICATION_REPLY.test(current) &&
+      !REPEATED_SELECTION_REPLY.test(current))
+  ) return null;
+  const pending = slots?.pending_clarification as
+    | PendingClarificationRecord
+    | undefined;
+  if (!pending || typeof pending !== "object") return null;
+  if (pending.status != null && pending.status !== "pending") return null;
+  const scope = pending.scope;
+  if (!scope || typeof scope !== "object") return null;
+  const scoped = scope as {
+    kind?: unknown;
+    token?: unknown;
+    resolved_category?: unknown;
+    assistance_level?: unknown;
+    reasoning_checkpoint?: unknown;
+  };
+  if (
+    scoped.kind !== SELECTION_READINESS_SCOPE ||
+    typeof scoped.token !== "string" ||
+    !scoped.token.trim()
+  ) return null;
+  const facetKey = typeof pending.facet_key === "string"
+    ? pending.facet_key.trim()
+    : "";
+  const options = normalizedClarificationOptions(pending.options);
+  const freeform = options.length === 0 &&
+    (facetKey === "readiness_remaining" ||
+      facetKey === "selection_prerequisite");
+  if (!facetKey || (!freeform && options.length < 2)) return null;
+
+  const currentLevel = Number.isInteger(scoped.assistance_level)
+    ? Number(scoped.assistance_level)
+    : 0;
+  const assistanceLevel = Math.min(currentLevel + 1, 2);
+  const terminal = assistanceLevel === 2;
+  const helpKey = FACET_PLAIN_LANGUAGE[facetKey]
+    ? facetKey
+    : /количеств\p{L}*\s+полюс\p{L}*|полюсност/iu.test(
+        String(pending.question ?? ""),
+      )
+    ? "pole_count"
+    : facetKey;
+  const explanation = FACET_PLAIN_LANGUAGE[helpKey] ??
+    "Ориентируйтесь на надпись на оборудовании, упаковке или проекте — специальная терминология не требуется.";
+  const labels = FACET_OPTION_LABELS[helpKey] ?? {};
+  const guidedOptions = options.map((option) => {
+    const key = helpKey === "pole_count" && /^[1-4]$/u.test(option.value)
+      ? `${option.value}p`
+      : option.value.toLocaleLowerCase("ru-RU");
+    return { value: option.value, label: labels[key] ?? option.label };
+  });
+  const question = freeform
+    ? !terminal
+      ? "Не нужно угадывать технические параметры. Посмотрите маркировку оборудования или проект и пришлите хотя бы известные значения; если их нет, я могу объяснить типы решений, но не назвать безопасный конкретный товар."
+      : "Не буду повторять вопрос: без данных с маркировки или проекта безопасный подбор конкретного товара пока невозможен. Пришлите их позже либо уточните у квалифицированного специалиста; я помогу сравнить варианты после этого."
+    : !terminal
+    ? `Разбираться в терминах не обязательно. ${explanation} Можно ответить текстом: ${
+      guidedOptions.map((option) => `«${option.label}»`).join("; ")
+    }. Если ни один вариант не подходит, напишите, что указано на оборудовании или в проекте.`
+    : `Не буду повторять прежний вопрос. ${explanation} Если определить параметр не получается, безопаснее уточнить маркировку или проект у электрика/монтажника. Пришлите данные позже — тогда я продолжу подбор.`;
+
+  return {
+    assistance_level: assistanceLevel,
+    question,
+    // Keep the original selection scope while waiting for real facts. Ending
+    // the question ladder must not discard the task when details arrive later.
+    facet_key: terminal ? "readiness_remaining" : facetKey,
+    options: terminal ? [] : guidedOptions,
+    ...(freeform || terminal ? { freeform: true } : {}),
+    scope: selectionReadinessScope(scoped.token, {
+      resolved_category: typeof scoped.resolved_category === "string"
+        ? scoped.resolved_category
+        : undefined,
+      assistance_level: assistanceLevel,
+      reasoning_checkpoint: scoped.reasoning_checkpoint &&
+          typeof scoped.reasoning_checkpoint === "object" &&
+          (scoped.reasoning_checkpoint as { version?: unknown }).version === 1
+        ? scoped.reasoning_checkpoint as
+          import("./selection-actionability.ts").SelectionReasoningCheckpoint
+        : undefined,
+    }),
+  };
+}
+
 interface ReadinessProfile {
   id: string;
   applies: RegExp;
   required: RegExp[];
+  /** Requirement represented by the opening quick replies. */
+  initial_requirement_index: number;
   /** Human-readable counterparts of `required`, in the same order. */
   missing_labels: string[];
   /**
@@ -172,6 +485,7 @@ export function measuredLoadGuidanceCanProceed(message: string): boolean {
 const PROFILES: ReadinessProfile[] = [
   {
     id: "electrical_distribution_plan",
+    initial_requirement_index: 0,
     priority: 20,
     // A request for the quantity/composition of protection devices in a
     // distribution board is a project-sizing task, not a SKU search. Area by
@@ -199,6 +513,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "pump_cable",
+    initial_requirement_index: 2,
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
     required: [
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
@@ -243,10 +558,11 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "underground_cable",
+    initial_requirement_index: 0,
     applies:
       /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}земл\p{L}*/iu,
     required: [
-      /(?:труб\p{L}*|пнд|брон\p{L}*|непосредственно\s+в\s+земл)/iu,
+      /(?:труб\p{L}*|пнд|брон\p{L}*|(?:непосредственно|прямо)\s+в\s+(?:земл|грунт))/iu,
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:жил\p{L}*|заземл\p{L}*)/iu,
@@ -256,6 +572,18 @@ const PROFILES: ReadinessProfile[] = [
       "мощность или ток нагрузки",
       "напряжение и число фаз",
       "число жил и наличие заземления",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question:
+          "Если кабель лежит прямо в грунте, обычно рассматривают силовой бронированный кабель; для прокладки в трубе условия другие. Конкретную марку и сечение без нагрузки и схемы питания выбирать нельзя. У линии однофазное питание 220–230 В или трёхфазное 380–400 В?",
+        facet_key: "supply_phase",
+        options: [
+          { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+          { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+        ],
+      },
     ],
     question:
       "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил и наличие заземления. Как планируется прокладка?",
@@ -267,6 +595,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "motor_breaker",
+    initial_requirement_index: 1,
     applies: /автомат\p{L}*[^.!?\n]{0,60}(?:для\s+)?двигател\p{L}*/iu,
     required: [
       /(?:мощн\p{L}*|ток\p{L}*|\d+(?:[.,]\d+)?\s*(?:к?вт|а))/iu,
@@ -303,6 +632,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "apartment_breaker",
+    initial_requirement_index: 0,
     applies:
       /автомат\p{L}*[^.!?\n]{0,80}(?:квартир\p{L}*|квартир\p{L}*[^.!?\n]{0,80}автомат\p{L}*)/iu,
     required: [
@@ -312,6 +642,28 @@ const PROFILES: ReadinessProfile[] = [
     missing_labels: [
       "полюсность или число фаз",
       "характеристику B, C или D",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 0,
+        question: "Какая полюсность нужна?",
+        facet_key: "pole_count",
+        options: [
+          { value: "1P", label: "1P" },
+          { value: "2P", label: "2P" },
+          { value: "3P", label: "3P" },
+        ],
+      },
+      {
+        requirement_index: 1,
+        question: "Какая характеристика срабатывания указана в проекте?",
+        facet_key: "trip_curve",
+        options: [
+          { value: "B", label: "B" },
+          { value: "C", label: "C" },
+          { value: "D", label: "D" },
+        ],
+      },
     ],
     question:
       "Номинал тока понятен. До подбора уточните полюсность/число фаз и характеристику (кривую B, C или D). Если проект задаёт отключающую способность в кА, также укажите её. Какая полюсность нужна?",
@@ -324,6 +676,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "kg_cable_replacement",
+    initial_requirement_index: 2,
     applies: /замен\p{L}*[^.!?\n]{0,50}(?:кабел\p{L}*\s+)?кг(?!\p{L})/iu,
     required: [
       /(?:услов\p{L}*|примен\p{L}*|назнач\p{L}*|подключ\p{L}*)/iu,
@@ -345,6 +698,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "cable_lug",
+    initial_requirement_index: 0,
     applies: /наконечник\p{L}*[^.!?\n]{0,80}кабел\p{L}*/iu,
     required: [
       /(?:мед\p{L}*|алюмин\p{L}*)/iu,
@@ -364,6 +718,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "surveillance_cable",
+    initial_requirement_index: 0,
     applies: /кабел\p{L}*[^.!?\n]{0,80}видеонаблюден\p{L}*/iu,
     required: [
       /(?:цифров\p{L}*|аналог\p{L}*|ip[- ]?камер)/iu,
@@ -385,6 +740,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "warm_led_lamp",
+    initial_requirement_index: 0,
     applies:
       /светодиодн\p{L}*\s+ламп\p{L}*[^.!?\n]{0,100}(?:тепл\p{L}*|3000\s*к)|(?:тепл\p{L}*|3000\s*к)[^.!?\n]{0,100}светодиодн\p{L}*\s+ламп\p{L}*/iu,
     required: [
@@ -408,6 +764,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "outdoor_floodlight",
+    initial_requirement_index: 1,
     applies:
       /прожектор\p{L}*[^.!?\n]{0,80}(?:ули[цч]\p{L}*|наруж\p{L}*)|(?:ули[цч]\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
@@ -429,6 +786,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "parking_floodlight",
+    initial_requirement_index: 1,
     priority: 10,
     applies:
       /прожектор\p{L}*[^.!?\n]{0,80}парковк\p{L}*|парковк\p{L}*[^.!?\n]{0,80}прожектор\p{L}*/iu,
@@ -478,6 +836,11 @@ export function selectReadinessClarification(
       missing.includes(candidate.requirement_index)
     )
     : undefined;
+  // Once the opening facet has been answered, its quick replies are stale.
+  // Numeric and other open-ended gaps cannot honestly be represented by those
+  // same choices: keep the scoped conversation, but ask for free-form facts.
+  const freeformRemaining = options.progressive === true && !followUp &&
+    !missing.includes(profile.initial_requirement_index);
   const missingSummary = missing
     .map((index) => profile.missing_labels[index])
     .filter(Boolean)
@@ -486,9 +849,13 @@ export function selectReadinessClarification(
     profile: profile.id,
     question: followUp
       ? `Осталось уточнить: ${missingSummary}. ${followUp.question}`
+      : freeformRemaining
+      ? `Указанный параметр учёл. Для точного подбора ещё нужны: ${missingSummary}. Напишите, что из этого известно; если не знаете, так и скажите — объясню, где посмотреть.`
       : profile.question,
-    facet_key: followUp?.facet_key ?? profile.facet_key,
-    options: followUp?.options ?? profile.options,
+    facet_key: followUp?.facet_key ??
+      (freeformRemaining ? "readiness_remaining" : profile.facet_key),
+    options: followUp?.options ?? (freeformRemaining ? [] : profile.options),
+    ...(freeformRemaining ? { freeform: true } : {}),
     scope: selectionReadinessScope(current),
   };
 }

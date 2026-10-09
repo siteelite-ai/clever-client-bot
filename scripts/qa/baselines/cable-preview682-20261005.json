@@ -1,0 +1,122 @@
+{
+  "probe": {
+    "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+    "passed": false,
+    "cases": [
+      {
+        "id": "audit-12-air-conditioner-cable-3kw",
+        "passed": false,
+        "repeats": [
+          {
+            "variant": "base",
+            "run": 1,
+            "passed": false,
+            "turns": [
+              {
+                "passed": false,
+                "duration_ms": 7913,
+                "log_id": "a3591d44-d4f0-4b5b-b915-4e4410703130",
+                "products_count": 0,
+                "products": [],
+                "text": "\n\nНе удалось завершить ответ из-за внутренней ошибки. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+                "failures": [
+                  "products 0 < 1",
+                  "none of required text fragments found: 2,5, сечен, медн",
+                  "selection contract misses required groups: [Количество жил] [\"value\":\"3\", \"value\":3]",
+                  "diagnostic error: internal_error"
+                ],
+                "diagnostic_error": "internal_error",
+                "selection_contract": null,
+                "tool_events": [
+                  {
+                    "tool": "discover_category",
+                    "phase": "start",
+                    "summary": "discover_category…",
+                    "duration_ms": null
+                  },
+                  {
+                    "tool": "discover_category",
+                    "phase": "result",
+                    "summary": "категория «Кабель и провод»: 741 тов., фасетов 29, листьев 15",
+                    "duration_ms": 1218
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "error": "derived_selection_reasoning_contract_invalid",
+      "steps": [
+        {
+          "ms": 6015,
+          "meta": {
+            "finish": "tool_calls",
+            "array_sizes": {
+              "mandatory_properties": 2,
+              "required_facet_values": 1,
+              "excluded_classifications": 6,
+              "compatible_classifications": 1,
+              "explicit_customer_classifications": 0
+            },
+            "tool_call_names": [
+              "declare_selection_reasoning"
+            ],
+            "declaration_keys": [
+              "clarification_question",
+              "compatible_classifications",
+              "excluded_classifications",
+              "explicit_customer_classifications",
+              "mandatory_properties",
+              "measurement_scope",
+              "per_product_measurement_evidence",
+              "reasoning",
+              "required_facet_values",
+              "retrieval_query"
+            ],
+            "rejection_stages": [
+              {
+                "stage": "classification_cleanup",
+                "errors": [
+                  {
+                    "index": 0,
+                    "reason": "source_not_visible"
+                  }
+                ],
+                "reasoning": "Обязательна трехжильная конструкция (3 жилы) для подключения фазы, нуля и защитного заземления кондиционера. Рекомендуется использовать кабель с медными жилами, так как он лучше выдерживает пусковые токи компрессора."
+              }
+            ],
+            "declaration_found": true,
+            "response_text_chars": 0,
+            "declaration_reasoning": "Для нагрузки 3 кВт (ток около 13.6 А) необходим медный кабель с сечением не менее 2.5 мм2 для обеспечения пожарной безопасности и запаса по мощности. Обязательна трехжильная конструкция (3 жилы) для подключения фазы, нуля и защитного заземления кондиционера. Рекомендуется использовать кабель с медными жилами, так как он лучше выдерживает пусковые токи компрессора.",
+            "property_obligation_errors": [],
+            "declaration_reasoning_chars": 366,
+            "property_obligation_sources": [
+              {
+                "op": "min",
+                "key": "Сечение кабеля",
+                "unit": "мм2",
+                "scope": "per_product",
+                "value": "2.5",
+                "source_span": "Для нагрузки 3 кВт (ток около 13.6 А) необходим медный кабель с сечением не менее 2.5 мм2 для обеспечения пожарной безопасности и запаса по мощности."
+              },
+              {
+                "op": "eq",
+                "key": "Количество жил",
+                "unit": "",
+                "scope": "per_product",
+                "value": "3",
+                "source_span": "Обязательна трехжильная конструкция (3 жилы) для подключения фазы, нуля и защитного заземления кондиционера."
+              }
+            ]
+          },
+          "step": "v3_derived_selection_reasoning_contract_rejected"
+        }
+      ]
+    }
+  ]
+}

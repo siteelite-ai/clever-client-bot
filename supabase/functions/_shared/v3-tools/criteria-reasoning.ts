@@ -185,6 +185,10 @@ function clauseSupportsCriterion(
     : [criterion.value];
   const valueSupported = rawValues.some((value) => {
     const normalized = normalizeEvidence(value);
+    if (typeof value === "number") {
+      // 50 W must not match the digits inside an unrelated 3500 lm claim.
+      return (` ${normalizedClause} `).includes(` ${normalized} `);
+    }
     if (normalized.length < 2) return false;
     if (normalizedClause.includes(normalized)) return true;
     const valueTokens = normalized.split(" ").filter((token) =>
@@ -254,18 +258,45 @@ export function alignCriteriaImportanceWithReasoning(
   const mandatory =
     /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
   const advisory =
-    /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
+    /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|обычно|как\s+правило|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
-    if (
-      userBackedCriteria.some((candidate) =>
-        criteriaIdentityMatches(criterion, candidate)
-      ) ||
-      protectedReasoningCriteria.some((candidate) =>
-        criteriaIdentityMatches(criterion, candidate)
-      )
-    ) return { ...criterion, level: "A" as const };
+    if (userBackedCriteria.some((candidate) =>
+      criteriaIdentityMatches(criterion, candidate)
+    )) return { ...criterion, level: "A" as const };
+    // A structurally parsed number is not proof of necessity. In particular,
+    // "recommended power amounts to ..." must not become mandatory merely
+    // because it contains arithmetic wording or a projectable range.
+    const explicitAdvice = /(?:рекоменд|ориентир|типичн|обычно|как\s+правило|recommend|typical|reference\s+point)/iu;
+    const explicitNecessity = /(?:необходим|обязател|требуется|требуем|потребн|required|necessary|must)/iu;
+    const related = clauses.filter((clause) => clauseSupportsCriterion(clause, criterion));
+    if ((typeof criterion.value === "number" || Array.isArray(criterion.value)) &&
+      related.some((clause) => explicitAdvice.test(clause)) &&
+      !related.some((clause) => explicitNecessity.test(clause) && !explicitAdvice.test(clause))) {
+      demoted.push(criterion.key);
+      return { ...criterion, level: "B" as const };
+    }
+    if (protectedReasoningCriteria.some((candidate) =>
+      criteriaIdentityMatches(criterion, candidate)
+    )) return { ...criterion, level: "A" as const };
+    // A necessary functional property does not make an illustrative material
+    // or implementation in parentheses necessary. Match the VALUE here, not
+    // the shared key (e.g. both properties may belong to the same shell).
+    if (typeof criterion.value === "string") {
+      const valueOnly = { ...criterion, key: "" };
+      const parentheticalAdvice = clauses.some((clause) =>
+        [...clause.matchAll(/\(([^()]*)\)/gu)].some((match) =>
+          advisory.test(match[1]) && clauseSupportsCriterion(match[1], valueOnly)));
+      const independentlyRequired = clauses.some((clause) => {
+        const outside = clause.replace(/\([^()]*\)/gu, " ");
+        return mandatory.test(outside) && clauseSupportsCriterion(outside, valueOnly);
+      });
+      if (parentheticalAdvice && !independentlyRequired) {
+        demoted.push(criterion.key);
+        return { ...criterion, level: "B" as const };
+      }
+    }
     const relevant = clauses.filter((clause) =>
       clauseSupportsCriterion(clause, criterion)
     );
@@ -316,9 +347,9 @@ export function demoteUnfrozenRenderCriteria(
  * states a calculated range, but serializes only unrelated preference filters:
  * the same range then governs both candidate retrieval and final rendering.
  *
- * Projected ranges are protected from wording-based importance demotion. Their
- * origin is structural (an explicit measured range mapped to one live facet),
- * so equivalent phrases cannot randomly switch the contract between A and B.
+ * Projected ranges retain structural grounding across equivalent wording,
+ * but an explicit recommendation cannot become mandatory just because its
+ * numeric values map to a live facet. User-owned limits stay protected.
  */
 export function compileMeasuredReasoningSearchContract(
   criteria: Criterion[],
@@ -416,7 +447,8 @@ export function compileMeasuredReasoningSearchContract(
   return {
     criteria: importance.criteria,
     mandatory_criteria: mandatory,
-    projected_criteria: projectedAdded,
+    projected_criteria: projectedAdded.filter((criterion) => mandatory.some((candidate) =>
+      criteriaIdentityMatches(criterion, candidate))),
     options: facetProjection.options,
     demoted: importance.demoted,
     unmatched_keys: facetProjection.unmatched_keys,

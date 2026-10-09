@@ -1,22 +1,803 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { compileMeasuredReasoningSearchContract } from "./criteria-reasoning.ts";
+import { applyCriteriaGate } from "./criteria-gate.ts";
+import { executeProposeClarification } from "./propose-clarification.ts";
+// Captured preview678 failures: aggregate demand was declared as per-item.
+Deno.test("aggregate obligations ask configuration before attempting per-product validation", () => {
+  for (const [area, total] of [[25, 3750], [500, 10000]]) {
+    const reasoning = `Для площади ${area} м² требуется суммарный световой поток не менее ${total} Лм.`;
+    const resolved = resolveDerivedSelectionReasoning({
+      reasoning,
+      measurement_scope: "system_total",
+      mandatory_properties: [{ key: "Световой поток, Лм", op: "min", value: total,
+        unit: "Лм", scope: "per_product", source_span: reasoning }],
+    }, [], `Площадь ${area} м²`);
+    assertEquals(resolved?.clarification?.facet_key, "system_configuration");
+    assertEquals(resolved?.propertyObligations ?? [], []);
+    assertEquals(resolved?.measurementEvidence, "");
+    assertEquals(resolved?.requiredFacetValues, []);
+    const emitted = executeProposeClarification({
+      ...resolved!.clarification!,
+      scope: { kind: "selection_readiness", token: `Исходная задача ${area} м²` },
+    });
+    assertEquals(emitted.ok, true);
+    if (emitted.ok) {
+      const update = emitted.side_effects?.find((event) => event.type === "slot_update");
+      assertEquals(update?.type, "slot_update");
+      if (update?.type === "slot_update") {
+        assertEquals((update.slots.pending_clarification as { scope: { token: string } }).scope.token,
+          `Исходная задача ${area} м²`);
+      }
+    }
+  }
+});
+
+Deno.test("configuration recovery never excuses invalid actual per-item obligations", () => {
+  const reasoning = "Для каждого прибора необходим световой поток не менее 3000 лм.";
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning, measurement_scope: "per_product",
+    mandatory_properties: [{ key: "Световой поток", op: "min", value: 9000,
+      unit: "лм", scope: "per_product", source_span: reasoning }],
+  }, []);
+  assertEquals(resolved, null);
+});
 import {
+  aggregateContinuationPreservesEstimate,
+  aggregateDistributionRepeat,
+  aggregateMultiItemFollowup,
+  aggregatePremiseChanged,
+  aggregateSelectionClarification,
+  buildDerivedReasoningSearch,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
+  derivedCorrectionPreservesRequirements,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
+  oneForOneReplacementCorrection,
+  oneForOneCorrectionPreservesAggregateThreshold,
   reasoningComputesSystemTotalFromSpatialExtent,
   resolveDerivedSelectionReasoning,
+  resumeSingleItemReasoning,
+  selectionReasoningCheckpoint,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
+  validatedPerProductMeasurementEvidence,
 } from "./selection-actionability.ts";
+
+Deno.test("four-fixture continuation preserves the prior total only as an estimate", () => {
+  const original =
+    "Какие прожекторы подойдут для освещения парковки?\nУточнение клиента: 500м2 3 метра";
+  const reasoning =
+    "Для парковки 500 м² на высоте 3 метра суммарный световой поток оценивается не менее 10000 Лм. Для улицы нужна защита IP65.";
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning,
+    measurement_scope: "system_total",
+  }, []);
+  assertEquals(Boolean(checkpoint), true);
+  const slots = { pending_clarification: {
+    facet_key: "system_configuration",
+    options: aggregateSelectionClarification("system_total", "")!.options,
+    scope: {
+      token: original,
+      resolved_category: "Прожекторы",
+      reasoning_checkpoint: checkpoint,
+    },
+  } };
+  const followup = aggregateMultiItemFollowup(
+    "Несколько изделий вместе, четыре прожектора",
+    slots,
+  );
+  assertEquals(followup?.text.includes("10000 лм"), true);
+  assertEquals(followup?.text.includes("2500"), false);
+  assertEquals(followup?.text.includes("IP65"), false);
+  assertEquals(followup?.checkpoint, checkpoint);
+  assertEquals(followup?.scopeToken.includes("500м2 3 метра"), true);
+  assertEquals(followup?.scopeToken.includes("четыре прожектора"), true);
+  assertEquals(Boolean(aggregateMultiItemFollowup("4 прожектора", slots)), true);
+  assertEquals(Boolean(aggregateMultiItemFollowup("четыре прожектора", slots)), true);
+  assertEquals(aggregateMultiItemFollowup(
+    "Одно изделие для всей задачи", slots,
+  ), null);
+  const withoutCheckpoint = aggregateMultiItemFollowup(
+    "Несколько изделий вместе, четыре прожектора",
+    { pending_clarification: { ...slots.pending_clarification,
+      scope: { token: original, resolved_category: "Прожекторы" } } },
+  );
+  assertEquals(withoutCheckpoint?.checkpoint, undefined);
+  assertEquals(withoutCheckpoint?.text.includes("10000"), false);
+});
+
+Deno.test("changed area or mounting height invalidates the old aggregate estimate", () => {
+  const original = "Парковка 500м2, высота 3 метра";
+  assertEquals(aggregatePremiseChanged(original, "Четыре изделия"), false);
+  assertEquals(aggregatePremiseChanged(original, "Теперь площадь 600 м²"), true);
+  assertEquals(aggregatePremiseChanged(original, "Теперь высота 5 м"), true);
+  assertEquals(aggregatePremiseChanged(original, "Требуется 20 лк"), true);
+  assertEquals(aggregatePremiseChanged(original, "Суммарно 12000 лм"), true);
+  assertEquals(aggregatePremiseChanged(original, "Мощность 300 Вт"), true);
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning: "Для парковки суммарный поток не менее 10000 лм.",
+    measurement_scope: "system_total",
+  }, []);
+  const slots = { pending_clarification: { facet_key: "system_configuration",
+    options: aggregateSelectionClarification("system_total", "")!.options,
+    scope: { token: original, reasoning_checkpoint: checkpoint } } };
+  for (const answer of [
+    "Несколько изделий вместе, теперь площадь 600 м²",
+    "Несколько изделий вместе, высота 5 м",
+    "Несколько изделий вместе, нужно 20 лк",
+    "Одно изделие для всей задачи, теперь площадь 600 м²",
+  ]) {
+    const followup = aggregateMultiItemFollowup(answer, slots);
+    assertEquals(followup?.checkpoint, undefined);
+    assertEquals(followup?.text.includes("10000"), false);
+    assertEquals(followup?.text.includes("прежнюю оценку"), true);
+    assertEquals(followup?.scopeToken, "");
+  }
+});
+
+Deno.test("fourth turn repeats count safely but lets useful distribution reasoning proceed", () => {
+  const original = "Парковка 500м2, высота 3 метра\nУточнение клиента: Несколько изделий вместе, четыре прожектора";
+  const checkpoint = selectionReasoningCheckpoint({
+    reasoning: "Для парковки суммарный поток не менее 10000 лм.",
+    measurement_scope: "system_total",
+  }, []);
+  assertEquals(Boolean(checkpoint), true);
+  const slots = { pending_clarification: { facet_key: "system_distribution",
+    scope: { token: original, resolved_category: "Прожекторы",
+      reasoning_checkpoint: checkpoint } } };
+  const repeated = aggregateDistributionRepeat(
+    "Несколько изделий вместе, четыре прожектора", slots,
+  );
+  assertEquals(repeated?.scopeToken, original);
+  assertEquals(repeated?.text.includes("поровну"), true);
+  assertEquals(Boolean(aggregateDistributionRepeat("4 прожектора", slots)), true);
+  assertEquals(aggregateDistributionRepeat(
+    "Четыре зоны по 125 м², по одному изделию на зону", slots,
+  ), null);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для этих зон суммарный поток не менее 10000 лм. Для каждого изделия требуется подтверждение по проекту.",
+  ), true);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для этих зон суммарный поток не менее 50000 лм.",
+  ), false);
+  assertEquals(aggregateContinuationPreservesEstimate(
+    checkpoint!, original,
+    "Для каждого изделия требуется не менее 2500 лм.",
+  ), false);
+});
+
+Deno.test("configuration continuation preserves visible demand and rebinds live IDs", () => {
+  const facets = [{
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }, { value: "IP20" }],
+  }];
+  const args = {
+    reasoning:
+      "Для площади 35 м² требуется общий световой поток не менее 3500 лм. Обязательна степень защиты IP65.",
+    measurement_scope: "system_total",
+    required_facet_values: ["f0v0"],
+  };
+  const checkpoint = selectionReasoningCheckpoint(args, facets);
+  const slots = {
+    pending_clarification: {
+      facet_key: "system_configuration",
+      scope: { reasoning_checkpoint: checkpoint },
+    },
+  };
+  const movedFacets = [{
+    key: "other",
+    caption: "Материал",
+    values: [{ value: "сталь" }],
+  }, ...facets];
+  const message =
+    "Площадь 35 м²\nУточнение клиента: Одно изделие для всей задачи";
+  const restored = resumeSingleItemReasoning(message, slots, movedFacets);
+  assertEquals(restored?.reasoning, args.reasoning);
+  assertEquals(restored?.required_facet_values, ["f1v0"]);
+  const resolved = resolveDerivedSelectionReasoning(
+    restored!,
+    movedFacets,
+    message,
+  );
+  assertEquals(resolved?.measurementScope, "per_product");
+  assertEquals(resolved?.measurementEvidence.includes("3500"), true);
+  assertEquals(
+    resumeSingleItemReasoning("Теперь площадь 3 м²", slots, movedFacets),
+    null,
+  );
+  assertEquals(
+    resumeSingleItemReasoning("Несколько изделий вместе", slots, movedFacets),
+    null,
+  );
+  assertEquals(resumeSingleItemReasoning(message, slots, []), null);
+  assertEquals(resumeSingleItemReasoning(message, {}, movedFacets), null);
+  assertEquals(
+    resumeSingleItemReasoning(message, {
+      pending_clarification: {
+        facet_key: "another_question",
+        scope: slots.pending_clarification.scope,
+      },
+    }, movedFacets),
+    null,
+  );
+});
+
+Deno.test("reasoning checkpoints reject malformed or non-aggregate declarations", () => {
+  assertEquals(
+    selectionReasoningCheckpoint({
+      reasoning: "test",
+      measurement_scope: "per_product",
+    }, []),
+    null,
+  );
+  const args = {
+    reasoning: "Общая потребность составляет не менее 5000 лм.",
+    measurement_scope: "system_total",
+  };
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      required_facet_values: ["unknown"],
+    }, []),
+    null,
+  );
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      clarification_question: "Какой тип?",
+    }, []),
+    null,
+  );
+  assertEquals(
+    selectionReasoningCheckpoint({
+      ...args,
+      explicit_customer_classifications: [null],
+    }, []),
+    null,
+  );
+});
+
+Deno.test("an unresolved prerequisite is a clarification outcome, never a partial search contract", () => {
+  const result = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Исполнение зависит от условий подключения, которые пока не указаны.",
+    clarification_question: "Какая схема подключения у оборудования?",
+    measurement_scope: "per_product",
+    retrieval_query: "изделие",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "count",
+    caption: "Количество элементов",
+    values: [{ value: "3" }, { value: "4" }],
+  }], "Нужно изделие для оборудования");
+  assertEquals(result?.clarification?.freeform, true);
+  assertEquals(
+    result?.clarification?.question,
+    "Какая схема подключения у оборудования?",
+  );
+  assertEquals(result?.measurementEvidence, "");
+  assertEquals(result?.requiredFacetValues, []);
+  assertEquals(result?.retrievalQuery, null);
+});
+
+Deno.test("a sufficient selection with an empty clarification preserves the existing path", () => {
+  const result = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Нужен трехэлементный вариант для уже указанной схемы подключения.",
+    clarification_question: "",
+    measurement_scope: "not_applicable",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "count",
+    caption: "Количество элементов",
+    values: [{ value: "3" }, { value: "4" }],
+  }], "Нужно трехэлементное изделие");
+  assertEquals(result?.clarification, undefined);
+  assertEquals(result?.requiredFacetValues, [{
+    key: "Количество элементов",
+    value: "3",
+  }]);
+});
+
+Deno.test("numeric correction cannot erase validated qualitative or customer-owned requirements", () => {
+  const prior = {
+    requiredFacetValues: [{ key: "Защита", value: "IP65" }],
+    customerGroundedCompatible: [{ key: "Исполнение", value: "A" }],
+    customerGroundedExcluded: [{ key: "Материал", value: "B" }],
+  };
+  assertEquals(derivedCorrectionPreservesRequirements(prior, prior), true);
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      requiredFacetValues: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      customerGroundedCompatible: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      customerGroundedExcluded: [],
+    }),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(prior, {
+      ...prior,
+      requiredFacetValues: [...prior.requiredFacetValues, {
+        key: "Порог",
+        value: "20",
+      }],
+    }),
+    true,
+  );
+});
+
+Deno.test("aggregate-only selection clarifies configuration and preserves a single-item choice", () => {
+  const question = aggregateSelectionClarification("system_total", "");
+  assertEquals(question?.options.length, 2);
+  assertEquals(aggregateSelectionClarification("per_product", ""), null);
+  assertEquals(
+    aggregateSelectionClarification(
+      "system_total",
+      "Каждое изделие должно иметь не менее 4000 лм.",
+    ),
+    null,
+  );
+  const args = {
+    reasoning: "Для площади 120 м² расчёт: 120 м² × 25 лк = 3000 лм.",
+    measurement_scope: "system_total",
+  };
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      "Площадь 120 м². Несколько вариантов.",
+    )?.measurementScope,
+    "system_total",
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      `Площадь 120 м²\nУточнение клиента: ${question!.options[0].value}`,
+    )?.measurementScope,
+    "per_product",
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      args,
+      [],
+      "Площадь 120 м²\nУточнение клиента: Не нужно одно изделие для всей задачи",
+    )?.measurementScope,
+    "system_total",
+  );
+});
+
+Deno.test("one-for-one replacement offers a bounded correction only for an unresolved aggregate calculation", () => {
+  const unresolved = {
+    text:
+      "Для гостиной 25 м² нужно 25 м² × 150 лк = 3750 лм суммарно. Можно взять один прибор или несколько.",
+    measurementScope: "system_total" as const,
+    measurementEvidence: "",
+  };
+  const correction = oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что предложите?",
+    unresolved,
+  );
+  assertEquals(typeof correction, "string");
+  assertEquals(correction?.includes("per_product_measurement_evidence"), true);
+  assertEquals(correction?.toLocaleLowerCase("ru-RU").includes("не выдумывай"), true);
+  assertEquals(typeof oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+    { ...unresolved,
+      text: "Для гостиной площадью 25 м² при норме освещенности 150 лк суммарный световой поток должен составлять не менее 3750 Лм. Вы можете использовать один мощный светильник или распределить яркость между несколькими приборами." },
+  ), "string");
+
+  for (const request of [
+    "Подбери светильники для гостиной 25 м²",
+    "Заменить люстры на светодиодные светильники в гостиной 25 м²",
+    "Заменить люстру на несколько светодиодных светильников в гостиной 25 м²",
+    "Заменить люстру на светильник и распределить свет между тремя приборами в гостиной 25 м²",
+    "Заменить люстру на светильник. Уточнение клиента: Несколько изделий вместе для гостиной 25 м²",
+    "Заменить освещение на светильник в гостиной 25 м²",
+  ]) {
+    assertEquals(oneForOneReplacementCorrection(request, unresolved), null, request);
+  }
+  assertEquals(oneForOneReplacementCorrection(
+    "Заменить насос на новый энергоэффективный насос для помещения 25 м²",
+    unresolved,
+  ) !== null, true);
+  assertEquals(typeof oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Предложите несколько вариантов.",
+    unresolved,
+  ), "string");
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, measurementEvidence: "На одно изделие необходимо не менее 3750 лм." },
+  ), null);
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, measurementScope: "per_product" },
+  ), null);
+  assertEquals(oneForOneReplacementCorrection(
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+    { ...unresolved, text: "Для помещения 25 м² нужен совместимый товар." },
+  ), null);
+});
+
+Deno.test("one-for-one correction cannot silently lower the original aggregate threshold", () => {
+  const customer =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²";
+  const prior =
+    "Для гостиной площадью 25 м² при норме 150 лк суммарный световой поток должен составлять не менее 3750 лм.";
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 4000 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие необходимо не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарный световой поток при норме 150 лк должен быть не менее 3750 лм для помещения 25 м².",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно при норме 150 лк требуется не менее 3750 лм для помещения 25 м².",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 500 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    `${prior} На одно изделие не менее 500 лм.`,
+    "На одно изделие световой поток должен быть не менее 500 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток не более 4000 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие световой поток должен быть не менее 4000 W.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior, "На одно изделие электрическая мощность должна быть не менее 4000 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для гостиной 25 м² при норме 150 лк нужен световой поток 3750 лм.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для гостиной 25 м² суммарная потребность зависит от условий.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно при норме 150 лк для помещения 25 м².",
+    "На одно изделие необходимо не менее 150 лк.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарно нужно не менее 3750 лм или не менее 5000 лм.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Суммарный световой поток 3750 лм или 5000 лм в зависимости от режима.",
+    "На одно изделие световой поток должен быть не менее 3750 лм.", customer,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    prior,
+    "На одно изделие световой поток должен быть не менее 3750 лм.",
+    "Нужно несколько изделий для гостиной 25 м²",
+  ), false);
+
+  const otherUnit =
+    "Для помещения 25 м² суммарная мощность должна составлять не менее 3000 W.";
+  const onePump = "Хочу заменить насос на новый для помещения 25 м²";
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit, "На одно изделие мощность должна быть не менее 3000 W.", onePump,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit, "На одно изделие мощность должна быть не менее 2500 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие потребность мощности должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная входная мощность не менее 3000 W.",
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    "Для помещения 25 м² суммарная потребляемая мощность не менее 3000 W.",
+    "На одно изделие потребляемая мощность должна быть не менее 3000 W.", onePump,
+  ), true);
+  assertEquals(oneForOneCorrectionPreservesAggregateThreshold(
+    otherUnit,
+    "На одно изделие выходная мощность должна быть не менее 3000 W.", onePump,
+  ), false);
+});
+
+Deno.test("per-item evidence tolerates capitalization but preserves visible wording and quantities", () => {
+  const visible =
+    "Суммарная потребность 3500 Лм. При установке одного прибора на одно изделие необходимо не менее 3500 Лм.";
+  const proposed = "На одно изделие необходимо не менее 3500 Лм.";
+  assertEquals(
+    validatedPerProductMeasurementEvidence(visible, proposed),
+    "на одно изделие необходимо не менее 3500 Лм.",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      visible,
+      proposed.replace("3500", "350"),
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      visible,
+      proposed.replace("не менее", "не более"),
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Всего на одно изделие 3500 Лм.",
+      "ВСЕГО на одно изделие 3500 Лм.",
+    ),
+    "",
+  );
+});
+
+Deno.test("per-item evidence is a visible bounded span, never the aggregate calculation", () => {
+  const perItem =
+    "Каждое изделие должно иметь световой поток не менее 4000 лм.";
+  const reasoning = `Общий расчёт: 120 м² × 25 лк = 3000 лм. ${perItem}`;
+  assertEquals(
+    validatedPerProductMeasurementEvidence(reasoning, perItem),
+    perItem,
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      reasoning,
+      "Каждое изделие должно иметь 9000 лм.",
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(reasoning, reasoning),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Всего 5000 лм, распределить на каждый товар.",
+      "Всего 5000 лм, распределить на каждый товар.",
+    ),
+    "",
+  );
+  assertEquals(
+    validatedPerProductMeasurementEvidence(
+      "Каждый вариант подходит.",
+      "Каждый вариант подходит.",
+    ),
+    "",
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("system_total", perItem),
+    true,
+  );
+  assertEquals(
+    derivedMeasurementMayConstrainIndividualProducts("system_total", reasoning),
+    false,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Площадь 120 м²",
+      perItem,
+      "system_total",
+    ),
+    true,
+  );
+});
+
+Deno.test("non-facet obligations survive declaration, checkpoint and correction and gate each product", () => {
+  const source =
+    "Необходимо волновое сопротивление 75 Ом. Обязательна УФ-стойкая оболочка.";
+  const args = {
+    reasoning: source,
+    measurement_scope: "system_total",
+    mandatory_properties: [
+      {
+        key: "волновое сопротивление",
+        value: 75,
+        unit: "Ом",
+        op: "eq",
+        scope: "per_product",
+        source_span: "Необходимо волновое сопротивление 75 Ом.",
+      },
+      {
+        key: "оболочка",
+        value: "УФ-стойкая",
+        unit: "",
+        op: "eq",
+        scope: "per_product",
+        source_span: "Обязательна УФ-стойкая оболочка.",
+      },
+    ],
+  };
+  const resolved = resolveDerivedSelectionReasoning(args, []);
+  assertEquals(resolved?.propertyObligations?.length, 2);
+  const checkpoint = selectionReasoningCheckpoint(args, []);
+  assertEquals(
+    checkpoint?.args.mandatory_properties,
+    args.mandatory_properties,
+  );
+  const resumed = resolveDerivedSelectionReasoning(checkpoint!.args, []);
+  assertEquals(resumed?.propertyObligations, resolved?.propertyObligations);
+  const empty = resolveDerivedSelectionReasoning({
+    ...args,
+    mandatory_properties: [],
+  }, []);
+  assertEquals(
+    derivedCorrectionPreservesRequirements(resolved!, empty!),
+    false,
+  );
+  assertEquals(
+    derivedCorrectionPreservesRequirements(resolved!, resumed!),
+    true,
+  );
+  const candidates = [
+    ["proven", "Волновое сопротивление: 75 Ом", "Оболочка: УФ-стойкая"],
+    ["wrong", "Волновое сопротивление: 50 Ом", "Оболочка: УФ-стойкая"],
+    ["unknown", "Волновое сопротивление: 75 Ом"],
+  ].map(([id, ...short_traits]) => ({
+    id,
+    pagetitle: "Кабель",
+    vendor: null,
+    price: 100,
+    stock: "unknown" as const,
+    short_traits,
+  }));
+  assertEquals(
+    applyCriteriaGate(
+      candidates,
+      resolved!.propertyObligations!.map(({ criterion }) => criterion),
+    ).passed_ids,
+    ["proven"],
+  );
+  assertEquals(
+    resolveDerivedSelectionReasoning({
+      ...args,
+      mandatory_properties: [{ ...args.mandatory_properties[0], value: 50 }],
+    }, []),
+    null,
+  );
+});
+
+Deno.test("a mixed declaration compiles only the separate per-product requirement", () => {
+  const perItem =
+    "Каждое изделие должно иметь световой поток не менее 4000 лм.";
+  const reasoning =
+    `Для площади 120 м² расчёт: 120 м² × 25 лк = 3000 лм. ${perItem}`;
+  const args = {
+    reasoning,
+    measurement_scope: "per_product",
+    per_product_measurement_evidence: perItem,
+  };
+  const declaration = resolveDerivedSelectionReasoning(
+    args,
+    [],
+    "Площадь 120 м²",
+  );
+  assertEquals(declaration?.measurementScope, "system_total");
+  assertEquals(declaration?.measurementEvidence, perItem);
+  assertEquals(declaration?.text.includes(reasoning), true);
+  const compiled = compileMeasuredReasoningSearchContract(
+    [],
+    declaration!.measurementEvidence,
+    [],
+    [{
+      key: "flux",
+      caption: "Световой поток",
+      type: "checkbox",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  const checked = applyCriteriaGate(
+    [3000, 4000, 5000].map((value) => ({
+      id: String(value),
+      pagetitle: "Изделие",
+      vendor: null,
+      price: 100,
+      stock: "unknown" as const,
+      short_traits: [`Световой поток: ${value} лм`],
+    })),
+    compiled.mandatory_criteria,
+  );
+  assertEquals(checked.passed_ids, ["4000", "5000"]);
+  assertEquals(
+    resolveDerivedSelectionReasoning(
+      { ...args, per_product_measurement_evidence: "" },
+      [],
+      "Площадь 120 м²",
+    )?.measurementEvidence,
+    "",
+  );
+});
+
+Deno.test("visible product type survives simultaneous numeric facet projection", () => {
+  const search = buildDerivedReasoningSearch({
+    compoundQuery: null,
+    retrievalQuery: "коаксиальный кабель",
+    options: { diameter: { min: 0.5 } },
+    categoryScope: { category: "Кабель и провод" },
+    measurementScope: "per_product",
+    scalarProjectionAllowed: true,
+  });
+  assertEquals(search, {
+    mode: "by_query",
+    query: "коаксиальный кабель",
+    category: "Кабель и провод",
+    options: { diameter: { min: 0.5 } },
+    per_page: 50,
+  });
+});
+
+Deno.test("exact compound search still precedes general retrieval wording", () => {
+  const search = buildDerivedReasoningSearch({
+    compoundQuery: "3*2,5",
+    retrievalQuery: "силовой кабель",
+    options: {},
+    categoryScope: { category: "Кабель" },
+    measurementScope: "per_product",
+    scalarProjectionAllowed: true,
+  });
+  assertEquals(search?.query, "3*2,5");
+  assertEquals(search?.mode, "by_query");
+});
+
+Deno.test("numeric-only search and unresolved reasoning keep their existing contracts", () => {
+  const input = {
+    compoundQuery: null,
+    retrievalQuery: null,
+    options: { power: "20" },
+    categoryScope: { category: "Светильники" },
+    measurementScope: "per_product" as const,
+    scalarProjectionAllowed: true,
+  };
+  assertEquals(buildDerivedReasoningSearch(input), {
+    mode: "by_filter",
+    options: { power: "20" },
+    per_page: 50,
+  });
+  assertEquals(buildDerivedReasoningSearch({ ...input, options: {} }), null);
+});
 
 Deno.test("a system total may separately declare one per-product range", () => {
   const reasoning =
@@ -137,6 +918,20 @@ Deno.test("an unresolved application context requires suitability reasoning even
 Deno.test("an adjacent suitability modifier requires reasoning when no live facet proves it", () => {
   const message = "Подбери несколько недорогих офисных светильников";
   assertEquals(hasSelectionSuitabilityContext(message, "Светильники"), true);
+  assertEquals(
+    hasSelectionSuitabilityContext(
+      "Есть ли у вас розетки скрытого монтажа черного цвета?",
+      "розетки",
+    ),
+    false,
+  );
+  assertEquals(
+    hasSelectionSuitabilityContext(
+      "Есть ли у вас бытовые светильники?",
+      "светильники",
+    ),
+    true,
+  );
   assertEquals(
     shouldRequireDerivedSelectionReasoning({
       intentMode: "select",
@@ -402,7 +1197,31 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
       },
     ],
   );
-  assertEquals(messages.length, 2);
+  assertEquals(messages.length, 4);
+  assertEquals(messages[2].role, "system");
+  assertEquals(messages[2].content.includes("не из сообщения клиента"), true);
+  assertEquals(messages[2].content.includes("отсутствие свойства в каталожной схеме не отменяет требование"), true);
+  assertEquals(messages[1].role, "system");
+  assertEquals(
+    messages[1].content.includes("количество материала для покупки"),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes(
+      "альтернативы, а не совместно работающая система",
+    ),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes("Скопируй отдельное требование дословно"),
+    true,
+  );
+  assertEquals(
+    messages[1].content.includes(
+      "безопасность зависит от неизвестной конфигурации",
+    ),
+    true,
+  );
   assertEquals(messages[0].content.includes("недоверенные данные"), true);
   assertEquals(
     messages[0].content.includes(
@@ -434,15 +1253,21 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
   );
   assertEquals(
     messages[0].content.includes(
-      "Промежуточный расчёт — например, ток из мощности — не завершает подбор",
+      "промежуточный расчёт — например, ток из мощности — не завершает подбор",
     ),
     true,
   );
   assertEquals(messages[0].content.includes("required_facet_values"), true);
-  assertEquals(messages[1].content.includes("<script>"), false);
-  assertEquals(messages[1].content.includes("\\u003cscript>"), true);
-  assertEquals(messages[1].content.includes("\\u003coption>"), true);
-  assertEquals(messages[1].content.includes("hidden-option"), false);
+  assertEquals(messages[0].content.includes("clarification_question"), true);
+  assertEquals(
+    messages[0].content.includes("не задавай уточняющий вопрос"),
+    false,
+  );
+  assertEquals(messages[3].role, "user");
+  assertEquals(messages[3].content.includes("<script>"), false);
+  assertEquals(messages[3].content.includes("\\u003cscript>"), true);
+  assertEquals(messages[3].content.includes("\\u003coption>"), true);
+  assertEquals(messages[3].content.includes("hidden-option"), false);
 });
 
 Deno.test("derived reasoning exposes bounded technical values but not identity or boolean metadata", () => {
@@ -480,6 +1305,67 @@ Deno.test("derived reasoning exposes bounded technical values but not identity o
     ),
     true,
   );
+});
+
+Deno.test("a decimal live scalar cannot become customer-owned from one matching integer", () => {
+  const facets = [{
+    key: "weight",
+    caption: "Вес",
+    values: [{ value: "3.4" }, { value: "4.5" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для нагрузки 3 кВт рекомендую исполнение 3×4 или 3×2,5.",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0"],
+    },
+    facets,
+    "Нужен кабель для кондиционера мощностью 3 кВт",
+  );
+  assertEquals(declaration?.requiredFacetValues, []);
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Нагрузка 3 кВт",
+  );
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f0v0") ?? false,
+    false,
+  );
+});
+
+Deno.test("numeric inequality labels require the matching physical unit, not matching digits", () => {
+  const facets = [{
+    key: "rated_voltage",
+    caption: "Номинальное напряжение, кВ",
+    unit: null,
+    values: [{ value: "≤ 10" }, { value: "≥ 20" }, { value: "10–20" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Линия длиной 10 метров",
+  );
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum ?? [], []);
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для линии длиной 10 метров требуется кабель номинальным напряжением ≤ 10 кВ.",
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "Линия длиной 10 метров",
+  );
+  assertEquals(declaration?.requiredFacetValues, []);
 });
 
 Deno.test("customer-scoped reasoning schema omits unrelated exact technical values", () => {
@@ -590,6 +1476,237 @@ Deno.test("a model-derived exact value requires visible facet context", () => {
     key: "Цвет корпуса",
     value: "белый",
   }]);
+});
+
+Deno.test("classification cleanup cannot erase a separately validated required facet", () => {
+  const sentence = "Необходим цвет корпуса черный.";
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: sentence + " Проверяю соответствие условиям применения.",
+    measurement_scope: "not_applicable",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [], excluded_classifications: [], explicit_customer_classifications: [],
+    mandatory_properties: [{ key: "Цвет корпуса", value: "черный", unit: "", op: "eq", scope: "per_product", source_span: sentence }],
+  }, [{ key: "colour", caption: "Цвет корпуса", values: [{ value: "черный" }, { value: "белый" }] }], "Подбери изделие для проекта.");
+  assertEquals(resolved?.propertyObligations?.length, 1);
+  assertEquals(resolved?.text.includes(sentence), true);
+});
+
+Deno.test("one shared purpose word is not evidence of a different compound product class", () => {
+  const source = "Необходим медный кабель с сечением не менее 2.5 мм2 для обеспечения пожарной безопасности.";
+  const facets = [{ key: "purpose", caption: "Назначение", values: [
+    { value: "Кабели силовые стационарные до 1кВ" },
+    { value: "кабели пожарной сигнализации" },
+    // Another live sibling shares the signal stem. It remains an essential
+    // part of the compound label even though it is no longer unique.
+    { value: "Кабели сигнально-блокировочные" },
+  ] }];
+  const args = {
+    reasoning: source + " Проверяю условия подключения нагрузки.",
+    measurement_scope: "per_product", compatible_classifications: ["f0v0"],
+    excluded_classifications: ["f0v1"],
+    mandatory_properties: [{ key: "Сечение кабеля", value: 2.5, unit: "мм2", op: "min", scope: "per_product", source_span: source }],
+  };
+  const result = resolveDerivedSelectionReasoning(args, facets, "Нужен кабель для нагрузки.");
+  assertEquals(result?.propertyObligations?.length, 1);
+  assertEquals(result?.text.includes(source), true);
+  const conflicting = resolveDerivedSelectionReasoning({ ...args,
+    mandatory_properties: [],
+    reasoning: "Необходим номинальный ток 10 А. Выбираю кабели пожарной сигнализации.",
+  }, facets, "Нужен кабель для нагрузки.");
+  assertEquals(conflicting?.text.includes("Выбираю кабели пожарной сигнализации"), false);
+});
+
+Deno.test("a facet label inside a negated sibling cannot erase an explicitly selected value", () => {
+  const sentence = "Для установки в ваш светильник необходим Тип цоколя E27.";
+  const result = resolveDerivedSelectionReasoning({
+    reasoning: sentence + " Проверяю соответствие условиям применения.",
+    measurement_scope: "not_applicable", compatible_classifications: ["f0v0"], excluded_classifications: ["f0v2"], required_facet_values: [], explicit_customer_classifications: [],
+    mandatory_properties: [{ key: "Тип цоколя", value: "E27", unit: "", op: "eq", scope: "per_product", source_span: sentence }],
+  }, [{ key: "base", caption: "Тип цоколя", values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }] }], "Нужны лампы E27.", "Лампы");
+  assertEquals(result?.propertyObligations?.length, 1);
+  assertEquals(result?.text.includes(sentence), true);
+});
+
+Deno.test("frozen exact customer classification vetoes a conflicting model class before search", () => {
+  const facets = [{
+    key: "base",
+    caption: "Тип цоколя",
+    values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }],
+  }, {
+    key: "body",
+    caption: "Тип отделки",
+    values: [{ value: "черный" }, { value: "белый" }],
+  }];
+  const args = {
+    reasoning:
+      "Для указанного цоколя подходит E27 и теплый свет. Без цоколя выбираю альтернативное исполнение.",
+    retrieval_query: "без цоколя",
+    compatible_classifications: ["f0v2", "f1v0"],
+    excluded_classifications: ["f0v1"],
+    explicit_customer_classifications: [{
+      customer_phrase: "Е27",
+      classification_id: "f0v2",
+    }],
+  };
+  const frozen = [{
+    key: "Тип цоколя",
+    op: "eq" as const,
+    value: "Е27", // Visually identical Cyrillic character in a compact code.
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    args,
+    facets,
+    "Нужны лампы с цоколем Е27",
+    "лампы",
+    undefined,
+    frozen,
+  );
+  assertEquals(resolved?.compatible, [
+    { key: "Тип цоколя", value: "E27" },
+    { key: "Тип отделки", value: "черный" },
+  ]);
+  assertEquals(resolved?.customerGroundedCompatible, [
+    { key: "Тип цоколя", value: "E27" },
+  ]);
+  assertEquals(resolved?.excluded.some(({ value }) => value === "E27"), false);
+  assertEquals(resolved?.explicitCustomerMappings, []);
+  assertEquals(resolved?.retrievalQuery, null);
+  assertEquals(resolved?.text.includes("без цоколя"), false);
+  assertEquals(resolved?.text.includes("E27"), true);
+
+  const withoutFrozen = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для этого применения выбираю исполнение без цоколя.",
+      compatible_classifications: ["f0v2"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен вариант",
+  );
+  assertEquals(withoutFrozen?.compatible, [{
+    key: "Тип цоколя",
+    value: "без цоколя",
+  }]);
+});
+
+Deno.test("provider exclusion or local prose negation of a frozen exact class fails closed", () => {
+  const facets = [{
+    key: "base",
+    caption: "Тип цоколя",
+    values: [{ value: "E27" }, { value: "E14" }, { value: "без цоколя" }],
+  }];
+  const frozen = [{
+    key: "Тип цоколя",
+    op: "eq" as const,
+    value: "E27",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const resolve = (
+    reasoning: string,
+    excluded: string[],
+    stages: string[],
+  ) => resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: excluded,
+    },
+    facets,
+    "Нужно исполнение Е27",
+    "изделие",
+    (diagnostic) => stages.push(diagnostic.stage),
+    frozen,
+  );
+
+  for (const [reasoning, excluded] of [
+    ["Цоколь E27 не подходит для этой задачи.", ["f0v0"]],
+    ["Цоколь E27 подходит для этой задачи.", ["f0v0"]],
+    ["Цоколь E27 не подходит для этой задачи.", []],
+  ] as const) {
+    const stages: string[] = [];
+    assertEquals(resolve(reasoning, [...excluded], stages), null);
+    assertEquals(stages, ["customer_exact_classification_contradiction"]);
+  }
+
+  const stages: string[] = [];
+  const control = resolve(
+    "Цоколь E27 подходит для этой задачи, а E14 не подходит.",
+    ["f0v1"],
+    stages,
+  );
+  assertEquals(stages, []);
+  assertEquals(control?.compatible, [{ key: "Тип цоколя", value: "E27" }]);
+});
+
+Deno.test("same-facet exact colour wins in either direction without vetoing other axes", () => {
+  const facets = [{
+    key: "finish",
+    caption: "Тип отделки",
+    values: [{ value: "черный" }, { value: "белый" }],
+  }, {
+    key: "mounting",
+    caption: "Тип монтажа",
+    values: [{ value: "настенный" }, { value: "потолочный" }],
+  }];
+  for (const [frozenValue, wrongId, expectedValue] of [
+    ["черный", "f0v1", "черный"],
+    ["белый", "f0v0", "белый"],
+  ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для указанного применения подходит отделка ${frozenValue}. Проверяю настенный монтаж по каталогу.`,
+        compatible_classifications: [wrongId, "f1v0"],
+        excluded_classifications: [],
+      },
+      facets,
+      `Нужен вариант ${frozenValue}`,
+      "изделие",
+      undefined,
+      [{
+        key: "Тип отделки",
+        op: "eq",
+        value: frozenValue,
+        level: "A",
+        evidence: "user_explicit",
+      }],
+    );
+    assertEquals(resolved?.compatible, [
+      { key: "Тип отделки", value: expectedValue },
+      { key: "Тип монтажа", value: "настенный" },
+    ]);
+  }
+});
+
+Deno.test("a solely contradictory model explanation is rejected, not shown after redaction", () => {
+  const stages: string[] = [];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для вашей задачи подойдет исполнение без цоколя.",
+      compatible_classifications: ["f0v1"],
+      excluded_classifications: [],
+    },
+    [{
+      key: "base",
+      caption: "Тип цоколя",
+      values: [{ value: "E27" }, { value: "без цоколя" }],
+    }],
+    "Нужно исполнение E27",
+    "изделие",
+    (diagnostic) => stages.push(diagnostic.stage),
+    [{
+      key: "Тип цоколя",
+      op: "eq",
+      value: "E27",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
+  assertEquals(resolved, null);
+  assertEquals(stages, ["classification_conflict_cleanup"]);
 });
 
 Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {
@@ -710,12 +1827,8 @@ Deno.test("system-total reasoning is visibly marked and cannot masquerade as one
     resolved?.text.includes("суммарная потребность всей системы"),
     true,
   );
-  assertEquals(
-    resolved?.measurementEvidence.includes(
-      "распределить между несколькими товарами",
-    ),
-    true,
-  );
+  // Aggregate prose remains visible but is not numeric card evidence.
+  assertEquals(resolved?.measurementEvidence, "");
 });
 
 Deno.test("system total drops a derived per-card measurement", () => {
@@ -908,6 +2021,83 @@ Deno.test("a separated inflected count in visible reasoning becomes one exact re
     resolved?.text.includes("Обязательные параметры: «Количество жил: 3»"),
     true,
   );
+});
+
+Deno.test("a derived compound count does not depend on a coincident customer scalar", () => {
+  const facets = [{
+    key: "core_count",
+    caption: "Количество жил",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    "Подберите подходящий вариант для нового подключения",
+  );
+  const properties = (schema.function.parameters.properties ?? {}) as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(properties.required_facet_values.items?.enum, [
+    "f0v0",
+    "f0v1",
+    "f0v2",
+  ]);
+
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для стационарного подключения необходим трёхжильный вариант: фаза, ноль и защитное заземление.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Подберите подходящий вариант для нового подключения",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Количество жил",
+    value: "3",
+  }]);
+  assertEquals(
+    resolved?.text.includes("Обязательные параметры: «Количество жил: 3»"),
+    true,
+  );
+});
+
+Deno.test("a visible three-core conclusion survives beside an unrelated 3 kW load", () => {
+  const facets = [{
+    key: "kolichestvo_ghil__taram_sany",
+    caption: "Количество жил",
+    values: ["4", "3", "1", "5", "2", "8", "14", "7", "10", "6", "40"]
+      .map((value) => ({ value })),
+  }, {
+    key: "sechenie_kabelya__mm2__kabely_қimasy__mm2",
+    caption: "Сечение кабеля, мм2",
+    unit: "мм²",
+    values: ["1.5", "2.5", "4"].map((value) => ({ value })),
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для кондиционера мощностью 3 кВт при однофазном питании 220 В расчётный ток составляет около 14,4 А. Для стационарной прокладки подходит трёхжильный кабель (фаза, ноль, заземление) сечением не менее 2,5 мм².",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f1v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Количество жил",
+    value: "3",
+  }, {
+    key: "Сечение кабеля, мм2",
+    value: "2.5",
+  }]);
 });
 
 Deno.test("visible reasoning compiles several exact values from a live-like schema", () => {
@@ -1244,6 +2434,47 @@ Deno.test("a uniquely customer-grounded live class overrides a broader model cho
     true,
   );
   assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
+});
+
+Deno.test("one shared application noun cannot own a narrower compound classification family", () => {
+  const facets = [{
+    caption: "Назначение",
+    values: [
+      { value: "Кабели силовые стационарные" },
+      { value: "Провод самонесущий для воздушных линий электропередач" },
+      { value: "Провод неизолированный для воздушных линий электропередач" },
+      { value: "Кабели сигнальные" },
+    ],
+  }];
+  const declaration = {
+    reasoning:
+      "Для стационарной прокладки требуется подходящий силовой кабель.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+  };
+  const unrelated = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Линия 10 метров, стационарная прокладка",
+    "кабель и провод",
+  );
+  assertEquals(
+    unrelated?.customerGroundedCompatible.some(({ value }) =>
+      value.includes("воздушных")
+    ),
+    false,
+  );
+  assertEquals(
+    unrelated?.compatible.some(({ value }) => value.includes("воздушных")),
+    false,
+  );
+  const explicit = resolveDerivedSelectionReasoning(
+    { ...declaration, compatible_classifications: [] },
+    facets,
+    "Нужен провод для воздушных линий электропередач",
+    "провод",
+  );
+  assertEquals(explicit?.customerGroundedCompatible.length, 2);
 });
 
 Deno.test("a customer-grounded class family preserves all matching live variants", () => {

@@ -8,10 +8,11 @@
 // мощность, ток, длина, объём, температура) не проверялись вообще, потому что
 // фасеты каталога — строгое равенство строк.
 //
-// Модуль — ЧИСТЫЙ и DATA-AGNOSTIC: никаких доменных ключей, значений, брендов и
-// жаргона. Он умеет только: (1) распарсить число/диапазон/единицу из произвольной
-// строки характеристики, (2) сопоставить критерий с характеристикой карточки по
-// нормализованному имени ключа, (3) вынести вердикт pass | fail | unknown.
+// Модуль — ЧИСТЫЙ: никаких SKU, брендов и категорий. Он умеет распарсить
+// число/диапазон/единицу, сопоставить критерий с характеристикой карточки и
+// вынести вердикт pass | fail | unknown. Там, где широкий булев фасет
+// противоречит конкретному типу активации в названии/описании, более точное
+// первичное свидетельство не может быть затёрто фасетом или его проекцией.
 //
 // Политика вердиктов:
 //   pass    — характеристика найдена и удовлетворяет оператору критерия.
@@ -26,6 +27,10 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import {
+  compareIpProtectionMinimum,
+  isIpProtectionPropertyKey,
+} from "./ip-protection-order.ts";
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
@@ -287,6 +292,15 @@ function renderedValueIsCustomerOwned(
   userMessage: string,
 ): boolean {
   if (isAdministrativeCatalogField({ caption: label })) return false;
+  // Boolean storage values cannot own an unrelated trait via conversational
+  // assent or a substring such as "да" in "задачи". This emission-only path
+  // requires the explicit labelled pair; semantic requests keep the normal
+  // visible-requirement/search contract.
+  const normalizedValue = normalizeKey(value);
+  if (/^(?:да|нет|yes|no|true|false)$/u.test(normalizedValue)) {
+    const pair = normalizeKey(`${label} ${value}`);
+    return (` ${normalizeKey(userMessage)} `).includes(` ${pair} `);
+  }
   // A bare scalar is not self-describing. Matching the digit `3` in `3 кВт`
   // must not promote an unrelated metadata field whose value also happens to
   // be `3`; numeric ownership additionally requires a grounded label or a
@@ -742,6 +756,43 @@ export function projectCatalogFilterEvidence<T extends ProductRef>(
   }));
 }
 
+/** Retain only requirements proved by the actual options sent to the catalog.
+ * Merely requesting a feature or searching for its words is not filter proof.
+ * Multiple allowed values of the same facet preserve their OR semantics. */
+export function catalogFilterProvenCriteria(
+  criteria: Criterion[],
+  facets: CriteriaFacet[],
+  searchArgs: Record<string, unknown>,
+): Criterion[] {
+  if (searchArgs.mode !== "by_filter" && searchArgs.mode !== "by_query") {
+    return [];
+  }
+  const options = searchArgs.options;
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return [];
+  }
+  const groups = new Map<string, Criterion[]>();
+  for (const criterion of criteria) {
+    const key = normalizeKey(criterion.key);
+    groups.set(key, [...(groups.get(key) ?? []), criterion]);
+  }
+  return [...groups.values()].flatMap((group) => {
+    const projection = projectCriteriaFacetOptions(group, facets);
+    const entries = Object.entries(projection.options);
+    const proven = entries.length > 0 && entries.every(([key, allowed]) => {
+      const raw = (options as Record<string, unknown>)[key];
+      const actual = Array.isArray(raw)
+        ? raw.map(String)
+        : typeof raw === "string"
+        ? [raw]
+        : [];
+      return actual.length > 0 &&
+        actual.every((value) => allowed.includes(value));
+    });
+    return proven ? projection.proven_criteria : [];
+  });
+}
+
 /** Enforces a user price ceiling on every render path, including recoveries. */
 export function filterProductIdsByBudgetCap<T extends { price: number }>(
   ids: string[],
@@ -870,6 +921,17 @@ export function titleContradictsExactCountCriterion(
     ? criterion.value.trim().replace(",", ".")
     : "";
   if (!/^\d+$/u.test(raw) || Number(raw) < 1) return false;
+  // Count facets may omit auxiliary elements of N×S + M×T. Compare the
+  // complete visible sum, not just the primary N, without interpreting S/T.
+  const additive =
+    /\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?(?:\s*\+\s*\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?)+/giu;
+  for (const construction of String(title ?? "").matchAll(additive)) {
+    const counts = [...construction[0].matchAll(/(\d+)\s*[xх×*]/giu)]
+      .map((match) => Number(match[1]));
+    if (counts.reduce((sum, count) => sum + count, 0) !== Number(raw)) {
+      return true;
+    }
+  }
   const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `(?<!\\d)${escaped}\\s*[\\p{L}]{0,3}\\s*\\+\\s*(?:\\d+\\s*)?[\\p{L}]`,
@@ -1014,7 +1076,18 @@ export function preferClosestPassingNumericTier<T extends ProductRef>(
       .filter(({ distance }) => Math.abs(distance - closest) < 1e-9)
       .map(({ product }) => String(product.id)),
   );
-  if (closestIds.size < Math.max(1, minimumTierSize)) return products;
+  if (closestIds.size < Math.max(1, minimumTierSize)) {
+    // Keep enough alternatives without falling back to arbitrary API order.
+    // A distant oversized item must not precede a nearer sufficient item just
+    // because the nearest exact tier contains fewer than the requested count.
+    const distances = new Map(
+      scored.map(({ product, distance }) => [String(product.id), distance]),
+    );
+    return [...products].sort((a, b) =>
+      (distances.get(String(a.id)) ?? Infinity) -
+      (distances.get(String(b.id)) ?? Infinity)
+    );
+  }
   return products.filter((product) => closestIds.has(String(product.id)));
 }
 
@@ -1025,6 +1098,46 @@ function productEvidenceText(product: ProductRef): string {
     ...(Array.isArray(product.short_traits) ? product.short_traits : []),
     product.description_excerpt ?? "",
   ].join(" "));
+}
+
+/**
+ * A measured property may be present only in the original product prose.
+ * Attribute the number to the named property in the same short statement and
+ * require its unit; a bare number in an SKU, price or unrelated measurement is
+ * not evidence. Ambiguous/conflicting statements remain unverified.
+ */
+function findUnitAttributedProseTrait(
+  product: ProductRef,
+  criterion: Criterion,
+): { label: string; value: string } | null {
+  const unit = normalizeUnit(criterion.unit ?? "");
+  if (!unit || !criterion.key.trim()) return null;
+  const sources = [product.pagetitle, product.description_excerpt ?? ""];
+  const values: number[] = [];
+  for (const source of sources) {
+    for (const statement of String(source ?? "").split(/(?:[.!?](?=\s|$)|[;\n])+/u)) {
+      const text = statement.trim();
+      if (!text || text.length > 260 ||
+        !stringEvidenceMatches(criterion.key, text)) continue;
+      const normalizedStatement = normalizeKey(text);
+      // A comparison, example, hypothetical or explicit negation is not a
+      // measured attribute of this specific product.
+      if (/(?:^|\s)(?:не|без|если|например|возможно|вариант)(?:\s|$)|отсутств/u
+        .test(normalizedStatement)) continue;
+      const quantities = extractClientQuantities(text).filter((quantity) =>
+        quantity.unit === unit
+      );
+      if (quantities.length !== 1) {
+        if (quantities.length > 1) return null;
+        continue;
+      }
+      values.push(quantities[0].value);
+    }
+  }
+  if (values.length === 0 || values.some((value) => value !== values[0])) {
+    return null;
+  }
+  return { label: criterion.key, value: `${values[0]} ${criterion.unit}` };
 }
 
 function looseStem(token: string): string {
@@ -1129,6 +1242,218 @@ function isNegativeBooleanValue(value: string): boolean {
   return ["нет", "отсутствует", "no", "false"].includes(normalizeKey(value));
 }
 
+function affirmativeFeatureName(key: string): string {
+  // Facet captions often start with the grammatical "С" ("С крышкой"). It
+  // names ownership, not a one-letter catalog code that every sentence must
+  // repeat; removing it also lets an activation sentence supply the proof.
+  return normalizeKey(key).replace(/^(?:с|со)\s+/u, "");
+}
+
+/**
+ * A feature mentioned as an accessory, supported add-on or connection target
+ * is not necessarily part of this product. A sparse affirmative boolean must
+ * instead be owned by the product ("с крышкой", "оснащён датчиком") or have
+ * an asserted effect ("сенсор включает прибор при движении"). Work on short
+ * statements so unrelated words in different fields cannot complete a proof.
+ * Exact labelled traits and proven live filters are handled separately below.
+ */
+function intrinsicAffirmativeProseProof(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  const feature = affirmativeFeatureName(criterion.key);
+  if (!feature) return null;
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ];
+  const weakRelation =
+    /(?:^|\s)(?:совместим\p{L}*|совместимость|опциональн\p{L}*|дополнительн\p{L}*|внешн\p{L}*|отдельн\p{L}*|приобрета\p{L}*|подключ\p{L}*|подсоедин\p{L}*|поддержива\p{L}*|подходит|подходят|возможн\p{L}*|можно|может|могут|если|для\s+(?:подключ\p{L}*|установ\p{L}*|монтаж\p{L}*|использован\p{L}*|работы)|compatible|optional|separately|external|connect\p{L}*|supports?)(?=\s|$)/iu;
+  const owner =
+    /(?:^|\s)(?:с|со|имеет|имеется|оснащ\p{L}*|оборудован\p{L}*|встроен\p{L}*|интегрирован\p{L}*|предусмотрен\p{L}*|with|includes?|equipped)(?=\s|$)/giu;
+  const activation =
+    /(?:^|\s)(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*|активир\p{L}*|открыва\p{L}*|закрыва\p{L}*|защища\p{L}*|detect\p{L}*|activat\p{L}*|switch\p{L}*|trigger\p{L}*)(?=\s|$)/iu;
+  for (const source of sources) {
+    for (const statement of source.text.split(/[.!?;,\n]+/u)) {
+      const normalized = normalizeKey(statement);
+      if (!normalized || !stringEvidenceMatches(feature, normalized)) {
+        continue;
+      }
+      // If a weak relationship is stated, an independent intrinsic assertion
+      // must precede it. "Совместим с датчиком" and "с опциональным датчиком"
+      // therefore stay unknown; "с датчиком, совместим с ..." still passes.
+      const weak = normalized.match(weakRelation);
+      const asserted = weak ? normalized.slice(0, weak.index) : normalized;
+      if (!stringEvidenceMatches(feature, asserted)) continue;
+      const owned = [...asserted.matchAll(owner)].some((match) => {
+        const after = asserted.slice((match.index ?? 0) + match[0].length);
+        // "с разъёмом для датчика" owns the connector, not the sensor.
+        // Limit the ownership window at a new target relation; a later
+        // independent "с датчиком" gets its own owner match.
+        const near = after.split(/\s+(?:для|под|через|к)\s+/u)[0]
+          .split(/\s+/u).slice(0, 6).join(" ");
+        return stringEvidenceMatches(feature, near);
+      });
+      if (owned || activation.test(asserted)) {
+        return `${source.label}: ${statement.trim()}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Only explicit absence can veto a first-party affirmative facet. */
+function explicitAffirmativeProseAbsence(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !isAffirmativeValue(criterion.value)
+  ) return null;
+  const feature = affirmativeFeatureName(criterion.key);
+  if (!feature) return null;
+  const featureLength = feature.split(/\s+/u).length;
+  const namesFeature = (words: string[]): boolean =>
+    stringEvidenceMatches(feature, words.join(" "));
+  const modifier = (word: string): boolean =>
+    /(?:ого|его|ой|ый|ий|ая|яя|ое|ее|ые|ых|их|ыми|ими|ым|им)$/u
+      .test(word) &&
+    !/(?:дополнител|опционал|внешн|отдельн)/u.test(word);
+  const namesLeadingFeature = (words: string[]): boolean => {
+    for (let skip = 0; skip <= 2; skip++) {
+      if (skip > 0 && !modifier(words[skip - 1] ?? "")) break;
+      if (namesFeature(words.slice(skip, skip + featureLength))) return true;
+    }
+    return false;
+  };
+  // A negated effect only contradicts a multi-part functional feature when
+  // its own trigger/target is named (e.g. sensor + motion, protection + load).
+  // "Крышка не закрывает ..." alone does not assert that the cover is absent.
+  const trigger = feature.split(/\s+/u).slice(1)
+    .filter((word) => !["на", "от", "по", "при", "для", "of", "for"].includes(word))
+    .join(" ");
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ];
+  for (const source of sources) {
+    for (const statement of source.text.split(/[.!?;,\n]+/u)) {
+      const normalized = normalizeKey(statement);
+      if (!stringEvidenceMatches(feature, normalized)) continue;
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)(?:без|without|нет)\s+/giu,
+        )
+      ) {
+        const words = normalized.slice(
+          (negative.index ?? 0) + negative[0].length,
+        ).split(/\s+/u);
+        if (namesLeadingFeature(words)) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)не\s+(?:оснащ\p{L}*|оборудован\p{L}*|имеет|имеются|содержит|снабжен\p{L}*|укомплектован\p{L}*)(?=\s|$)\s*/giu,
+        )
+      ) {
+        const words = normalized.slice(
+          (negative.index ?? 0) + negative[0].length,
+        ).split(/\s+/u);
+        if (namesLeadingFeature(words)) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+      if (trigger) {
+        for (
+          const negative of normalized.matchAll(
+            /(?:^|\s)не\s+(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*|активир\p{L}*|защища\p{L}*)(?=\s|$)/giu,
+          )
+        ) {
+          const tail = normalized.slice(
+            (negative.index ?? 0) + negative[0].length,
+          ).split(/\s+/u).slice(0, 8).join(" ");
+          if (stringEvidenceMatches(trigger, tail)) {
+            return `${source.label}: ${statement.trim()}`;
+          }
+        }
+      }
+      for (
+        const negative of normalized.matchAll(
+          /(?:^|\s)(?:отсутству\p{L}*|не\s+(?:предусмотрен\p{L}*|установлен\p{L}*|встроен\p{L}*))(?=\s|$)/giu,
+        )
+      ) {
+        const words = normalized.slice(0, negative.index).trim().split(/\s+/u);
+        if (namesFeature(words.slice(-featureLength))) {
+          return `${source.label}: ${statement.trim()}`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * A broad catalog yes/no flag is weaker than a concrete activation mechanism
+ * stated in the product's own title or description. In particular, a product
+ * described as sound-triggered must not satisfy a customer's motion-sensor
+ * requirement solely because a catalog facet says "да". Only these original
+ * prose fields participate: short_traits can contain by_filter proof projected
+ * by the caller, so using them here would let the same boolean erase the
+ * contradiction it is meant to resolve.
+ */
+function motionSensorProseContradiction(
+  product: ProductRef,
+  criterion: Criterion,
+): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !isAffirmativeValue(criterion.value)
+  ) return null;
+  const key = normalizeKey(criterion.key);
+  if (
+    !/(?:датчик|сенсор|детектор)\p{L}*(?:\s+\p{L}+){0,2}\s+движен\p{L}*|motion\s+(?:sensor|detector)/u
+      .test(key)
+  ) return null;
+
+  const sources = [
+    { label: "Название", text: String(product.pagetitle ?? "") },
+    { label: "Описание", text: String(product.description_excerpt ?? "") },
+  ].filter(({ text }) => text.trim()).map((source) => ({
+    ...source,
+    normalized: normalizeKey(source.text),
+  }));
+  const motionAbsence =
+    /(?:без|нет)\s+(?:(?:встроен|интегрирован|отдельн|инфракрасн|пир|ик)\p{L}*\s+)?(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*|(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*\s+(?:отсутству\p{L}*|нет)|не\s+(?:реагир\p{L}*|срабат\p{L}*|включа\p{L}*)\s+(?:на|от|при)\s+движен\p{L}*|(?:на|от|при)\s+движен\p{L}*\s+не\s+(?:реагир|срабат|включа)\p{L}*|не\s+(?:на|от|по|при)\s+движен\p{L}*|(?:without|no)\s+motion\s+(?:sensor|detector)/u;
+  const explicitAbsence = sources.find(({ normalized }) =>
+    motionAbsence.test(normalized)
+  );
+  if (explicitAbsence) {
+    return `${explicitAbsence.label}: ${explicitAbsence.text.trim()}`;
+  }
+
+  const acousticActivation =
+    /(?:акустическ|звуков)\p{L}*\s+(?:(?:встроен|интегрирован)\p{L}*\s+)?(?:датчик|сенсор|управлен|включен)\p{L}*|(?:датчик|сенсор)\p{L}*\s+(?:звук|шум|хлопк)\p{L}*|(?:реагир|срабат|включа|активир|активац)\p{L}*(?:\s+\p{L}+){0,5}\s+(?:на|от|по|при)\s+(?:звук|шум|хлопк)\p{L}*|(?:sound|acoustic)\s+(?:sensor|activated|activation)/u;
+  const acousticSource = sources.find(({ normalized }) =>
+    acousticActivation.test(normalized) &&
+    !/(?:без|нет)\s+(?:акустическ|звуков)\p{L}*\s+(?:датчик|сенсор)\p{L}*|(?:акустическ|звуков)\p{L}*\s+(?:датчик|сенсор)\p{L}*\s+(?:отсутству\p{L}*|нет)/u
+      .test(normalized)
+  );
+  if (!acousticSource) return null;
+
+  const acousticOnly = sources.some(({ normalized }) =>
+    /(?:только|исключительно|лишь)\s+(?:(?:на|от|по|при)\s+)?(?:звук|шум|хлопк)\p{L}*|(?:только|исключительно|лишь)\s+(?:акустическ|звуков)\p{L}*(?:\s+\p{L}+){0,2}\s+(?:датчик|сенсор)\p{L}*|(?:sound|acoustic)\s+only/u
+      .test(normalized)
+  );
+  const motionActivation = sources.some(({ normalized }) =>
+    /(?:датчик|сенсор|детектор)\p{L}*\s+движен\p{L}*|(?:pir|пир|инфракрасн|микроволнов|радиоволнов)\p{L}*\s+(?:датчик|сенсор|детектор)\p{L}*|(?:реагир|срабат|включа|активир)\p{L}*(?:\s+\p{L}+){0,5}\s+(?:на|от|при)\s+движен\p{L}*|motion\s+(?:sensor|detector)/u
+      .test(normalized)
+  );
+  if (motionActivation && !acousticOnly) return null;
+  return `${acousticSource.label}: ${acousticSource.text.trim()}`;
+}
+
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) {
@@ -1154,7 +1479,18 @@ export function checkCriterion(
   c: Criterion,
 ): CriterionCheck {
   const expected = expectedLabel(c);
-  const trait = findTrait(product, c.key);
+  const proseContradiction = motionSensorProseContradiction(product, c) ??
+    explicitAffirmativeProseAbsence(product, c);
+  if (proseContradiction) {
+    return {
+      key: c.key,
+      verdict: "fail",
+      expected,
+      actual: proseContradiction,
+    };
+  }
+  const trait = findTrait(product, c.key) ??
+    findUnitAttributedProseTrait(product, c);
   if (!trait) {
     // Часть доказательных признаков живёт только в названии/описании товара,
     // а не в отдельном фасете. Строковое требование можно подтвердить по всему
@@ -1165,11 +1501,12 @@ export function checkCriterion(
       // Boolean facets are often sparse in the source catalog even when the
       // feature is explicitly described in the product title or description.
       // For an affirmative value, the criterion key carries the feature name
-      // (e.g. "С датчиком движения"); require that full key to be evidenced
-      // instead of looking for the uninformative word "да".
+      // (e.g. "С датчиком движения"). A mere reference to a compatible or
+      // optional accessory is not proof that the feature is built in.
       if (isAffirmativeValue(c.value)) {
-        return stringEvidenceMatches(c.key, evidence)
-          ? { key: c.key, verdict: "pass", expected, actual: c.key }
+        const proof = intrinsicAffirmativeProseProof(product, c);
+        return proof
+          ? { key: c.key, verdict: "pass", expected, actual: proof }
           : { key: c.key, verdict: "unknown", expected, actual: null };
       }
       // An omitted negative boolean facet is not evidence of absence. More
@@ -1185,6 +1522,21 @@ export function checkCriterion(
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
+
+  // IEC IP markings have a partial order on two independent axes. Keep them
+  // away from generic numeric parsing, including malformed `IP 65` strings.
+  // Only an ingress-protection property and a supported minimum can use this
+  // path; other directional code declarations remain unverified.
+  if (typeof c.value === "string" && /^ip/iu.test(c.value.trim()) && c.op !== "eq") {
+    return {
+      key: c.key,
+      verdict: c.op === "min" && !c.unit && isIpProtectionPropertyKey(c.key)
+        ? compareIpProtectionMinimum(actual, c.value, !!c.exclusive)
+        : "unknown",
+      expected,
+      actual,
+    };
+  }
 
   // Catalog facet values are strings even when they represent measurements.
   // Numeric equality must therefore use numeric spans, not substring matching:
@@ -1216,6 +1568,18 @@ export function checkCriterion(
     const want = normalizeKey(c.value);
     const got = normalizeKey(actual);
     if (!want) return { key: c.key, verdict: "unknown", expected, actual };
+    if (
+      isAffirmativeValue(c.value) && stringEvidenceMatches(want, got) &&
+      normalizeKey(trait.label) !== normalizeKey(c.key)
+    ) {
+      // Fuzzy label matching is useful for values but not authoritative for
+      // feature ownership: "Совместимость с датчиком движения: да" is not the
+      // exact "С датчиком движения: да" facet or a proven filter projection.
+      const proof = intrinsicAffirmativeProseProof(product, c);
+      return proof
+        ? { key: c.key, verdict: "pass", expected, actual: proof }
+        : { key: c.key, verdict: "unknown", expected, actual: null };
+    }
     return {
       key: c.key,
       verdict: stringEvidenceMatches(want, got) ? "pass" : "fail",

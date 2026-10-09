@@ -1459,6 +1459,17 @@ Deno.test("advisory model defaults do not become mandatory filters", () => {
   assertEquals(aligned.demoted, ["Параметр бета", "Параметр гамма"]);
 });
 
+Deno.test("parenthetical implementation examples do not inherit necessity from the functional property", () => {
+  const material: Criterion = { key: "Оболочка", op: "eq", value: "полиэтилен", level: "A" };
+  const functional: Criterion = { key: "Оболочка", op: "eq", value: "стойкая к ультрафиолету", level: "A" };
+  const text = "Для уличной прокладки обязательна стойкая к ультрафиолету оболочка (обычно черного цвета из полиэтилена).";
+  assertEquals(alignCriteriaImportanceWithReasoning([material, functional], text).criteria.map(c => c.level), ["B", "A"]);
+  assertEquals(alignCriteriaImportanceWithReasoning([material], text, [material]).criteria[0].level, "A");
+  assertEquals(alignCriteriaImportanceWithReasoning([material], text + " Обязательно используйте полиэтилен.").criteria[0].level, "A");
+  const finish: Criterion = { key: "Поверхность", op: "eq", value: "глянцевая", level: "A" };
+  assertEquals(alignCriteriaImportanceWithReasoning([finish], "Необходима моющаяся поверхность (например, глянцевая).").criteria[0].level, "B");
+});
+
 Deno.test("user-backed criterion stays mandatory without necessity wording", () => {
   const criterion: Criterion = {
     key: "Параметр дельта",
@@ -1577,6 +1588,84 @@ Deno.test("a bare derived up-to capability does not become a product maximum", (
     unit: "кв",
     level: "A",
   }]);
+});
+
+Deno.test("recompiling a selection at final render preserves the retrieval contract", () => {
+  const facets = [
+    {
+      key: "area",
+      caption: "Сечение кабеля, мм2",
+      type: "number",
+      unit: "мм²",
+      values: [{ value: "2.5" }, { value: "4" }],
+    },
+    {
+      key: "voltage",
+      caption: "Номинальное напряжение, кВ",
+      type: "string",
+      unit: null,
+      values: [{ value: "≤ 1" }],
+    },
+  ];
+  const reasoning =
+    "Требуется сечение не менее 2,5 мм². Изделие рассчитано на напряжение до 1 кВ.";
+  const retrieval = compileMeasuredReasoningSearchContract(
+    [],
+    reasoning,
+    [],
+    facets,
+  );
+  const terminal = compileMeasuredReasoningSearchContract(
+    retrieval.criteria,
+    reasoning,
+    [],
+    facets,
+  );
+  assertEquals(terminal.mandatory_criteria, retrieval.mandatory_criteria);
+  assertEquals(terminal.mandatory_criteria.length, 1);
+  assertEquals(terminal.mandatory_criteria[0].op, "min");
+  const customerMaximum: Criterion = {
+    key: "Номинальное напряжение, кВ",
+    op: "max",
+    value: 1,
+    unit: "кв",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const explicitTerminal = compileMeasuredReasoningSearchContract(
+    [...retrieval.criteria, customerMaximum],
+    reasoning,
+    [customerMaximum],
+    facets,
+  );
+  assertEquals(
+    explicitTerminal.mandatory_criteria.some(
+      (criterion) =>
+        criterion.key === customerMaximum.key && criterion.op === "max",
+    ),
+    true,
+  );
+});
+
+Deno.test("terminal finalization uses the retrieval compiler and preserves frozen obligations", () => {
+  const source = Deno.readTextFileSync(
+    new URL("../../chat-consultant-v3/index.ts", import.meta.url),
+  );
+  const terminal = source.slice(
+    source.indexOf("const terminalMeasuredContract ="),
+    source.indexOf("const verifyTerminalSelectionTarget ="),
+  );
+  assertEquals(
+    terminal.includes("compileMeasuredReasoningSearchContract("),
+    true,
+  );
+  assertEquals(terminal.includes("projectReasoningRangeCriteria("), false);
+  assertEquals(
+    terminal.includes(
+      "preserveFrozenSelectionCriteria(terminalMeasuredContract.criteria)",
+    ),
+    true,
+  );
 });
 
 Deno.test("an exact live application class remains mandatory while colour stays advisory", () => {
@@ -1759,6 +1848,21 @@ Deno.test("a measured preference already demoted as advisory cannot be promoted 
   assertEquals(importance.demoted, ["Measured output"]);
   assertEquals(aligned.criteria.map((criterion) => criterion.level), ["B"]);
   assertEquals(aligned.promoted, []);
+});
+
+Deno.test("projected recommendation ranges cannot bypass necessity through arithmetic wording", () => {
+  const facets = [
+    { key: "flux", caption: "Световой поток, Лм", type: "number", unit: "лм", values: [{ value: "3500" }, { value: "4000" }] },
+    { key: "power", caption: "Мощность, вт", type: "number", unit: "вт", values: [{ value: "40" }, { value: "50" }, { value: "70" }] },
+  ];
+  const reasoning = "Необходим световой поток не менее 3500 Лм. Рекомендуемая мощность для таких параметров составляет от 40-50 Вт.";
+  const result = compileMeasuredReasoningSearchContract([], reasoning, [], facets);
+  assertEquals(result.mandatory_criteria.some((criterion) => criterion.key === "Мощность, вт"), false);
+  assertEquals(result.projected_criteria.some((criterion) => criterion.key === "Мощность, вт"), false);
+  assertEquals(result.options.power, undefined);
+  assertEquals(result.mandatory_criteria.some((criterion) => criterion.op === "min" && criterion.value === 3500), true);
+  const customer = { key: "Мощность, вт", op: "range" as const, value: [40, 50] as [number, number], unit: "вт", level: "A" as const, evidence: "user_explicit" as const };
+  assertEquals(compileMeasuredReasoningSearchContract([customer], reasoning, [customer], facets).mandatory_criteria.some((criterion) => criterion.key === customer.key), true);
 });
 
 Deno.test("render-only model criteria cannot retroactively strengthen an ordinary search", () => {

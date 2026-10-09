@@ -26,6 +26,70 @@ const V3_ENDPOINT = `${SUPABASE_URL}/functions/v1/chat-consultant-v3`;
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
+interface QuickReplyEvent {
+  facetKey: string;
+  replies: QuickReply[];
+}
+
+interface ActiveChoice extends QuickReplyEvent {
+  mode: 'options' | 'freeform';
+  messageId: string;
+  slotId: string;
+  sessionId: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const normalizeReplies = (value: unknown): QuickReply[] | null => {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 5) return null;
+  const seen = new Set<string>();
+  const replies: QuickReply[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.value !== 'string' ||
+        typeof item.label !== 'string' || !item.value.trim() ||
+        !item.label.trim() || item.value !== item.value.trim() ||
+        item.value.length > 2000 || item.label.length > 160 ||
+        seen.has(item.value)) return null;
+    seen.add(item.value);
+    replies.push({ value: item.value, label: item.label });
+  }
+  return replies;
+};
+
+const normalizeQuickReplyEvent = (event: unknown): QuickReplyEvent | null => {
+  if (!isRecord(event) || typeof event.facet_key !== 'string' ||
+      !event.facet_key.trim() || event.facet_key.length > 128) return null;
+  const replies = normalizeReplies(event.replies);
+  return replies ? { facetKey: event.facet_key, replies } : null;
+};
+
+const choiceFromPendingSlot = (
+  slots: DialogSlots,
+  event: QuickReplyEvent | null,
+): Pick<ActiveChoice, 'mode' | 'slotId' | 'facetKey' | 'replies'> | null => {
+  const pending = slots.pending_clarification;
+  if (!isRecord(pending) || pending.status !== 'pending' ||
+      typeof pending.slot_id !== 'string' || !pending.slot_id ||
+      pending.slot_id.length > 128 ||
+      typeof pending.facet_key !== 'string' || !pending.facet_key.trim() ||
+      pending.facet_key.length > 128 ||
+      typeof pending.question !== 'string' || !pending.question.trim() ||
+      !Array.isArray(pending.options)) return null;
+  if (pending.options.length === 0) {
+    return { mode: 'freeform', slotId: pending.slot_id,
+      facetKey: pending.facet_key, replies: [] };
+  }
+  if (!event || event.facetKey !== pending.facet_key ||
+      pending.options.length !== event.replies.length ||
+      !event.replies.every((reply, index) => {
+        const option = pending.options[index];
+        return isRecord(option) && option.value === reply.value && option.label === reply.label;
+      })) return null;
+  return { mode: 'options', slotId: pending.slot_id,
+    facetKey: pending.facet_key, replies: event.replies };
+};
+
 // Dialog slot types for persistent intent memory
 interface DialogSlot {
   intent: 'price_extreme' | 'product_search';
@@ -37,7 +101,7 @@ interface DialogSlot {
   turns_since_touched: number;
 }
 
-type DialogSlots = Record<string, DialogSlot>;
+type DialogSlots = Record<string, DialogSlot | Record<string, unknown>>;
 
 async function streamChat({
   messages,
@@ -62,11 +126,11 @@ async function streamChat({
   /** Явный текст последнего user-сообщения. V2/V3 контракт требует поле `query`/`message`. */
   query: string;
   onDelta: (deltaText: string) => void;
-  onDone: () => void;
+  onDone: (protocolComplete: boolean) => void;
   onError: (error: string) => void;
   onContacts?: (contacts: string) => void;
   onSlotUpdate?: (slots: DialogSlots) => void;
-  onQuickReplies?: (replies: QuickReply[]) => void;
+  onQuickReplies?: (event: QuickReplyEvent | null) => void;
   onFollowup?: (text: string) => void;
   /** V3: bubble boundary — finalize current assistant message, next delta opens a new one. */
   onTurnBreak?: (reason: string) => void;
@@ -161,12 +225,10 @@ async function streamChat({
         const jsonStr = line.slice(6).trim();
         if (jsonStr === '[DONE]') {
           streamDone = true;
-          // Drain remaining data from reader (slot_update may come after [DONE])
-          while (true) {
-            const { done: readerDone, value: extraValue } = await reader.read();
-            if (readerDone) break;
-            textBuffer += decoder.decode(extraValue, { stream: true });
-          }
+          // [DONE] is the terminal protocol marker. Waiting for the proxy to
+          // close its stream can leave the UI loading indefinitely.
+          textBuffer = '';
+          void reader.cancel().catch(() => {});
           break;
         }
 
@@ -197,7 +259,7 @@ async function streamChat({
                 if (typeof ev.html === 'string') onContacts?.(ev.html);
                 break;
               case 'quick_replies':
-                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                onQuickReplies?.(normalizeQuickReplyEvent(ev));
                 break;
               case 'slot_update':
                 if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
@@ -217,7 +279,9 @@ async function streamChat({
           }
           // Check for quick_replies event (Plan V7 — category disambiguation)
           if (Array.isArray(parsed.quick_replies) && onQuickReplies) {
-            onQuickReplies(parsed.quick_replies);
+            onQuickReplies(normalizeQuickReplyEvent({
+              facet_key: parsed.facet_key, replies: parsed.quick_replies,
+            }));
             continue;
           }
           if (parsed.followup?.text && onFollowup) {
@@ -241,7 +305,10 @@ async function streamChat({
         if (raw.startsWith(':') || raw.trim() === '') continue;
         if (!raw.startsWith('data: ')) continue;
         const jsonStr = raw.slice(6).trim();
-        if (jsonStr === '[DONE]') continue;
+        if (jsonStr === '[DONE]') {
+          streamDone = true;
+          continue;
+        }
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.v3_event) {
@@ -268,7 +335,7 @@ async function streamChat({
                 if (typeof ev.html === 'string') onContacts?.(ev.html);
                 break;
               case 'quick_replies':
-                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                onQuickReplies?.(normalizeQuickReplyEvent(ev));
                 break;
               case 'slot_update':
                 if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
@@ -285,7 +352,9 @@ async function streamChat({
             continue;
           }
           if (Array.isArray(parsed.quick_replies) && onQuickReplies) {
-            onQuickReplies(parsed.quick_replies);
+            onQuickReplies(normalizeQuickReplyEvent({
+              facet_key: parsed.facet_key, replies: parsed.quick_replies,
+            }));
             continue;
           }
           if (parsed.followup?.text && onFollowup) {
@@ -298,7 +367,7 @@ async function streamChat({
       }
     }
 
-    onDone();
+    onDone(streamDone);
   } catch (error) {
     console.error('Stream error:', error);
     onError(error instanceof Error ? error.message : 'Ошибка подключения');
@@ -328,7 +397,16 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
+  const [activeChoice, setActiveChoice] = useState<ActiveChoice | null>(null);
   const conversationIdRef = useRef(crypto.randomUUID());
+  const inputRef = useRef<HTMLInputElement>(null);
+  const turnIdRef = useRef(0);
+  const followupTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  useEffect(() => () => {
+    turnIdRef.current += 1;
+    for (const timer of followupTimersRef.current) clearTimeout(timer);
+    followupTimersRef.current.clear();
+  }, []);
   // Synchronous re-entrancy guard. setIsLoading(true) is async, so two rapid
   // clicks can both pass the `isLoading` check before React re-renders. A ref
   // flips immediately and blocks any second call.
@@ -348,6 +426,11 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     const text = (overrideText ?? input).trim();
     if (!text || !endpointReady || isLoading || sendingRef.current) return;
     sendingRef.current = true;
+    const turnId = ++turnIdRef.current;
+    const requestSessionId = conversationIdRef.current;
+    for (const timer of followupTimersRef.current) clearTimeout(timer);
+    followupTimersRef.current.clear();
+    setActiveChoice(null);
 
     const userMessage: ChatMessage = {
       id: mid('user'),
@@ -356,27 +439,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       timestamp: new Date()
     };
 
-    // Capture, in this send's closure, the ID of the assistant message whose
-    // chips the user is currently responding to. We then clear chips strictly
-    // by that captured ID — not by index or "last assistant" lookup at
-    // commit time. This eliminates races where two rapid sends each compute
-    // "last with chips" against an already-mutated array, or where a new
-    // assistant message has slipped in between dispatch and commit.
-    let chipsToClearId: string | null = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === 'assistant' && m.quickReplies && m.quickReplies.length > 0) {
-        chipsToClearId = m.id;
-        break;
-      }
-    }
-
-    setMessages(prev => {
-      const next = chipsToClearId === null
-        ? prev
-        : prev.map(m => (m.id === chipsToClearId ? { ...m, quickReplies: undefined } : m));
-      return [...next, userMessage];
-    });
+    setMessages(prev => [...prev, userMessage]);
     if (!overrideText) setInput('');
     setIsLoading(true);
 
@@ -406,6 +469,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     // appending to the previous streaming one. Set by onTurnBreak /
     // onProductsBlock; cleared automatically once a new bubble is created.
     let bubbleSealed = false;
+    let latestAssistantId: string | null = null;
+    let candidateQuickReplies: QuickReplyEvent | null = null;
+    let candidateSlots: DialogSlots = dialogSlots;
+    let sawSlotUpdate = false;
+    let diagnosticComplete = false;
+    const pendingFollowups: string[] = [];
 
     const upsertAssistant = (
       updater: (prev: ChatMessage[]) => ChatMessage[]
@@ -432,6 +501,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       typing2Removed = true;
       bubbleSealed = false;
       streamMsgId = targetId;
+      latestAssistantId = targetId;
 
       upsertAssistant(prev => {
         const updated = shouldRemoveTyping
@@ -470,6 +540,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         assistantContent = '';
         bubbleSealed = true;
         streamMsgId = null;
+        latestAssistantId = null;
         // When a tool is about to run, show typing dots until the next
         // bubble (delta or products) arrives.
         if (reason === 'tool_pending') {
@@ -484,6 +555,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }
       },
       onProductsBlock: (markdown, _meta) => {
+        latestAssistantId = null;
         setMessages(prev => {
           const cleaned = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           return [...cleaned, {
@@ -501,42 +573,20 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         else console.log(`[Widget v3] tool ${ev.tool} → ${ev.summary} (${ev.duration_ms}ms)`);
       },
       onDiagnostic: (ev) => {
+        if (ev.phase === 'complete') diagnosticComplete = !ev.error;
         console.info(`[Widget v3] request=${ev.log_id ?? 'unavailable'} phase=${ev.phase} products=${ev.products_count ?? '?'}`);
       },
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
+        candidateSlots = updatedSlots;
+        sawSlotUpdate = true;
         setDialogSlots(updatedSlots);
       },
-      onQuickReplies: (replies) => {
-        console.log('[Widget] Received quick_replies:', JSON.stringify(replies));
-        // If we already have a streaming message, attach chips to it.
-        // Otherwise (disambiguation short-circuit may emit content+quick_replies
-        // back-to-back; the content event creates the message in updateAssistant),
-        // fall back to attaching to the last assistant message.
-        setMessages(prev => {
-          const targetId = streamMsgId;
-          // First try the tracked stream message id
-          if (targetId) {
-            const idx = prev.findIndex(m => m.id === targetId);
-            if (idx !== -1) {
-              return prev.map((m, i) =>
-                i === idx ? { ...m, quickReplies: replies } : m
-              );
-            }
-          }
-          // Fallback: last assistant message that isn't typing
-          for (let i = prev.length - 1; i >= 0; i--) {
-            const m = prev[i];
-            if (m.role === 'assistant' && m.content !== '__TYPING__') {
-              return prev.map((mm, j) =>
-                j === i ? { ...mm, quickReplies: replies } : mm
-              );
-            }
-          }
-          return prev;
-        });
+      onQuickReplies: (event) => {
+        candidateQuickReplies = event;
       },
       onContacts: (contacts) => {
+        latestAssistantId = null;
         setMessages(prev => [...prev, {
           id: mid('contacts'),
           role: 'assistant' as const,
@@ -545,18 +595,35 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }]);
       },
       onFollowup: (text) => {
-        // Render related-products follow-up as a SEPARATE assistant bubble
-        // shortly after main message, so it visually feels like a new turn.
-        setTimeout(() => {
-          setMessages(prev => [...prev, {
-            id: mid('followup'),
-            role: 'assistant' as const,
-            content: text,
-            timestamp: new Date()
-          }]);
-        }, 1000);
+        // Wait for the completed turn before scheduling a separate bubble.
+        pendingFollowups.push(text);
       },
-      onDone: () => {
+      onDone: (protocolComplete) => {
+        const choice = protocolComplete && diagnosticComplete && sawSlotUpdate
+          ? choiceFromPendingSlot(candidateSlots, candidateQuickReplies)
+          : null;
+        if (choice && latestAssistantId) setActiveChoice({
+          ...choice, messageId: latestAssistantId,
+          sessionId: requestSessionId,
+        });
+        // A clarification should not be followed by a delayed, unrelated
+        // bubble. A newer user turn or unmount invalidates these timers.
+        if (protocolComplete && diagnosticComplete && !choice) {
+          for (const text of pendingFollowups) {
+            const timer = setTimeout(() => {
+              followupTimersRef.current.delete(timer);
+              if (turnIdRef.current !== turnId ||
+                  conversationIdRef.current !== requestSessionId) return;
+              setMessages(prev => [...prev, {
+                id: mid('followup'),
+                role: 'assistant' as const,
+                content: text,
+                timestamp: new Date(),
+              }]);
+            }, 1000);
+            followupTimersRef.current.add(timer);
+          }
+        }
         setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
         setIsLoading(false);
         sendingRef.current = false;
@@ -582,14 +649,28 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     await streamPromise;
   }, [input, endpointReady, isLoading, messages, dialogSlots, endpoint]);
 
-  const handleQuickReply = useCallback((value: string) => {
+  const choiceIsCurrent = useCallback((choice: ActiveChoice) => {
+    if (activeChoice !== choice || choice.sessionId !== conversationIdRef.current ||
+        messages[messages.length - 1]?.id !== choice.messageId) return false;
+    const verified = choiceFromPendingSlot(dialogSlots,
+      choice.mode === 'options' ? choice : null);
+    return Boolean(verified && verified.slotId === choice.slotId &&
+      verified.mode === choice.mode && verified.facetKey === choice.facetKey);
+  }, [activeChoice, dialogSlots, messages]);
+
+  const handleQuickReply = useCallback((choice: ActiveChoice, value: string) => {
     // Re-entrancy guard: ignore clicks while a request is in flight. The ref
     // catches double-clicks that fire before isLoading flips, the state check
     // covers the rendered-disabled case.
-    if (isLoading || sendingRef.current || pendingQuickReply !== null) return;
+    if (isLoading || sendingRef.current || pendingQuickReply !== null ||
+        !choiceIsCurrent(choice) || !choice.replies.some(reply => reply.value === value)) return;
     setPendingQuickReply(value);
     handleSend(value);
-  }, [isLoading, pendingQuickReply, handleSend]);
+  }, [isLoading, pendingQuickReply, choiceIsCurrent, handleSend]);
+
+  const handleCustomReply = useCallback((choice: ActiveChoice) => {
+    if (!isLoading && !sendingRef.current && choiceIsCurrent(choice)) inputRef.current?.focus();
+  }, [isLoading, choiceIsCurrent]);
 
 
   const ProductCard = ({ product }: { product: Product }) => (
@@ -697,33 +778,32 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                     </div>
                   )}
 
-                  {message.role === 'assistant' && message.quickReplies && message.quickReplies.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {message.quickReplies.map((qr, i) => {
-                        const isPending = pendingQuickReply === qr.value;
-                        const isBlocked = isLoading || pendingQuickReply !== null;
-                        return (
-                          <button
-                            key={`${message.id}-qr-${i}`}
-                            type="button"
-                            onClick={() => handleQuickReply(qr.value)}
-                            disabled={isBlocked}
-                            aria-busy={isPending}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:cursor-not-allowed ${
-                              isPending
-                                ? 'bg-primary text-primary-foreground border-primary opacity-90'
-                                : 'bg-primary/15 text-primary border-primary/30 hover:bg-primary/25 disabled:opacity-50'
-                            }`}
-                          >
-                            {isPending ? (
-                              <span className="inline-flex items-center gap-1.5">
-                                <span className="w-3 h-3 border-2 border-primary-foreground/40 border-t-primary-foreground rounded-full animate-spin" />
-                                {qr.label}
-                              </span>
-                            ) : qr.label}
-                          </button>
-                        );
-                      })}
+                  {message.role === 'assistant' && activeChoice &&
+                    activeChoice.messageId === message.id &&
+                    choiceIsCurrent(activeChoice) &&
+                    !isLoading && (
+                    <div className="mt-3 flex flex-wrap gap-2" role="group"
+                      aria-label={activeChoice.mode === 'freeform' ? 'Ответить на уточнение' : 'Варианты ответа'}>
+                      {activeChoice.replies.map((qr) => (
+                        <button
+                          key={`${message.id}-qr-${qr.value}`}
+                          type="button"
+                          onClick={() => handleQuickReply(activeChoice, qr.value)}
+                          disabled={pendingQuickReply !== null}
+                          aria-busy={pendingQuickReply === qr.value}
+                          className="min-h-11 max-w-full break-words px-3 py-2 rounded-full text-xs font-medium border border-primary/30 bg-primary/15 text-primary transition-colors hover:bg-primary/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {qr.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => handleCustomReply(activeChoice)}
+                        disabled={pendingQuickReply !== null}
+                        className="min-h-11 max-w-full break-words px-3 py-2 rounded-full text-xs font-medium border border-sidebar-border bg-sidebar-accent text-widget-text transition-colors hover:bg-sidebar-accent/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Напишу свой вариант
+                      </button>
                     </div>
                   )}
                 </div>
@@ -751,6 +831,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           <div className="flex flex-col gap-1">
             <div className="flex gap-2">
               <input
+                ref={inputRef}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value.slice(0, 2000))}

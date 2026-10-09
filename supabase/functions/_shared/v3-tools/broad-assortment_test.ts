@@ -19,6 +19,12 @@ Deno.test("broad assortment is structural and does not capture an exact all-item
   assert(buildBroadAssortmentClarification(discover).includes("Розетки"));
 });
 
+Deno.test("broad assortment examples match only the offered catalog choices", () => {
+  const question = buildBroadAssortmentClarification(discover, ["Выключатели", "Рамки"]);
+  assert(question.includes("Выключатели, Рамки"));
+  assertEquals(question.includes("Розетки"), false);
+});
+
 Deno.test("broad assortment scope is extracted structurally without a brand dictionary", () => {
   assertEquals(extractBroadAssortmentScope("покажи ассортимент Gallant на сайте"), "Gallant");
   assertEquals(extractBroadAssortmentScope("Покажи ассортимент бренда Schneider Electric в каталоге"), "Schneider Electric");

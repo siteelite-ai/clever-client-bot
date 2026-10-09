@@ -1,0 +1,193 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": false,
+  "cases": [
+    {
+      "id": "audit-01-vvg-3x1_5-cheapest",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 5207,
+              "log_id": "7bac422c-bfff-4f78-ba46-434a5673fa36",
+              "products_count": 1,
+              "products": [
+                "Кабель ВВГ 3*1,5 ГОСТ IK"
+              ],
+              "text": "Ищу в каталоге точную маркировку «кабель ввг 3*1,5» и сортирую точные совпадения от самой низкой цены; товары с другим составным размером не показываю.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-6bf59292",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "3×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Exact compound marking: подтверждено 1",
+                  "duration_ms": 2131
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-06-corn-e14",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 23274,
+              "log_id": "d1c37c6b-614e-4984-aff1-8b4720ca1986",
+              "products_count": 3,
+              "products": [
+                "Лампа LED CORN капсула 5Вт 230В 4000К керамика E14 ИЭК",
+                "Лампа LED CORN капсула 7Вт 230В 4000К керамика E14 ИЭК",
+                "Лампа светодиодная CORN капсула 7Вт 230В 3000К керамика E14 IEK"
+              ],
+              "text": "Показываю варианты класса «Corn», прошедшие проверку соответствия заявленному типу товара.",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-84f16838",
+                "mandatory_criteria": [
+                  {
+                    "key": "Тип цоколя",
+                    "op": "eq",
+                    "value": "E14",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 2341
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "jargon_recover_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 3",
+                  "duration_ms": 12991
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 3",
+                  "duration_ms": null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "audit-15-analog-cctv-outdoor-cable",
+      "passed": false,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": false,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 989,
+              "log_id": "8360cc21-5755-439b-9592-c5813d9d238e",
+              "products_count": 0,
+              "products": [],
+              "text": "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": false,
+              "duration_ms": 6941,
+              "log_id": "f1f4a361-91bb-4a89-9d07-23c4df8b5e22",
+              "products_count": 0,
+              "products": [],
+              "text": "\n\nНе удалось завершить ответ из-за внутренней ошибки. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "failures": [
+                "products 0 < 1",
+                "none of required text fragments found: коакси, RG-59, RG59, КВК",
+                "selection contract misses required groups: [75] [УФ, ультрафиолет, UV, улич, наружн]",
+                "diagnostic error: internal_error"
+              ],
+              "diagnostic_error": "internal_error",
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Кабель и провод»: 741 тов., фасетов 29, листьев 15",
+                  "duration_ms": 2788
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -11,6 +11,16 @@ export interface ResultCardinalityContext {
   superlative?: boolean;
 }
 
+/** Right-sizing may prefer a narrow numeric tier for an open-ended request,
+ * but must not discard eligible adjacent tiers when the customer explicitly
+ * asked for a minimum number of alternatives. */
+export function numericTierMinimumForCardinality(
+  contract: ResultCardinalityContract,
+): number {
+  if (contract.explicit) return Math.max(1, contract.minimum);
+  return contract.target <= 1 ? 1 : 2;
+}
+
 const MAX_RENDERED_PRODUCTS = 10;
 const MAX_CANDIDATE_WINDOW = 50;
 const DEFAULT_SELECTION_TARGET = 4;
@@ -189,4 +199,29 @@ export function resultCardinalityShortfallText(
   }
   const noun = actual === 1 ? "вариант" : "варианта";
   return `По заданным условиям удалось подтвердить только ${actual} ${noun}; остальные найденные карточки не прошли те же обязательные критерии.`;
+}
+
+/** Bounded supplementary lookup for a verified but incomplete selection.
+ * Never widens exact lexical routes or a pool without catalog-backed facets.
+ * Eligibility remains the caller's responsibility, including unprojected criteria. */
+export function buildCardinalityVerificationSearches(input: {
+  eligible_count: number;
+  contract: ResultCardinalityContract;
+  mandatory_options: Record<string, string[]>;
+  leaf_categories: string[];
+  lexical_route: boolean;
+}): Record<string, unknown>[] {
+  if (
+    input.lexical_route || input.contract.target <= 1 ||
+    input.eligible_count >= input.contract.minimum ||
+    Object.keys(input.mandatory_options).length === 0
+  ) return [];
+  const common = {
+    mode: "by_filter",
+    options: input.mandatory_options,
+    per_page: 50,
+  };
+  return input.leaf_categories.length > 0
+    ? [{ ...common, category_in: input.leaf_categories }, common]
+    : [common];
 }

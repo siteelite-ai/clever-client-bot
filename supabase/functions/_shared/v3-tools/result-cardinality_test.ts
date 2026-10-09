@@ -1,12 +1,68 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildCardinalityVerificationSearches,
   capResultCandidateIds,
   ensureSearchCapacity,
   expandResultCandidateIds,
+  numericTierMinimumForCardinality,
   resolveResultCardinality,
   resultCardinalityCandidateWindow,
   resultCardinalityShortfallText,
 } from "./result-cardinality.ts";
+
+Deno.test("numeric tier preference preserves explicit requested alternative counts", () => {
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Покажи 3 варианта от 2,5 мм²", { selection: true }),
+  ), 3);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Дай несколько вариантов", { selection: true }),
+  ), 3);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Какой кабель подойдёт?", { selection: true }),
+  ), 2);
+  assertEquals(numericTierMinimumForCardinality(
+    resolveResultCardinality("Покажи один вариант", { selection: true }),
+  ), 1);
+});
+
+Deno.test("incomplete selections search mandatory facets without weakening them", () => {
+  const input = {
+    eligible_count: 1,
+    contract: resolveResultCardinality("дай несколько вариантов", {
+      selection: true,
+    }),
+    mandatory_options: { feature: ["yes"], size: ["16"] },
+    leaf_categories: ["Live category"],
+    lexical_route: false,
+  };
+  const searches = buildCardinalityVerificationSearches(input);
+  assertEquals(searches.length, 2);
+  assertEquals(searches.map((search) => search.options), [
+    input.mandatory_options,
+    input.mandatory_options,
+  ]);
+  assertEquals(searches[0].category_in, input.leaf_categories);
+  assertEquals(searches[1].category_in, undefined);
+  assertEquals(
+    buildCardinalityVerificationSearches({ ...input, eligible_count: 3 }),
+    [],
+  );
+  assertEquals(
+    buildCardinalityVerificationSearches({ ...input, lexical_route: true }),
+    [],
+  );
+  assertEquals(
+    buildCardinalityVerificationSearches({ ...input, mandatory_options: {} }),
+    [],
+  );
+  assertEquals(
+    buildCardinalityVerificationSearches({
+      ...input,
+      contract: { target: 1, minimum: 1, mode: "single", explicit: false },
+    }),
+    [],
+  );
+});
 
 Deno.test("cardinality distinguishes card counts from product measurements", () => {
   assertEquals(
@@ -63,10 +119,13 @@ Deno.test("single-result intents remain single", () => {
 
 Deno.test("plural price superlatives sort a selection instead of collapsing it to one card", () => {
   assertEquals(
-    resolveResultCardinality("Покажи самые дешевые светильники Philips для офиса", {
-      selection: true,
-      superlative: true,
-    }),
+    resolveResultCardinality(
+      "Покажи самые дешевые светильники Philips для офиса",
+      {
+        selection: true,
+        superlative: true,
+      },
+    ),
     { target: 4, minimum: 3, mode: "selection", explicit: false },
   );
   assertEquals(

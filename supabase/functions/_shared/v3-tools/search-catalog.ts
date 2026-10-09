@@ -1,7 +1,14 @@
 // V3 tool: search_catalog — minimal 220volt /products wrapper.
 // Data-agnostic: baseUrl + apiToken injected from caller.
 
-import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
+import type {
+  ProductCache,
+  ProductRef,
+  SearchCatalogOk,
+  SearchCatalogPriceSortCoverage,
+  SearchCatalogPriceSortPartialReason,
+  ToolError,
+} from "./types.ts";
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
@@ -106,6 +113,10 @@ export interface CatalogClientDeps {
   apiToken: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Absolute request deadline shared by every page, retry and recovery. */
+  deadlineAtMs?: number;
+  signal?: AbortSignal;
+  onDeadlineExceeded?: () => void;
 }
 
 export interface SearchCatalogInput {
@@ -282,8 +293,104 @@ function extractBrand(p: Record<string, unknown>): string | null {
 }
 
 type SingleSearchResult =
-  | { ok: true; total: number; results: ProductRef[] }
+  | {
+    ok: true;
+    total: number;
+    results: ProductRef[];
+    rawCount: number;
+    rawIds: string[];
+    reportedTotal: number | null;
+    priceSortCoverage?: SearchCatalogPriceSortCoverage;
+  }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
+
+function priceSortCoverage(
+  scanned: number,
+  total: number | null,
+  reasons: SearchCatalogPriceSortPartialReason[],
+): SearchCatalogPriceSortCoverage {
+  const distinctReasons = [...new Set(reasons)];
+  return {
+    status: distinctReasons.length === 0 ? "full" : "partial",
+    scanned,
+    total,
+    reasons: distinctReasons,
+  };
+}
+
+function catalogDeadlineExceeded(deps: CatalogClientDeps): boolean {
+  return Boolean(deps.signal?.aborted) ||
+    (typeof deps.deadlineAtMs === "number" && Date.now() >= deps.deadlineAtMs);
+}
+
+function catalogDeadlineFailure(
+  deps: CatalogClientDeps,
+): Extract<SingleSearchResult, { ok: false }> {
+  deps.onDeadlineExceeded?.();
+  return {
+    ok: false,
+    error_code: "catalog_timeout",
+    message: "catalog_turn_deadline_exceeded",
+  };
+}
+
+function isTurnDeadlineFailure(
+  result: SingleSearchResult,
+): result is Extract<SingleSearchResult, { ok: false }> & {
+  message: "catalog_turn_deadline_exceeded";
+} {
+  return !result.ok && result.error_code === "catalog_timeout" &&
+    result.message === "catalog_turn_deadline_exceeded";
+}
+
+/** Bound even an injected/non-compliant fetch that ignores AbortSignal. */
+function awaitCatalogAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("catalog request aborted", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("catalog request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
+async function waitCatalogRetry(
+  delayMs: number,
+  deps: CatalogClientDeps,
+): Promise<boolean> {
+  if (catalogDeadlineExceeded(deps)) return false;
+  const remaining = typeof deps.deadlineAtMs === "number"
+    ? Math.max(0, deps.deadlineAtMs - Date.now())
+    : delayMs;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      deps.signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.min(delayMs, remaining));
+    deps.signal?.addEventListener("abort", finish, { once: true });
+    if (deps.signal?.aborted) finish();
+  });
+  return !catalogDeadlineExceeded(deps);
+}
 
 /** Один HTTP-вызов /products. Применяет input как есть, плюс опциональный single `category` override. */
 async function singleSearch(
@@ -292,8 +399,14 @@ async function singleSearch(
   cache: ProductCache,
   categoryOverride?: string,
 ): Promise<SingleSearchResult> {
+  if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 8000;
+  const timeoutMs = Math.min(
+    deps.timeoutMs ?? 8000,
+    typeof deps.deadlineAtMs === "number"
+      ? Math.max(1, deps.deadlineAtMs - Date.now())
+      : Number.POSITIVE_INFINITY,
+  );
 
   const params = new URLSearchParams();
   if (input.mode === "by_article" && input.article) params.append("article", input.article);
@@ -321,24 +434,43 @@ async function singleSearch(
   const url = `${deps.baseUrl}/products?${params}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onOuterAbort = () => controller.abort(deps.signal?.reason);
+  deps.signal?.addEventListener("abort", onOuterAbort, { once: true });
+  if (deps.signal?.aborted) onOuterAbort();
 
   try {
-    const res = await fetchImpl(url, {
+    const res = await awaitCatalogAbort(fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
       signal: controller.signal,
-    });
+    }), controller.signal);
 
     if (!res.ok) {
-      await res.body?.cancel();
+      if (res.body) await awaitCatalogAbort(res.body.cancel(), controller.signal);
       if (res.status === 429) return { ok: false, error_code: "rate_limited", message: `429 from catalog` };
       if (res.status >= 500) return { ok: false, error_code: "transport_5xx", message: `${res.status}` };
       return { ok: false, error_code: "bad_input", message: `${res.status}` };
     }
 
-    const json = await res.json() as { data?: { results?: unknown[]; pagination?: { total?: number } } };
+    const json = await awaitCatalogAbort(res.json(), controller.signal) as {
+      data?: { results?: unknown[]; pagination?: { total?: number } };
+    };
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
     const rawResults = Array.isArray(json?.data?.results) ? json.data!.results! : [];
-    const total = Number(json?.data?.pagination?.total ?? rawResults.length) || 0;
+    const rawIds = (rawResults as Array<Record<string, unknown>>)
+      .map((raw) => String(raw?.id ?? "").trim())
+      .filter(Boolean);
+    const reportedTotalRaw: unknown = json?.data?.pagination?.total;
+    const reportedTotalNumber = Number(reportedTotalRaw);
+    const hasReportedTotal = typeof reportedTotalRaw === "number" ||
+      (typeof reportedTotalRaw === "string" && reportedTotalRaw.trim().length > 0);
+    const reportedTotal = hasReportedTotal &&
+        Number.isSafeInteger(reportedTotalNumber) && reportedTotalNumber >= 0
+      ? reportedTotalNumber
+      : null;
+    // Keep the legacy public total fallback. Coverage uses reportedTotal so a
+    // missing/invalid pagination total cannot masquerade as an exhaustive scan.
+    const total = Number(reportedTotalRaw ?? rawResults.length) || 0;
 
     const results: ProductRef[] = [];
     for (const raw of rawResults as Array<Record<string, unknown>>) {
@@ -372,19 +504,34 @@ async function singleSearch(
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       const facetValues = extractFacetValues(raw);
+      // Every value here comes from an actual options row on a catalog card.
+      // Repeated pages/branches can return a sparse copy of the same id; do
+      // not erase earlier raw evidence when a later card omits that key. If
+      // it supplies the same key, use the latest raw value as before: some
+      // consumers accept any one value, so unioning conflicting values would
+      // widen eligibility rather than fail closed.
+      const mergedFacetValues = { ...(cache.get(id)?.facet_values ?? {}) };
+      for (const [key, values] of Object.entries(facetValues)) {
+        mergedFacetValues[key] = values;
+      }
       cache.set(id, {
         ...ref,
         url: u,
-        ...(Object.keys(facetValues).length > 0 ? { facet_values: facetValues } : {}),
+        ...(Object.keys(mergedFacetValues).length > 0 ? { facet_values: mergedFacetValues } : {}),
       });
       results.push(ref);
     }
-    return { ok: true, total, results };
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
+    return { ok: true, total, results, rawCount: rawResults.length, rawIds, reportedTotal };
   } catch (e) {
-    const isAbort = (e as { name?: string })?.name === "AbortError";
+    if (catalogDeadlineExceeded(deps)) return catalogDeadlineFailure(deps);
+    const isAbort = ["AbortError", "TimeoutError"].includes(
+      (e as { name?: string })?.name ?? "",
+    );
     return { ok: false, error_code: isAbort ? "catalog_timeout" : "transport_5xx", message: (e as Error)?.message ?? "fetch failed" };
   } finally {
     clearTimeout(timer);
+    deps.signal?.removeEventListener("abort", onOuterAbort);
   }
 }
 
@@ -423,6 +570,8 @@ async function recoverUnmaterializedCatalogWindow(
   const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   const pagesToScan = Math.max(1, Math.ceil(Math.min(primary.total, MAX_SORT_FETCH) / SORT_PAGE_SIZE));
   const recoveredById = new Map<string, ProductRef>();
+  let rawCount = primary.rawCount;
+  const rawIds = [...primary.rawIds];
 
   // Use a stable 50-row page size for the recovery window. Requests are
   // sequential and stop on the first page with usable cards, so a malformed
@@ -435,9 +584,12 @@ async function recoverUnmaterializedCatalogWindow(
       categoryOverride,
     );
     if (!candidatePage.ok) {
+      if (isTurnDeadlineFailure(candidatePage)) return candidatePage;
       if (candidatePage.error_code === "rate_limited") break;
       continue;
     }
+    rawCount += candidatePage.rawCount;
+    rawIds.push(...candidatePage.rawIds);
     for (const product of candidatePage.results) {
       if (!recoveredById.has(product.id)) recoveredById.set(product.id, product);
     }
@@ -446,11 +598,11 @@ async function recoverUnmaterializedCatalogWindow(
   const recovered = [...recoveredById.values()].slice(0, requestedPerPage);
   if (recovered.length > 0) {
     warnings.push(`catalog_materialization_recovered:${recovered.length}/${primary.total}`);
-    return { ok: true, total: primary.total, results: recovered };
+    return { ok: true, total: primary.total, results: recovered, rawCount, rawIds, reportedTotal: primary.reportedTotal };
   }
 
   warnings.push(`catalog_unmaterialized_total:${primary.total}`);
-  return { ok: true, total: 0, results: [] };
+  return { ok: true, total: 0, results: [], rawCount, rawIds, reportedTotal: primary.reportedTotal };
 }
 
 /**
@@ -507,6 +659,11 @@ async function singleSearchSorted(
   if (!first.ok) return first;
   const all: ProductRef[] = [...first.results];
   const totalApi = first.total;
+  const reportedTotal = first.reportedTotal;
+  let coverageTotal = reportedTotal;
+  let scanned = first.rawCount;
+  const rawIds = [...first.rawIds];
+  const coverageReasons: SearchCatalogPriceSortPartialReason[] = [];
   const cap = Math.min(totalApi, MAX_SORT_FETCH);
   const pagesNeeded = Math.ceil(cap / SORT_PAGE_SIZE);
   if (pagesNeeded > 1) {
@@ -515,10 +672,26 @@ async function singleSearchSorted(
         singleSearch({ ...input, per_page: SORT_PAGE_SIZE, page: i + 2 }, deps, cache, categoryOverride),
       ),
     );
+    const timedOut = extra.find(isTurnDeadlineFailure);
+    if (timedOut) return timedOut;
     for (const r of extra) {
-      if (r.ok) all.push(...r.results);
+      if (r.ok) {
+        all.push(...r.results);
+        scanned += r.rawCount;
+        rawIds.push(...r.rawIds);
+        if (r.reportedTotal !== reportedTotal) {
+          coverageTotal = null;
+          coverageReasons.push(r.reportedTotal === null ? "unknown_total" : "pagination_total_changed");
+        }
+      } else {
+        coverageReasons.push(r.error_code === "catalog_timeout" ? "page_timeout" : "page_error");
+      }
     }
   }
+  // Counting duplicate rows as newly scanned candidates would produce a
+  // false "full" at exactly the advertised total. Check raw IDs before the
+  // materialized-card dedup hides the overlap.
+  if (new Set(rawIds).size < rawIds.length) coverageReasons.push("overlapping_raw_ids");
   // Дедуп по id (на случай если API повторит товар на стыке страниц).
   const byId = new Map<string, ProductRef>();
   for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
@@ -528,12 +701,30 @@ async function singleSearchSorted(
   const sorted = [...byId.values()].sort(cmp);
   if (totalApi > MAX_SORT_FETCH) {
     warnings.push(`sort_truncated:${totalApi}>${MAX_SORT_FETCH}`);
+    coverageReasons.push("raw_row_cap");
   }
+  if (coverageTotal === null && !coverageReasons.includes("pagination_total_changed")) {
+    coverageReasons.push("unknown_total");
+  }
+  // A successful HTTP response can still return fewer raw rows than its
+  // advertised pagination total. Do not call that a complete price scan.
+  if (coverageTotal !== null && scanned !== coverageTotal && coverageReasons.length === 0) {
+    coverageReasons.push("incomplete_raw_window");
+  }
+  const coverage = priceSortCoverage(scanned, coverageTotal, coverageReasons);
   if (totalApi > 0 && sorted.length === 0) {
     warnings.push(`catalog_unmaterialized_total:${totalApi}`);
-    return { ok: true, total: 0, results: [] };
+    return { ok: true, total: 0, results: [], rawCount: scanned, rawIds, reportedTotal, priceSortCoverage: coverage };
   }
-  return { ok: true, total: totalApi, results: sorted.slice(0, requestedPerPage) };
+  return {
+    ok: true,
+    total: totalApi,
+    results: sorted.slice(0, requestedPerPage),
+    rawCount: scanned,
+    rawIds,
+    reportedTotal,
+    priceSortCoverage: coverage,
+  };
 }
 
 async function singleSearchSortedWithCompoundFallback(
@@ -561,11 +752,36 @@ async function singleSearchSortedWithCompoundFallback(
     categoryOverride,
     warnings,
   );
-  if (!retry.ok || retry.total <= 0) return primary;
+  if (isTurnDeadlineFailure(retry)) return retry;
+  // The canonical spelling is part of this search attempt. An empty primary
+  // cannot be called a full price scan when its equivalent retry failed or
+  // scanned only part of its own raw range.
+  const primaryCoverage = primary.priceSortCoverage;
+  const retryCoverage = retry.ok ? retry.priceSortCoverage : undefined;
+  let combinedCoverage: SearchCatalogPriceSortCoverage | undefined;
+  if (primaryCoverage) {
+    const reasons: SearchCatalogPriceSortPartialReason[] = [
+      ...primaryCoverage.reasons,
+      ...(retryCoverage?.reasons ?? []),
+    ];
+    if (!retry.ok) reasons.push("canonical_retry_error");
+    else if (!retryCoverage) reasons.push("unknown_total");
+    const total = retryCoverage && primaryCoverage.total !== null && retryCoverage.total !== null
+      ? primaryCoverage.total + retryCoverage.total
+      : null;
+    combinedCoverage = priceSortCoverage(
+      primaryCoverage.scanned + (retryCoverage?.scanned ?? 0),
+      total,
+      reasons,
+    );
+  }
+  if (!retry.ok || retry.total <= 0) {
+    return combinedCoverage ? { ...primary, priceSortCoverage: combinedCoverage } : primary;
+  }
   if (!warnings.includes("compound_query_variant_retry")) {
     warnings.push("compound_query_variant_retry");
   }
-  return retry;
+  return combinedCoverage ? { ...retry, priceSortCoverage: combinedCoverage } : retry;
 }
 
 async function searchWithRateLimitRetry(
@@ -577,7 +793,7 @@ async function searchWithRateLimitRetry(
 ): Promise<SingleSearchResult> {
   let result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
   for (let attempt = 1; !result.ok && result.error_code === "rate_limited" && attempt <= 2; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    if (!await waitCatalogRetry(500 * attempt, deps)) return catalogDeadlineFailure(deps);
     result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
     if (result.ok && !warnings.includes("rate_limit_retry_recovered")) warnings.push("rate_limit_retry_recovered");
   }
@@ -589,6 +805,10 @@ export async function executeSearchCatalog(
   deps: CatalogClientDeps,
   cache: ProductCache,
 ): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  if (catalogDeadlineExceeded(deps)) {
+    const timeout = catalogDeadlineFailure(deps);
+    return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+  }
   // Валидация режима.
   if (input.mode === "by_article" && !input.article) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_article requires article" };
   if (input.mode === "by_pagetitle" && !input.pagetitle) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_pagetitle requires pagetitle" };
@@ -631,8 +851,20 @@ export async function executeSearchCatalog(
   // Один запрос: нет ни category fan-out, ни OR-альтернатив фасета.
   if (categories.length <= 1 && optionVariants.length === 1) {
     const r = await searchWithRateLimitRetry(optionVariants[0], deps, cache, categories[0], warnings);
+    if (catalogDeadlineExceeded(deps)) {
+      const timeout = catalogDeadlineFailure(deps);
+      return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+    }
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
-    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
+    return {
+      tool: "search_catalog",
+      ok: true,
+      mode: input.mode,
+      total: r.total,
+      results: r.results,
+      ...(r.priceSortCoverage ? { price_sort_coverage: r.priceSortCoverage } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   // Fan-out: Cartesian product of leaf categories and exact option variants.
@@ -651,6 +883,10 @@ export async function executeSearchCatalog(
       const batch = await Promise.all(categoryVariants.map((cat) =>
         searchWithRateLimitRetry(variant, deps, cache, cat, warnings)
       ));
+      if (catalogDeadlineExceeded(deps)) {
+        const timeout = catalogDeadlineFailure(deps);
+        return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+      }
       settled.push(...batch);
       for (const result of batch) {
         if (result.ok) result.results.forEach((product) => collected.add(product.id));
@@ -661,6 +897,14 @@ export async function executeSearchCatalog(
     settled.push(...await Promise.all(
       categoryVariants.map((cat) => searchWithRateLimitRetry(optionVariants[0], deps, cache, cat, warnings)),
     ));
+  }
+  if (catalogDeadlineExceeded(deps)) {
+    const timeout = catalogDeadlineFailure(deps);
+    return { tool: "search_catalog", ok: false, error_code: "catalog_timeout", message: timeout.message };
+  }
+  const timedOut = settled.find(isTurnDeadlineFailure);
+  if (timedOut) {
+    return { tool: "search_catalog", ok: false, error_code: timedOut.error_code, message: timedOut.message };
   }
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {
@@ -685,6 +929,27 @@ export async function executeSearchCatalog(
     }
   }
   const merged = [...mergedById.values()];
+  let coverage: SearchCatalogPriceSortCoverage | undefined;
+  if (input.sort_cheapest || input.sort_expensive) {
+    const branchCoverages = okResults.map((result) => result.priceSortCoverage);
+    const failures = settled.filter((result): result is Extract<SingleSearchResult, { ok: false }> => !result.ok);
+    const skippedBranches = categoryVariants.length * optionVariants.length - settled.length;
+    const coverageReasons: SearchCatalogPriceSortPartialReason[] = branchCoverages.flatMap(
+      (branch) => branch?.reasons ?? ["branch_error"],
+    );
+    for (const failure of failures) {
+      coverageReasons.push(failure.error_code === "catalog_timeout" ? "branch_timeout" : "branch_error");
+    }
+    if (skippedBranches > 0) coverageReasons.push("branch_skipped");
+    const knownTotal = branchCoverages.reduce((sum, branch) => sum + (branch?.total ?? 0), 0);
+    const hasUnknownTotal = skippedBranches > 0 || failures.length > 0 ||
+      branchCoverages.some((branch) => !branch || branch.total === null);
+    coverage = priceSortCoverage(
+      branchCoverages.reduce((sum, branch) => sum + (branch?.scanned ?? 0), 0),
+      hasUnknownTotal ? null : knownTotal,
+      coverageReasons,
+    );
+  }
   // После fan-out пересортируем мердж, если запрошена сортировка по цене,
   // т.к. слияние нескольких листьев нарушает порядок.
   if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
@@ -696,6 +961,7 @@ export async function executeSearchCatalog(
     mode: input.mode,
     total: totalSum, // суммарный total по веткам (грубая оценка; дедуп — на уровне results)
     results: merged.slice(0, perPage),
+    ...(coverage ? { price_sort_coverage: coverage } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }

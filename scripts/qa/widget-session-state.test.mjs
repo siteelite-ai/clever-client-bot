@@ -454,6 +454,45 @@ test('accepted request is never executed again when its SSE connection breaks', 
   dom.window.close();
 });
 
+test('catalog deadline diagnostic preserves the completed SSE answer without a connection error or duplicate bubble', async () => {
+  const answer = 'Проверка каталога заняла слишком много времени; результаты не подтверждены. Повторите запрос.';
+  const logId = 'catalog-deadline-log';
+  let fetchCount = 0;
+  const sse = [
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0, error: 'catalog_deadline_exceeded' } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Подбери светильник для двора';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  send.click();
+
+  const deadline = Date.now() + 2_000;
+  while (send.disabled && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const assistantBubbles = Array.from(dom.window.document.querySelectorAll('.volt-message.assistant'))
+    .filter((bubble) => bubble.textContent.includes(answer));
+  assert.equal(fetchCount, 1, 'a completed diagnostic must not trigger a replay or another execution');
+  assert.equal(assistantBubbles.length, 1, 'the honest deadline answer must appear once');
+  assert.match(visibleMessages(dom), new RegExp(logId, 'u'));
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Соединение прервалось|Ответ получен не полностью/iu);
+  assert.equal(readState(dom).history.filter((message) => message.role === 'assistant' && message.content === answer).length, 1);
+  dom.window.close();
+});
+
 test('request_pending replay continues on the next route instead of replacing the answer', async () => {
   let fetchCount = 0;
   let executionCount = 0;

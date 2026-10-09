@@ -260,11 +260,29 @@ export function extractCustomerApplicationContexts(
     const tokens = normalize(source).split(/\s+/u).filter(Boolean);
     const ignoredModifier =
       /^(?:сам\p{L}*|дешев\p{L}*|дорог\p{L}*|недорог\p{L}*|бюджетн\p{L}*|нескольк\p{L}*|все|кажд\p{L}*|подходящ\p{L}*)$/u;
+    // The word immediately before a class can be the customer's selection
+    // command ("найди автомат"), not an adjective describing application.
+    // Keep this grammatical and independent of product/category vocabulary.
+    const requestWord =
+      /^(?:найд(?:и|ите)|подбер(?:и|ите)|покаж(?:и|ите)|предлож(?:и|ите)|выбер(?:и|ите)|куп(?:и|ите)|закаж(?:и|ите)|подскаж(?:и|ите)|посоветуй(?:те)?|дай|дайте|ищу|ищем|хочу|нуж(?:ен|на|но|ны)|необходим(?:а|о|ы)?|требу(?:ется|ются))$/u;
+    // An adjacent application modifier must actually describe the item.
+    // Pronouns and sentence-frame words in «есть ли у вас …» are not
+    // suitability requirements. Russian adjectival endings keep this gate
+    // independent of product/category vocabulary, while explicit «для …»
+    // phrases above remain available for non-adjectival use cases.
+    const grammaticalWord =
+      /^(?:я|мы|вы|ты|он|она|они|оно|меня|мне|мной|нас|нам|нами|вас|вам|вами|тебя|тебе|его|ему|ее|ей|их|им|мой|моя|мое|мои|моего|моей|наш|наша|наше|наши|ваш|ваша|ваше|ваши|свой|своя|свое|свои|этот|эта|это|эти|того|такой|такая|такие|какой|какая|какое|какие|есть|имеется|имеются|бывает|бывают|наличии)$/u;
+    const adjectiveEnding =
+      /(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ыми|ими|ым|им|ом|ем|ых|их|ую|юю|ою|ею)$/u;
     for (let index = 1; index < tokens.length; index += 1) {
       if (!classStems.has(stem(tokens[index]))) continue;
       const candidate = tokens[index - 1];
       if (
         !candidate || ignoredModifier.test(candidate) ||
+        requestWord.test(candidate) ||
+        grammaticalWord.test(candidate) ||
+        classStems.has(stem(candidate)) ||
+        !adjectiveEnding.test(candidate) ||
         meaningfulTokens(candidate).length === 0
       ) continue;
       if (contexts.some((known) => normalize(known) === candidate)) continue;

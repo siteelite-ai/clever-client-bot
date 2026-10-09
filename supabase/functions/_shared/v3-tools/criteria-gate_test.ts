@@ -5,6 +5,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   applyCriteriaGate,
   buildCriteriaQuery,
+  catalogFilterProvenCriteria,
   checkCriterion,
   type Criterion,
   extendSelectionCriteriaPlan,
@@ -31,6 +32,120 @@ import {
   titleProvesCompactCriterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
+
+Deno.test("rendered boolean facts require a customer-owned label, not incidental assent", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: "Изделие",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Диммирование: Да", "Защита: Да", "Разборный: Нет"],
+  }));
+  for (
+    const message of ["Одно изделие для всей задачи", "Да", "нет", "Для дачи"]
+  ) {
+    assertEquals(projectCommonRenderedUserCriteria(products, message), []);
+  }
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Диммирование: да"),
+    [{
+      key: "Диммирование",
+      op: "eq",
+      value: "Да",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
+  assertEquals(projectCommonRenderedUserCriteria(products, "Разборный: нет"), [{
+    key: "Разборный",
+    op: "eq",
+    value: "Нет",
+    level: "A",
+    evidence: "user_explicit",
+  }]);
+});
+
+Deno.test("catalog proof requires the actual request to constrain the same facet", () => {
+  const required: Criterion[] = [{
+    key: "Нужная функция",
+    op: "eq",
+    value: "да",
+    level: "A",
+  }];
+  const facets = [{
+    key: "feature",
+    caption: "Нужная функция",
+    unit: null,
+    values: [{ value: "да" }, { value: "нет" }],
+  }];
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_query",
+      query: "изделие с функцией",
+    }),
+    [],
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_filter",
+      options: { another: ["да"] },
+    }),
+    [],
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(required, facets, {
+      mode: "by_filter",
+      options: { feature: ["да", "нет"] },
+    }),
+    [],
+  );
+  const proof = catalogFilterProvenCriteria(required, facets, {
+    mode: "by_filter",
+    options: { feature: ["да"] },
+  });
+  assertEquals(proof, required);
+  assertEquals(catalogFilterProvenCriteria(required, facets, {
+    mode: "by_query",
+    query: "изделие",
+    options: { feature: ["да"] },
+  }), required);
+  const unproved = projectCatalogFilterEvidence([product("1", [])], []);
+  assertEquals(applyCriteriaGate(unproved, required).passed_ids, []);
+});
+
+Deno.test("catalog proof preserves exact alternatives but excludes missing requirements", () => {
+  const alternatives: Criterion[] = [
+    { key: "Исполнение", op: "eq", value: "A", level: "A" },
+    { key: "Исполнение", op: "eq", value: "B", level: "A" },
+  ];
+  const missing: Criterion = {
+    key: "Другой признак",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const facets = [{
+    key: "variant",
+    caption: "Исполнение",
+    unit: null,
+    values: [{ value: "A" }, { value: "B" }, { value: "C" }],
+  }];
+  assertEquals(
+    catalogFilterProvenCriteria([...alternatives, missing], facets, {
+      mode: "by_filter",
+      options: { variant: ["A", "B"] },
+    }),
+    alternatives,
+  );
+  assertEquals(
+    catalogFilterProvenCriteria(alternatives, facets, {
+      mode: "by_filter",
+      options: { variant: ["A", "C"] },
+    }),
+    [],
+  );
+});
 
 function product(id: string, traits: string[]): ProductRef {
   return {
@@ -122,6 +237,11 @@ Deno.test("derived minimum prefers the closest sufficient standard tier", () => 
       id
     ),
     ["a", "b", "c", "d"],
+  );
+  assertEquals(
+    preferClosestPassingNumericTier([...products].reverse(), [criterion], 3)
+      .map(({ id }) => id),
+    ["b", "a", "c", "d"],
   );
 });
 
@@ -783,6 +903,28 @@ Deno.test("an exact count rejects a visible additional compact component", () =>
   );
 });
 
+Deno.test("exact count uses every component of an additive dimensional marking", () => {
+  const criterion: Criterion = { key: "Количество жил", op: "eq", value: 3 };
+  for (const title of ["Кабель 3*2,5+1*1,5", "Кабель 1×1.5 + 3×2.5"]) {
+    assertEquals(titleContradictsExactCountCriterion(title, criterion), true);
+  }
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 2*2,5+1*1,5", criterion),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 3*2,5", criterion),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Изделие 3*2,5+1*1,5", {
+      ...criterion,
+      key: "Сечение",
+    }),
+    false,
+  );
+});
+
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
   assertEquals(parseNumSpan("12"), { min: 12, max: 12 });
   assertEquals(parseNumSpan("12,5 ед"), { min: 12.5, max: 12.5 });
@@ -1003,6 +1145,305 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
   );
 });
 
+Deno.test("sparse affirmative feature proof requires intrinsic ownership or activation", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const compatible = {
+    ...product("compatible", []),
+    pagetitle: "Светильник совместим с датчиком движения",
+  };
+  const connection = {
+    ...product("connection", []),
+    description_excerpt: "Для подключения датчика движения предусмотрены клеммы.",
+  };
+  const connector = {
+    ...product("connector", []),
+    pagetitle: "Светильник с разъёмом для датчика движения",
+  };
+  const optional = {
+    ...product("optional", []),
+    pagetitle: "Светильник с опциональным датчиком движения",
+    description_excerpt: "Дополнительный датчик движения приобретается отдельно.",
+  };
+  const looseTrait = {
+    ...product("loose-trait", ["Совместимость с датчиком движения: да"]),
+    description_excerpt: "Подходит для подключения датчика движения.",
+  };
+  const articleOnly = {
+    ...product("article-only", []),
+    article: "датчик движения",
+  };
+  for (const candidate of [
+    compatible,
+    connection,
+    connector,
+    optional,
+    looseTrait,
+    articleOnly,
+  ]) {
+    assertEquals(checkCriterion(candidate, requirement).verdict, "unknown");
+  }
+  assertEquals(
+    applyCriteriaGate([
+      compatible,
+      connection,
+      connector,
+      optional,
+      looseTrait,
+      articleOnly,
+    ], [requirement]).passed_ids,
+    [],
+  );
+
+  const intrinsic = {
+    ...product("intrinsic", []),
+    pagetitle: "Светильник с микроволновым сенсором",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+  };
+  const embedded = {
+    ...product("embedded", []),
+    description_excerpt:
+      "Корпус оснащён встроенным датчиком движения для автоматического включения.",
+  };
+  const roomContext = {
+    ...product("room-context", []),
+    pagetitle: "Светильник для коридора с датчиком движения",
+  };
+  assertEquals(
+    applyCriteriaGate([intrinsic, embedded, roomContext], [requirement])
+      .passed_ids,
+    ["intrinsic", "embedded", "room-context"],
+  );
+});
+
+Deno.test("sparse boolean ownership works across categories without overriding exact facet proof", () => {
+  const requirement: Criterion = {
+    key: "С крышкой",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const withCover = {
+    ...product("with-cover", []),
+    pagetitle: "Розетка с защитной крышкой",
+  };
+  const equipped = {
+    ...product("equipped", []),
+    description_excerpt: "Корпус оснащён защитной крышкой.",
+  };
+  const compatible = {
+    ...product("compatible", []),
+    pagetitle: "Розетка совместима с крышкой",
+  };
+  const optional = {
+    ...product("optional", []),
+    description_excerpt: "Для установки крышки предусмотрено крепление.",
+  };
+  assertEquals(
+    applyCriteriaGate([withCover, equipped, compatible, optional], [requirement])
+      .passed_ids,
+    ["with-cover", "equipped"],
+  );
+  const exactTrait = {
+    ...compatible,
+    short_traits: ["С крышкой: да"],
+  };
+  assertEquals(checkCriterion(exactTrait, requirement).verdict, "pass");
+  const projected = projectCatalogFilterEvidence([compatible], [requirement]);
+  assertEquals(checkCriterion(projected[0], requirement).verdict, "pass");
+  assertEquals(
+    checkCriterion({
+      ...exactTrait,
+      pagetitle: "Розетка без крышки",
+    }, requirement).verdict,
+    "fail",
+  );
+});
+
+Deno.test("explicit negated feature ownership vetoes exact and projected affirmative proof", () => {
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const exact = product("exact", ["С датчиком движения: да"]);
+  for (const description_excerpt of [
+    "Светильник не оснащён датчиком движения.",
+    "Прибор не оборудован встроенным микроволновым датчиком движения.",
+    "Светильник не имеет датчика движения.",
+  ]) {
+    const contradicted = { ...exact, description_excerpt };
+    assertEquals(checkCriterion(contradicted, motion).verdict, "fail");
+    assertEquals(applyCriteriaGate([contradicted], [motion]).passed_ids, []);
+  }
+  const projected = projectCatalogFilterEvidence([
+    {
+      ...product("projected", []),
+      description_excerpt: "Не оснащён датчиком движения.",
+    },
+  ], [motion]);
+  assertEquals(checkCriterion(projected[0], motion).verdict, "fail");
+
+  const cover: Criterion = {
+    key: "С крышкой",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion({
+    ...product("cover", ["С крышкой: да"]),
+    pagetitle: "Розетка не имеет крышки",
+  }, cover).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...product("fine", ["С крышкой: да"]),
+    description_excerpt: "Не имеет проблем с крышкой при монтаже.",
+  }, cover).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...product("owned", []),
+    description_excerpt: "Корпус оснащён крышкой.",
+  }, cover).verdict, "pass");
+});
+
+Deno.test("negated activation vetoes only the named functional trigger", () => {
+  const protection: Criterion = {
+    key: "Защита от перегрузки",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion({
+    ...product("broken", ["Защита от перегрузки: да"]),
+    description_excerpt: "Защита не срабатывает при перегрузке.",
+  }, protection).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...product("fine", ["Защита от перегрузки: да"]),
+    description_excerpt: "Защита не срабатывает при штатной нагрузке.",
+  }, protection).verdict, "pass");
+});
+
+Deno.test("motion-sensor boolean cannot overrule acoustic activation in original prose", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const acoustic = {
+    ...product("acoustic", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с оптико-акустическим датчиком",
+    description_excerpt: "Включается от звука при низкой освещённости.",
+  };
+  const check = checkCriterion(acoustic, requirement);
+  assertEquals(check.verdict, "fail");
+  assertEquals(check.actual?.startsWith("Название: "), true);
+  assertEquals(applyCriteriaGate([acoustic], [requirement]).passed_ids, []);
+
+  // by_filter lineage is projected into short_traits, never into the original
+  // title/description. The contradiction must survive that projection.
+  const filtered = projectCatalogFilterEvidence([{
+    ...product("filtered", []),
+    pagetitle: "Светильник со звуковым датчиком",
+  }], [requirement]);
+  assertEquals(filtered[0].short_traits, ["С датчиком движения: да"]);
+  assertEquals(applyCriteriaGate(filtered, [requirement]).passed_ids, []);
+
+  const recovered = {
+    ...product("recovered", []),
+    description_excerpt: "Активация только по звуку; на движение не реагирует.",
+  };
+  assertEquals(checkCriterion(recovered, requirement).verdict, "fail");
+});
+
+Deno.test("motion-sensor gate retains genuine PIR and microwave evidence", () => {
+  const requirement: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  const pir = {
+    ...product("pir", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с PIR-датчиком движения",
+  };
+  const microwave = {
+    ...product("microwave", ["С датчиком движения: да"]),
+    description_excerpt:
+      "Микроволновый сенсор реагирует на движение в помещении.",
+  };
+  const dual = {
+    ...product("dual", ["С датчиком движения: да"]),
+    pagetitle: "Светильник со звуковым датчиком и датчиком движения",
+  };
+  assertEquals(
+    applyCriteriaGate([pir, microwave, dual], [requirement]).passed_ids,
+    ["pir", "microwave", "dual"],
+  );
+  const explicitlyAbsent = {
+    ...product("absent", ["С датчиком движения: да"]),
+    description_excerpt: "Датчик движения отсутствует; включение по звуку.",
+  };
+  assertEquals(checkCriterion(explicitlyAbsent, requirement).verdict, "fail");
+  const soundOnlyDespiteMotionTitle = {
+    ...product("sound-only", ["С датчиком движения: да"]),
+    pagetitle: "Светильник с датчиком движения",
+    description_excerpt: "Реагирует только на звук, не на движение.",
+  };
+  assertEquals(
+    checkCriterion(soundOnlyDespiteMotionTitle, requirement).verdict,
+    "fail",
+  );
+  const nonNegation = {
+    ...product("non-negation", ["С датчиком движения: да"]),
+    pagetitle: "Светильник со звуковым датчиком",
+    description_excerpt: "Нет проблем с датчиком движения при установке.",
+  };
+  assertEquals(checkCriterion(nonNegation, requirement).verdict, "pass");
+});
+
+Deno.test("motion-sensor contradiction leaves sparse and other boolean axes unchanged", () => {
+  const acoustic = {
+    ...product("acoustic", ["Диммирование: да"]),
+    pagetitle: "Акустическая панель",
+    description_excerpt: "Подходит для звукоизоляции помещения.",
+  };
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+  };
+  assertEquals(checkCriterion(acoustic, motion).verdict, "unknown");
+  assertEquals(
+    checkCriterion(acoustic, {
+      key: "Диммирование",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion({
+      ...acoustic,
+      pagetitle: "Светильник со звуковым датчиком",
+      short_traits: ["С датчиком звука: да"],
+    }, {
+      key: "С датчиком звука",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
+    "pass",
+  );
+});
+
 Deno.test("checkCriterion: affirmative boolean remains unknown without feature evidence", () => {
   const p = {
     ...product("1", []),
@@ -1034,6 +1475,63 @@ Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelate
     }).verdict,
     "unknown",
   );
+});
+
+Deno.test("checkCriterion: a unit-bearing numeric property can be proven by its own attributed catalog prose", () => {
+  const requirement = {
+    key: "Волновое сопротивление",
+    op: "eq" as const,
+    value: 75,
+    unit: "Ом",
+    level: "A" as const,
+  };
+  const attributed = {
+    ...product("coax-75", ["Оболочка: ПВХ"]),
+    pagetitle: "Кабель RG6 75Ом, длина 300м",
+    description_excerpt:
+      "Кабель для телевизионной сети. Волновое сопротивление составляет 75 Ом. Оболочка из ПВХ.",
+  };
+  assertEquals(checkCriterion(attributed, requirement).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Кабель для телевизионной сети. Волновое сопротивление составляет 50 Ом.",
+  }, requirement).verdict, "fail");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Длина 75 м. Волновое сопротивление не указано.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Волновое сопротивление составляет 50 Ом или 75 Ом в зависимости от версии.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Тип RG6, 75 Ом. Наружная длина 30 м.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...attributed,
+    description_excerpt: "Например, волновое сопротивление 75 Ом встречается у других моделей.",
+  }, requirement).verdict, "unknown");
+  assertEquals(checkCriterion({
+    ...product("light-4000", []),
+    description_excerpt: "Световой поток составляет 4000 лм. Мощность 36 Вт.",
+  }, {
+    key: "Световой поток",
+    op: "min",
+    value: 3750,
+    unit: "лм",
+    level: "A",
+  }).verdict, "pass");
+  assertEquals(checkCriterion({
+    ...product("cable-2.5", []),
+    description_excerpt: "Сечение кабеля 2.5 мм². Длина бухты 100 м.",
+  }, {
+    key: "Сечение кабеля",
+    op: "min",
+    value: 2.5,
+    unit: "мм²",
+    level: "A",
+  }).verdict, "pass");
 });
 
 Deno.test("checkCriterion: строковое противоречие в одноимённом фасете = fail", () => {
@@ -1124,6 +1622,32 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
     flow: ["4000", "5000"],
   });
   assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("IP minimum gates products and live facets by proven partial order", () => {
+  const criterion: Criterion = {
+    key: "Степень защиты", op: "min", value: "IP65", level: "A",
+  };
+  const ratings = ["IP65", "IP66", "IP54", "IP67", "IP56", "IP69", "IP65/IP67", "IP65/IP7A"];
+  const products = ratings.map((rating) => product(rating, [`Степень защиты: ${rating}`]));
+  assertEquals(ratings.map((rating, index) => checkCriterion(products[index], criterion).verdict), [
+    "pass", "pass", "fail", "unknown", "fail", "unknown", "pass", "unknown",
+  ]);
+  assertEquals(applyCriteriaGate(products, [criterion]).passed_ids, ["IP65", "IP66", "IP65/IP67"]);
+  assertEquals(projectCriteriaFacetOptions([criterion], [{
+    key: "ip", caption: "Степень защиты", unit: null,
+    values: ratings.map((value) => ({ value })),
+  }]).options, { ip: ["IP65", "IP66", "IP65/IP67"] });
+  assertEquals(checkCriterion(product("bad-key", ["Модель: IP65"]), {
+    ...criterion, key: "Модель",
+  }).verdict, "unknown");
+  assertEquals(checkCriterion(product("bad-unit", ["Степень защиты: IP65"]), {
+    ...criterion, unit: "мм",
+  }).verdict, "unknown");
+  assertEquals(checkCriterion(product("unknown", []), criterion).verdict, "unknown");
+  assertEquals(checkCriterion(product("max", ["Степень защиты: IP65"]), {
+    ...criterion, op: "max",
+  }).verdict, "unknown");
 });
 
 Deno.test("advisory model classification guides retrieval without becoming mandatory", () => {

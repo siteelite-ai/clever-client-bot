@@ -1,0 +1,261 @@
+{
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "passed": true,
+  "cases": [
+    {
+      "id": "audit-04-yard-floodlight-35m2",
+      "passed": true,
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 865,
+              "log_id": "cf772e9d-cdf9-4964-a4a2-d6f5f33afefc",
+              "products_count": 0,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 5854,
+              "log_id": "238dbbdb-822b-42d8-980b-1db427b61bc1",
+              "products_count": 3,
+              "products": [
+                "Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК",
+                "Прожектор СДО 06-50 светодиодный черный IP65 4000 K ИЭК",
+                "Светодиодный прожектор GLANZEN FAD-0005-50-SL"
+              ],
+              "text": "Для освещения двора площадью 35 м² при норме 100 лк суммарный световой поток должен составлять не менее 3500 Лм. Учитывая низкую высоту установки (1,5 м), рекомендуется использовать прожекторы с широким углом рассеивания, чтобы избежать слепящего эффекта. Для уличного использования обязательна степень защиты не ниже IP65. На одно изделие необходимо не менее 3500 Лм. Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию. Обязательные параметры: «Степень защиты: IP65».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-1150383d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 3500,
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1253
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 439
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "variant": "base",
+          "run": 2,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 1108,
+              "log_id": "d257fbaa-a354-4184-971d-12a4fb0045e6",
+              "products_count": 0,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 5090,
+              "log_id": "847df8c3-c7cc-4b48-a13f-98a5833ded59",
+              "products_count": 3,
+              "products": [
+                "Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК",
+                "Прожектор СДО 06-50 светодиодный черный IP65 4000 K ИЭК",
+                "Светодиодный прожектор GLANZEN FAD-0005-50-SL"
+              ],
+              "text": "Для освещения двора площадью 35 м² при норме 100 лк суммарный световой поток должен составлять не менее 3500 Лм. Учитывая низкую высоту установки (1,5 м), рекомендуется использовать прожекторы с широким углом рассеивания, чтобы избежать слепящего эффекта. Для уличного использования обязательна степень защиты не ниже IP65. На одно изделие необходимо не менее 3500 Лм. Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию. Обязательные параметры: «Степень защиты: IP65».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-1150383d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 3500,
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1008
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 318
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "variant": "base",
+          "run": 3,
+          "passed": true,
+          "turns": [
+            {
+              "passed": true,
+              "duration_ms": 748,
+              "log_id": "1cc5570a-f636-4a52-b1a1-51ab4ec09286",
+              "products_count": 0,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": null,
+              "tool_events": []
+            },
+            {
+              "passed": true,
+              "duration_ms": 6712,
+              "log_id": "52119ca3-5f4f-46e9-952b-298e99790e2e",
+              "products_count": 3,
+              "products": [
+                "Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК",
+                "Прожектор СДО 06-50 светодиодный черный IP65 4000 K ИЭК",
+                "Светодиодный прожектор GLANZEN FAD-0005-50-SL"
+              ],
+              "text": "Для освещения двора площадью 35 м² при норме 100 лк суммарная потребность составляет 3500 Лм. При установке одного прибора на одно изделие необходимо не менее 3500 Лм. Для уличного использования обязательна степень защиты не ниже IP65. Общий расчёт относится ко всему объекту. Для проверки отдельных товаров использую указанное выше требование к каждому изделию. Обязательные параметры: «Степень защиты: IP65».",
+              "failures": [],
+              "diagnostic_error": null,
+              "selection_contract": {
+                "hash": "selection-1150383d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "min",
+                    "value": 3500,
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 892
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 290
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
