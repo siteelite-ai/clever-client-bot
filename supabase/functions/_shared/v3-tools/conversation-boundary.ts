@@ -1,3 +1,5 @@
+import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
+
 export type ConversationMessage = {
   role: "user" | "assistant";
   content: string;
@@ -26,7 +28,7 @@ const MAX_HISTORY_CHARS = 6_000;
 const NEW_TASK_THRESHOLD = 0.72;
 
 const FOLLOWUP_REFERENCE_RE =
-  /(?:^|\s)(?:этот|эта|это|эти|этой|этих|того|той|тех|такой|такая|такие|первый|второй|третий|последний|предыдущий|выше|из\s+них|среди\s+них|для\s+него|для\s+неё|для\s+них|их|его|её|другие\s+варианты|ещ[её]\s+варианты)(?:\s|[?!.,]|$)/iu;
+  /(?:^|\s)(?:этот|эта|это|эти|этой|этих|того|той|тех|такой|такая|такие|первый|второй|третий|последний|предыдущий|выше|из\s+них|среди\s+них|для\s+него|для\s+неё|для\s+них|их|его|её)(?:\s|[?!.,]|$)/iu;
 const FOLLOWUP_INTENT_RE =
   /^(?:а\s+)?(?:почему|сравни|чем\s+они|какой\s+из|какая\s+из|какие\s+из|дешевле|дороже|самый\s+бюджетный|самая\s+бюджетная|подробнее|подтверждаю|да|нет)(?=\s|[?!:;.,-]|$)/iu;
 const COMPLETE_REQUEST_RE =
@@ -57,6 +59,20 @@ export function classifyConversationBoundaryLocally(
 ): ConversationBoundaryDecision | null {
   const text = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
   if (!text) return null;
+  if (EXPLICIT_NEW_TASK_RE.test(text)) {
+    return {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_explicit_new_task",
+    };
+  }
+  if (isAdditionalProductSelectionFollowup(text)) {
+    return {
+      mode: "continuation",
+      confidence: 0.98,
+      reason: "local_additional_selection",
+    };
+  }
   if (FOLLOWUP_REFERENCE_RE.test(text) || FOLLOWUP_INTENT_RE.test(text)) {
     return {
       mode: "continuation",
@@ -71,14 +87,6 @@ export function classifyConversationBoundaryLocally(
       reason: "local_elliptical_attribute",
     };
   }
-  if (EXPLICIT_NEW_TASK_RE.test(text)) {
-    return {
-      mode: "new_task",
-      confidence: 1,
-      reason: "local_explicit_new_task",
-    };
-  }
-
   const words = lexicalWords(text);
   if (words.length >= 5 && COMPLETE_REQUEST_RE.test(text)) {
     return {
@@ -210,13 +218,18 @@ function compactPendingSlots(
   return pending;
 }
 
-function hasServerIssuedScopedClarification(slots: Record<string, unknown>): boolean {
+function hasServerIssuedScopedClarification(
+  slots: Record<string, unknown>,
+): boolean {
   const pending = slots?.pending_clarification;
-  if (!pending || typeof pending !== "object" || Array.isArray(pending)) return false;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return false;
+  }
   const scope = (pending as Record<string, unknown>).scope;
   if (!scope || typeof scope !== "object" || Array.isArray(scope)) return false;
   const row = scope as Record<string, unknown>;
-  return (row.kind === "selection_readiness" || row.kind === "broad_assortment") &&
+  return (row.kind === "selection_readiness" ||
+    row.kind === "broad_assortment") &&
     typeof row.token === "string" && row.token.trim().length > 0;
 }
 

@@ -75,11 +75,14 @@ Deno.test("local boundary classifier isolates complete requests without product 
     )?.mode,
     "new_task",
   );
-  assertEquals(classifyConversationBoundaryLocally("Новая тема: нужны розетки"), {
-    mode: "new_task",
-    confidence: 1,
-    reason: "local_explicit_new_task",
-  });
+  assertEquals(
+    classifyConversationBoundaryLocally("Новая тема: нужны розетки"),
+    {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_explicit_new_task",
+    },
+  );
 });
 
 Deno.test("local boundary classifier preserves references and short clarification answers", () => {
@@ -110,6 +113,33 @@ Deno.test("local boundary classifier preserves references and short clarificatio
   assertEquals(
     classifyConversationBoundaryLocally("характеристика С, 1 полюс"),
     null,
+  );
+});
+
+Deno.test("additional options continue selection but why and complete requests keep their own routes", () => {
+  assertEquals(classifyConversationBoundaryLocally("А есть другие варианты?"), {
+    mode: "continuation",
+    confidence: 0.98,
+    reason: "local_additional_selection",
+  });
+  assertEquals(
+    classifyConversationBoundaryLocally("Покажи ещё подходящие варианты")?.mode,
+    "continuation",
+  );
+  assertEquals(
+    classifyConversationBoundaryLocally("Почему эти варианты?")?.reason,
+    "local_followup_reference",
+  );
+  assertEquals(
+    classifyConversationBoundaryLocally(
+      "Найди другие варианты светильников для гостиной 25 м²",
+    )?.mode,
+    "new_task",
+  );
+  assertEquals(
+    classifyConversationBoundaryLocally("Новая тема: а есть другие варианты")
+      ?.mode,
+    "new_task",
   );
 });
 
