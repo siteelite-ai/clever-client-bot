@@ -16528,6 +16528,24 @@ async function runExpertLoop(
           );
         }),
     );
+    if (replacementIntent && derivedStructuredSearchFinalizationReady) {
+      steps.push({
+        step: "v3_replacement_terminal_contract_state",
+        ms: now(),
+        meta: {
+          candidates: reasoningBackedSearch?.ids.length ?? 0,
+          criteria: reasoningBackedSearch?.criteria.length ?? 0,
+          target: terminalSelectionTarget,
+          discovery: terminalDiscover?.category.pagetitle ?? null,
+          alias: terminalAliasRequirement,
+          title_grounded_semantic_pool: terminalTitleGroundedSemanticPool,
+          series_grounding_required: seriesTurnRequiresGrounding,
+          series_grounding_satisfied: seriesGroundingSatisfied,
+          pending_finalization: terminalFinalizationRequired,
+          required_axes: replacementRequiredAxes.map((axis) => axis.key),
+        },
+      });
+    }
     // A server-issued search may be guided by a live classification selected
     // in the visible reasoning or by a short retrieval phrase repeated
     // verbatim in that reasoning. Such guidance is deliberately advisory, so
