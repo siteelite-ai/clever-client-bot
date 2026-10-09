@@ -68,6 +68,12 @@
         "expect": {
           "min_products": 3,
           "max_products": 5,
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Назначение", "require_any": ["гостин"] },
+              { "name": "Максимальная площадь освещения, м2", "min_numeric": 25 }
+            ]
+          },
           "require_any_text": ["3750", "4000", "5000", "лм", "люмен"],
           "forbid_every_product_title_any": ["6500K", "ДПО", "ДВО", "линейный", "prismatic", "прожектор"],
           "forbid_selection_criteria_any": ["офисно-административное", "ЖКХ"],

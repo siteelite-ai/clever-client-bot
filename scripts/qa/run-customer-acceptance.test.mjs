@@ -37,6 +37,52 @@ test('household motion scenarios require several source-backed alternatives acro
   }
 });
 
+test('replacement-light and TTU acceptance cannot pass on plausible but wrong products', () => {
+  for (const [id, area] of [
+    ['customer-chandelier-30m2', 30],
+    ['customer-new-chandelier-25m2', 25],
+  ]) {
+    const scenario = acceptanceSuite.cases.find((item) => item.id === id);
+    const rule = scenario.turns[0].expect.require_every_product_page;
+    assert(rule, `missing source proof for ${id}`);
+    const url = `https://220volt.kz/catalog/svetotexnika/lyustryi/${id}/`;
+    const identity = productUrlIdentity(url);
+    const base = {
+      text: '', productsMarkdown: '', links: [{ title: 'Люстра светодиодная 90W', url }],
+      completed: true, diagnosticError: null, serverProductsCount: 1,
+    };
+    const proof = {
+      verified: true, sku: id, name: 'Люстра светодиодная 90W', description: '',
+      facets: { 'Назначение': 'офис', 'Максимальная площадь освещения, м2': String(area + 10) },
+    };
+    const verifiedProductPages = new Map([[identity, proof]]);
+    assert(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages })
+      .some((failure) => failure.includes('facet Назначение')));
+    verifiedProductPages.set(identity, {
+      ...proof,
+      facets: { 'Назначение': 'гостиная', 'Максимальная площадь освещения, м2': String(area - 5) },
+    });
+    assert(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages })
+      .some((failure) => failure.includes('Максимальная площадь')));
+    verifiedProductPages.set(identity, {
+      ...proof,
+      facets: { 'Назначение': 'гостиная', 'Максимальная площадь освещения, м2': String(area) },
+    });
+    assert.deepEqual(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages }), []);
+  }
+
+  const ttu = acceptanceSuite.cases.find((item) => item.id === 'customer-new-heat-shrink-10mm');
+  const titleRule = ttu.turns[0].expect.require_every_product_title_any;
+  assert(titleRule?.some((fragment) => fragment.toLocaleLowerCase('ru-RU') === 'тту'));
+  const base = { text: '', productsMarkdown: '', completed: true, diagnosticError: null, serverProductsCount: 1 };
+  assert(evaluate({ require_every_product_title_any: titleRule }, {
+    ...base, links: [{ title: 'Трубка Navigator NST-12/6' }],
+  }).some((failure) => failure.includes('required fragment')));
+  assert.deepEqual(evaluate({ require_every_product_title_any: titleRule }, {
+    ...base, links: [{ title: 'Трубка ТТУ 12/6 IEK' }],
+  }), []);
+});
+
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
 }
@@ -379,10 +425,44 @@ test('strict product proof requires matching JSON-LD Product/@id/name/sku, not a
   })}</script>`;
   assert.deepEqual(productProofFromHtml(productHtml, identity), {
     sku: 'Ем000000001', name: 'Трубка NST 14/7', facets: {}, description: '',
+    offerPrice: null, availability: null,
   });
   assert.equal(productProofFromHtml(categoryHtml, identity), null);
   assert.equal(productProofFromHtml(productHtml.replace('Ем000000001', ''), identity), null);
   assert.equal(productProofFromHtml(productHtml.replace(productUrl, 'https://220volt.kz/catalog/other/item/'), identity), null);
+});
+
+test('strict acceptance checks rendered SKU identity, source price, stock and terminal trace', () => {
+  const url = 'https://220volt.kz/catalog/kabeli/prokladka/trubki/ttu-12-6/';
+  const identity = productUrlIdentity(url);
+  const proof = {
+    verified: true, sku: 'SKU-TTU-12', name: 'Термоусадочная трубка ТТУ 12/6 черная',
+    offerPrice: 133, availability: 'https://schema.org/InStock', facets: {}, description: '',
+  };
+  const base = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-1', diagnosticError: null, serverProductsCount: 1,
+    links: [{ title: 'Трубка ТТУ 12/6 черная', url, price: 133, stockLine: 'Астана (2 шт)' }],
+    verifiedProductPages: new Map([[identity, proof]]),
+  };
+  assert.deepEqual(evaluate({}, base, { requireVerifiedPages: true }), []);
+  const wrong = {
+    ...base,
+    links: [{ title: 'Розетка Gallant двойная', url, price: 99, stockLine: null }],
+    terminalDiagnosticSeen: false,
+    logId: null,
+  };
+  const failures = evaluate({}, wrong, { requireVerifiedPages: true });
+  assert(failures.some((failure) => failure.includes('name disagrees')));
+  assert(failures.some((failure) => failure.includes('price disagrees')));
+  assert(failures.some((failure) => failure.includes('stock is missing')));
+  assert(failures.includes('terminal diagnostic is missing'));
+  assert(failures.includes('request log ID is missing'));
+  const unavailable = { ...base, verifiedProductPages: new Map([[identity, {
+    ...proof, availability: 'https://schema.org/OutOfStock',
+  }]]) };
+  assert(evaluate({}, unavailable, { requireVerifiedPages: true })
+    .some((failure) => failure.includes('not confirmed in stock')));
 });
 
 test('live product verification is bounded, cached and fails closed on categories or redirects', async () => {
@@ -523,6 +603,31 @@ test('source-backed numeric and exact facet checks reject underpowered and non-c
   } }, { ...base, links: [{ title: 'Кабель витая пара', url: cableUrl }] });
   assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Материал проводника')));
   assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Оболочка')));
+});
+
+test('heat-shrink source proof enforces both strict diameters and the requested TTU class', () => {
+  const scenario = acceptanceSuite.cases.find((item) => item.id === 'customer-new-heat-shrink-10mm');
+  const rule = scenario.turns[0].expect.require_every_product_page;
+  const url = 'https://220volt.kz/catalog/kabeli/prokladka/trubki/ttu-12-6/';
+  const link = [{ title: 'Трубка ТТУ 12/6', url }];
+  const base = { text: '', productsMarkdown: '', links: link, completed: true,
+    diagnosticError: null, serverProductsCount: 1 };
+  const proof = { verified: true, sku: 'T-12-6', name: 'Термоусадочная трубка ТТУ 12/6',
+    facets: { 'Внутр диаметр до термоусадки,мм': '12', 'Внутр диаметр после термоусадки, мм': '6' },
+    description: '' };
+  const verifiedProductPages = new Map([[productUrlIdentity(url), proof]]);
+  assert.deepEqual(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages }), []);
+  verifiedProductPages.set(productUrlIdentity(url), { ...proof,
+    facets: { ...proof.facets, 'Внутр диаметр до термоусадки,мм': '10' } });
+  assert(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages })
+    .some((failure) => failure.includes('not > 10')));
+  verifiedProductPages.set(productUrlIdentity(url), { ...proof,
+    facets: { ...proof.facets, 'Внутр диаметр после термоусадки, мм': '10' } });
+  assert(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages })
+    .some((failure) => failure.includes('not < 10')));
+  verifiedProductPages.set(productUrlIdentity(url), { ...proof, name: 'Термоусадочная трубка NST 12/6' });
+  assert(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages })
+    .some((failure) => failure.includes('source does not contain any of ТТУ')));
 });
 
 test('source-backed alternatives accept residential proof outside a catalog facet without admitting acoustic-only sensors', () => {

@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "source": "тестированиебота130826.docx и Копия тестированиебота130826.docx, актуальная версия 2026-08-19",
+  "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
       "id": "customer-dn027b-analogs",
@@ -28,6 +29,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 30 }
+              ]
+            },
             "forbid_text": ["свежих карточек", "И ещё", "search_catalog", "render_products"]
           }
         },
@@ -58,12 +65,22 @@
           "message": "мне нужен бытовой накладной светильник с датчиком движения с ценой не более 4000 тенге",
           "expect": {
             "min_products": 1,
-            "require_product_title": ["Gauss", "HALL", "сенсор"],
+            "max_products": 5,
+            "max_product_price": 4000,
             "require_every_product_page": {
-              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
-              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+              "all_of": [
+                { "facets": [{ "name": "Способ монтажа", "require_any": ["накладн"] }] },
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
             },
-            "forbid_product_title": ["для ЖКХ"],
+            "forbid_every_product_title_any": ["промышленный", "акустический", "акуст."],
             "forbid_text": ["свежих карточек", "внутренняя механика", "search_catalog", "discover_category", "render_products"]
           }
         },
@@ -448,7 +465,10 @@
             "max_products": 5,
             "max_product_price": 4000,
             "require_every_product_page": {
-              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+              "any_of": [
+                { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+              ]
             },
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -466,6 +486,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 25 }
+              ]
+            },
             "require_every_product_title_any": ["светильник", "панель", "люстра"],
             "require_every_product_measurement": {
               "units": ["Вт", "W", "ватт"],
@@ -519,6 +545,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Внутр диаметр до термоусадки,мм", "greater_than": 12 },
+                { "name": "Внутр диаметр после термоусадки, мм", "less_than": 12 }
+              ]
+            },
             "require_every_product_pair_around": 12,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],
@@ -542,6 +574,14 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "name": { "require_any": ["ТТУ"] },
+              "facets": [
+                { "name": "Внутр диаметр до термоусадки,мм", "greater_than": 10 },
+                { "name": "Внутр диаметр после термоусадки, мм", "less_than": 10 }
+              ]
+            },
+            "require_every_product_title_any": ["ТТУ"],
             "require_every_product_pair_around": 10,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],

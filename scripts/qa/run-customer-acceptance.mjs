@@ -93,13 +93,13 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: 'da46ede7a0383e2eb521e66a1b97bd2b376be0bd1885bad607e22171f546cc6a',
+    sha256: '9ee3a004bf597cc7848a38cbf7e8845d7fba4ebc84544a306bd5dadb8af4b2cd',
     repeat: 3,
     turns: 41,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
   },
   'customer-audit-20260921-cases.json': {
-    sha256: '66c99602b1e4f7f2d4164c0f60bc04e6a7cf12359f62981f08ce21c7779765ea',
+    sha256: '38bd5615c3419f2399eef876a82523bb14e9d1ba725948048bd972e3d8a1bd28',
     repeat: 1,
     turns: 39,
     runs: 54,
@@ -110,7 +110,7 @@ const FULL_SUITE_MANIFESTS = {
     variationIds: `word-order-and-cyrillic-size rephrased-independent-task area-unit-and-word-order explicit-installation-height compact-c16 latin-series-with-russian-alias exhaustive-command-first quoted-source-product compact-followup-specification load-before-environment natural-phase-answer selection-question trip-symptom-first ground-wording camera-and-route-wording compact-led-specification geometry-with-punctuation short-pole-followup explicit-single-phase comparison-command spaced-lumen-unit voltage-sag-wording length-before-purpose how-to-question installation-synonym-and-elliptical-color cardinality-before-price panel-planning-wording`.split(' '),
   },
   'notion-legacy-bug-cases.json': {
-    sha256: 'ddaa2eb9ce2276a23e4b1e59192047fa84c76d79b88198804acc40e68da0d927',
+    sha256: '92d323e84399dce920e10b37575e20c67f71e6e6dfe7851adac3e3000fa7f367',
     repeat: 1,
     repeatById: {
       'bt925-corn-e27': 3,
@@ -124,7 +124,7 @@ const FULL_SUITE_MANIFESTS = {
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'systemic-cardinality-cases.json': {
-    sha256: '4535004e0860551b31ffb9a07887df6535a6cf8f7073dc921e79b4405d947741',
+    sha256: 'b5583b3380c3e17680cb7f2e85407e301e7650754a879b098bc6bf2103c8a5b0',
     repeat: 3,
     turns: 5,
     runs: 15,
@@ -295,6 +295,7 @@ export function parseSse(body) {
   let productsStarted = false;
   let logId = null;
   let completed = false;
+  let terminalDiagnosticSeen = false;
   let serverProductsCount = null;
   let diagnosticError = null;
   let conversationBoundary = null;
@@ -322,6 +323,7 @@ export function parseSse(body) {
       logId = event.log_id || logId;
       diagnosticError = event.error || diagnosticError;
       if (event.phase === 'complete' && typeof event.products_count === 'number') {
+        terminalDiagnosticSeen = true;
         serverProductsCount = event.products_count;
       }
     }
@@ -360,7 +362,7 @@ export function parseSse(body) {
       cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -390,10 +392,16 @@ function sourceRuleFailures(rule, actual, location) {
       if (includesAny(actual, [value])) failures.push(`${location}: forbidden source fragment ${value}`);
     }
   }
-  if (Number.isFinite(rule.min_numeric)) {
+  if (Number.isFinite(rule.min_numeric) || Number.isFinite(rule.greater_than) || Number.isFinite(rule.less_than)) {
     const measured = Number(String(actual).match(/-?\d+(?:[.,]\d+)?/u)?.[0]?.replace(',', '.'));
-    if (!Number.isFinite(measured) || measured < rule.min_numeric) {
+    if (Number.isFinite(rule.min_numeric) && (!Number.isFinite(measured) || measured < rule.min_numeric)) {
       failures.push(`${location}: source numeric value ${actual} < ${rule.min_numeric}`);
+    }
+    if (Number.isFinite(rule.greater_than) && (!Number.isFinite(measured) || measured <= rule.greater_than)) {
+      failures.push(`${location}: source numeric value ${actual} is not > ${rule.greater_than}`);
+    }
+    if (Number.isFinite(rule.less_than) && (!Number.isFinite(measured) || measured >= rule.less_than)) {
+      failures.push(`${location}: source numeric value ${actual} is not < ${rule.less_than}`);
     }
   }
   return failures;
@@ -402,8 +410,11 @@ function sourceRuleFailures(rule, actual, location) {
 function validSourceRule(rule) {
   if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return false;
   if (rule.min_numeric !== undefined && !Number.isFinite(rule.min_numeric)) return false;
+  if (rule.greater_than !== undefined && !Number.isFinite(rule.greater_than)) return false;
+  if (rule.less_than !== undefined && !Number.isFinite(rule.less_than)) return false;
   const groups = [rule.require_any, rule.forbid_any, rule.exact_any].filter((group) => group !== undefined);
-  return (groups.length > 0 || Number.isFinite(rule.min_numeric)) && groups.every((group) =>
+  return (groups.length > 0 || Number.isFinite(rule.min_numeric) ||
+    Number.isFinite(rule.greater_than) || Number.isFinite(rule.less_than)) && groups.every((group) =>
     Array.isArray(group) && group.length > 0 &&
     group.every((value) => typeof value === 'string' && value.trim())
   );
@@ -572,7 +583,14 @@ export function productProofFromHtml(html, requestedIdentity) {
         const description = document
           .querySelector('.product-item__tab-content[data-tab-content="description"]')
           ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
-        return { sku: sku.trim(), name: product.name.trim(), facets, description };
+        const offers = Array.isArray(product.offers) ? product.offers : [product.offers];
+        const offer = offers.find((entry) => entry && typeof entry === 'object' &&
+          entry.priceCurrency === 'KZT' && Number.isFinite(Number(entry.price)) && Number(entry.price) > 0);
+        return {
+          sku: sku.trim(), name: product.name.trim(), facets, description,
+          offerPrice: offer ? Number(offer.price) : null,
+          availability: typeof offer?.availability === 'string' ? offer.availability : null,
+        };
       }
     }
     return null;
@@ -686,6 +704,17 @@ export function productLinkEvidence(links = [], { verifiedPages = null, requireV
   return { uniqueCount, duplicates, invalid, unverified };
 }
 
+function nameTokenRecall(displayed, source) {
+  const words = (value) => String(value ?? '').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
+    .match(/[\p{L}\p{N}]+/gu)?.filter((part) => part.length > 1) ?? [];
+  const displayedWords = new Set(words(displayed));
+  const sourceWords = new Set(words(source));
+  if (displayedWords.size < 2) return 0;
+  let shared = 0;
+  for (const word of displayedWords) if (sourceWords.has(word)) shared++;
+  return shared / displayedWords.size;
+}
+
 export function evaluate(expect = {}, response, { requireVerifiedPages = false } = {}) {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_every_product_page);
@@ -703,6 +732,28 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false }
   }
   if (linkEvidence.unverified.length > 0) {
     failures.push(`unverified product page(s): ${linkEvidence.unverified.join(' | ')}`);
+  }
+  if (requireVerifiedPages) {
+    const seenSkus = new Set();
+    for (const link of response.links) {
+      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
+      if (!proof?.verified) continue;
+      if (seenSkus.has(proof.sku)) failures.push(`duplicate verified SKU: ${proof.sku}`);
+      seenSkus.add(proof.sku);
+      if (nameTokenRecall(link.title, proof.name) < 0.6) {
+        failures.push(`rendered product name disagrees with source SKU ${proof.sku}`);
+      }
+      if (!Number.isFinite(link.price) || !Number.isFinite(proof.offerPrice) ||
+          Math.abs(link.price - proof.offerPrice) > 0.51) {
+        failures.push(`rendered price disagrees with source SKU ${proof.sku}: ${link.price} vs ${proof.offerPrice}`);
+      }
+      if (!/\/InStock$/iu.test(proof.availability ?? '')) {
+        failures.push(`source SKU ${proof.sku} is not confirmed in stock`);
+      }
+      if (!link.stockLine) failures.push(`rendered stock is missing for source SKU ${proof.sku}`);
+    }
+    if (!response.terminalDiagnosticSeen) failures.push('terminal diagnostic is missing');
+    if (!response.logId) failures.push('request log ID is missing');
   }
   if (requireSourceProof) {
     const rules = expect.require_every_product_page;
@@ -1067,7 +1118,9 @@ async function runTurn({ message, expect }, state) {
     diagnostic_error: parsed.diagnosticError,
     products_count: parsed.links.length,
     unique_products_count: linkEvidence.uniqueCount,
-    product_identity_mode: requiresLiveProductProof ? 'live_jsonld_product_sku' : 'url_shape_only_not_sku_verified',
+    product_identity_mode: strictFullSuite
+      ? 'live_jsonld_product_sku_name_price_stock'
+      : requiresLiveProductProof ? 'live_jsonld_product_sku' : 'url_shape_only_not_sku_verified',
     product_identity_evidence: requiresLiveProductProof
       ? [...(parsed.verifiedProductPages ?? new Map()).values()].map(({ description, ...evidence }) => ({
           ...evidence,
@@ -1096,7 +1149,7 @@ export async function main() {
     endpoint,
     strict_full_suite: strictFullSuite,
     strict_inventory: strictManifest,
-    product_identity_mode: strictFullSuite ? 'live_jsonld_product_sku' : 'url_shape_only_not_sku_verified',
+    product_identity_mode: strictFullSuite ? 'live_jsonld_product_sku_name_price_stock' : 'url_shape_only_not_sku_verified',
     selected_count: selected.length,
     requested_repetitions: Object.fromEntries(runPlan.map(({ testCase, repeat }) => [testCase.id, repeat])),
     cases: [],

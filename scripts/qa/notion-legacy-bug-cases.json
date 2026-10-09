@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; production recheck 2026-08-25",
+  "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
       "id": "bt929-pump-cable-clarification",
@@ -106,6 +107,12 @@
         "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
         "expect": {
           "min_products": 1,
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Назначение", "require_any": ["гостин"] },
+              { "name": "Максимальная площадь освещения, м2", "min_numeric": 25 }
+            ]
+          },
           "require_every_product_title_any": ["светильник", "панель", "люстра"],
           "forbid_every_product_title_any": ["улич", "прожектор", "E40"],
           "require_any_text": ["лм", "люмен", "гостин", "основн"]

@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "source": "Системный контракт количества карточек, 2026-09-15",
+  "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
       "id": "cardinality-multiple-sockets",
