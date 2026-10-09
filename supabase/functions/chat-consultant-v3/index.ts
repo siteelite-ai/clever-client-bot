@@ -189,8 +189,8 @@ import {
   extractPostNominalCatalogQualifier,
   extractUnrepresentedPostNominalCatalogQualifier,
   filterProductsByDeclaredAlias,
-  retainRequiredCatalogAlias,
   resolveRenderAliasClaim,
+  retainRequiredCatalogAlias,
   titleContainsDeclaredAlias,
 } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -465,6 +465,7 @@ import {
 import {
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
+  resolveServerIssuedSelectionReadinessPending,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessClarification,
@@ -501,6 +502,7 @@ import {
 } from "../_shared/v3-tools/request-validation.ts";
 import {
   classifyConversationBoundary,
+  classifyPendingSelectionReadinessNewTaskLocally,
   isEllipticalAttributeFollowup,
   shouldStartNewConversation,
   stripCurrentUserEcho,
@@ -509,6 +511,11 @@ import {
   classifyPublicFailure,
   UpstreamHttpError,
 } from "../_shared/v3-tools/public-failure.ts";
+import {
+  type ChatV3AdmissionResult,
+  checkChatV3Admission,
+  releaseChatV3Admission,
+} from "../_shared/v3-tools/chat-admission.ts";
 import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
@@ -568,6 +575,7 @@ const RESPONSE_TARGET_MS = 50_000;
 const MAX_ACCEPTED_WORK_MS = 40_000;
 const TERMINAL_LOG_ATTEMPT_TIMEOUT_MS = 4_000;
 const TERMINAL_LOG_RESERVE_MS = 2 * TERMINAL_LOG_ATTEMPT_TIMEOUT_MS;
+const ADMISSION_RPC_TIMEOUT_MS = DB_FETCH_TIMEOUT_MS + 1_000;
 // Stop starting remote model calls before the hard abort so the ordinary
 // evidence-gated recovery below has time to render a proven pool and close SSE.
 const TURN_SOFT_DEADLINE_MS = 13_000;
@@ -718,14 +726,14 @@ async function loadSettings(
     signal,
   );
   const row = read.data as {
-      openrouter_api_key?: string;
-      volt220_api_token?: string;
-      classifier_model?: string;
-      v3_anchor_filter_enabled?: boolean;
-      v3_relaxation_hints_enabled?: boolean;
-      v3_jargon_category_context_enabled?: boolean;
-      v3_jargon_axial_modifiers_enabled?: boolean;
-      v3_criteria_gate_enabled?: boolean;
+    openrouter_api_key?: string;
+    volt220_api_token?: string;
+    classifier_model?: string;
+    v3_anchor_filter_enabled?: boolean;
+    v3_relaxation_hints_enabled?: boolean;
+    v3_jargon_category_context_enabled?: boolean;
+    v3_jargon_axial_modifiers_enabled?: boolean;
+    v3_criteria_gate_enabled?: boolean;
   } | null;
   return {
     openrouter_api_key: row?.openrouter_api_key ??
@@ -3416,7 +3424,9 @@ async function loadVerifiedNamedSeriesProducts(
     search.total > pagesScanned * pageSize &&
     namedSeriesClassCoverage(
       requestedClasses,
-      [...groundedRefs.keys()].map((id) => ctx.cache.get(id)).filter((product): product is ProductFull => Boolean(product)),
+      [...groundedRefs.keys()].map((id) => ctx.cache.get(id)).filter((
+        product,
+      ): product is ProductFull => Boolean(product)),
     ).some((group) => group.products.length === 0)
   ) {
     const page = await executeSearchCatalog(
@@ -3431,7 +3441,9 @@ async function loadVerifiedNamedSeriesProducts(
       ctx.cache,
     );
     if (!page.ok) break;
-    for (const product of filterProductsByNamedSeries(page.results, seriesToken)) {
+    for (
+      const product of filterProductsByNamedSeries(page.results, seriesToken)
+    ) {
       groundedRefs.set(String(product.id), product);
     }
     pagesScanned += 1;
@@ -3472,7 +3484,10 @@ async function answerVerifiedNamedSeriesInquiry(
     8,
     requestedClasses,
   );
-  const coverage = namedSeriesClassCoverage(requestedClasses, grounded.products);
+  const coverage = namedSeriesClassCoverage(
+    requestedClasses,
+    grounded.products,
+  );
   const products = coverage.length > 0
     ? stratifyNamedSeriesProducts(coverage, 8)
     : grounded.products;
@@ -3575,7 +3590,10 @@ async function selectVerifiedNamedSeriesRequest(
     10,
     requestedClasses,
   );
-  const coverage = namedSeriesClassCoverage(requestedClasses, grounded.products);
+  const coverage = namedSeriesClassCoverage(
+    requestedClasses,
+    grounded.products,
+  );
   const products = coverage.length > 0
     ? stratifyNamedSeriesProducts(coverage, 10)
     : grounded.products.slice(0, 10);
@@ -3614,7 +3632,9 @@ async function selectVerifiedNamedSeriesRequest(
     return [];
   }
 
-  const missingClasses = coverage.filter((group) => group.products.length === 0);
+  const missingClasses = coverage.filter((group) =>
+    group.products.length === 0
+  );
   if (missingClasses.length > 0) {
     send({
       type: "delta",
@@ -3910,7 +3930,8 @@ async function answerMeasuredSourceClassRecovery(
   if (!rendered.ok) {
     send({
       type: "delta",
-      content: "Подтверждённые товары не удалось вывести. Повторите запрос позже.",
+      content:
+        "Подтверждённые товары не удалось вывести. Повторите запрос позже.",
     });
     steps.push({
       step: "v3_measured_replacement_render_failed",
@@ -3922,7 +3943,8 @@ async function answerMeasuredSourceClassRecovery(
   const classCaveat = recovered.origin === "source_class_fallback"
     ? `Для расширения поиска проверил названный вами исходный класс «${recovered.source_category}»; это не обзор всех видов светодиодного освещения. `
     : "";
-  const caption = `${classCaveat}У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «${recovered.request.place}», максимальная площадь освещения не менее ${recovered.request.minimum_area_m2} м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.`;
+  const caption =
+    `${classCaveat}У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «${recovered.request.place}», максимальная площадь освещения не менее ${recovered.request.minimum_area_m2} м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.`;
   send({ type: "delta", content: caption });
   const plan = extendSelectionCriteriaPlan(null, [{
     key: "Максимальная площадь освещения, м2",
@@ -3947,7 +3969,11 @@ async function answerMeasuredSourceClassRecovery(
         ...(criterion.evidence ? { evidence: criterion.evidence } : {}),
       })),
       visible_requirements: [
-        { kind: "application", label: "Назначение", value: recovered.request.place },
+        {
+          kind: "application",
+          label: "Назначение",
+          value: recovered.request.place,
+        },
         { kind: "technology", label: "Светодиодное исполнение" },
         { kind: "availability", label: "Положительный складской остаток" },
       ],
@@ -5472,7 +5498,9 @@ async function loadVerifiedBroadAssortmentChoice(
   userMessage: string,
 ): Promise<{
   choice: VerifiedBroadAssortmentChoice | null;
-  constrainedContinuation: VerifiedBroadAssortmentConstrainedContinuation | null;
+  constrainedContinuation:
+    | VerifiedBroadAssortmentConstrainedContinuation
+    | null;
   verifiedSlot: Record<string, unknown> | null;
   matchedIssuedOption: boolean;
   lookupFailed: boolean;
@@ -5547,6 +5575,76 @@ async function loadVerifiedBroadAssortmentChoice(
       lookupFailed: true,
     };
   }
+}
+
+async function loadVerifiedSelectionReadinessPending(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  slots: Record<string, unknown>,
+): Promise<{ slot: Record<string, unknown> | null; lookupFailed: boolean }> {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return { slot: null, lookupFailed: false };
+  }
+  const scope = (pending as Record<string, unknown>).scope;
+  if (
+    !scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== "selection_readiness"
+  ) return { slot: null, lookupFailed: false };
+
+  try {
+    // Only the immediately previous completed server response may issue a
+    // scoped question. Never search arbitrary older turns for a client slot.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let { data, error } = await supabase.from("chat_request_logs")
+        .select("session_id,error,response_events")
+        .eq("session_id", sessionId)
+        .eq("pipeline", "v3")
+        .neq("id", currentLogId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && !data) {
+        const rotated = await supabase.from("chat_request_logs")
+          .select("session_id,error,response_events")
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .contains("response_events", [{
+            type: "conversation_boundary",
+            mode: "new_task",
+            session_id: sessionId,
+          }])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        data = rotated.data;
+        error = rotated.error;
+      }
+      if (error) {
+        console.error("[v3] selection readiness slot lookup failed", {
+          code: error.code ?? "database_error",
+        });
+        return { slot: null, lookupFailed: true };
+      }
+      if (data && data.error !== "in_progress") {
+        return {
+          slot: resolveServerIssuedSelectionReadinessPending(
+            slots,
+            data,
+            sessionId,
+          ),
+          lookupFailed: false,
+        };
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+    }
+  } catch (error) {
+    console.error("[v3] selection readiness slot lookup exception", error);
+  }
+  return { slot: null, lookupFailed: true };
 }
 
 /**
@@ -6239,7 +6337,9 @@ async function runExpertLoop(
         : null;
       if (!verdict?.canClaimSufficient) {
         const threshold = requirement
-          ? ` ${requirement.minimumTotal.toLocaleString("ru-RU")} ${requirement.unit}`
+          ? ` ${
+            requirement.minimumTotal.toLocaleString("ru-RU")
+          } ${requirement.unit}`
           : "";
         const notice =
           `\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность${threshold}. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.`;
@@ -7408,19 +7508,20 @@ async function runExpertLoop(
         namedSeriesToken,
       ),
     );
-    const classificationSafe = derivedExcludedClassificationCriteria.length === 0
-      ? structurallySafe
-      : (() => {
-        const eligible = new Set(
-          filterProductsByExcludedCriteria(
-            structurallySafe
-              .map((id) => ctx.cache.get(id))
-              .filter((product): product is ProductFull => Boolean(product)),
-            derivedExcludedClassificationCriteria,
-          ).map(({ id }) => id),
-        );
-        return structurallySafe.filter((id) => eligible.has(id));
-      })();
+    const classificationSafe =
+      derivedExcludedClassificationCriteria.length === 0
+        ? structurallySafe
+        : (() => {
+          const eligible = new Set(
+            filterProductsByExcludedCriteria(
+              structurallySafe
+                .map((id) => ctx.cache.get(id))
+                .filter((product): product is ProductFull => Boolean(product)),
+              derivedExcludedClassificationCriteria,
+            ).map(({ id }) => id),
+          );
+          return structurallySafe.filter((id) => eligible.has(id));
+        })();
     // This is a relative ranking of already-safe alternatives, not a claim
     // that one card (or the list of cards) supplies an installation total.
     // Bind the output axis and lower bound to the reasoning actually shown
@@ -13751,7 +13852,17 @@ async function runExpertLoop(
             tool: "selection_recovery",
             phase: "result",
             summary:
-              `plan=${shortfallPlan.length}; initial=${eligible.length}; minimum=${resultCardinality.minimum}; application=${sourceProofCriteria.filter((criterion) => criterion.proof_scope === "application_suitability").length}; customer_eq=${sourceProofCriteria.filter((criterion) => criterion.op === "eq" && criterion.evidence === "user_explicit" && criterion.proof_scope !== "application_suitability").length}`,
+              `plan=${shortfallPlan.length}; initial=${eligible.length}; minimum=${resultCardinality.minimum}; application=${
+                sourceProofCriteria.filter((criterion) =>
+                  criterion.proof_scope === "application_suitability"
+                ).length
+              }; customer_eq=${
+                sourceProofCriteria.filter((criterion) =>
+                  criterion.op === "eq" &&
+                  criterion.evidence === "user_explicit" &&
+                  criterion.proof_scope !== "application_suitability"
+                ).length
+              }`,
           });
           const recoveryQueue: Array<{
             attempt: SelectionSearchRecoveryAttempt;
@@ -13770,8 +13881,10 @@ async function runExpertLoop(
             // The catalog may retry 429 twice, so its own per-request 8 s
             // timer is not an end-to-end cap. Abort this optional recovery
             // independently and leave room for final evidence rendering.
-            if (now() > TURN_TIMEOUT_MS - 12_000 ||
-              now() >= recoveryDeadline - 500) break;
+            if (
+              now() > TURN_TIMEOUT_MS - 12_000 ||
+              now() >= recoveryDeadline - 500
+            ) break;
             const recoveryBudgetMs = Math.min(
               6_000,
               Math.max(1, recoveryDeadline - now()),
@@ -13833,8 +13946,17 @@ async function runExpertLoop(
               type: "tool_event",
               tool: "selection_recovery",
               phase: "result",
-              summary:
-                `scope=${scope}; total=${recovered.ok && recovered.tool === "search_catalog" ? recovered.total : 0}; retrieved=${recovered.ok && recovered.tool === "search_catalog" ? recovered.results.length : 0}; candidate=${candidatePool.length}; proven=${sourceProvenRecovered.length}; pooled=${eligible.length}; error=${recovered.ok ? "none" : recovered.error_code}`,
+              summary: `scope=${scope}; total=${
+                recovered.ok && recovered.tool === "search_catalog"
+                  ? recovered.total
+                  : 0
+              }; retrieved=${
+                recovered.ok && recovered.tool === "search_catalog"
+                  ? recovered.results.length
+                  : 0
+              }; candidate=${candidatePool.length}; proven=${sourceProvenRecovered.length}; pooled=${eligible.length}; error=${
+                recovered.ok ? "none" : recovered.error_code
+              }`,
             });
             steps.push({
               step: "v3_source_proven_cardinality_recovery",
@@ -18846,6 +18968,7 @@ Deno.serve(async (req) => {
       // model work: a resume-only request will replay the persisted result.
       const executionController = new AbortController();
       let logFinalized = false;
+      let admission: ChatV3AdmissionResult | null = null;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
         if (logFinalized) return;
@@ -18869,6 +18992,41 @@ Deno.serve(async (req) => {
       };
 
       try {
+        // Only a newly claimed turn is eligible. Existing/resume requests
+        // returned above and never spend a second admission reservation.
+        // With the default `off` mode this makes no database call and leaves
+        // the current production pipeline untouched.
+        admission = await runWithDeadline(
+          () =>
+            checkChatV3Admission(
+              logId,
+              (name, args) => supabase.rpc(name, args),
+            ),
+          ADMISSION_RPC_TIMEOUT_MS,
+        );
+        steps.push({
+          step: "v3_admission_checked",
+          ms: Date.now() - t0,
+          meta: {
+            mode: admission.mode,
+            allowed: admission.allowed,
+            reason: admission.reason,
+            would_reject: admission.wouldReject,
+            limit_reason: admission.limitReason,
+            failure: admission.failure,
+          },
+        });
+        if (!admission.allowed) {
+          errorMsg = `admission_${admission.reason}`;
+          publicDiagnosticError = "request_unavailable";
+          send({
+            type: "delta",
+            content: admission.reason === "limit_exceeded"
+              ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+              : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+          });
+          return;
+        }
         await runWithDeadline(
           async (turnSignal) => {
             const persistRecentProductEvidence = (
@@ -18937,15 +19095,45 @@ Deno.serve(async (req) => {
                 userMessage,
               );
             const verifiedBroadChoice = verifiedBroadChoiceState.choice;
+            const clientSelectionReadinessScope = Boolean(
+              pendingScope && typeof pendingScope === "object" &&
+                !Array.isArray(pendingScope) &&
+                (pendingScope as Record<string, unknown>).kind ===
+                  "selection_readiness",
+            );
+            const verifiedReadinessState = clientSelectionReadinessScope
+              ? await loadVerifiedSelectionReadinessPending(
+                supabase,
+                sessionId,
+                logId,
+                slots,
+              )
+              : { slot: null, lookupFailed: false };
+            const readinessSlots = clientSelectionReadinessScope
+              ? {
+                ...slots,
+                pending_clarification: verifiedReadinessState.slot ?? undefined,
+              }
+              : slots;
             // A broad slot is deliberately absent from boundary classification.
             // Otherwise the existing "server-scoped clarification" shortcut turns
             // even a complete unrelated request into a Gallant continuation.
             const boundarySlots = clientCatalogClarification
               ? {
-                ...slots,
+                ...readinessSlots,
                 pending_clarification: undefined,
               }
-              : slots;
+              : readinessSlots;
+            const readinessNewTask =
+              classifyPendingSelectionReadinessNewTaskLocally(
+                userMessage,
+                boundarySlots,
+                {
+                  serverIssuedScopeVerified: Boolean(
+                    verifiedReadinessState.slot,
+                  ),
+                },
+              );
             const boundary = verifiedBroadChoiceState.matchedIssuedOption
               ? {
                 mode: "continuation" as const,
@@ -18953,6 +19141,8 @@ Deno.serve(async (req) => {
                 source: "local" as const,
                 reason: "server_verified_catalog_option",
               }
+              : readinessNewTask
+              ? { ...readinessNewTask, source: "local" as const }
               : await classifyConversationBoundary(
                 userMessage,
                 priorHistory,
@@ -18966,6 +19156,7 @@ Deno.serve(async (req) => {
             const scopedSelectionRequest = resolveSelectionReadinessRequest(
               userMessage,
               boundarySlots,
+              { newTaskBoundary: Boolean(readinessNewTask) },
             );
             const matchedPendingClarification = Boolean(
               verifiedBroadChoiceState.matchedIssuedOption ||
@@ -18978,15 +19169,16 @@ Deno.serve(async (req) => {
                 isRecentProductShowFollowup(userMessage) ||
                 isRecentProductPriceSelectionFollowup(userMessage)
               );
-            const startsNewTask = shouldStartNewConversation(boundary, {
-              matchedPendingClarification,
-              activeScopedClarification: scopedSelectionRequest.scoped,
-              referencesRenderedProducts,
-            }) || shouldResetUnverifiedBroadAssortmentTask(
-              userMessage,
-              clientCatalogClarification,
-              verifiedBroadChoiceState.verifiedSlot,
-            );
+            const startsNewTask = Boolean(readinessNewTask) ||
+              shouldStartNewConversation(boundary, {
+                matchedPendingClarification,
+                activeScopedClarification: scopedSelectionRequest.scoped,
+                referencesRenderedProducts,
+              }) || shouldResetUnverifiedBroadAssortmentTask(
+                userMessage,
+                clientCatalogClarification,
+                verifiedBroadChoiceState.verifiedSlot,
+              );
             // Only after a continuation decision may a server-verified free-form
             // broad scope reach the old expert route. Exact chips take the bounded
             // deterministic route below. A stale/forged scope is never restored.
@@ -19031,6 +19223,11 @@ Deno.serve(async (req) => {
                   !verifiedBroadChoiceState.verifiedSlot,
                 catalog_slot_lookup_failed:
                   verifiedBroadChoiceState.lookupFailed,
+                verified_selection_readiness_slot: Boolean(
+                  verifiedReadinessState.slot,
+                ),
+                readiness_slot_lookup_failed:
+                  verifiedReadinessState.lookupFailed,
                 references_rendered_products: referencesRenderedProducts,
                 history_echo_removed: priorHistory.length !== history.length,
               },
@@ -19334,7 +19531,8 @@ Deno.serve(async (req) => {
               verifiedBroadChoiceState.matchedIssuedOption &&
               !verifiedBroadChoice && !startsNewTask
             ) {
-              const constrained = verifiedBroadChoiceState.constrainedContinuation;
+              const constrained =
+                verifiedBroadChoiceState.constrainedContinuation;
               if (!constrained) {
                 // A verified chip without its durable original request cannot
                 // safely become an unconstrained standalone selection.
@@ -19368,7 +19566,8 @@ Deno.serve(async (req) => {
                   t0,
                   {
                     anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-                    relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                    relaxationHintsEnabled:
+                      settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
                   recentProductEvidence,
@@ -19772,8 +19971,12 @@ Deno.serve(async (req) => {
                 });
               }
             } else if (
-              parseMeasuredSourceClassRecoveryRequest(scopedSelectionRequest.message) &&
-              admitMeasuredSourceClassDirectRoute(scopedSelectionRequest.message)
+              parseMeasuredSourceClassRecoveryRequest(
+                scopedSelectionRequest.message,
+              ) &&
+              admitMeasuredSourceClassDirectRoute(
+                scopedSelectionRequest.message,
+              )
             ) {
               const measuredRecovery = await answerMeasuredSourceClassRecovery(
                 scopedSelectionRequest.message,
@@ -19952,7 +20155,8 @@ Deno.serve(async (req) => {
           remainingAcceptedWorkBudgetMs(
             Date.now() - t0,
             RESPONSE_TARGET_MS,
-            TERMINAL_LOG_RESERVE_MS,
+            TERMINAL_LOG_RESERVE_MS +
+              (admission.releaseRequired ? ADMISSION_RPC_TIMEOUT_MS : 0),
             MAX_ACCEPTED_WORK_MS,
           ),
           () => {
@@ -20008,6 +20212,29 @@ Deno.serve(async (req) => {
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
         // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
         await finalizeLogAwait();
+        if (admission) {
+          const checkedAdmission = admission;
+          try {
+            const released = await runWithDeadline(
+              () =>
+                releaseChatV3Admission(
+                  logId,
+                  checkedAdmission,
+                  (name, args) => supabase.rpc(name, args),
+                ),
+              ADMISSION_RPC_TIMEOUT_MS,
+            );
+            if (released.failure) {
+              console.error("[v3] admission reservation release incomplete", {
+                failure: released.failure,
+              });
+            }
+          } catch {
+            // A failed release expires in the admission ledger after 3 min.
+            // It must not leave the live SSE open indefinitely.
+            console.error("[v3] admission reservation release timed out");
+          }
+        }
         emit(completeEvent);
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
         emit({ type: "done" });

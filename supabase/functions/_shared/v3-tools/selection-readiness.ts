@@ -2,6 +2,88 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
+export interface CompletedSelectionReadinessLog {
+  session_id: unknown;
+  error: unknown;
+  response_events: unknown;
+}
+
+/**
+ * Client slots are only a transport echo. A readiness continuation may inherit
+ * its original request only when the immediately preceding completed server
+ * response issued that exact pending slot. The caller must supply the latest
+ * prior log, not search older logs for a matching UUID.
+ */
+export function resolveServerIssuedSelectionReadinessPending(
+  clientSlots: Record<string, unknown>,
+  latestCompletedLog: CompletedSelectionReadinessLog | null,
+  sessionId: string,
+): Record<string, unknown> | null {
+  const client = clientSlots?.pending_clarification;
+  if (!client || typeof client !== "object" || Array.isArray(client)) {
+    return null;
+  }
+  const clientRecord = client as Record<string, unknown>;
+  const clientScope = clientRecord.scope;
+  if (
+    clientRecord.status !== "pending" ||
+    typeof clientRecord.slot_id !== "string" ||
+    !clientRecord.slot_id.trim() ||
+    !clientScope || typeof clientScope !== "object" ||
+    Array.isArray(clientScope)
+  ) return null;
+  const clientScopeRecord = clientScope as Record<string, unknown>;
+  if (
+    clientScopeRecord.kind !== SELECTION_READINESS_SCOPE ||
+    typeof clientScopeRecord.token !== "string" ||
+    !clientScopeRecord.token.trim()
+  ) return null;
+  if (!latestCompletedLog || latestCompletedLog.error != null) return null;
+  const events = latestCompletedLog.response_events;
+  if (!Array.isArray(events)) return null;
+  const issuedIntoSession = latestCompletedLog.session_id === sessionId ||
+    events.some((event) =>
+      event && typeof event === "object" &&
+      event.type === "conversation_boundary" && event.mode === "new_task" &&
+      event.session_id === sessionId
+    );
+  if (!issuedIntoSession) return null;
+  const complete = events.some((event) =>
+    event && typeof event === "object" && event.type === "diagnostic" &&
+    event.phase === "complete" && !event.error
+  );
+  const done = events.some((event) =>
+    event && typeof event === "object" && event.type === "done"
+  );
+  if (!complete || !done) return null;
+  const lastSlotUpdate = [...events].reverse().find((event) =>
+    event && typeof event === "object" && event.type === "slot_update"
+  );
+  const issued = lastSlotUpdate?.slots?.pending_clarification;
+  if (!issued || typeof issued !== "object" || Array.isArray(issued)) {
+    return null;
+  }
+  const issuedRecord = issued as Record<string, unknown>;
+  const issuedScope = issuedRecord.scope;
+  if (
+    issuedRecord.status !== "pending" ||
+    issuedRecord.slot_id !== clientRecord.slot_id ||
+    issuedRecord.facet_key !== clientRecord.facet_key ||
+    !issuedScope || typeof issuedScope !== "object" ||
+    Array.isArray(issuedScope)
+  ) return null;
+  const issuedScopeRecord = issuedScope as Record<string, unknown>;
+  if (
+    issuedScopeRecord.kind !== SELECTION_READINESS_SCOPE ||
+    issuedScopeRecord.token !== clientScopeRecord.token ||
+    typeof issuedScopeRecord.token !== "string" ||
+    !issuedScopeRecord.token.trim() ||
+    issuedScopeRecord.resolved_category !==
+      clientScopeRecord.resolved_category
+  ) return null;
+  return issuedRecord;
+}
+
 export function selectionReadinessScope(
   token: string,
   context: { resolved_category?: string } = {},
@@ -508,8 +590,12 @@ export function selectReadinessClarification(
 export function resolveSelectionReadinessRequest(
   currentMessage: string,
   slots: Record<string, unknown>,
+  options: { newTaskBoundary?: boolean } = {},
 ): { message: string; scoped: boolean } {
   const current = String(currentMessage ?? "").trim();
+  if (options.newTaskBoundary) {
+    return { message: current, scoped: false };
+  }
   const pending = slots?.pending_clarification;
   if (!pending || typeof pending !== "object") {
     return { message: current, scoped: false };

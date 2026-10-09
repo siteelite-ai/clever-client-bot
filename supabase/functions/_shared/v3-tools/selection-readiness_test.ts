@@ -3,6 +3,7 @@ import {
   measuredLoadGuidanceCanProceed,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
+  resolveServerIssuedSelectionReadinessPending,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessClarification,
@@ -292,6 +293,129 @@ Deno.test("free-form clarification answer retains the original selection request
       `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
     scoped: true,
   });
+});
+
+Deno.test("a new-task boundary never concatenates the pending readiness request", () => {
+  const current = "Найди самый дешёвый кабель ВВГ 3*1,5";
+  assertEquals(
+    resolveSelectionReadinessRequest(current, {
+      pending_clarification: {
+        scope: selectionReadinessScope("Мне нужен кабель для насоса"),
+      },
+    }, { newTaskBoundary: true }),
+    { message: current, scoped: false },
+  );
+});
+
+const issuedReadinessSlot = {
+  status: "pending",
+  slot_id: "readiness-slot-1",
+  facet_key: "supply_phase",
+  question: "Какое питание у насоса?",
+  options: [{ value: "220 В, 1 фаза", label: "220 В, 1 фаза" }],
+  scope: selectionReadinessScope("Мне нужен кабель для насоса"),
+};
+const completedReadinessLog = {
+  session_id: "session-original",
+  error: null,
+  response_events: [
+    {
+      type: "slot_update",
+      slots: { pending_clarification: issuedReadinessSlot },
+    },
+    { type: "diagnostic", phase: "complete" },
+    { type: "done" },
+  ],
+};
+
+Deno.test("readiness scope is trusted only when the last completed server response issued it", () => {
+  assertEquals(
+    resolveServerIssuedSelectionReadinessPending(
+      { pending_clarification: issuedReadinessSlot },
+      completedReadinessLog,
+      "session-original",
+    ),
+    issuedReadinessSlot,
+  );
+  assertEquals(
+    resolveServerIssuedSelectionReadinessPending(
+      { pending_clarification: issuedReadinessSlot },
+      {
+        ...completedReadinessLog,
+        response_events: [
+          {
+            type: "conversation_boundary",
+            mode: "new_task",
+            session_id: "session-rotated",
+          },
+          ...completedReadinessLog.response_events,
+        ],
+      },
+      "session-rotated",
+    ),
+    issuedReadinessSlot,
+  );
+});
+
+Deno.test("forged, stale and incomplete readiness scopes fail closed", () => {
+  const client = { pending_clarification: issuedReadinessSlot };
+  for (
+    const forged of [
+      { ...issuedReadinessSlot, slot_id: "forged-slot" },
+      {
+        ...issuedReadinessSlot,
+        scope: selectionReadinessScope("Подберите прожектор для парковки"),
+      },
+      { ...issuedReadinessSlot, facet_key: "forged-facet" },
+      { ...issuedReadinessSlot, status: "resolved" },
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedSelectionReadinessPending(
+        { pending_clarification: forged },
+        completedReadinessLog,
+        "session-original",
+      ),
+      null,
+    );
+  }
+  assertEquals(
+    resolveServerIssuedSelectionReadinessPending(
+      client,
+      completedReadinessLog,
+      "stale-session",
+    ),
+    null,
+  );
+  for (
+    const response_events of [
+      completedReadinessLog.response_events.slice(0, 2),
+      completedReadinessLog.response_events.filter((event) =>
+        event.type !== "diagnostic"
+      ),
+      [
+        ...completedReadinessLog.response_events,
+        { type: "slot_update", slots: {} },
+      ],
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedSelectionReadinessPending(
+        client,
+        { ...completedReadinessLog, response_events },
+        "session-original",
+      ),
+      null,
+    );
+  }
+  assertEquals(
+    resolveServerIssuedSelectionReadinessPending(
+      client,
+      { ...completedReadinessLog, error: "in_progress" },
+      "session-original",
+    ),
+    null,
+  );
 });
 
 Deno.test("catalog clarification preserves its server-proven category for a terse continuation", () => {

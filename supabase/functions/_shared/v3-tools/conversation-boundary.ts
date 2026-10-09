@@ -37,6 +37,230 @@ const EXPLICIT_NEW_TASK_RE =
   /^(?:новая\s+тема|новый\s+вопрос)(?=\s|[?!:;.,-]|$)/iu;
 const ELLIPTICAL_ATTRIBUTE_RE =
   /^(?:а\s+)?(?:(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?|[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+[\p{L}-]{3,}){0,2}\s+есть)[?!.,]?$/iu;
+const INDEPENDENT_SELECTION_FRAME_RE =
+  /^(?:(?:новая\s+тема|новый\s+вопрос)\s*[:.!?-]?\s*)?(?:(?:а|ну|тогда|пожалуйста)\s+)*(?:найди(?:те)?|подбери(?:те)?|покажи(?:те)?|предложи(?:те)?|посоветуй(?:те)?|ищу|хочу(?:\s+купить)?|(?:мне|нам)\s+нуж(?:ен|на|но|ны))\s+(.+)$/iu;
+const INDEPENDENT_SELECTION_QUESTION_RE =
+  /^(?:(?:а|ну|тогда)\s+)*како\p{L}*\s+(.+\s+(?:подойд\p{L}*|нуж\p{L}*|выбр\p{L}*|купить|посовет\p{L}*)[^.!?]*\?)$/iu;
+const SCOPED_DEPENDENCY_RE =
+  /(?:^|[^\p{L}])(?:эт\p{L}*|тот|того|той|тех|данн\p{L}*|предыдущ\p{L}*|прежн\p{L}*|выше|ниже|их|его|её|него|неё|них|друг\p{L}*|ещ[её]|вместо|аналог\p{L}*|вариант\p{L}*\s+из\s+списка)(?=$|[^\p{L}])/iu;
+const PRICE_CRITERION_RE =
+  /(?:сам\p{L}*\s+(?:дешев\p{L}*|дешёв\p{L}*|недорог\p{L}*)|бюджетн\p{L}*|дешевл\p{L}*|дешёвл\p{L}*|до\s*\d+\s*(?:₽|руб\p{L}*|тенге|тг))/iu;
+const STRUCTURED_SPEC_RE =
+  /\d+(?:[.,]\d+)?\s*[xх×*]\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*(?:к?вт|мм²|м²|м2|метр\p{L}*|ампер\p{L}*|вольт\p{L}*)(?=$|[^\p{L}\p{N}])/iu;
+const MODEL_MARKER_RE =
+  /(?<![\p{L}\p{N}])(?:\p{Lu}{2,}[\p{L}\p{N}-]*|[\p{L}]{1,10}[-/]?\d{1,5}[\p{L}\p{N}-]*)(?![\p{L}\p{N}])/gu;
+const RELATION_TARGET_RE =
+  /(?:^|\s)(для|под|к|ко|на)\s+([\p{L}]{3,})(?=$|[^\p{L}])/giu;
+const DEPENDENT_FRAME_BODY_RE =
+  /^(?:для|под|на|к|ко|в|во|по|с|со|от|из|до|без|при|вместо)(?=\s|$)/iu;
+const ANCHOR_STOPWORDS = new Set([
+  "мне",
+  "нам",
+  "нужен",
+  "нужна",
+  "нужно",
+  "нужны",
+  "найди",
+  "найдите",
+  "подбери",
+  "подберите",
+  "покажи",
+  "покажите",
+  "предложи",
+  "предложите",
+  "посоветуй",
+  "посоветуйте",
+  "ищу",
+  "хочу",
+  "купить",
+  "пожалуйста",
+  "новая",
+  "новый",
+  "тема",
+  "вопрос",
+  "какой",
+  "какая",
+  "какие",
+  "какое",
+  "самый",
+  "самая",
+  "самое",
+  "самые",
+  "дешевый",
+  "дешевого",
+  "недорогой",
+  "бюджетный",
+  "цена",
+  "ценой",
+  "стоимость",
+  "для",
+  "под",
+  "или",
+  "если",
+  "подойдет",
+  "подойдут",
+  "поставить",
+  "ставить",
+  "площадь",
+  "площади",
+  "высота",
+  "высоте",
+  "высоту",
+  "длина",
+  "длину",
+  "мощность",
+  "мощностью",
+  "напряжение",
+  "фаза",
+  "фазы",
+  "метра",
+  "метров",
+  "метр",
+  "квт",
+  "вт",
+  "мм",
+  "рублей",
+  "тенге",
+]);
+
+function scopedAnchorWords(value: string): string[] {
+  return (value.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[\p{L}][\p{L}\p{N}-]*/gu) ?? [])
+    .filter((word) => word.length >= 3 && !ANCHOR_STOPWORDS.has(word))
+    .map((word) => word.length >= 5 ? word.slice(0, 5) : word);
+}
+
+function scopedRelationTargets(
+  value: string,
+): { purpose: string | null; setting: string | null } {
+  const targets: { purpose: string | null; setting: string | null } = {
+    purpose: null,
+    setting: null,
+  };
+  for (const match of value.matchAll(RELATION_TARGET_RE)) {
+    const anchor = scopedAnchorWords(match[2])[0] ?? null;
+    if (!anchor) continue;
+    const field = /^(?:для|под)$/iu.test(match[1]) ? "purpose" : "setting";
+    targets[field] ??= anchor;
+  }
+  return targets;
+}
+
+function scopedModelMarkers(value: string): string[] {
+  return (value.match(MODEL_MARKER_RE) ?? []).map((marker) =>
+    marker.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+  );
+}
+
+/**
+ * Escape a pending readiness question only for a clearly independent,
+ * self-contained selection. A caller must first verify the pending slot in
+ * the immediately previous completed server response; client-carried slots
+ * alone cannot authorise this decision. Ambiguity stays with the pending task.
+ * The comparison uses grammatical request structure, lexical anchors and
+ * generic specifications, never a catalog/product dictionary.
+ */
+export function classifyPendingSelectionReadinessNewTaskLocally(
+  userMessage: string,
+  slots: Record<string, unknown>,
+  options: { serverIssuedScopeVerified?: boolean } = {},
+): ConversationBoundaryDecision | null {
+  if (!options.serverIssuedScopeVerified) return null;
+  const pending = slots?.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return null;
+  }
+  const pendingRecord = pending as Record<string, unknown>;
+  const scope = pendingRecord.scope;
+  if (
+    pendingRecord.status !== "pending" ||
+    typeof pendingRecord.slot_id !== "string" ||
+    !pendingRecord.slot_id.trim() ||
+    !scope || typeof scope !== "object" || Array.isArray(scope)
+  ) return null;
+  const scopeRecord = scope as Record<string, unknown>;
+  if (
+    scopeRecord.kind !== "selection_readiness" ||
+    typeof scopeRecord.token !== "string" ||
+    !scopeRecord.token.trim()
+  ) return null;
+  const current = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/gu, " ")
+    .trim();
+  const original = scopeRecord.token.replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/gu, " ").trim();
+  if (!current || !original || current.length > 800) return null;
+  if (EXPLICIT_NEW_TASK_RE.test(current)) {
+    return {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_verified_readiness_explicit_new_topic",
+    };
+  }
+  const frame = current.match(INDEPENDENT_SELECTION_FRAME_RE) ??
+    current.match(INDEPENDENT_SELECTION_QUESTION_RE);
+  if (
+    !frame || SCOPED_DEPENDENCY_RE.test(current) ||
+    isAdditionalProductSelectionFollowup(current) ||
+    /(?:[.!?;]\s+\p{L}|,\s+а\s+\p{L})/iu.test(current) ||
+    /(?:^|\s)уточнение\s+клиента\s*:/iu.test(current)
+  ) return null;
+
+  const body = frame[1];
+  // An imperative followed only by a prepositional refinement still needs
+  // the issued product class: `Подбери для стационарной прокладки ...` is not
+  // a self-contained request, even if its purpose differs lexically.
+  if (DEPENDENT_FRAME_BODY_RE.test(body)) return null;
+  const currentAnchors = [...new Set(scopedAnchorWords(body))];
+  const originalAnchors = [...new Set(scopedAnchorWords(original))];
+  if (currentAnchors.length === 0 || originalAnchors.length === 0) return null;
+  const currentSet = new Set(currentAnchors);
+  const originalSet = new Set(originalAnchors);
+  const shared = currentAnchors.filter((anchor) => originalSet.has(anchor));
+  const novel = currentAnchors.filter((anchor) => !originalSet.has(anchor));
+  const structuredSpec = STRUCTURED_SPEC_RE.test(body);
+  const priceCriterion = PRICE_CRITERION_RE.test(body);
+  // One bare noun after an imperative is too thin to distinguish a new task
+  // from a rephrased readiness answer.
+  if (currentAnchors.length < 2 && !structuredSpec && !priceCriterion) {
+    return null;
+  }
+
+  const originalTargets = scopedRelationTargets(original);
+  const currentTargets = scopedRelationTargets(body);
+  const originalHeadStillPresent = currentSet.has(originalAnchors[0]);
+  const changedRelationTarget = Boolean(
+    (originalTargets.purpose && currentTargets.purpose &&
+      originalTargets.purpose !== currentTargets.purpose) ||
+      (originalTargets.setting && currentTargets.setting &&
+        originalTargets.setting !== currentTargets.setting),
+  );
+  // A same-class purpose change can be a refinement of the pending task.
+  // Demand an independent specification before discarding its source context;
+  // a different head noun already proves a new product request below.
+  const changedTarget = changedRelationTarget &&
+    (!originalHeadStillPresent || structuredSpec || priceCriterion);
+  const originalMarkers = new Set(scopedModelMarkers(original));
+  const novelModelMarker = scopedModelMarkers(body).some((marker) =>
+    !originalMarkers.has(marker)
+  );
+  const newDetailedSameClassRequest = originalHeadStillPresent &&
+    Boolean(originalTargets.purpose || originalTargets.setting) &&
+    !currentTargets.purpose && !currentTargets.setting &&
+    novel.length >= 1 && novelModelMarker && structuredSpec;
+  const independent = changedTarget ||
+    (!originalHeadStillPresent && novel.length >= 1 &&
+      (currentAnchors.length >= 2 || structuredSpec || priceCriterion)) ||
+    (shared.length === 0 &&
+      (currentAnchors.length >= 2 || structuredSpec || priceCriterion)) ||
+    newDetailedSameClassRequest;
+  return independent
+    ? {
+      mode: "new_task",
+      confidence: 0.99,
+      reason: "local_verified_readiness_independent_selection",
+    }
+    : null;
+}
 
 /** A structurally incomplete attribute change such as «а есть белые?». */
 export function isEllipticalAttributeFollowup(userMessage: string): boolean {

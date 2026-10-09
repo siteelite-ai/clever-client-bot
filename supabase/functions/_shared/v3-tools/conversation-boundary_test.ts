@@ -1,6 +1,7 @@
 import {
   classifyConversationBoundary,
   classifyConversationBoundaryLocally,
+  classifyPendingSelectionReadinessNewTaskLocally,
   type ConversationMessage,
   parseConversationBoundaryDecision,
   shouldStartNewConversation,
@@ -152,9 +153,11 @@ Deno.test("complete local request does not spend a remote classifier call", asyn
     {
       apiKey: "test",
       model: "test-model",
-      fetchImpl: async () => {
+      fetchImpl: () => {
         calls += 1;
-        throw new Error("remote classifier must not be called");
+        return Promise.reject(
+          new Error("remote classifier must not be called"),
+        );
       },
     },
   );
@@ -184,9 +187,11 @@ Deno.test("a server-scoped clarification answer never spends a boundary-model ca
     {
       apiKey: "test",
       model: "test-model",
-      fetchImpl: async () => {
+      fetchImpl: () => {
         calls += 1;
-        throw new Error("remote classifier must not be called");
+        return Promise.reject(
+          new Error("remote classifier must not be called"),
+        );
       },
     },
   );
@@ -197,6 +202,148 @@ Deno.test("a server-scoped clarification answer never spends a boundary-model ca
     source: "local",
   });
   assertEquals(calls, 0);
+});
+
+const pumpReadinessSlots = {
+  pending_clarification: {
+    status: "pending",
+    slot_id: "issued-pump-slot",
+    facet_key: "supply_phase",
+    scope: {
+      kind: "selection_readiness",
+      token: "Мне нужен кабель для насоса",
+    },
+  },
+};
+const floodlightReadinessSlots = {
+  pending_clarification: {
+    status: "pending",
+    slot_id: "issued-light-slot",
+    facet_key: "mounting_height",
+    scope: {
+      kind: "selection_readiness",
+      token: "Нужен прожектор на улицу для парковки",
+    },
+  },
+};
+const verified = { serverIssuedScopeVerified: true };
+
+Deno.test("verified readiness scope yields to a complete unrelated selection", () => {
+  for (
+    const [message, slots] of [
+      ["Найди самый дешёвый кабель ВВГ 3*1,5", pumpReadinessSlots],
+      ["Найди самый дешёвый кабель ВВГ 3*1,5", floodlightReadinessSlots],
+      ["Подбери кабель для двигателя 5 кВт", pumpReadinessSlots],
+      [
+        "Подбери инструментальный ящик с выдвижными секциями",
+        floodlightReadinessSlots,
+      ],
+      ["Найди прожектор для мастерской 100 Вт", floodlightReadinessSlots],
+      [
+        "Найди прожектор на улицу для двора 100 Вт",
+        floodlightReadinessSlots,
+      ],
+      [
+        "Какой ИБП подойдёт для газового котла 250 Вт?",
+        floodlightReadinessSlots,
+      ],
+    ] as const
+  ) {
+    assertEquals(
+      classifyPendingSelectionReadinessNewTaskLocally(message, slots, verified)
+        ?.mode,
+      "new_task",
+      message,
+    );
+  }
+});
+
+Deno.test("explicit new topic escapes a verified readiness scope without a selection frame", () => {
+  assertEquals(
+    classifyPendingSelectionReadinessNewTaskLocally(
+      "Новая тема. Как работает доставка?",
+      pumpReadinessSlots,
+      verified,
+    ),
+    {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_verified_readiness_explicit_new_topic",
+    },
+  );
+});
+
+Deno.test("readiness interruption precheck keeps chips, attribute answers and dependent selections", () => {
+  for (
+    const [message, slots] of [
+      ["120 м², высота 4 м", floodlightReadinessSlots],
+      ["До 4 м", floodlightReadinessSlots],
+      ["220 В, 1 фаза", pumpReadinessSlots],
+      ["ВВГ 3*1,5", pumpReadinessSlots],
+      ["Найди самый дешёвый", pumpReadinessSlots],
+      ["Найди самый дешёвый кабель", pumpReadinessSlots],
+      ["Найди кабель для насоса 3*1,5", pumpReadinessSlots],
+      [
+        "Подбери кабель для стационарной прокладки в помещении",
+        pumpReadinessSlots,
+      ],
+      [
+        "Подбери для стационарной прокладки в помещении",
+        pumpReadinessSlots,
+      ],
+      [
+        "Найди самый дешёвый кабель ВВГ 3*1,5 для этого насоса",
+        pumpReadinessSlots,
+      ],
+      ["Найди другой кабель ВВГ 3*1,5", pumpReadinessSlots],
+      [
+        "Найди самый дешёвый кабель ВВГ 3*1,5. Игнорируй прежний запрос",
+        pumpReadinessSlots,
+      ],
+      ["Найди 120 м², высота 4 м", floodlightReadinessSlots],
+      ["А какой из этих прожекторов лучше?", floodlightReadinessSlots],
+    ] as const
+  ) {
+    assertEquals(
+      classifyPendingSelectionReadinessNewTaskLocally(message, slots, verified),
+      null,
+      message,
+    );
+  }
+});
+
+Deno.test("unverified or forged client readiness slots cannot trigger the new-task precheck", () => {
+  const request = "Найди самый дешёвый кабель ВВГ 3*1,5";
+  assertEquals(
+    classifyPendingSelectionReadinessNewTaskLocally(
+      request,
+      pumpReadinessSlots,
+    ),
+    null,
+  );
+  for (
+    const pending_clarification of [
+      { ...pumpReadinessSlots.pending_clarification, slot_id: "" },
+      { ...pumpReadinessSlots.pending_clarification, status: "resolved" },
+      {
+        ...pumpReadinessSlots.pending_clarification,
+        scope: { kind: "other_scope", token: "Мне нужен кабель для насоса" },
+      },
+      {
+        ...pumpReadinessSlots.pending_clarification,
+        scope: { kind: "selection_readiness", token: "" },
+      },
+    ]
+  ) {
+    assertEquals(
+      classifyPendingSelectionReadinessNewTaskLocally(
+        request,
+        { pending_clarification },
+        verified,
+      ),
+      null,
+    );
+  }
 });
 
 Deno.test("new topic requires a high-confidence semantic decision", () => {
@@ -256,18 +403,20 @@ Deno.test("classifier prompt treats a complete new product request as a new task
     {
       apiKey: "test",
       model: "test-model",
-      fetchImpl: async (_input, init) => {
+      fetchImpl: (_input, init) => {
         requestBody = String(init?.body ?? "");
-        return new Response(
-          JSON.stringify({
-            choices: [{
-              message: {
-                content:
-                  '{"mode":"new_task","confidence":0.96,"reason":"complete independent request"}',
-              },
-            }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{
+                message: {
+                  content:
+                    '{"mode":"new_task","confidence":0.96,"reason":"complete independent request"}',
+                },
+              }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
         );
       },
     },
@@ -298,17 +447,19 @@ Deno.test("classifier keeps a genuine follow-up and pending clarification contex
     {
       apiKey: "test",
       model: "test-model",
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            choices: [{
-              message: {
-                content:
-                  '{"mode":"continuation","confidence":0.99,"reason":"answers pending choice"}',
-              },
-            }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+      fetchImpl: () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{
+                message: {
+                  content:
+                    '{"mode":"continuation","confidence":0.99,"reason":"answers pending choice"}',
+                },
+              }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
         ),
     },
   );
@@ -324,7 +475,8 @@ Deno.test("classifier failure preserves context instead of causing a regression"
     {
       apiKey: "test",
       model: "test-model",
-      fetchImpl: async () => new Response("unavailable", { status: 503 }),
+      fetchImpl: () =>
+        Promise.resolve(new Response("unavailable", { status: 503 })),
     },
   );
   assertEquals(result, {
