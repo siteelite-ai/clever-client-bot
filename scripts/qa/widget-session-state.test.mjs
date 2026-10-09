@@ -439,6 +439,33 @@ test('widget renders user and assistant HTML as inert text', async () => {
   dom.window.close();
 });
 
+test('customer text echoed by an exact-price response remains inert in streamed assistant HTML', async () => {
+  const echoedQuery = 'кабель ВВГ 3*1,5 <img src=x onerror="window.__echoXss=1"> [ссылка](https://example.com/" onmouseover="window.__echoXss=2)';
+  const assistantText = `Ищу в каталоге точную маркировку «${echoedQuery}» и проверяю цену.`;
+  const sse = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: assistantText } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'echo-xss-test', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = echoedQuery;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  await waitForWidget(() => readState(dom)?.history?.at(-1)?.content === assistantText,
+    'streamed echoed query should complete');
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__echoXss, undefined);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]')?.getAttribute('onmouseover'), null);
+  assert.match(messages.textContent, /<img src=x onerror=/u);
+  dom.window.close();
+});
+
 test('accepted request is never executed again when its SSE connection breaks', async () => {
   let fetchCount = 0;
   let executionCount = 0;

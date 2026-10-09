@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; v2 also contains internal 3-run reliability retests, catalog-backed BT-923 price-unit acceptance and two synthetic API quick-reply continuations (not customer quotes or browser clicks)",
+  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; v2 also contains internal 3-run reliability retests, catalog-backed BT-923 price-unit acceptance and explicitly marked synthetic API continuations and geometry scenarios (not customer quotes or browser clicks)",
   "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
@@ -15,6 +15,7 @@
           "require_clarification_facet_key": "supply_phase"
         }
       }, {
+        "synthetic": true,
         "message": "220 В, 1 фаза",
         "expect": {
           "conversation_boundary": "continuation",
@@ -40,6 +41,7 @@
           "require_clarification_range_unit": "м"
         }
       }, {
+        "synthetic": true,
         "message": "До 4 м",
         "expect": {
           "conversation_boundary": "continuation",
@@ -49,6 +51,38 @@
           "require_clarification_choice": "options",
           "require_clarification_facet_key": "illuminated_area",
           "require_clarification_range_unit": "м²"
+        }
+      }]
+    },
+    {
+      "id": "bt929-synthetic-yard-area-cable-not-height",
+      "title": "Synthetic BT-929: yard area and cable length do not prove mounting height",
+      "synthetic": true,
+      "turns": [{
+        "message": "Нужен прожектор на улицу для двора 35 м², кабель до него 10 м. Предложи варианты.",
+        "expect": {
+          "max_products": 0,
+          "require_any_text": ["высот", "монтаж", "установ"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_option_values": ["До 4 м", "4–8 м", "Выше 8 м"],
+          "require_clarification_range_unit": "м"
+        }
+      }]
+    },
+    {
+      "id": "bt929-synthetic-parking-area-cable-not-height",
+      "title": "Synthetic BT-929: parking area and cable length do not prove mounting height",
+      "synthetic": true,
+      "turns": [{
+        "message": "Какие прожекторы подойдут для парковки 300 м², если кабель до опоры 20 м?",
+        "expect": {
+          "max_products": 0,
+          "require_any_text": ["высот", "монтаж", "установ"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_option_values": ["До 4 м", "4–8 м", "Выше 8 м"],
+          "require_clarification_range_unit": "м"
         }
       }]
     },
@@ -76,6 +110,47 @@
           "require_clarification_choice": "options",
           "require_clarification_facet_key": "installation_method"
         }
+      }, {
+        "synthetic": true,
+        "message": "В трубе/ПНД",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_method", "value": "В трубе/ПНД" },
+          "max_products": 0,
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase",
+          "require_clarification_option_values": ["220 В, 1 фаза", "380 В, 3 фазы"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "220 В, 1 фаза",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "supply_phase", "value": "220 В, 1 фаза" },
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "load_power"
+        }
+      }, {
+        "synthetic": true,
+        "message": "5 кВт",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "load_power",
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "core_count"
+        }
+      }, {
+        "synthetic": true,
+        "message": "3 жилы",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "core_count",
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "grounding_presence"
+        }
       }]
     },
     {
@@ -98,6 +173,29 @@
           "require_clarification_facet_key": "conductor_material",
           "forbid_text": ["НКИ"]
         }
+      }, {
+        "synthetic": true,
+        "message": "Медь",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "conductor_material", "value": "Медь" },
+          "max_products": 0,
+          "require_any_text": ["болт", "клемм", "соедин"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "connection_type",
+          "require_clarification_option_values": ["Под болт", "В клемму"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Под болт",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "connection_type", "value": "Под болт" },
+          "max_products": 0,
+          "require_any_text": ["отверст", "болт", "М"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "hole_size"
+        }
       }]
     },
     {
@@ -110,6 +208,41 @@
           "require_text_groups": [["цифров", "аналог"], ["улиц", "помещен"], ["PoE", "питан", "расстоян"]],
           "require_clarification_choice": "options",
           "require_clarification_facet_key": "camera_system"
+        }
+      }, {
+        "synthetic": true,
+        "message": "Цифровая/IP",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "camera_system", "value": "Цифровая/IP" },
+          "max_products": 0,
+          "require_any_text": ["улиц", "помещен", "проклад"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_location",
+          "require_clarification_option_values": ["На улице", "В помещении"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "На улице",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_location", "value": "На улице" },
+          "max_products": 0,
+          "require_any_text": ["PoE", "питан"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "power_mode",
+          "require_clarification_option_values": ["Питание PoE", "Отдельное питание"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Питание PoE",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "power_mode", "value": "Питание PoE" },
+          "max_products": 0,
+          "require_any_text": ["длин", "расстоян", "метр"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "line_length"
         }
       }]
     },
@@ -267,6 +400,28 @@
           "require_text_groups": [["услов", "примен", "назнач", "подключ"], ["сечен", "жил"], ["гибк", "стационар", "подвиж"]],
           "require_clarification_choice": "options",
           "require_clarification_facet_key": "installation_mode"
+        }
+      }, {
+        "synthetic": true,
+        "message": "Подвижное подключение",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_mode", "value": "Подвижное подключение" },
+          "max_products": 0,
+          "require_any_text": ["сечен", "жил"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "core_and_section"
+        }
+      }, {
+        "synthetic": true,
+        "message": "3×2,5",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "core_and_section",
+          "max_products": 0,
+          "require_any_text": ["назнач", "оборудован", "подключ"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "usage_purpose"
         }
       }]
     },

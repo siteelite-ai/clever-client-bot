@@ -34,7 +34,7 @@ function withChangedJson(filename, change, manifestChange = (manifest) => manife
 
 test('the pinned five matrix hashes and release dimensions match the actual files', () => {
   const ledger = buildReleaseLedger();
-  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 188, ordered_turns: 260 });
+  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 190, ordered_turns: 273 });
   for (const file of ledger.matrix_files) {
     assert.equal(sha256(fs.readFileSync(new URL(`./${file.basename}`, import.meta.url))), file.sha256);
   }
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases-v2.json', 38, 41],
+      ['notion-legacy-bug-cases-v2.json', 40, 54],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -62,13 +62,15 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   assert.equal(ledger.historical_report_results_joined, false);
   for (const run of ledger.runs) {
     assert.equal(run.candidate_status, 'NOT_RUN');
-    assert.equal(run.provenance_level, 'suite_only');
+    assert.equal(run.synthetic_scenario, run.turns.some((turn) => turn.synthetic_scenario));
+    assert.equal(run.provenance_level, !run.synthetic_scenario ? 'suite_only'
+      : run.turns.every((turn) => turn.synthetic_scenario) ? 'synthetic_scenario' : 'mixed_suite_and_synthetic');
     assert.equal(run.original_case_locator, null);
     assert.deepEqual(JSON.parse(run.run_key),
       [run.suite_basename, run.suite_sha256, run.case_id, run.variant, run.repeat_index]);
     for (const [index, turn] of run.turns.entries()) {
       assert.equal(turn.candidate_status, 'NOT_RUN');
-      assert.equal(turn.provenance_level, 'suite_only');
+      assert.equal(turn.provenance_level, turn.synthetic_scenario ? 'synthetic_scenario' : 'suite_only');
       assert.equal(turn.original_case_locator, null);
       assert.equal(turn.run_key, run.run_key);
       assert.equal(turn.suite_basename, run.suite_basename);
@@ -83,7 +85,7 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   }
 });
 
-test('all 119 base turns, including two synthetic chip continuations, have explicit acceptance', () => {
+test('all 132 base turns, including 15 synthetic turns, have explicit acceptance', () => {
   let checked = 0;
   for (const manifest of MATRIX_MANIFESTS) {
     const suite = JSON.parse(fs.readFileSync(new URL(`./${manifest.file}`, import.meta.url), 'utf8'));
@@ -96,10 +98,10 @@ test('all 119 base turns, including two synthetic chip continuations, have expli
       }
     }
   }
-  assert.equal(checked, 119);
+  assert.equal(checked, 132);
 });
 
-test('all 260 messages and effective expectations match the acceptance runner plan', () => {
+test('all 273 messages and effective expectations match the acceptance runner plan', () => {
   const ledger = buildReleaseLedger();
   let cursor = 0;
   for (const manifest of MATRIX_MANIFESTS) {
@@ -125,23 +127,25 @@ test('all 260 messages and effective expectations match the acceptance runner pl
       }
     }
   }
-  assert.equal(cursor, 188);
+  assert.equal(cursor, 190);
 });
 
-test('Notion synthetic chip continuations remain source-distinct and NOT_RUN until preview', () => {
+test('all Notion synthetic continuations and geometry probes remain distinct and NOT_RUN until preview', () => {
   const ledger = buildReleaseLedger();
-  for (const [id, expectedValue] of [
-    ['bt929-pump-cable-clarification', '220 В, 1 фаза'],
-    ['bt929-outdoor-floodlight-clarification', 'До 4 м'],
-  ]) {
-    const run = ledger.runs.find((item) => item.case_id === id);
-    assert(run, id);
-    assert.equal(run.turns.length, 2, id);
-    assert.equal(run.turns[1].message, expectedValue, id);
-    assert.equal(run.turns[1].effective_expectation.require_previous_quick_reply.value, expectedValue, id);
-    assert.equal(run.turns[1].provenance_level, 'suite_only', id);
-    assert.equal(run.turns[1].candidate_status, 'NOT_RUN', id);
+  const sourceIndex = JSON.parse(fs.readFileSync(new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
+  assert.equal(sourceIndex.synthetic_api_continuations.length, 15);
+  const syntheticTurns = ledger.runs.flatMap((run) => run.turns)
+    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v2.json' && turn.synthetic_scenario);
+  assert.equal(syntheticTurns.length, 15);
+  for (const source of sourceIndex.synthetic_api_continuations) {
+    const turn = syntheticTurns.find((item) => item.case_id === source.case_id && item.turn_index === source.turn_index);
+    assert(turn, `${source.case_id} turn ${source.turn_index}`);
+    assert.equal(turn.message, source.message);
+    assert.equal(turn.provenance_level, 'synthetic_scenario');
+    assert.equal(turn.candidate_status, 'NOT_RUN');
   }
+  assert.equal(new Set(sourceIndex.synthetic_api_continuations.map((source) =>
+    `${source.case_id}:${source.turn_index}`)).size, 15);
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

@@ -45,8 +45,12 @@ test('all 30 legacy cases have ticket attribution and both BT-923 prompts match 
   const suites = ['notion-legacy-bug-cases.json', 'notion-legacy-bug-cases-v2.json']
     .map((file) => JSON.parse(fs.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')));
   assert.equal(index.tickets.length, 9);
-  assert(suites.every((suite) => suite.cases.length === 30));
-  assert.deepEqual(suites[1].cases.map((item) => item.id), suites[0].cases.map((item) => item.id));
+  assert.equal(suites[0].cases.length, 30);
+  assert.equal(suites[1].cases.length, 32);
+  assert.deepEqual(suites[1].cases.filter((item) => item.synthetic !== true).map((item) => item.id),
+    suites[0].cases.map((item) => item.id));
+  assert.deepEqual(suites[1].cases.filter((item) => item.synthetic === true).map((item) => item.id),
+    ['bt929-synthetic-yard-area-cable-not-height', 'bt929-synthetic-parking-area-cable-not-height']);
   for (const oldCase of suites[0].cases) {
     if (oldCase.id.startsWith('bt923-')) continue;
     const nextCase = suites[1].cases.find((item) => item.id === oldCase.id);
@@ -57,13 +61,22 @@ test('all 30 legacy cases have ticket attribution and both BT-923 prompts match 
       .filter((item) => item.case_id === oldCase.id);
     assert.deepEqual(added.map((turn) => turn.message), declaredSynthetic.map((item) => item.message),
       `${oldCase.id}: later turn must be explicitly labelled synthetic`);
+    assert(added.every((turn) => turn.synthetic === true), `${oldCase.id}: later turn marker missing`);
   }
-  assert.deepEqual(index.synthetic_api_continuations.map((item) => item.case_id),
-    ['bt929-pump-cable-clarification', 'bt929-outdoor-floodlight-clarification']);
+  assert.equal(index.synthetic_api_continuations.length, 15);
+  const syntheticCaseTurns = suites[1].cases.flatMap((testCase) => testCase.turns
+    .map((turn, index) => ({ case_id: testCase.id, turn_index: index + 1, message: turn.message,
+      synthetic: testCase.synthetic === true || turn.synthetic === true })))
+    .filter((turn) => turn.synthetic);
+  assert.equal(syntheticCaseTurns.length, 15);
+  assert.deepEqual(index.synthetic_api_continuations.map(({ case_id, turn_index, message }) =>
+    [case_id, turn_index, message]), syntheticCaseTurns.map(({ case_id, turn_index, message }) =>
+    [case_id, turn_index, message]));
   for (const item of index.synthetic_api_continuations) {
-    assert.equal(item.turn_index, 2);
-    assert.match(item.intent, /does not assert a browser click/u);
+    assert(Number.isSafeInteger(item.turn_index) && item.turn_index > 0);
+    assert(item.intent.length > 30);
   }
+  assert.match(index.scope, /not customer quotes or browser clicks/u);
   const ticketIds = new Set();
   for (const ticket of index.tickets) {
     assert(!ticketIds.has(ticket.ticket));
@@ -71,7 +84,8 @@ test('all 30 legacy cases have ticket attribution and both BT-923 prompts match 
     assert.match(ticket.page_url, /^https:\/\/app\.notion\.com\/p\/[a-f0-9]{32}$/u);
     const casePrefix = ticket.ticket.toLowerCase().replace('-', '');
     for (const suite of suites) {
-      assert.equal(suite.cases.filter((item) => item.id.startsWith(casePrefix)).length, ticket.case_count);
+      assert.equal(suite.cases.filter((item) => item.synthetic !== true && item.id.startsWith(casePrefix)).length,
+        ticket.case_count);
     }
   }
   assert.equal(index.tickets.reduce((count, ticket) => count + ticket.case_count, 0), 30);

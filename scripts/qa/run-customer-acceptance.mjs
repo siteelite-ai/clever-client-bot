@@ -125,7 +125,7 @@ const FULL_SUITE_MANIFESTS = {
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'notion-legacy-bug-cases-v2.json': {
-    sha256: '2422a788c909c979abed927e07693f91b5054861f525bf79710b4a358342e25f',
+    sha256: '360d633e61a8ba0eaac83b85e77afcaf460e9dc09587acb6ca6384037ea87d0d',
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -133,16 +133,20 @@ const FULL_SUITE_MANIFESTS = {
       'bt923-battery-unit': 3,
       'bt922-breaker-replacement-under-1000': 3,
     },
-    turns: 33,
-    runs: 38,
-    evaluatedTurns: 41,
+    turns: 46,
+    runs: 40,
+    evaluatedTurns: 54,
     defaultTurnsPerCase: 1,
     turnsById: {
       'bt929-pump-cable-clarification': 2,
       'bt929-outdoor-floodlight-clarification': 2,
+      'bt929-underground-cable-clarification': 5,
+      'bt929-lugs-35mm-clarification': 3,
+      'bt929-surveillance-cable-clarification': 4,
+      'bt924-replace-kg-cable': 3,
       'bt924-acti9-followup-show': 2,
     },
-    ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
+    ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-synthetic-yard-area-cable-not-height bt929-synthetic-parking-area-cable-not-height bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'systemic-cardinality-cases.json': {
     sha256: 'db38f93c6245a8b0063cc35c1d6ddca4c7e88c27f95f0d52055ae7556799e62b',
@@ -320,7 +324,9 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_quoted_price_per_piece',
   'require_clarification_choice',
   'require_clarification_facet_key',
+  'require_clarification_option_values',
   'require_clarification_range_unit',
+  'require_previous_freeform_slot',
   'require_previous_quick_reply',
   'require_catalog_minimum',
   'require_result_cardinality',
@@ -486,9 +492,23 @@ export function validateExpectationObject(expect, location = 'expect') {
        !/^[a-z][a-z0-9_]{0,127}$/u.test(expect.require_clarification_facet_key))) {
     throw new Error(`${location}.require_clarification_facet_key: must be a bounded facet key`);
   }
+  if (expect.require_clarification_option_values !== undefined) {
+    const values = expect.require_clarification_option_values;
+    expectationStringList(values, `${location}.require_clarification_option_values`);
+    if (values.length < 2 || values.length > 5 ||
+        values.some((value) => value !== value.trim() || value.length > 2000) ||
+        new Set(values).size !== values.length) {
+      throw new Error(`${location}.require_clarification_option_values: requires 2–5 distinct widget-compatible values`);
+    }
+  }
   if (expect.require_clarification_range_unit !== undefined &&
       !['м', 'м²'].includes(expect.require_clarification_range_unit)) {
     throw new Error(`${location}.require_clarification_range_unit: must be м or м²`);
+  }
+  if (expect.require_previous_freeform_slot !== undefined &&
+      (typeof expect.require_previous_freeform_slot !== 'string' ||
+       !/^[a-z][a-z0-9_]{0,127}$/u.test(expect.require_previous_freeform_slot))) {
+    throw new Error(`${location}.require_previous_freeform_slot: must be a bounded facet key`);
   }
   if (expect.require_previous_quick_reply !== undefined) {
     const prior = expect.require_previous_quick_reply;
@@ -600,7 +620,16 @@ export function validateExpectationSuite(suiteToValidate, variationSuiteToValida
   }
   for (const testCase of suiteToValidate.cases) {
     if (!Array.isArray(testCase.turns)) throw new Error(`${testCase.id}: turns must be an array`);
+    if (testCase.synthetic !== undefined && testCase.synthetic !== true) {
+      throw new Error(`${testCase.id}.synthetic: only explicit true is supported`);
+    }
     for (const [index, turn] of testCase.turns.entries()) {
+      if (turn.synthetic !== undefined && turn.synthetic !== true) {
+        throw new Error(`${testCase.id}.turns[${index}].synthetic: only explicit true is supported`);
+      }
+      if (turn.synthetic === true && index === 0 && testCase.synthetic !== true) {
+        throw new Error(`${testCase.id}.turns[0].synthetic: wholly synthetic cases must be labelled at case level`);
+      }
       const location = `${testCase.id}.turns[${index}].expect`;
       if (turn.expect !== undefined) validateExpectationObject(turn.expect, location);
       validateExpectationObject(resolveExpectations(defaults, turn.expect), `${location} (effective)`);
@@ -1411,6 +1440,15 @@ export function evaluate(expect = {}, response, {
       failures.push(`clarification facet ${evidence.facet_key ?? 'missing'} != ${expect.require_clarification_facet_key}`);
     }
   }
+  if (expect.require_clarification_option_values !== undefined) {
+    const evidence = clarificationChoiceEvidence(response);
+    const expectedValues = expect.require_clarification_option_values;
+    const actualValues = evidence.values ?? [];
+    if (evidence.mode !== 'options' || actualValues.length !== expectedValues.length ||
+        expectedValues.some((value) => !actualValues.includes(value))) {
+      failures.push(`clarification options ${JSON.stringify(actualValues)} != ${JSON.stringify(expectedValues)}`);
+    }
+  }
   if (expect.require_clarification_range_unit !== undefined) {
     failures.push(...clarificationRangeFailures(
       clarificationChoiceEvidence(response), expect.require_clarification_range_unit,
@@ -1424,6 +1462,12 @@ export function evaluate(expect = {}, response, {
         message !== required.value) {
       failures.push(`continuation is not an exact server-issued quick-reply value for ${required.facet_key}`);
     }
+  }
+  if (expect.require_previous_freeform_slot !== undefined &&
+      (previousClarificationChoice?.mode !== 'freeform' ||
+       previousClarificationChoice.facet_key !== expect.require_previous_freeform_slot ||
+       typeof message !== 'string' || !message.trim())) {
+    failures.push(`continuation is not answering a server-issued free-form slot for ${expect.require_previous_freeform_slot}`);
   }
   if (Number.isFinite(expect.min_products) && linkEvidence.uniqueCount < expect.min_products) {
     failures.push(`products ${linkEvidence.uniqueCount} < ${expect.min_products}`);
@@ -1737,7 +1781,7 @@ export async function fetchAcceptanceTurn(payload, {
   }
 }
 
-async function runTurn({ message, expect }, state) {
+async function runTurn({ message, expect, synthetic = false }, state) {
   const startedAt = Date.now();
   const payload = {
     message,
@@ -1760,6 +1804,7 @@ async function runTurn({ message, expect }, state) {
       : `network error: ${String(error?.message ?? error)}`;
     return {
       message,
+      synthetic_scenario: synthetic,
       status: null,
       duration_ms: Date.now() - startedAt,
       network_attempts: error?.attempts ?? null,
@@ -1818,6 +1863,7 @@ async function runTurn({ message, expect }, state) {
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
     message,
+    synthetic_scenario: synthetic,
     status: response.status,
     duration_ms: parsed.durationMs,
     network_attempts: attempts,
@@ -1887,6 +1933,7 @@ export async function main() {
           turns.push(await runTurn({
             ...turn,
             message: execution.messages[turnIndex],
+            synthetic: testCase.synthetic === true || turn.synthetic === true,
             expect: resolveExpectations(
               suite.default_expectations,
               resolveExpectations(turn.expect, variantExpectation),

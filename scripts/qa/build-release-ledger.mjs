@@ -11,7 +11,7 @@ const outputFile = path.join(root, 'docs/qa/release-inventory-v2-20261009.json')
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
 // `sourceTurnCount` is the count of base-suite turns, not a claim that each
-// turn quotes a customer source: the two BT-929 chip continuations are synthetic.
+// turn quotes a customer source: synthetic turns are explicitly marked in the suite.
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
@@ -32,8 +32,8 @@ export const MATRIX_MANIFESTS = [
   },
   {
     file: 'notion-legacy-bug-cases-v2.json',
-    sha256: '2422a788c909c979abed927e07693f91b5054861f525bf79710b4a358342e25f',
-    caseCount: 30, sourceTurnCount: 33, runCount: 38, evaluatedTurnCount: 41,
+    sha256: '360d633e61a8ba0eaac83b85e77afcaf460e9dc09587acb6ca6384037ea87d0d',
+    caseCount: 32, sourceTurnCount: 46, runCount: 40, evaluatedTurnCount: 54,
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -79,11 +79,17 @@ function validateSuite(suite, manifest) {
     assert(!caseIds.has(testCase.id), `${manifest.file}: duplicate case ID ${testCase.id}`);
     caseIds.add(testCase.id);
     assert(Array.isArray(testCase.turns) && testCase.turns.length > 0, `${testCase.id}: no turns`);
+    assert(testCase.synthetic === undefined || testCase.synthetic === true,
+      `${testCase.id}: synthetic case marker must be explicit true`);
     assert.equal(testCase.repeat ?? 1, manifest.repeatById?.[testCase.id] ?? manifest.repeat,
       `${testCase.id}: repeat count changed`);
     sourceTurns += testCase.turns.length;
     for (const [index, turn] of testCase.turns.entries()) {
       assert(nonEmpty(turn.message), `${testCase.id} turn ${index + 1}: message is empty`);
+      assert(turn.synthetic === undefined || turn.synthetic === true,
+        `${testCase.id} turn ${index + 1}: synthetic turn marker must be explicit true`);
+      assert(index !== 0 || turn.synthetic !== true || testCase.synthetic === true,
+        `${testCase.id}: fully synthetic case must be labelled at case level`);
       assert(isRecord(turn.expect), `${testCase.id} turn ${index + 1}: expect must be an object`);
       assert(Object.keys(turn.expect).some((key) => key !== 'max_duration_ms'),
         `${testCase.id} turn ${index + 1}: explicit acceptance assertion is missing`);
@@ -173,6 +179,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
           const runKey = JSON.stringify([manifest.file, manifest.sha256, testCase.id, execution.id, repeatIndex]);
           const turns = testCase.turns.map((turn, index) => {
             const override = execution.expect_overrides?.[index] ?? null;
+            const syntheticScenario = testCase.synthetic === true || turn.synthetic === true;
             return {
               turn_key: JSON.stringify([manifest.file, manifest.sha256, testCase.id, execution.id, repeatIndex, index + 1]),
               run_key: runKey,
@@ -186,11 +193,13 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
               effective_expectation: effectiveExpectation(suite.default_expectations, turn.expect, override ?? {}),
               explicit_variant_expect_override: override,
               suite_source_claim: suite.source,
-              provenance_level: 'suite_only',
+              synthetic_scenario: syntheticScenario,
+              provenance_level: syntheticScenario ? 'synthetic_scenario' : 'suite_only',
               original_case_locator: null,
               candidate_status: 'NOT_RUN',
             };
           });
+          const syntheticTurnCount = turns.filter((turn) => turn.synthetic_scenario).length;
           runs.push({
             run_key: runKey,
             suite_basename: manifest.file,
@@ -204,7 +213,9 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
             } : null,
             variation_inherits_base_source_and_expectations: isVariation,
             suite_source_claim: suite.source,
-            provenance_level: 'suite_only',
+            synthetic_scenario: syntheticTurnCount > 0,
+            provenance_level: syntheticTurnCount === 0 ? 'suite_only'
+              : syntheticTurnCount === turns.length ? 'synthetic_scenario' : 'mixed_suite_and_synthetic',
             original_case_locator: null,
             candidate_status: 'NOT_RUN',
             turns,
@@ -222,7 +233,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
     runs: runs.length,
     ordered_turns: runs.reduce((count, run) => count + run.turns.length, 0),
   };
-  assert.deepEqual(counts, { matrix_files: 5, runs: 188, ordered_turns: 260 });
+  assert.deepEqual(counts, { matrix_files: 5, runs: 190, ordered_turns: 273 });
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
@@ -233,7 +244,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content. The second turns of BT-929 pump and outdoor-floodlight cases are explicitly synthetic API chip continuations (docs/qa/notion-source-index-20261009.json), not customer quotations or browser clicks.',
+    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content. Fifteen explicitly marked BT-929/BT-924 turns are synthetic API continuations or geometry scenarios (docs/qa/notion-source-index-20261009.json), not customer quotations or browser clicks.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,
@@ -258,7 +269,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else {
       assert.equal(fs.readFileSync(outputFile, 'utf8'), serialized,
         'release inventory is stale; rebuild with --write after reviewing matrix changes');
-      process.stdout.write('Release inventory matches the pinned five-file matrix (188 runs, 260 turns).\n');
+      process.stdout.write('Release inventory matches the pinned five-file matrix (190 runs, 273 turns).\n');
     }
   }
 }

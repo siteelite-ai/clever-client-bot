@@ -486,7 +486,7 @@ test('strict full-suite verifies all Notion legacy and systemic cardinality runs
     suiteBytes: notionV2Bytes,
     variantsBytes: null,
   });
-  assert.deepEqual([notionV2.expected_cases, notionV2.expected_turns_per_base_suite, notionV2.expected_runs, notionV2.expected_evaluated_turns], [30, 33, 38, 41]);
+  assert.deepEqual([notionV2.expected_cases, notionV2.expected_turns_per_base_suite, notionV2.expected_runs, notionV2.expected_evaluated_turns], [32, 46, 40, 54]);
   const cardinality = validateStrictFullSuite({
     argv: strictArgs,
     suite: cardinalitySuite,
@@ -528,7 +528,7 @@ test('strict full-suite rejects missing, swapped, or changed-repeat Notion and c
   };
   assert.throws(() => validateStrictFullSuite({ ...notionV2Args, suite: {
     ...notionV2Suite, cases: notionV2Suite.cases.slice(1),
-  } }), /expected 30 unique IDs/);
+  } }), /expected 32 unique IDs/);
   for (const id of ['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit']) {
     assert.throws(() => validateStrictFullSuite({ ...notionV2Args, suite: {
       ...notionV2Suite,
@@ -558,7 +558,18 @@ test('strict full-suite rejects missing, swapped, or changed-repeat Notion and c
 test('Notion v2 preserves source prompts while adding scoped reliability, chips and BT-923 assertions', () => {
   assert.equal(notionSuite.schema_version, 1);
   assert.equal(notionV2Suite.schema_version, 2);
-  assert.deepEqual(notionV2Suite.cases.map((item) => item.id), notionSuite.cases.map((item) => item.id));
+  assert.deepEqual(notionV2Suite.cases.filter((item) => item.synthetic !== true).map((item) => item.id),
+    notionSuite.cases.map((item) => item.id));
+  assert.deepEqual(notionV2Suite.cases.filter((item) => item.synthetic === true).map((item) => item.id),
+    ['bt929-synthetic-yard-area-cable-not-height', 'bt929-synthetic-parking-area-cable-not-height']);
+  const addedFollowupCounts = {
+    'bt929-pump-cable-clarification': 1,
+    'bt929-outdoor-floodlight-clarification': 1,
+    'bt929-underground-cable-clarification': 4,
+    'bt929-lugs-35mm-clarification': 2,
+    'bt929-surveillance-cable-clarification': 3,
+    'bt924-replace-kg-cable': 2,
+  };
   for (const oldCase of notionSuite.cases) {
     const nextCase = notionV2Suite.cases.find((item) => item.id === oldCase.id);
     if (['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit', 'bt923-vvg-3x1_5-unit'].includes(oldCase.id)) continue;
@@ -571,9 +582,9 @@ test('Notion v2 preserves source prompts while adding scoped reliability, chips 
         delete first.expect[key];
       }
       assert.deepEqual(first, oldCase.turns[0], `${oldCase.id}: original source turn changed`);
-      const addedSyntheticFollowup = ['bt929-pump-cable-clarification', 'bt929-outdoor-floodlight-clarification']
-        .includes(oldCase.id);
-      assert.equal(nextCase.turns.length, oldCase.turns.length + Number(addedSyntheticFollowup), oldCase.id);
+      const addedSyntheticFollowups = addedFollowupCounts[oldCase.id] ?? 0;
+      assert.equal(nextCase.turns.length, oldCase.turns.length + addedSyntheticFollowups, oldCase.id);
+      assert(nextCase.turns.slice(oldCase.turns.length).every((turn) => turn.synthetic === true), oldCase.id);
     } else {
       assert.deepEqual(nextCase, oldCase);
     }
@@ -1409,9 +1420,73 @@ test('all BT-929 readiness axes require server-bound chips; numeric axes remain 
     assert.equal(followup.expect.require_clarification_range_unit, unit, id);
     assert.equal(followup.expect.conversation_boundary, 'continuation', id);
   }
-  assert.match(notionV2Suite.source, /synthetic API quick-reply continuations \(not customer quotes or browser clicks\)/u);
+  assert.match(notionV2Suite.source, /synthetic API continuations and geometry scenarios \(not customer quotes or browser clicks\)/u);
   assert.equal(notionV2Suite.cases.find((item) => item.id === 'bt929-heat-shrink-12mm')
     .turns[0].expect.require_clarification_choice, undefined);
+});
+
+test('synthetic BT-929/BT-924 continuations prevent a product search after the first chip', () => {
+  const scenarios = [
+    ['bt929-lugs-35mm-clarification', ['conductor_material', 'connection_type', 'hole_size'], ['Медь', 'Под болт']],
+    ['bt929-surveillance-cable-clarification', ['camera_system', 'installation_location', 'power_mode', 'line_length'],
+      ['Цифровая/IP', 'На улице', 'Питание PoE']],
+    ['bt929-underground-cable-clarification',
+      ['installation_method', 'supply_phase', 'load_power', 'core_count', 'grounding_presence'],
+      ['В трубе/ПНД', '220 В, 1 фаза', '5 кВт', '3 жилы']],
+    ['bt924-replace-kg-cable', ['installation_mode', 'core_and_section', 'usage_purpose'],
+      ['Подвижное подключение', '3×2,5']],
+  ];
+  for (const [id, facets, replies] of scenarios) {
+    const turns = notionV2Suite.cases.find((item) => item.id === id)?.turns;
+    assert.equal(turns.length, facets.length, id);
+    for (const [index, turn] of turns.entries()) {
+      assert.equal(turn.expect.max_products, 0, `${id} turn ${index + 1}`);
+      assert.equal(turn.expect.require_clarification_facet_key, facets[index], `${id} turn ${index + 1}`);
+      if (index === 0) continue;
+      assert.equal(turn.synthetic, true, `${id} turn ${index + 1} must be marked synthetic`);
+      assert.equal(turn.message, replies[index - 1], `${id} turn ${index + 1}`);
+      assert.equal(turn.expect.conversation_boundary, 'continuation');
+      assert(turn.expect.require_previous_quick_reply || turn.expect.require_previous_freeform_slot,
+        `${id} turn ${index + 1} must be bound to the preceding server slot`);
+    }
+  }
+  const yard = notionV2Suite.cases.filter((item) => item.id.includes('-synthetic-') && item.id.includes('-not-height'));
+  assert.equal(yard.length, 2);
+  for (const testCase of yard) {
+    assert.equal(testCase.synthetic, true);
+    assert.equal(testCase.turns.length, 1);
+    assert.match(testCase.turns[0].message, /(?:10|20) м/u);
+    assert.equal(testCase.turns[0].expect.require_clarification_facet_key, 'mounting_height');
+    assert.equal(testCase.turns[0].expect.max_products, 0);
+    assert.deepEqual(testCase.turns[0].expect.require_clarification_option_values,
+      ['До 4 м', '4–8 м', 'Выше 8 м']);
+  }
+});
+
+test('server-issued chip sets and free-form predecessor slots are evaluated, not inferred from prose', () => {
+  const replies = [{ value: 'Под болт', label: 'Под болт' }, { value: 'В клемму', label: 'В клемму' }];
+  const response = clarificationReply({ facetKey: 'connection_type', replies });
+  assert.deepEqual(evaluate({ require_clarification_option_values: ['В клемму', 'Под болт'] }, response), []);
+  assert(evaluate({ require_clarification_option_values: ['Под болт', 'Неизвестно'] }, response)
+    .some((failure) => failure.includes('clarification options')));
+  assert(evaluate({ require_clarification_option_values: ['Под болт', 'В клемму'] },
+    clarificationReply({ quickEvent: false, options: [] }))
+    .some((failure) => failure.includes('clarification options')));
+  const previous = { mode: 'freeform', facet_key: 'core_and_section', values: [] };
+  const context = { previousClarificationChoice: previous, message: '3×2,5' };
+  assert.deepEqual(evaluate({ require_previous_freeform_slot: 'core_and_section' }, response, context), []);
+  for (const broken of [
+    { ...context, previousClarificationChoice: { mode: 'options', facet_key: 'core_and_section', values: ['3×2,5'] } },
+    { ...context, previousClarificationChoice: { ...previous, facet_key: 'usage_purpose' } },
+    { ...context, message: '' },
+  ]) {
+    assert(evaluate({ require_previous_freeform_slot: 'core_and_section' }, response, broken)
+      .some((failure) => failure.includes('server-issued free-form slot')));
+  }
+  assert.throws(() => validateExpectationObject({ require_clarification_option_values: ['same', 'same'] }),
+    /requires 2–5 distinct widget-compatible values/);
+  assert.throws(() => validateExpectationObject({ require_previous_freeform_slot: 'bad axis' }),
+    /must be a bounded facet key/);
 });
 
 test('prose options and legacy-looking JSON cannot impersonate clickable SSE chips', () => {
