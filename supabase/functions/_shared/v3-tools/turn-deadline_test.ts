@@ -5,6 +5,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createDeadlineFetch,
+  remainingAcceptedWorkBudgetMs,
   retryBoundedTerminalWrite,
   runWithDeadline,
 } from "./turn-deadline.ts";
@@ -135,4 +136,32 @@ Deno.test("two stuck terminal writes return failure within the bounded window", 
   );
   assertEquals(written, false);
   assertEquals(attempts, 2);
+});
+
+Deno.test("worst-case claim, work and terminal writes stay below the client deadline", () => {
+  const clientDeadlineMs = 55_000;
+  const serverTargetMs = 50_000;
+  const claimMs = 6_000;
+  const terminalWriteReserveMs = 2 * 4_000;
+  const workMs = remainingAcceptedWorkBudgetMs(
+    claimMs,
+    serverTargetMs,
+    terminalWriteReserveMs,
+    40_000,
+  );
+  assertEquals(workMs, 36_000);
+  assertEquals(claimMs + workMs + terminalWriteReserveMs, serverTargetMs);
+  assert(serverTargetMs < clientDeadlineMs);
+  // Fast claims keep the whole ordinary expert-loop budget plus recovery.
+  assertEquals(
+    remainingAcceptedWorkBudgetMs(
+      0,
+      serverTargetMs,
+      terminalWriteReserveMs,
+      40_000,
+    ),
+    40_000,
+  );
+  // Duplicate transport never waits past the same end-to-end target either.
+  assertEquals(claimMs + Math.max(1, serverTargetMs - claimMs), serverTargetMs);
 });

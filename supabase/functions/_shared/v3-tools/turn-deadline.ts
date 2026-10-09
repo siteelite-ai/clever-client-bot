@@ -66,3 +66,17 @@ export async function retryBoundedTerminalWrite(
   }
   return false;
 }
+
+/** Reserve time for the durable terminal write and SSE closure from one
+ * end-to-end request budget, instead of stacking independent timeouts. */
+export function remainingAcceptedWorkBudgetMs(
+  elapsedMs: number,
+  totalTargetMs: number,
+  finalizationReserveMs: number,
+  maxWorkMs: number,
+): number {
+  return Math.max(
+    1,
+    Math.min(maxWorkMs, totalTargetMs - finalizationReserveMs - elapsedMs),
+  );
+}

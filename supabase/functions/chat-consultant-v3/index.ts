@@ -10,6 +10,7 @@ import {
 } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   createDeadlineFetch,
+  remainingAcceptedWorkBudgetMs,
   retryBoundedTerminalWrite,
   runWithDeadline,
 } from "../_shared/v3-tools/turn-deadline.ts";
@@ -531,6 +532,12 @@ const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
 const TURN_TIMEOUT_MS = 32_000;
 const DB_FETCH_TIMEOUT_MS = 5_000;
+// The strict browser QA route expires after 55 seconds. A single server-side
+// target includes claim, ordinary work, two terminal-log attempts and SSE.
+const RESPONSE_TARGET_MS = 50_000;
+const MAX_ACCEPTED_WORK_MS = 40_000;
+const TERMINAL_LOG_ATTEMPT_TIMEOUT_MS = 4_000;
+const TERMINAL_LOG_RESERVE_MS = 2 * TERMINAL_LOG_ATTEMPT_TIMEOUT_MS;
 // Stop starting remote model calls before the hard abort so the ordinary
 // evidence-gated recovery below has time to render a proven pool and close SSE.
 const TURN_SOFT_DEADLINE_MS = 13_000;
@@ -5660,7 +5667,7 @@ async function updateTurnLogEnd(
         .eq("id", logId);
       if (error) throw error;
     },
-    DB_FETCH_TIMEOUT_MS,
+    TERMINAL_LOG_ATTEMPT_TIMEOUT_MS,
     (error, attempt) => console.error(
       `[v3] terminal log update attempt ${attempt} failed:`,
       error,
@@ -18158,6 +18165,7 @@ Deno.serve(async (req) => {
           supabase,
           body.messageId,
           claim.row,
+          Math.max(1, t0 + RESPONSE_TARGET_MS - Date.now()),
         );
         const events = replayableSseEvents(replay.response_events);
         clearInterval(keepAliveTimer);
@@ -19158,7 +19166,12 @@ Deno.serve(async (req) => {
             shownProducts,
           );
         }
-        }, TURN_TIMEOUT_MS + 10_000, () => {
+        }, remainingAcceptedWorkBudgetMs(
+          Date.now() - t0,
+          RESPONSE_TARGET_MS,
+          TERMINAL_LOG_RESERVE_MS,
+          MAX_ACCEPTED_WORK_MS,
+        ), () => {
           workTimedOut = true;
           executionController.abort(
             new DOMException("turn_deadline_exceeded", "TimeoutError"),
