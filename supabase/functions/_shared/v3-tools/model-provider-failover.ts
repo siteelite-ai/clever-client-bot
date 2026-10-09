@@ -166,11 +166,54 @@ export async function isQuotaLimitedForbiddenResponse(
 }
 
 /** Some OpenAI-compatible gateways report a provider failure as HTTP 200 with
- * an unusable choice whose finish_reason is `error`. Treat that envelope as a
- * transport failure instead of allowing callers to mark an empty completion
- * as recovered. */
+ * an unusable choice whose finish_reason is `error`. */
 export function isProviderErrorFinishReason(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "error";
+}
+
+function isAbortError(error: unknown): boolean {
+  return error !== null && typeof error === "object" &&
+    "name" in error &&
+    (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+/** Fetch rejects with TypeError for transport failures. Do not retry an
+ * arbitrary caller/programming exception as though it were provider downtime. */
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError ||
+    (error !== null && typeof error === "object" &&
+      "name" in error && error.name === "NetworkError");
+}
+
+/** This only checks the shared, non-streaming completion envelope. Whether a
+ * choice contains the particular content/tool call a caller needs is a
+ * caller-specific decision and must not be guessed here. */
+async function hasUnusableCompletionEnvelope(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    const data: unknown = await response.clone().json();
+    if (signal?.aborted) signal.throwIfAborted();
+    if (!data || typeof data !== "object" || !("choices" in data)) {
+      return true;
+    }
+    const choices = data.choices;
+    if (
+      !Array.isArray(choices) || !choices[0] ||
+      typeof choices[0] !== "object"
+    ) return true;
+    const choice = choices[0] as Record<string, unknown>;
+    return isProviderErrorFinishReason(choice.finish_reason) ||
+      !choice.message || typeof choice.message !== "object" ||
+      Array.isArray(choice.message);
+  } catch (error) {
+    if (signal?.aborted) signal.throwIfAborted();
+    if (isAbortError(error)) throw error;
+    // Invalid JSON or an incomplete upstream body cannot be used by any
+    // non-streaming chat-completion caller.
+    return true;
+  }
 }
 
 function providerBody(
@@ -183,13 +226,12 @@ function providerBody(
   return copy;
 }
 
-async function callProvider(
+function providerRequestInit(
   provider: ChatCompletionProvider,
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
-  fetchImpl: typeof fetch,
-): Promise<Response> {
-  return fetchImpl(provider.url, {
+): RequestInit {
+  return {
     method: "POST",
     headers: {
       Authorization: `Bearer ${provider.apiKey}`,
@@ -198,7 +240,16 @@ async function callProvider(
     },
     body: JSON.stringify(providerBody(body, provider)),
     signal,
-  });
+  };
+}
+
+function callProvider(
+  provider: ChatCompletionProvider,
+  body: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  fetchImpl: typeof fetch,
+): Promise<Response> {
+  return fetchImpl(provider.url, providerRequestInit(provider, body, signal));
 }
 
 /**
@@ -246,20 +297,48 @@ export async function fetchChatCompletionWithFailover(
     };
   }
 
-  const primary = await callProvider(
+  // Build the request before catching fetch failures. Serialization or request
+  // construction errors are not network outages and must remain visible.
+  const primaryInit = providerRequestInit(
     input.primary,
     input.body,
     input.signal,
-    fetchImpl,
   );
+  let primary: Response;
+  try {
+    primary = await fetchImpl(input.primary.url, primaryInit);
+  } catch (error) {
+    if (
+      !input.fallback?.apiKey || input.signal?.aborted ||
+      !isNetworkError(error)
+    ) throw error;
+    const fallback = await callProvider(
+      input.fallback,
+      input.body,
+      input.signal,
+      fetchImpl,
+    );
+    return {
+      response: fallback,
+      provider: input.fallback.id,
+      failedOver: true,
+      primarySkipped: false,
+    };
+  }
   const quotaLimitedForbidden = await isQuotaLimitedForbiddenResponse(primary);
+  const fallbackProvider = input.fallback;
+  const hasFallback = Boolean(fallbackProvider?.apiKey);
+  const unusableCompletion = primary.status === 200 && hasFallback &&
+    input.body.stream !== true &&
+    !primary.headers.get("content-type")?.includes("text/event-stream") &&
+    await hasUnusableCompletionEnvelope(primary, input.signal);
   const failoverEligible = shouldFailoverChatCompletion(primary.status) ||
-    quotaLimitedForbidden;
-  if (primary.ok) cooldown?.clear(input.primary);
+    quotaLimitedForbidden || unusableCompletion;
+  if (primary.ok && !unusableCompletion) cooldown?.clear(input.primary);
   else cooldown?.record(input.primary, primary, quotaLimitedForbidden);
   if (
-    primary.ok ||
-    !input.fallback?.apiKey ||
+    (primary.ok && !unusableCompletion) ||
+    !fallbackProvider?.apiKey ||
     !failoverEligible
   ) {
     return {
@@ -272,15 +351,16 @@ export async function fetchChatCompletionWithFailover(
 
   const primaryStatus = primary.status;
   await primary.body?.cancel();
+  input.signal?.throwIfAborted();
   const fallback = await callProvider(
-    input.fallback,
+    fallbackProvider,
     input.body,
     input.signal,
     fetchImpl,
   );
   return {
     response: fallback,
-    provider: input.fallback.id,
+    provider: fallbackProvider.id,
     failedOver: true,
     primaryStatus,
     primarySkipped: false,

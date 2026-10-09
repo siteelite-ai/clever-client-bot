@@ -237,6 +237,10 @@ import {
   type VerifiedBroadAssortmentConstrainedContinuation,
 } from "../_shared/v3-tools/broad-assortment.ts";
 import {
+  auditTerminalClarificationProtocol,
+  buildTerminalFreeformSlot,
+} from "../_shared/v3-tools/terminal-clarification.ts";
+import {
   admitDirectSelectionRoute,
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
@@ -5621,17 +5625,20 @@ async function answerBroadAssortmentRequest(
         : {}),
     });
     emitSideEffects(clarification, send);
-  } else if (seriesToken) {
-    // Free-form refinements still inherit the catalog entity even when there
-    // are not enough leaf categories to offer quick replies.
+  } else {
+    // Every direct request for a broad assortment asks a free-form question.
+    // Preserve a proven series scope when present; a null-series question is
+    // generic and must not impersonate a server-verified catalog-series slot.
     send({
       type: "slot_update",
       slots: {
-        pending_clarification: buildBroadAssortmentFreeformSlot(
-          answer,
-          seriesToken,
-          crypto.randomUUID(),
-        ),
+        pending_clarification: seriesToken
+          ? buildBroadAssortmentFreeformSlot(
+            answer,
+            seriesToken,
+            crypto.randomUUID(),
+          )
+          : buildTerminalFreeformSlot(answer, crypto.randomUUID()),
       },
     });
   }
@@ -10813,17 +10820,23 @@ async function runExpertLoop(
                 options: leafChoices.map((value) => ({ value, label: value })),
                 scope: { kind: "broad_assortment", token: namedSeriesToken },
               }), send);
-            } else if (namedSeriesToken) {
-              // Mirror the preflight path: a prose-only question loses the
-              // series when the customer replies with a short product type.
+            } else {
+              // Mirror the preflight path. Preserve a proven named series,
+              // while a broad request without one still owns a free-form
+              // clarification and must not gain fabricated option chips.
               send({
                 type: "slot_update",
                 slots: {
-                  pending_clarification: buildBroadAssortmentFreeformSlot(
-                    clarification,
-                    namedSeriesToken,
-                    crypto.randomUUID(),
-                  ),
+                  pending_clarification: namedSeriesToken
+                    ? buildBroadAssortmentFreeformSlot(
+                      clarification,
+                      namedSeriesToken,
+                      crypto.randomUUID(),
+                    )
+                    : buildTerminalFreeformSlot(
+                      clarification,
+                      crypto.randomUUID(),
+                    ),
                 },
               });
             }
@@ -20601,6 +20614,25 @@ Deno.serve(async (req) => {
         }
       } finally {
         clearInterval(keepAliveTimer);
+        // Audit only a normally completed turn. The extra side effect is
+        // server-owned, follows the visible final ask, and is recorded before
+        // the completion marker so live SSE and durable replay stay identical.
+        // Errors, deadline aborts, and intermediate/tool-pending text are not
+        // repaired or reinterpreted as customer questions.
+        if (!errorMsg && !publicDiagnosticError && !workTimedOut) {
+          const clarification = auditTerminalClarificationProtocol(
+            responseEvents,
+            crypto.randomUUID(),
+          );
+          if (clarification) {
+            send(clarification);
+            steps.push({
+              step: "v3_terminal_freeform_slot_attached",
+              ms: Date.now() - t0,
+              meta: { question: clarification.slots.pending_clarification.question },
+            });
+          }
+        }
         streamCompleted = true;
         const completeEvent: SseEvent = {
           type: "diagnostic",
