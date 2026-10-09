@@ -463,7 +463,7 @@ function propertyStem(token: string): string {
 function customerPropertiesBeforeReferences(
   userMessage: string,
   reference: { value: number; unit: string },
-): string[][] {
+): Array<{ properties: string[]; prefix: string }> {
   // The shared reference extractor canonicalizes 010, 10.0, 10,00 and unit
   // aliases (W/Вт). Compare occurrences numerically through that same
   // extractor instead of reconstructing the customer's spelling from 10.
@@ -479,12 +479,48 @@ function customerPropertiesBeforeReferences(
     return parsed?.value === reference.value &&
       parsed.unit === canonicalReference;
   }).map((match) => {
-    const before = userMessage.slice(
-      Math.max(0, match.index - 50),
-      match.index,
-    );
-    return (before.match(/\p{L}+/gu) ?? []).slice(-4);
+    const prefix = userMessage.slice(0, match.index);
+    return {
+      properties: (prefix.match(/\p{L}+/gu) ?? []).slice(-4),
+      prefix,
+    };
   });
+}
+
+/** The live requested class, not the paired facet, owns a directly stated
+ * product size. A relational preposition introduces a different measured
+ * object; absent that boundary, a class head next to the property is direct
+ * product evidence. This stays grammatical and contains no product names. */
+function measuredReferenceOwner(
+  prefix: string,
+  productClass: string,
+): "product" | "context" | "unknown" {
+  const targetStems = new Set(
+    normalize(productClass).split(" ").filter((word) => word.length >= 4)
+      .map(propertyStem),
+  );
+  if (targetStems.size === 0) return "unknown";
+  const tokens = normalize(prefix).split(" ").filter(Boolean);
+  let propertyIndex = tokens.length - 1;
+  while (
+    propertyIndex >= 0 &&
+    /^(?:примерно|приблизительно|около|порядка|не|более|менее|до|от)$/u
+      .test(tokens[propertyIndex])
+  ) propertyIndex -= 1;
+  if (propertyIndex < 0) return "unknown";
+  const preceding = tokens.slice(Math.max(0, propertyIndex - 6), propertyIndex);
+  const relationIndex = preceding.findLastIndex((token) =>
+    /^(?:для|на|под|к|ко|у)$/u.test(token)
+  );
+  const ownerWords = relationIndex >= 0
+    ? preceding.slice(relationIndex + 1)
+    : preceding.slice(-3);
+  if (ownerWords.length === 0) return "unknown";
+  const namesProduct = ownerWords.some((word) =>
+    targetStems.has(propertyStem(word))
+  );
+  if (namesProduct) return "product";
+  return relationIndex >= 0 ? "context" : "unknown";
 }
 
 /** Numeric directions must be asserted about the selected property locally. */
@@ -560,6 +596,7 @@ export function terminalPairedFitDecision(
   userMessage: string,
   visibleModelReasoning: string,
   facets: CompatibilityFacet[],
+  requestedProductClass = "",
 ): TerminalPairedFitDecision {
   const none: TerminalPairedFitDecision = {
     state: "not_applicable",
@@ -616,7 +653,14 @@ export function terminalPairedFitDecision(
   if (customerMentions.length !== 1) {
     return { state: "unproven", reference, relations: [] };
   }
-  const customerProperties = customerMentions[0];
+  if (
+    requestedProductClass &&
+    measuredReferenceOwner(
+        customerMentions[0].prefix,
+        requestedProductClass,
+      ) === "product"
+  ) return none;
+  const customerProperties = customerMentions[0].properties;
   let nearestProperty: string | null = null;
   for (const property of [...customerProperties].reverse()) {
     const token = normalize(property);

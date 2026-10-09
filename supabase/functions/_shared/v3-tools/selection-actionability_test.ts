@@ -285,11 +285,177 @@ Deno.test("derived declaration cannot turn a paired object reference into an exa
     "Изделия",
     {
       value: 12,
+      unit: "мм",
       facetKeys: ["diameter_before", "diameter_after"],
     },
   );
   assertEquals(declaration?.requiredFacetValues, []);
   assertEquals(declaration?.text.includes("Обязательные параметры"), false);
+});
+
+Deno.test("unitful live values cannot copy either 12 or 10 mm object reference", () => {
+  for (const value of [12, 10]) {
+    const facets = [{
+      key: "before_size",
+      caption: "Размер до изменения, мм",
+      unit: "мм",
+      values: [{ value: `${value} мм` }],
+    }, {
+      key: "after_size",
+      caption: "Размер после изменения, мм",
+      unit: "мм",
+      values: [{ value: `${value} мм` }],
+    }];
+    const declaration = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для объекта размером ${value} мм размер изделия до изменения строго больше ${value} мм, а размер после изменения строго меньше ${value} мм.`,
+        required_facet_values: ["f0v0", "f1v0"],
+        compatible_classifications: [],
+        excluded_classifications: [],
+      },
+      facets,
+      `объект размером ${value} мм`,
+      "Изделия",
+      { value, unit: "мм", facetKeys: ["before_size", "after_size"] },
+    );
+    assertEquals(declaration?.requiredFacetValues, []);
+    assertEquals(declaration?.text.includes("Обязательные параметры"), false);
+  }
+});
+
+Deno.test("paired declaration rejects an affirmed incompatible live range and never requires a negated one", () => {
+  const facets = [{
+    key: "before_size",
+    caption: "Размер до изменения, мм",
+    unit: "мм",
+    values: [{ value: "14" }],
+  }, {
+    key: "after_size",
+    caption: "Размер после изменения, мм",
+    unit: "мм",
+    values: [{ value: "7" }],
+  }, {
+    key: "supported_object_size",
+    caption: "Диапазон размеров объекта, мм",
+    unit: "мм",
+    values: [{ value: "12.8-24" }, { value: "6.8-12" }],
+  }];
+  const paired = {
+    value: 12,
+    unit: "мм",
+    facetKeys: ["before_size", "after_size"],
+  };
+  const strict =
+    "Для объекта размером 12 мм размер изделия до изменения строго больше 12 мм. Размер после изменения строго меньше 12 мм.";
+  const incompatible = resolveDerivedSelectionReasoning(
+    {
+      reasoning: `${strict} Диапазон размеров объекта 12.8-24 мм подходит.`,
+      required_facet_values: ["f2v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект размером 12 мм",
+    "Изделия",
+    paired,
+  );
+  assertEquals(incompatible, null);
+
+  const negated = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        `${strict} Диапазон размеров объекта 12.8-24 мм не подходит. Подходит диапазон 6.8-12 мм.`,
+      required_facet_values: ["f2v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект размером 12 мм",
+    "Изделия",
+    paired,
+  );
+  assertEquals(
+    negated?.requiredFacetValues.some(({ value }) => value === "12.8-24"),
+    false,
+  );
+  assertEquals(
+    negated?.text.includes(
+      "Обязательные параметры: «Диапазон размеров объекта, мм: 12.8-24»",
+    ),
+    false,
+  );
+
+  const mixed = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        `${strict} Диапазон размеров объекта 12.8-24 мм подходит, а 6.8-12 мм не подходит.`,
+      required_facet_values: ["f2v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект размером 12 мм",
+    "Изделия",
+    paired,
+  );
+  assertEquals(mixed, null);
+
+  const abbreviated = resolveDerivedSelectionReasoning(
+    {
+      reasoning: `${strict} Диапазон 12.8-24 мм подходит.`,
+      required_facet_values: [],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект размером 12 мм",
+    "Изделия",
+    paired,
+  );
+  assertEquals(abbreviated, null);
+});
+
+Deno.test("live-like paired diameter declaration never requires a range excluding 12 or 10 mm", () => {
+  const facets = [{
+    key: "diameter_before",
+    caption: "Внутренний диаметр до усадки, мм",
+    unit: "мм",
+    values: [{ value: "14" }, { value: "16" }],
+  }, {
+    key: "diameter_after",
+    caption: "Внутренний диаметр после усадки, мм",
+    unit: "мм",
+    values: [{ value: "7" }, { value: "8" }],
+  }, {
+    key: "wire_diameter_range",
+    caption: "Диапазон диаметров проводов",
+    unit: "мм",
+    values: [{ value: "12.8-24" }, { value: "6.8-12" }],
+  }];
+  for (const value of [12, 10]) {
+    const declaration = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для кабеля диаметром ${value} мм внутренний диаметр трубки до усадки должен быть строго больше ${value} мм. ` +
+          `Внутренний диаметр после усадки должен быть строго меньше ${value} мм. ` +
+          `Диапазон диаметров проводов 12.8–24 мм не подходит. Подходит диапазон 6.8–12 мм.`,
+        required_facet_values: ["f2v0"],
+        compatible_classifications: [],
+        excluded_classifications: [],
+      },
+      facets,
+      `кабель диаметром ${value} мм`,
+      "Трубки",
+      {
+        value,
+        unit: "мм",
+        facetKeys: ["diameter_before", "diameter_after"],
+      },
+    );
+    assertEquals(declaration?.requiredFacetValues, []);
+    assertEquals(declaration?.text.includes("Обязательные параметры"), false);
+  }
 });
 
 Deno.test("visible derived reasoning cannot be replaced by hidden later tool prose", () => {

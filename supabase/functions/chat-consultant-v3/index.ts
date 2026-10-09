@@ -7556,6 +7556,7 @@ async function runExpertLoop(
               userMessage,
               String(args.reasoning ?? ""),
               lastDiscover?.facets ?? [],
+              lastDiscover?.category?.pagetitle ?? "",
             );
           const resolvePairedDeclaration = (
             args: Record<string, unknown>,
@@ -7569,6 +7570,7 @@ async function runExpertLoop(
               pair.reference && pair.selected_pair
                 ? {
                   value: pair.reference.value,
+                  unit: pair.reference.unit,
                   facetKeys: [
                     pair.selected_pair.before_facet_key,
                     pair.selected_pair.after_facet_key,
@@ -12131,6 +12133,7 @@ async function runExpertLoop(
             userMessage,
             visiblePairReasoning,
             lastDiscover?.facets ?? [],
+            lastDiscover?.category?.pagetitle ?? "",
           );
           adoptValidatedPairedRelations(
             modelPairDecision,
@@ -14081,6 +14084,7 @@ async function runExpertLoop(
                   firstAssistantText,
                 ),
                 lastDiscover.facets,
+                lastDiscover.category?.pagetitle ?? "",
               );
               const discoveryFacets = lastDiscover.facets;
               const omitPairedExact = (criteria: Criterion[]) =>
@@ -15511,6 +15515,7 @@ async function runExpertLoop(
       userMessage,
       terminalVisibleModelReasoning,
       terminalDiscover?.facets ?? [],
+      terminalDiscover?.category?.pagetitle ?? "",
     );
     if (terminalDiscover) {
       terminalSelectionCriteria = omitPairedObjectReferenceExactCriteria(

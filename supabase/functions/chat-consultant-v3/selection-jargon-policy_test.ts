@@ -493,6 +493,46 @@ Deno.test("live caption-only units identify the same strict pair for both custom
   }
 });
 
+Deno.test("measured requested product size is not reinterpreted as another object's paired fit", () => {
+  for (const value of [12, 10]) {
+    const direct = terminalPairedFitDecision(
+      { value, unit: "мм" },
+      `подбери термоусадочную трубку диаметром ${value} мм`,
+      "",
+      pairedFacets,
+      "Трубки термоусаживаемые",
+    );
+    assertEquals(direct.state, "not_applicable");
+    assertEquals(
+      omitPairedObjectReferenceExactCriteria(
+        [
+          criterion(String(value), "diameter_before"),
+        ],
+        direct,
+        pairedFacets,
+      ).length,
+      1,
+    );
+    const contextual = terminalPairedFitDecision(
+      { value, unit: "мм" },
+      `подбери термоусадочную трубку для кабеля диаметром ${value} мм`,
+      "",
+      pairedFacets,
+      "Трубки термоусаживаемые",
+    );
+    assertEquals(contextual.state, "unproven");
+    assertEquals(contextual.selected_pair?.before_facet_key, "diameter_before");
+    const mounted = terminalPairedFitDecision(
+      { value, unit: "мм" },
+      `подбери трубку на кабель диаметром ${value} мм`,
+      "",
+      pairedFacets,
+      "Трубки термоусаживаемые",
+    );
+    assertEquals(mounted.state, "unproven");
+  }
+});
+
 Deno.test("live pair schema is an obligation, never a substitute for model reasoning", () => {
   const reference = { value: 10, unit: "мм" };
   for (

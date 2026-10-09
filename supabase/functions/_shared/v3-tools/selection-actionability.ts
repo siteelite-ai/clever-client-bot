@@ -13,7 +13,10 @@ import {
   projectExplicitReasoningFacetValues,
   type SearchFacet,
 } from "./search-filter-guard.ts";
-import { projectReasoningRangeCriteria } from "./criteria-reasoning.ts";
+import {
+  canonicalMeasurementUnit,
+  projectReasoningRangeCriteria,
+} from "./criteria-reasoning.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import { extractCustomerApplicationContexts } from "./selection-contract.ts";
 
@@ -702,6 +705,184 @@ export interface ResolvedDerivedSelectionReasoning {
   >;
 }
 
+interface PairedObjectReference {
+  value: number;
+  unit: string;
+  facetKeys: string[];
+}
+
+function facetMeasurementUnit(facet: DerivedSelectionFacet): string {
+  const captionUnit = String(facet.caption ?? "").match(
+    /[,;:(/]\s*([a-zа-я°]{1,8}(?:[²³]|\d)?)\s*\)?$/iu,
+  )?.[1] ?? "";
+  return canonicalMeasurementUnit(String(facet.unit || captionUnit));
+}
+
+/** A schema value is the copied object scalar only when both its number and
+ * physical scale match. `12 см` is not the same assertion as `12 мм`. */
+function copiesPairedObjectScalar(
+  value: string,
+  facet: DerivedSelectionFacet,
+  reference: PairedObjectReference,
+): boolean {
+  const match = String(value).trim().match(
+    /^(\d+(?:[.,]\d+)?)\s*([\p{L}°²³]+)?$/u,
+  );
+  if (!match || Number(match[1].replace(",", ".")) !== reference.value) {
+    return false;
+  }
+  const valueUnit = canonicalMeasurementUnit(match[2] ?? "");
+  const declaredUnit = facetMeasurementUnit(facet);
+  const referenceUnit = canonicalMeasurementUnit(reference.unit);
+  return (!valueUnit || valueUnit === referenceUnit) &&
+    (!declaredUnit || declaredUnit === referenceUnit);
+}
+
+function facetPropertyStems(facet: DerivedSelectionFacet): string[] {
+  // A short prefix is intentionally stable across inflection (`размер` /
+  // `размеров`, `диаметр` / `диаметров`) in both facet captions and prose.
+  const axisStem = (word: string) =>
+    word.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").slice(0, 4);
+  const label = String(facet.caption || facet.key || "");
+  const words = label.match(/[a-zа-я]{3,}/giu) ?? [];
+  const stateIndex = words.findIndex((word) =>
+    /^(?:до|после|before|after|initial|final|исходн|начальн|конечн)/iu
+      .test(word)
+  );
+  const relevant = stateIndex >= 0 ? words.slice(0, stateIndex) : words;
+  const descriptorStems = new Set(
+    [
+      "внутренний",
+      "внешний",
+      "наружный",
+      "номинальный",
+      "фактический",
+      "диапазон",
+      "значение",
+      "параметр",
+      "объект",
+      "изделие",
+    ]
+      .map(axisStem),
+  );
+  const unit = axisStem(facetMeasurementUnit(facet));
+  return relevant.map(axisStem).filter((stem) =>
+    stem !== unit && !descriptorStems.has(stem)
+  );
+}
+
+/** Related range facets are identified by the common physical axis in the
+ * live before/after pair, never by a product or category word. */
+function pairedObjectRangeChoices(
+  facets: DerivedSelectionFacet[],
+  reference: PairedObjectReference,
+): Array<{
+  id: string;
+  low: number;
+  high: number;
+  axisStems: string[];
+  includesObject: boolean;
+}> {
+  const beforeAfter = reference.facetKeys.map((key) =>
+    facets.find((facet) => String(facet.key ?? "") === key)
+  ).filter((facet): facet is DerivedSelectionFacet => Boolean(facet));
+  if (beforeAfter.length !== 2) return [];
+  const firstStems = facetPropertyStems(beforeAfter[0]);
+  const secondStems = new Set(facetPropertyStems(beforeAfter[1]));
+  const axisStems = firstStems.filter((stem) => secondStems.has(stem));
+  if (axisStems.length === 0) return [];
+  const requiredUnit = canonicalMeasurementUnit(reference.unit);
+  const ranges: Array<{
+    id: string;
+    low: number;
+    high: number;
+    axisStems: string[];
+    includesObject: boolean;
+  }> = [];
+  for (const [facetIndex, facet] of facets.entries()) {
+    if (reference.facetKeys.includes(String(facet.key ?? ""))) continue;
+    if (!facetPropertyStems(facet).some((stem) => axisStems.includes(stem))) {
+      continue;
+    }
+    const declaredUnit = facetMeasurementUnit(facet);
+    if (declaredUnit && declaredUnit !== requiredUnit) continue;
+    for (const [valueIndex, value] of (facet.values ?? []).entries()) {
+      const match = String(value.value ?? "").trim().match(
+        /^(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*([\p{L}°²³]+)?$/u,
+      );
+      if (!match) continue;
+      const valueUnit = canonicalMeasurementUnit(match[3] ?? "");
+      if (
+        (!valueUnit && !declaredUnit) ||
+        (valueUnit && valueUnit !== requiredUnit)
+      ) continue;
+      const low = Number(match[1].replace(",", "."));
+      const high = Number(match[2].replace(",", "."));
+      if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) {
+        continue;
+      }
+      ranges.push({
+        id: `f${facetIndex}v${valueIndex}`,
+        low,
+        high,
+        axisStems,
+        includesObject: reference.value >= low && reference.value <= high,
+      });
+    }
+  }
+  return ranges;
+}
+
+function affirmsIncompatiblePairedRange(
+  reasoning: string,
+  ranges: ReturnType<typeof pairedObjectRangeChoices>,
+): boolean {
+  if (ranges.length === 0) return false;
+  const sentences = String(reasoning).split(
+    /[!?;\n]+|\.(?!\d)|(?<!\d)\.|,(?!\d)|(?<!\d),/u,
+  );
+  for (const sentence of sentences) {
+    const stems = new Set(
+      (sentence.match(/[a-zа-я]{3,}/giu) ?? []).map((word) =>
+        word.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").slice(0, 4)
+      ),
+    );
+    const rangeMatches = sentence.matchAll(
+      /(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/gu,
+    );
+    for (const match of rangeMatches) {
+      const low = Number(match[1].replace(",", "."));
+      const high = Number(match[2].replace(",", "."));
+      const matchingRanges = ranges.filter((range) =>
+        range.low === low && range.high === high
+      );
+      const namesAxis = matchingRanges.some((range) =>
+        range.axisStems.some((stem) => stems.has(stem))
+      );
+      // Catalog prose can abbreviate a caption to just “диапазон …”. An
+      // exact unique live interval plus that generic range noun is still a
+      // grounded claim; no product vocabulary is required.
+      if (
+        matchingRanges.length === 0 ||
+        !namesAxis && !(matchingRanges.length === 1 &&
+            /(?:диапазон|range)/iu.test(sentence))
+      ) continue;
+      const local = sentence.slice(
+        Math.max(0, (match.index ?? 0) - 80),
+        (match.index ?? 0) + match[0].length + 80,
+      );
+      const affirmative =
+        /(?:подход\p{L}*|год\p{L}*|совместим\p{L}*|соответств\p{L}*|допуска\p{L}*|рекоменд\p{L}*|выбира\p{L}*)/iu
+          .test(local);
+      const negated =
+        /(?:не\s+(?:подход|год|совместим|соответств|допуска)|несовместим|исключа)/iu
+          .test(local);
+      if (affirmative && !negated) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Convert every customer-grounded live classification, including all sibling
  * values in an OR family, into the immutable hard contract. The index uses
@@ -794,15 +975,24 @@ export function resolveDerivedSelectionReasoning(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
   productClass = "",
-  pairedObjectReference: {
-    value: number;
-    facetKeys: string[];
-  } | null = null,
+  pairedObjectReference: PairedObjectReference | null = null,
 ): ResolvedDerivedSelectionReasoning | null {
   const originalReasoning = stripDerivedSchemaIds(
     visibleFacetText(String(args.reasoning ?? "")),
   ).slice(0, 1600);
   if (originalReasoning.length < 20) return null;
+  const pairedObjectRanges = pairedObjectReference
+    ? pairedObjectRangeChoices(facets, pairedObjectReference)
+    : [];
+  const incompatiblePairedRanges = pairedObjectRanges.filter((range) =>
+    !range.includesObject
+  );
+  if (
+    affirmsIncompatiblePairedRange(originalReasoning, incompatiblePairedRanges)
+  ) return null;
+  const pairedObjectRangeIds = new Set(
+    pairedObjectRanges.map(({ id }) => id),
+  );
   const declaredMeasurementScope = String(
     args.measurement_scope ?? "per_product",
   );
@@ -1076,6 +1266,10 @@ export function resolveDerivedSelectionReasoning(
     customerOwnedFacets.set(identity, ids);
   }
   for (const choice of requiredById.values()) {
+    // The measured object is governed by the two-sided product fit. A catalog
+    // range about possible objects is a corroborating hint, not another exact
+    // product obligation; do not serialize one of its options as mandatory.
+    if (pairedObjectRangeIds.has(choice.id)) continue;
     const sourceFacet = facets.find((facet) =>
       String(facet.caption || facet.key || "").trim() === choice.facet
     );
@@ -1085,8 +1279,11 @@ export function resolveDerivedSelectionReasoning(
     if (
       pairedObjectReference && sourceFacet &&
       pairedObjectReference.facetKeys.includes(String(sourceFacet.key ?? "")) &&
-      Number(String(choice.value).trim().replace(",", ".")) ===
-        pairedObjectReference.value
+      copiesPairedObjectScalar(
+        choice.value,
+        sourceFacet,
+        pairedObjectReference,
+      )
     ) continue;
     const machineKey = String(
       sourceFacet?.key || sourceFacet?.caption || choice.facet,
