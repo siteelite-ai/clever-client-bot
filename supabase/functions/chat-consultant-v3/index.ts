@@ -372,7 +372,6 @@ import {
 import {
   compileLiveCompactReplacementContract,
   derivePortableAxisTitleRequirements,
-  excludeMandatoryAxisCodesFromSourceModels,
   extractExplicitSingleLetterCodes,
   extractPortableTechnicalRequirements,
   extractReplacementLookupKeys,
@@ -387,6 +386,7 @@ import {
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
+  resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
   shouldApplyReplacementExclusionGuard,
 } from "../_shared/v3-tools/replacement-preflight.ts";
@@ -4264,13 +4264,15 @@ async function selectVerifiedOrdinaryReplacement(
   }
 
   const sourceModel = extractModelCode(anchor.pagetitle);
-  const sourceModels = excludeMandatoryAxisCodesFromSourceModels(
+  const sourceModels = resolveReplacementSourceModelCodes(
+    userMessage,
+    anchor,
+    axes,
     lookup.modelCodes.length > 0
       ? lookup.modelCodes
       : sourceModel
       ? [sourceModel]
       : [],
-    axes,
   );
   const excludedIds = new Set([anchor.id]);
   const mandatoryAxes: ReplacementAxis[] = axes
@@ -6614,7 +6616,10 @@ async function runExpertLoop(
     ? extractPortableTechnicalRequirements(replacementEvidenceMessage)
     : codeConstraints;
   const replacementSourceModelCodes = replacementIntent
-    ? extractReplacementLookupKeys(replacementEvidenceMessage).modelCodes
+    ? resolveReplacementSourceModelCodes(
+      replacementEvidenceMessage,
+      findAnchorInCache(ctx.cache, replacementEvidenceMessage),
+    )
     : [];
   // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
   // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса

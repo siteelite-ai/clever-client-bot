@@ -445,7 +445,7 @@ function codeNorm(value: string): string {
   return norm(value).replace(/\s+/gu, "");
 }
 
-function visualCodeNorm(value: string): string {
+function identityCodeNorm(value: string): string {
   const lookalikes: Record<string, string> = {
     а: "a",
     в: "b",
@@ -463,7 +463,11 @@ function visualCodeNorm(value: string): string {
   return codeNorm(value).replace(
     /[авекмнорстух]/gu,
     (char) => lookalikes[char] ?? char,
-  )
+  );
+}
+
+function visualCodeNorm(value: string): string {
+  return identityCodeNorm(value)
     // Standard electrical units may be written as Latin symbols or Russian
     // abbreviations. Normalize only terminal unit suffixes, never prose.
     .replace(/(?<=\d)kbt$/u, "kw")
@@ -664,7 +668,7 @@ export function extractReplacementLookupKeys(
 }
 
 function traitEntries(
-  product: ProductRef,
+  product: { short_traits?: string[] },
 ): Array<{ caption: string; value: string }> {
   const entries: Array<{ caption: string; value: string }> = [];
   for (const line of product.short_traits ?? []) {
@@ -675,6 +679,91 @@ function traitEntries(
     if (caption && value) entries.push({ caption, value });
   }
   return entries;
+}
+
+/**
+ * Lookup keys are intentionally broad: every code in a source title can help
+ * find the anchor. Excluding analogue cards is a narrower operation. A code
+ * explicitly recorded as a non-identity trait is portable; otherwise the
+ * first model-like code in the live anchor title is the source-family key.
+ * Later title codes describe variants/specifications and must not each become
+ * an independent family exclusion merely because they were in the request.
+ */
+export function resolveReplacementSourceModelCodes(
+  message: string,
+  anchor: { pagetitle?: string; short_traits?: string[] } | null = null,
+  axes: ExplicitReplacementAxis[] = [],
+  lookupCodes = extractReplacementLookupKeys(message).modelCodes,
+): string[] {
+  const candidates = [...new Map(
+    excludeMandatoryAxisCodesFromSourceModels(lookupCodes, axes)
+      .map((code) => [
+        identityCodeNorm(code),
+        code.replace(/\s+/gu, ""),
+      ]),
+  ).values()];
+  if (candidates.length === 0) return [];
+  const traits = anchor ? traitEntries(anchor) : [];
+  const hasTraitCode = (
+    code: string,
+    identity: boolean,
+  ): boolean =>
+    traits.some((trait) =>
+      isReplacementIdentityFacet({
+          key: trait.caption,
+          caption: trait.caption,
+        }) ===
+        identity &&
+      extractReplacementLookupKeys(trait.value).modelCodes.some((value) =>
+        identityCodeNorm(value) === identityCodeNorm(code)
+      )
+    );
+  const eligible = candidates.filter((code) => !hasTraitCode(code, false));
+  if (eligible.length === 0) return [];
+
+  const title = anchor?.pagetitle ?? "";
+  const titleNorm = identityCodeNorm(title);
+  const titlePosition = (code: string): number => {
+    const position = titleNorm.indexOf(identityCodeNorm(code));
+    return position < 0 ? Number.POSITIVE_INFINITY : position;
+  };
+  const byTitlePosition = (left: string, right: string): number =>
+    titlePosition(left) - titlePosition(right);
+  const explicitIdentity = eligible.filter((code) => hasTraitCode(code, true));
+  if (explicitIdentity.length > 0) {
+    return explicitIdentity.sort(byTitlePosition).slice(0, 1);
+  }
+
+  if (title) {
+    const primaryTitleCode = extractReplacementLookupKeys(title).modelCodes
+      .filter((code) => !hasTraitCode(code, false))
+      .sort(byTitlePosition)[0];
+    if (primaryTitleCode) {
+      // A request may quote a later technical/variant code without naming the
+      // actual family. In that case there is no proven model exclusion.
+      return eligible.filter((code) =>
+        identityCodeNorm(code) === identityCodeNorm(primaryTitleCode)
+      );
+    }
+  }
+
+  // Without a verified anchor, use only the first structural code in the
+  // customer's source description. This keeps exclusion conservative while
+  // the broad lookup still searches every candidate code.
+  const source = identityCodeNorm(extractReplacementSourceDescription(message));
+  return eligible
+    .map((code, index) => ({
+      code,
+      index,
+      position: source.indexOf(identityCodeNorm(code)),
+    }))
+    .sort((left, right) =>
+      (left.position < 0 ? Number.POSITIVE_INFINITY : left.position) -
+        (right.position < 0 ? Number.POSITIVE_INFINITY : right.position) ||
+      left.index - right.index
+    )
+    .slice(0, 1)
+    .map(({ code }) => code);
 }
 
 function captionsMatch(left: string, right: string): boolean {
