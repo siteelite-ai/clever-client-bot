@@ -229,7 +229,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'suite_source_claim is copied from each suite JSON; original-case document locations were not independently verified.',
+    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,

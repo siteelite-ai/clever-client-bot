@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scope": "Ticket-page attribution for the 30 legacy Notion QA cases, not exact block or screenshot provenance.",
+  "project_url": "https://app.notion.com/p/220volt-kz-e5f02f251f234a1eb71c3f90fea21394",
+  "tickets": [
+    { "ticket": "BT-929", "page_url": "https://app.notion.com/p/37bcf8d369ba80ba99afcfeaa1b0713b", "case_count": 9 },
+    { "ticket": "BT-928", "page_url": "https://app.notion.com/p/37bcf8d369ba80cb9f98c43bd2a84f6b", "case_count": 2 },
+    { "ticket": "BT-927", "page_url": "https://app.notion.com/p/37bcf8d369ba80e5bb15d1209eaa6dea", "case_count": 2 },
+    { "ticket": "BT-925", "page_url": "https://app.notion.com/p/37bcf8d369ba805bb2bbf087029a2baf", "case_count": 1 },
+    { "ticket": "BT-924", "page_url": "https://app.notion.com/p/37bcf8d369ba80bfb1e8d578b4a13256", "case_count": 7 },
+    { "ticket": "BT-923", "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7", "case_count": 2 },
+    { "ticket": "BT-922", "page_url": "https://app.notion.com/p/37bcf8d369ba801aa4fbe04dc70f5669", "case_count": 1 },
+    { "ticket": "BT-821", "page_url": "https://app.notion.com/p/349cf8d369ba80a48698ec54849f2762", "case_count": 2 },
+    { "ticket": "BT-746", "page_url": "https://app.notion.com/p/336cf8d369ba800bbc5fc9872d6cd765", "case_count": 4 }
+  ],
+  "comment_only_cases": {
+    "bt746-black-double-socket": "336cf8d3-69ba-8016-9d74-001dfbdf0737",
+    "bt746-garmoniya-sockets": "336cf8d3-69ba-8093-8d93-001db3f63d3d"
+  },
+  "limitations": [
+    "Most case prompts are paraphrases, not exact quotes of a Notion block.",
+    "No prose block IDs or screenshot URLs are recorded per case in the existing QA matrix.",
+    "The nine pages contain 89 embedded images and 29 comment attachments; image content is not verified by this page-level index."
+  ]
+}
