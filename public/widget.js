@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-aeab15a8591fc2f2';
+  var WIDGET_VERSION = 'widget-2013a726bdde9cbc';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -27,9 +27,10 @@
   // so a single absolute 90-second abort would kill a healthy response. A short
   // connect timeout enables fast route failover, and the idle timeout is
   // refreshed by every byte/heartbeat. A single route has 155 seconds for
-  // the backend's valid ~140-second work plus transport margin. Only a proxy
-  // pre-acceptance timeout can grant the direct fallback a fresh bounded
-  // route budget (at most 15 + 15 extra seconds across the whole user turn).
+  // the backend's valid ~140-second work plus transport margin. Only a
+  // pre-acceptance timeout can grant the alternate route a fresh bounded
+  // route budget (at most 15 + 15 extra seconds across the whole user turn),
+  // regardless of which route was preferred first.
   var STREAM_CONNECT_TIMEOUT_MS = 15000;
   // Transport comments prove only that a socket is open. They do not prove
   // that the application accepted the turn. Bound that pre-acceptance phase
@@ -1593,16 +1594,18 @@
     connectTimer = null;
     armIdleTimer();
 
-    if (!response.ok) {
-      throw await createHttpError(response, label);
-    }
-
     // Application acknowledgement has its own budget, starting only once
     // HTTP headers arrive. Otherwise a slow connection silently consumes the
     // acknowledgement window even though the server has not begun streaming.
+    // Arm it before reading an HTTP error body as well: a stalled 503 body
+    // must not spend the fallback route's response window.
     var remainingAfterHeaders = deadlineAt - Date.now();
     if (remainingAfterHeaders <= 0) abortTransport('request_deadline');
     else acceptTimer = setTimeout(function() { abortTransport('protocol_accept_timeout'); }, Math.min(STREAM_ACCEPT_TIMEOUT_MS, remainingAfterHeaders));
+
+    if (!response.ok) {
+      throw await createHttpError(response, label);
+    }
 
     // Read incrementally even when an intermediary rewrites Content-Type.
     // Calling response.text() here would hide heartbeat bytes from the idle
@@ -2015,13 +2018,12 @@
     // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
       for (var i = 0; i < streamEndpoints.length; i++) {
-        if (streamEndpoints[i].label === 'direct' && i > 0 &&
-            streamEndpoints[i - 1].label === 'proxy' && lastError &&
+        if (i > 0 && lastError &&
             (lastError.code === 'connect_timeout' || lastError.code === 'protocol_accept_timeout')) {
-          // The proxy can consume up to 15s connecting and another 15s after
-          // headers without accepting the turn. Keep a legitimately long
-          // direct answer possible, but cap the complete two-route turn at
-          // 155 + 15 + 15 seconds. No extra time is given after HTTP errors.
+          // Either preferred route can consume its connection/acceptance
+          // budget before failing. Give the fallback its normal completion
+          // window, but cap the whole two-route turn at 155 + 15 + 15 seconds.
+          // Accepted partial streams and HTTP errors do not extend the budget.
           requestDeadlineAt = Math.min(maxFailoverDeadlineAt,
             Math.max(requestDeadlineAt, Date.now() + STREAM_TOTAL_TIMEOUT_MS));
         }

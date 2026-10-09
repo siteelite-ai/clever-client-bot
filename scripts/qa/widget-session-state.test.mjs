@@ -2026,6 +2026,150 @@ test('proxy connection circuit uses direct first briefly, retains fallback, and 
   dom.window.close();
 });
 
+test('direct-first connection timeout leaves a full bounded window for proxy fallback', async () => {
+  const calls = [];
+  const firstQuery = 'Открыть прямой маршрут';
+  const secondQuery = 'Долгий ответ после отказа прямого маршрута';
+  const proxyAnswer = 'Восстановленный ответ прокси';
+  const completeSse = (logId, content) => [
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 25, accept: 40, idle: 50, total: 110 }),
+    fetchImpl: async (url, init) => {
+      const payload = JSON.parse(init.body);
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      calls.push({ route, message: payload.message });
+      if ((payload.message === firstQuery && route === 'proxy') ||
+          (payload.message === secondQuery && route === 'direct')) {
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      }
+      if (payload.message === firstQuery) {
+        return new Response(completeSse('direct-first-log', 'Первый ответ'), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      let streamController;
+      let heartbeat;
+      let finishTimer;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-fallback-log', phase: 'start' } })}\n\n`,
+          ));
+          heartbeat = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 10);
+          finishTimer = setTimeout(() => {
+            clearInterval(heartbeat);
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: proxyAnswer } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-fallback-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+            controller.close();
+          }, 95);
+        },
+        cancel() {
+          clearInterval(heartbeat);
+          clearTimeout(finishTimer);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        clearTimeout(finishTimer);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  async function ask(query, expected) {
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    input.value = query;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => visibleMessages(dom).includes(expected) &&
+      !dom.window.document.querySelector('#volt-widget-send').disabled,
+    `answer for ${query} should complete`, 800);
+  }
+  await ask(firstQuery, 'Первый ответ');
+  await ask(secondQuery, proxyAnswer);
+  assert.deepEqual(calls.map((call) => call.route), ['proxy', 'direct', 'direct', 'proxy']);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('stalled HTTP error body cannot consume the fallback response window', async () => {
+  const routes = [];
+  const answer = 'Длинный ответ после ошибки прокси';
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 25, accept: 20, idle: 50, total: 150 }),
+    fetchImpl: async (url, init) => {
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      routes.push(route);
+      if (route === 'proxy') {
+        let errorBodyController;
+        const body = new ReadableStream({
+          start(controller) { errorBodyController = controller; },
+        });
+        init.signal.addEventListener('abort', () => {
+          try { errorBodyController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+        }, { once: true });
+        return new Response(body, { status: 503, headers: { 'Content-Type': 'text/plain' } });
+      }
+      let streamController;
+      let heartbeat;
+      let finishTimer;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'http-fallback-log', phase: 'start' } })}\n\n`,
+          ));
+          heartbeat = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 10);
+          finishTimer = setTimeout(() => {
+            clearInterval(heartbeat);
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'http-fallback-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+            controller.close();
+          }, 120);
+        },
+        cancel() {
+          clearInterval(heartbeat);
+          clearTimeout(finishTimer);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        clearTimeout(finishTimer);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка резервного ответа';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes(answer) &&
+    !dom.window.document.querySelector('#volt-widget-send').disabled,
+  'fallback after stalled HTTP error body should complete', 800);
+  assert.deepEqual(routes, ['proxy', 'direct']);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
 test('direct-first accepted partial response replays once through the proxy with the same messageId', async () => {
   const calls = [];
   const firstQuery = 'Первый запрос для открытия прямого маршрута';
