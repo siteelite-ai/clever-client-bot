@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-ee3fb9a3f8ea7f60';
+  var WIDGET_VERSION = 'widget-553f288944a37b22';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -25,8 +25,11 @@
   // Transport budgets are deliberately split by failure mode. The server emits
   // a heartbeat every 10 seconds and may legitimately work for up to 140 seconds,
   // so a single absolute 90-second abort would kill a healthy response. A short
-  // connect timeout enables fast route failover, the idle timeout is refreshed by
-  // every byte/heartbeat, and one shared deadline bounds the complete user turn.
+  // connect timeout enables fast route failover, and the idle timeout is
+  // refreshed by every byte/heartbeat. A single route has 155 seconds for
+  // the backend's valid ~140-second work plus transport margin. Only a proxy
+  // pre-acceptance timeout can grant the direct fallback a fresh bounded
+  // route budget (at most 15 + 15 extra seconds across the whole user turn).
   var STREAM_CONNECT_TIMEOUT_MS = 15000;
   // Transport comments prove only that a socket is open. They do not prove
   // that the application accepted the turn. Bound that pre-acceptance phase
@@ -34,6 +37,11 @@
   var STREAM_ACCEPT_TIMEOUT_MS = 15000;
   var STREAM_IDLE_TIMEOUT_MS = 30000;
   var STREAM_TOTAL_TIMEOUT_MS = 155000;
+  // A proxy that cannot establish a connection should not add its full
+  // connect timeout to every subsequent question in this open widget. This
+  // in-memory preference expires automatically and never removes either route.
+  var PROXY_DIRECT_FIRST_TTL_MS = 3 * 60 * 1000;
+  var proxyDirectFirstUntil = 0;
   // The edge function rejects request bodies above 64 KiB. Keep explicit
   // headroom for UTF-8 expansion and future protocol fields.
   var REQUEST_BODY_BUDGET_BYTES = 56 * 1024;
@@ -1500,7 +1508,9 @@
 
     function describeTransportError(error) {
       if (controller.signal.aborted && transportAbortReason) {
-        return new Error(label + ': ' + transportAbortReason);
+        var timeoutError = new Error(label + ': ' + transportAbortReason);
+        timeoutError.code = transportAbortReason;
+        return timeoutError;
       }
       return error;
     }
@@ -1539,7 +1549,6 @@
     }
 
     connectTimer = setTimeout(function() { abortTransport('connect_timeout'); }, Math.min(STREAM_CONNECT_TIMEOUT_MS, remainingAtStart));
-    acceptTimer = setTimeout(function() { abortTransport('protocol_accept_timeout'); }, Math.min(STREAM_ACCEPT_TIMEOUT_MS, remainingAtStart));
     totalTimer = setTimeout(function() { abortTransport('request_deadline'); }, remainingAtStart);
 
     try {
@@ -1566,6 +1575,13 @@
     if (!response.ok) {
       throw await createHttpError(response, label);
     }
+
+    // Application acknowledgement has its own budget, starting only once
+    // HTTP headers arrive. Otherwise a slow connection silently consumes the
+    // acknowledgement window even though the server has not begun streaming.
+    var remainingAfterHeaders = deadlineAt - Date.now();
+    if (remainingAfterHeaders <= 0) abortTransport('request_deadline');
+    else acceptTimer = setTimeout(function() { abortTransport('protocol_accept_timeout'); }, Math.min(STREAM_ACCEPT_TIMEOUT_MS, remainingAfterHeaders));
 
     // Read incrementally even when an intermediary rewrites Content-Type.
     // Calling response.text() here would hide heartbeat bytes from the idle
@@ -1816,7 +1832,7 @@
       if (!data.content) throw new Error(label + ': empty content');
       markProtocolAccepted();
       onFirstToken();
-      return { content: data.content, contacts: data.contacts || null };
+      return { content: data.content, contacts: data.contacts || null, routeLabel: label };
     }
 
     var combined = [introContent, productsContent].filter(function(s){ return s && s.trim(); }).join('\n\n');
@@ -1914,14 +1930,16 @@
     messagesContainer.appendChild(typingIndicator);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // Prefer the Cloudflare route: it exists specifically for networks where
-    // the Supabase project hostname is slow or unreachable. Direct Supabase
-    // remains a fast fallback, and both attempts share one user-turn deadline.
-    var streamEndpoints = [
-      { url: CONFIG.supabaseUrl, label: 'proxy' },
-      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
-    ];
+    // Normally prefer Cloudflare for networks that cannot reach Supabase.
+    // After a proven proxy connection timeout and a completed direct answer,
+    // try direct first for a short bounded period; proxy remains its fallback.
+    var proxyEndpoint = { url: CONFIG.supabaseUrl, label: 'proxy' };
+    var directEndpoint = { url: CONFIG.directOrigin, label: 'direct' };
+    var streamEndpoints = Date.now() < proxyDirectFirstUntil
+      ? [directEndpoint, proxyEndpoint]
+      : [proxyEndpoint, directEndpoint];
     var requestDeadlineAt = Date.now() + STREAM_TOTAL_TIMEOUT_MS;
+    var maxFailoverDeadlineAt = requestDeadlineAt + STREAM_CONNECT_TIMEOUT_MS + STREAM_ACCEPT_TIMEOUT_MS;
 
     // Create assistant message element for streaming (intro-пузырь)
     var assistantMsg = document.createElement('div');
@@ -1971,10 +1989,21 @@
     var result = null;
     var lastError = null;
     var routeFailures = [];
+    var proxyConnectTimedOut = false;
 
     // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
       for (var i = 0; i < streamEndpoints.length; i++) {
+        if (streamEndpoints[i].label === 'direct' && i > 0 &&
+            streamEndpoints[i - 1].label === 'proxy' && lastError &&
+            (lastError.code === 'connect_timeout' || lastError.code === 'protocol_accept_timeout')) {
+          // The proxy can consume up to 15s connecting and another 15s after
+          // headers without accepting the turn. Keep a legitimately long
+          // direct answer possible, but cap the complete two-route turn at
+          // 155 + 15 + 15 seconds. No extra time is given after HTTP errors.
+          requestDeadlineAt = Math.min(maxFailoverDeadlineAt,
+            Math.max(requestDeadlineAt, Date.now() + STREAM_TOTAL_TIMEOUT_MS));
+        }
         try {
           result = await tryStreamEndpoint(
             streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg,
@@ -2006,6 +2035,9 @@
           return;
         } catch (err) {
           lastError = err;
+          if (streamEndpoints[i].label === 'proxy' && err && err.code === 'connect_timeout') {
+            proxyConnectTimedOut = true;
+          }
           routeFailures.push({
             route: streamEndpoints[i].label,
             status: err && typeof err.status === 'number' ? err.status : null,
@@ -2131,6 +2163,17 @@
         result = selectedReplay.result;
       } else {
         result = acceptedPartial;
+      }
+    }
+
+    // Switch route priority only on evidence that direct completed the same
+    // turn after an unconnected proxy. A healthy proxy response restores its
+    // normal priority; expiry also probes it again without persisting state.
+    if (result && !result.partial) {
+      if (proxyConnectTimedOut && (result.routeLabel === 'direct' || result.routeLabel === 'direct-resume')) {
+        proxyDirectFirstUntil = Date.now() + PROXY_DIRECT_FIRST_TTL_MS;
+      } else if (result.routeLabel === 'proxy' || result.routeLabel === 'proxy-resume') {
+        proxyDirectFirstUntil = 0;
       }
     }
 
