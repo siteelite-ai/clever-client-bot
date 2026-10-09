@@ -1,0 +1,90 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "111e1ca0ffdad1b4865a04e4594b98df1de0ecc71d179f6277aa6083abe4ed74",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T15:38:41.560Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-household-motion-without-mount": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-household-motion-without-mount",
+      "title": "Бытовой светильник с датчиком без навязанного типа монтажа",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-without-mount_base_1791560321564_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
+              "status": 200,
+              "duration_ms": 25885,
+              "network_attempts": 1,
+              "log_id": "ff74a76e-1b99-449b-ac86-050dffa5c8fb",
+              "diagnostic_error": "request_timeout",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nКонсультант не успел завершить подбор за отведённое время. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1407
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "selection contract misses required groups: [С датчиком движения] [\"value\":\"да\"]",
+                "rendered products have no machine-readable result cardinality contract",
+                "diagnostic error: request_timeout"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T15:39:07.451Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "ff74a76e-1b99-449b-ac86-050dffa5c8fb"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

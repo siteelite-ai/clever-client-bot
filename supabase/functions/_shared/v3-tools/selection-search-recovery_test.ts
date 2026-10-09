@@ -482,7 +482,7 @@ Deno.test("frozen application alternative survives final composition and activat
   const mandatory = resolveTerminalSelectionCriteria(
     [...exact, application, sensor],
     [],
-    exact,
+    [exact[0]],
   );
   const plan = buildSourceProvenCardinalityRecoveryPlan({
     search_args: {

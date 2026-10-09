@@ -231,7 +231,7 @@ Deno.test("customer application proof remains an OR alternative beside exact liv
   const criteria = resolveTerminalSelectionCriteria(
     [...exact, application, feature],
     [modelClass, application],
-    exact,
+    [exact[0]],
   );
   assertEquals(criteria, [...exact, application, feature]);
   const candidate = (id: string, description: string): ProductRef => ({

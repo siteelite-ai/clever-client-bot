@@ -794,16 +794,16 @@ export function resolveRenderCriteria(
   userBacked: Criterion[],
   strictUserEvidenceOnly: boolean,
 ): Criterion[] {
-  const isCustomerApplicationAlternative = (criterion: Criterion) =>
+  const isCustomerOwnedAlternative = (criterion: Criterion) =>
     criterion.op === "eq" &&
-    criterion.proof_scope === "application_suitability" &&
     criterion.evidence === "user_explicit" &&
     (criterion.level ?? "A") === "A";
-  const sameApplicationAlternative = (left: Criterion, right: Criterion) =>
-    isCustomerApplicationAlternative(left) &&
-    isCustomerApplicationAlternative(right) &&
+  const sameCustomerAlternative = (left: Criterion, right: Criterion) =>
+    isCustomerOwnedAlternative(left) &&
+    isCustomerOwnedAlternative(right) &&
     normalizeKey(left.key) === normalizeKey(right.key) &&
-    normalizeKey(String(left.value)) === normalizeKey(String(right.value));
+    normalizeKey(String(left.value)) === normalizeKey(String(right.value)) &&
+    left.proof_scope === right.proof_scope;
   const userKeys = new Set(
     userBacked.map((criterion) => normalizeKey(criterion.key)),
   );
@@ -811,9 +811,9 @@ export function resolveRenderCriteria(
     ...userBacked,
     ...enforced.filter((criterion) =>
       !userKeys.has(normalizeKey(criterion.key)) ||
-      (isCustomerApplicationAlternative(criterion) &&
+      (isCustomerOwnedAlternative(criterion) &&
         !userBacked.some((owned) =>
-          sameApplicationAlternative(owned, criterion)
+          sameCustomerAlternative(owned, criterion)
         ))
     ),
   ];
@@ -826,9 +826,10 @@ export function resolveRenderCriteria(
       ? []
       : raw.filter((criterion) =>
         !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))) ||
-        (criterion && isCustomerApplicationAlternative(criterion) &&
+        (criterion && criterion.proof_scope === "application_suitability" &&
+          isCustomerOwnedAlternative(criterion) &&
           !base.some((existing) =>
-            sameApplicationAlternative(existing, criterion)
+            sameCustomerAlternative(existing, criterion)
           ))
       )),
   ].filter((criterion) =>
