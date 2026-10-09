@@ -16,6 +16,11 @@ import {
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import {
+  resolveVisibleSystemTotalRequirement,
+  verifySystemTotalCapacityPlan,
+} from "../_shared/v3-tools/system-total-capacity.ts";
+import { resolveUnavailableProductReference } from "../_shared/v3-tools/unavailable-product-reference.ts";
+import {
   buildSystemPrompt,
   TOOL_SCHEMAS,
 } from "../_shared/v3-tools/schemas.ts";
@@ -6079,6 +6084,7 @@ async function runExpertLoop(
   // testable instead of leaving a short result indistinguishable from an
   // intentional one-card answer.
   let emittedResultCardinality: ResultCardinalityContract | null = null;
+  let systemTotalCaveatSent = false;
   // The plan is mutated inside the freeze helper. Reading it through a small
   // accessor prevents TypeScript control-flow analysis from treating the
   // outer variable as permanently null.
@@ -6206,6 +6212,41 @@ async function runExpertLoop(
       rawSend({ type: "delta", content: notice });
       finalText += notice;
       unverifiedRecoveryNoticeSent = true;
+    }
+    if (
+      derivedSelectionMeasurementScope === "system_total" &&
+      !systemTotalCaveatSent
+    ) {
+      const requirement = resolveVisibleSystemTotalRequirement({
+        measurementScope: derivedSelectionMeasurementScope,
+        reasoningText: derivedSelectionReasoningEvidence,
+        facets: lastDiscover?.facets ?? [],
+      });
+      // A list of alternative cards is not a counted installation plan. Even
+      // when an individual output is verified, it cannot prove the total.
+      const verdict = requirement
+        ? verifySystemTotalCapacityPlan(requirement, [])
+        : null;
+      if (!verdict?.canClaimSufficient) {
+        const threshold = requirement
+          ? ` ${requirement.minimumTotal.toLocaleString("ru-RU")} ${requirement.unit}`
+          : "";
+        const notice =
+          `\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность${threshold}. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.`;
+        rawSend({ type: "delta", content: notice });
+        finalText += notice;
+        steps.push({
+          step: "v3_system_total_plan_unverified",
+          ms: now(),
+          meta: {
+            requirement_proven: Boolean(requirement),
+            metric: requirement?.outputFacet.caption ?? null,
+            minimum_total: requirement?.minimumTotal ?? null,
+            verdict: verdict?.status ?? "unverified",
+          },
+        });
+      }
+      systemTotalCaveatSent = true;
     }
     rawSend({
       ...event,
@@ -18957,6 +18998,12 @@ Deno.serve(async (req) => {
                 meta: { count: recentProductEvidence.length },
               });
             }
+            const unavailableProductReference =
+              resolveUnavailableProductReference(
+                userMessage,
+                effectiveHistory,
+                recentProductEvidence.length,
+              );
             const constrainedRecentPriceFollowup =
               recentProductEvidence.length > 0 &&
               isRecentProductPriceSelectionFollowup(userMessage) &&
@@ -19354,6 +19401,19 @@ Deno.serve(async (req) => {
                 effectiveSessionId,
                 products,
               );
+            } else if (
+              unavailableProductReference
+            ) {
+              send({
+                type: "delta",
+                content: unavailableProductReference.answer,
+              });
+              productsCount = 0;
+              steps.push({
+                step: "v3_unavailable_product_reference",
+                ms: Date.now() - t0,
+                meta: { reason: unavailableProductReference.reason },
+              });
             } else if (
               recentProductEvidence.length > 0 &&
               isRecentProductShowFollowup(userMessage)
