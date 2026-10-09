@@ -8,6 +8,7 @@ import {
   buildCatalogEmptySynthesisMessages,
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
+  buildSourceProvenCardinalityRecoveryPlan,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
@@ -362,6 +363,161 @@ Deno.test("literal functional-feature recovery crosses a sales class only with f
       4000,
     ).map(({ id }) => id),
     ["proved"],
+  );
+});
+
+Deno.test("a nonempty short selection gets bounded literal recovery in the live leaf", () => {
+  const criteria = [
+    ...["Бытовые ИБП настольные", "Бытовые ИБП напольные"].map((value) => ({
+      key: "Класс применения",
+      op: "eq" as const,
+      value,
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Класс применения",
+      op: "eq" as const,
+      value: "бытовой",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С защитой от перегрузки",
+      op: "eq" as const,
+      value: "да",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const input = {
+    search_args: {
+      mode: "by_filter",
+      options: { kind: ["Бытовые ИБП настольные"], overload: ["да"] },
+      max_price: 4000,
+    },
+    customer_message:
+      "Нужен бытовой ИБП с защитой от перегрузки до 4000. Дайте несколько вариантов",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Источники питания", "Источники питания"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  };
+  const plan = buildSourceProvenCardinalityRecoveryPlan(input);
+  assertEquals(plan.length, 2);
+  assertEquals(plan[0].kind, "verify_literal_feature_under_broad_application");
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "перегрузки",
+    category_in: ["Источники питания"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(plan[0].proven_criteria, []);
+  assertEquals(plan[0].evidence_required_criteria, criteria);
+  assertEquals(plan[0].revalidate, [
+    "selection_target",
+    "mandatory_criteria",
+    "compatibility",
+    "budget",
+  ]);
+  // The same cardinality contract also applies when the first search used a
+  // query instead of a live-facet intersection.
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      search_args: { mode: "by_query", query: "ИБП", max_price: 4000 },
+    })[0].args,
+    plan[0].args,
+  );
+
+  const product = (
+    id: string,
+    description: string,
+    price = 3000,
+  ): ProductRef => ({
+    id,
+    pagetitle: `ИБП ${id} с защитой от перегрузки`,
+    vendor: null,
+    price,
+    stock: "in_stock",
+    short_traits: ["Класс применения: Оборудование для учреждений"],
+    description_excerpt: description,
+  });
+  const recovered = filterSelectionRecoveryPool([
+    product("household", "Предназначен для бытового применения."),
+    product("industrial", "Предназначен для промышленного применения."),
+    product("too-expensive", "Предназначен для бытового применения.", 5000),
+  ], plan[0]);
+  assertEquals(recovered.map(({ id }) => id), ["household", "too-expensive"]);
+  assertEquals(
+    sourceProvenSelectionPool(recovered, criteria, 4000).map(({ id }) => id),
+    ["household"],
+  );
+});
+
+Deno.test("cardinality recovery never widens an explicit narrow class", () => {
+  const broadCriteria = [
+    ...["Бытовые ИБП настольные", "Бытовые ИБП напольные"].map((value) => ({
+      key: "Класс применения",
+      op: "eq" as const,
+      value,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Класс применения",
+      op: "eq" as const,
+      value: "бытовой",
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С защитой от перегрузки",
+      op: "eq" as const,
+      value: "да",
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const input = {
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Бытовой настольный ИБП с защитой от перегрузки",
+    mandatory_criteria: broadCriteria,
+    leaf_categories: ["Источники питания"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  };
+  assertEquals(buildSourceProvenCardinalityRecoveryPlan(input), []);
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      customer_message: "Бытовой ИБП с защитой от перегрузки",
+      mandatory_criteria: broadCriteria.filter((criterion) =>
+        criterion.value !== "Бытовые ИБП напольные"
+      ),
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      source_proven_count: 3,
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      leaf_categories: [],
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      customer_message: "Покажите несколько бытовых ИБП",
+    }),
+    [],
   );
 });
 

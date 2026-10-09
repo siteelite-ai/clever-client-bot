@@ -147,6 +147,95 @@ export interface SelectionSearchRecoveryPlanInput {
   customer_message?: string;
 }
 
+/**
+ * The first search can return a valid card yet still fall short of the
+ * customer's requested choice. This independent plan is deliberately usable
+ * for both by_filter and by_query searches: it does not depend on an empty
+ * result, an advisory facet, or a sparse boolean option. The caller must run
+ * each returned pool through filterSelectionRecoveryPool and the complete
+ * source/target/compatibility/budget gates before merging distinct cards.
+ */
+export interface SourceProvenCardinalityRecoveryInput {
+  search_args: Record<string, unknown>;
+  customer_message: string;
+  mandatory_criteria: Criterion[];
+  leaf_categories: string[];
+  source_proven_count: number;
+  minimum_results: number;
+}
+
+function hasBroadApplicationFamily(criteria: Criterion[]): boolean {
+  const applicationKeys = new Set(
+    criteria.filter((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit" && criterion.op === "eq"
+    ).map((criterion) =>
+      String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+        .trim()
+    ),
+  );
+  // A customer's one exact subtype is never an invitation to cross into
+  // sibling sales classes. Broad applications compiled from the live schema
+  // have an OR family of at least two customer-grounded class values.
+  return [...applicationKeys].some((key) =>
+    new Set(
+      criteria.filter((criterion) =>
+        criterion.proof_scope !== "application_suitability" &&
+        criterion.evidence === "user_explicit" && criterion.op === "eq" &&
+        String(criterion.key).toLocaleLowerCase("ru-RU")
+            .replace(/ё/gu, "е").trim() === key
+      ).map((criterion) => String(criterion.value)),
+    ).size >= 2
+  );
+}
+
+function classLexicalStems(value: string): string[] {
+  return (String(value).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[a-zа-я0-9]{3,}/giu) ?? []).map((token) =>
+      token.length >= 7
+        ? token.slice(0, 5)
+        : token.length >= 5
+        ? token.slice(0, 4)
+        : token
+    );
+}
+
+function customerNamesNarrowFamilyValue(
+  customerMessage: string,
+  criteria: Criterion[],
+): boolean {
+  const customer = new Set(classLexicalStems(customerMessage));
+  const applicationKeys = new Set(
+    criteria.filter((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit"
+    ).map((criterion) =>
+      String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+        .trim()
+    ),
+  );
+  for (const key of applicationKeys) {
+    const variants = criteria.filter((criterion) =>
+      criterion.proof_scope !== "application_suitability" &&
+      criterion.evidence === "user_explicit" && criterion.op === "eq" &&
+      String(criterion.key).toLocaleLowerCase("ru-RU")
+          .replace(/ё/gu, "е").trim() === key
+    ).map((criterion) => new Set(classLexicalStems(String(criterion.value))));
+    if (variants.length < 2) continue;
+    const shared = new Set(
+      [...variants[0]].filter((stem) =>
+        variants.every((variant) => variant.has(stem))
+      ),
+    );
+    if (
+      variants.some((variant) =>
+        [...variant].some((stem) => !shared.has(stem) && customer.has(stem))
+      )
+    ) return true;
+  }
+  return false;
+}
+
 function literalFunctionalFeatureQueries(
   customerMessage: string,
   criteria: Criterion[],
@@ -155,20 +244,18 @@ function literalFunctionalFeatureQueries(
   // customer-owned application remains hard at the per-card evidence gate.
   // Only this situation warrants searching beyond the taxonomy OR family.
   if (
-    !criteria.some((criterion) =>
-      criterion.proof_scope === "application_suitability" &&
-      criterion.evidence === "user_explicit"
-    )
+    !hasBroadApplicationFamily(criteria) ||
+    customerNamesNarrowFamilyValue(customerMessage, criteria)
   ) return [];
   const userTokens = String(customerMessage ?? "")
     .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
     .match(/[a-zа-я]{6,}/giu) ?? [];
   const featureTokens = new Set(
     criteria
-    .filter((criterion) =>
-      criterion.proof_scope !== "application_suitability" &&
-      (criterion.evidence === "user_explicit" ||
-        criterion.evidence === "derived_required") &&
+      .filter((criterion) =>
+        criterion.proof_scope !== "application_suitability" &&
+        (criterion.evidence === "user_explicit" ||
+          criterion.evidence === "derived_required") &&
         criterion.op === "eq" &&
         /^(?:да|yes|true)$/iu.test(String(criterion.value).trim())
       )
@@ -179,6 +266,67 @@ function literalFunctionalFeatureQueries(
   );
   return [...new Set(userTokens.filter((token) => featureTokens.has(token)))]
     .reverse().slice(0, 2);
+}
+
+/**
+ * Recover a genuine multi-choice shortfall inside the already discovered live
+ * leaf. Only literal functional words shared by the customer's request and a
+ * frozen affirmative criterion are queried; no product vocabulary, synonym,
+ * SKU or broader category is invented. Every query is a single bounded page.
+ */
+export function buildSourceProvenCardinalityRecoveryPlan(
+  input: SourceProvenCardinalityRecoveryInput,
+): SelectionSearchRecoveryAttempt[] {
+  const minimum = Math.floor(Number(input.minimum_results));
+  const count = Number(input.source_proven_count);
+  const leaves = [
+    ...new Set(
+      input.leaf_categories.map((leaf) => leaf.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (
+    !Number.isFinite(minimum) || minimum <= 1 ||
+    !Number.isFinite(count) || count < 0 || count >= minimum ||
+    leaves.length === 0
+  ) return [];
+  const queries = literalFunctionalFeatureQueries(
+    input.customer_message,
+    input.mandatory_criteria,
+  );
+  return queries.map((query) => ({
+    kind: "verify_literal_feature_under_broad_application" as const,
+    args: {
+      mode: "by_query",
+      query,
+      category_in: leaves,
+      ...(typeof input.search_args.min_price === "number"
+        ? { min_price: input.search_args.min_price }
+        : {}),
+      ...(typeof input.search_args.max_price === "number"
+        ? { max_price: input.search_args.max_price }
+        : {}),
+      ...(input.search_args.sort_cheapest === true
+        ? { sort_cheapest: true }
+        : {}),
+      ...(input.search_args.sort_expensive === true
+        ? { sort_expensive: true }
+        : {}),
+      per_page: 50,
+    },
+    relaxed_inputs: [
+      "taxonomy_class_retrieval_only",
+      "sparse_boolean_retrieval_only",
+    ],
+    proven_criteria: [],
+    // This is not a proof from the new HTTP query. Check the exact frozen
+    // obligation independently on every recovered card before it can merge.
+    evidence_required_criteria: input.mandatory_criteria.map((criterion) => ({
+      ...criterion,
+    })),
+    unverified_criteria: [],
+    revalidate: [...REVALIDATE],
+  }));
 }
 
 /**
