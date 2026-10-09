@@ -1,0 +1,309 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:54:38.766Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-poe-outdoor-100m": 1
+  },
+  "cases": [
+    {
+      "id": "customer-poe-outdoor-100m",
+      "title": "Уличная PoE-камера на 100 м и выбор кабеля",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-poe-outdoor-100m_base_1791554078769_1",
+          "turns": [
+            {
+              "message": "Я нашёл дешёвый кабель для камеры на охраняемой парковке: Кабель витая пара U/UTP кат. 5 CCA 4 пары, GENERICA. Подойдёт или нет?",
+              "status": 200,
+              "duration_ms": 1182,
+              "network_attempts": 1,
+              "log_id": "8ba735cf-3e08-4290-9a60-999699157038",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "По одному названию этот кабель нельзя считать подходящим для камеры на парковке.\n\nНужно уточнить три условия: будет ли питание PoE, какова дистанция линии и где проходит кабель — на улице или внутри помещения. Для длинной наружной PoE-линии CCA и обычная PVC-оболочка являются критическими рисками.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Да, PoE-камера, расстояние почти 100 метров, кабель будет идти на улице. Почему этот кабель нельзя использовать?",
+              "status": 200,
+              "duration_ms": 1061,
+              "network_attempts": 1,
+              "log_id": "95c17399-00ce-48a1-a5d3-fd080582c006",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Этот кабель нельзя использовать для уличной PoE-камеры почти на 100 метрах по двум независимым причинам.\n\nCCA — это алюминиевая жила с медным покрытием. Её сопротивление выше, поэтому на длинной линии возникает просадка напряжения: камера может не запуститься или работать нестабильно, особенно при повышенном потреблении.\n\nPVC (ПВХ) — оболочка для помещения, если в карточке прямо не доказано наружное исполнение. На улице нужны стойкость к УФ, влаге и морозу, обычно подтверждённые PE/LDPE-оболочкой. Поэтому безопасный ориентир — медная витая пара Cat.5e или Cat.6 для наружной прокладки с PE/LDPE.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Тогда подбери подходящий кабель.",
+              "status": 200,
+              "duration_ms": 6107,
+              "network_attempts": 1,
+              "log_id": "36cf1793-3694-4e17-9bd8-e3793c8c326f",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/kabel-vitaya-para-uutp-kat.5e-100mgcz-4-paryi-ldpe-outdoor-1m-chernyij-generica",
+                  "verified": true,
+                  "sku": "УТ-00004157",
+                  "name": "Кабель витая пара U/UTP кат.5E 100МГц 4 пары LDPE OUTDOOR 1м черный GENERICA",
+                  "facets": {
+                    "Категория": "Кабель UTP, FTP",
+                    "Изоляция": "твердый полиэтилен",
+                    "Объем, м3": "0.000066",
+                    "Бронированный": "Нет",
+                    "Бренд": "U/UTP",
+                    "Оболочка": "LDPE",
+                    "Код ТН ВЭД": "8544492000",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.1±0.2",
+                    "Страна происхождения": "КИТАЙ",
+                    "Количество в групповой упаковке": "305",
+                    "Продается только в групповой упаковке": "Да",
+                    "Сечение кабеля, мм2": "0.16",
+                    "Гарантийный срок, лет": "1",
+                    "Срок службы, мес": "180",
+                    "Температура монтажа": "-10+50 °C",
+                    "Назначение": "Кабели для структурированных систем связи",
+                    "Диапазон рабочих температур": "-40+60 °C",
+                    "Количество жил": "8",
+                    "Единица измерения": "м",
+                    "Негорючесть": "Нет",
+                    "Вес, кг.": "0.028",
+                    "Материал проводника": "медь"
+                  },
+                  "description_excerpt": "Артикул: BC3-C5E04-139-305-G Кабель витая пара GENERICA U/UTP категории 5E 4x2 предназначен для внешней прокладки при построении операторских систем широкополосного доступа, локальных вычислительных сетей и сетевой инфраструктуры предприятий. Кабель выполнен с проводниками из высококачественной электротехнической меди, оболочкой LDPE черного цвета и рассчитан на эксплуатацию вне помещений. Конструкция обеспечивает повышенную прочность внешней оболочки и устойчивость к ультрафиолетовому излучению"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-ldpe-chernyij-(305m)-iek-(up.)",
+                  "verified": true,
+                  "sku": "Ем000031629",
+                  "name": "ITK Витая пара U/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)",
+                  "facets": {
+                    "Категория": "Кабель UTP, FTP",
+                    "Изоляция": "HDPE",
+                    "Объем, м3": "0.022707",
+                    "Бронированный": "Нет",
+                    "Бренд": "ITK",
+                    "Оболочка": "LDPE",
+                    "Код ТН ВЭД": "8544492000",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.2±0.2",
+                    "Страна происхождения": "КИТАЙ",
+                    "Количество в групповой упаковке": "1",
+                    "Продается только в групповой упаковке": "Да",
+                    "Сечение кабеля, мм2": "0.20",
+                    "Гарантийный срок, лет": "1",
+                    "Срок службы, мес": "180",
+                    "Температура монтажа": "-10+50 °C",
+                    "Назначение": "Кабели для структурированных систем связи",
+                    "Диапазон рабочих температур": "-60+60 °C",
+                    "Количество жил": "8",
+                    "Единица измерения": "уп.",
+                    "Негорючесть": "Нет",
+                    "Вес, кг.": "9.5",
+                    "Материал проводника": "медь"
+                  },
+                  "description_excerpt": "ITK Витая пара U/UTP кат.5E 4х2х24AWG LDPE черный (305м) IEK (уп.) LC3-C5E04-139 Артикул: LC3-C5E04-139 Кабель витая пара ITK U/UTP категории 5E предназначен для построения структурированных кабельных систем и организации сетей передачи данных Ethernet. Используется для прокладки компьютерных и телекоммуникационных сетей в жилых, коммерческих и промышленных объектах, обеспечивая стабильную и высокоскоростную передачу сигнала. Назначение и область применения: - Локальные вычислительные сети (LAN)"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-solid-ldpe-c-metallicheskim-trosom-1,2mm-chernyij-(305m)",
+                  "verified": true,
+                  "sku": "УТ-00004158",
+                  "name": "ITK Витая пара U/UTP кат.5E 4х2х24AWG solid LDPE c металлическим тросом 1,2мм черный (305м)",
+                  "facets": {
+                    "Категория": "Кабель UTP, FTP",
+                    "Изоляция": "твердый полиэтилен",
+                    "Объем, м3": "0.031581",
+                    "Бронированный": "Нет",
+                    "Бренд": "U/UTP",
+                    "Оболочка": "LDPE",
+                    "Код ТН ВЭД": "8544492000",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.40",
+                    "Страна происхождения": "КИТАЙ",
+                    "Количество в групповой упаковке": "1",
+                    "Продается только в групповой упаковке": "Да",
+                    "Сечение кабеля, мм2": "0.20",
+                    "Гарантийный срок, лет": "5",
+                    "Срок службы, мес": "360",
+                    "Температура монтажа": "-10+60 °C",
+                    "Назначение": "Кабели для структурированных систем связи",
+                    "Диапазон рабочих температур": "-60+60 °C",
+                    "Количество жил": "8",
+                    "Единица измерения": "уп.",
+                    "Негорючесть": "Нет",
+                    "Вес, кг.": "17.5",
+                    "Материал проводника": "медь"
+                  },
+                  "description_excerpt": "Артикул: LC3-C5E04-159 Витая пара ITK U/UTP категории 5E 4x2х24AWG предназначена для внешней прокладки при построении структурированных кабельных систем, локальных вычислительных сетей и коммуникационной инфраструктуры между зданиями. Кабель выполнен с цельнотянутыми медными проводниками, оболочкой LDPE черного цвета и цельнометаллическим несущим тросом диаметром 1,2 мм. Применяется для магистральных подсистем и организации уличной \"последней мили\" Назначение и область применения: - Структуриров"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-futp-kat.5e-4x2x24awg-ldpe-chernyij-(305m)-iek-(up.)",
+                  "verified": true,
+                  "sku": "Ем000021771",
+                  "name": "ITK Витая пара F/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)",
+                  "facets": {
+                    "Категория": "Кабель UTP, FTP",
+                    "Изоляция": "твердый полиэтилен",
+                    "Объем, м3": "0.025947",
+                    "Бронированный": "Нет",
+                    "Бренд": "U/UTP",
+                    "Оболочка": "LDPE",
+                    "Код ТН ВЭД": "8544492000",
+                    "Экранированный": "Да",
+                    "Наружный диаметр кабеля, мм": "5.2±0.2",
+                    "Страна происхождения": "КИТАЙ",
+                    "Количество в групповой упаковке": "1",
+                    "Продается только в групповой упаковке": "Да",
+                    "Сечение кабеля, мм2": "0.20",
+                    "Гарантийный срок, лет": "1",
+                    "Срок службы, мес": "180",
+                    "Температура монтажа": "-10+60 °C",
+                    "Назначение": "Кабели для структурированных систем связи",
+                    "Диапазон рабочих температур": "-60+60 °C",
+                    "Количество жил": "8",
+                    "Единица измерения": "уп.",
+                    "Негорючесть": "Нет",
+                    "Вес, кг.": "12.5",
+                    "Материал проводника": "медь"
+                  },
+                  "description_excerpt": "Витая пара ITK F/UTP категории 5E 4x2х24AWG LDPE черная 305м Артикул: LC3-C5E04-339 Витая пара ITK категории 5E предназначена для построения структурированных кабельных систем, локальных вычислительных сетей и коммуникационной инфраструктуры между зданиями. Экранированная конструкция F/UTP обеспечивает защиту от электромагнитных помех, а оболочка LDPE повышенной прочности обеспечивает устойчивость к воздействию ультрафиолета и внешней среды. Кабель подходит для магистральных подсистем и организа"
+                }
+              ],
+              "products": [
+                {
+                  "title": "Кабель витая пара U/UTP кат.5E 100МГц 4 пары LDPE OUTDOOR 1м черный GENERICA",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/kabel-vitaya-para-uutp-kat.5e-100mgcz-4-paryi-ldpe-outdoor-1m-chernyij-generica/",
+                  "price": 216,
+                  "stockLine": "Иргели (17995 м)",
+                  "cardText": "- **[Кабель витая пара U/UTP кат.5E 100МГц 4 пары LDPE OUTDOOR 1м черный GENERICA](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/kabel-vitaya-para-uutp-kat.5e-100mgcz-4-paryi-ldpe-outdoor-1m-chernyij-generica/)**\n  Цена: *216* ₸/м\n  Бренд: U/UTP\n  Наличие: Иргели (17995 м)"
+                },
+                {
+                  "title": "ITK Витая пара U/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-ldpe-chernyij-%28305m%29-iek-%28up.%29/",
+                  "price": 90863,
+                  "stockLine": "Шымкент (2 уп.), Иргели (60 уп.)",
+                  "cardText": "- **[ITK Витая пара U/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-ldpe-chernyij-%28305m%29-iek-%28up.%29/)**\n  Цена: *90 863* ₸/уп\n  Бренд: ITK\n  Наличие: Шымкент (2 уп.), Иргели (60 уп.)"
+                },
+                {
+                  "title": "ITK Витая пара U/UTP кат.5E 4х2х24AWG solid LDPE c металлическим тросом 1,2мм черный (305м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-solid-ldpe-c-metallicheskim-trosom-1,2mm-chernyij-%28305m%29/",
+                  "price": 119029,
+                  "stockLine": "Иргели (5 уп.)",
+                  "cardText": "- **[ITK Витая пара U/UTP кат.5E 4х2х24AWG solid LDPE c металлическим тросом 1,2мм черный (305м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-uutp-kat.5e-4x2x24awg-solid-ldpe-c-metallicheskim-trosom-1,2mm-chernyij-%28305m%29/)**\n  Цена: *119 029* ₸/уп\n  Бренд: U/UTP\n  Наличие: Иргели (5 уп.)"
+                },
+                {
+                  "title": "ITK Витая пара F/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-futp-kat.5e-4x2x24awg-ldpe-chernyij-%28305m%29-iek-%28up.%29/",
+                  "price": 127158,
+                  "stockLine": "Иргели (338 уп.)",
+                  "cardText": "- **[ITK Витая пара F/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-utp,-ftp/itk-vitaya-para-futp-kat.5e-4x2x24awg-ldpe-chernyij-%28305m%29-iek-%28up.%29/)**\n  Цена: *127 158* ₸/уп\n  Бренд: U/UTP\n  Наличие: Иргели (338 уп.)"
+                }
+              ],
+              "text": "Подбираю только медную витую пару Cat.5e/6 с доказанной наружной PE/LDPE-оболочкой; CCA, PVC и внутренний LSZH исключаю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "PoE outdoor policy: подтверждено 4",
+                  "duration_ms": 2238
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "В каких единицах указаны цена и остатки?",
+              "status": 200,
+              "duration_ms": 3213,
+              "network_attempts": 1,
+              "log_id": "6acc4e93-b84f-4dd6-983f-8108dc012f13",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "По ранее показанным карточкам могу подтвердить только следующие данные:\n1. Кабель витая пара U/UTP кат.5E 100МГц 4 пары LDPE OUTDOOR 1м черный GENERICA — 216 ₸/м; Бренд: U/UTP; Бронированный: Нет; Диапазон рабочих температур: -40+60 °C; Единица измерения: м; Экранированный: Нет.\n2. ITK Витая пара U/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.) — 90 863 ₸/уп.; Бренд: ITK; Бронированный: Нет; Диапазон рабочих температур: -60+60 °C; Единица измерения: уп.; Экранированный: Нет.\n3. ITK Витая пара U/UTP кат.5E 4х2х24AWG solid LDPE c металлическим тросом 1,2мм черный (305м) — 119 029 ₸/уп.; Бренд: U/UTP; Бронированный: Нет; Диапазон рабочих температур: -60+60 °C; Единица измерения: уп.; Экранированный: Нет.\n4. ITK Витая пара F/UTP кат.5E 4х2х24AWG LDPE черный (305м) ИЭК (уп.) — 127 158 ₸/уп.; Бренд: U/UTP; Бронированный: Нет; Диапазон рабочих температур: -60+60 °C; Единица измерения: уп.; Экранированный: Да.\nЕсли нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T13:54:52.592Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 4,
+    "recorded_turns": 4
+  },
+  "log_ids": [
+    "8ba735cf-3e08-4290-9a60-999699157038",
+    "95c17399-00ce-48a1-a5d3-fd080582c006",
+    "36cf1793-3694-4e17-9bd8-e3793c8c326f",
+    "6acc4e93-b84f-4dd6-983f-8108dc012f13"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 4,
+    "verified": 4,
+    "unverified": 0
+  },
+  "passed": true
+}

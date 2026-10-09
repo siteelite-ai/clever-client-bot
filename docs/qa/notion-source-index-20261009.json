@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "scope": "Ticket-page attribution covers the original 30 scenario identities in legacy Notion QA v1 and v2; two additional BT-929 geometry scenarios are synthetic, not ticket cases. V2 uses exact source text for both BT-923 prompts. Fifteen explicitly marked BT-929/BT-924 turns in v2 are internal synthetic API continuations or geometry probes, not customer quotes or browser clicks. Ticket case_count values below count only the original attributed scenarios. Most other prompts are paraphrases, and block/screenshot provenance is incomplete.",
+  "project_url": "https://app.notion.com/p/220volt-kz-e5f02f251f234a1eb71c3f90fea21394",
+  "tickets": [
+    { "ticket": "BT-929", "page_url": "https://app.notion.com/p/37bcf8d369ba80ba99afcfeaa1b0713b", "case_count": 9 },
+    { "ticket": "BT-928", "page_url": "https://app.notion.com/p/37bcf8d369ba80cb9f98c43bd2a84f6b", "case_count": 2 },
+    { "ticket": "BT-927", "page_url": "https://app.notion.com/p/37bcf8d369ba80e5bb15d1209eaa6dea", "case_count": 2 },
+    { "ticket": "BT-925", "page_url": "https://app.notion.com/p/37bcf8d369ba805bb2bbf087029a2baf", "case_count": 1 },
+    { "ticket": "BT-924", "page_url": "https://app.notion.com/p/37bcf8d369ba80bfb1e8d578b4a13256", "case_count": 7 },
+    { "ticket": "BT-923", "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7", "case_count": 2 },
+    { "ticket": "BT-922", "page_url": "https://app.notion.com/p/37bcf8d369ba801aa4fbe04dc70f5669", "case_count": 1 },
+    { "ticket": "BT-821", "page_url": "https://app.notion.com/p/349cf8d369ba80a48698ec54849f2762", "case_count": 2 },
+    { "ticket": "BT-746", "page_url": "https://app.notion.com/p/336cf8d369ba800bbc5fc9872d6cd765", "case_count": 4 }
+  ],
+  "comment_only_cases": {
+    "bt746-black-double-socket": "336cf8d3-69ba-8016-9d74-001dfbdf0737",
+    "bt746-garmoniya-sockets": "336cf8d3-69ba-8093-8d93-001db3f63d3d"
+  },
+  "synthetic_api_continuations": [
+    {
+      "case_id": "bt929-pump-cable-clarification",
+      "turn_index": 2,
+      "message": "220 В, 1 фаза",
+      "intent": "Choose an exact server-issued categorical chip and require the next missing axis; this does not assert a browser click."
+    },
+    {
+      "case_id": "bt929-outdoor-floodlight-clarification",
+      "turn_index": 2,
+      "message": "До 4 м",
+      "intent": "Choose an exact server-issued safe height-range chip and require the area axis; this does not assert a browser click or an exact mounting height."
+    },
+    {
+      "case_id": "bt929-synthetic-yard-area-cable-not-height",
+      "turn_index": 1,
+      "message": "Нужен прожектор на улицу для двора 35 м², кабель до него 10 м. Предложи варианты.",
+      "intent": "Synthetic geometry probe: cable length must not substitute for missing mounting height."
+    },
+    {
+      "case_id": "bt929-synthetic-parking-area-cable-not-height",
+      "turn_index": 1,
+      "message": "Какие прожекторы подойдут для парковки 300 м², если кабель до опоры 20 м?",
+      "intent": "Synthetic geometry probe: parking area and cable length must not trigger premature product search."
+    },
+    {
+      "case_id": "bt929-underground-cable-clarification",
+      "turn_index": 2,
+      "message": "В трубе/ПНД",
+      "intent": "Synthetic continuation requiring a supply-phase choice before searching."
+    },
+    {
+      "case_id": "bt929-underground-cable-clarification",
+      "turn_index": 3,
+      "message": "220 В, 1 фаза",
+      "intent": "Synthetic continuation requiring load power as a separate free-form slot."
+    },
+    {
+      "case_id": "bt929-underground-cable-clarification",
+      "turn_index": 4,
+      "message": "5 кВт",
+      "intent": "Synthetic continuation requiring a separate core-count slot before searching."
+    },
+    {
+      "case_id": "bt929-underground-cable-clarification",
+      "turn_index": 5,
+      "message": "3 жилы",
+      "intent": "Synthetic continuation requiring grounding presence before searching."
+    },
+    {
+      "case_id": "bt929-lugs-35mm-clarification",
+      "turn_index": 2,
+      "message": "Медь",
+      "intent": "Synthetic continuation requiring connection type before searching."
+    },
+    {
+      "case_id": "bt929-lugs-35mm-clarification",
+      "turn_index": 3,
+      "message": "Под болт",
+      "intent": "Synthetic continuation requiring the hole size as a separate free-form slot."
+    },
+    {
+      "case_id": "bt929-surveillance-cable-clarification",
+      "turn_index": 2,
+      "message": "Цифровая/IP",
+      "intent": "Synthetic continuation requiring installation location before searching."
+    },
+    {
+      "case_id": "bt929-surveillance-cable-clarification",
+      "turn_index": 3,
+      "message": "На улице",
+      "intent": "Synthetic continuation requiring a power-mode choice before searching."
+    },
+    {
+      "case_id": "bt929-surveillance-cable-clarification",
+      "turn_index": 4,
+      "message": "Питание PoE",
+      "intent": "Synthetic continuation requiring exact line length as a separate free-form slot."
+    },
+    {
+      "case_id": "bt924-replace-kg-cable",
+      "turn_index": 2,
+      "message": "Подвижное подключение",
+      "intent": "Synthetic continuation requiring core count and section before searching."
+    },
+    {
+      "case_id": "bt924-replace-kg-cable",
+      "turn_index": 3,
+      "message": "3×2,5",
+      "intent": "Synthetic continuation requiring specific usage purpose before searching."
+    }
+  ],
+  "clarified_source_facts": [
+    {
+      "ticket": "BT-923",
+      "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7",
+      "source_prompt": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
+      "source_product_url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/batarejki/element-pitaniya-nbt-cr2025-bp5-94-764-navigator/",
+      "expected_catalog_unit": "шт",
+      "live_page_check": {
+        "checked_at_utc": "2026-10-09T18:30:00Z",
+        "source_product_name": "Элемент питания NBT-CR2025-BP5 94 764 Navigator",
+        "source_sku": "Ем000003738",
+        "source_unit_facet": "шт",
+        "observed_offer_price_kzt": 225,
+        "observed_availability": "https://schema.org/InStock",
+        "note": "Read-only productProofFromHtml on live page; price and stock are time-sensitive, so acceptance re-fetches the page rather than pinning these values."
+      },
+      "source_meaning": "The ticket says the site lists the product unit as шт and the bot must not reinterpret that catalog unit as упаковка. It does not establish how many battery cells are inside one sellable SKU."
+    },
+    {
+      "ticket": "BT-923",
+      "page_url": "https://app.notion.com/p/37bcf8d369ba80dbbe70d71f3588bbf7",
+      "source_prompt": "найди кабель ввг 3*1,5 самый дешевый",
+      "source_product_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5/",
+      "expected_catalog_unit": "м",
+      "live_page_check": {
+        "checked_at_utc": "2026-10-09T18:33:00Z",
+        "source_product_name": "Кабель ВВГ 3*1,5",
+        "source_sku": "000000227",
+        "source_unit_facet": "м",
+        "observed_offer_price_kzt": 462,
+        "observed_availability": "https://schema.org/InStock",
+        "note": "Read-only productProofFromHtml on live page. The ticket spells out метр; the current page's unit abbreviation is м."
+      },
+      "source_meaning": "A VVG 3*1,5 stock line must use a length unit, not штуки; the cheapest-product claim still requires separate catalog-wide price proof."
+    }
+  ],
+  "observed_instability_comments": [
+    {
+      "ticket": "BT-928",
+      "comment_id": "6b7cf8d3-69ba-82f9-ae75-031378691bb7",
+      "observation": "The boiler-breaker diagnostic succeeded only once in three observed attempts on 2026-08-25.",
+      "qa_policy": "Retest three times; this is a team reliability criterion, not a quoted prospective customer requirement."
+    },
+    {
+      "ticket": "BT-923",
+      "comment_id": "7a0cf8d3-69ba-82e0-8f32-03b6a176995d",
+      "observation": "The CR2025 unit/packaging answer succeeded only once in three observed attempts on 2026-08-25.",
+      "qa_policy": "Retest three times; this is a team reliability criterion, not a quoted prospective customer requirement."
+    },
+    {
+      "ticket": "BT-924",
+      "comment_id": "3c7cf8d3-69ba-81d1-851a-001c770a8701",
+      "observation": "The Acti9 continuation was described as unstable, with no stated number of attempts.",
+      "qa_policy": "Do not attribute a three-run requirement to this customer comment."
+    }
+  ],
+  "limitations": [
+    "Most case prompts are paraphrases, not exact quotes of a Notion block.",
+    "No prose block IDs or screenshot URLs are recorded per case in the existing QA matrix.",
+    "The nine pages contain 89 embedded images and 29 comment attachments; image content is not verified by this page-level index."
+  ]
+}

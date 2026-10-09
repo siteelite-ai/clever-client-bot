@@ -1,0 +1,112 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "28c3a21666610684124b54b5647edff6c99d81dda53a5bc6d8317198fd8bbabc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:41:13.911Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-heat-shrink-12mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-12mm_base_1791553273912_1",
+          "turns": [
+            {
+              "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              "status": 200,
+              "duration_ms": 27392,
+              "network_attempts": 1,
+              "log_id": "57cbe07b-f508-4d1f-9e40-4024b775a52d",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для кабеля диаметром 12 мм необходима термоусадочная трубка с внутренним диаметром до усадки не менее 12 мм, чтобы обеспечить легкое надевание, и внутренним диаметром после усадки не более 12 мм для плотного облегания. Рекомендуется выбирать трубку с внутренним диаметром до усадки 12 мм и после усадки 6 мм, что соответствует коэффициенту усадки 2:1. Обязательные параметры: «Внутр диаметр до термоусадки,мм: 12».\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 2185
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 415",
+                  "duration_ms": 682
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю расширенный набор по условиям запроса…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Расширенная проверка: найдено 116, класс 97, подтверждено 0; коды −0, контракт −8; термоусадочную:1/8, кабеля:0/8",
+                  "duration_ms": null
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "selection contract misses required groups: [\"op\":\"min\"] [\"op\":\"max\"] [\"value\":12] [\"exclusive\":true]"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T13:41:41.306Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "57cbe07b-f508-4d1f-9e40-4024b775a52d"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

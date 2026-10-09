@@ -1,0 +1,881 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "9ee3a004bf597cc7848a38cbf7e8845d7fba4ebc84544a306bd5dadb8af4b2cd",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T15:11:10.074Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 5,
+  "requested_repetitions": {
+    "customer-corn-lamp-jargon": 1,
+    "customer-new-heat-shrink-12mm": 1,
+    "customer-new-heat-shrink-10mm": 1,
+    "customer-new-gallant-catalog-section-chip": 1,
+    "customer-new-black-double-sockets": 1
+  },
+  "cases": [
+    {
+      "id": "customer-corn-lamp-jargon",
+      "title": "Жаргон «лампа-кукуруза» остаётся в категории ламп",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-corn-lamp-jargon_base_1791558670077_1",
+          "turns": [
+            {
+              "message": "а у тебя есть лампы кукуруза?",
+              "status": 200,
+              "duration_ms": 17559,
+              "network_attempts": 1,
+              "log_id": "3883635b-3beb-47d0-91df-37f8d4b9cb6d",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 476,
+                  "stockLine": "Караганда (95 шт), Алматы (2 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *476* ₸\n  Бренд: IEK\n  Наличие: Караганда (95 шт), Алматы (2 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 448,
+                  "stockLine": "Астана (56 шт), Иргели (210 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *448* ₸\n  Бренд: IEK\n  Наличие: Астана (56 шт), Иргели (210 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/",
+                  "price": 560,
+                  "stockLine": "Караганда (58 шт), Иргели (140 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/)**\n  Цена: *560* ₸\n  Бренд: IEK\n  Наличие: Караганда (58 шт), Иргели (140 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/",
+                  "price": 626,
+                  "stockLine": "Иргели (20 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/)**\n  Цена: *626* ₸\n  Бренд: IEK\n  Наличие: Иргели (20 шт)"
+                }
+              ],
+              "text": "Это именно лампы, а не какой-то другой класс товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-dcdf519d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Вид лампы (принцип работы)",
+                    "op": "eq",
+                    "value": "светодиодная",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 2425
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 581",
+                  "duration_ms": 709
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 17",
+                  "duration_ms": null
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-12mm_base_1791558687649_1",
+          "turns": [
+            {
+              "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              "status": 200,
+              "duration_ms": 11037,
+              "network_attempts": 1,
+              "log_id": "a70a0a61-0f63-4cbc-af00-a24b003f08b1",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator",
+                  "verified": true,
+                  "sku": "Ем000010607",
+                  "name": "Трубка термоусадочная NST-14/7-10-21 71 122 Navigator",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "разноцветный",
+                    "Диапазон диаметров проводов": "7.3-13",
+                    "Материал": "полиолефин",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...105 °C",
+                    "Длина, м": "0.1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "уп.",
+                    "Ширина, м": "0.014",
+                    "Вес, кг.": "0.041",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "14",
+                    "Объем, м3": "0.000153",
+                    "Внутр диаметр после термоусадки, мм": "7",
+                    "Бренд": "Navigator",
+                    "Код ТН ВЭД": "3917320001",
+                    "Номинальное поперечное сечение, мм2": "13",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0.55±0.1"
+                  },
+                  "offerPrice": 530,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Термоусадочные трубки Navigator серии NST предназначены для электрической изоляции, антикоррозионной защиты, защиты от механических повреждений и маркировки проводов и кабелей. Изготовлены из модифицированного полиэтилена, не поддерживающего горение и устойчивого к воздействию ультрафиолетового излучения. Преимущества: • Рабочее напряжение до 1кВ • Коэффициент усадки 2:1 • Прочность на растяжение не менее 10 МПа • Минимальное уплотнение перед разрывом 200% • Электрическая прочность не менее 20 к"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator",
+                  "verified": true,
+                  "sku": "Ем000010608",
+                  "name": "Трубка термоусадочная NST-16/8-10-21 71 123 Navigator",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "разноцветный",
+                    "Диапазон диаметров проводов": "8.3-15",
+                    "Материал": "полиолефин",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...105 °C",
+                    "Длина, м": "0.1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "уп.",
+                    "Ширина, м": "0.016",
+                    "Вес, кг.": "0.047",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "16",
+                    "Объем, м3": "0.000192",
+                    "Внутр диаметр после термоусадки, мм": "8",
+                    "Бренд": "Navigator",
+                    "Код ТН ВЭД": "3917320001",
+                    "Номинальное поперечное сечение, мм2": "15",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0.55±0.1"
+                  },
+                  "offerPrice": 606,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Термоусадочные трубки Navigator серии NST предназначены для электрической изоляции, антикоррозионной защиты, защиты от механических повреждений и маркировки проводов и кабелей. Изготовлены из модифицированного полиэтилена, не поддерживающего горение и устойчивого к воздействию ультрафиолетового излучения. Преимущества: • Рабочее напряжение до 1кВ • Коэффициент усадки 2:1 • Прочность на растяжение не менее 10 МПа • Минимальное уплотнение перед разрывом 200% • Электрическая прочность не менее 20 к"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-168-chernaya-100mupak.-iek-(up.)",
+                  "verified": true,
+                  "sku": "00002455",
+                  "name": "Термоусадочная трубка ТТУ 16/8 черная 100 м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "чёрный",
+                    "Диапазон диаметров проводов": "8.3-15",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "1",
+                    "Длина, м": "100",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "уп.",
+                    "Ширина, м": "0.443",
+                    "Вес, кг.": "3",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "16",
+                    "Объем, м3": "0.008",
+                    "Внутр диаметр после термоусадки, мм": "8",
+                    "Бренд": "IEK",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "15",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1"
+                  },
+                  "offerPrice": 21419,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000665",
+                  "name": "Термоусадочная трубка ТТУ 20/10 желтая 100 м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "жёлтый",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "1",
+                    "Длина, м": "100",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "м",
+                    "Ширина, м": "0.02",
+                    "Вес, кг.": "0.0447",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Бренд": "IEK",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "products": [
+                {
+                  "title": "Трубка термо NST-14/7-10-21 71 122 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/",
+                  "price": 530,
+                  "stockLine": "Астана (79 уп.), Караганда (32 уп.)",
+                  "cardText": "- **[Трубка термо NST-14/7-10-21 71 122 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/)**\n  Цена: *530* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (79 уп.), Караганда (32 уп.)"
+                },
+                {
+                  "title": "Трубка термо NST-16/8-10-21 71 123 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "price": 606,
+                  "stockLine": "Астана (98 уп.), Караганда (22 уп.), Шымкент (10 уп.)",
+                  "cardText": "- **[Трубка термо NST-16/8-10-21 71 123 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/)**\n  Цена: *606* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (98 уп.), Караганда (22 уп.), Шымкент (10 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 16/8 черная 100м/упак. ИЭК (уп.)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-168-chernaya-100mupak.-iek-%28up.%29/",
+                  "price": 21419,
+                  "stockLine": "Иргели (3 уп.)",
+                  "cardText": "- **[Трубка ТТУ 16/8 черная 100м/упак. ИЭК (уп.)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-168-chernaya-100mupak.-iek-%28up.%29/)**\n  Цена: *21 419* ₸/уп\n  Бренд: IEK\n  Наличие: Иргели (3 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Актобе (290 м), Астана (287 м), Шымкент (114 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (290 м), Астана (287 м), Шымкент (114 м) и ещё 2 городов"
+                }
+              ],
+              "text": "Для кабеля диаметром 12 мм необходима термоусадочная трубка, внутренний диаметр которой до усадки должен быть строго больше 12 мм, а после усадки — строго меньше 12 мм, чтобы обеспечить плотное облегание кабеля.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-aa16db17",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 1845
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 364",
+                  "duration_ms": 1474
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1791558701088_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "status": 200,
+              "duration_ms": 15050,
+              "network_attempts": 1,
+              "log_id": "9e8b3be4-3b13-409f-a30d-e4a7d7083efa",
+              "diagnostic_error": "request_timeout",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nКонсультант не успел завершить подбор за отведённое время. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 1125
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "selection contract misses required groups: [\"op\":\"min\"] [\"op\":\"max\"] [\"value\":10] [\"exclusive\":true]",
+                "diagnostic error: request_timeout"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-gallant-catalog-section-chip",
+      "title": "Выбор раздела после широкого ассортимента сохраняет серию и категорию",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-gallant-catalog-section-chip_base_1791558716139_1",
+          "turns": [
+            {
+              "message": "покажи ассортимент Gallant на сайте",
+              "status": 200,
+              "duration_ms": 3370,
+              "network_attempts": 1,
+              "log_id": "767bf04f-c248-42c7-995e-692347a1a4fb",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками. В каталоге уже видны разделы: Выключатели, Розетки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Розетки",
+              "status": 200,
+              "duration_ms": 2865,
+              "network_attempts": 1,
+              "log_id": "58b66d7f-68ed-4489-8ba4-1c7ddc2608ea",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Розетка влагозащ. с зазем. с защит.крышкой и шторками Gallant /WL15-02-04 (слоновая кость)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashh.-s-zazem.-s-zashhit.kryishkoj-i-shtorkami-gallant-wl15-02-04-%28slonovaya-kost%29/",
+                  "price": 3193,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Розетка влагозащ. с зазем. с защит.крышкой и шторками Gallant /WL15-02-04 (слоновая кость)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashh.-s-zazem.-s-zashhit.kryishkoj-i-shtorkami-gallant-wl15-02-04-%28slonovaya-kost%29/)**\n  Цена: *3 193* ₸\n  Бренд: Werkel\n  Наличие: Караганда (1 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071210 (шампань рифл)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071210-%28shampan-rifl%29/",
+                  "price": 5061,
+                  "stockLine": "Караганда (8 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071210 (шампань рифл)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071210-%28shampan-rifl%29/)**\n  Цена: *5 061* ₸\n  Бренд: Werkel\n  Наличие: Караганда (8 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071203 (слоновая кос)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071203-%28slonovaya-kos%29/",
+                  "price": 4149,
+                  "stockLine": "Караганда (3 шт), Астана (1 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071203 (слоновая кос)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071203-%28slonovaya-kos%29/)**\n  Цена: *4 149* ₸\n  Бренд: Werkel\n  Наличие: Караганда (3 шт), Астана (1 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071201 (белый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071201-%28belyij%29/",
+                  "price": 4149,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071201 (белый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071201-%28belyij%29/)**\n  Цена: *4 149* ₸\n  Бренд: Werkel\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072135 (черный/хром)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/",
+                  "price": 6343,
+                  "stockLine": "Караганда (40 шт), Шымкент (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072135 (черный/хром)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/)**\n  Цена: *6 343* ₸\n  Бренд: Werkel\n  Наличие: Караганда (40 шт), Шымкент (2 шт)"
+                }
+              ],
+              "text": "Показываю подтверждённые товары серии «Gallant» в разделе «Розетки».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-904cdb64",
+                "mandatory_criteria": [
+                  {
+                    "key": "Серия",
+                    "op": "eq",
+                    "value": "Gallant",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Раздел каталога",
+                    "op": "eq",
+                    "value": "Розетки",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю выбранный раздел и серию в каталоге…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Подтверждённых товаров: 27",
+                  "duration_ms": 1742
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-black-double-sockets",
+      "title": "Чёрные двойные электрические розетки сохраняют оба признака",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-black-double-sockets_base_1791558722374_1",
+          "turns": [
+            {
+              "message": "Найди двойные черные розетки электрические",
+              "status": 200,
+              "duration_ms": 10423,
+              "network_attempts": 1,
+              "log_id": "1eea0236-f768-4b5e-816f-d3edeb2532ab",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)",
+                  "verified": true,
+                  "sku": "Ем000028744",
+                  "name": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Florence",
+                    "Напряжение, В": "250",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик; поликарбонат",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "КИТАЙ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.086",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0006",
+                    "Наличие заземления": "Да",
+                    "Бренд": "OneKeyElectro",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 2923,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Двойная розетка OneKeyElectro с заземлением, винтовые контакты - это гармония эстетики и эргономики, которая позволяет удвоить количество розеток в случае ограниченного пространства или при проведении косметического ремонта в помещении. Двойная розетка OneKeyElectro устанавливается в одинарный подрозетник (монтажную коробку), что позволяет увеличить количество точек питания без проведения работ по штроблению стен."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026162",
+                  "name": "Розетка 2-местная открытой установки, серия ПРАЛЕСКА, РА16-260 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.073",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0002",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 692,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026163",
+                  "name": "Розетка 2-местная открытой установки с заземляющим контактом, серия ПРАЛЕСКА, РА16-261 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.089",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0003",
+                    "Наличие заземления": "Да",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 932,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij",
+                  "verified": true,
+                  "sku": "Ем000028175",
+                  "name": "Розетка РС 16-343 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Уют",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.09",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0004",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 964,
+                  "availability": "https://schema.org/InStock",
+                  "description_excerpt": "Серия «Уют» отличается от других очень интересным дизайном. Благодаря цветным декоративным рамкам можно удачно вписать эти розетки и выключатели практически в любой интерьер. Высочайшее качество продукции обеспечивается благодаря тому, что компания «Светоприбор», на заводах которой выпускается данная продукция, осуществляет весь производственный цикл от изготовления оснастки до выпуска готовой продукции. Преимущества серии «Уют»: Большой выбор функциональных возможностей Современный дизайн Эколо"
+                }
+              ],
+              "products": [
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 2923,
+                  "stockLine": "Караганда (56 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *2 923* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (56 шт)"
+                },
+                {
+                  "title": "Розетка РА 16-260 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "price": 692,
+                  "stockLine": "Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-260 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/)**\n  Цена: *692* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РА 16-261 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "price": 932,
+                  "stockLine": "Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-261 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/)**\n  Цена: *932* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РС 16-343 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "price": 964,
+                  "stockLine": "Караганда (1091 шт)",
+                  "cardText": "- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/)**\n  Цена: *964* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1091 шт)"
+                }
+              ],
+              "text": "Клиент просит электрические розетки — двойные (два разъёма) и чёрного цвета. Это стандартная электрическая розетка с двумя гнёздами в чёрном исполнении. Поищем такие. По вашему обязательному классу допускаю одно из: «Вид розетки: электрическая»; «Вид розетки: электрическая с USB»; значения вне этого класса исключаю. Внутри вашего класса в первую очередь проверяю «электрическая» как предпочтение, не исключая другие допустимые варианты.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-186edd9c",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая с USB",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  },
+                  {
+                    "kind": "literal_modifier",
+                    "label": "черные",
+                    "op": "eq",
+                    "value": "черные"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 4162
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 35",
+                  "duration_ms": 1485
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T15:12:16.421Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 5,
+    "recorded_cases": 5,
+    "planned_runs": 5,
+    "recorded_runs": 5,
+    "planned_turns": 6,
+    "recorded_turns": 6
+  },
+  "log_ids": [
+    "3883635b-3beb-47d0-91df-37f8d4b9cb6d",
+    "a70a0a61-0f63-4cbc-af00-a24b003f08b1",
+    "9e8b3be4-3b13-409f-a30d-e4a7d7083efa",
+    "767bf04f-c248-42c7-995e-692347a1a4fb",
+    "58b66d7f-68ed-4489-8ba4-1c7ddc2608ea",
+    "1eea0236-f768-4b5e-816f-d3edeb2532ab"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 8,
+    "verified": 8,
+    "unverified": 0
+  },
+  "passed": false
+}

@@ -1,3 +1,5 @@
+import { measuredLoadGuidanceCanProceed } from "./selection-readiness.ts";
+
 export interface MeasuredBreakerGuidance {
   answer: string;
   current_a: number;
@@ -34,7 +36,8 @@ export function buildMeasuredBreakerGuidance(
   const source = String(message ?? "").trim();
   if (!source) return null;
   const breaker = /(?:автомат\p{L}*(?:\s+выключател\p{L}*)?|выключател\p{L}*\s+автомат\p{L}*)/iu.test(source);
-  const guidance = /(?:какой|какая|какое|какие)[^.!?\n]{0,100}(?:нужен|нужна|нужно|нужны|подойдет|подойдут)|(?:рассчитай|рассчитать|определи|определить)[^.!?\n]{0,80}(?:номинал|ток|автомат)/iu.test(source);
+  const guidance = measuredLoadGuidanceCanProceed(source) ||
+    /(?:рассчитай|рассчитать|определи|определить)[^.!?\n]{0,80}(?:номинал|ток|автомат)/iu.test(source);
   const catalogImperative = /(?:^|[^\p{L}])(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|купи\p{L}*)(?=$|[^\p{L}])/iu.test(source);
   if (!breaker || !guidance || catalogImperative) return null;
 

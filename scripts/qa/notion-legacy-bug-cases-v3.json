@@ -1,0 +1,776 @@
+{
+  "schema_version": 3,
+  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; v3 extends the pinned v2 matrix with independently verified catalog-page assertions and explicitly marked synthetic continuations; no synthetic turn is attributed to a customer quote or browser click. The BT-929 20% reserve versus 14/7 example conflict remains unresolved and is not treated as a passing acceptance condition.",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "bt929-pump-cable-clarification",
+      "title": "BT-929: cable for a pump requires clarification",
+      "turns": [{
+        "message": "Мне нужен кабель для насоса",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["длин", "расстоян"], ["напряж", "фаз"], ["проклад", "улиц", "помещен", "перенос"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase"
+        }
+      }, {
+        "synthetic": true,
+        "message": "220 В, 1 фаза",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "supply_phase", "value": "220 В, 1 фаза" },
+          "max_products": 0,
+          "require_text_groups": [["длин", "расстоян"], ["мощн", "ток"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "line_length",
+          "require_clarification_range_unit": "м"
+        }
+      }]
+    },
+    {
+      "id": "bt929-outdoor-floodlight-clarification",
+      "title": "BT-929: outdoor floodlight requires clarification",
+      "turns": [{
+        "message": "Нужен прожектор на улицу.",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["площад", "размер", "территор"], ["высот", "установ"], ["ярк", "мощн", "люмен"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_range_unit": "м"
+        }
+      }, {
+        "synthetic": true,
+        "message": "До 4 м",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "mounting_height", "value": "До 4 м" },
+          "max_products": 0,
+          "require_any_text": ["площад", "размер", "м²"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "illuminated_area",
+          "require_clarification_range_unit": "м²"
+        }
+      }]
+    },
+    {
+      "id": "bt929-synthetic-yard-area-cable-not-height",
+      "title": "Synthetic BT-929: yard area and cable length do not prove mounting height",
+      "synthetic": true,
+      "turns": [{
+        "message": "Нужен прожектор на улицу для двора 35 м², кабель до него 10 м. Предложи варианты.",
+        "expect": {
+          "max_products": 0,
+          "require_any_text": ["высот", "монтаж", "установ"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_option_values": ["До 4 м", "4–8 м", "Выше 8 м"],
+          "require_clarification_range_unit": "м"
+        }
+      }]
+    },
+    {
+      "id": "bt929-synthetic-parking-area-cable-not-height",
+      "title": "Synthetic BT-929: parking area and cable length do not prove mounting height",
+      "synthetic": true,
+      "turns": [{
+        "message": "Какие прожекторы подойдут для парковки 300 м², если кабель до опоры 20 м?",
+        "expect": {
+          "max_products": 0,
+          "require_any_text": ["высот", "монтаж", "установ"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_option_values": ["До 4 м", "4–8 м", "Выше 8 м"],
+          "require_clarification_range_unit": "м"
+        }
+      }]
+    },
+    {
+      "id": "bt929-motor-breaker-clarification",
+      "title": "BT-929: motor breaker requires motor data",
+      "turns": [{
+        "message": "Подберите автомат для двигателя",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["напряж", "фаз"], ["пуск", "характерист"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase"
+        }
+      }]
+    },
+    {
+      "id": "bt929-underground-cable-clarification",
+      "title": "BT-929: underground cable requires installation data",
+      "turns": [{
+        "message": "Какой кабель подойдет для прокладки в земле?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["земл", "труб", "ПНД", "брон"], ["мощн", "ток"], ["напряж", "фаз"], ["жил", "заземл"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_method"
+        }
+      }, {
+        "synthetic": true,
+        "message": "В трубе/ПНД",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_method", "value": "В трубе/ПНД" },
+          "max_products": 0,
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase",
+          "require_clarification_option_values": ["220 В, 1 фаза", "380 В, 3 фазы"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "220 В, 1 фаза",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "supply_phase", "value": "220 В, 1 фаза" },
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "load_power"
+        }
+      }, {
+        "synthetic": true,
+        "message": "5 кВт",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "load_power",
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "core_count"
+        }
+      }, {
+        "synthetic": true,
+        "message": "3 жилы",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "core_count",
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "grounding_presence"
+        }
+      }]
+    },
+    {
+      "id": "bt929-heat-shrink-12mm",
+      "title": "BT-929: heat shrink fits 12 mm cable",
+      "turns": [{
+        "message": "Подберите термоусадочную трубку для кабеля диаметром 12 мм.",
+        "expect": {"min_products": 1, "require_every_product_pair_around": 12}
+      }]
+    },
+    {
+      "id": "bt929-lugs-35mm-clarification",
+      "title": "BT-929: 35 mm2 cable lugs require clarification",
+      "turns": [{
+        "message": "Какие наконечники нужны для кабеля 35 мм²",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мед", "алюмин"], ["болт", "клемм", "отверст", "тип"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "conductor_material",
+          "forbid_text": ["НКИ"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Медь",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "conductor_material", "value": "Медь" },
+          "max_products": 0,
+          "require_any_text": ["болт", "клемм", "соедин"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "connection_type",
+          "require_clarification_option_values": ["Под болт", "В клемму"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Под болт",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "connection_type", "value": "Под болт" },
+          "max_products": 0,
+          "require_any_text": ["отверст", "болт", "М"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "hole_size"
+        }
+      }, {
+        "synthetic": true,
+        "message": "M8",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "hole_size",
+          "min_products": 1,
+          "forbid_product_title": ["НКИ"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Материал", "exact_any": ["медь"] },
+              { "name": "Диапазон сечений кабеля, мм2", "exact_any": ["35"] },
+              { "name": "Диаметр монтажного отверстия,мм", "exact_any": ["8"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt929-surveillance-cable-clarification",
+      "title": "BT-929: surveillance cable requires system clarification",
+      "turns": [{
+        "message": "Есть ли у вас кабель для видеонаблюдения?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["цифров", "аналог"], ["улиц", "помещен"], ["PoE", "питан", "расстоян"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "camera_system"
+        }
+      }, {
+        "synthetic": true,
+        "message": "Цифровая/IP",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "camera_system", "value": "Цифровая/IP" },
+          "max_products": 0,
+          "require_any_text": ["улиц", "помещен", "проклад"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_location",
+          "require_clarification_option_values": ["На улице", "В помещении"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "На улице",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_location", "value": "На улице" },
+          "max_products": 0,
+          "require_any_text": ["PoE", "питан"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "power_mode",
+          "require_clarification_option_values": ["Питание PoE", "Отдельное питание"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Питание PoE",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "power_mode", "value": "Питание PoE" },
+          "max_products": 0,
+          "require_any_text": ["длин", "расстоян", "метр"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "line_length"
+        }
+      }, {
+        "synthetic": true,
+        "message": "50 м",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "line_length",
+          "min_products": 1,
+          "require_every_product_title_any": ["UTP", "FTP", "витая пара"],
+          "forbid_every_product_title_any": ["РК-75", "КВК"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Категория", "exact_any": ["Кабель UTP, FTP"] },
+              { "name": "Оболочка", "require_any": ["LDPE", "наруж"] },
+              { "name": "Единица измерения", "exact_any": ["м", "метр"] }
+            ],
+            "description": { "require_any": ["наруж", "внешн", "улиц"] }
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt929-warm-led-clarification",
+      "title": "BT-929: 3000 K LED lamps require form-factor clarification",
+      "turns": [{
+        "message": "Есть ли светодиодные лампы с теплым светом 3000К?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["цокол"], ["форм", "колб"], ["мощн", "ватт"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "socket_type"
+        }
+      }, {
+        "synthetic": true,
+        "message": "E27",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "socket_type", "value": "E27" },
+          "max_products": 0,
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "bulb_shape",
+          "require_clarification_option_values": ["Форма груша", "Форма свеча", "Форма шар"]
+        }
+      }, {
+        "synthetic": true,
+        "message": "Форма груша",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "bulb_shape", "value": "Форма груша" },
+          "max_products": 0,
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "selection_requirement_2"
+        }
+      }, {
+        "synthetic": true,
+        "message": "8 Вт",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "selection_requirement_2",
+          "min_products": 1,
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Тип цоколя", "exact_any": ["E27"] },
+              { "name": "Форма колбы", "require_any": ["груша"] },
+              { "name": "Мощность, Вт", "exact_any": ["8"] },
+              { "name": "Цветовая температура, К", "exact_any": ["3000"] },
+              { "name": "Вид лампы (принцип работы)", "exact_any": ["светодиодная"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt929-parking-floodlight-clarification",
+      "title": "BT-929: parking floodlights require site clarification",
+      "turns": [{
+        "message": "Какие прожекторы подойдут для освещения парковки?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["IP65", "IP66"], ["площад"], ["высот"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_range_unit": "м"
+        }
+      }]
+    },
+    {
+      "id": "bt928-living-room-25m2",
+      "title": "BT-928: LED lighting for a 25 m2 living room",
+      "turns": [{
+        "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Назначение", "require_any": ["гостин"] },
+              { "name": "Максимальная площадь освещения, м2", "min_numeric": 25 }
+            ]
+          },
+          "require_every_product_title_any": ["светильник", "панель", "люстра"],
+          "forbid_every_product_title_any": ["улич", "прожектор", "E40"],
+          "require_any_text": ["лм", "люмен", "гостин", "основн"]
+        }
+      }]
+    },
+    {
+      "id": "bt928-boiler-breaker-diagnostic",
+      "title": "BT-928: boiler breaker trip is diagnosed before products",
+      "repeat": 3,
+      "turns": [{
+        "message": "У меня выбивает автомат при включении бойлера. В чем может быть причина?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["автомат", "характерист", "номинал"], ["утеч", "коротк", "провод", "контакт", "УЗО"]],
+          "require_asked_text_groups": [
+            [["сразу", "немедленно", "моментально"], ["через", "спустя", "после"], ["минут"]],
+            [["номинал", "ампер", "маркировк"], ["автомат"], ["сейчас", "текущ", "установлен", "стоит", "у вас", "вашего"]],
+            [["мощн", "кВт", "ватт"], ["бойлер", "водонагревател", "прибор"]]
+          ],
+          "forbid_assistant_text": ["не нашёл подходящ", "не нашел подходящ", "не нашёл товар", "не нашел товар", "не удалось найти товар"]
+        }
+      }]
+    },
+    {
+      "id": "bt927-copper-fire-resistant-2x1_5",
+      "title": "BT-927: copper fire-resistant 2x1.5 cable",
+      "turns": [{
+        "message": "нужен медный кабель негорючий 2*1,5",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["2*1,5", "2×1,5", "2x1,5", "2х1,5"], ["нг", "негорюч"]],
+          "forbid_product_title": ["АВВГ", "AVVG"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Материал проводника", "exact_any": ["медь"] },
+              { "name": "Негорючесть", "exact_any": ["Да"] },
+              { "name": "Количество жил", "exact_any": ["2"] },
+              { "name": "Сечение кабеля, мм2", "min_numeric": 1.5, "less_than": 1.51 }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt927-led-floodlights-100w",
+      "title": "BT-927: LED floodlights from 100 W",
+      "turns": [{
+        "message": "Покажите светодиодные прожекторы мощностью от 100 Вт",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["прожектор"], ["светодиод", "LED", "СДО"]],
+          "require_every_product_measurement": { "min": 100, "units": ["Вт", "W"], "allow_compact_numeric": true },
+          "forbid_every_product_title_any": ["лампа", "светильник"]
+        }
+      }]
+    },
+    {
+      "id": "bt925-corn-e27",
+      "title": "BT-925: corn lamp E27 jargon",
+      "repeat": 3,
+      "turns": [{
+        "message": "подбери лампу кукуруза на цоколь e27",
+        "expect": {
+          "min_products": 1,
+          "require_axis_exact_or_split": {
+            "category_path": "/catalog/svetotexnika/lampyi/",
+            "axes": [
+              [{ "term": "CORN", "match": "code" }, { "term": "кукуруз", "match": "word_prefix" }],
+              [{ "term": "E27", "match": "code" }, { "term": "Е27", "match": "code" }]
+            ],
+            "split_disclosure_groups": [
+              ["среди найденных", "в найденных", "среди показанных", "в показанных"],
+              ["сочетан", "совпаден", "одновременно", "оба признака"],
+              ["не удалось подтвердить", "не подтверждено", "не подтвердилось"]
+            ],
+            "split_priority_question_groups": [
+              ["важнее", "приоритет"],
+              ["CORN", "кукуруз", "форма"],
+              ["E27", "Е27", "цоколь"]
+            ]
+          },
+          "forbid_every_product_title_any": ["LABEL OFF", "удаления наклеек", "аэрозоль"]
+        }
+      }]
+    },
+    {
+      "id": "bt924-dn027b-analogs",
+      "title": "BT-924: DN027B analogs match the recessed LED downlight, not only its name",
+      "turns": [{
+        "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+        "expect": {
+          "min_products": 1,
+          "forbid_product_title": ["DN027B"],
+          "require_every_product_page": {
+            "name": { "forbid_any": ["DN027B"] },
+            "facets": [
+              { "name": "Категория", "exact_any": ["Светильники"] },
+              { "name": "Вид светильника", "exact_any": ["даунлайт"] },
+              { "name": "Способ монтажа", "exact_any": ["встраиваемый"] },
+              { "name": "Тип лампы", "exact_any": ["LED"] },
+              { "name": "Тип цоколя", "exact_any": ["нет"] },
+              { "name": "ПРА", "exact_any": ["в комплекте"] },
+              { "name": "Мощность ламп, Вт", "min_numeric": 6, "less_than": 8.01, "require_scalar_numeric": true },
+              { "name": "Световой поток, Лм", "min_numeric": 400, "less_than": 801, "require_scalar_numeric": true },
+              { "name": "Диаметр, см", "min_numeric": 8, "less_than": 10.01, "require_scalar_numeric": true },
+              { "name": "Степень защиты, IP", "min_numeric": 20, "require_scalar_numeric": true }
+            ],
+            "any_of": [
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 220 }] },
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 230 }] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt924-gx53-analogs",
+      "title": "BT-924: GX53 tablet lamp analogs preserve lamp class and socket",
+      "turns": [{
+        "message": "Подбери аналоги для лампы ECO T75 таблетка GX53",
+        "expect": {
+          "min_products": 2,
+          "forbid_product_title": ["Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK"],
+          "require_every_product_title_groups": [["GX53"], ["ламп"]],
+          "require_every_product_page": {
+            "name": { "forbid_any": ["Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK"] },
+            "facets": [
+              { "name": "Категория", "exact_any": ["Лампы"] },
+              { "name": "Тип цоколя", "exact_any": ["GX53"] },
+              { "name": "Вид лампы (принцип работы)", "exact_any": ["светодиодная"] },
+              { "name": "Тип напряжения", "exact_any": ["АС", "AC"] },
+              { "name": "Форма колбы", "exact_any": ["таблетка"] },
+              { "name": "Диаметр, мм", "min_numeric": 70, "less_than": 81, "require_scalar_numeric": true },
+              { "name": "Мощность, Вт", "min_numeric": 6, "less_than": 15.01, "require_scalar_numeric": true }
+            ],
+            "any_of": [
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 220 }] },
+              { "facets": [{ "name": "Напряжение, В", "range_covers_numeric": 230 }] }
+            ]
+          },
+          "require_higher_product_facet_caveat": {
+            "facet_name": "Мощность, Вт",
+            "baseline_numeric": 6,
+            "text_groups": [
+              ["проверь", "уточн", "свер"],
+              ["максимальн", "допустим", "предельн"],
+              ["мощн", "Вт"],
+              ["габарит", "размер", "посадоч", "помест"]
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt924-apartment-breaker-25a",
+      "title": "BT-924: 25 A apartment breaker asks for missing axes",
+      "turns": [{
+        "message": "Подбери автомат 25А для квартиры",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["полюс", "фаз"], ["характерист", "крив"], ["отключ", "кА", "килоампер"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "pole_count"
+        }
+      }]
+    },
+    {
+      "id": "bt924-schneider-cheaper-analogs",
+      "title": "BT-924: cheaper Schneider analogs",
+      "turns": [{
+        "message": "Подбери более дешевые аналоги автомата Schneider Electric Acti9 1P 16A C",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16 А", "16А"], ["C", "С"]],
+          "forbid_product_title": ["Acti9", "Acti 9"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Количество полюсов", "exact_any": ["1"] },
+              { "name": "Номинальный ток", "exact_any": ["16"] },
+              { "name": "Характеристика срабатывания", "exact_any": ["C", "С"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt924-replace-kg-cable",
+      "title": "BT-924: KG cable replacement preserves use case",
+      "turns": [{
+        "message": "Чем можно заменить кабель КГ?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["услов", "примен", "назнач", "подключ"], ["сечен", "жил"], ["гибк", "стационар", "подвиж"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_mode"
+        }
+      }, {
+        "synthetic": true,
+        "message": "Подвижное подключение",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "installation_mode", "value": "Подвижное подключение" },
+          "max_products": 0,
+          "require_any_text": ["сечен", "жил"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "core_and_section"
+        }
+      }, {
+        "synthetic": true,
+        "message": "3×2,5",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_freeform_slot": "core_and_section",
+          "max_products": 0,
+          "require_any_text": ["назнач", "оборудован", "подключ"],
+          "require_clarification_choice": "freeform",
+          "require_clarification_facet_key": "usage_purpose"
+        }
+      }]
+    },
+    {
+      "id": "bt924-conditioner-3kw",
+      "title": "BT-924: cable for a 3 kW conditioner",
+      "turns": [{
+        "message": "Какой кабель нужен для кондиционера 3 кВт?",
+        "expect": {
+          "require_text_groups": [["3×2,5", "3x2,5", "3*2,5", "2,5 мм"], ["мед", "ВВГ"]]
+        }
+      }]
+    },
+    {
+      "id": "bt924-acti9-followup-show",
+      "title": "BT-924: follow-up show keeps Acti9 replacement context",
+      "turns": [
+        {
+          "message": "Подбери аналог Schneider Acti9 C16",
+          "expect": {"require_any_text": ["16", "C", "С", "полюс", "уточн"]}
+        },
+        {
+          "message": "покажи",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "require_every_product_title_groups": [["16A", "16 А", "16А"], ["C", "С"]],
+            "forbid_product_title": ["Acti9", "Acti 9"],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Номинальный ток", "exact_any": ["16"] },
+                { "name": "Характеристика срабатывания", "exact_any": ["C", "С"] }
+              ]
+            },
+            "forbid_text": ["параметр покажи", "характеристика покажи"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bt923-battery-unit",
+      "title": "BT-923: CR2025 packaging unit is explicit",
+      "repeat": 3,
+      "turns": [{
+        "message": "Элемент питания NBT-CR2025-BP5 94 764 Navigator - цена на сайте указана за штуку или за упаковку?",
+        "expect": {
+          "min_products": 1,
+          "max_products": 1,
+          "require_every_product_title_groups": [["NBT-CR2025-BP5", "NBT CR2025 BP5"]],
+          "require_every_product_exact_identifier": "NBT-CR2025-BP5",
+          "require_every_product_page": {
+            "name": { "require_any": ["NBT-CR2025-BP5", "NBT CR2025 BP5"] },
+            "facets": [{ "name": "Единица измерения", "exact_any": ["шт"] }]
+          },
+          "require_text_groups": [["упаков", "блистер"]],
+          "require_quoted_price_per_piece": true,
+          "forbid_text": ["Не нашёл подходящие товары", "Не нашел подходящие товары", "упаковка не предусмотрена"]
+        }
+      }]
+    },
+    {
+      "id": "bt923-vvg-3x1_5-unit",
+      "title": "BT-923: cheapest VVG 3x1.5 uses metre unit",
+      "turns": [{
+        "message": "найди кабель ввг 3*1,5 самый дешевый",
+        "expect": {
+          "min_products": 1,
+          "max_products": 1,
+          "require_catalog_minimum": { "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/3-1.5/", "title_prefix": "Кабель ВВГ 3*1,5", "unit": "м" },
+          "require_every_product_title_groups": [["3*1,5", "3×1,5", "3x1,5", "3х1,5"]],
+          "require_every_product_page": { "facets": [{ "name": "Единица измерения", "exact_any": ["м", "метр"] }] },
+          "require_every_product_stock_unit": "м",
+          "require_any_text": ["метр", "/м", "за м"]
+        }
+      }]
+    },
+    {
+      "id": "bt922-breaker-replacement-under-1000",
+      "title": "BT-922: equivalent breaker replacement under 1000 KZT",
+      "repeat": 3,
+      "turns": [{
+        "message": "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С GENERICA ИЭК предложи равноценную замену этому автомату по цене не дороже 1000 тг",
+        "expect": {
+          "min_products": 2,
+          "max_product_price": 1000,
+          "require_every_product_title_groups": [["1P", "1Р", "1-пол", "1 полюс"], ["16A", "16 A", "16А", "16 А"], ["4,5кА", "4,5 кА", "4.5kA", "4.5 kA"], ["х-ка C", "х-ка С", "характеристика C", "характеристика С"]],
+          "forbid_product_title": ["GENERICA"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Количество полюсов", "exact_any": ["1"] },
+              { "name": "Номинальный ток", "exact_any": ["16"] },
+              { "name": "Номинальная откл способность, кА", "min_numeric": 4.5 },
+              { "name": "Характеристика срабатывания", "exact_any": ["C", "С"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt821-dku-100w-replacement",
+      "title": "BT-821: DKU 100 W replacement excludes source",
+      "turns": [{
+        "message": "ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену на этот светильник по характеристикам",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["ДКУ", "улич", "консоль"], ["100W", "100Вт", "100 Вт"]],
+          "forbid_product_title": ["ДКУ-LED-03-100W"]
+        }
+      }]
+    },
+    {
+      "id": "bt821-stabilizer-analogs",
+      "title": "BT-821: ACH-10001-C analogs stay in stabilizers",
+      "turns": [{
+        "message": "подбери аналоги для Стабилизатора ACH-10001-C",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["стабилизатор", "ACH", "АСН"],
+          "forbid_every_product_title_any": ["светильник", "панель"]
+        }
+      }]
+    },
+    {
+      "id": "bt746-extension-50m",
+      "title": "BT-746: 50 m extension cord",
+      "turns": [{
+        "message": "подбери удлинитель на 50 м",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["удлинитель", "катушка"], ["50 м", "50м"]],
+          "require_every_product_page": {
+            "name": { "require_any": ["удлинитель", "катушка"] },
+            "facets": [{ "name": "Длина кабеля, м", "exact_any": ["50"] }]
+          }
+        }
+      }, {
+        "synthetic": true,
+        "message": "дай ссылку",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_product_link": true
+        }
+      }]
+    },
+    {
+      "id": "bt746-white-extension-3-sockets",
+      "title": "BT-746: white extension cord with three sockets",
+      "turns": [{
+        "message": "нужен белый удлинитель на 3 места",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["удлинитель"], ["3 мест", "3мест", "3 розет", "3 гнезд"]],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Цвет", "exact_any": ["белый"] },
+              { "name": "Количество розеток евростандарта", "exact_any": ["3"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt746-black-double-socket",
+      "title": "BT-746: black double socket",
+      "turns": [{
+        "message": "подбери черную двойную розетку",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["розет"], ["двойн", "2 мест", "2-мест", "2 пост"], ["черн", "графит"]],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Количество разъемов", "exact_any": ["2"] },
+              { "name": "Цвет", "require_any": ["черный", "чёрный", "графит"] },
+              { "name": "Вид розетки", "exact_any": ["электрическая"] }
+            ]
+          }
+        }
+      }]
+    },
+    {
+      "id": "bt746-garmoniya-sockets",
+      "title": "BT-746: Garmoniya socket series",
+      "turns": [{
+        "message": "покажи розетки серии Гармония",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["Гармония"],
+          "require_every_product_page": {
+            "facets": [
+              { "name": "Коллекция", "exact_any": ["Гармония"] }
+            ],
+            "name": { "require_any": ["розетка"] }
+          }
+        }
+      }]
+    }
+  ]
+}

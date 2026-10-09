@@ -1633,3 +1633,190 @@ export function verifySelectionTargetWithGroundedSearch(input: {
       .map((product) => product.id),
   };
 }
+
+export interface ReplacementDestinationFitReport {
+  required: boolean;
+  place: string | null;
+  minimum_area_m2: number | null;
+  passed_ids: string[];
+  rejected_ids: string[];
+}
+
+/**
+ * In a replacement request, the removed item is not evidence that a new card
+ * suits the customer's installation site. A broad semantic category is only a
+ * search hypothesis: when the customer gave both a site and its area, every
+ * displayed card needs independent first-party proof of that use and capacity.
+ * The site is taken literally from the customer, never from a model-proposed
+ * class; no product names, taxonomy labels or room-name dictionary is used.
+ */
+export function verifyReplacementDestinationFit(
+  customerMessage: string,
+  products: ProductRef[],
+): ReplacementDestinationFitReport {
+  const request = String(customerMessage ?? "");
+  const replacement = /(?:^|[^\p{L}])(?:замен|поменя|смен)\p{L}*/iu
+    .test(request);
+  const siteArea = request.match(
+    /(?:^|[\s,;])(?:в|во|для)\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2}?)\s+(?:площад\p{L}*\s+)?(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*)/iu,
+  );
+  const place = replacement && siteArea ? siteArea[1].trim() : null;
+  const minimumArea = place ? Number(siteArea?.[2].replace(",", ".")) : null;
+  if (
+    !place || minimumArea === null || !Number.isFinite(minimumArea) ||
+    minimumArea <= 0
+  ) {
+    return {
+      required: false,
+      place: null,
+      minimum_area_m2: null,
+      passed_ids: products.map((product) => product.id),
+      rejected_ids: [],
+    };
+  }
+
+  const siteStem = (raw: string): string => {
+    const word = normalize(raw);
+    if (word.length < 4) return word;
+    const root = word.replace(
+      /(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ую|юю|ый|ий|ые|ие|ых|их|ым|им|ом|ем|ов|ев|ам|ям|ах|ях|у|ю|а|я|о|е|ы|и)$/u,
+      "",
+    );
+    return root.length >= 3 ? root : word;
+  };
+  const siteTokens = normalize(place).split(/\s+/u).filter(Boolean)
+    .map(siteStem);
+  // In a home context, Russian «зал» is the living room. Do not apply this
+  // equivalence to an unqualified hall (e.g. a conference or assembly hall).
+  const residentialHall = siteTokens.length === 1 && siteTokens[0] === "зал" &&
+    /(?:^|[^\p{L}])(?:дома|домаш\p{L}*|квартир\p{L}*)(?:$|[^\p{L}])/iu
+      .test(request);
+  const siteTokenMatches = (actual: string, expected: string): boolean =>
+    actual === expected ||
+    (residentialHall && expected === "зал" && actual === "гостин");
+  const siteSpans = (words: string[]): number[] =>
+    words.flatMap((_, index) =>
+      siteTokens.every((token, offset) =>
+          siteTokenMatches(siteStem(words[index + offset] ?? ""), token)
+        )
+        ? [index]
+        : []
+    );
+  // A source may say «для гостиной, но не для офиса». Keep those clauses
+  // separate so a negation for a different place cannot erase positive proof.
+  // Conversely, one negative clause for the requested place vetoes a positive
+  // title or trait elsewhere on the same card: contradictory source data is
+  // not safe evidence for a recommendation.
+  const siteClauses = (value: string): string[] =>
+    String(value ?? "").split(
+      /[.!?;\n]+|,\s*(?=(?:но|однако|зато|а|не|для|в|во|кроме|исключая|за\s+исключением)(?:\s|$))|\s+(?:но|однако|зато)\s+/iu,
+    );
+  const negativeCue = (word: string): boolean =>
+    word === "не" || word === "нельзя" || word === "кроме" ||
+    word === "без" || /^(?:исключ|запрещ|непригод|невозмож|противопоказ)/u
+      .test(word);
+  const sitePolarity = (
+    value: string,
+    standaloneSiteIsProof: boolean,
+  ): { positive: boolean; negative: boolean } => {
+    let positive = false;
+    let negative = false;
+    for (const clause of siteClauses(value)) {
+      const words = normalize(clause).split(/\s+/u).filter(Boolean);
+      for (const start of siteSpans(words)) {
+        const relation = words.findLastIndex((word, index) =>
+          index < start && index >= start - 5 &&
+          ["для", "в", "во"].includes(word)
+        );
+        // A new relation after «и/или» starts a new scope: «не для офиса и
+        // для гостиной» must not inherit the office negation.
+        const previousConjunction = relation < 0 ? -1 : words.findLastIndex(
+          (word, index) => index < relation && ["и", "или", "а"].includes(word),
+        );
+        const prefixStart = Math.max(
+          0,
+          relation < 0 ? start - 5 : relation - 5,
+          previousConjunction + 1,
+        );
+        const prefix = words.slice(prefixStart, start);
+        const after = words.slice(
+          start + siteTokens.length,
+          start + siteTokens.length + 3,
+        );
+        const postposedNegative = after[0] === "не" &&
+          /^(?:подход|рекоменд|предназнач|год|использ|примен|рассчит|разреш)/u
+            .test(after[1] ?? "");
+        if (prefix.some(negativeCue) || postposedNegative) {
+          negative = true;
+        } else if (relation >= 0 || standaloneSiteIsProof) {
+          positive = true;
+        }
+      }
+    }
+    return { positive, negative };
+  };
+  const hasSiteProof = (product: ProductRef): boolean => {
+    const traits = product.short_traits.map((trait) => {
+      const [caption, ...parts] = String(trait).split(":");
+      const destinationCaption = parts.length > 0 &&
+        /(?:назначен|помещен|комнат|место\s+применен|область\s+применен|использован)/iu
+          .test(normalize(caption));
+      return sitePolarity(
+        parts.length > 0 ? parts.join(":") : trait,
+        destinationCaption,
+      );
+    });
+    const proofs = [
+      ...traits,
+      sitePolarity(product.pagetitle, false),
+      sitePolarity(product.description_excerpt ?? "", false),
+    ];
+    return proofs.some((proof) => proof.positive) &&
+      !proofs.some((proof) => proof.negative);
+  };
+  const provenArea = (product: ProductRef): number[] => {
+    const evidence = [
+      ...product.short_traits,
+      ...(product.description_excerpt
+        ? product.description_excerpt.split(/[.!?;\n]/u)
+        : []),
+    ];
+    return evidence.flatMap((line) => {
+      const normalizedLine = normalize(line);
+      if (
+        !/площад/u.test(normalizedLine) ||
+        !/(?:освещ|помещен|максимальн|рекоменд|рассчитан)/u
+          .test(normalizedLine)
+      ) return [];
+      let match = String(line).match(
+        /(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*)/iu,
+      );
+      if (
+        !match && /(?:м\s*[²2]|кв\.?\s*м)/iu.test(
+          String(line).split(":", 1)[0],
+        )
+      ) {
+        match = String(line).split(":").slice(1).join(":").match(
+          /(?:^|[^\d])(\d+(?:[.,]\d+)?)/u,
+        );
+      }
+      if (!match) return [];
+      const value = Number(match[1].replace(",", "."));
+      return Number.isFinite(value) ? [value] : [];
+    });
+  };
+
+  const passed = products.filter((product) =>
+    hasSiteProof(product) &&
+    provenArea(product).some((area) => area >= minimumArea)
+  ).map((product) => product.id);
+  const accepted = new Set(passed);
+  return {
+    required: true,
+    place,
+    minimum_area_m2: minimumArea,
+    passed_ids: passed,
+    rejected_ids: products.filter((product) => !accepted.has(product.id))
+      .map((product) => product.id),
+  };
+}

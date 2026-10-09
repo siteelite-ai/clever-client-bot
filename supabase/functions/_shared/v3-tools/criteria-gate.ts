@@ -26,6 +26,10 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import {
+  customerOwnsIdentityValue,
+  isIdentityFacetLabel,
+} from "./identity-provenance.ts";
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
@@ -47,6 +51,10 @@ export interface Criterion {
   level?: "A" | "B";
   /** Why this criterion is allowed to influence the selection contract. */
   evidence?: CriterionEvidence;
+  /** A use-class adjective may be proved by explicit product application text,
+   * not only by its catalog taxonomy leaf. Never applies to exact model/facet
+   * values, dimensions, or technical features. */
+  proof_scope?: "application_suitability";
   /**
    * Строгое неравенство для min/max: «больше 12» (а не «не менее 12»).
    * Ставится Слоем 5 по прозе модели (criteria-reasoning.ts).
@@ -145,26 +153,24 @@ export function overlayMandatoryFacetOptions(
   mandatory: Record<string, string[]>,
   advisory: Record<string, string[]>,
 ): Record<string, string[]> {
-  const merged = mergeFacetOptionConstraints(mandatory, advisory);
-  if (merged.conflicting_keys.length === 0) return merged.options;
-
-  const conflicting = new Set(merged.conflicting_keys);
+  // Advisory values on the same facet may overlap just one member of a
+  // customer-owned OR family. Intersecting them would silently turn a model
+  // preference into a hard exclusion even though there is no empty conflict.
+  // Mandatory values always own their facet in full; advisory values are used
+  // only on independent axes.
+  const activeMandatory = Object.fromEntries(
+    Object.entries(mandatory ?? {}).filter(([, values]) =>
+      (values ?? []).length > 0
+    ),
+  );
   return {
     ...Object.fromEntries(
       Object.entries(advisory ?? {}).filter(([key, values]) =>
-        !conflicting.has(key) &&
-        !(key in (mandatory ?? {})) &&
+        !(key in activeMandatory) &&
         (values ?? []).length > 0
       ),
     ),
-    ...Object.fromEntries(
-      Object.entries(merged.options).filter(([key]) => !conflicting.has(key)),
-    ),
-    ...Object.fromEntries(
-      Object.entries(mandatory ?? {}).filter(([, values]) =>
-        (values ?? []).length > 0
-      ),
-    ),
+    ...activeMandatory,
   };
 }
 
@@ -238,6 +244,7 @@ export function mergeUserBackedCriteria(
       value,
       normalizeKey(String(criterion.unit ?? "")),
       criterion.exclusive === true ? "exclusive" : "inclusive",
+      criterion.proof_scope ?? "exact_facet",
     ].join("\u0001");
     if (seen.has(signature)) continue;
     seen.add(signature);
@@ -285,8 +292,18 @@ function renderedValueIsCustomerOwned(
   label: string,
   value: string,
   userMessage: string,
+  categoryLabel = "",
 ): boolean {
   if (isAdministrativeCatalogField({ caption: label })) return false;
+  if (
+    isIdentityFacetLabel(label) &&
+    !customerOwnsIdentityValue({
+      facetLabel: label,
+      value,
+      userMessage,
+      categoryLabel,
+    })
+  ) return false;
   // A bare scalar is not self-describing. Matching the digit `3` in `3 кВт`
   // must not promote an unrelated metadata field whose value also happens to
   // be `3`; numeric ownership additionally requires a grounded label or a
@@ -450,7 +467,14 @@ export function projectCommonRenderedUserCriteria(
   const firstTraits = parsedProductTraits(products[0]);
   const criteria: Criterion[] = [];
   for (const first of firstTraits) {
-    if (!renderedValueIsCustomerOwned(first.label, first.value, userMessage)) {
+    if (
+      !renderedValueIsCustomerOwned(
+        first.label,
+        first.value,
+        userMessage,
+        products[0].leaf_category ?? "",
+      )
+    ) {
       continue;
     }
     const shared = products.slice(1).every((product) =>
@@ -556,6 +580,7 @@ function mandatoryCriterionSignature(criterion: Criterion): string {
     value,
     normalizeKey(String(criterion.unit ?? "")),
     criterion.exclusive === true ? "exclusive" : "inclusive",
+    criterion.proof_scope ?? "exact_facet",
   ].join("\u0001");
 }
 
@@ -769,13 +794,27 @@ export function resolveRenderCriteria(
   userBacked: Criterion[],
   strictUserEvidenceOnly: boolean,
 ): Criterion[] {
+  const isCustomerOwnedAlternative = (criterion: Criterion) =>
+    criterion.op === "eq" &&
+    criterion.evidence === "user_explicit" &&
+    (criterion.level ?? "A") === "A";
+  const sameCustomerAlternative = (left: Criterion, right: Criterion) =>
+    isCustomerOwnedAlternative(left) &&
+    isCustomerOwnedAlternative(right) &&
+    normalizeKey(left.key) === normalizeKey(right.key) &&
+    normalizeKey(String(left.value)) === normalizeKey(String(right.value)) &&
+    left.proof_scope === right.proof_scope;
   const userKeys = new Set(
     userBacked.map((criterion) => normalizeKey(criterion.key)),
   );
   const base = strictUserEvidenceOnly ? userBacked : [
     ...userBacked,
     ...enforced.filter((criterion) =>
-      !userKeys.has(normalizeKey(criterion.key))
+      !userKeys.has(normalizeKey(criterion.key)) ||
+      (isCustomerOwnedAlternative(criterion) &&
+        !userBacked.some((owned) =>
+          sameCustomerAlternative(owned, criterion)
+        ))
     ),
   ];
   const baseKeys = new Set(
@@ -786,7 +825,12 @@ export function resolveRenderCriteria(
     ...(strictUserEvidenceOnly
       ? []
       : raw.filter((criterion) =>
-        !baseKeys.has(normalizeKey(String(criterion?.key ?? "")))
+        !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))) ||
+        (criterion && criterion.proof_scope === "application_suitability" &&
+          isCustomerOwnedAlternative(criterion) &&
+          !base.some((existing) =>
+            sameCustomerAlternative(existing, criterion)
+          ))
       )),
   ].filter((criterion) =>
     criterion && typeof criterion.key === "string" &&
@@ -1027,6 +1071,48 @@ function productEvidenceText(product: ProductRef): string {
   ].join(" "));
 }
 
+/** Catalog taxonomies often name one sales channel while the product prose
+ * explicitly permits another application. An application adjective is proved
+ * only by the current card's own text; an unrelated taxonomy label is neither
+ * proof nor a contradiction. Negated or other-model descriptions cannot be
+ * borrowed as suitability evidence. */
+function checkApplicationSuitability(
+  product: ProductRef,
+  criterion: Criterion,
+): CriterionCheck {
+  const expected = expectedLabel(criterion);
+  if (criterion.op !== "eq" || typeof criterion.value !== "string") {
+    return { key: criterion.key, verdict: "unknown", expected, actual: null };
+  }
+  const wanted = criterion.value;
+  const description = String(product.description_excerpt ?? "");
+  // An adversative joins independent claims: "for the living room, but not
+  // for the bathroom" must not negate living-room suitability. Keep denial
+  // and affirmative proof within the same clause, without product-type rules.
+  const sentences = description.split(/[.!?;\n]+/u)
+    .flatMap((part) => part.split(/(?:,\s*|\s+)(?:но|однако)\s+/iu))
+    .map((part) => part.trim()).filter(Boolean);
+  const denying = sentences.find((sentence) =>
+    stringEvidenceMatches(wanted, sentence) &&
+    /(?:(?:^|[^\p{L}])не\s+(?:(?:\p{L}+)\s+){0,3}(?:подход\p{L}*|предназнач\p{L}*|рекоменд\p{L}*|допуска\p{L}*|совместим\p{L}*)|(?:^|[^\p{L}])не\s+для(?:[^\p{L}]|$)|(?:^|[^\p{L}])исключа\p{L}*)/iu
+      .test(sentence)
+  );
+  if (denying) {
+    return { key: criterion.key, verdict: "fail", expected, actual: denying };
+  }
+  const evidence = [
+    product.pagetitle,
+    ...(product.short_traits ?? []),
+    ...sentences.filter((sentence) =>
+      !/(?:в\s+линейке\s+есть|другие\s+модели|отдельные\s+модели)/iu
+        .test(sentence)
+    ),
+  ].find((part) => stringEvidenceMatches(wanted, part));
+  return evidence
+    ? { key: criterion.key, verdict: "pass", expected, actual: evidence }
+    : { key: criterion.key, verdict: "unknown", expected, actual: null };
+}
+
 function looseStem(token: string): string {
   if (token.length < 5) return token;
   return token.replace(
@@ -1129,6 +1215,76 @@ function isNegativeBooleanValue(value: string): boolean {
   return ["нет", "отсутствует", "no", "false"].includes(normalizeKey(value));
 }
 
+/**
+ * A positive structured sensor flag is not sufficient when the same card
+ * explicitly describes a different response stimulus. Compare the response
+ * object with the customer-owned sensor feature; no product, brand or
+ * alternative stimulus vocabulary is embedded here. Sparse prose is not a
+ * contradiction, and prose mentioning the requested stimulus stays eligible.
+ */
+function contradictsAffirmativeSensorEvidence(
+  product: ProductRef,
+  criterion: Criterion,
+): boolean {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !isAffirmativeValue(criterion.value)
+  ) return false;
+  const key = normalizeKey(criterion.key);
+  if (
+    !/(?:^| )(?:датчик\p{L}*|сенсор\p{L}*|sensor\p{L}*|detector\p{L}*)(?: |$)/u
+      .test(key)
+  ) {
+    return false;
+  }
+  const target = key.split(" ").filter((token) =>
+    token.length >= 4 &&
+    !/^(?:датчик\p{L}*|сенсор\p{L}*|sensor\p{L}*|detector\p{L}*)$/u
+      .test(token)
+  );
+  if (target.length === 0) return false;
+  const prose = [product.pagetitle, product.description_excerpt ?? ""]
+    .filter(Boolean).join(" ");
+  if (!prose) return false;
+  const response = prose.matchAll(
+    /(?:^|[^\p{L}])(?:(не|not)\s+)?(?:реагир\p{L}*|срабатыва\p{L}*|активиру\p{L}*|respond\p{L}*|trigger\p{L}*)\s+(?:(только|only)\s+)?(?:на|по|от|при|to|on)\s+([\p{L}]{3,}(?:\s+(?:и|или|and|or)\s+[\p{L}]{3,})?)/giu,
+  );
+  const responses = [...response].map((match) => ({
+    negated: Boolean(match[1]),
+    exclusive: Boolean(match[2]),
+    stimulus: match[3],
+  }));
+  if (responses.length === 0) return false;
+  const targetsRequestedStimulus = (stimulus: string) =>
+    target.every((word) => stringEvidenceMatches(word, stimulus));
+  // Explicit negation of the requested response wins over an affirmative
+  // title/facet, even if another sentence happens to mention the same word.
+  if (
+    responses.some((response) =>
+      response.negated && targetsRequestedStimulus(response.stimulus)
+    )
+  ) return true;
+  // "Only another stimulus" explicitly excludes the customer's requested
+  // one, even if a broader headline happens to claim the opposite.
+  if (
+    responses.some((response) =>
+      !response.negated && response.exclusive &&
+      !targetsRequestedStimulus(response.stimulus)
+    )
+  ) return true;
+  const affirmativeResponses = responses.filter((response) =>
+    !response.negated
+  );
+  if (affirmativeResponses.length === 0) return false;
+  // A requested feature word in the product title does not rebut an explicit
+  // contradictory response description. Conversely, an explicitly dual-mode
+  // response still proves the requested stimulus; no stimulus names are
+  // hard-coded here.
+  return !affirmativeResponses.some((response) =>
+    targetsRequestedStimulus(response.stimulus)
+  );
+}
+
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) {
@@ -1153,6 +1309,9 @@ export function checkCriterion(
   product: ProductRef,
   c: Criterion,
 ): CriterionCheck {
+  if (c.proof_scope === "application_suitability") {
+    return checkApplicationSuitability(product, c);
+  }
   const expected = expectedLabel(c);
   const trait = findTrait(product, c.key);
   if (!trait) {
@@ -1168,6 +1327,14 @@ export function checkCriterion(
       // (e.g. "С датчиком движения"); require that full key to be evidenced
       // instead of looking for the uninformative word "да".
       if (isAffirmativeValue(c.value)) {
+        if (contradictsAffirmativeSensorEvidence(product, c)) {
+          return {
+            key: c.key,
+            verdict: "fail",
+            expected,
+            actual: product.description_excerpt ?? null,
+          };
+        }
         return stringEvidenceMatches(c.key, evidence)
           ? { key: c.key, verdict: "pass", expected, actual: c.key }
           : { key: c.key, verdict: "unknown", expected, actual: null };
@@ -1185,6 +1352,10 @@ export function checkCriterion(
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
+
+  if (contradictsAffirmativeSensorEvidence(product, c)) {
+    return { key: c.key, verdict: "fail", expected, actual };
+  }
 
   // Catalog facet values are strings even when they represent measurements.
   // Numeric equality must therefore use numeric spans, not substring matching:

@@ -2,6 +2,7 @@ import type { Facet } from "./discover-category.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import {
   applyCriteriaGate,
+  filterProductsByExcludedCriteria,
   projectCriteriaFacetOptions,
 } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
@@ -13,6 +14,7 @@ import {
 } from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
+  | "verify_literal_feature_under_broad_application"
   | "relax_model_advisory_facets"
   | "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
   | "preserve_filters_expand_category_scope"
@@ -63,6 +65,64 @@ export function filterSelectionRecoveryPool<T extends ProductRef>(
   return products.filter((product) => safe.has(String(product.id)));
 }
 
+/**
+ * Count only source-proven cards when deciding whether a nonempty upstream
+ * boolean intersection has actually met the customer's selection request.
+ * Compact catalog rows may omit a true boolean facet, so the relaxed lookup
+ * is permitted, but neither a conflicting facet nor an unknown feature can
+ * make a card eligible. Customer exclusions and budget remain monotonic.
+ */
+export function sourceProvenSelectionPool<T extends ProductRef>(
+  products: T[],
+  mandatoryCriteria: Criterion[],
+  budgetCap: number | null,
+  excludedCriteria: Criterion[] = [],
+): T[] {
+  const withinBudget = products.filter((product) =>
+    budgetCap === null ||
+    (Number.isFinite(product.price) && product.price > 0 &&
+      product.price <= budgetCap)
+  );
+  const notExcluded = filterProductsByExcludedCriteria(
+    withinBudget,
+    excludedCriteria,
+  );
+  const passed = new Set(
+    applyCriteriaGate(notExcluded, mandatoryCriteria).passed_ids,
+  );
+  return notExcluded.filter((product) => passed.has(String(product.id)));
+}
+
+/** A recovered pool supplements, rather than displaces, distinct proven
+ * cards from the initial search. No unproven result enters this union. */
+export function mergeSourceProvenSelectionPools<T extends ProductRef>(
+  original: T[],
+  recovered: T[],
+): T[] {
+  const seen = new Set<string>();
+  return [...original, ...recovered].filter((product) => {
+    const id = String(product.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/** Trigger a bounded category/filter recovery even if the first HTTP result
+ * is nonempty, but only for a live affirmative boolean whose source-proven
+ * cards remain below the explicit result-cardinality minimum. */
+export function isRecoverableSparseBooleanProofShortfall(
+  args: Record<string, unknown>,
+  facets: Facet[],
+  sourceProvenCount: number,
+  minimumResults: number,
+): boolean {
+  if (args.mode !== "by_filter") return false;
+  const minimum = Math.max(1, Math.floor(Number(minimumResults) || 1));
+  if (sourceProvenCount >= minimum) return false;
+  return dropAffirmativeBooleanFilters(args, facets).removed.length > 0;
+}
+
 export interface SelectionSearchRecoveryPlanInput {
   failed_args: Record<string, unknown>;
   facets: Facet[];
@@ -82,6 +142,243 @@ export interface SelectionSearchRecoveryPlanInput {
    * sparse catalog metadata would otherwise force a false empty result.
    */
   advisory_evidence_options?: Record<string, string[]>;
+  /** Exact customer text, used only to retry a literal functional feature
+   * already present in the frozen mandatory contract. */
+  customer_message?: string;
+}
+
+/**
+ * The first search can return a valid card yet still fall short of the
+ * customer's requested choice. This independent plan is deliberately usable
+ * for both by_filter and by_query searches: it does not depend on an empty
+ * result, an advisory facet, or a sparse boolean option. The caller must run
+ * each returned pool through filterSelectionRecoveryPool and the complete
+ * source/target/compatibility/budget gates before merging distinct cards.
+ */
+export interface SourceProvenCardinalityRecoveryInput {
+  search_args: Record<string, unknown>;
+  customer_message: string;
+  mandatory_criteria: Criterion[];
+  leaf_categories: string[];
+  source_proven_count: number;
+  minimum_results: number;
+}
+
+function hasBroadApplicationFamily(criteria: Criterion[]): boolean {
+  const applicationKeys = new Set(
+    criteria.filter((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit" && criterion.op === "eq"
+    ).map((criterion) =>
+      String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+        .trim()
+    ),
+  );
+  // A customer's one exact subtype is never an invitation to cross into
+  // sibling sales classes. Broad applications compiled from the live schema
+  // have an OR family of at least two customer-grounded class values.
+  return [...applicationKeys].some((key) =>
+    new Set(
+      criteria.filter((criterion) =>
+        criterion.proof_scope !== "application_suitability" &&
+        criterion.evidence === "user_explicit" && criterion.op === "eq" &&
+        String(criterion.key).toLocaleLowerCase("ru-RU")
+            .replace(/ё/gu, "е").trim() === key
+      ).map((criterion) => String(criterion.value)),
+    ).size >= 2
+  );
+}
+
+function classLexicalStems(value: string): string[] {
+  return (String(value).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[a-zа-я0-9]{3,}/giu) ?? []).map((token) =>
+      token.length >= 7
+        ? token.slice(0, 5)
+        : token.length >= 5
+        ? token.slice(0, 4)
+        : token
+    );
+}
+
+function customerNamesNarrowFamilyValue(
+  customerMessage: string,
+  criteria: Criterion[],
+): boolean {
+  const customer = new Set(classLexicalStems(customerMessage));
+  const applicationKeys = new Set(
+    criteria.filter((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit"
+    ).map((criterion) =>
+      String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+        .trim()
+    ),
+  );
+  for (const key of applicationKeys) {
+    const variants = criteria.filter((criterion) =>
+      criterion.proof_scope !== "application_suitability" &&
+      criterion.evidence === "user_explicit" && criterion.op === "eq" &&
+      String(criterion.key).toLocaleLowerCase("ru-RU")
+          .replace(/ё/gu, "е").trim() === key
+    ).map((criterion) => new Set(classLexicalStems(String(criterion.value))));
+    if (variants.length < 2) continue;
+    const shared = new Set(
+      [...variants[0]].filter((stem) =>
+        variants.every((variant) => variant.has(stem))
+      ),
+    );
+    if (
+      variants.some((variant) =>
+        [...variant].some((stem) => !shared.has(stem) && customer.has(stem))
+      )
+    ) return true;
+  }
+  return false;
+}
+
+function literalFunctionalFeatureQueries(
+  customerMessage: string,
+  criteria: Criterion[],
+): string[] {
+  // A broad use class is a preference in the catalog taxonomy, but its
+  // customer-owned application remains hard at the per-card evidence gate.
+  // Only this situation warrants searching beyond the taxonomy OR family.
+  if (
+    !hasBroadApplicationFamily(criteria) ||
+    customerNamesNarrowFamilyValue(customerMessage, criteria)
+  ) return [];
+  const userTokens = String(customerMessage ?? "")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[a-zа-я]{6,}/giu) ?? [];
+  const featureTokens = new Set(
+    criteria
+      .filter((criterion) =>
+        criterion.proof_scope !== "application_suitability" &&
+        (criterion.evidence === "user_explicit" ||
+          criterion.evidence === "derived_required") &&
+        criterion.op === "eq" &&
+        /^(?:да|yes|true)$/iu.test(String(criterion.value).trim())
+      )
+      .flatMap((criterion) =>
+        String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+          .match(/[a-zа-я]{6,}/giu) ?? []
+      ),
+  );
+  return [...new Set(userTokens.filter((token) => featureTokens.has(token)))]
+    .reverse().slice(0, 2);
+}
+
+/**
+ * Recover a genuine multi-choice shortfall inside the already discovered live
+ * leaf. Only literal functional words shared by the customer's request and a
+ * frozen affirmative criterion are queried; no product vocabulary, synonym,
+ * SKU or broader category is invented. Every query is a single bounded page.
+ */
+export function buildSourceProvenCardinalityRecoveryPlan(
+  input: SourceProvenCardinalityRecoveryInput,
+): SelectionSearchRecoveryAttempt[] {
+  const minimum = Math.floor(Number(input.minimum_results));
+  const count = Number(input.source_proven_count);
+  const leaves = [
+    ...new Set(
+      input.leaf_categories.map((leaf) => leaf.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (
+    !Number.isFinite(minimum) || minimum <= 1 ||
+    !Number.isFinite(count) || count < 0 || count >= minimum ||
+    leaves.length === 0
+  ) return [];
+  const queries = literalFunctionalFeatureQueries(
+    input.customer_message,
+    input.mandatory_criteria,
+  );
+  return queries.map((query) => ({
+    kind: "verify_literal_feature_under_broad_application" as const,
+    args: {
+      mode: "by_query",
+      query,
+      category_in: leaves,
+      ...(typeof input.search_args.min_price === "number"
+        ? { min_price: input.search_args.min_price }
+        : {}),
+      ...(typeof input.search_args.max_price === "number"
+        ? { max_price: input.search_args.max_price }
+        : {}),
+      ...(input.search_args.sort_cheapest === true
+        ? { sort_cheapest: true }
+        : {}),
+      ...(input.search_args.sort_expensive === true
+        ? { sort_expensive: true }
+        : {}),
+      per_page: 50,
+    },
+    relaxed_inputs: [
+      "taxonomy_class_retrieval_only",
+      "sparse_boolean_retrieval_only",
+    ],
+    proven_criteria: [],
+    // This is not a proof from the new HTTP query. Check the exact frozen
+    // obligation independently on every recovered card before it can merge.
+    evidence_required_criteria: input.mandatory_criteria.map((criterion) => ({
+      ...criterion,
+    })),
+    unverified_criteria: [],
+    revalidate: [...REVALIDATE],
+  }));
+}
+
+export interface UnscopedSourceProvenCardinalityDecisionInput {
+  scoped_attempt: SelectionSearchRecoveryAttempt;
+  scoped_search_succeeded: boolean;
+  /** Distinct cards after all source, class, target, visible and budget gates. */
+  source_verified_eligible_count: number;
+  minimum_results: number;
+  unscoped_attempted: boolean;
+}
+
+/** A nonempty scoped HTTP response can contain no eligible cards. Decide from
+ * the source-verified pool, never the catalog row count, whether the one
+ * bounded unscoped literal retry is still warranted. The caller must compute
+ * this count after the complete per-card eligibility gate. */
+export function shouldAttemptUnscopedSourceProvenCardinalityRecovery(
+  input: UnscopedSourceProvenCardinalityDecisionInput,
+): boolean {
+  const attempt = input.scoped_attempt;
+  const minimum = Math.floor(input.minimum_results);
+  const count = input.source_verified_eligible_count;
+  const pageSize = attempt.args.per_page;
+  return input.scoped_search_succeeded && !input.unscoped_attempted &&
+    attempt.kind === "verify_literal_feature_under_broad_application" &&
+    attempt.args.mode === "by_query" &&
+    typeof attempt.args.query === "string" &&
+    attempt.args.query.trim().length > 0 &&
+    Array.isArray(attempt.args.category_in) &&
+    attempt.args.category_in.some((category) =>
+      typeof category === "string" && category.trim().length > 0
+    ) &&
+    typeof pageSize === "number" && Number.isInteger(pageSize) &&
+    pageSize >= 1 && pageSize <= 50 &&
+    Number.isFinite(minimum) && minimum > 1 &&
+    Number.isInteger(count) && count >= 0 && count < minimum;
+}
+
+/** Some catalog indexes do not combine full-text and leaf category filters.
+ * If the scoped literal lookup leaves a verified-card shortfall, retry the
+ * identical literal once without that retrieval hint. Eligibility does not
+ * widen: the caller must reapply the unchanged source, target, visible and
+ * budget gates. */
+export function unscopedSourceProvenCardinalityAttempt(
+  scoped: SelectionSearchRecoveryAttempt,
+): SelectionSearchRecoveryAttempt {
+  const { category: _category, category_in: _categoryIn, ...args } = scoped.args;
+  return {
+    ...scoped,
+    args,
+    relaxed_inputs: [...scoped.relaxed_inputs, "leaf_retrieval_only"],
+    evidence_required_criteria: scoped.evidence_required_criteria.map(criterion => ({ ...criterion })),
+  };
 }
 
 /**
@@ -490,6 +787,40 @@ export function buildSelectionSearchRecoveryPlan(
     attempts.push(attempt);
   };
 
+  // The source's boolean facet can omit valid cards while a customer use
+  // adjective also spans sales categories. Retry only literal feature words
+  // from the customer/mandatory criterion, then recheck *every* hard
+  // requirement against each candidate. No synonym or SKU list is injected.
+  for (
+    const query of literalFunctionalFeatureQueries(
+      input.customer_message ?? "",
+      input.reasoning_criteria,
+    )
+  ) {
+    add({
+      kind: "verify_literal_feature_under_broad_application",
+      args: {
+        mode: "by_query",
+        query,
+        ...(input.leaf_categories.length > 0
+          ? { category_in: [...input.leaf_categories] }
+          : {}),
+        ...(typeof original.max_price === "number"
+          ? { max_price: original.max_price }
+          : {}),
+        per_page: pageSize(original),
+      },
+      relaxed_inputs: [
+        "taxonomy_class_retrieval_only",
+        "sparse_boolean_retrieval_only",
+      ],
+      proven_criteria: [],
+      evidence_required_criteria: [],
+      unverified_criteria: [],
+      revalidate: [...REVALIDATE],
+    });
+  }
+
   const options = original.options && typeof original.options === "object"
     ? original.options as Record<string, unknown>
     : {};
@@ -497,9 +828,29 @@ export function buildSelectionSearchRecoveryPlan(
   // requirements. When their intersection is empty, relax them before live
   // category scope or explicit user filters. This is data-agnostic: the exact
   // keys and values come from the current live taxonomy projection.
-  const classAdvisoryOptions = input.advisory_evidence_options ?? {};
+  // A model's preferred subtype may share a live facet with a customer-owned
+  // OR family. It did not shape that mandatory facet in the original search,
+  // so recovery must not "relax" one of the customer's sibling values.
+  const userOwnedFacetKeys = new Set(Object.keys(
+    projectCriteriaFacetOptions(
+      input.reasoning_criteria.filter((criterion) =>
+        criterion.evidence === "user_explicit"
+      ),
+      input.facets,
+    ).options,
+  ));
+  const safeAdvisoryOptions = Object.fromEntries(
+    Object.entries(input.advisory_options ?? {}).filter(([key]) =>
+      !userOwnedFacetKeys.has(key)
+    ),
+  );
+  const classAdvisoryOptions = Object.fromEntries(
+    Object.entries(input.advisory_evidence_options ?? {}).filter(([key]) =>
+      !userOwnedFacetKeys.has(key)
+    ),
+  );
   const sparseSuitabilityOptions = Object.fromEntries(
-    Object.entries(input.advisory_options ?? {}).flatMap(([key, values]) => {
+    Object.entries(safeAdvisoryOptions).flatMap(([key, values]) => {
       const classValues = new Set(
         (classAdvisoryOptions[key] ?? []).map(normalizeFacetValue),
       );
@@ -513,7 +864,7 @@ export function buildSelectionSearchRecoveryPlan(
     Object.keys(sparseSuitabilityOptions).length > 0;
   const advisoryFallback = dropModelAdvisoryFacetOptions(
     original,
-    preservesClassFilter ? sparseSuitabilityOptions : input.advisory_options,
+    preservesClassFilter ? sparseSuitabilityOptions : safeAdvisoryOptions,
   );
   if (advisoryFallback.removed.length > 0) {
     // A model-owned option may be removed from the upstream request only to
@@ -770,6 +1121,7 @@ export function buildSelectionSearchRecoveryPlan(
     // cards, keep the smaller correct pool (or an honest empty result) instead
     // of crossing into a sibling class.
     return attempts.filter(({ kind }) =>
+      kind === "verify_literal_feature_under_broad_application" ||
       kind === "relax_model_advisory_facets" ||
       kind ===
         "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"

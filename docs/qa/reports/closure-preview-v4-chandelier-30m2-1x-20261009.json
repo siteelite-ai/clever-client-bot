@@ -1,0 +1,113 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T14:42:47.199Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-chandelier-30m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-chandelier-30m2_base_1791556967203_1",
+          "turns": [
+            {
+              "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+              "status": null,
+              "duration_ms": 55007,
+              "network_attempts": 1,
+              "log_id": null,
+              "diagnostic_error": "network deadline exceeded (55000ms)",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "products": [],
+              "text": "",
+              "completed": false,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "network deadline exceeded (55000ms)"
+              ]
+            },
+            {
+              "message": "Они точно подходят для освещения 30 квадратных метров?",
+              "status": 200,
+              "duration_ms": 3261,
+              "network_attempts": 1,
+              "log_id": "7786c20c-893c-4f8a-bb36-c183c4983c66",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для оценки достаточности освещения на площади 30 квадратных метров необходимо знать световую отдачу (световой поток в люменах) источника света.\n\nОбщепринятый ориентир для комфортного освещения жилых помещений составляет примерно 100-150 люмен на квадратный метр. Таким образом, для 30 квадратных метров потребуется от 3000 до 4500 люмен.\n\nЕсли вы предоставите световой поток (в люменах) вашего источника света, я смогу точнее сказать, подходит ли он для освещения 30 квадратных метров.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+              "status": 200,
+              "duration_ms": 2782,
+              "network_attempts": 1,
+              "log_id": "bfe9bacd-bca0-45b7-9b72-d170f7d2d629",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для сравнения подтверждённых характеристик и объяснения разницы в цене мне нужно знать, о каких именно вариантах идёт речь. Уточните, пожалуйста, какие варианты вы сравниваете.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T14:43:48.255Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "7786c20c-893c-4f8a-bb36-c183c4983c66",
+    "bfe9bacd-bca0-45b7-9b72-d170f7d2d629"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

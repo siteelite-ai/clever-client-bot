@@ -1,0 +1,162 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:52:53.775Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-chandelier-25m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791553973779_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "status": 200,
+              "duration_ms": 19789,
+              "network_attempts": 1,
+              "log_id": "4c1942c5-48ed-4944-bff3-53e3fc20c1f3",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Светильник с/д (потолочный) LE LED CLL Crystal 70W (1/6)",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-sd-%28potolochnyij%29-le-led-cll-crystal-70w-%2816%29/",
+                  "price": 21044,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Светильник с/д (потолочный) LE LED CLL Crystal 70W (1/6)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-sd-%28potolochnyij%29-le-led-cll-crystal-70w-%2816%29/)**\n  Цена: *21 044* ₸\n  Бренд: Leek\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "Светильник с/д (потолочный) LE LED CLL Crystal-S 70W (1/6)",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-sd-%28potolochnyij%29-le-led-cll-crystal-s-70w-%2816%29/",
+                  "price": 31649,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Светильник с/д (потолочный) LE LED CLL Crystal-S 70W (1/6)](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-sd-%28potolochnyij%29-le-led-cll-crystal-s-70w-%2816%29/)**\n  Цена: *31 649* ₸\n  Бренд: Leek\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "MRL LED 12W 1005 IP20 /Светильник настенный светодиодный Venta Neo LED хром",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/mrl-led-12w-1005-ip20-svetilnik-nastennyij-svetodiodnyij-venta-neo-led-xrom/",
+                  "price": 5000,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[MRL LED 12W 1005 IP20 /Светильник настенный светодиодный Venta Neo LED хром](https://220volt.kz/catalog/svetotexnika/svetilniki/mrl-led-12w-1005-ip20-svetilnik-nastennyij-svetodiodnyij-venta-neo-led-xrom/)**\n  Цена: *5 000* ₸\n  Бренд: Elektrostandard\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "MRL LED 1020 /Светильник настенный светодиодный BAND белый",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/mrl-led-1020-svetilnik-nastennyij-svetodiodnyij-band-belyij/",
+                  "price": 5000,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[MRL LED 1020 /Светильник настенный светодиодный BAND белый](https://220volt.kz/catalog/svetotexnika/svetilniki/mrl-led-1020-svetilnik-nastennyij-svetodiodnyij-band-belyij/)**\n  Цена: *5 000* ₸\n  Бренд: Elektrostandard\n  Наличие: Караганда (3 шт)"
+                }
+              ],
+              "text": "Для гостиной 25 м² требуется общий свет с освещённостью 150–200 лк. Световой поток = 25 м² × 150–200 лк = 3750–5000 Лм. Светодиодное освещение (LED) обеспечивает энергоэффективность и долгий срок службы. Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки. По классу «Тип лампы» выбираю «LED»; «Вид светильника» выбираю «люстры; бра; ночники». Явно указанное свойство «светодиодное освещение» соответствует «Тип лампы: LED».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-26687e57",
+                "mandatory_criteria": [
+                  {
+                    "key": "Тип лампы",
+                    "op": "eq",
+                    "value": "LED",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "люстры; бра; ночники",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "ошибка: category_not_found",
+                  "duration_ms": 2761
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 38, листьев 1",
+                  "duration_ms": 1810
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 85",
+                  "duration_ms": 678
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "product title measurement violates contract: MRL LED 12W 1005 IP20 /Светильник настенный светодиодный Venta Neo LED хром | MRL LED 1020 /Светильник настенный светодиодный BAND белый"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T13:53:13.571Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "4c1942c5-48ed-4944-bff3-53e3fc20c1f3"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

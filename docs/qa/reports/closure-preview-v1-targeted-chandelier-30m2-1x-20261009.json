@@ -1,0 +1,177 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:53:22.586Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-chandelier-30m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-chandelier-30m2_base_1791554002586_1",
+          "turns": [
+            {
+              "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+              "status": 200,
+              "duration_ms": 41896,
+              "network_attempts": 1,
+              "log_id": "120785b7-2376-4ae2-ab77-813b84fc5d82",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для общего освещения жилой гостиной площадью 30 м² рекомендуется освещённость 150–200 лк. Световой поток = 30 м² × 150–200 лк = 4500–6000 лм. Это обеспечит комфортный уровень света для зала. Назначение: гостиная (зал). Максимальная площадь освещения: 30 м². Современный стиль обычно предполагает лаконичные формы и актуальные материалы; покажу несколько вариантов разного дизайна. Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки. Обязательные параметры: «Максимальная площадь освещения, м2: 30». По классу «Назначение» выбираю «зал; гостиная; спальня; кафе; кухня». Явно указанное свойство «зале» соответствует «Назначение: зал; гостиная; спальня; кафе; кухня».\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Люстры»: 29 тов., фасетов 31, листьев 1",
+                  "duration_ms": 1059
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 0",
+                  "duration_ms": 451
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Перепроверяю итоговый набор по обязательным параметрам…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Итоговая перепроверка: подтверждено 0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Сверяю поиск с выбранным типом товара…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Сверка по выбранному типу: подтверждено 0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 0",
+                  "duration_ms": null
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3"
+              ]
+            },
+            {
+              "message": "Они точно подходят для освещения 30 квадратных метров?",
+              "status": 200,
+              "duration_ms": 9258,
+              "network_attempts": 1,
+              "log_id": "bf00f0c1-5e20-413a-a973-53002eb9bb65",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для освещения 30 квадратных метров требуется определенная световая мощность. Общепринятый ориентир для жилых помещений составляет 150 люмен на квадратный метр.\n\nТаким образом, для 30 квадратных метров потребуется:\n30 м² * 150 лм/м² = 4500 люмен.\n\nЧтобы точно ответить, подходят ли \"они\", мне нужно знать их общую световую отдачу в люменах. Какова суммарная световая отдача (в люменах) всех источников света, о которых идет речь?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+              "status": 200,
+              "duration_ms": 2327,
+              "network_attempts": 1,
+              "log_id": "aebe1816-ed3a-4cb8-9ea6-cb3432060029",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Чтобы сравнить характеристики и понять причины различий в цене, мне нужно знать, о каких именно вариантах идёт речь. Пожалуйста, уточните, что именно вы сравниваете.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T13:54:16.068Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "120785b7-2376-4ae2-ab77-813b84fc5d82",
+    "bf00f0c1-5e20-413a-a973-53002eb9bb65",
+    "aebe1816-ed3a-4cb8-9ea6-cb3432060029"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

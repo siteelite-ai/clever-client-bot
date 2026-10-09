@@ -9,15 +9,37 @@
     </style>
     <script>
       (() => {
-        const preview = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview';
+        const previewFunction = new URLSearchParams(location.search).get('function') === 'closure'
+          ? 'chat-consultant-v3-closure-preview'
+          : 'chat-consultant-v3-preview';
+        const directPreview = `https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/${previewFunction}`;
+        const proxyPreview = `https://supabase-proxy.bold-dawn-058f.workers.dev/functions/v1/${previewFunction}`;
         const nativeFetch = window.fetch.bind(window);
         window.fetch = (input, init) => {
           const url = typeof input === 'string' ? input : input.url;
           if (/\/functions\/v1\/chat-consultant-v3(?:$|[?#])/u.test(url)) {
+            const preview = url.startsWith('https://supabase-proxy.bold-dawn-058f.workers.dev/')
+              ? proxyPreview
+              : directPreview;
             return nativeFetch(preview, init);
           }
           return nativeFetch(input, init);
         };
+        // A local-only restored-history fixture exercises the browser's real
+        // Markdown renderer without asking the remote assistant to echo an
+        // attack string. It never runs on the production embed.
+        if (new URLSearchParams(location.search).get('fixture') === 'xss') {
+          sessionStorage.setItem('volt_widget_state', JSON.stringify({
+            sessionId: 'session_local_xss_fixture',
+            updatedAt: Date.now(),
+            dialogSlots: {},
+            history: [
+              { role: 'assistant', content: 'Здравствуйте!' },
+              { role: 'user', content: 'тест безопасности отображения' },
+              { role: 'assistant', content: '<img src=x onerror="window.__voltQaXssTriggered=true"> [ссылка](https://example.com/" onmouseover="window.__voltQaXssTriggered=true)' },
+            ],
+          }));
+        }
       })();
     </script>
   </head>

@@ -8,16 +8,23 @@ import {
   buildCatalogEmptySynthesisMessages,
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
+  buildSourceProvenCardinalityRecoveryPlan,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
+  isRecoverableSparseBooleanProofShortfall,
+  mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
+  shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldAppendCatalogEmpty,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
+  sourceProvenSelectionPool,
+  unscopedSourceProvenCardinalityAttempt,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
+import { type Criterion, resolveTerminalSelectionCriteria } from "./criteria-gate.ts";
 
 Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
   const messages = buildCatalogEmptySynthesisMessages(
@@ -155,6 +162,694 @@ Deno.test("a model advisory facet may recover a multi-card shortfall", () => {
       { ok: true, total: 1, results_count: 1 },
       3,
       undefined,
+    ),
+    false,
+  );
+});
+
+Deno.test("a nonempty acoustic-only boolean result cannot block source-proven recovery", () => {
+  const motion = {
+    key: "С датчиком движения",
+    op: "eq" as const,
+    value: "да",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  };
+  const household = {
+    key: "Вид светильника",
+    op: "eq" as const,
+    value: "Бытовые светильники накладные",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  };
+  const raw = [{
+    id: "iek-acoustic",
+    pagetitle: "Светильник LED ДПО с акустическим датчиком",
+    vendor: null,
+    price: 2900,
+    stock: "in_stock" as const,
+    short_traits: [
+      "Вид светильника: Бытовые светильники накладные",
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Оптико-акустический датчик реагирует на звук.",
+  }];
+  const gauss = {
+    id: "gauss-hall",
+    pagetitle: "Светильник Gauss HALL с микроволновым сенсором",
+    vendor: "Gauss",
+    price: 3878,
+    stock: "in_stock" as const,
+    short_traits: ["Вид светильника: Бытовые светильники накладные"],
+    description_excerpt:
+      "Микроволновый датчик реагирует на движение в помещении.",
+  };
+  const args = {
+    mode: "by_filter",
+    options: { kind: [household.value], sensor: ["да"] },
+    max_price: 4000,
+  };
+  const live = [{
+    key: "kind",
+    caption: "Вид светильника",
+    type: "string",
+    unit: null,
+    values: [
+      { value: household.value },
+      { value: "Бытовые светильники подвесные" },
+    ],
+  }, {
+    key: "sensor",
+    caption: motion.key,
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }],
+  }];
+  const criteria = [household, {
+    ...household,
+    value: "Бытовые светильники подвесные",
+  }, motion];
+  const initial = sourceProvenSelectionPool(raw, criteria, 4000);
+  assertEquals(initial, []);
+  assertEquals(
+    isRecoverableSparseBooleanProofShortfall(
+      args,
+      live,
+      initial.length,
+      2,
+    ),
+    true,
+  );
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: args,
+    facets: live,
+    leaf_categories: ["Светильники"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+    advisory_options: { kind: [household.value] },
+    advisory_evidence_options: { kind: [household.value] },
+  });
+  assertEquals(
+    plan.some(({ kind }) => kind === "relax_model_advisory_facets"),
+    false,
+  );
+  const booleanAttempt = plan.find(({ kind }) =>
+    kind === "preserve_scope_verify_sparse_boolean_as_evidence"
+  );
+  if (!booleanAttempt) throw new Error("expected boolean recovery");
+  assertEquals(booleanAttempt.args.options, { kind: [household.value] });
+  const proofSafe = filterSelectionRecoveryPool(
+    [gauss, ...raw],
+    booleanAttempt,
+  );
+  assertEquals(proofSafe.map(({ id }) => id), ["gauss-hall"]);
+  const recovered = sourceProvenSelectionPool(proofSafe, criteria, 4000);
+  assertEquals(
+    mergeSourceProvenSelectionPools(initial, recovered).map(({ id }) => id),
+    [
+      "gauss-hall",
+    ],
+  );
+  assertEquals(sourceProvenSelectionPool(raw, criteria, 4000), []);
+});
+
+Deno.test("literal functional-feature recovery crosses a sales class only with final per-card proof", () => {
+  const facets = [{
+    key: "kind",
+    caption: "Вид изделия",
+    type: "string",
+    unit: null,
+    values: [
+      { value: "Бытовые изделия накладные" },
+      { value: "Бытовые изделия подвесные" },
+      { value: "Изделия для ЖКХ" },
+    ],
+  }, {
+    key: "feature",
+    caption: "С датчиком движения",
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }],
+  }];
+  const criteria = [
+    ...["Бытовые изделия накладные", "Бытовые изделия подвесные"].map((
+      value,
+    ) => ({
+      key: "Вид изделия",
+      op: "eq" as const,
+      value,
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Вид изделия",
+      op: "eq" as const,
+      value: "бытовое",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq" as const,
+      value: "да",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      category_in: ["Изделия"],
+      options: {
+        kind: ["Бытовые изделия накладные", "Бытовые изделия подвесные"],
+        feature: ["да"],
+      },
+      max_price: 4000,
+    },
+    customer_message: "Нужно бытовое изделие с датчиком движения до 4000",
+    facets,
+    leaf_categories: ["Изделия"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+  });
+  assertEquals(plan[0].kind, "verify_literal_feature_under_broad_application");
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "движения",
+    category_in: ["Изделия"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  const card = (id: string, description: string): ProductRef => ({
+    id,
+    pagetitle: `Изделие ${id} с датчиком движения`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Вид изделия: Изделия для ЖКХ"],
+    description_excerpt: description,
+  });
+  assertEquals(
+    sourceProvenSelectionPool(
+      [
+        card(
+          "proved",
+          "Для общественного и бытового применения. Датчик реагирует на движение.",
+        ),
+        card(
+          "unproved",
+          "Для промышленного применения. Датчик реагирует на движение.",
+        ),
+      ],
+      criteria,
+      4000,
+    ).map(({ id }) => id),
+    ["proved"],
+  );
+});
+
+Deno.test("a nonempty short selection gets bounded literal recovery in the live leaf", () => {
+  const criteria = [
+    ...["Бытовые ИБП настольные", "Бытовые ИБП напольные"].map((value) => ({
+      key: "Класс применения",
+      op: "eq" as const,
+      value,
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Класс применения",
+      op: "eq" as const,
+      value: "бытовой",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С защитой от перегрузки",
+      op: "eq" as const,
+      value: "да",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const input = {
+    search_args: {
+      mode: "by_filter",
+      options: { kind: ["Бытовые ИБП настольные"], overload: ["да"] },
+      max_price: 4000,
+    },
+    customer_message:
+      "Нужен бытовой ИБП с защитой от перегрузки до 4000. Дайте несколько вариантов",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Источники питания", "Источники питания"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  };
+  const plan = buildSourceProvenCardinalityRecoveryPlan(input);
+  assertEquals(plan.length, 2);
+  assertEquals(plan[0].kind, "verify_literal_feature_under_broad_application");
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "перегрузки",
+    category_in: ["Источники питания"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(plan[0].proven_criteria, []);
+  assertEquals(plan[0].evidence_required_criteria, criteria);
+  assertEquals(plan[0].revalidate, [
+    "selection_target",
+    "mandatory_criteria",
+    "compatibility",
+    "budget",
+  ]);
+  // The same cardinality contract also applies when the first search used a
+  // query instead of a live-facet intersection.
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      search_args: { mode: "by_query", query: "ИБП", max_price: 4000 },
+    })[0].args,
+    plan[0].args,
+  );
+
+  const product = (
+    id: string,
+    description: string,
+    price = 3000,
+  ): ProductRef => ({
+    id,
+    pagetitle: `ИБП ${id} с защитой от перегрузки`,
+    vendor: null,
+    price,
+    stock: "in_stock",
+    short_traits: ["Класс применения: Оборудование для учреждений"],
+    description_excerpt: description,
+  });
+  const recovered = filterSelectionRecoveryPool([
+    product("household", "Предназначен для бытового применения."),
+    product("industrial", "Предназначен для промышленного применения."),
+    product("too-expensive", "Предназначен для бытового применения.", 5000),
+  ], plan[0]);
+  assertEquals(recovered.map(({ id }) => id), ["household", "too-expensive"]);
+  assertEquals(
+    sourceProvenSelectionPool(recovered, criteria, 4000).map(({ id }) => id),
+    ["household"],
+  );
+});
+
+Deno.test("frozen application alternative survives final composition and activates generic shortfall recovery", () => {
+  const exact: Criterion[] = ["Бытовые устройства настольные", "Бытовые устройства подвесные"]
+    .map((value) => ({
+      key: "Класс применения",
+      op: "eq",
+      value,
+      evidence: "user_explicit",
+    }));
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const sensor: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    evidence: "derived_required",
+  };
+  const mandatory = resolveTerminalSelectionCriteria(
+    [...exact, application, sensor],
+    [],
+    [exact[0]],
+  );
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: {
+      mode: "by_filter",
+      max_price: 4000,
+      options: { class: [exact[0].value], sensor: ["да"] },
+    },
+    customer_message: "Нужны бытовые устройства с датчиком движения до 4000, несколько вариантов",
+    mandatory_criteria: mandatory,
+    leaf_categories: ["Устройства"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  });
+  assertEquals(plan.length > 0, true);
+  assertEquals(plan[0].args, {
+    mode: "by_query",
+    query: "движения",
+    category_in: ["Устройства"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(plan[0].evidence_required_criteria, mandatory);
+  const unscoped = unscopedSourceProvenCardinalityAttempt(plan[0]);
+  assertEquals(unscoped.args, {
+    mode: "by_query",
+    query: "движения",
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(unscoped.evidence_required_criteria, mandatory);
+  assertEquals(unscoped.revalidate, plan[0].revalidate);
+});
+
+Deno.test("nonempty acoustic-only scoped rows still permit one source-verified unscoped retry", () => {
+  const classValues = [
+    "Бытовые светильники накладные",
+    "Бытовые светильники подвесные",
+  ];
+  const criteria: Criterion[] = [
+    ...classValues.map((value) => ({
+      key: "Вид светильника",
+      op: "eq" as const,
+      value,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Вид светильника",
+      op: "eq",
+      value: "бытовое",
+      evidence: "user_explicit",
+      proof_scope: "application_suitability",
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      evidence: "user_explicit",
+    },
+  ];
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Нужны бытовые светильники с датчиком движения до 4000",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Светильники"],
+    source_proven_count: 0,
+    minimum_results: 2,
+  });
+  assert(plan.length > 0);
+  const attempt = plan[0];
+  const acoustic: ProductRef = {
+    id: "acoustic",
+    pagetitle: "Светильник с акустическим датчиком",
+    vendor: null,
+    price: 2900,
+    stock: "in_stock",
+    short_traits: [
+      `Вид светильника: ${classValues[0]}`,
+      "С датчиком движения: да",
+    ],
+    description_excerpt:
+      "Для бытового применения. Акустический датчик реагирует на звук.",
+  };
+  const scopedRows = [acoustic];
+  const verifiedScoped = sourceProvenSelectionPool(
+    filterSelectionRecoveryPool(scopedRows, attempt),
+    criteria,
+    4000,
+  );
+  assertEquals(scopedRows.length, 1);
+  assertEquals(verifiedScoped, []);
+  const decision = {
+    scoped_attempt: attempt,
+    scoped_search_succeeded: true,
+    source_verified_eligible_count: verifiedScoped.length,
+    minimum_results: 2,
+    unscoped_attempted: false,
+  };
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery(decision),
+    true,
+  );
+  const unscoped = unscopedSourceProvenCardinalityAttempt(attempt);
+  assertEquals(unscoped.args, {
+    mode: "by_query",
+    query: attempt.args.query,
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(unscoped.evidence_required_criteria, criteria);
+  assertEquals(unscoped.revalidate, attempt.revalidate);
+  const wrongClass: ProductRef = {
+    id: "industrial",
+    pagetitle: "Промышленный светильник с датчиком движения",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Вид светильника: Промышленные светильники"],
+    description_excerpt: "Для промышленного применения. Датчик реагирует на движение.",
+  };
+  const valid: ProductRef = {
+    id: "motion",
+    pagetitle: "Бытовой светильник с датчиком движения",
+    vendor: null,
+    price: 3100,
+    stock: "in_stock",
+    short_traits: [
+      `Вид светильника: ${classValues[0]}`,
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Датчик реагирует на движение в помещении.",
+  };
+  assertEquals(
+    sourceProvenSelectionPool(
+      filterSelectionRecoveryPool([acoustic, wrongClass, valid], unscoped),
+      criteria,
+      4000,
+    ).map(({ id }) => id),
+    ["motion"],
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      unscoped_attempted: true,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      scoped_search_succeeded: false,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      ...decision,
+      scoped_attempt: {
+        ...attempt,
+        args: { ...attempt.args, per_page: 51 },
+      },
+    }),
+    false,
+  );
+});
+
+Deno.test("enough distinct verified cards prevent unscoped widening", () => {
+  const classCriterion: Criterion = {
+    key: "Вид светильника",
+    op: "eq",
+    value: "Бытовые светильники накладные",
+    evidence: "user_explicit",
+  };
+  const criteria: Criterion[] = [
+    classCriterion,
+    { ...classCriterion, value: "Бытовые светильники подвесные" },
+    {
+      ...classCriterion,
+      value: "бытовое",
+      proof_scope: "application_suitability",
+    },
+    {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      evidence: "user_explicit",
+    },
+  ];
+  const plan = buildSourceProvenCardinalityRecoveryPlan({
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Нужны бытовые светильники с датчиком движения до 4000",
+    mandatory_criteria: criteria,
+    leaf_categories: ["Светильники"],
+    source_proven_count: 0,
+    minimum_results: 2,
+  });
+  assert(plan.length > 0);
+  const valid = (id: string): ProductRef => ({
+    id,
+    pagetitle: `Бытовой светильник ${id} с датчиком движения`,
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: [
+      "Вид светильника: Бытовые светильники накладные",
+      "С датчиком движения: да",
+    ],
+    description_excerpt: "Датчик реагирует на движение в помещении.",
+  });
+  const scopedRows = [valid("one"), valid("two")];
+  const verified = sourceProvenSelectionPool(
+    filterSelectionRecoveryPool(scopedRows, plan[0]),
+    criteria,
+    4000,
+  );
+  assertEquals(verified.map(({ id }) => id), ["one", "two"]);
+  assertEquals(
+    shouldAttemptUnscopedSourceProvenCardinalityRecovery({
+      scoped_attempt: plan[0],
+      scoped_search_succeeded: true,
+      source_verified_eligible_count: verified.length,
+      minimum_results: 2,
+      unscoped_attempted: false,
+    }),
+    false,
+  );
+});
+
+Deno.test("cardinality recovery never widens an explicit narrow class", () => {
+  const broadCriteria = [
+    ...["Бытовые ИБП настольные", "Бытовые ИБП напольные"].map((value) => ({
+      key: "Класс применения",
+      op: "eq" as const,
+      value,
+      evidence: "user_explicit" as const,
+    })),
+    {
+      key: "Класс применения",
+      op: "eq" as const,
+      value: "бытовой",
+      evidence: "user_explicit" as const,
+      proof_scope: "application_suitability" as const,
+    },
+    {
+      key: "С защитой от перегрузки",
+      op: "eq" as const,
+      value: "да",
+      evidence: "user_explicit" as const,
+    },
+  ];
+  const input = {
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message: "Бытовой настольный ИБП с защитой от перегрузки",
+    mandatory_criteria: broadCriteria,
+    leaf_categories: ["Источники питания"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  };
+  assertEquals(buildSourceProvenCardinalityRecoveryPlan(input), []);
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      customer_message: "Бытовой ИБП с защитой от перегрузки",
+      mandatory_criteria: broadCriteria.filter((criterion) =>
+        criterion.value !== "Бытовые ИБП напольные"
+      ),
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      source_proven_count: 3,
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      leaf_categories: [],
+    }),
+    [],
+  );
+  assertEquals(
+    buildSourceProvenCardinalityRecoveryPlan({
+      ...input,
+      customer_message: "Покажите несколько бытовых ИБП",
+    }),
+    [],
+  );
+});
+
+Deno.test("generic sparse boolean recovery preserves other customer axes and honest zero", () => {
+  const criteria = [{
+    key: "С защитой от перегрузки",
+    op: "eq" as const,
+    value: "да",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }, {
+    key: "Тип оборудования",
+    op: "eq" as const,
+    value: "Бытовой ИБП",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
+  }];
+  const live = [{
+    key: "overload",
+    caption: criteria[0].key,
+    type: "string",
+    unit: null,
+    values: [{ value: "да" }, { value: "нет" }],
+  }, {
+    key: "type",
+    caption: criteria[1].key,
+    type: "string",
+    unit: null,
+    values: [{ value: "Бытовой ИБП" }],
+  }];
+  const args = {
+    mode: "by_filter",
+    options: { overload: ["да"], type: ["Бытовой ИБП"] },
+  };
+  const plan = buildSelectionSearchRecoveryPlan({
+    failed_args: args,
+    facets: live,
+    leaf_categories: ["ИБП"],
+    reasoning_criteria: criteria,
+    compatibility_shaped: false,
+  });
+  const fallback = plan.find(({ kind }) =>
+    kind === "preserve_scope_verify_sparse_boolean_as_evidence"
+  );
+  if (!fallback) throw new Error("expected generic boolean recovery");
+  assertEquals(fallback.args.options, { type: ["Бытовой ИБП"] });
+  const wrongType = {
+    id: "industrial",
+    pagetitle: "ИБП с защитой от перегрузки",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock" as const,
+    short_traits: [
+      "С защитой от перегрузки: да",
+      "Тип оборудования: Промышленный ИБП",
+    ],
+  };
+  const unproven = {
+    ...wrongType,
+    id: "unknown",
+    short_traits: ["Тип оборудования: Бытовой ИБП"],
+    pagetitle: "ИБП без указания защиты",
+  };
+  assertEquals(
+    sourceProvenSelectionPool(
+      filterSelectionRecoveryPool([wrongType, unproven], fallback),
+      criteria,
+      null,
+    ),
+    [],
+  );
+  assertEquals(
+    isRecoverableSparseBooleanProofShortfall(
+      { mode: "by_filter", options: { overload: ["нет"] } },
+      live,
+      0,
+      2,
     ),
     false,
   );

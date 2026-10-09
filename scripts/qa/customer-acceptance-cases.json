@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "source": "тестированиебота130826.docx и Копия тестированиебота130826.docx, актуальная версия 2026-08-19",
+  "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
       "id": "customer-dn027b-analogs",
@@ -28,6 +29,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 30 }
+              ]
+            },
             "forbid_text": ["свежих карточек", "И ещё", "search_catalog", "render_products"]
           }
         },
@@ -35,7 +42,11 @@
           "message": "Они точно подходят для освещения 30 квадратных метров?",
           "expect": {
             "conversation_boundary": "continuation",
-            "require_any_text": ["светов", "люмен", "мощн", "не могу подтвердить", "нельзя гарантировать"],
+            "require_text_groups": [
+              ["30 м²", "30 м2", "30 квадрат"],
+              ["по каталог", "в карточк", "заявлен"],
+              ["площадь освещения", "максимальная площадь"]
+            ],
             "forbid_text": ["свежих карточек", "погорячился", "search_catalog", "render_products"]
           }
         },
@@ -45,6 +56,22 @@
             "conversation_boundary": "continuation",
             "require_any_text": ["цен", "мощн", "управ", "характерист"],
             "forbid_text": ["свежих карточек", "не довёл", "search_catalog", "render_products"]
+          }
+        },
+        {
+          "message": "А есть другие варианты?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_new_product_skus": true,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 30 }
+              ]
+            },
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
       ]
@@ -58,8 +85,22 @@
           "message": "мне нужен бытовой накладной светильник с датчиком движения с ценой не более 4000 тенге",
           "expect": {
             "min_products": 1,
-            "require_product_title": ["Gauss", "HALL", "сенсор"],
-            "forbid_product_title": ["для ЖКХ"],
+            "max_products": 5,
+            "max_product_price": 4000,
+            "require_every_product_page": {
+              "all_of": [
+                { "facets": [{ "name": "Способ монтажа", "require_any": ["накладн"] }] },
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
+            },
+            "forbid_every_product_title_any": ["промышленный", "акустический", "акуст."],
             "forbid_text": ["свежих карточек", "внутренняя механика", "search_catalog", "discover_category", "render_products"]
           }
         },
@@ -165,6 +206,7 @@
           "expect": {
             "min_products": 1,
             "max_products": 1,
+            "require_catalog_minimum": { "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/", "title_prefix": "Кабель ВВГ 2*1,5", "unit": "м" },
             "require_product_title": ["2*1,5", "2×1,5", "2x1,5"],
             "forbid_product_title": ["4*2,5", "4×2,5", "4x2,5"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -202,7 +244,8 @@
             "min_text_before_products_chars": 120,
             "require_text_groups": [
               ["Gallant", "Галант", "серия"],
-              ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн", "надёж", "безопас", "заземл", "шторк", "техническ"]
+              ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн", "надёж", "безопас", "заземл", "шторк", "техническ"],
+              ["выключател"]
             ],
             "forbid_text": ["свежих карточек", "снята с производства", "не представлена", "Schneider Electric", "Не нашёл подходящие товары", "開", "ось ", "це ", "знайшов", "вимикач", "якість", "ціна", "наявність", "search_catalog", "discover_category", "render_products"]
           }
@@ -213,6 +256,10 @@
             "conversation_boundary": "continuation",
             "min_products": 1,
             "require_every_product_title_any": ["Gallant", "Галант"],
+            "require_product_groups_or_gap": [
+              { "title_groups": [["розет"]], "gap_text_groups": [["розет"], ["не наш", "нет в каталоге", "не подтвержд", "не могу подтвердить"]] },
+              { "title_groups": [["выключател"]], "gap_text_groups": [["выключател"], ["не наш", "нет в каталоге", "не подтвержд", "не могу подтвердить"]] }
+            ],
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
         }
@@ -339,6 +386,12 @@
             "conversation_boundary": "continuation",
             "min_products": 1,
             "require_product_title": ["LDPE", "Cat.5E", "кат.5E"],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Материал проводника", "exact_any": ["медь", "медный", "Cu"] },
+                { "name": "Оболочка", "exact_any": ["PE", "LDPE", "полиэтилен"] }
+              ]
+            },
             "forbid_product_title": ["CCA", "PVC", "LSZH"],
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
@@ -365,11 +418,23 @@
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "all_of": [
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
+            },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
             ],
-            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный", "акустический", "акуст."],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -387,11 +452,23 @@
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "all_of": [
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
+            },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
             ],
-            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный", "акустический", "акуст."],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -408,6 +485,12 @@
             "min_products": 3,
             "max_products": 5,
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "any_of": [
+                { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+              ]
+            },
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
@@ -424,6 +507,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 25 }
+              ]
+            },
             "require_every_product_title_any": ["светильник", "панель", "люстра"],
             "require_every_product_measurement": {
               "units": ["Вт", "W", "ватт"],
@@ -449,6 +538,9 @@
               ["площад", "размер"],
               ["высот", "монтаж", "установ"]
             ],
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "mounting_height",
+            "require_clarification_range_unit": "м",
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         },
@@ -459,6 +551,9 @@
             "min_products": 3,
             "max_products": 5,
             "require_every_product_title_any": ["прожектор"],
+            "require_every_product_page": {
+              "facets": [{ "name": "Световой поток, Лм", "min_numeric": 1800 }]
+            },
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -474,6 +569,12 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Внутр диаметр до термоусадки,мм", "greater_than": 12 },
+                { "name": "Внутр диаметр после термоусадки, мм", "less_than": 12 }
+              ]
+            },
             "require_every_product_pair_around": 12,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],
@@ -497,6 +598,14 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_every_product_page": {
+              "name": { "require_any": ["ТТУ"] },
+              "facets": [
+                { "name": "Внутр диаметр до термоусадки,мм", "greater_than": 10 },
+                { "name": "Внутр диаметр после термоусадки, мм", "less_than": 10 }
+              ]
+            },
+            "require_every_product_title_any": ["ТТУ"],
             "require_every_product_pair_around": 10,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],
@@ -519,6 +628,8 @@
           "expect": {
             "max_products": 0,
             "require_any_text": ["уточните", "раздел", "товарн", "групп", "розет", "выключател"],
+            "require_clarification_choice": "either",
+            "require_clarification_facet_key": "catalog_section",
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         },
@@ -543,6 +654,40 @@
       ]
     },
     {
+      "id": "customer-new-gallant-catalog-section-chip",
+      "title": "Выбор раздела после широкого ассортимента сохраняет серию и категорию",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "покажи ассортимент Gallant на сайте",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["уточните", "раздел", "розет", "выключател"],
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "catalog_section"
+          }
+        },
+        {
+          "message": "Розетки",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"]
+            ],
+            "require_selection_criteria_groups": [
+              ["Gallant", "Галант"],
+              ["розет"]
+            ],
+            "require_selection_criteria_evidence": true,
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
       "id": "customer-new-black-double-sockets",
       "title": "Чёрные двойные электрические розетки сохраняют оба признака",
       "repeat": 3,
@@ -556,6 +701,13 @@
               ["розет"],
               ["черн", "графит"]
             ],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Количество разъемов", "require_any": ["2"] },
+                { "name": "Цвет", "require_any": ["черный", "чёрный", "графит"] },
+                { "name": "Вид розетки", "require_any": ["электрическая"] }
+              ]
+            },
             "require_selection_criteria_groups": [
               ["Количество разъемов", "Количество разъёмов", "\"kind\":\"count\""],
               ["\"value\":2", "\"value\":\"2\""],
@@ -603,6 +755,10 @@
         {
           "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
           "expect": {
+            "require_products_or_text_groups": {
+              "min_products": 1,
+              "text_groups": [["не нашёл", "не нашел", "не найден", "не могу подобрать", "не могу подтвердить наличие"], ["ИБП", "UPS"], ["каталог", "карточк"]]
+            },
             "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
             "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
             "require_text_groups": [
