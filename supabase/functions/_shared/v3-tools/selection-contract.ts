@@ -1633,3 +1633,131 @@ export function verifySelectionTargetWithGroundedSearch(input: {
       .map((product) => product.id),
   };
 }
+
+export interface ReplacementDestinationFitReport {
+  required: boolean;
+  place: string | null;
+  minimum_area_m2: number | null;
+  passed_ids: string[];
+  rejected_ids: string[];
+}
+
+/**
+ * In a replacement request, the removed item is not evidence that a new card
+ * suits the customer's installation site. A broad semantic category is only a
+ * search hypothesis: when the customer gave both a site and its area, every
+ * displayed card needs independent first-party proof of that use and capacity.
+ * The site is taken literally from the customer, never from a model-proposed
+ * class; no product names, taxonomy labels or room-name dictionary is used.
+ */
+export function verifyReplacementDestinationFit(
+  customerMessage: string,
+  products: ProductRef[],
+): ReplacementDestinationFitReport {
+  const request = String(customerMessage ?? "");
+  const replacement = /(?:^|[^\p{L}])(?:замен|поменя|смен)\p{L}*/iu
+    .test(request);
+  const siteArea = request.match(
+    /(?:^|[\s,;])(?:в|во|для)\s+([\p{L}-]+(?:\s+[\p{L}-]+){0,2}?)\s+(?:площад\p{L}*\s+)?(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*)/iu,
+  );
+  const place = replacement && siteArea ? siteArea[1].trim() : null;
+  const minimumArea = place ? Number(siteArea?.[2].replace(",", ".")) : null;
+  if (
+    !place || minimumArea === null || !Number.isFinite(minimumArea) ||
+    minimumArea <= 0
+  ) {
+    return {
+      required: false,
+      place: null,
+      minimum_area_m2: null,
+      passed_ids: products.map((product) => product.id),
+      rejected_ids: [],
+    };
+  }
+
+  const siteStem = (raw: string): string => {
+    const word = normalize(raw);
+    if (word.length < 4) return word;
+    const root = word.replace(
+      /(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ую|юю|ый|ий|ые|ие|ых|их|ым|им|ом|ем|ов|ев|ам|ям|ах|ях|у|ю|а|я|о|е|ы|и)$/u,
+      "",
+    );
+    return root.length >= 3 ? root : word;
+  };
+  const siteTokens = normalize(place).split(/\s+/u).filter(Boolean)
+    .map(siteStem);
+  const hasSiteTokens = (value: string): boolean => {
+    const tokens = normalize(value).split(/\s+/u).filter(Boolean)
+      .map(siteStem);
+    return siteTokens.every((token) => tokens.includes(token));
+  };
+  const hasUnnegatedSiteRelation = (value: string): boolean =>
+    String(value ?? "").split(/[.!?;\n]/u).some((sentence) => {
+      const words = normalize(sentence).split(/\s+/u).filter(Boolean);
+      return words.some((word, index) => {
+        if (!["для", "в", "во"].includes(word)) return false;
+        if (words.slice(Math.max(0, index - 3), index).includes("не")) {
+          return false;
+        }
+        const governed = words.slice(index + 1, index + 5)
+          .map(siteStem);
+        return siteTokens.every((token) => governed.includes(token));
+      });
+    });
+  const hasSiteProof = (product: ProductRef): boolean =>
+    product.short_traits.some((trait) => {
+      const [caption, ...parts] = String(trait).split(":");
+      return parts.length > 0 &&
+        /(?:назначен|помещен|комнат|место\s+применен|область\s+применен|использован)/iu
+          .test(normalize(caption)) &&
+        hasSiteTokens(parts.join(":")) &&
+        !/\bне\s+(?:для|в|во)\b/iu.test(parts.join(":"));
+    }) ||
+    hasUnnegatedSiteRelation(product.pagetitle) ||
+    hasUnnegatedSiteRelation(product.description_excerpt ?? "");
+  const provenArea = (product: ProductRef): number[] => {
+    const evidence = [
+      ...product.short_traits,
+      ...(product.description_excerpt
+        ? product.description_excerpt.split(/[.!?;\n]/u)
+        : []),
+    ];
+    return evidence.flatMap((line) => {
+      const normalizedLine = normalize(line);
+      if (
+        !/площад/u.test(normalizedLine) ||
+        !/(?:освещ|помещен|максимальн|рекоменд|рассчитан)/u
+          .test(normalizedLine)
+      ) return [];
+      let match = String(line).match(
+        /(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*)/iu,
+      );
+      if (
+        !match && /(?:м\s*[²2]|кв\.?\s*м)/iu.test(
+          String(line).split(":", 1)[0],
+        )
+      ) {
+        match = String(line).split(":").slice(1).join(":").match(
+          /(?:^|[^\d])(\d+(?:[.,]\d+)?)/u,
+        );
+      }
+      if (!match) return [];
+      const value = Number(match[1].replace(",", "."));
+      return Number.isFinite(value) ? [value] : [];
+    });
+  };
+
+  const passed = products.filter((product) =>
+    hasSiteProof(product) &&
+    provenArea(product).some((area) => area >= minimumArea)
+  ).map((product) => product.id);
+  const accepted = new Set(passed);
+  return {
+    required: true,
+    place,
+    minimum_area_m2: minimumArea,
+    passed_ids: passed,
+    rejected_ids: products.filter((product) => !accepted.has(product.id))
+      .map((product) => product.id),
+  };
+}

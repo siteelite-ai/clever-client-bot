@@ -26,6 +26,7 @@ import {
   selectionTargetIsDeclared,
   selectionTargetMayUseGroundedBase,
   selectionTargetPreservesGroundedBase,
+  verifyReplacementDestinationFit,
   verifySelectionTarget,
   verifySelectionTargetWithExactLiveCategoryContract,
   verifySelectionTargetWithGroundedSearch,
@@ -100,6 +101,95 @@ Deno.test("selection projection separates product class from application context
   ]);
   assertEquals(report.passed_ids, ["indoor", "street"]);
   assertEquals(report.rejected_ids, []);
+});
+
+Deno.test("a replacement with a measured room requires card-level room and area proof", () => {
+  const request =
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
+  const products = [
+    {
+      ...product("home", "Люстра светодиодная MATEO 75W", "Люстры"),
+      short_traits: [
+        "Назначение: Гостиная",
+        "Максимальная площадь освещения: 28 м²",
+      ],
+    },
+    {
+      ...product("office", "Светильник ДПО 48W", "Светильники"),
+      short_traits: [
+        "Назначение: Офис",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+    },
+    {
+      ...product("traffic", "Светофор светодиодный 100W", "Светофоры"),
+      short_traits: ["Площадь освещения: 30 м²"],
+    },
+    {
+      ...product("small", "Светильник для гостиной", "Светильники"),
+      short_traits: ["Максимальная площадь освещения: 12 м²"],
+    },
+    {
+      ...product("unsupported", "Светильник светодиодный", "Светильники"),
+      short_traits: ["Мощность: 48 Вт"],
+    },
+  ];
+  assertEquals(verifyReplacementDestinationFit(request, products), {
+    required: true,
+    place: "гостиной",
+    minimum_area_m2: 25,
+    passed_ids: ["home"],
+    rejected_ids: ["office", "traffic", "small", "unsupported"],
+  });
+});
+
+Deno.test("replacement site proof is grammatical, first-party, and category-neutral", () => {
+  const report = verifyReplacementDestinationFit(
+    "Хочу поменять светильник в зале 30 квадратов",
+    [
+      {
+        ...product("home-in-description", "Новый светильник", "ЖКХ"),
+        description_excerpt:
+          "Подходит для зала. Рекомендуемая площадь освещения: 35 м².",
+      },
+      {
+        ...product("negated", "Новый светильник", "Светильники"),
+        description_excerpt:
+          "Не подходит для зала. Максимальная площадь освещения: 35 м².",
+      },
+      {
+        ...product("unmeasured", "Светильник для зала", "Светильники"),
+        short_traits: ["Мощность: 100 Вт"],
+      },
+      {
+        ...product("normalized-unit", "Новый светильник", "Светильники"),
+        short_traits: [
+          "Назначение: Зал",
+          "Максимальная площадь освещения (м²): 35",
+        ],
+      },
+    ],
+  );
+  assertEquals(report.passed_ids, ["home-in-description", "normalized-unit"]);
+  assertEquals(report.rejected_ids, ["negated", "unmeasured"]);
+});
+
+Deno.test("unmeasured replacement and ordinary selection keep their existing routes", () => {
+  const products = [product("ordinary", "Светильник")];
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу заменить люстру на светильник в гостиной",
+      products,
+    ).required,
+    false,
+  );
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Нужен светильник для гостиной 25 м²",
+      products,
+    ).passed_ids,
+    ["ordinary"],
+  );
 });
 
 Deno.test("only customer-grounded application context can become a live facet obligation", () => {
