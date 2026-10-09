@@ -19,6 +19,7 @@ import {
   resolveVisibleSystemTotalRequirement,
   verifySystemTotalCapacityPlan,
 } from "../_shared/v3-tools/system-total-capacity.ts";
+import { rankSystemTotalCandidates } from "../_shared/v3-tools/system-total-candidate-ranking.ts";
 import { resolveUnavailableProductReference } from "../_shared/v3-tools/unavailable-product-reference.ts";
 import {
   buildSystemPrompt,
@@ -251,6 +252,7 @@ import {
   compactCodeTokensInQuery,
   compactFacetCodeProductEvidenceDiagnostics,
   compactFacetCodeSupportScore,
+  proveCustomerNumericAxisAliasFromProducts,
   resolveCompactFacetCodeEvidenceFromProductsV2,
   unresolvedCompactCodeTokens,
 } from "../_shared/v3-tools/compact-facet-code.ts";
@@ -7398,18 +7400,60 @@ async function runExpertLoop(
         namedSeriesToken,
       ),
     );
-    if (derivedExcludedClassificationCriteria.length === 0) {
-      return structurallySafe;
+    const classificationSafe = derivedExcludedClassificationCriteria.length === 0
+      ? structurallySafe
+      : (() => {
+        const eligible = new Set(
+          filterProductsByExcludedCriteria(
+            structurallySafe
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is ProductFull => Boolean(product)),
+            derivedExcludedClassificationCriteria,
+          ).map(({ id }) => id),
+        );
+        return structurallySafe.filter((id) => eligible.has(id));
+      })();
+    // This is a relative ranking of already-safe alternatives, not a claim
+    // that one card (or the list of cards) supplies an installation total.
+    // Bind the output axis and lower bound to the reasoning actually shown
+    // to the customer and the current live category schema.
+    if (derivedSelectionMeasurementScope !== "system_total") {
+      return classificationSafe;
     }
-    const eligible = new Set(
-      filterProductsByExcludedCriteria(
-        structurallySafe
-          .map((id) => ctx.cache.get(id))
-          .filter((product): product is ProductFull => Boolean(product)),
-        derivedExcludedClassificationCriteria,
-      ).map(({ id }) => id),
+    const totalRequirement = resolveVisibleSystemTotalRequirement({
+      measurementScope: derivedSelectionMeasurementScope,
+      reasoningText: derivedSelectionReasoningEvidence,
+      facets: derivedStructuredSearchDiscovery?.facets ??
+        lastDiscover?.facets ?? [],
+    });
+    if (!totalRequirement || classificationSafe.length < 2) {
+      return classificationSafe;
+    }
+    const ranking = rankSystemTotalCandidates(
+      totalRequirement,
+      classificationSafe
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product)),
+      {
+        minimumVerifiedAlternatives: resultCardinality.minimum,
+        severeOutputGapFactor: 2,
+      },
     );
-    return structurallySafe.filter((id) => eligible.has(id));
+    if (ranking.excludedVeryLowOutput.length > 0) {
+      steps.push({
+        step: "v3_system_total_relative_output_ranked",
+        ms: now(),
+        meta: {
+          before: classificationSafe.length,
+          retained: ranking.retained.length,
+          excluded: ranking.excludedVeryLowOutput.length,
+          output_facet: totalRequirement.outputFacet.key,
+          unit: totalRequirement.unit,
+          system_sufficiency_proven: false,
+        },
+      });
+    }
+    return ranking.retained.map(({ product }) => product.id);
   };
 
   const finalizeTerminalRenderIds = (ids: string[]): string[] => {
@@ -16547,6 +16591,38 @@ async function runExpertLoop(
     // generic facet/search recovery. Resolve that claim first, or keep the turn
     // empty; otherwise the system would knowingly render a broad sibling pool.
     const terminalAliasRequirement = declaredAliasQuery ?? requiredCatalogAlias;
+    const terminalAliasFacets = terminalDiscover?.facets ?? [];
+    const filterTerminalAliasProducts = (products: ProductFull[]) => {
+      if (!terminalAliasRequirement) return products;
+      const proof = proveCustomerNumericAxisAliasFromProducts(
+        terminalAliasRequirement,
+        userMessage,
+        terminalAliasFacets,
+        products,
+      );
+      if (proof.status === "proven") return proof.products;
+      // If the live numeric axis and the customer's wording agree, a title
+      // alone is insufficient to rescue a card with missing/conflicting
+      // evidence for that axis.
+      if (proof.status === "product_axis_unproven") return [];
+      return filterProductsByDeclaredAlias(
+        products,
+        terminalAliasRequirement,
+      );
+    };
+    const terminalNumericAliasProof = terminalAliasRequirement &&
+        reasoningBackedSearch && terminalDiscover
+      ? proveCustomerNumericAxisAliasFromProducts(
+        terminalAliasRequirement,
+        userMessage,
+        terminalAliasFacets,
+        reasoningBackedSearch.ids
+          .map((id) => ctx.cache.get(id))
+          .filter((product): product is ProductFull => Boolean(product)),
+      )
+      : null;
+    const terminalAliasProvenByLiveFacet =
+      terminalNumericAliasProof?.status === "proven";
     // A model-selected semantic pool becomes authoritative only when every
     // cached card literally proves the distinctive search label. Generic
     // category/criteria recovery must never replace that narrower evidence:
@@ -16624,12 +16700,9 @@ async function runExpertLoop(
       // This fast terminal path must obey the same title-grounded alias
       // obligation as the later recovery paths. A consultant's metalinguistic
       // label is not proven by a broad category match or by a facet alone.
-      const aliasGroundedProducts = terminalAliasRequirement
-        ? filterProductsByDeclaredAlias(
-          categoryGroundedProducts,
-          terminalAliasRequirement,
-        )
-        : categoryGroundedProducts;
+      const aliasGroundedProducts = filterTerminalAliasProducts(
+        categoryGroundedProducts,
+      );
       const targetReport = verifyTerminalSelectionTarget(
         terminalSelectionTarget,
         aliasGroundedProducts,
@@ -16736,12 +16809,7 @@ async function runExpertLoop(
         let products = pool.results
           .map((product) => ctx.cache.get(String(product.id)))
           .filter((product): product is ProductFull => Boolean(product));
-        if (terminalAliasRequirement) {
-          products = filterProductsByDeclaredAlias(
-            products,
-            terminalAliasRequirement,
-          );
-        }
+        products = filterTerminalAliasProducts(products);
         const paired = filterProductsByPairedTitleFit(
           products,
           terminalCompatibilityReference.value,
@@ -17535,7 +17603,7 @@ async function runExpertLoop(
     // values declared in the consultant's reasoning.
     if (
       productsRendered === 0 &&
-      !terminalAliasRequirement &&
+      (!terminalAliasRequirement || terminalAliasProvenByLiveFacet) &&
       !terminalTitleGroundedSemanticPool &&
       reasoningBackedSearch &&
       terminalSelectionTarget &&
@@ -17547,6 +17615,11 @@ async function runExpertLoop(
         .filter((product): product is NonNullable<typeof product> =>
           Boolean(product)
         );
+      const terminalAliasProductIds = new Set(
+        filterTerminalAliasProducts(candidateProducts).map((product) =>
+          product.id
+        ),
+      );
       // Reconstruct the complete render contract from every proof accumulated
       // before the provider stopped: catalog-filter criteria plus the latest
       // model render criteria. Requiring a previously successful render here
@@ -17570,7 +17643,7 @@ async function runExpertLoop(
       );
       const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) =>
-        gate.passed_ids.includes(id)
+        gate.passed_ids.includes(id) && terminalAliasProductIds.has(id)
       );
       const criteriaPassedCount = safeIds.length;
       let terminalTargetProducts = candidateProducts;
@@ -17636,6 +17709,8 @@ async function runExpertLoop(
         ms: now(),
         meta: {
           candidates: reasoningBackedSearch.ids.length,
+          alias_proven_by_live_facet: terminalAliasProvenByLiveFacet,
+          alias_passed: terminalAliasProductIds.size,
           criteria_passed: criteriaPassedCount,
           category_grounded: terminalTargetProducts.length,
           target_passed: targetPassedCount,
