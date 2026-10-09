@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Ticket-page attribution for 30 scenario identities in legacy Notion QA v1 and v2; v2 uses exact source text for both BT-923 prompts. Most other prompts are paraphrases, and block/screenshot provenance is incomplete.",
+  "scope": "Ticket-page attribution for 30 scenario identities in legacy Notion QA v1 and v2; v2 uses exact source text for both BT-923 prompts. BT-929 two-turn API choice continuations are internal synthetic acceptance, not source quotes or browser clicks. Most other prompts are paraphrases, and block/screenshot provenance is incomplete.",
   "project_url": "https://app.notion.com/p/220volt-kz-e5f02f251f234a1eb71c3f90fea21394",
   "tickets": [
     { "ticket": "BT-929", "page_url": "https://app.notion.com/p/37bcf8d369ba80ba99afcfeaa1b0713b", "case_count": 9 },
@@ -17,6 +17,20 @@
     "bt746-black-double-socket": "336cf8d3-69ba-8016-9d74-001dfbdf0737",
     "bt746-garmoniya-sockets": "336cf8d3-69ba-8093-8d93-001db3f63d3d"
   },
+  "synthetic_api_continuations": [
+    {
+      "case_id": "bt929-pump-cable-clarification",
+      "turn_index": 2,
+      "message": "220 В, 1 фаза",
+      "intent": "Choose an exact server-issued categorical chip and require the next missing axis; this does not assert a browser click."
+    },
+    {
+      "case_id": "bt929-outdoor-floodlight-clarification",
+      "turn_index": 2,
+      "message": "До 4 м",
+      "intent": "Choose an exact server-issued safe height-range chip and require the area axis; this does not assert a browser click or an exact mounting height."
+    }
+  ],
   "clarified_source_facts": [
     {
       "ticket": "BT-923",

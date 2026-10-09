@@ -24,6 +24,59 @@ const notionV2Suite = JSON.parse(notionV2Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
+test('all pinned VVG cheapest cases require an independent complete-category minimum', () => {
+  const cases = [
+    [acceptanceSuite, 'customer-vvg-exact-cheapest', '2-1.5'],
+    [septemberSuite, 'audit-01-vvg-3x1_5-cheapest', '3-1.5'],
+    [notionV2Suite, 'bt923-vvg-3x1_5-unit', '3-1.5'],
+    [cardinalitySuite, 'cardinality-single-superlative', '2-1.5'],
+  ];
+  for (const [suite, id, category] of cases) {
+    const expectation = suite.cases.find((entry) => entry.id === id)?.turns[0].expect;
+    assert(expectation, id);
+    assert.equal(expectation.require_catalog_minimum.source_url.endsWith(`/kabel-vvg/${category}/`), true, id);
+    assert.equal(expectation.require_catalog_minimum.unit, 'м', id);
+    assert.doesNotThrow(() => validateExpectationObject(expectation), id);
+  }
+  for (const contract of [{}, { source_url: 'https://evil.example/catalog/x/y/z/', title_prefix: 'Кабель ВВГ 3*1,5', unit: 'м' },
+    { source_url: 'https://220volt.kz/catalog/x/y/z/', title_prefix: 'ВВГ', unit: 'м' },
+    { source_url: 'https://220volt.kz/catalog/x/y/z/', title_prefix: 'Кабель ВВГ 3*1,5', unit: 'м', allow_partial: true }]) {
+    assert.throws(() => validateExpectationObject({ require_catalog_minimum: contract }), /require_catalog_minimum/u);
+  }
+});
+
+test('catalog-minimum acceptance rejects a plausible but non-cheapest exact cable card', () => {
+  const bestUrl = 'https://220volt.kz/catalog/cables/vvg/product-301/';
+  const worseUrl = 'https://220volt.kz/catalog/cables/vvg/product-462/';
+  const sourceUrl = 'https://220volt.kz/catalog/cables/vvg/3-1.5/';
+  const criterion = { require_catalog_minimum: {
+    source_url: sourceUrl, title_prefix: 'Кабель ВВГ 3*1,5', unit: 'м',
+  } };
+  const items = [
+    { url: bestUrl, title: 'Кабель ВВГ 3*1,5 ГОСТ IK', price: 301, unit: 'м', id: '301' },
+    { url: worseUrl, title: 'Кабель ВВГ 3*1,5 AT', price: 462, unit: 'м', id: '462' },
+  ];
+  const page = (item) => ({ identity: productUrlIdentity(item.url), verified: true,
+    sku: item.id, name: item.title, offerPrice: item.price,
+    availability: 'https://schema.org/InStock' });
+  const reply = (item) => ({
+    links: [{ url: item.url, title: item.title, price: item.price, stockLine: 'Караганда (98 м)' }],
+    text: '', productsMarkdown: '', terminalDiagnosticSeen: true, logId: 'test-id', completed: true,
+    verifiedProductPages: new Map([[productUrlIdentity(item.url), page(item)]]),
+    catalogMinimumProof: { verified: true, source_url: sourceUrl, listed_total: 2,
+      matching_available: 2, eligible_products: items, minimum_price: 301, winners: [items[0]] },
+  });
+  assert.deepEqual(evaluate(criterion, reply(items[0])), []);
+  assert(evaluate(criterion, reply(items[1])).some((failure) => failure.includes('not a catalog-proven minimum')));
+  assert(evaluate(criterion, { ...reply(items[0]), catalogMinimumProof: null })
+    .some((failure) => failure.includes('not independently verified')));
+  assert(evaluate(criterion, { ...reply(items[0]), catalogMinimumProof: {
+    ...reply(items[0]).catalogMinimumProof, eligible_products: [items[1]],
+  } }).some((failure) => failure.includes('no valid winner')));
+  assert(evaluate(criterion, { ...reply(items[0]), verifiedProductPages: new Map() })
+    .some((failure) => failure.includes('unverified product page')));
+});
+
 test('household motion scenarios require several source-backed alternatives across catalog classes', () => {
   for (const id of [
     'customer-new-household-motion-without-mount',
@@ -433,7 +486,7 @@ test('strict full-suite verifies all Notion legacy and systemic cardinality runs
     suiteBytes: notionV2Bytes,
     variantsBytes: null,
   });
-  assert.deepEqual([notionV2.expected_cases, notionV2.expected_turns_per_base_suite, notionV2.expected_runs, notionV2.expected_evaluated_turns], [30, 31, 38, 39]);
+  assert.deepEqual([notionV2.expected_cases, notionV2.expected_turns_per_base_suite, notionV2.expected_runs, notionV2.expected_evaluated_turns], [30, 33, 38, 41]);
   const cardinality = validateStrictFullSuite({
     argv: strictArgs,
     suite: cardinalitySuite,
@@ -502,13 +555,26 @@ test('strict full-suite rejects missing, swapped, or changed-repeat Notion and c
   } }), /invalid repeats=cardinality-multiple-sockets/);
 });
 
-test('Notion v2 preserves the v1 case inventory and adds only scoped reliability and BT-923 assertions', () => {
+test('Notion v2 preserves source prompts while adding scoped reliability, chips and BT-923 assertions', () => {
   assert.equal(notionSuite.schema_version, 1);
   assert.equal(notionV2Suite.schema_version, 2);
   assert.deepEqual(notionV2Suite.cases.map((item) => item.id), notionSuite.cases.map((item) => item.id));
   for (const oldCase of notionSuite.cases) {
     const nextCase = notionV2Suite.cases.find((item) => item.id === oldCase.id);
-    if (!['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit', 'bt923-vvg-3x1_5-unit'].includes(oldCase.id)) {
+    if (['bt928-boiler-breaker-diagnostic', 'bt923-battery-unit', 'bt923-vvg-3x1_5-unit'].includes(oldCase.id)) continue;
+    if (oldCase.id.startsWith('bt929-') && oldCase.id !== 'bt929-heat-shrink-12mm' ||
+        ['bt924-apartment-breaker-25a', 'bt924-replace-kg-cable'].includes(oldCase.id)) {
+      assert.equal(nextCase.id, oldCase.id);
+      assert.equal(nextCase.title, oldCase.title);
+      const first = structuredClone(nextCase.turns[0]);
+      for (const key of ['require_clarification_choice', 'require_clarification_facet_key', 'require_clarification_range_unit']) {
+        delete first.expect[key];
+      }
+      assert.deepEqual(first, oldCase.turns[0], `${oldCase.id}: original source turn changed`);
+      const addedSyntheticFollowup = ['bt929-pump-cable-clarification', 'bt929-outdoor-floodlight-clarification']
+        .includes(oldCase.id);
+      assert.equal(nextCase.turns.length, oldCase.turns.length + Number(addedSyntheticFollowup), oldCase.id);
+    } else {
       assert.deepEqual(nextCase, oldCase);
     }
   }
@@ -1299,12 +1365,53 @@ test('a visible clarification with server-bound quick replies passes the options
   assert.equal(response.quickReplies.type, 'quick_replies');
   assert.deepEqual(evaluate({ require_clarification_choice: 'options' }, response), []);
   assert.deepEqual(evaluate({ require_clarification_choice: 'either' }, response), []);
+  assert.deepEqual(evaluate({ require_clarification_choice: 'options', require_clarification_facet_key: 'connection' }, response), []);
+  assert(evaluate({ require_clarification_facet_key: 'mounting' }, response)
+    .includes('clarification facet connection != mounting'));
 });
 
 test('the Gallant release case requires actual section chips before a follow-up', () => {
   const gallant = acceptanceSuite.cases.find((item) => item.id === 'customer-new-gallant-catalog-section-chip');
   assert.equal(gallant.turns[0].expect.require_clarification_choice, 'options');
+  assert.equal(gallant.turns[0].expect.require_clarification_facet_key, 'catalog_section');
   assert.equal(gallant.turns[1].message, 'Розетки');
+});
+
+test('all BT-929 readiness axes require server-bound chips; numeric axes remain ranges', () => {
+  const axes = {
+    'bt929-pump-cable-clarification': 'supply_phase',
+    'bt929-outdoor-floodlight-clarification': 'mounting_height',
+    'bt929-motor-breaker-clarification': 'supply_phase',
+    'bt929-underground-cable-clarification': 'installation_method',
+    'bt929-lugs-35mm-clarification': 'conductor_material',
+    'bt929-surveillance-cable-clarification': 'camera_system',
+    'bt929-warm-led-clarification': 'socket_type',
+    'bt929-parking-floodlight-clarification': 'mounting_height',
+  };
+  for (const [id, facet] of Object.entries(axes)) {
+    const first = notionV2Suite.cases.find((item) => item.id === id)?.turns[0];
+    assert(first, id);
+    assert.equal(first.expect.require_clarification_choice, 'options', id);
+    assert.equal(first.expect.require_clarification_facet_key, facet, id);
+    assert.equal(first.expect.max_products, 0, id);
+    if (facet === 'mounting_height') assert.equal(first.expect.require_clarification_range_unit, 'м', id);
+    assert.doesNotThrow(() => validateExpectationObject(first.expect), id);
+  }
+  for (const [id, value, nextFacet, unit] of [
+    ['bt929-pump-cable-clarification', '220 В, 1 фаза', 'line_length', 'м'],
+    ['bt929-outdoor-floodlight-clarification', 'До 4 м', 'illuminated_area', 'м²'],
+  ]) {
+    const followup = notionV2Suite.cases.find((item) => item.id === id)?.turns[1];
+    assert(followup, id);
+    assert.equal(followup.message, value, id);
+    assert.equal(followup.expect.require_previous_quick_reply.value, value, id);
+    assert.equal(followup.expect.require_clarification_facet_key, nextFacet, id);
+    assert.equal(followup.expect.require_clarification_range_unit, unit, id);
+    assert.equal(followup.expect.conversation_boundary, 'continuation', id);
+  }
+  assert.match(notionV2Suite.source, /synthetic API quick-reply continuations \(not customer quotes or browser clicks\)/u);
+  assert.equal(notionV2Suite.cases.find((item) => item.id === 'bt929-heat-shrink-12mm')
+    .turns[0].expect.require_clarification_choice, undefined);
 });
 
 test('prose options and legacy-looking JSON cannot impersonate clickable SSE chips', () => {
@@ -1357,9 +1464,55 @@ test('free-form clarification is accepted only from an explicit empty server slo
     .some((failure) => failure.includes('conflicts with quick-reply event')));
 });
 
+test('numeric chips must be bounded ranges with their dimension, while typed exact input stays possible', () => {
+  const height = clarificationReply({
+    facetKey: 'mounting_height',
+    replies: [{ value: 'До 4 м', label: 'До 4 м' }, { value: '4–8 м', label: '4–8 м' }, { value: 'Выше 8 м', label: 'Выше 8 м' }],
+  });
+  const area = clarificationReply({
+    facetKey: 'illuminated_area',
+    replies: [{ value: 'До 50 м²', label: 'До 50 м²' }, { value: '50–150 м²', label: '50–150 м²' }],
+  });
+  assert.deepEqual(evaluate({ require_clarification_range_unit: 'м' }, height), []);
+  assert.deepEqual(evaluate({ require_clarification_range_unit: 'м²' }, area), []);
+  for (const replies of [
+    [{ value: '4 м', label: '4 м' }, { value: '8 м', label: '8 м' }],
+    [{ value: 'До 4 м', label: 'До 4 м' }, { value: 'Высоко', label: 'Высоко' }],
+  ]) {
+    assert(evaluate({ require_clarification_range_unit: 'м' }, clarificationReply({ replies }))
+      .some((failure) => failure.includes('exact or unitless option')));
+  }
+  assert(evaluate({ require_clarification_range_unit: 'м' }, clarificationReply({ quickEvent: false, options: [] }))
+    .includes('numeric clarification lacks verified range chips'));
+});
+
+test('scripted continuation is bound to an actual prior server choice, not prose or an invented option', () => {
+  const issued = { mode: 'options', facet_key: 'supply_phase', values: ['220 В, 1 фаза', '380 В, 3 фазы'] };
+  const expect = { require_previous_quick_reply: { facet_key: 'supply_phase', value: '220 В, 1 фаза' } };
+  const response = parseSse('data: [DONE]\n');
+  assert.deepEqual(evaluate(expect, response, { previousClarificationChoice: issued, message: '220 В, 1 фаза' }), []);
+  for (const context of [
+    { previousClarificationChoice: null, message: '220 В, 1 фаза' },
+    { previousClarificationChoice: { mode: 'freeform', facet_key: 'supply_phase', values: [] }, message: '220 В, 1 фаза' },
+    { previousClarificationChoice: { ...issued, facet_key: 'line_length' }, message: '220 В, 1 фаза' },
+    { previousClarificationChoice: { ...issued, values: ['380 В, 3 фазы'] }, message: '220 В, 1 фаза' },
+    { previousClarificationChoice: issued, message: '1 фаза' },
+  ]) {
+    assert(evaluate(expect, response, context).some((failure) => failure.includes('not an exact server-issued quick-reply')));
+  }
+});
+
 test('clarification choice expectations reject unsupported modes before a live request', () => {
   assert.throws(() => validateExpectationObject({ require_clarification_choice: 'chips-or-text' }),
     /require_clarification_choice: must be options, freeform or either/);
+  assert.throws(() => validateExpectationObject({ require_clarification_facet_key: 'bad axis' }),
+    /require_clarification_facet_key/u);
+  assert.throws(() => validateExpectationObject({ require_clarification_range_unit: 'мм' }),
+    /require_clarification_range_unit/u);
+  assert.throws(() => validateExpectationObject({ require_previous_quick_reply: { facet_key: 'connection', value: '  bad' } }),
+    /require_previous_quick_reply/u);
+  assert.throws(() => validateExpectationObject({ require_previous_quick_reply: { facet_key: 'connection', value: 'p', injected: true } }),
+    /unknown expectation key injected/u);
 });
 
 test('evaluate checks every product title group and maximum price', () => {

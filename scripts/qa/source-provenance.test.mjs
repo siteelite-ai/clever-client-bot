@@ -50,7 +50,19 @@ test('all 30 legacy cases have ticket attribution and both BT-923 prompts match 
   for (const oldCase of suites[0].cases) {
     if (oldCase.id.startsWith('bt923-')) continue;
     const nextCase = suites[1].cases.find((item) => item.id === oldCase.id);
-    assert.deepEqual(nextCase.turns.map((turn) => turn.message), oldCase.turns.map((turn) => turn.message));
+    assert.deepEqual(nextCase.turns.slice(0, oldCase.turns.length).map((turn) => turn.message),
+      oldCase.turns.map((turn) => turn.message));
+    const added = nextCase.turns.slice(oldCase.turns.length);
+    const declaredSynthetic = index.synthetic_api_continuations
+      .filter((item) => item.case_id === oldCase.id);
+    assert.deepEqual(added.map((turn) => turn.message), declaredSynthetic.map((item) => item.message),
+      `${oldCase.id}: later turn must be explicitly labelled synthetic`);
+  }
+  assert.deepEqual(index.synthetic_api_continuations.map((item) => item.case_id),
+    ['bt929-pump-cable-clarification', 'bt929-outdoor-floodlight-clarification']);
+  for (const item of index.synthetic_api_continuations) {
+    assert.equal(item.turn_index, 2);
+    assert.match(item.intent, /does not assert a browser click/u);
   }
   const ticketIds = new Set();
   for (const ticket of index.tickets) {

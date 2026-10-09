@@ -206,6 +206,7 @@
           "expect": {
             "min_products": 1,
             "max_products": 1,
+            "require_catalog_minimum": { "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/", "title_prefix": "Кабель ВВГ 2*1,5", "unit": "м" },
             "require_product_title": ["2*1,5", "2×1,5", "2x1,5"],
             "forbid_product_title": ["4*2,5", "4×2,5", "4x2,5"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -537,6 +538,9 @@
               ["площад", "размер"],
               ["высот", "монтаж", "установ"]
             ],
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "mounting_height",
+            "require_clarification_range_unit": "м",
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         },
@@ -624,6 +628,8 @@
           "expect": {
             "max_products": 0,
             "require_any_text": ["уточните", "раздел", "товарн", "групп", "розет", "выключател"],
+            "require_clarification_choice": "either",
+            "require_clarification_facet_key": "catalog_section",
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         },
@@ -657,7 +663,8 @@
           "expect": {
             "max_products": 0,
             "require_any_text": ["уточните", "раздел", "розет", "выключател"],
-            "require_clarification_choice": "options"
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "catalog_section"
           }
         },
         {

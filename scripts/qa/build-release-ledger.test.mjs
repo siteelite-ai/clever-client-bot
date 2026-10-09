@@ -34,7 +34,7 @@ function withChangedJson(filename, change, manifestChange = (manifest) => manife
 
 test('the pinned five matrix hashes and release dimensions match the actual files', () => {
   const ledger = buildReleaseLedger();
-  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 188, ordered_turns: 258 });
+  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 188, ordered_turns: 260 });
   for (const file of ledger.matrix_files) {
     assert.equal(sha256(fs.readFileSync(new URL(`./${file.basename}`, import.meta.url))), file.sha256);
   }
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases-v2.json', 38, 39],
+      ['notion-legacy-bug-cases-v2.json', 38, 41],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -83,7 +83,7 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   }
 });
 
-test('all 117 base source turns declare a substantive explicit acceptance assertion', () => {
+test('all 119 base turns, including two synthetic chip continuations, have explicit acceptance', () => {
   let checked = 0;
   for (const manifest of MATRIX_MANIFESTS) {
     const suite = JSON.parse(fs.readFileSync(new URL(`./${manifest.file}`, import.meta.url), 'utf8'));
@@ -96,10 +96,10 @@ test('all 117 base source turns declare a substantive explicit acceptance assert
       }
     }
   }
-  assert.equal(checked, 117);
+  assert.equal(checked, 119);
 });
 
-test('all 258 messages and effective expectations match the acceptance runner plan', () => {
+test('all 260 messages and effective expectations match the acceptance runner plan', () => {
   const ledger = buildReleaseLedger();
   let cursor = 0;
   for (const manifest of MATRIX_MANIFESTS) {
@@ -126,6 +126,22 @@ test('all 258 messages and effective expectations match the acceptance runner pl
     }
   }
   assert.equal(cursor, 188);
+});
+
+test('Notion synthetic chip continuations remain source-distinct and NOT_RUN until preview', () => {
+  const ledger = buildReleaseLedger();
+  for (const [id, expectedValue] of [
+    ['bt929-pump-cable-clarification', '220 В, 1 фаза'],
+    ['bt929-outdoor-floodlight-clarification', 'До 4 м'],
+  ]) {
+    const run = ledger.runs.find((item) => item.case_id === id);
+    assert(run, id);
+    assert.equal(run.turns.length, 2, id);
+    assert.equal(run.turns[1].message, expectedValue, id);
+    assert.equal(run.turns[1].effective_expectation.require_previous_quick_reply.value, expectedValue, id);
+    assert.equal(run.turns[1].provenance_level, 'suite_only', id);
+    assert.equal(run.turns[1].candidate_status, 'NOT_RUN', id);
+  }
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

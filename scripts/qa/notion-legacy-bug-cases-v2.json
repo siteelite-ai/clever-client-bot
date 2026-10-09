@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; v2 adds internal 3-run reliability retests for observed 1/3 boiler and battery outcomes, and clarifies BT-923 price-unit acceptance without asserting package quantity",
+  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; v2 also contains internal 3-run reliability retests, catalog-backed BT-923 price-unit acceptance and two synthetic API quick-reply continuations (not customer quotes or browser clicks)",
   "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
@@ -10,7 +10,20 @@
         "message": "Мне нужен кабель для насоса",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["мощн", "ток"], ["длин", "расстоян"], ["напряж", "фаз"], ["проклад", "улиц", "помещен", "перенос"]]
+          "require_text_groups": [["мощн", "ток"], ["длин", "расстоян"], ["напряж", "фаз"], ["проклад", "улиц", "помещен", "перенос"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase"
+        }
+      }, {
+        "message": "220 В, 1 фаза",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "supply_phase", "value": "220 В, 1 фаза" },
+          "max_products": 0,
+          "require_text_groups": [["длин", "расстоян"], ["мощн", "ток"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "line_length",
+          "require_clarification_range_unit": "м"
         }
       }]
     },
@@ -21,7 +34,21 @@
         "message": "Нужен прожектор на улицу.",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["площад", "размер", "территор"], ["высот", "установ"], ["ярк", "мощн", "люмен"]]
+          "require_text_groups": [["площад", "размер", "территор"], ["высот", "установ"], ["ярк", "мощн", "люмен"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_range_unit": "м"
+        }
+      }, {
+        "message": "До 4 м",
+        "expect": {
+          "conversation_boundary": "continuation",
+          "require_previous_quick_reply": { "facet_key": "mounting_height", "value": "До 4 м" },
+          "max_products": 0,
+          "require_any_text": ["площад", "размер", "м²"],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "illuminated_area",
+          "require_clarification_range_unit": "м²"
         }
       }]
     },
@@ -32,7 +59,9 @@
         "message": "Подберите автомат для двигателя",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["мощн", "ток"], ["напряж", "фаз"], ["пуск", "характерист"]]
+          "require_text_groups": [["мощн", "ток"], ["напряж", "фаз"], ["пуск", "характерист"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "supply_phase"
         }
       }]
     },
@@ -43,7 +72,9 @@
         "message": "Какой кабель подойдет для прокладки в земле?",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["земл", "труб", "ПНД", "брон"], ["мощн", "ток"], ["напряж", "фаз"], ["жил", "заземл"]]
+          "require_text_groups": [["земл", "труб", "ПНД", "брон"], ["мощн", "ток"], ["напряж", "фаз"], ["жил", "заземл"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_method"
         }
       }]
     },
@@ -63,6 +94,8 @@
         "expect": {
           "max_products": 0,
           "require_text_groups": [["мед", "алюмин"], ["болт", "клемм", "отверст", "тип"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "conductor_material",
           "forbid_text": ["НКИ"]
         }
       }]
@@ -74,7 +107,9 @@
         "message": "Есть ли у вас кабель для видеонаблюдения?",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["цифров", "аналог"], ["улиц", "помещен"], ["PoE", "питан", "расстоян"]]
+          "require_text_groups": [["цифров", "аналог"], ["улиц", "помещен"], ["PoE", "питан", "расстоян"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "camera_system"
         }
       }]
     },
@@ -85,7 +120,9 @@
         "message": "Есть ли светодиодные лампы с теплым светом 3000К?",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["цокол"], ["форм", "колб"], ["мощн", "ватт"]]
+          "require_text_groups": [["цокол"], ["форм", "колб"], ["мощн", "ватт"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "socket_type"
         }
       }]
     },
@@ -96,7 +133,10 @@
         "message": "Какие прожекторы подойдут для освещения парковки?",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["IP65", "IP66"], ["площад"], ["высот"]]
+          "require_text_groups": [["IP65", "IP66"], ["площад"], ["высот"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "mounting_height",
+          "require_clarification_range_unit": "м"
         }
       }]
     },
@@ -199,7 +239,9 @@
         "message": "Подбери автомат 25А для квартиры",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["полюс", "фаз"], ["характерист", "крив"], ["отключ", "кА", "килоампер"]]
+          "require_text_groups": [["полюс", "фаз"], ["характерист", "крив"], ["отключ", "кА", "килоампер"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "pole_count"
         }
       }]
     },
@@ -222,7 +264,9 @@
         "message": "Чем можно заменить кабель КГ?",
         "expect": {
           "max_products": 0,
-          "require_text_groups": [["услов", "примен", "назнач", "подключ"], ["сечен", "жил"], ["гибк", "стационар", "подвиж"]]
+          "require_text_groups": [["услов", "примен", "назнач", "подключ"], ["сечен", "жил"], ["гибк", "стационар", "подвиж"]],
+          "require_clarification_choice": "options",
+          "require_clarification_facet_key": "installation_mode"
         }
       }]
     },
@@ -285,6 +329,7 @@
         "expect": {
           "min_products": 1,
           "max_products": 1,
+          "require_catalog_minimum": { "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/3-1.5/", "title_prefix": "Кабель ВВГ 3*1,5", "unit": "м" },
           "require_every_product_title_groups": [["3*1,5", "3×1,5", "3x1,5", "3х1,5"]],
           "require_every_product_page": { "facets": [{ "name": "Единица измерения", "exact_any": ["м", "метр"] }] },
           "require_every_product_stock_unit": "м",

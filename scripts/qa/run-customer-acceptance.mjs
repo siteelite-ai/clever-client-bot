@@ -4,6 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
+import { validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -93,13 +94,13 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: '3e83af0d0859636af91896a0dd34517aaf81a9d275e7babcdda812f99cb9d91d',
+    sha256: '7c8a908bc82f8dfaecf648cce43af895be333a78b45bbc1b151c30d3379f0173',
     repeat: 3,
     turns: 42,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
   },
   'customer-audit-20260921-cases.json': {
-    sha256: '38bd5615c3419f2399eef876a82523bb14e9d1ba725948048bd972e3d8a1bd28',
+    sha256: 'b90117df7f92907efe1826300b48c41fec3ee899bad29813870dd88726182929',
     repeat: 1,
     turns: 39,
     runs: 54,
@@ -124,7 +125,7 @@ const FULL_SUITE_MANIFESTS = {
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'notion-legacy-bug-cases-v2.json': {
-    sha256: '4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7',
+    sha256: '2422a788c909c979abed927e07693f91b5054861f525bf79710b4a358342e25f',
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -132,15 +133,19 @@ const FULL_SUITE_MANIFESTS = {
       'bt923-battery-unit': 3,
       'bt922-breaker-replacement-under-1000': 3,
     },
-    turns: 31,
+    turns: 33,
     runs: 38,
-    evaluatedTurns: 39,
+    evaluatedTurns: 41,
     defaultTurnsPerCase: 1,
-    turnsById: { 'bt924-acti9-followup-show': 2 },
+    turnsById: {
+      'bt929-pump-cable-clarification': 2,
+      'bt929-outdoor-floodlight-clarification': 2,
+      'bt924-acti9-followup-show': 2,
+    },
     ids: `bt929-pump-cable-clarification bt929-outdoor-floodlight-clarification bt929-motor-breaker-clarification bt929-underground-cable-clarification bt929-heat-shrink-12mm bt929-lugs-35mm-clarification bt929-surveillance-cable-clarification bt929-warm-led-clarification bt929-parking-floodlight-clarification bt928-living-room-25m2 bt928-boiler-breaker-diagnostic bt927-copper-fire-resistant-2x1_5 bt927-led-floodlights-100w bt925-corn-e27 bt924-dn027b-analogs bt924-gx53-analogs bt924-apartment-breaker-25a bt924-schneider-cheaper-analogs bt924-replace-kg-cable bt924-conditioner-3kw bt924-acti9-followup-show bt923-battery-unit bt923-vvg-3x1_5-unit bt922-breaker-replacement-under-1000 bt821-dku-100w-replacement bt821-stabilizer-analogs bt746-extension-50m bt746-white-extension-3-sockets bt746-black-double-socket bt746-garmoniya-sockets`.split(' '),
   },
   'systemic-cardinality-cases.json': {
-    sha256: 'b5583b3380c3e17680cb7f2e85407e301e7650754a879b098bc6bf2103c8a5b0',
+    sha256: 'db38f93c6245a8b0063cc35c1d6ddca4c7e88c27f95f0d52055ae7556799e62b',
     repeat: 3,
     turns: 5,
     runs: 15,
@@ -314,6 +319,10 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_every_product_exact_identifier',
   'require_quoted_price_per_piece',
   'require_clarification_choice',
+  'require_clarification_facet_key',
+  'require_clarification_range_unit',
+  'require_previous_quick_reply',
+  'require_catalog_minimum',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
   'require_selection_criteria_groups',
@@ -415,6 +424,10 @@ function validateProductPageRuleKeys(rule, location) {
 
 export function validateExpectationObject(expect, location = 'expect') {
   expectationKeys(expect, SUPPORTED_EXPECTATION_KEYS, location);
+  if (expect.require_catalog_minimum !== undefined &&
+      !validCatalogMinimumContract(expect.require_catalog_minimum)) {
+    throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
+  }
   expectationMinMax(expect, 'min_products', 'max_products', location);
   if (expect.require_every_product_exact_identifier !== undefined &&
       (typeof expect.require_every_product_exact_identifier !== 'string' ||
@@ -467,6 +480,25 @@ export function validateExpectationObject(expect, location = 'expect') {
   if (expect.require_clarification_choice !== undefined &&
       !['options', 'freeform', 'either'].includes(expect.require_clarification_choice)) {
     throw new Error(`${location}.require_clarification_choice: must be options, freeform or either`);
+  }
+  if (expect.require_clarification_facet_key !== undefined &&
+      (typeof expect.require_clarification_facet_key !== 'string' ||
+       !/^[a-z][a-z0-9_]{0,127}$/u.test(expect.require_clarification_facet_key))) {
+    throw new Error(`${location}.require_clarification_facet_key: must be a bounded facet key`);
+  }
+  if (expect.require_clarification_range_unit !== undefined &&
+      !['м', 'м²'].includes(expect.require_clarification_range_unit)) {
+    throw new Error(`${location}.require_clarification_range_unit: must be м or м²`);
+  }
+  if (expect.require_previous_quick_reply !== undefined) {
+    const prior = expect.require_previous_quick_reply;
+    expectationKeys(prior, new Set(['facet_key', 'value']), `${location}.require_previous_quick_reply`);
+    if (typeof prior.facet_key !== 'string' ||
+        !/^[a-z][a-z0-9_]{0,127}$/u.test(prior.facet_key) ||
+        typeof prior.value !== 'string' || !prior.value.trim() ||
+        prior.value !== prior.value.trim() || prior.value.length > 2000) {
+      throw new Error(`${location}.require_previous_quick_reply: requires a bounded facet key and exact option value`);
+    }
   }
   if (expect.require_every_product_page !== undefined) {
     const pageLocation = `${location}.require_every_product_page`;
@@ -1224,7 +1256,19 @@ function clarificationChoiceEvidence(response) {
     }
     values.add(reply.value);
   }
-  return { mode: 'options', facet_key: pending.facet_key, options_count: event.replies.length };
+  return {
+    mode: 'options', facet_key: pending.facet_key, options_count: event.replies.length,
+    values: event.replies.map((reply) => reply.value),
+  };
+}
+
+function clarificationRangeFailures(evidence, unit) {
+  if (evidence.mode !== 'options') return ['numeric clarification lacks verified range chips'];
+  const suffix = unit === 'м²' ? /\s*м(?:²|2)\s*$/iu : /\s*м\s*$/iu;
+  const range = /(?:^|\s)(?:до|от|более|выше|свыше|менее)\s*\d|\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/iu;
+  return evidence.values.every((value) => suffix.test(value) && range.test(value))
+    ? []
+    : [`numeric clarification has an exact or unitless option instead of ${unit} ranges`];
 }
 
 function normalizeCatalogUnit(unit) {
@@ -1266,9 +1310,14 @@ function renderedStockUnitFailures(links, expectedUnit) {
   return failures;
 }
 
-export function evaluate(expect = {}, response, { requireVerifiedPages = false, previousVerifiedSkus = new Set() } = {}) {
+export function evaluate(expect = {}, response, {
+  requireVerifiedPages = false,
+  previousVerifiedSkus = new Set(),
+  previousClarificationChoice = null,
+  message = null,
+} = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_every_product_page);
+  const requireSourceProof = Boolean(expect.require_every_product_page || expect.require_catalog_minimum);
   const linkEvidence = productLinkEvidence(response.links, {
     verifiedPages: response.verifiedProductPages,
     requireVerifiedPages: requireVerifiedPages || requireSourceProof,
@@ -1295,7 +1344,7 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
       }
     }
   }
-  if (requireVerifiedPages) {
+  if (requireVerifiedPages || Boolean(expect.require_catalog_minimum)) {
     const seenProducts = new Set();
     for (const link of response.links) {
       const identity = productUrlIdentity(link.url);
@@ -1329,7 +1378,7 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
     if (!response.terminalDiagnosticSeen) failures.push('terminal diagnostic is missing');
     if (!response.logId) failures.push('request log ID is missing');
   }
-  if (requireSourceProof) {
+  if (expect.require_every_product_page) {
     const rules = expect.require_every_product_page;
     if (!validProductPageRules(rules)) {
       failures.push('invalid product-page source evidence contract');
@@ -1354,6 +1403,26 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
     } else if (expect.require_clarification_choice !== 'either' &&
                evidence.mode !== expect.require_clarification_choice) {
       failures.push(`clarification choice mode ${evidence.mode} != ${expect.require_clarification_choice}`);
+    }
+  }
+  if (expect.require_clarification_facet_key !== undefined) {
+    const evidence = clarificationChoiceEvidence(response);
+    if (evidence.facet_key !== expect.require_clarification_facet_key || !evidence.mode) {
+      failures.push(`clarification facet ${evidence.facet_key ?? 'missing'} != ${expect.require_clarification_facet_key}`);
+    }
+  }
+  if (expect.require_clarification_range_unit !== undefined) {
+    failures.push(...clarificationRangeFailures(
+      clarificationChoiceEvidence(response), expect.require_clarification_range_unit,
+    ));
+  }
+  if (expect.require_previous_quick_reply !== undefined) {
+    const required = expect.require_previous_quick_reply;
+    if (previousClarificationChoice?.mode !== 'options' ||
+        previousClarificationChoice.facet_key !== required.facet_key ||
+        !previousClarificationChoice.values?.includes(required.value) ||
+        message !== required.value) {
+      failures.push(`continuation is not an exact server-issued quick-reply value for ${required.facet_key}`);
     }
   }
   if (Number.isFinite(expect.min_products) && linkEvidence.uniqueCount < expect.min_products) {
@@ -1415,6 +1484,29 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false, 
   }
   if (expect.require_quoted_price_per_piece === true) {
     failures.push(...quotedPricePerPieceFailures(response));
+  }
+  if (expect.require_catalog_minimum !== undefined) {
+    const proof = response.catalogMinimumProof;
+    if (!proof?.verified || proof.source_url !== expect.require_catalog_minimum.source_url) {
+      failures.push(`catalog minimum is not independently verified: ${proof?.reason ?? 'missing source proof'}`);
+    } else if (!Array.isArray(proof.winners) || proof.winners.length === 0 ||
+               !Array.isArray(proof.eligible_products) ||
+               proof.eligible_products.length !== proof.matching_available ||
+               !Number.isFinite(proof.minimum_price) ||
+               proof.winners.some((winner) => winner.price !== proof.minimum_price ||
+                 !proof.eligible_products.some((item) => item.url === winner.url && item.price === winner.price))) {
+      failures.push('catalog minimum proof has no valid winner');
+    } else if (response.links.length === 0) {
+      failures.push('catalog minimum requires a rendered product card');
+    } else {
+      const winnerIdentities = new Set(proof.winners.map((item) => productUrlIdentity(item.url)));
+      for (const link of response.links) {
+        if (!winnerIdentities.has(productUrlIdentity(link.url)) ||
+            !Number.isFinite(link.price) || Math.abs(link.price - proof.minimum_price) > 0.01) {
+          failures.push(`rendered product is not a catalog-proven minimum ${proof.minimum_price} ₸/${expect.require_catalog_minimum.unit}: ${link.title}`);
+        }
+      }
+    }
   }
   if (Array.isArray(expect.require_product_title) && !includesAny(productTitles, expect.require_product_title)) {
     failures.push(`none of required product-title fragments found: ${expect.require_product_title.join(', ')}`);
@@ -1690,18 +1782,24 @@ async function runTurn({ message, expect }, state) {
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
   const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+    Boolean(expect.require_catalog_minimum) ||
     expect.require_new_product_skus === true;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
     ? await verifyProductLinks(parsed.links, { cache: productPageCache })
+    : null;
+  parsed.catalogMinimumProof = response.ok && expect.require_catalog_minimum
+    ? await verifyCatalogMinimum(expect.require_catalog_minimum.source_url, expect.require_catalog_minimum)
     : null;
   const linkEvidence = productLinkEvidence(parsed.links, {
     verifiedPages: parsed.verifiedProductPages,
     requireVerifiedPages: requiresLiveProductProof,
   });
   const failures = response.ok
-    ? evaluate(expect, parsed, {
+      ? evaluate(expect, parsed, {
         requireVerifiedPages: requiresLiveProductProof,
         previousVerifiedSkus: state.previousVerifiedSkus,
+        previousClarificationChoice: state.previousClarificationChoice,
+        message,
       })
     : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
@@ -1712,6 +1810,8 @@ async function runTurn({ message, expect }, state) {
     state.previousVerifiedSkus = new Set();
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
+  const priorChoiceEvidence = state.previousClarificationChoice;
+  state.previousClarificationChoice = clarificationChoiceEvidence(parsed);
   for (const proof of parsed.verifiedProductPages?.values() ?? []) {
     if (proof.verified) state.previousVerifiedSkus.add(verifiedProductKey(proof, proof.identity));
   }
@@ -1736,12 +1836,14 @@ async function runTurn({ message, expect }, state) {
           description_excerpt: description?.slice(0, 500) ?? '',
         }))
       : [],
+    catalog_minimum_evidence: parsed.catalogMinimumProof,
     products: parsed.links,
     text: parsed.text,
     completed: parsed.completed,
     conversation_boundary: parsed.conversationBoundary,
     selection_contract: parsed.selectionContract,
     clarification_choice: clarificationChoiceEvidence(parsed),
+    previous_clarification_choice: expect.require_previous_quick_reply ? priorChoiceEvidence : null,
     tool_events: parsed.toolEvents,
     passed: failures.length === 0,
     failures,
@@ -1776,6 +1878,7 @@ export async function main() {
           history: [],
           dialogSlots: {},
           previousVerifiedSkus: new Set(),
+          previousClarificationChoice: null,
         };
         const turns = [];
         for (let turnIndex = 0; turnIndex < testCase.turns.length; turnIndex++) {

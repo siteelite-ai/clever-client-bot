@@ -10,16 +10,18 @@ const outputFile = path.join(root, 'docs/qa/release-inventory-v2-20261009.json')
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
+// `sourceTurnCount` is the count of base-suite turns, not a claim that each
+// turn quotes a customer source: the two BT-929 chip continuations are synthetic.
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
-    sha256: '3e83af0d0859636af91896a0dd34517aaf81a9d275e7babcdda812f99cb9d91d',
+    sha256: '7c8a908bc82f8dfaecf648cce43af895be333a78b45bbc1b151c30d3379f0173',
     caseCount: 27, sourceTurnCount: 42, runCount: 81, evaluatedTurnCount: 126,
     repeat: 3,
   },
   {
     file: 'customer-audit-20260921-cases.json',
-    sha256: '38bd5615c3419f2399eef876a82523bb14e9d1ba725948048bd972e3d8a1bd28',
+    sha256: 'b90117df7f92907efe1826300b48c41fec3ee899bad29813870dd88726182929',
     caseCount: 27, sourceTurnCount: 39, runCount: 54, evaluatedTurnCount: 78,
     repeat: 1,
     variations: {
@@ -30,8 +32,8 @@ export const MATRIX_MANIFESTS = [
   },
   {
     file: 'notion-legacy-bug-cases-v2.json',
-    sha256: '4105294a2dbc6c015b73be939947d8372317deafcc1785b4210212354c5abbb7',
-    caseCount: 30, sourceTurnCount: 31, runCount: 38, evaluatedTurnCount: 39,
+    sha256: '2422a788c909c979abed927e07693f91b5054861f525bf79710b4a358342e25f',
+    caseCount: 30, sourceTurnCount: 33, runCount: 38, evaluatedTurnCount: 41,
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -42,7 +44,7 @@ export const MATRIX_MANIFESTS = [
   },
   {
     file: 'systemic-cardinality-cases.json',
-    sha256: 'b5583b3380c3e17680cb7f2e85407e301e7650754a879b098bc6bf2103c8a5b0',
+    sha256: 'db38f93c6245a8b0063cc35c1d6ddca4c7e88c27f95f0d52055ae7556799e62b',
     caseCount: 5, sourceTurnCount: 5, runCount: 15, evaluatedTurnCount: 15,
     repeat: 3,
   },
@@ -220,7 +222,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
     runs: runs.length,
     ordered_turns: runs.reduce((count, run) => count + run.turns.length, 0),
   };
-  assert.deepEqual(counts, { matrix_files: 5, runs: 188, ordered_turns: 258 });
+  assert.deepEqual(counts, { matrix_files: 5, runs: 188, ordered_turns: 260 });
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
@@ -231,7 +233,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content.',
+    provenance_note: 'This inventory stores suite-level claims only. Exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json; later turns and expectations are not independently linked to source content. The second turns of BT-929 pump and outdoor-floodlight cases are explicitly synthetic API chip continuations (docs/qa/notion-source-index-20261009.json), not customer quotations or browser clicks.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,
@@ -256,7 +258,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else {
       assert.equal(fs.readFileSync(outputFile, 'utf8'), serialized,
         'release inventory is stale; rebuild with --write after reviewing matrix changes');
-      process.stdout.write('Release inventory matches the pinned five-file matrix (188 runs, 258 turns).\n');
+      process.stdout.write('Release inventory matches the pinned five-file matrix (188 runs, 260 turns).\n');
     }
   }
 }
