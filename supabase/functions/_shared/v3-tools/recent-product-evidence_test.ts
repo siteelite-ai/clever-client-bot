@@ -198,6 +198,95 @@ Deno.test("multi-product comparison explicitly frames prices and confirmed chara
   );
 });
 
+Deno.test("measured 30 m² facet survives late catalog order and both follow-up routes", () => {
+  const earlierFacets = Array.from({ length: 18 }, (_, index) =>
+    `Параметр ${index + 1}: значение ${index + 1}`
+  );
+  const evidence = compactRecentProducts([1, 2, 3, 4].map((index) =>
+    product({
+      id: String(index),
+      pagetitle: `Люстра ${index}`,
+      short_traits: [
+        ...earlierFacets,
+        "Максимальная площадь освещения, м2: 30",
+        "Назначение: кафе; кухня; офис; гостиная; спальня",
+      ],
+    })
+  ));
+  assertEquals(evidence.length, 4);
+  assert(evidence.every((item) =>
+    item.short_traits.includes("Максимальная площадь освещения, м2: 30")
+  ));
+  const suitability = buildDeterministicEvidenceAnswer(
+    evidence,
+    "Они точно подходят для освещения 30 квадратных метров?",
+  );
+  assert(suitability.includes("Для 30 м²"));
+  assert(suitability.includes("4 из 4 вариантов"));
+  assertEquals(
+    suitability.match(/Максимальная площадь освещения, м2: 30/gu)?.length,
+    4,
+  );
+  assert(suitability.includes("не гарантия достаточной освещённости"));
+
+  const comparison = buildDeterministicEvidenceAnswer(
+    evidence,
+    "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+  );
+  assertEquals(
+    comparison.match(/Максимальная площадь освещения, м2: 30/gu)?.length,
+    4,
+  );
+  assert(comparison.includes("Сравниваю цены"));
+});
+
+Deno.test("measured follow-up does not invent missing, lower or contradictory area proof", () => {
+  const evidence = compactRecentProducts([
+    product({
+      id: "below",
+      short_traits: ["Максимальная площадь освещения, м2: 25"],
+    }),
+    product({
+      id: "missing",
+      pagetitle: "Светильник 30 м²",
+      short_traits: ["Цвет: белый"],
+    }),
+    product({
+      id: "conflict",
+      short_traits: [
+        "Максимальная площадь освещения, м2: 30",
+        "Максимальная площадь освещения, м2: 25",
+      ],
+    }),
+    product({
+      id: "wrong-axis",
+      short_traits: ["Максимальная площадь упаковки, м2: 30"],
+    }),
+  ]);
+  const answer = buildDeterministicEvidenceAnswer(
+    evidence,
+    "Они точно подходят для освещения 30 квадратных метров?",
+  );
+  assert(answer.includes("0 из 4 вариантов"));
+  assert(answer.includes("1 — ниже"));
+  assert(answer.includes("по 3 подтвердить значение нельзя"));
+  assert(!answer.includes("4 из 4 вариантов имеют значение не ниже"));
+});
+
+Deno.test("recent evidence keeps a bounded forty-trait source window", () => {
+  const evidence = compactRecentProducts([
+    product({
+      short_traits: Array.from({ length: 60 }, (_, index) =>
+        `Характеристика ${index + 1}: значение ${index + 1}`
+      ),
+    }),
+  ]);
+  assertEquals(evidence[0].short_traits.length, 40);
+  assertEquals(evidence[0].short_traits.at(-1), "Характеристика 40: значение 40");
+  const answer = buildDeterministicEvidenceAnswer(evidence);
+  assert(!answer.includes("Характеристика 41"));
+});
+
 Deno.test("rendered product titles are only lookup hints from controlled product links", () => {
   const titles = extractRenderedProductTitles([
     { role: "user", content: "Покажи светильник" },
@@ -368,6 +457,35 @@ Deno.test("prior reasoning excludes rendered product blocks and their numeric me
     prose,
     "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.",
   );
+});
+
+Deno.test("loaded evidence stays bounded and rejects an external product URL", async () => {
+  const valid = compactRecentProducts([product()])[0];
+  const supabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({
+            data: {
+              cache_value: {
+                products: [
+                  { ...valid, short_traits: Array.from({ length: 60 }, (_, i) =>
+                    `Характеристика ${i + 1}: ${"x".repeat(200)}`) },
+                  { ...valid, id: "external", url: "https://example.com/catalog/item/" },
+                ],
+              },
+              expires_at: "2099-01-01T00:00:00.000Z",
+            },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  } as unknown as SupabaseClient;
+  const loaded = await loadRecentProductEvidence(supabase, "session");
+  assertEquals(loaded.length, 1);
+  assertEquals(loaded[0].short_traits.length, 40);
+  assert(loaded[0].short_traits.every((trait) => trait.length <= 160));
 });
 
 Deno.test("hanging optional context read cannot hold a customer turn", async () => {

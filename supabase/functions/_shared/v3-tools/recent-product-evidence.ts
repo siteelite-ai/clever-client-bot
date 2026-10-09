@@ -9,7 +9,11 @@ import { runWithDeadline } from "./turn-deadline.ts";
 
 const TTL_SECONDS = 30 * 60;
 const MAX_PRODUCTS = 8;
-const MAX_TRAITS = 14;
+// The catalog may put a selection-critical measured facet after cosmetic
+// fields. Retain a bounded full card window, then select relevant facts for
+// each follow-up instead of persisting/printing an arbitrary first-five slice.
+const MAX_TRAITS = 40;
+const MAX_DISPLAY_TRAITS = 8;
 
 export interface RecentProductEvidence {
   id: string;
@@ -269,6 +273,134 @@ function displayUnit(unit: string | null): string {
   return value ? `/${value}` : "";
 }
 
+function evidenceTraitParts(raw: string): { caption: string; value: string } | null {
+  const [rawCaption, ...rawValue] = cleanText(raw, 160).split(":");
+  const caption = rawCaption?.trim() ?? "";
+  const value = rawValue.join(":").trim();
+  return caption && value ? { caption, value } : null;
+}
+
+function normalisedEvidenceText(value: string): string {
+  return cleanText(value, 800).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+}
+
+function requestedSquareMetres(message: string): number | null {
+  const match = normalisedEvidenceText(message).match(
+    /(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(?:м\s*[²2]|кв\.?\s*м(?:етр\p{L}*)?|квадрат\p{L}*\s+метр\p{L}*)/u,
+  );
+  const value = match ? Number(match[1].replace(",", ".")) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function declaredSquareMetreMaximum(
+  product: RecentProductEvidence,
+  userMessage: string,
+): { caption: string; value: number } | null {
+  const domainStems = (normalisedEvidenceText(userMessage).match(/\p{L}{5,}/gu) ?? [])
+    .map((word) => word.slice(0, 5))
+    .filter((stem) =>
+      !["квадр", "метро", "точно", "подхо", "вариа", "товар"].includes(stem)
+    );
+  if (domainStems.length === 0) return null;
+  const facts = (Array.isArray(product.short_traits) ? product.short_traits : [])
+    .slice(0, MAX_TRAITS)
+    .map(evidenceTraitParts)
+    .filter((fact): fact is { caption: string; value: string } => Boolean(fact))
+    .filter(({ caption, value }) =>
+      /максимальн\p{L}*/iu.test(caption) &&
+      domainStems.some((stem) =>
+        normalisedEvidenceText(caption).includes(stem)
+      ) &&
+      /(?:^|[^\p{L}\p{N}])(?:м\s*[²2]|кв\.?\s*м)(?:$|[^\p{L}\p{N}])/iu
+        .test(`${caption}: ${value}`)
+    )
+    .map(({ caption, value }) => ({
+      caption,
+      value: /^\d+(?:[.,]\d+)?$/u.test(value)
+        ? Number(value.replace(",", "."))
+        : NaN,
+    }));
+  // Contradictory or ambiguous source values are not an affirmative proof.
+  return facts.length === 1 && Number.isFinite(facts[0].value) &&
+      facts[0].value > 0
+    ? facts[0]
+    : null;
+}
+
+function relevantEvidenceTraits(
+  product: RecentProductEvidence,
+  batch: RecentProductEvidence[],
+  userMessage: string,
+): string[] {
+  const question = normalisedEvidenceText(userMessage);
+  const queryStems = [...new Set(
+    (question.match(/\p{L}{5,}/gu) ?? []).map((word) => word.slice(0, 5)),
+  )];
+  const squareMetresAsked = requestedSquareMetres(userMessage) !== null;
+  const valuesByCaption = new Map<string, Set<string>>();
+  for (const item of batch) {
+    for (const raw of (Array.isArray(item.short_traits) ? item.short_traits : [])
+      .slice(0, MAX_TRAITS)) {
+      const fact = evidenceTraitParts(raw);
+      if (!fact) continue;
+      const key = normalisedEvidenceText(fact.caption);
+      const values = valuesByCaption.get(key) ?? new Set<string>();
+      values.add(normalisedEvidenceText(fact.value));
+      valuesByCaption.set(key, values);
+    }
+  }
+  const seen = new Set<string>();
+  return (Array.isArray(product.short_traits) ? product.short_traits : [])
+    .slice(0, MAX_TRAITS)
+    .map((raw, index) => {
+      const fact = evidenceTraitParts(raw);
+      if (!fact) return null;
+      const line = `${fact.caption}: ${fact.value}`;
+      const key = normalisedEvidenceText(line);
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const caption = normalisedEvidenceText(fact.caption);
+      const hasSquareUnit = /(?:^|[^\p{L}\p{N}])(?:м\s*[²2]|кв\.?\s*м)(?:$|[^\p{L}\p{N}])/iu
+        .test(line);
+      const numeric = /\d/u.test(fact.value);
+      const score = queryStems.filter((stem) => caption.includes(stem)).length * 12 +
+        (squareMetresAsked && hasSquareUnit ? 15 : 0) +
+        (numeric && /максимальн\p{L}*/iu.test(fact.caption) ? 10 : 0) +
+        (numeric && /,\s*[\p{L}%°][\p{L}\d%°²/.-]{0,8}$/u.test(fact.caption) ? 5 : 0) +
+        ((valuesByCaption.get(caption)?.size ?? 0) > 1 ? 3 : 0);
+      return { line, index, score };
+    })
+    .filter((fact): fact is { line: string; index: number; score: number } =>
+      Boolean(fact))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, MAX_DISPLAY_TRAITS)
+    .map(({ line }) => line);
+}
+
+function measuredFollowupBoundary(
+  products: RecentProductEvidence[],
+  userMessage: string,
+): string | null {
+  const requested = requestedSquareMetres(userMessage);
+  if (requested === null || products.length === 0) return null;
+  const facts = products.map((product) =>
+    declaredSquareMetreMaximum(product, userMessage)
+  );
+  const confirmed = facts.filter((fact) => fact && fact.value >= requested).length;
+  const below = facts.filter((fact) => fact && fact.value < requested).length;
+  const missing = products.length - confirmed - below;
+  const amount = String(requested).replace(".", ",");
+  const knownCaptions = [...new Set(
+    facts.filter((fact): fact is { caption: string; value: number } => Boolean(fact))
+      .map((fact) => normalisedEvidenceText(fact.caption)),
+  )];
+  const sourceCaption = facts.find((fact) => fact)?.caption;
+  const source = knownCaptions.length === 1 && sourceCaption
+    ? `по заявленному в карточке параметру «${sourceCaption}»`
+    : "по однозначному параметру максимальной площади в сохранённых карточках";
+  return `Для ${amount} м² ${source}: ${confirmed} из ${products.length} вариантов имеют значение не ниже запроса, ${below} — ниже, по ${missing} подтвердить значение нельзя. Это проверка заявленной характеристики, а не гарантия достаточной освещённости или пригодности установки в конкретном помещении.`;
+}
+
 export function buildDeterministicEvidenceAnswer(
   products: RecentProductEvidence[],
   userMessage = "",
@@ -285,10 +417,9 @@ export function buildDeterministicEvidenceAnswer(
       ? "В последней выдаче только один вариант, поэтому сравнить товары и объяснить разницу в цене нельзя."
       : "Сравниваю цены и подтверждённые характеристики ранее показанных вариантов:"
     : "По ранее показанным карточкам могу подтвердить только следующие данные:";
-  const rows = products.slice(0, 5).map((product, index) => {
-    const traits = product.short_traits.slice(0, 5).map((trait) =>
-      cleanText(trait, 180)
-    ).filter(Boolean);
+  const displayedProducts = products.slice(0, MAX_PRODUCTS);
+  const rows = displayedProducts.map((product, index) => {
+    const traits = relevantEvidenceTraits(product, displayedProducts, userMessage);
     const facts = traits.length
       ? traits.join("; ")
       : "дополнительные характеристики в карточке не подтверждены";
@@ -298,9 +429,10 @@ export function buildDeterministicEvidenceAnswer(
   });
   return [
     comparisonBoundary,
+    measuredFollowupBoundary(displayedProducts, userMessage),
     ...rows,
     "Если нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function cleanText(value: unknown, max: number): string {
@@ -316,8 +448,26 @@ function isEvidence(value: unknown): value is RecentProductEvidence {
   const row = value as Record<string, unknown>;
   return Boolean(
     cleanText(row.id, 120) && cleanText(row.pagetitle, 300) &&
-      Number(row.price) > 0 && cleanText(row.url, 800),
+      Number.isFinite(Number(row.price)) && Number(row.price) > 0 &&
+      productUrlIdentity(String(row.url ?? "")),
   );
+}
+
+function boundLoadedEvidence(product: RecentProductEvidence): RecentProductEvidence {
+  return {
+    id: cleanText(product.id, 120),
+    pagetitle: cleanText(product.pagetitle, 300),
+    article: cleanText(product.article, 120) || null,
+    vendor: cleanText(product.vendor, 120) || null,
+    price: Number(product.price),
+    unit: cleanText(product.unit, 40) || null,
+    url: productUrlIdentity(product.url)!,
+    short_traits: (Array.isArray(product.short_traits) ? product.short_traits : [])
+      .map((trait) => cleanText(trait, 160))
+      .filter(Boolean)
+      .slice(0, MAX_TRAITS),
+    shown_at: cleanText(product.shown_at, 80),
+  };
 }
 
 export function compactRecentProducts(
@@ -346,7 +496,7 @@ export function compactRecentProducts(
       url,
       short_traits:
         (Array.isArray(product.short_traits) ? product.short_traits : [])
-          .map((trait) => cleanText(trait, 240))
+          .map((trait) => cleanText(trait, 160))
           .filter(Boolean)
           .slice(0, MAX_TRAITS),
       shown_at: shownAt,
@@ -388,7 +538,7 @@ export async function loadRecentProductEvidence(
     }
     const raw = (data.cache_value as { products?: unknown })?.products;
     return Array.isArray(raw)
-      ? raw.filter(isEvidence).slice(0, MAX_PRODUCTS)
+      ? raw.filter(isEvidence).slice(0, MAX_PRODUCTS).map(boundLoadedEvidence)
       : [];
   } catch {
     return [];
