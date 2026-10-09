@@ -154,6 +154,33 @@ test('restored assistant content cannot inject HTML or event handlers through ma
   dom.window.close();
 });
 
+test('markdown formatting preserves URL underscores and cannot promote URL content into HTML', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  const productUrl = 'https://220volt.kz/catalog/__line__/item?series=foo__bar__baz&x=1';
+  const escapedProductUrl = 'https://220volt.kz/catalog/product\\_model';
+  const suspiciousUrl = 'https://example.com/" onmouseover="window.__xss__=1';
+  state.history[2].content = [
+    `1. [**Товар**](${productUrl})`,
+    `2. [Товар с экранированным знаком](${escapedProductUrl})`,
+    `- [ссылка](${suspiciousUrl})`,
+    '<img src=x onerror="window.__xss__=1">',
+  ].join('\n');
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = messages.querySelectorAll('a');
+
+  assert.equal(links.length, 3);
+  assert.equal(links[0].getAttribute('href'), productUrl);
+  assert.equal(links[0].querySelector('strong')?.textContent, 'Товар', 'link label markdown should remain formatted');
+  assert.equal(links[1].getAttribute('href'), 'https://220volt.kz/catalog/product_model');
+  assert.equal(links[2].getAttribute('href'), suspiciousUrl);
+  assert.equal(links[2].getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__xss, undefined);
+  dom.window.close();
+});
+
 test('expired dialogue is discarded on initialization', () => {
   const now = 1_800_000_000_000;
   const dom = bootWidget({ state: savedDialogue(now - SESSION_TTL_MS - 1), now });

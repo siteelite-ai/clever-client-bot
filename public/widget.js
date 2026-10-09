@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-85698adad59601d5';
+  var WIDGET_VERSION = 'widget-aeab15a8591fc2f2';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -1281,16 +1281,24 @@
     return text.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '').trim();
   }
 
+  function unescapeMarkdownPunctuation(text) {
+    return text.replace(/\\([()\[\]_*~`\\])/g, '$1');
+  }
+
   // Parse markdown-like formatting (only for assistant messages, input is pre-escaped)
   function formatMessage(text) {
     // First escape ALL HTML to prevent XSS
     let result = escapeHtml(text);
+    var linkUrls = [];
     
     // Now safely apply markdown formatting on escaped text
-    // Handle links [text](url) - validate URL protocol (http, https, tel, mailto, viber)
+    // Handle links [text](url) - validate URL protocol (http, https, tel, mailto, viber).
+    // Keep URL attributes inert until all other Markdown substitutions finish:
+    // otherwise __ in a URL can become <strong> inside the generated href.
     result = result.replace(/\[([^\]]+)\]\(((https?:\/\/|tel:|mailto:|viber:\/\/)[^)]+)\)/g, function(match, text, url) {
       var isExternal = url.startsWith('http');
-      return '<a href="' + escapeQuotedAttribute(url) + '"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
+      var index = linkUrls.push(url) - 1;
+      return '<a href="<!--volturl:' + index + '-->"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
     });
     
     // Handle bold **text**
@@ -1328,7 +1336,7 @@
     
     // Unescape backslash-escaped markdown punctuation that LLM may emit in product names
     // e.g. "\(серия Florence\)" → "(серия Florence)"
-    result = result.replace(/\\([()\[\]_*~`\\])/g, '$1');
+    result = unescapeMarkdownPunctuation(result);
     
     // Line breaks (but not after list items)
     result = result.replace(/\n/g, '<br>');
@@ -1339,6 +1347,12 @@
     
     // Clean up multiple consecutive breaks
     result = result.replace(/(<br>){3,}/g, '<br><br>');
+
+    // Restore URL attributes only after formatting. A literal marker in
+    // untrusted content was HTML-escaped above and cannot match this token.
+    result = result.replace(/<!--volturl:(\d+)-->/g, function(match, index) {
+      return escapeQuotedAttribute(unescapeMarkdownPunctuation(linkUrls[Number(index)]));
+    });
     
     return result;
   }

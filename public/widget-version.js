@@ -1,2 +1,2 @@
 /* Версия виджета. Загружается через <script> с ?ts=..., поэтому кэш невозможен и CORS не нужен. */
-window.__voltWidgetVersion = 'widget-85698adad59601d5';
+window.__voltWidgetVersion = 'widget-aeab15a8591fc2f2';
