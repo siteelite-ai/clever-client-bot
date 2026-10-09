@@ -1,10 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { authorizeKnowledgeUser, bearerToken } from "./authorization.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Cache-Control': 'no-store',
 };
+
+function accessResponse(status: number, error: string): Response {
+  return new Response(JSON.stringify({ success: false, error }), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
 
 // Generate embeddings via OpenRouter (Gemini embedding models)
 async function generateEmbedding(text: string, supabase: any): Promise<number[]> {
@@ -290,13 +300,57 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+  if (req.method !== 'POST') {
+    return accessResponse(405, 'Метод не поддерживается');
+  }
+
+  // This function uses the service-role key for every knowledge action. Keep
+  // the authorization gate ahead of request parsing and service-role creation,
+  // even when the Edge gateway is deployed with verify_jwt = false.
+  const token = bearerToken(req.headers.get('Authorization'));
+  if (!token) {
+    return accessResponse(401, 'Не авторизован');
+  }
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error('[Knowledge] Auth configuration missing');
+    return accessResponse(503, 'Сервис авторизации недоступен');
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const authorization = await authorizeKnowledgeUser(
+      token,
+      async (accessToken) => {
+        const { data, error } = await callerClient.auth.getUser(accessToken);
+        return { userId: data.user?.id ?? null, error };
+      },
+      async (userId) => {
+        const { data, error } = await callerClient
+          .from('user_roles')
+          .select('role')
+          .eq('user_id', userId)
+          .in('role', ['admin', 'editor']);
+        return { roles: data?.map((row) => row.role) ?? null, error };
+      },
+    );
+    if (!authorization.allowed) {
+      return accessResponse(authorization.status, authorization.error);
+    }
+  } catch (error) {
+    console.error('[Knowledge] Authorization setup failed:', error);
+    return accessResponse(503, 'Сервис авторизации недоступен');
+  }
 
   try {
     const requestBody = await req.json();
     const { action, url, text, title, pdfBase64, entryId, entryType, offset, batch_size } = requestBody;
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     
     if (!LOVABLE_API_KEY) {
