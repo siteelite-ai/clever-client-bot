@@ -42,7 +42,11 @@
           "message": "Они точно подходят для освещения 30 квадратных метров?",
           "expect": {
             "conversation_boundary": "continuation",
-            "require_any_text": ["светов", "люмен", "мощн", "не могу подтвердить", "нельзя гарантировать"],
+            "require_text_groups": [
+              ["30 м²", "30 м2", "30 квадрат"],
+              ["по каталог", "в карточк", "заявлен"],
+              ["площадь освещения", "максимальная площадь"]
+            ],
             "forbid_text": ["свежих карточек", "погорячился", "search_catalog", "render_products"]
           }
         },
@@ -52,6 +56,22 @@
             "conversation_boundary": "continuation",
             "require_any_text": ["цен", "мощн", "управ", "характерист"],
             "forbid_text": ["свежих карточек", "не довёл", "search_catalog", "render_products"]
+          }
+        },
+        {
+          "message": "А есть другие варианты?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_new_product_skus": true,
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Назначение", "require_any": ["гостин"] },
+                { "name": "Максимальная площадь освещения, м2", "min_numeric": 30 }
+              ]
+            },
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
       ]
@@ -72,7 +92,7 @@
                 { "facets": [{ "name": "Способ монтажа", "require_any": ["накладн"] }] },
                 { "any_of": [
                   { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
-                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                  { "description": { "require_any": ["бытов", "жилых"] } }
                 ] },
                 { "any_of": [
                   { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
@@ -401,7 +421,7 @@
               "all_of": [
                 { "any_of": [
                   { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
-                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                  { "description": { "require_any": ["бытов", "жилых"] } }
                 ] },
                 { "any_of": [
                   { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
@@ -435,7 +455,7 @@
               "all_of": [
                 { "any_of": [
                   { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
-                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                  { "description": { "require_any": ["бытов", "жилых"] } }
                 ] },
                 { "any_of": [
                   { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },

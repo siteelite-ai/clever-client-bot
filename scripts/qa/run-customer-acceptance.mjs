@@ -93,9 +93,9 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: '9ee3a004bf597cc7848a38cbf7e8845d7fba4ebc84544a306bd5dadb8af4b2cd',
+    sha256: '111e1ca0ffdad1b4865a04e4594b98df1de0ecc71d179f6277aa6083abe4ed74',
     repeat: 3,
-    turns: 41,
+    turns: 42,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
   },
   'customer-audit-20260921-cases.json': {
@@ -715,7 +715,7 @@ function nameTokenRecall(displayed, source) {
   return shared / displayedWords.size;
 }
 
-export function evaluate(expect = {}, response, { requireVerifiedPages = false } = {}) {
+export function evaluate(expect = {}, response, { requireVerifiedPages = false, previousVerifiedSkus = new Set() } = {}) {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_every_product_page);
   const linkEvidence = productLinkEvidence(response.links, {
@@ -732,6 +732,14 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false }
   }
   if (linkEvidence.unverified.length > 0) {
     failures.push(`unverified product page(s): ${linkEvidence.unverified.join(' | ')}`);
+  }
+  if (expect.require_new_product_skus === true) {
+    for (const link of response.links) {
+      const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
+      if (proof?.verified && previousVerifiedSkus.has(proof.sku)) {
+        failures.push(`previously shown SKU repeated as a new alternative: ${proof.sku}`);
+      }
+    }
   }
   if (requireVerifiedPages) {
     const seenSkus = new Set();
@@ -1090,7 +1098,8 @@ async function runTurn({ message, expect }, state) {
   const { response, raw, attempts } = fetched;
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
-  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page);
+  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+    expect.require_new_product_skus === true;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
     ? await verifyProductLinks(parsed.links, { cache: productPageCache })
     : null;
@@ -1099,15 +1108,22 @@ async function runTurn({ message, expect }, state) {
     requireVerifiedPages: requiresLiveProductProof,
   });
   const failures = response.ok
-    ? evaluate(expect, parsed, { requireVerifiedPages: requiresLiveProductProof })
+    ? evaluate(expect, parsed, {
+        requireVerifiedPages: requiresLiveProductProof,
+        previousVerifiedSkus: state.previousVerifiedSkus,
+      })
     : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
   if (parsed.conversationBoundary?.sessionId) {
     state.sessionId = parsed.conversationBoundary.sessionId;
     state.history = [];
     state.dialogSlots = {};
+    state.previousVerifiedSkus = new Set();
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
+  for (const proof of parsed.verifiedProductPages?.values() ?? []) {
+    if (proof.verified) state.previousVerifiedSkus.add(proof.sku);
+  }
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
     message,
@@ -1163,6 +1179,7 @@ export async function main() {
           sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${execution.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
           history: [],
           dialogSlots: {},
+          previousVerifiedSkus: new Set(),
         };
         const turns = [];
         for (let turnIndex = 0; turnIndex < testCase.turns.length; turnIndex++) {

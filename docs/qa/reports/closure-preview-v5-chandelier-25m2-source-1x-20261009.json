@@ -1,0 +1,99 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "9ee3a004bf597cc7848a38cbf7e8845d7fba4ebc84544a306bd5dadb8af4b2cd",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T15:08:46.583Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-chandelier-25m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791558526590_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "status": 200,
+              "duration_ms": 23613,
+              "network_attempts": 1,
+              "log_id": "ae8bd15f-86f4-4ee7-9733-b56c45256ebf",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для общей освещённости гостиной 25 м² принимаем базовый ориентир 150–200 лк. Световой поток: 25 м² × 150 лк = 3750 лм (минимум). Комфортный ориентир — 25 × 200 = 5000 лм. Как рабочую гипотезу сначала проверяю «Тип лампы: LED»; без подтверждения клиента это не становится обязательным фильтром. По вашему обязательному классу допускаю одно из: «Вид светильника: аварийное освещение»; «Вид светильника: офисно-административное освещение»; «Вид светильника: светильники для промышленного освещения»; «Вид светильника: для освещения улиц»; «Вид светильника: декоративное освещение»; «Вид светильника: светильник для ориентационного освещения»; значения вне этого класса исключаю.\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 38, листьев 1",
+                  "duration_ms": 8260
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 7",
+                  "duration_ms": 2205
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T15:09:10.205Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "ae8bd15f-86f4-4ee7-9733-b56c45256ebf"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

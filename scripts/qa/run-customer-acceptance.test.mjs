@@ -465,6 +465,31 @@ test('strict acceptance checks rendered SKU identity, source price, stock and te
     .some((failure) => failure.includes('not confirmed in stock')));
 });
 
+test('alternative follow-up rejects a previously verified SKU', () => {
+  const url = 'https://220volt.kz/catalog/svetotexnika/svetilniki/old-light/';
+  const identity = productUrlIdentity(url);
+  const proof = {
+    verified: true, sku: 'OLD-LIGHT', name: 'Люстра для гостиной',
+    offerPrice: 9000, availability: 'https://schema.org/InStock',
+    facets: {}, description: '',
+  };
+  const response = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-alternatives', diagnosticError: null, serverProductsCount: 1,
+    links: [{ title: proof.name, url, price: 9000, stockLine: 'Астана (2 шт)' }],
+    verifiedProductPages: new Map([[identity, proof]]),
+  };
+  const expect = { min_products: 1, require_new_product_skus: true };
+  assert(evaluate(expect, response, {
+    requireVerifiedPages: true,
+    previousVerifiedSkus: new Set(['OLD-LIGHT']),
+  }).some((failure) => failure.includes('previously shown SKU')));
+  assert.deepEqual(evaluate(expect, response, {
+    requireVerifiedPages: true,
+    previousVerifiedSkus: new Set(['ANOTHER-LIGHT']),
+  }), []);
+});
+
 test('live product verification is bounded, cached and fails closed on categories or redirects', async () => {
   const productUrl = 'https://220volt.kz/catalog/a/b/item/';
   const categoryUrl = 'https://220volt.kz/catalog/a/b/deep-category/';
