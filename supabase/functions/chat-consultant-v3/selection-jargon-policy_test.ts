@@ -8,6 +8,7 @@ import {
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
   enforceTerminalPairedFit,
+  extractSchemaBackedMeasuredReference,
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
   omitPairedObjectReferenceExactCriteria,
@@ -372,6 +373,101 @@ const item = (id: string, title: string): ProductRef => ({
   price: 100,
   stock: "in_stock",
   short_traits: [],
+});
+
+Deno.test("a customer cm dimension cannot silently bypass a live mm pair", () => {
+  const reference = { value: 12, unit: "см" };
+  const decision = terminalPairedFitDecision(
+    reference,
+    "подбери изделие для кабеля диаметром 12 см",
+    "До изменения диаметр больше 12 см, после изменения диаметр меньше 12 см.",
+    pairedFacets,
+  );
+  assertEquals(decision.state, "unproven");
+  assertEquals(
+    enforceTerminalPairedFit(
+      [item("wrong-scale", "Изделие 16/8")],
+      decision,
+      "",
+    ),
+    [],
+  );
+  assertEquals(
+    terminalPairedFitDecision(
+      reference,
+      "подбери изделие для кабеля длиной 12 см",
+      "",
+      pairedFacets,
+    ).state,
+    "not_applicable",
+  );
+  assertEquals(
+    terminalPairedFitDecision(
+      { value: 12, unit: "А" },
+      "подбери изделие для кабеля с током 12 А",
+      "",
+      pairedFacets,
+    ).state,
+    "not_applicable",
+  );
+});
+
+Deno.test("schema-owned diameter survives a distinct length measurement", () => {
+  const request = "подбери трубку для кабеля диаметром 12 мм длиной 1 м";
+  const reference = extractSchemaBackedMeasuredReference(
+    request,
+    pairedFacets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(reference, { value: 12, unit: "мм" });
+  const reasoning =
+    "До изменения внутренний диаметр должен быть строго больше 12 мм, а после изменения внутренний диаметр должен быть строго меньше 12 мм.";
+  const decision = terminalPairedFitDecision(
+    reference,
+    request,
+    reasoning,
+    pairedFacets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(
+    enforceTerminalPairedFit(
+      [item("equal", "Изделие 12/6"), item("fit", "Изделие 16/8")],
+      decision,
+      reasoning,
+    ).map(({ id }) => id),
+    ["fit"],
+  );
+  assertEquals(
+    extractSchemaBackedMeasuredReference(
+      "для кабеля диаметром 12 мм и другого кабеля диаметром 10 мм",
+      pairedFacets,
+    ),
+    null,
+  );
+  const foreignUnitRequest = "для кабеля диаметром 12 см длиной 1 м";
+  const foreignReference = extractSchemaBackedMeasuredReference(
+    foreignUnitRequest,
+    pairedFacets,
+  );
+  assertEquals(foreignReference, { value: 12, unit: "см" });
+  assertEquals(
+    terminalPairedFitDecision(
+      foreignReference,
+      foreignUnitRequest,
+      "До изменения диаметр больше 12 см, после изменения диаметр меньше 12 см.",
+      pairedFacets,
+    ).state,
+    "unproven",
+  );
+  assertEquals(
+    extractSchemaBackedMeasuredReference(
+      "трубка диаметром 12 мм длиной 1 м",
+      pairedFacets,
+      "Трубки термоусаживаемые",
+    ),
+    null,
+  );
 });
 
 Deno.test("terminal jargon fit proves strict high > 10 > low from live paired schema", () => {

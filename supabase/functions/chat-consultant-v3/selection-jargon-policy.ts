@@ -12,6 +12,7 @@ import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import {
   extractClientQuantities,
   isPhysicalMeasurementUnit,
+  normalizeUnit,
 } from "../_shared/v3-tools/criteria-consistency.ts";
 import { isRecentProductPriceSelectionFollowup } from "../_shared/v3-tools/recent-product-evidence.ts";
 import {
@@ -460,6 +461,43 @@ function propertyStem(token: string): string {
   return clean.length >= 5 ? clean.slice(0, 4) : clean;
 }
 
+function nearestMeasuredProperty(prefix: string): string | null {
+  const words = (prefix.match(/\p{L}+/gu) ?? []).slice(-4);
+  for (const property of [...words].reverse()) {
+    const token = normalize(property);
+    // An older property may not override an intervening, different physical
+    // property. Only measurement qualifiers may be skipped.
+    if (
+      /^(?:примерно|приблизительно|около|порядка|не|более|менее|до|от)$/u
+        .test(token)
+    ) continue;
+    return token;
+  }
+  return null;
+}
+
+function graphNamesProperty(
+  graph: { beforeFacet: CompatibilityFacet; afterFacet: CompatibilityFacet },
+  stem: string,
+): boolean {
+  const facetStems = (facet: CompatibilityFacet) =>
+    new Set(
+      `${facet.key} ${facet.caption}`.match(/\p{L}{4,}/gu)?.map(propertyStem) ??
+        [],
+    );
+  return facetStems(graph.beforeFacet).has(stem) &&
+    facetStems(graph.afterFacet).has(stem);
+}
+
+/** A catalog mm graph and a customer cm value concern the same dimension,
+ * but cannot be compared numerically without an explicit conversion proof.
+ * Keep the pair obligation and fail closed instead of treating it as absent. */
+function sameLengthDimension(left: string, right: string): boolean {
+  const lengthUnits = new Set(["мм", "см", "дм", "м", "км"]);
+  return lengthUnits.has(normalizeUnit(left)) &&
+    lengthUnits.has(normalizeUnit(right));
+}
+
 function customerPropertiesBeforeReferences(
   userMessage: string,
   reference: { value: number; unit: string },
@@ -640,10 +678,6 @@ export function terminalPairedFitDecision(
       ? { state: "unproven", reference: null, relations: [] }
       : none;
   }
-  const sameUnitGraphs = graphs.filter(({ graph }) =>
-    normalize(graph.unit) === normalize(reference.unit)
-  );
-  if (sameUnitGraphs.length === 0) return none;
   const customerMentions = customerPropertiesBeforeReferences(
     userMessage,
     reference,
@@ -660,40 +694,30 @@ export function terminalPairedFitDecision(
         requestedProductClass,
       ) === "product"
   ) return none;
-  const customerProperties = customerMentions[0].properties;
-  let nearestProperty: string | null = null;
-  for (const property of [...customerProperties].reverse()) {
-    const token = normalize(property);
-    // Only measurement qualifiers may be skipped. An unknown intervening
-    // noun is ambiguous; an older mention of diameter must never override a
-    // nearer explicit length (or other physical property) for this scalar.
-    if (
-      /^(?:примерно|приблизительно|около|порядка|не|более|менее|до|от)$/u.test(
-        token,
-      )
-    ) {
-      continue;
-    }
-    nearestProperty = token;
-    break;
-  }
+  const nearestProperty = nearestMeasuredProperty(
+    customerMentions[0].prefix,
+  );
   if (!nearestProperty) {
     return { state: "unproven", reference, relations: [] };
   }
   const nearestStem = propertyStem(nearestProperty);
-  const matchingGraphs = sameUnitGraphs.filter(
-    ({ beforeFacet, afterFacet }) => {
-      const beforeStems = new Set(
-        `${beforeFacet.key} ${beforeFacet.caption}`
-          .match(/\p{L}{4,}/gu)?.map(propertyStem) ?? [],
-      );
-      const afterStems = new Set(
-        `${afterFacet.key} ${afterFacet.caption}`
-          .match(/\p{L}{4,}/gu)?.map(propertyStem) ?? [],
-      );
-      return beforeStems.has(nearestStem) && afterStems.has(nearestStem);
-    },
+  const sameUnitGraphs = graphs.filter(({ graph }) =>
+    normalize(graph.unit) === normalize(reference.unit)
   );
+  const matchingGraphs = sameUnitGraphs.filter((graph) =>
+    graphNamesProperty(graph, nearestStem)
+  );
+  if (matchingGraphs.length === 0 && sameUnitGraphs.length === 0) {
+    // A different unit in the SAME physical dimension is not evidence that
+    // the live pair is irrelevant: the numeric comparison is simply unproven.
+    // A truly different property or dimension remains outside this gate.
+    return graphs.some((candidate) =>
+        graphNamesProperty(candidate, nearestStem) &&
+        sameLengthDimension(candidate.graph.unit, reference.unit)
+      )
+      ? { state: "unproven", reference, relations: [] }
+      : none;
+  }
   if (matchingGraphs.length === 0) {
     return /^(?:длин|ширин|высот|толщин|глубин|радиус|масс|вес|объем|площад)/u
         .test(nearestProperty)
@@ -751,6 +775,40 @@ export function terminalPairedFitDecision(
       relations: [],
       selected_pair: selectedPair,
     };
+}
+
+/** Selects a customer's reference only when the live paired property owns it.
+ * A request can also specify an independent length, voltage or other measure;
+ * that second quantity must neither disable the relevant pair nor be mistaken
+ * for its reference. Multiple references for one paired property stay
+ * ambiguous and therefore fail closed at the terminal decision. */
+export function extractSchemaBackedMeasuredReference(
+  userMessage: string,
+  facets: CompatibilityFacet[],
+  requestedProductClass = "",
+): { value: number; unit: string } | null {
+  const single = extractSingleMeasuredReference(userMessage);
+  if (single) return single;
+  const references = new Map<string, { value: number; unit: string }>();
+  for (
+    const match of userMessage.matchAll(
+      /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,10}[²³]?\d?(?![\p{L}])/giu,
+    )
+  ) {
+    const candidate = extractSingleMeasuredReference(match[0]);
+    if (!candidate) continue;
+    if (
+      terminalPairedFitDecision(
+        candidate,
+        userMessage,
+        "",
+        facets,
+        requestedProductClass,
+      ).state === "not_applicable"
+    ) continue;
+    references.set(`${candidate.value}|${candidate.unit}`, candidate);
+  }
+  return references.size === 1 ? [...references.values()][0] : null;
 }
 
 /**
