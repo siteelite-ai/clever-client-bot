@@ -548,6 +548,48 @@ function customerOwnsExactTransparentClassification(
   return [...discriminators].every((stem) => customerStems.has(stem));
 }
 
+/** A word shared by several live labels is not necessarily the customer's
+ * chosen classification. In particular, a generic head such as an abstract
+ * use noun can occur in otherwise unrelated subtypes. A family is customer-
+ * owned only when the shared word is a descriptive qualifier, a complete live
+ * alias, or the head of every matching class. This uses grammar and the live
+ * values, not a list of products or catalog categories. */
+function customerOwnsClassificationFamilyStem(
+  stem: string,
+  sourceTokens: string[],
+  choices: DerivedClassificationChoice[],
+  customerEvidence: string,
+): boolean {
+  const matchingSourceTokens = sourceTokens.filter((token) =>
+    classificationLexicalStem(token) === stem
+  ).map((token) => token.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е"));
+  if (
+    matchingSourceTokens.some((token) =>
+      token.length >= 5 &&
+      !/[аея]ние$/u.test(token) &&
+      /(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ым|им|ом|ем|ую|юю|ых|их|ыми|ими)$/u
+        .test(token)
+    )
+  ) return true;
+
+  const source = ` ${normalizeLiteralEvidence(customerEvidence)} `;
+  if (
+    choices.every((choice) =>
+      String(choice.value).split(/[;/]+/u).some((segment) => {
+        const alias = normalizeLiteralEvidence(segment);
+        return alias.length >= 3 && source.includes(` ${alias} `);
+      })
+    )
+  ) return true;
+
+  return matchingSourceTokens.some((token) =>
+    !/[аея]ние$/u.test(token) &&
+    choices.every((choice) =>
+      classificationLexicalTokens(choice.value)[0] === stem
+    )
+  );
+}
+
 /**
  * Preserve an exact class term that the customer already supplied when one
  * live classification value uniquely owns that term. Common words shared by
@@ -596,16 +638,24 @@ function customerGroundedClassificationChoices(
     // discarding the customer's explicit qualifier. Generic words shared by
     // every value are non-selective and therefore cannot ground the facet.
     const selectiveGroups = [...positiveStems]
-      .map((stem) =>
-        choices.filter((choice) =>
+      .map((stem) => ({
+        stem,
+        matches: choices.filter((choice) =>
           classificationLexicalTokens(choice.value).includes(stem)
-        )
+        ),
+      }))
+      .filter(({ stem, matches }) =>
+        matches.length > 0 && matches.length < choices.length &&
+        (matches.length === 1 ||
+          customerOwnsClassificationFamilyStem(
+            stem,
+            sourceTokens,
+            matches,
+            customerEvidence,
+          ))
       )
-      .filter((matches) =>
-        matches.length > 0 && matches.length < choices.length
-      )
-      .sort((left, right) => left.length - right.length);
-    const candidateGroup = selectiveGroups[0] ?? [];
+      .sort((left, right) => left.matches.length - right.matches.length);
+    const candidateGroup = selectiveGroups[0]?.matches ?? [];
     const mostSelective = candidateGroup.length === 1 &&
         !customerOwnsExactTransparentClassification(
           customerEvidence,

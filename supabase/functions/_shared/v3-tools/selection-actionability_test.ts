@@ -1718,6 +1718,151 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   );
 });
 
+Deno.test("a generic replacement target noun cannot bind unrelated lighting-use classes", () => {
+  const facets = [{
+    caption: "Вид светильника",
+    type: "string",
+    values: [
+      { value: "аварийное освещение" },
+      { value: "офисно-административное освещение" },
+      { value: "светильники для промышленного освещения" },
+      { value: "для освещения улиц" },
+      { value: "декоративное освещение" },
+      { value: "светильник для ориентационного освещения" },
+      { value: "бытовые светильники накладные" },
+      { value: "бытовые светильники подвесные" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для гостиной подбираю светодиодное освещение по площади.",
+      compatible_classifications: ["f0v1"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м²",
+    "Светильники",
+  );
+
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved && compileCustomerClassificationCriteria(resolved), []);
+  assertEquals(resolved?.familyCompatibleFacetKeys, []);
+  assertEquals(
+    resolved?.text.includes("По вашему обязательному классу"),
+    false,
+  );
+});
+
+Deno.test("a generic power-use noun cannot bind arbitrary server and office branches", () => {
+  const facets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "для резервного электропитания серверов" },
+      { value: "для электропитания офисной техники" },
+      { value: "для газовых котлов" },
+      { value: "бытовые модели" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Подбираю резервное электропитание по нагрузке и времени работы.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен ИБП для электропитания в доме",
+    "Источники бесперебойного питания",
+  );
+
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved && compileCustomerClassificationCriteria(resolved), []);
+});
+
+Deno.test("an explicit descriptive family remains user-owned across mounting variants", () => {
+  const facets = [{
+    caption: "Вид светильника",
+    type: "string",
+    values: [
+      { value: "бытовые светильники накладные" },
+      { value: "бытовые светильники подвесные" },
+      { value: "офисное освещение" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для дома нужен подходящий светильник.",
+      compatible_classifications: ["f0v2"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен бытовой светильник",
+    "Светильники",
+  );
+  assertEquals(resolved?.customerGroundedCompatible, [
+    { key: "Вид светильника", value: "бытовые светильники накладные" },
+    { key: "Вид светильника", value: "бытовые светильники подвесные" },
+  ]);
+  assertEquals(resolved?.applicationSuitabilityAlternatives, [{
+    key: "Вид светильника",
+    value: "бытовой",
+  }]);
+});
+
+Deno.test("a customer-owned noun class still keeps its live mounting family", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Покажу варианты бра с разным монтажом.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    [{
+      caption: "Вид светильника",
+      type: "string",
+      values: [
+        { value: "бра настенные" },
+        { value: "бра потолочные" },
+        { value: "торшеры" },
+      ],
+    }],
+    "Нужны бра для комнаты",
+    "Светильники",
+  );
+
+  assertEquals(resolved?.customerGroundedCompatible, [
+    { key: "Вид светильника", value: "бра настенные" },
+    { key: "Вид светильника", value: "бра потолочные" },
+  ]);
+});
+
+Deno.test("a complete live subtype remains exact even when its generic noun is shared", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Нужно офисно-административное освещение.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+    },
+    [{
+      caption: "Вид светильника",
+      type: "string",
+      values: [
+        { value: "офисно-административное освещение" },
+        { value: "аварийное освещение" },
+        { value: "декоративное освещение" },
+        { value: "бытовые светильники" },
+      ],
+    }],
+    "Нужно офисно-административное освещение",
+    "Светильники",
+  );
+
+  assertEquals(resolved?.customerGroundedCompatible, [{
+    key: "Вид светильника",
+    value: "офисно-административное освещение",
+  }]);
+});
+
 Deno.test("a model may refine a customer-owned family only to one member of that family", () => {
   const liveFacets = [{
     caption: "Класс применения",
