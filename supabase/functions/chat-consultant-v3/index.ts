@@ -107,6 +107,7 @@ import {
   buildCatalogEmptySynthesisMessages,
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
+  buildSourceProvenCardinalityRecoveryPlan,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
@@ -160,11 +161,11 @@ import {
   selectionTargetIsDeclared,
   selectionTargetMayUseGroundedBase,
   selectionTargetPreservesGroundedBase,
+  verifyReplacementDestinationFit,
   verifySelectionTargetWithExactLiveCategoryContract,
   verifySelectionTargetWithGroundedSearch,
   verifySelectionTargetWithNamedEntityCategory,
   verifySelectionTargetWithVisibleTitle,
-  verifyReplacementDestinationFit,
 } from "../_shared/v3-tools/selection-contract.ts";
 import {
   aliasDuplicatesIndependentCatalogClass,
@@ -281,6 +282,8 @@ import {
   compactRecentProducts,
   extractPriorAssistantProse,
   extractRenderedProductTitles,
+  extractRenderedProductUrls,
+  isAdditionalProductSelectionFollowup,
   isEvidenceOnlyFollowup,
   isRecentProductPriceSelectionFollowup,
   isRecentProductShowFollowup,
@@ -288,6 +291,7 @@ import {
   latestRenderedSelectionRequest,
   loadRecentProductEvidence,
   persistRecentProductEvidence as persistRecentProductEvidenceUnchecked,
+  productUrlIdentity,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import {
@@ -5552,11 +5556,12 @@ async function readReplayLog(
 ): Promise<ReplayLogRow | null> {
   try {
     const { data, error } = await runWithDeadline(
-      () => supabase
-        .from("chat_request_logs")
-        .select("id,session_id,user_query,error,response_events")
-        .eq("message_id", messageId)
-        .maybeSingle(),
+      () =>
+        supabase
+          .from("chat_request_logs")
+          .select("id,session_id,user_query,error,response_events")
+          .eq("message_id", messageId)
+          .maybeSingle(),
       timeoutMs,
     );
     if (error) {
@@ -5668,10 +5673,11 @@ async function updateTurnLogEnd(
       if (error) throw error;
     },
     TERMINAL_LOG_ATTEMPT_TIMEOUT_MS,
-    (error, attempt) => console.error(
-      `[v3] terminal log update attempt ${attempt} failed:`,
-      error,
-    ),
+    (error, attempt) =>
+      console.error(
+        `[v3] terminal log update attempt ${attempt} failed:`,
+        error,
+      ),
   );
   if (!updated) console.error("[v3] terminal log update unavailable:", logId);
 }
@@ -5701,6 +5707,7 @@ async function runExpertLoop(
   preExcludedReplacementIds: string[] = [],
   selectionPlan: ReplacementSelectionPlan | null = null,
   ellipticalContinuation: EllipticalSelectionContinuation | null = null,
+  preExcludedProductUrls: string[] = [],
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -5713,6 +5720,7 @@ async function runExpertLoop(
   let finalText = "";
   let productsRendered = 0;
   const preExcludedReplacementIdSet = new Set(preExcludedReplacementIds);
+  const preExcludedProductUrlSet = new Set(preExcludedProductUrls);
   let firstAssistantText = "";
   // Вся проза модели за ход (включая заглушённые фрагменты) — источник истины
   // для Слоя 5: направление подбора берём из рассуждения, а не из сырого числа
@@ -6175,6 +6183,9 @@ async function runExpertLoop(
       const product = ctx.cache.get(id);
       return Boolean(
         product &&
+          !preExcludedProductUrlSet.has(
+            productUrlIdentity(product.url) ?? "",
+          ) &&
           compactCriteria.every((criterion) =>
             titleProvesCompactCriterion(product.pagetitle, criterion)
           ),
@@ -6231,9 +6242,9 @@ async function runExpertLoop(
     // this shared final-card boundary as well.
     const destinationFit = verifyReplacementDestinationFit(
       userMessage,
-      guarded.map((id) => ctx.cache.get(id)).filter((product): product is ProductFull =>
-        Boolean(product)
-      ),
+      guarded.map((id) => ctx.cache.get(id)).filter((
+        product,
+      ): product is ProductFull => Boolean(product)),
     );
     if (destinationFit.required) {
       const accepted = new Set(destinationFit.passed_ids);
@@ -7885,11 +7896,10 @@ async function runExpertLoop(
                     : "model_assumption" as const,
                 };
               });
-          const customerGroundedClassificationCriteria =
-            [
-              ...compileCustomerClassificationCriteria(declaration),
-              ...compileApplicationSuitabilityAlternatives(declaration),
-            ];
+          const customerGroundedClassificationCriteria = [
+            ...compileCustomerClassificationCriteria(declaration),
+            ...compileApplicationSuitabilityAlternatives(declaration),
+          ];
           derivedExcludedClassificationCriteria =
             mergeMandatorySelectionCriteria([
               ...derivedExcludedClassificationCriteria,
@@ -13276,6 +13286,110 @@ async function runExpertLoop(
           }
         }
 
+        // The first search can be nonempty yet fail the customer's explicit
+        // request for several choices. Recover only from a literal feature
+        // inside the same discovered leaf; every extra card must pass the
+        // frozen criteria, visible request, target and budget again. This is
+        // independent of the older empty/advisory/boolean recovery triggers.
+        if (
+          tc.name === "search_catalog" && result.ok &&
+          result.tool === "search_catalog" && intentMode === "select" &&
+          !replacementIntent && !seriesTurnRequiresGrounding &&
+          !semanticCompoundEvidenceRequired
+        ) {
+          const eligiblePool = (products: ProductRef[]): ProductRef[] => {
+            const proven = sourceProvenSelectionPool(
+              products,
+              sourceProofCriteria,
+              sourceProofBudget,
+              derivedExcludedClassificationCriteria,
+            );
+            const targetReport = activeSelectionTarget &&
+                verifiedApplicationSelectionContract && lastDiscover
+              ? verifySelectionTargetWithExactLiveCategoryContract({
+                target: activeSelectionTarget,
+                products: proven,
+                live_category: lastDiscover.category.pagetitle,
+                mandatory_criteria:
+                  verifiedApplicationSelectionContract.criteria,
+                criteria_passed_ids: applyCriteriaGate(
+                  proven,
+                  verifiedApplicationSelectionContract.criteria,
+                ).passed_ids,
+                contract_complete: true,
+              })
+              : activeSelectionTarget
+              ? verifySelectionTargetWithVisibleTitle(
+                activeSelectionTarget,
+                proven,
+              )
+              : null;
+            const targetPassed = new Set(
+              targetReport?.passed_ids ?? proven.map((product) => product.id),
+            );
+            const visiblePassed = new Set(
+              guardVisibleCardinality(
+                proven.map((product) => product.id),
+              ).ids,
+            );
+            return proven.filter((product) =>
+              targetPassed.has(product.id) && visiblePassed.has(product.id)
+            );
+          };
+          let eligible = eligiblePool(result.results);
+          const shortfallPlan = buildSourceProvenCardinalityRecoveryPlan({
+            search_args: runArgs,
+            customer_message: userMessage,
+            mandatory_criteria: sourceProofCriteria,
+            leaf_categories: lastDiscover?.leaf_categories.map((category) =>
+              category.pagetitle
+            ) ?? [],
+            source_proven_count: eligible.length,
+            minimum_results: resultCardinality.minimum,
+          });
+          for (const attempt of shortfallPlan) {
+            if (now() > TURN_TIMEOUT_MS - 2_000) break;
+            const recovered = await runTool(
+              "search_catalog",
+              attempt.args,
+              ctx,
+            );
+            const candidatePool = recovered.ok &&
+                recovered.tool === "search_catalog"
+              ? filterSelectionRecoveryPool(recovered.results, attempt)
+              : [];
+            const sourceProvenRecovered = eligiblePool(candidatePool);
+            eligible = mergeSourceProvenSelectionPools(
+              eligible,
+              sourceProvenRecovered,
+            );
+            steps.push({
+              step: "v3_source_proven_cardinality_recovery",
+              ms: now(),
+              meta: {
+                kind: attempt.kind,
+                before: result.results.length,
+                recovered: candidatePool.length,
+                eligible: eligible.length,
+                minimum: resultCardinality.minimum,
+                query: attempt.args.query,
+              },
+            });
+            if (eligible.length >= resultCardinality.minimum) break;
+          }
+          if (shortfallPlan.length > 0 && eligible.length > 0) {
+            result = {
+              ...result,
+              results: eligible,
+              total: eligible.length,
+              warnings: [
+                ...(result.warnings ?? []),
+                `source_proven_cardinality_pool:${eligible.length}`,
+              ],
+            };
+          }
+        }
+
         // A broad noun can resolve to different valid live catalog branches.
         // If the model-owned filtered search remains empty, retry only wording
         // already selected by the model plus the user's literal N×S marking.
@@ -18009,7 +18123,9 @@ Deno.serve(async (req) => {
       const send = (ev: SseEvent) => {
         // An uncooperative remote promise may settle after the turn deadline.
         // It must not append a second answer or mutate the persisted replay.
-        if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) return;
+        if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) {
+          return;
+        }
         // GUARD: единственный выход текста наружу. Служебная лексика механики
         // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
@@ -18086,14 +18202,15 @@ Deno.serve(async (req) => {
         },
       });
       const claim = await runWithDeadline(
-        () => claimTurnLogStart(
-          supabase,
-          sessionId,
-          body.messageId,
-          userMessage,
-          [...steps],
-          body.resumeOnly,
-        ),
+        () =>
+          claimTurnLogStart(
+            supabase,
+            sessionId,
+            body.messageId,
+            userMessage,
+            [...steps],
+            body.resumeOnly,
+          ),
         6_000,
       ).catch((error): TurnClaim => {
         console.error("[v3] turn claim timed out or failed:", error);
@@ -18226,957 +18343,1030 @@ Deno.serve(async (req) => {
       };
 
       try {
-        await runWithDeadline(async (turnSignal) => {
-          const persistRecentProductEvidence = (
-            database: SupabaseClient,
-            evidenceSessionId: string,
-            products: ProductFull[],
-          ) => persistRecentProductEvidenceUnchecked(
-            database,
-            evidenceSessionId,
-            products,
-            4_000,
-            () => !workTimedOut && !streamCompleted && !turnSignal.aborted,
-          );
-          const settings = await loadSettings(supabase, turnSignal);
-          // A slow settings response must not start paid catalog/model work
-          // after the outer deadline has already closed the accepted turn.
-          if (turnSignal.aborted) return;
-          steps.push({
-            step: "v3_settings_loaded",
-            ms: Date.now() - t0,
-            meta: {
-              has_openrouter_key: Boolean(settings.openrouter_api_key),
-              has_catalog_token: Boolean(settings.volt220_api_token),
-            },
-          });
-          if (!settings.openrouter_api_key || !settings.volt220_api_token) {
-            errorMsg = !settings.openrouter_api_key
-              ? "missing_openrouter_key"
-              : "missing_catalog_token";
-            publicDiagnosticError = "internal_error";
-            send({
-              type: "delta",
-              content:
-                "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером.",
-            });
-            return;
-          }
-
-        const priorHistory = stripCurrentUserEcho(history, userMessage);
-        const pendingSlot = slots.pending_clarification;
-        const pendingRecord = pendingSlot && typeof pendingSlot === "object" &&
-            !Array.isArray(pendingSlot)
-          ? pendingSlot as Record<string, unknown>
-          : null;
-        const pendingScope = pendingRecord?.scope;
-        const clientCatalogClarification = Boolean(
-          pendingRecord?.facet_key === "catalog_section" ||
-            (pendingScope && typeof pendingScope === "object" &&
-              !Array.isArray(pendingScope) &&
-              (pendingScope as Record<string, unknown>).kind ===
-                "broad_assortment"),
-        );
-        const verifiedBroadChoiceState =
-          await loadVerifiedBroadAssortmentChoice(
-            supabase,
-            sessionId,
-            logId,
-            slots,
-            userMessage,
-          );
-        const verifiedBroadChoice = verifiedBroadChoiceState.choice;
-        // A broad slot is deliberately absent from boundary classification.
-        // Otherwise the existing "server-scoped clarification" shortcut turns
-        // even a complete unrelated request into a Gallant continuation.
-        const boundarySlots = clientCatalogClarification
-          ? {
-            ...slots,
-            pending_clarification: undefined,
-          }
-          : slots;
-        const boundary = verifiedBroadChoiceState.matchedIssuedOption
-          ? {
-            mode: "continuation" as const,
-            confidence: 1,
-            source: "local" as const,
-            reason: "server_verified_catalog_option",
-          }
-          : await classifyConversationBoundary(
-            userMessage,
-            priorHistory,
-            boundarySlots,
-            {
-              apiKey: settings.openrouter_api_key!,
-              model: settings.classifier_model,
-            },
-            executionController.signal,
-          );
-        const scopedSelectionRequest = resolveSelectionReadinessRequest(
-          userMessage,
-          boundarySlots,
-        );
-        const matchedPendingClarification = Boolean(
-          verifiedBroadChoiceState.matchedIssuedOption ||
-            resolvePendingClarificationChoice(boundarySlots, userMessage),
-        );
-        const referencesRenderedProducts =
-          extractRenderedProductTitles(priorHistory, 1).length > 0 && (
-            isEvidenceOnlyFollowup(userMessage) ||
-            isRecentProductShowFollowup(userMessage) ||
-            isRecentProductPriceSelectionFollowup(userMessage)
-          );
-        const startsNewTask = shouldStartNewConversation(boundary, {
-          matchedPendingClarification,
-          activeScopedClarification: scopedSelectionRequest.scoped,
-          referencesRenderedProducts,
-        }) || shouldResetUnverifiedBroadAssortmentTask(
-          userMessage,
-          clientCatalogClarification,
-          verifiedBroadChoiceState.verifiedSlot,
-        );
-        // Only after a continuation decision may a server-verified free-form
-        // broad scope reach the old expert route. Exact chips take the bounded
-        // deterministic route below. A stale/forged scope is never restored.
-        const trustedSlots = !startsNewTask && clientCatalogClarification &&
-            verifiedBroadChoiceState.verifiedSlot
-          ? {
-            ...slots,
-            pending_clarification: verifiedBroadChoiceState.verifiedSlot,
-          }
-          : boundarySlots;
-        const pendingBroadAssortmentScope = resolvePendingBroadAssortmentScope(
-          trustedSlots,
-          priorHistory,
-        );
-        const effectiveSessionId = startsNewTask
-          ? `session_${crypto.randomUUID()}`
-          : sessionId;
-        const effectiveHistory = startsNewTask ? [] : priorHistory;
-        const effectiveSlots = startsNewTask ? {} : trustedSlots;
-        const electricalTripDiagnostic =
-          resolveElectricalProtectionTripDiagnostic(
-            userMessage,
-            effectiveHistory,
-          );
-        const measuredBreakerGuidance = buildMeasuredBreakerGuidance(
-          userMessage,
-        );
-        steps.push({
-          step: "v3_conversation_boundary",
-          ms: Date.now() - t0,
-          meta: {
-            mode: startsNewTask ? "new_task" : "continuation",
-            classifier_mode: boundary.mode,
-            confidence: boundary.confidence,
-            source: boundary.source,
-            reason: boundary.reason,
-            matched_pending_clarification: matchedPendingClarification,
-            pending_broad_assortment_scope: pendingBroadAssortmentScope,
-            verified_broad_assortment_choice: Boolean(verifiedBroadChoice),
-            catalog_slot_validation_failed: clientCatalogClarification &&
-              !verifiedBroadChoiceState.verifiedSlot,
-            catalog_slot_lookup_failed: verifiedBroadChoiceState.lookupFailed,
-            references_rendered_products: referencesRenderedProducts,
-            history_echo_removed: priorHistory.length !== history.length,
-          },
-        });
-        if (startsNewTask) {
-          send({
-            type: "conversation_boundary",
-            mode: "new_task",
-            session_id: effectiveSessionId,
-          });
-        } else if (
-          matchedPendingClarification || pendingBroadAssortmentScope ||
-          scopedSelectionRequest.scoped
-        ) {
-          // The current request still receives the original slot through
-          // `effectiveSlots`, but the browser must not carry that consumed
-          // choice into an unrelated future turn. A later clarification in this
-          // same response can establish a fresh slot normally.
-          send({ type: "slot_update", slots: {} });
-        }
-
-        const cache: ProductCache = new Map();
-        const ctx: ToolContext = {
-          cache,
-          supabase,
-          catalogToken: settings.volt220_api_token!,
-          openrouterKey: settings.openrouter_api_key!,
-          lovableApiKey: LOVABLE_API_KEY,
-          selectionReasoningModel: settings.classifier_model,
-          sessionId: effectiveSessionId,
-          jargonCategoryContextEnabled:
-            settings.v3_jargon_category_context_enabled,
-          jargonAxialModifiersEnabled:
-            settings.v3_jargon_axial_modifiers_enabled,
-        };
-
-        let recentProductEvidence = await loadRecentProductEvidence(
-          supabase,
-          effectiveSessionId,
-        );
-        if (
-          recentProductEvidence.length === 0 &&
-          isEvidenceOnlyFollowup(userMessage)
-        ) {
-          const lookupTitles = extractRenderedProductTitles(effectiveHistory);
-          const recoveredProducts: ProductFull[] = [];
-          for (const pagetitle of lookupTitles) {
-            const recovered = await runTool("search_catalog", {
-              mode: "by_pagetitle",
-              pagetitle,
-              per_page: 3,
-            }, ctx);
-            if (!recovered.ok || recovered.tool !== "search_catalog") continue;
-            const wanted = pagetitle.toLowerCase().replace(/ё/g, "е").trim();
-            const exact = recovered.results.find((product) =>
-              product.pagetitle.toLowerCase().replace(/ё/g, "е").trim() ===
-                wanted
-            );
-            if (!exact) continue;
-            const full = ctx.cache.get(String(exact.id));
-            if (full) recoveredProducts.push(full);
-          }
-          recentProductEvidence = compactRecentProducts(recoveredProducts);
-          if (recentProductEvidence.length > 0) {
+        await runWithDeadline(
+          async (turnSignal) => {
+            const persistRecentProductEvidence = (
+              database: SupabaseClient,
+              evidenceSessionId: string,
+              products: ProductFull[],
+            ) =>
+              persistRecentProductEvidenceUnchecked(
+                database,
+                evidenceSessionId,
+                products,
+                4_000,
+                () => !workTimedOut && !streamCompleted && !turnSignal.aborted,
+              );
+            const settings = await loadSettings(supabase, turnSignal);
+            // A slow settings response must not start paid catalog/model work
+            // after the outer deadline has already closed the accepted turn.
+            if (turnSignal.aborted) return;
             steps.push({
-              step: "v3_recent_product_evidence_recovered",
+              step: "v3_settings_loaded",
               ms: Date.now() - t0,
               meta: {
-                count: recentProductEvidence.length,
-                lookup_titles: lookupTitles.length,
+                has_openrouter_key: Boolean(settings.openrouter_api_key),
+                has_catalog_token: Boolean(settings.volt220_api_token),
               },
             });
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              recoveredProducts,
-            );
-          }
-        }
-        if (recentProductEvidence.length > 0) {
-          steps.push({
-            step: "v3_recent_product_evidence_loaded",
-            ms: Date.now() - t0,
-            meta: { count: recentProductEvidence.length },
-          });
-        }
-        const constrainedRecentPriceFollowup =
-          recentProductEvidence.length > 0 &&
-          isRecentProductPriceSelectionFollowup(userMessage) &&
-          !isPureRecentPriceFollowup(userMessage);
-        const ellipticalBaseRequest = recentProductEvidence.length > 0 &&
-            (isEllipticalAttributeFollowup(userMessage) ||
-              constrainedRecentPriceFollowup)
-          ? latestRenderedSelectionRequest(effectiveHistory)
-          : null;
-        const ellipticalContinuation: EllipticalSelectionContinuation | null =
-          ellipticalBaseRequest
-            ? { baseUserMessage: ellipticalBaseRequest }
-            : null;
-        if (ellipticalContinuation) {
-          steps.push({
-            step: "v3_elliptical_selection_context_resolved",
-            ms: Date.now() - t0,
-            meta: { source: "latest_controlled_product_batch" },
-          });
-        }
+            if (!settings.openrouter_api_key || !settings.volt220_api_token) {
+              errorMsg = !settings.openrouter_api_key
+                ? "missing_openrouter_key"
+                : "missing_catalog_token";
+              publicDiagnosticError = "internal_error";
+              send({
+                type: "delta",
+                content:
+                  "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером.",
+              });
+              return;
+            }
 
-        const outdoorPoeIntent = classifyOutdoorPoeIntent(
-          userMessage,
-          effectiveHistory,
-        );
-        const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(
-          userMessage,
-        );
-        const explicitCompoundMarking = extractExplicitCompoundMarking(
-          userMessage,
-        );
-        const semanticCompoundMarking =
-          detectUserIntentMode(userMessage) === "select" &&
-            explicitCompoundMarking &&
-            requiresSemanticCompoundEvidence(userMessage)
-            ? explicitCompoundMarking
-            : null;
-        const semanticCompoundDirectAdmitted = Boolean(
-          semanticCompoundMarking && admitDirectSelectionRoute({
-            route: "compound",
-            userMessage,
-            coveredCompound: semanticCompoundMarking,
-          }),
-        );
-        const exactCompoundDirectAdmitted = Boolean(
-          exactCompoundMarkingRequest && admitDirectSelectionRoute({
-            route: "compound",
-            userMessage,
-            coveredCompound: exactCompoundMarkingRequest,
-          }),
-        );
-        const outdoorPoeDirectAdmitted = outdoorPoeIntent === "selection" &&
-          admitDirectSelectionRoute({ route: "outdoor_poe", userMessage });
-        // Routing and the expert loop must resolve the same dialogue intent.
-        // Otherwise a short continuation such as `покажи` enters the ordinary
-        // branch before the loop can inherit the already proven replacement.
-        const replacementSourceRequest = resolveReplacementSourceMessage(
-          scopedSelectionRequest.message,
-          effectiveHistory.slice(-8),
-        );
-        const pendingScopedCatalogContinuation =
-          resolveScopedCatalogSelectionContinuation(
-            userMessage,
-            effectiveSlots,
-          );
-        const namedSeriesInquiryToken =
-          detectUserIntentMode(userMessage) === "inquire"
-            ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
-            : null;
-        const namedSeriesSelectionToken =
-          detectUserIntentMode(userMessage) === "select"
-            ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
-            : null;
-        const pureNamedSeriesBrowse = Boolean(
-          namedSeriesSelectionToken &&
-            isPureNamedSeriesBrowse(userMessage, namedSeriesSelectionToken),
-        );
-        const exactProductInquiryLookup =
-          detectUserIntentMode(userMessage) === "inquire"
-            ? extractReplacementLookupKeys(userMessage)
-            : { articles: [], modelCodes: [] };
-        const hasExactProductInquiry = !namedSeriesInquiryToken &&
-          (exactProductInquiryLookup.articles.length > 0 ||
-            exactProductInquiryLookup.modelCodes.length > 0);
-        const exactProductInquiryDirectAdmitted = hasExactProductInquiry &&
-          admitDirectSelectionRoute({ route: "exact_inquiry", userMessage });
-        const generalInquiryDirect = shouldAnswerGeneralInquiryDirectly({
-          intentMode: detectUserIntentMode(userMessage),
-          exactProductInquiry: hasExactProductInquiry,
-          namedSeriesInquiry: Boolean(namedSeriesInquiryToken),
-          catalogGroundingRequired: requiresCatalogGroundingForInquiry(
-            userMessage,
-          ),
-          recentProductEvidence: recentProductEvidence.length > 0,
-          activeSelectionScope: scopedSelectionRequest.scoped,
-        });
-        // A verified formula/safety rule is selected by its own narrow proof
-        // conditions, not by whether the generic intent classifier called the
-        // same wording a question or a command (`чем отличается` vs `сравни`,
-        // `что посоветуете` vs `посоветуйте`).  Product-selection imperatives
-        // remain outside these rules and continue through the catalog routes.
-        const verifiedEngineeringInquiry = resolveVerifiedEngineeringInquiry(
-          userMessage,
-        );
-        const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
-        const broadAssortmentToken = broadAssortmentRequest
-          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8)) ??
-            extractBroadAssortmentScope(userMessage)
-          : null;
-        const readinessClarification = selectReadinessClarification(
-          scopedSelectionRequest.message,
-          selectionReadinessEvidenceFromHistory(effectiveHistory.slice(-8)),
-          { progressive: scopedSelectionRequest.scoped },
-        );
-        // GUARD v3_meta_question_declined: вопрос про устройство сервиса
-        // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
-        // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
-        // Так утечка внутреннего устройства невозможна в принципе.
-        if (verifiedBroadChoice && !startsNewTask) {
-          const products = await answerVerifiedBroadAssortmentChoice(
-            verifiedBroadChoice,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = products.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            products,
-          );
-        } else if (
-          clientCatalogClarification &&
-          !verifiedBroadChoiceState.verifiedSlot && !startsNewTask
-        ) {
-          send({
-            type: "delta",
-            content: verifiedBroadChoiceState.lookupFailed
-              ? "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже."
-              : "Этот выбор раздела уже недействителен. Напишите серию и нужный раздел заново.",
-          });
-          productsCount = 0;
-          steps.push({
-            step: "v3_broad_assortment_selection_unverified",
-            ms: Date.now() - t0,
-            meta: { lookup_failed: verifiedBroadChoiceState.lookupFailed },
-          });
-        } else if (readinessClarification) {
-          const { profile, ...clarificationInput } = readinessClarification;
-          send({ type: "delta", content: clarificationInput.question });
-          const clarification = executeProposeClarification(clarificationInput);
-          emitSideEffects(clarification, send);
-          steps.push({
-            step: "v3_selection_readiness_clarification",
-            ms: Date.now() - t0,
-            meta: { profile, facet_key: clarificationInput.facet_key },
-          });
-          productsCount = 0;
-        } else if (
-          verifiedBroadChoiceState.matchedIssuedOption &&
-          !verifiedBroadChoice && !startsNewTask
-        ) {
-          // A real chip from a constrained or ambiguous broad request must
-          // retain the original turn's requirements. No other direct selector
-          // is allowed to bypass the existing criteria-aware expert route.
-          steps.push({
-            step: "v3_broad_assortment_constrained_chip_expert_route",
-            ms: Date.now() - t0,
-          });
-          const out = await runExpertLoop(
-            scopedSelectionRequest.message,
-            effectiveHistory,
-            effectiveSlots,
-            settings.openrouter_api_key!,
-            ctx,
-            send,
-            steps,
-            t0,
-            {
-              anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-              relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-              criteriaGateEnabled: true,
-            },
-            recentProductEvidence,
-            [],
-            null,
-            ellipticalContinuation,
-          );
-          productsCount = out.productsRendered;
-          const shownProducts = out.shownProductIds
-            .map((id) => ctx.cache.get(id))
-            .filter((product): product is NonNullable<typeof product> =>
-              Boolean(product)
+            const priorHistory = stripCurrentUserEcho(history, userMessage);
+            const pendingSlot = slots.pending_clarification;
+            const pendingRecord =
+              pendingSlot && typeof pendingSlot === "object" &&
+                !Array.isArray(pendingSlot)
+                ? pendingSlot as Record<string, unknown>
+                : null;
+            const pendingScope = pendingRecord?.scope;
+            const clientCatalogClarification = Boolean(
+              pendingRecord?.facet_key === "catalog_section" ||
+                (pendingScope && typeof pendingScope === "object" &&
+                  !Array.isArray(pendingScope) &&
+                  (pendingScope as Record<string, unknown>).kind ===
+                    "broad_assortment"),
             );
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            shownProducts,
-          );
-        } else if (isMetaSelfQuestion(userMessage)) {
-          steps.push({
-            step: "v3_meta_question_declined",
-            ms: Date.now() - t0,
-            meta: { user_message: userMessage },
-          });
-          send({ type: "delta", content: META_DECLINE_TEXT });
-          productsCount = 0;
-        } else if (verifiedEngineeringInquiry) {
-          steps.push({
-            step: "v3_verified_engineering_inquiry",
-            ms: Date.now() - t0,
-            meta: { rule: verifiedEngineeringInquiry.rule },
-          });
-          send({ type: "delta", content: verifiedEngineeringInquiry.answer });
-          productsCount = 0;
-        } else if (isCleanPowerSafetyRequest(userMessage)) {
-          steps.push({
-            step: "v3_clean_power_safety_answer",
-            ms: Date.now() - t0,
-          });
-          send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
-          productsCount = 0;
-        } else if (isSensitiveBackupPowerRequest(userMessage)) {
-          steps.push({
-            step: "v3_sensitive_backup_power_answer",
-            ms: Date.now() - t0,
-          });
-          send({
-            type: "delta",
-            content: buildSensitiveBackupPowerAnswer(userMessage),
-          });
-          productsCount = 0;
-        } else if (electricalTripDiagnostic) {
-          steps.push({
-            step: "v3_electrical_trip_safety_answer",
-            ms: Date.now() - t0,
-          });
-          send({
-            type: "delta",
-            content: electricalTripDiagnostic.followup
-              ? buildElectricalProtectionTripFollowupAnswer(
-                electricalTripDiagnostic.current,
-              )
-              : ELECTRICAL_PROTECTION_TRIP_ANSWER,
-          });
-          productsCount = 0;
-        } else if (measuredBreakerGuidance) {
-          steps.push({
-            step: "v3_measured_breaker_guidance",
-            ms: Date.now() - t0,
-            meta: {
-              current_a: measuredBreakerGuidance.current_a,
-              suggested_rating_a: measuredBreakerGuidance.suggested_rating_a,
-              supply: measuredBreakerGuidance.supply,
-              conditional_supply: measuredBreakerGuidance.conditional_supply,
-            },
-          });
-          send({ type: "delta", content: measuredBreakerGuidance.answer });
-          productsCount = 0;
-        } else if (broadAssortmentRequest) {
-          await answerBroadAssortmentRequest(
-            broadAssortmentToken,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = 0;
-        } else if (exactProductInquiryDirectAdmitted) {
-          const direct = await answerVerifiedExactProductInquiry(
-            userMessage,
-            settings.openrouter_api_key!,
-            ctx,
-            send,
-            steps,
-            t0,
-            executionController.signal,
-          );
-          if (direct.handled) {
-            productsCount = direct.products.length;
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              direct.products,
-            );
-          } else {
-            const out = await runExpertLoop(
-              scopedSelectionRequest.message,
-              effectiveHistory,
-              effectiveSlots,
-              settings.openrouter_api_key!,
-              ctx,
-              send,
-              steps,
-              t0,
-              {
-                anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-                relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-                criteriaGateEnabled: true,
-              },
-              recentProductEvidence,
-              [],
-              null,
-              ellipticalContinuation,
-            );
-            productsCount = out.productsRendered;
-            const shownProducts = out.shownProductIds
-              .map((id) => ctx.cache.get(id))
-              .filter((product): product is NonNullable<typeof product> =>
-                Boolean(product)
+            const verifiedBroadChoiceState =
+              await loadVerifiedBroadAssortmentChoice(
+                supabase,
+                sessionId,
+                logId,
+                slots,
+                userMessage,
               );
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              shownProducts,
-            );
-          }
-        } else if (namedSeriesInquiryToken) {
-          await answerVerifiedNamedSeriesInquiry(
-            namedSeriesInquiryToken,
-            userMessage,
-            settings.openrouter_api_key!,
-            ctx,
-            send,
-            steps,
-            t0,
-            executionController.signal,
-          );
-          productsCount = 0;
-        } else if (namedSeriesSelectionToken && pureNamedSeriesBrowse) {
-          const products = await selectVerifiedNamedSeriesRequest(
-            namedSeriesSelectionToken,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = products.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            products,
-          );
-        } else if (
-          recentProductEvidence.length > 0 &&
-          isRecentProductShowFollowup(userMessage)
-        ) {
-          const selection = await selectVerifiedRecentShowFollowup(
-            userMessage,
-            recentProductEvidence,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = selection.products.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            selection.products,
-          );
-        } else if (
-          recentProductEvidence.length > 0 &&
-          isPureRecentPriceFollowup(userMessage)
-        ) {
-          const selection = await selectVerifiedRecentPriceFollowup(
-            userMessage,
-            recentProductEvidence,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = selection.products.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            selection.products,
-          );
-        } else if (semanticCompoundMarking && semanticCompoundDirectAdmitted) {
-          send({
-            type: "delta",
-            content:
-              `Понял требования: сохраняю точный размер ${semanticCompoundMarking.first}×${
-                String(semanticCompoundMarking.second).replace(".", ",")
-              } и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
-          });
-          const direct = await selectVerifiedSemanticCompoundProducts(
-            userMessage,
-            semanticCompoundMarking,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          if (direct.handled) {
-            productsCount = direct.products.length;
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              direct.products,
-            );
-          } else {
-            const out = await runExpertLoop(
-              scopedSelectionRequest.message,
-              effectiveHistory,
-              effectiveSlots,
-              settings.openrouter_api_key!,
-              ctx,
-              send,
-              steps,
-              t0,
-              {
-                anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-                relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-                criteriaGateEnabled: true,
-              },
-              recentProductEvidence,
-              [],
-              null,
-              ellipticalContinuation,
-            );
-            productsCount = out.productsRendered;
-            const shownProducts = out.shownProductIds
-              .map((id) => ctx.cache.get(id))
-              .filter((product): product is NonNullable<typeof product> =>
-                Boolean(product)
+            const verifiedBroadChoice = verifiedBroadChoiceState.choice;
+            // A broad slot is deliberately absent from boundary classification.
+            // Otherwise the existing "server-scoped clarification" shortcut turns
+            // even a complete unrelated request into a Gallant continuation.
+            const boundarySlots = clientCatalogClarification
+              ? {
+                ...slots,
+                pending_clarification: undefined,
+              }
+              : slots;
+            const boundary = verifiedBroadChoiceState.matchedIssuedOption
+              ? {
+                mode: "continuation" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: "server_verified_catalog_option",
+              }
+              : await classifyConversationBoundary(
+                userMessage,
+                priorHistory,
+                boundarySlots,
+                {
+                  apiKey: settings.openrouter_api_key!,
+                  model: settings.classifier_model,
+                },
+                executionController.signal,
               );
-            await persistRecentProductEvidence(
+            const scopedSelectionRequest = resolveSelectionReadinessRequest(
+              userMessage,
+              boundarySlots,
+            );
+            const matchedPendingClarification = Boolean(
+              verifiedBroadChoiceState.matchedIssuedOption ||
+                resolvePendingClarificationChoice(boundarySlots, userMessage),
+            );
+            const referencesRenderedProducts =
+              extractRenderedProductTitles(priorHistory, 1).length > 0 && (
+                isAdditionalProductSelectionFollowup(userMessage) ||
+                isEvidenceOnlyFollowup(userMessage) ||
+                isRecentProductShowFollowup(userMessage) ||
+                isRecentProductPriceSelectionFollowup(userMessage)
+              );
+            const startsNewTask = shouldStartNewConversation(boundary, {
+              matchedPendingClarification,
+              activeScopedClarification: scopedSelectionRequest.scoped,
+              referencesRenderedProducts,
+            }) || shouldResetUnverifiedBroadAssortmentTask(
+              userMessage,
+              clientCatalogClarification,
+              verifiedBroadChoiceState.verifiedSlot,
+            );
+            // Only after a continuation decision may a server-verified free-form
+            // broad scope reach the old expert route. Exact chips take the bounded
+            // deterministic route below. A stale/forged scope is never restored.
+            const trustedSlots = !startsNewTask && clientCatalogClarification &&
+                verifiedBroadChoiceState.verifiedSlot
+              ? {
+                ...slots,
+                pending_clarification: verifiedBroadChoiceState.verifiedSlot,
+              }
+              : boundarySlots;
+            const pendingBroadAssortmentScope =
+              resolvePendingBroadAssortmentScope(
+                trustedSlots,
+                priorHistory,
+              );
+            const effectiveSessionId = startsNewTask
+              ? `session_${crypto.randomUUID()}`
+              : sessionId;
+            const effectiveHistory = startsNewTask ? [] : priorHistory;
+            const effectiveSlots = startsNewTask ? {} : trustedSlots;
+            const electricalTripDiagnostic =
+              resolveElectricalProtectionTripDiagnostic(
+                userMessage,
+                effectiveHistory,
+              );
+            const measuredBreakerGuidance = buildMeasuredBreakerGuidance(
+              userMessage,
+            );
+            steps.push({
+              step: "v3_conversation_boundary",
+              ms: Date.now() - t0,
+              meta: {
+                mode: startsNewTask ? "new_task" : "continuation",
+                classifier_mode: boundary.mode,
+                confidence: boundary.confidence,
+                source: boundary.source,
+                reason: boundary.reason,
+                matched_pending_clarification: matchedPendingClarification,
+                pending_broad_assortment_scope: pendingBroadAssortmentScope,
+                verified_broad_assortment_choice: Boolean(verifiedBroadChoice),
+                catalog_slot_validation_failed: clientCatalogClarification &&
+                  !verifiedBroadChoiceState.verifiedSlot,
+                catalog_slot_lookup_failed:
+                  verifiedBroadChoiceState.lookupFailed,
+                references_rendered_products: referencesRenderedProducts,
+                history_echo_removed: priorHistory.length !== history.length,
+              },
+            });
+            if (startsNewTask) {
+              send({
+                type: "conversation_boundary",
+                mode: "new_task",
+                session_id: effectiveSessionId,
+              });
+            } else if (
+              matchedPendingClarification || pendingBroadAssortmentScope ||
+              scopedSelectionRequest.scoped
+            ) {
+              // The current request still receives the original slot through
+              // `effectiveSlots`, but the browser must not carry that consumed
+              // choice into an unrelated future turn. A later clarification in this
+              // same response can establish a fresh slot normally.
+              send({ type: "slot_update", slots: {} });
+            }
+
+            const cache: ProductCache = new Map();
+            const ctx: ToolContext = {
+              cache,
+              supabase,
+              catalogToken: settings.volt220_api_token!,
+              openrouterKey: settings.openrouter_api_key!,
+              lovableApiKey: LOVABLE_API_KEY,
+              selectionReasoningModel: settings.classifier_model,
+              sessionId: effectiveSessionId,
+              jargonCategoryContextEnabled:
+                settings.v3_jargon_category_context_enabled,
+              jargonAxialModifiersEnabled:
+                settings.v3_jargon_axial_modifiers_enabled,
+            };
+
+            let recentProductEvidence = await loadRecentProductEvidence(
               supabase,
               effectiveSessionId,
-              shownProducts,
             );
-          }
-        } else if (exactCompoundMarkingRequest && exactCompoundDirectAdmitted) {
-          send({
-            type: "delta",
-            content: exactCompoundMarkingIntro(exactCompoundMarkingRequest),
-          });
-          const selectedProducts = await selectVerifiedExactCompoundProducts(
-            exactCompoundMarkingRequest,
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            selectedProducts,
-          );
-        } else if (outdoorPoeIntent === "assessment") {
-          steps.push({
-            step: "v3_outdoor_poe_assessment",
-            ms: Date.now() - t0,
-          });
-          send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
-          productsCount = 0;
-        } else if (outdoorPoeIntent === "explanation") {
-          steps.push({
-            step: "v3_outdoor_poe_explanation",
-            ms: Date.now() - t0,
-          });
-          send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
-          productsCount = 0;
-        } else if (
-          outdoorPoeIntent === "selection" && outdoorPoeDirectAdmitted
-        ) {
-          send({ type: "delta", content: OUTDOOR_POE_SELECTION_INTRO });
-          const selectedProducts = await selectVerifiedOutdoorPoeProducts(
-            ctx,
-            send,
-            steps,
-            t0,
-          );
-          productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            selectedProducts,
-          );
-        } else if (
-          recentProductEvidence.length > 0 &&
-          isEvidenceOnlyFollowup(userMessage) &&
-          !constrainedRecentPriceFollowup &&
-          !(namedSeriesSelectionToken && !pureNamedSeriesBrowse)
-        ) {
-          const answer = buildDeterministicEvidenceAnswer(
-            recentProductEvidence,
-            userMessage,
-          );
-          steps.push({
-            step: "v3_deterministic_evidence_followup",
-            ms: Date.now() - t0,
-            meta: { count: recentProductEvidence.length },
-          });
-          send({ type: "delta", content: answer });
-          productsCount = 0;
-        } else if (generalInquiryDirect) {
-          let answered = false;
-          try {
-            const inquiry = await callOpenRouter(
-              settings.openrouter_api_key!,
-              buildGeneralInquiryMessages(userMessage),
-              executionController.signal,
-              LLM_TIMEOUT_TOOL_DECISION_MS,
-              "tool_decision",
-              [],
-              null,
-              0.15,
-              [],
-              1400,
-              GENERAL_INQUIRY_MODEL_ROUTING,
-            );
-            const guarded = sanitizeIntermediateReasoning(inquiry.text);
-            const visible = guarded.suppressed
-              ? ""
-              : stripUnrenderedCatalogFactSegments(guarded.text).text.trim();
-            if (visible) {
-              send({ type: "delta", content: visible });
-              productsCount = 0;
-              answered = true;
+            if (
+              recentProductEvidence.length === 0 &&
+              isEvidenceOnlyFollowup(userMessage)
+            ) {
+              const lookupTitles = extractRenderedProductTitles(
+                effectiveHistory,
+              );
+              const recoveredProducts: ProductFull[] = [];
+              for (const pagetitle of lookupTitles) {
+                const recovered = await runTool("search_catalog", {
+                  mode: "by_pagetitle",
+                  pagetitle,
+                  per_page: 3,
+                }, ctx);
+                if (
+                  !recovered.ok || recovered.tool !== "search_catalog"
+                ) continue;
+                const wanted = pagetitle.toLowerCase().replace(/ё/g, "е")
+                  .trim();
+                const exact = recovered.results.find((product) =>
+                  product.pagetitle.toLowerCase().replace(/ё/g, "е").trim() ===
+                    wanted
+                );
+                if (!exact) continue;
+                const full = ctx.cache.get(String(exact.id));
+                if (full) recoveredProducts.push(full);
+              }
+              recentProductEvidence = compactRecentProducts(recoveredProducts);
+              if (recentProductEvidence.length > 0) {
+                steps.push({
+                  step: "v3_recent_product_evidence_recovered",
+                  ms: Date.now() - t0,
+                  meta: {
+                    count: recentProductEvidence.length,
+                    lookup_titles: lookupTitles.length,
+                  },
+                });
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  recoveredProducts,
+                );
+              }
+            }
+            if (recentProductEvidence.length > 0) {
               steps.push({
-                step: "v3_general_inquiry_direct_answer",
+                step: "v3_recent_product_evidence_loaded",
+                ms: Date.now() - t0,
+                meta: { count: recentProductEvidence.length },
+              });
+            }
+            const constrainedRecentPriceFollowup =
+              recentProductEvidence.length > 0 &&
+              isRecentProductPriceSelectionFollowup(userMessage) &&
+              !isPureRecentPriceFollowup(userMessage);
+            const additionalProductSelectionFollowup =
+              recentProductEvidence.length > 0 &&
+              isAdditionalProductSelectionFollowup(userMessage);
+            const ellipticalBaseRequest = recentProductEvidence.length > 0 &&
+                (additionalProductSelectionFollowup ||
+                  isEllipticalAttributeFollowup(userMessage) ||
+                  constrainedRecentPriceFollowup)
+              ? latestRenderedSelectionRequest(effectiveHistory)
+              : null;
+            const additionalSelectionRequest =
+              additionalProductSelectionFollowup &&
+              Boolean(ellipticalBaseRequest);
+            const priorShownProductUrls = additionalSelectionRequest
+              ? extractRenderedProductUrls(effectiveHistory)
+              : [];
+            const ellipticalContinuation:
+              | EllipticalSelectionContinuation
+              | null = ellipticalBaseRequest
+                ? { baseUserMessage: ellipticalBaseRequest }
+                : null;
+            if (ellipticalContinuation) {
+              steps.push({
+                step: "v3_elliptical_selection_context_resolved",
                 ms: Date.now() - t0,
                 meta: {
-                  chars: visible.length,
-                  provider: inquiry.provider ?? "openrouter",
-                  guard_matches: guarded.matched.length,
+                  source: "latest_controlled_product_batch",
+                  additional_selection: additionalSelectionRequest,
+                  excluded_urls: priorShownProductUrls.length,
                 },
               });
             }
-          } catch (error) {
-            steps.push({
-              step: "v3_general_inquiry_direct_failed",
-              ms: Date.now() - t0,
-              meta: { error: String((error as Error)?.message ?? error) },
-            });
-          }
-          if (!answered) {
-            send({ type: "delta", content: GENERAL_INQUIRY_UNAVAILABLE_TEXT });
-            productsCount = 0;
-            steps.push({
-              step: "v3_general_inquiry_unavailable",
-              ms: Date.now() - t0,
-            });
-          }
-        } else if (replacementSourceRequest) {
-          let direct: DirectReplacementResult | null = null;
-          const replacementDirectAdmitted = admitDirectSelectionRoute({
-            route: "replacement",
-            userMessage: replacementSourceRequest,
-          });
-          if (!replacementDirectAdmitted) {
-            direct = {
-              handled: false,
-              products: [],
-              outcome: "query_inconsistent",
-            };
-            steps.push({
-              step: "v3_replacement_direct_unproven_delegated",
-              ms: Date.now() - t0,
-            });
-          }
-          if (replacementDirectAdmitted && pendingScopedCatalogContinuation) {
-            const preservedDiscovery = await executeDiscoverCategory({
-              noun: pendingScopedCatalogContinuation.category,
-              semantic_query: pendingScopedCatalogContinuation.message,
-            }, {
-              baseUrl: CATALOG_BASE_URL,
-              apiToken: ctx.catalogToken,
-              openrouterApiKey: ctx.openrouterKey,
-            });
-            if (preservedDiscovery.ok) {
-              direct = await selectVerifiedCompactReplacementContinuation(
-                pendingScopedCatalogContinuation.message,
-                preservedDiscovery,
+
+            const outdoorPoeIntent = classifyOutdoorPoeIntent(
+              userMessage,
+              effectiveHistory,
+            );
+            const exactCompoundMarkingRequest =
+              classifyExactCompoundMarkingRequest(
+                userMessage,
+              );
+            const explicitCompoundMarking = extractExplicitCompoundMarking(
+              userMessage,
+            );
+            const semanticCompoundMarking =
+              detectUserIntentMode(userMessage) === "select" &&
+                explicitCompoundMarking &&
+                requiresSemanticCompoundEvidence(userMessage)
+                ? explicitCompoundMarking
+                : null;
+            const semanticCompoundDirectAdmitted = Boolean(
+              semanticCompoundMarking && admitDirectSelectionRoute({
+                route: "compound",
+                userMessage,
+                coveredCompound: semanticCompoundMarking,
+              }),
+            );
+            const exactCompoundDirectAdmitted = Boolean(
+              exactCompoundMarkingRequest && admitDirectSelectionRoute({
+                route: "compound",
+                userMessage,
+                coveredCompound: exactCompoundMarkingRequest,
+              }),
+            );
+            const outdoorPoeDirectAdmitted = outdoorPoeIntent === "selection" &&
+              admitDirectSelectionRoute({ route: "outdoor_poe", userMessage });
+            // Routing and the expert loop must resolve the same dialogue intent.
+            // Otherwise a short continuation such as `покажи` enters the ordinary
+            // branch before the loop can inherit the already proven replacement.
+            const replacementSourceRequest = resolveReplacementSourceMessage(
+              scopedSelectionRequest.message,
+              effectiveHistory.slice(-8),
+            );
+            const pendingScopedCatalogContinuation =
+              resolveScopedCatalogSelectionContinuation(
+                userMessage,
+                effectiveSlots,
+              );
+            const namedSeriesInquiryToken =
+              detectUserIntentMode(userMessage) === "inquire"
+                ? resolveNamedSeriesToken(
+                  userMessage,
+                  effectiveHistory.slice(-8),
+                )
+                : null;
+            const namedSeriesSelectionToken =
+              detectUserIntentMode(userMessage) === "select"
+                ? resolveNamedSeriesToken(
+                  userMessage,
+                  effectiveHistory.slice(-8),
+                )
+                : null;
+            const pureNamedSeriesBrowse = Boolean(
+              namedSeriesSelectionToken &&
+                isPureNamedSeriesBrowse(userMessage, namedSeriesSelectionToken),
+            );
+            const exactProductInquiryLookup =
+              detectUserIntentMode(userMessage) === "inquire"
+                ? extractReplacementLookupKeys(userMessage)
+                : { articles: [], modelCodes: [] };
+            const hasExactProductInquiry = !namedSeriesInquiryToken &&
+              (exactProductInquiryLookup.articles.length > 0 ||
+                exactProductInquiryLookup.modelCodes.length > 0);
+            const exactProductInquiryDirectAdmitted = hasExactProductInquiry &&
+              admitDirectSelectionRoute({
+                route: "exact_inquiry",
+                userMessage,
+              });
+            const generalInquiryDirect = shouldAnswerGeneralInquiryDirectly({
+              intentMode: detectUserIntentMode(userMessage),
+              exactProductInquiry: hasExactProductInquiry,
+              namedSeriesInquiry: Boolean(namedSeriesInquiryToken),
+              catalogGroundingRequired: requiresCatalogGroundingForInquiry(
+                userMessage,
+              ),
+              recentProductEvidence: recentProductEvidence.length > 0,
+              activeSelectionScope: scopedSelectionRequest.scoped,
+            }) && !additionalSelectionRequest;
+            // A verified formula/safety rule is selected by its own narrow proof
+            // conditions, not by whether the generic intent classifier called the
+            // same wording a question or a command (`чем отличается` vs `сравни`,
+            // `что посоветуете` vs `посоветуйте`).  Product-selection imperatives
+            // remain outside these rules and continue through the catalog routes.
+            const verifiedEngineeringInquiry =
+              resolveVerifiedEngineeringInquiry(
+                userMessage,
+              );
+            const broadAssortmentRequest = isBroadAssortmentRequest(
+              userMessage,
+            );
+            const broadAssortmentToken = broadAssortmentRequest
+              ? resolveNamedSeriesToken(
+                userMessage,
+                effectiveHistory.slice(-8),
+              ) ??
+                extractBroadAssortmentScope(userMessage)
+              : null;
+            const readinessClarification = additionalSelectionRequest
+              ? null
+              : selectReadinessClarification(
+                scopedSelectionRequest.message,
+                selectionReadinessEvidenceFromHistory(
+                  effectiveHistory.slice(-8),
+                ),
+                { progressive: scopedSelectionRequest.scoped },
+              );
+            // GUARD v3_meta_question_declined: вопрос про устройство сервиса
+            // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
+            // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
+            // Так утечка внутреннего устройства невозможна в принципе.
+            if (verifiedBroadChoice && !startsNewTask) {
+              const products = await answerVerifiedBroadAssortmentChoice(
+                verifiedBroadChoice,
                 ctx,
                 send,
                 steps,
                 t0,
               );
-              steps.push({
-                step: "v3_scoped_catalog_clarification_continued",
-                ms: Date.now() - t0,
-                meta: {
-                  category: preservedDiscovery.category.pagetitle,
-                  handled: Boolean(direct?.handled),
-                },
-              });
-            } else {
-              steps.push({
-                step: "v3_scoped_catalog_clarification_discovery_failed",
-                ms: Date.now() - t0,
-                meta: {
-                  category: pendingScopedCatalogContinuation.category,
-                  error_code: preservedDiscovery.error_code,
-                },
-              });
-            }
-          }
-          if (!direct) {
-            direct = await selectVerifiedOrdinaryReplacement(
-              replacementSourceRequest,
-              ctx,
-              send,
-              steps,
-              t0,
-            );
-          }
-          if (!direct.handled && direct.retryable_reason) {
-            steps.push({
-              step: "v3_replacement_preflight_retry",
-              ms: Date.now() - t0,
-              meta: { reason: direct.retryable_reason },
-            });
-            direct = await selectVerifiedOrdinaryReplacement(
-              replacementSourceRequest,
-              ctx,
-              send,
-              steps,
-              t0,
-            );
-          }
-          if (direct.handled) {
-            productsCount = direct.products.length;
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              direct.products,
-            );
-          } else {
-            const replacementSelectionPlan = buildReplacementSelectionPlan(
-              replacementSourceRequest,
-              direct.outcome,
-            );
-            const out = await runExpertLoop(
-              scopedSelectionRequest.message,
-              effectiveHistory,
-              effectiveSlots,
-              settings.openrouter_api_key!,
-              ctx,
-              send,
-              steps,
-              t0,
-              {
-                anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-                relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-                criteriaGateEnabled: true,
-              },
-              recentProductEvidence,
-              direct.source_candidate_ids ?? [],
-              replacementSelectionPlan,
-              ellipticalContinuation,
-            );
-            productsCount = out.productsRendered;
-            const shownProducts = out.shownProductIds
-              .map((id) => ctx.cache.get(id))
-              .filter((product): product is NonNullable<typeof product> =>
-                Boolean(product)
+              productsCount = products.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                products,
               );
-            await persistRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-              shownProducts,
+            } else if (
+              clientCatalogClarification &&
+              !verifiedBroadChoiceState.verifiedSlot && !startsNewTask
+            ) {
+              send({
+                type: "delta",
+                content: verifiedBroadChoiceState.lookupFailed
+                  ? "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже."
+                  : "Этот выбор раздела уже недействителен. Напишите серию и нужный раздел заново.",
+              });
+              productsCount = 0;
+              steps.push({
+                step: "v3_broad_assortment_selection_unverified",
+                ms: Date.now() - t0,
+                meta: { lookup_failed: verifiedBroadChoiceState.lookupFailed },
+              });
+            } else if (readinessClarification) {
+              const { profile, ...clarificationInput } = readinessClarification;
+              send({ type: "delta", content: clarificationInput.question });
+              const clarification = executeProposeClarification(
+                clarificationInput,
+              );
+              emitSideEffects(clarification, send);
+              steps.push({
+                step: "v3_selection_readiness_clarification",
+                ms: Date.now() - t0,
+                meta: { profile, facet_key: clarificationInput.facet_key },
+              });
+              productsCount = 0;
+            } else if (
+              verifiedBroadChoiceState.matchedIssuedOption &&
+              !verifiedBroadChoice && !startsNewTask
+            ) {
+              // A real chip from a constrained or ambiguous broad request must
+              // retain the original turn's requirements. No other direct selector
+              // is allowed to bypass the existing criteria-aware expert route.
+              steps.push({
+                step: "v3_broad_assortment_constrained_chip_expert_route",
+                ms: Date.now() - t0,
+              });
+              const out = await runExpertLoop(
+                scopedSelectionRequest.message,
+                effectiveHistory,
+                effectiveSlots,
+                settings.openrouter_api_key!,
+                ctx,
+                send,
+                steps,
+                t0,
+                {
+                  anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                  relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                  criteriaGateEnabled: true,
+                },
+                recentProductEvidence,
+                [],
+                null,
+                ellipticalContinuation,
+              );
+              productsCount = out.productsRendered;
+              const shownProducts = out.shownProductIds
+                .map((id) => ctx.cache.get(id))
+                .filter((product): product is NonNullable<typeof product> =>
+                  Boolean(product)
+                );
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                shownProducts,
+              );
+            } else if (isMetaSelfQuestion(userMessage)) {
+              steps.push({
+                step: "v3_meta_question_declined",
+                ms: Date.now() - t0,
+                meta: { user_message: userMessage },
+              });
+              send({ type: "delta", content: META_DECLINE_TEXT });
+              productsCount = 0;
+            } else if (verifiedEngineeringInquiry) {
+              steps.push({
+                step: "v3_verified_engineering_inquiry",
+                ms: Date.now() - t0,
+                meta: { rule: verifiedEngineeringInquiry.rule },
+              });
+              send({
+                type: "delta",
+                content: verifiedEngineeringInquiry.answer,
+              });
+              productsCount = 0;
+            } else if (isCleanPowerSafetyRequest(userMessage)) {
+              steps.push({
+                step: "v3_clean_power_safety_answer",
+                ms: Date.now() - t0,
+              });
+              send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
+              productsCount = 0;
+            } else if (isSensitiveBackupPowerRequest(userMessage)) {
+              steps.push({
+                step: "v3_sensitive_backup_power_answer",
+                ms: Date.now() - t0,
+              });
+              send({
+                type: "delta",
+                content: buildSensitiveBackupPowerAnswer(userMessage),
+              });
+              productsCount = 0;
+            } else if (electricalTripDiagnostic) {
+              steps.push({
+                step: "v3_electrical_trip_safety_answer",
+                ms: Date.now() - t0,
+              });
+              send({
+                type: "delta",
+                content: electricalTripDiagnostic.followup
+                  ? buildElectricalProtectionTripFollowupAnswer(
+                    electricalTripDiagnostic.current,
+                  )
+                  : ELECTRICAL_PROTECTION_TRIP_ANSWER,
+              });
+              productsCount = 0;
+            } else if (measuredBreakerGuidance) {
+              steps.push({
+                step: "v3_measured_breaker_guidance",
+                ms: Date.now() - t0,
+                meta: {
+                  current_a: measuredBreakerGuidance.current_a,
+                  suggested_rating_a:
+                    measuredBreakerGuidance.suggested_rating_a,
+                  supply: measuredBreakerGuidance.supply,
+                  conditional_supply:
+                    measuredBreakerGuidance.conditional_supply,
+                },
+              });
+              send({ type: "delta", content: measuredBreakerGuidance.answer });
+              productsCount = 0;
+            } else if (broadAssortmentRequest) {
+              await answerBroadAssortmentRequest(
+                broadAssortmentToken,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = 0;
+            } else if (exactProductInquiryDirectAdmitted) {
+              const direct = await answerVerifiedExactProductInquiry(
+                userMessage,
+                settings.openrouter_api_key!,
+                ctx,
+                send,
+                steps,
+                t0,
+                executionController.signal,
+              );
+              if (direct.handled) {
+                productsCount = direct.products.length;
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  direct.products,
+                );
+              } else {
+                const out = await runExpertLoop(
+                  scopedSelectionRequest.message,
+                  effectiveHistory,
+                  effectiveSlots,
+                  settings.openrouter_api_key!,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  {
+                    anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                    relaxationHintsEnabled:
+                      settings.v3_relaxation_hints_enabled,
+                    criteriaGateEnabled: true,
+                  },
+                  recentProductEvidence,
+                  [],
+                  null,
+                  ellipticalContinuation,
+                );
+                productsCount = out.productsRendered;
+                const shownProducts = out.shownProductIds
+                  .map((id) => ctx.cache.get(id))
+                  .filter((product): product is NonNullable<typeof product> =>
+                    Boolean(product)
+                  );
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  shownProducts,
+                );
+              }
+            } else if (namedSeriesInquiryToken) {
+              await answerVerifiedNamedSeriesInquiry(
+                namedSeriesInquiryToken,
+                userMessage,
+                settings.openrouter_api_key!,
+                ctx,
+                send,
+                steps,
+                t0,
+                executionController.signal,
+              );
+              productsCount = 0;
+            } else if (namedSeriesSelectionToken && pureNamedSeriesBrowse) {
+              const products = await selectVerifiedNamedSeriesRequest(
+                namedSeriesSelectionToken,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = products.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                products,
+              );
+            } else if (
+              recentProductEvidence.length > 0 &&
+              isRecentProductShowFollowup(userMessage)
+            ) {
+              const selection = await selectVerifiedRecentShowFollowup(
+                userMessage,
+                recentProductEvidence,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = selection.products.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selection.products,
+              );
+            } else if (
+              recentProductEvidence.length > 0 &&
+              isPureRecentPriceFollowup(userMessage)
+            ) {
+              const selection = await selectVerifiedRecentPriceFollowup(
+                userMessage,
+                recentProductEvidence,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = selection.products.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selection.products,
+              );
+            } else if (
+              semanticCompoundMarking && semanticCompoundDirectAdmitted
+            ) {
+              send({
+                type: "delta",
+                content:
+                  `Понял требования: сохраняю точный размер ${semanticCompoundMarking.first}×${
+                    String(semanticCompoundMarking.second).replace(".", ",")
+                  } и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
+              });
+              const direct = await selectVerifiedSemanticCompoundProducts(
+                userMessage,
+                semanticCompoundMarking,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              if (direct.handled) {
+                productsCount = direct.products.length;
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  direct.products,
+                );
+              } else {
+                const out = await runExpertLoop(
+                  scopedSelectionRequest.message,
+                  effectiveHistory,
+                  effectiveSlots,
+                  settings.openrouter_api_key!,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  {
+                    anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                    relaxationHintsEnabled:
+                      settings.v3_relaxation_hints_enabled,
+                    criteriaGateEnabled: true,
+                  },
+                  recentProductEvidence,
+                  [],
+                  null,
+                  ellipticalContinuation,
+                );
+                productsCount = out.productsRendered;
+                const shownProducts = out.shownProductIds
+                  .map((id) => ctx.cache.get(id))
+                  .filter((product): product is NonNullable<typeof product> =>
+                    Boolean(product)
+                  );
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  shownProducts,
+                );
+              }
+            } else if (
+              exactCompoundMarkingRequest && exactCompoundDirectAdmitted
+            ) {
+              send({
+                type: "delta",
+                content: exactCompoundMarkingIntro(exactCompoundMarkingRequest),
+              });
+              const selectedProducts =
+                await selectVerifiedExactCompoundProducts(
+                  exactCompoundMarkingRequest,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                );
+              productsCount = selectedProducts.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selectedProducts,
+              );
+            } else if (outdoorPoeIntent === "assessment") {
+              steps.push({
+                step: "v3_outdoor_poe_assessment",
+                ms: Date.now() - t0,
+              });
+              send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
+              productsCount = 0;
+            } else if (outdoorPoeIntent === "explanation") {
+              steps.push({
+                step: "v3_outdoor_poe_explanation",
+                ms: Date.now() - t0,
+              });
+              send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
+              productsCount = 0;
+            } else if (
+              outdoorPoeIntent === "selection" && outdoorPoeDirectAdmitted
+            ) {
+              send({ type: "delta", content: OUTDOOR_POE_SELECTION_INTRO });
+              const selectedProducts = await selectVerifiedOutdoorPoeProducts(
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = selectedProducts.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selectedProducts,
+              );
+            } else if (
+              recentProductEvidence.length > 0 &&
+              isEvidenceOnlyFollowup(userMessage) &&
+              !constrainedRecentPriceFollowup &&
+              !(namedSeriesSelectionToken && !pureNamedSeriesBrowse)
+            ) {
+              const answer = buildDeterministicEvidenceAnswer(
+                recentProductEvidence,
+                userMessage,
+              );
+              steps.push({
+                step: "v3_deterministic_evidence_followup",
+                ms: Date.now() - t0,
+                meta: { count: recentProductEvidence.length },
+              });
+              send({ type: "delta", content: answer });
+              productsCount = 0;
+            } else if (generalInquiryDirect) {
+              let answered = false;
+              try {
+                const inquiry = await callOpenRouter(
+                  settings.openrouter_api_key!,
+                  buildGeneralInquiryMessages(userMessage),
+                  executionController.signal,
+                  LLM_TIMEOUT_TOOL_DECISION_MS,
+                  "tool_decision",
+                  [],
+                  null,
+                  0.15,
+                  [],
+                  1400,
+                  GENERAL_INQUIRY_MODEL_ROUTING,
+                );
+                const guarded = sanitizeIntermediateReasoning(inquiry.text);
+                const visible = guarded.suppressed
+                  ? ""
+                  : stripUnrenderedCatalogFactSegments(guarded.text).text
+                    .trim();
+                if (visible) {
+                  send({ type: "delta", content: visible });
+                  productsCount = 0;
+                  answered = true;
+                  steps.push({
+                    step: "v3_general_inquiry_direct_answer",
+                    ms: Date.now() - t0,
+                    meta: {
+                      chars: visible.length,
+                      provider: inquiry.provider ?? "openrouter",
+                      guard_matches: guarded.matched.length,
+                    },
+                  });
+                }
+              } catch (error) {
+                steps.push({
+                  step: "v3_general_inquiry_direct_failed",
+                  ms: Date.now() - t0,
+                  meta: { error: String((error as Error)?.message ?? error) },
+                });
+              }
+              if (!answered) {
+                send({
+                  type: "delta",
+                  content: GENERAL_INQUIRY_UNAVAILABLE_TEXT,
+                });
+                productsCount = 0;
+                steps.push({
+                  step: "v3_general_inquiry_unavailable",
+                  ms: Date.now() - t0,
+                });
+              }
+            } else if (replacementSourceRequest) {
+              let direct: DirectReplacementResult | null = null;
+              const replacementDirectAdmitted = admitDirectSelectionRoute({
+                route: "replacement",
+                userMessage: replacementSourceRequest,
+              });
+              if (!replacementDirectAdmitted) {
+                direct = {
+                  handled: false,
+                  products: [],
+                  outcome: "query_inconsistent",
+                };
+                steps.push({
+                  step: "v3_replacement_direct_unproven_delegated",
+                  ms: Date.now() - t0,
+                });
+              }
+              if (
+                replacementDirectAdmitted && pendingScopedCatalogContinuation
+              ) {
+                const preservedDiscovery = await executeDiscoverCategory({
+                  noun: pendingScopedCatalogContinuation.category,
+                  semantic_query: pendingScopedCatalogContinuation.message,
+                }, {
+                  baseUrl: CATALOG_BASE_URL,
+                  apiToken: ctx.catalogToken,
+                  openrouterApiKey: ctx.openrouterKey,
+                });
+                if (preservedDiscovery.ok) {
+                  direct = await selectVerifiedCompactReplacementContinuation(
+                    pendingScopedCatalogContinuation.message,
+                    preservedDiscovery,
+                    ctx,
+                    send,
+                    steps,
+                    t0,
+                  );
+                  steps.push({
+                    step: "v3_scoped_catalog_clarification_continued",
+                    ms: Date.now() - t0,
+                    meta: {
+                      category: preservedDiscovery.category.pagetitle,
+                      handled: Boolean(direct?.handled),
+                    },
+                  });
+                } else {
+                  steps.push({
+                    step: "v3_scoped_catalog_clarification_discovery_failed",
+                    ms: Date.now() - t0,
+                    meta: {
+                      category: pendingScopedCatalogContinuation.category,
+                      error_code: preservedDiscovery.error_code,
+                    },
+                  });
+                }
+              }
+              if (!direct) {
+                direct = await selectVerifiedOrdinaryReplacement(
+                  replacementSourceRequest,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                );
+              }
+              if (!direct.handled && direct.retryable_reason) {
+                steps.push({
+                  step: "v3_replacement_preflight_retry",
+                  ms: Date.now() - t0,
+                  meta: { reason: direct.retryable_reason },
+                });
+                direct = await selectVerifiedOrdinaryReplacement(
+                  replacementSourceRequest,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                );
+              }
+              if (direct.handled) {
+                productsCount = direct.products.length;
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  direct.products,
+                );
+              } else {
+                const replacementSelectionPlan = buildReplacementSelectionPlan(
+                  replacementSourceRequest,
+                  direct.outcome,
+                );
+                const out = await runExpertLoop(
+                  scopedSelectionRequest.message,
+                  effectiveHistory,
+                  effectiveSlots,
+                  settings.openrouter_api_key!,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  {
+                    anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                    relaxationHintsEnabled:
+                      settings.v3_relaxation_hints_enabled,
+                    criteriaGateEnabled: true,
+                  },
+                  recentProductEvidence,
+                  direct.source_candidate_ids ?? [],
+                  replacementSelectionPlan,
+                  ellipticalContinuation,
+                );
+                productsCount = out.productsRendered;
+                const shownProducts = out.shownProductIds
+                  .map((id) => ctx.cache.get(id))
+                  .filter((product): product is NonNullable<typeof product> =>
+                    Boolean(product)
+                  );
+                await persistRecentProductEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  shownProducts,
+                );
+              }
+            } else {
+              const out = await runExpertLoop(
+                additionalSelectionRequest
+                  ? `${ellipticalBaseRequest}\n${userMessage}`
+                  : scopedSelectionRequest.message,
+                effectiveHistory,
+                effectiveSlots,
+                settings.openrouter_api_key!,
+                ctx,
+                send,
+                steps,
+                t0,
+                {
+                  anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                  relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                  // Criteria gate — production-инвариант доказательности, а не
+                  // экспериментальный UX-флаг. Его нельзя выключить настройкой.
+                  criteriaGateEnabled: true,
+                },
+                recentProductEvidence,
+                [],
+                null,
+                ellipticalContinuation,
+                priorShownProductUrls,
+              );
+              productsCount = out.productsRendered;
+              const shownProducts = out.shownProductIds
+                .map((id) => ctx.cache.get(id))
+                .filter((product): product is NonNullable<typeof product> =>
+                  Boolean(product)
+                );
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                shownProducts,
+              );
+            }
+          },
+          remainingAcceptedWorkBudgetMs(
+            Date.now() - t0,
+            RESPONSE_TARGET_MS,
+            TERMINAL_LOG_RESERVE_MS,
+            MAX_ACCEPTED_WORK_MS,
+          ),
+          () => {
+            workTimedOut = true;
+            executionController.abort(
+              new DOMException("turn_deadline_exceeded", "TimeoutError"),
             );
-          }
-        } else {
-          const out = await runExpertLoop(
-            scopedSelectionRequest.message,
-            effectiveHistory,
-            effectiveSlots,
-            settings.openrouter_api_key!,
-            ctx,
-            send,
-            steps,
-            t0,
-            {
-              anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-              relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-              // Criteria gate — production-инвариант доказательности, а не
-              // экспериментальный UX-флаг. Его нельзя выключить настройкой.
-              criteriaGateEnabled: true,
-            },
-            recentProductEvidence,
-            [],
-            null,
-            ellipticalContinuation,
-          );
-          productsCount = out.productsRendered;
-          const shownProducts = out.shownProductIds
-            .map((id) => ctx.cache.get(id))
-            .filter((product): product is NonNullable<typeof product> =>
-              Boolean(product)
-            );
-          await persistRecentProductEvidence(
-            supabase,
-            effectiveSessionId,
-            shownProducts,
-          );
-        }
-        }, remainingAcceptedWorkBudgetMs(
-          Date.now() - t0,
-          RESPONSE_TARGET_MS,
-          TERMINAL_LOG_RESERVE_MS,
-          MAX_ACCEPTED_WORK_MS,
-        ), () => {
-          workTimedOut = true;
-          executionController.abort(
-            new DOMException("turn_deadline_exceeded", "TimeoutError"),
-          );
-        });
+          },
+        );
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
         const publicFailure = classifyPublicFailure(e);
@@ -19201,8 +19391,11 @@ Deno.serve(async (req) => {
             type: "delta",
             content: `\n\n${publicFailure.customer_message}`,
           });
-        } catch { /* stream may be closed */ }
-        finally { sendingTerminalFailure = false; }
+        } catch {
+          /* stream may be closed */
+        } finally {
+          sendingTerminalFailure = false;
+        }
       } finally {
         clearInterval(keepAliveTimer);
         streamCompleted = true;
