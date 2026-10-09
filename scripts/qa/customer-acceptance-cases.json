@@ -376,26 +376,27 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
             "max_products": 5,
-            "require_products_or_text_groups": {
-              "min_products": 3,
-              "text_groups": [
-                ["только 1 вариант", "только один вариант", "не удалось подтвердить больше"],
-                ["остальные", "другие", "больше"]
-              ]
-            },
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_every_product_page": {
-              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
-              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+              "all_of": [
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
             },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
             ],
-            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный", "акустический", "акуст."],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -409,26 +410,27 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
             "max_products": 5,
-            "require_products_or_text_groups": {
-              "min_products": 3,
-              "text_groups": [
-                ["только 1 вариант", "только один вариант", "не удалось подтвердить больше"],
-                ["остальные", "другие", "больше"]
-              ]
-            },
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_every_product_page": {
-              "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }],
-              "description": { "require_any": ["движущ", "движен", "motion", "PIR"] }
+              "all_of": [
+                { "any_of": [
+                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                  { "description": { "require_any": ["бытов", "жилых зданий", "жилых помещ"] } }
+                ] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
             },
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
               ["\"value\":\"да\""]
             ],
-            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный", "акустический", "акуст."],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

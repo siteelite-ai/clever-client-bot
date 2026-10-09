@@ -509,6 +509,36 @@ test('source-backed numeric and exact facet checks reject underpowered and non-c
   assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Оболочка')));
 });
 
+test('source-backed alternatives accept residential proof outside a catalog facet without admitting acoustic-only sensors', () => {
+  const rule = {
+    all_of: [
+      { any_of: [
+        { facets: [{ name: 'Вид светильника', require_any: ['бытов'] }] },
+        { description: { require_any: ['бытов', 'жилых зданий'] } },
+      ] },
+      { any_of: [
+        { name: { require_any: ['датчиком движения', 'микроволновым сенсором'] } },
+        { description: { require_any: ['движущ', 'движен', 'микроволнов'] } },
+      ] },
+    ],
+  };
+  const url = 'https://220volt.kz/catalog/svetotexnika/svetilniki/residential-sensor/';
+  const link = [{ title: 'Светильник с датчиком движения', url }];
+  const base = { text: '', productsMarkdown: '', links: link, completed: true, diagnosticError: null, serverProductsCount: 1 };
+  const proof = { verified: true, sku: 'LEDAR-20', name: link[0].title,
+    facets: { 'Вид светильника': 'Светильники для ЖКХ' },
+    description: 'Для общественного и бытового освещения. Реагирует на движение.' };
+  const verifiedProductPages = new Map([[productUrlIdentity(url), proof]]);
+  assert.deepEqual(evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages }), []);
+  verifiedProductPages.set(productUrlIdentity(url), { ...proof,
+    name: 'Светильник с акустическим датчиком',
+    description: 'Для общественного освещения. Реагирует на звук.' });
+  const failures = evaluate({ require_every_product_page: rule }, { ...base, verifiedProductPages });
+  assert(failures.some((failure) => failure.includes('no source-backed alternative matched')));
+  assert(evaluate({ require_every_product_page: { any_of: [] } }, { ...base, verifiedProductPages })
+    .includes('invalid product-page source evidence contract'));
+});
+
 test('product-or-explicit-gap and class-or-gap contracts cannot pass vacuously', () => {
   const empty = { text: 'Для котла нужен ИБП с чистой синусоидой.', productsMarkdown: '', links: [], completed: true, diagnosticError: null };
   const ups = { require_products_or_text_groups: {

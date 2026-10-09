@@ -93,7 +93,7 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: '82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1',
+    sha256: 'da46ede7a0383e2eb521e66a1b97bd2b376be0bd1885bad607e22171f546cc6a',
     repeat: 3,
     turns: 41,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
@@ -416,7 +416,51 @@ function validProductPageRules(rules) {
     typeof rule?.name !== 'string' || !rule.name.trim() || !validSourceRule(rule)
   )) return false;
   if (rules.description !== undefined && !validSourceRule(rules.description)) return false;
-  return facets.length > 0 || rules.description !== undefined;
+  if (rules.name !== undefined && !validSourceRule(rules.name)) return false;
+  for (const operator of ['all_of', 'any_of']) {
+    if (rules[operator] !== undefined &&
+        (!Array.isArray(rules[operator]) || rules[operator].length === 0 ||
+          rules[operator].some((branch) => !validProductPageRules(branch)))) return false;
+  }
+  return facets.length > 0 || rules.description !== undefined || rules.name !== undefined ||
+    rules.all_of !== undefined || rules.any_of !== undefined;
+}
+
+function productPageRuleFailures(rules, proof) {
+  const failures = [];
+  for (const facetRule of rules.facets ?? []) {
+    const field = Object.entries(proof.facets ?? {})
+      .find(([name]) => sameSourceLabel(name, facetRule.name));
+    failures.push(...sourceRuleFailures(
+      facetRule,
+      field?.[1] ?? '',
+      `product ${proof.sku} facet ${facetRule.name}`,
+    ));
+  }
+  if (rules.description) {
+    failures.push(...sourceRuleFailures(
+      rules.description,
+      proof.description,
+      `product ${proof.sku} description`,
+    ));
+  }
+  if (rules.name) {
+    failures.push(...sourceRuleFailures(
+      rules.name,
+      proof.name,
+      `product ${proof.sku} name`,
+    ));
+  }
+  for (const branch of rules.all_of ?? []) {
+    failures.push(...productPageRuleFailures(branch, proof));
+  }
+  if (rules.any_of) {
+    const alternatives = rules.any_of.map((branch) => productPageRuleFailures(branch, proof));
+    if (alternatives.every((branchFailures) => branchFailures.length > 0)) {
+      failures.push(`product ${proof.sku}: no source-backed alternative matched: ${alternatives.map((branchFailures) => branchFailures.join('; ')).join(' | ')}`);
+    }
+  }
+  return failures;
 }
 
 function matchesEveryGroup(value, groups) {
@@ -668,22 +712,7 @@ export function evaluate(expect = {}, response, { requireVerifiedPages = false }
       for (const link of response.links) {
         const proof = response.verifiedProductPages?.get(productUrlIdentity(link.url));
         if (!proof?.verified) continue; // The unverified-page failure above is authoritative.
-        for (const facetRule of rules.facets ?? []) {
-          const field = Object.entries(proof.facets ?? {})
-            .find(([name]) => sameSourceLabel(name, facetRule.name));
-          failures.push(...sourceRuleFailures(
-            facetRule,
-            field?.[1] ?? '',
-            `product ${proof.sku} facet ${facetRule.name}`,
-          ));
-        }
-        if (rules.description) {
-          failures.push(...sourceRuleFailures(
-            rules.description,
-            proof.description,
-            `product ${proof.sku} description`,
-          ));
-        }
+        failures.push(...productPageRuleFailures(rules, proof));
       }
     }
   }
