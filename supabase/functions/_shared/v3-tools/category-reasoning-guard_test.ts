@@ -488,6 +488,92 @@ Deno.test("semantic discovery uses only the explicit customer destination of a t
   );
 });
 
+Deno.test("server-compiled live discovery evaluates the destination, never the replaced source", () => {
+  const request =
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
+  for (const category of ["Светильники", "Светодиодные светильники"]) {
+    assertEquals(
+      discoveryResultPreservesCustomerIntent(
+        request,
+        category,
+        request,
+        false,
+        false,
+        request,
+        false,
+        true,
+      ),
+      true,
+      `destination-side live category ${category} should survive`,
+    );
+  }
+  for (
+    const category of [
+      "Люстры",
+      "Офисные светильники",
+      "Светильники ЖКХ",
+      "Кабели",
+    ]
+  ) {
+    assertEquals(
+      discoveryResultPreservesCustomerIntent(
+        request,
+        category,
+        request,
+        false,
+        false,
+        request,
+        false,
+        true,
+      ),
+      false,
+      `unproven source/sibling/modifier ${category} must fail`,
+    );
+  }
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      request,
+      "Светильники",
+      request,
+      false,
+      false,
+      request,
+      false,
+    ),
+    false,
+    "model-authored discovery must not gain the server-compiled exception",
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "Нужен светильник в гостиную",
+      "Кабели",
+      "Нужен светильник в гостиную",
+      false,
+      false,
+      "Нужен светильник в гостиную",
+      false,
+      true,
+    ),
+    false,
+    "non-replacement searches keep their former target guard",
+  );
+  const reversed = "Хочу заменить светильник на люстру для гостиной";
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      reversed,
+      "Люстры",
+      reversed,
+      false,
+      false,
+      reversed,
+      false,
+      true,
+    ),
+    true,
+    "the rule follows transformation direction rather than any product word",
+  );
+});
+
 Deno.test("customer-owned semantic discovery may formalize a qualified noun without losing its base class", () => {
   assertEquals(
     discoveryResultPreservesCustomerIntent(

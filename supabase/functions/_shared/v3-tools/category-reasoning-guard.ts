@@ -309,7 +309,29 @@ export function discoveryResultPreservesCustomerIntent(
   liveFacetSchemaResolution = false,
   resolverGroundedFrom = "",
   independentSchemaResolution = false,
+  serverCompiledLiveTaxonomyResolution = false,
 ): boolean {
+  // A server-compiled call may send the customer's complete sentence as noun.
+  // For an explicit `replace X with Y` request, X is the thing being removed:
+  // neither its occurrence in the sentence nor a later model declaration may
+  // ground the destination category. The live taxonomy has already proven
+  // that `resolvedCategory` exists; require *every* substantive word in that
+  // label to derive from customer-owned Y. Unproved modifiers remain a hard
+  // rejection even if the category itself is real.
+  if (serverCompiledLiveTaxonomyResolution) {
+    const destination = extractCustomerOwnedDiscoveryTarget(requestedNoun);
+    if (destination) {
+      const grounded = norm(
+        groundDiscoveryNounToCustomerTarget(resolvedCategory, destination) ??
+          "",
+      ).split(" ").filter(Boolean);
+      const categoryWords = norm(resolvedCategory).split(" ").filter((word) =>
+        word.length >= 2 && !GENERIC_TOKENS.has(word)
+      );
+      return categoryWords.length > 0 &&
+        categoryWords.every((word) => grounded.includes(word));
+    }
+  }
   // Server-compiled discovery sends the complete customer sentence so the
   // live resolver can distinguish product class from application. When that
   // resolver also reports a literal customer-owned head, compare the formal

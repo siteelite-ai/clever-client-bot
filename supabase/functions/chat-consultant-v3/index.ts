@@ -12501,6 +12501,13 @@ async function runExpertLoop(
                 "live_facet_schema",
               (result as DiscoverCategoryOk).resolved_from ?? "",
               compactSchemaBackedResolution,
+              isServerCompiledInitialDiscoveryCall(
+                resp.finishReason,
+                requestedNoun,
+                selectionDiscoveryMessage,
+              ) && ["live_taxonomy", "live_facet_schema"].includes(
+                (result as DiscoverCategoryOk).resolution_method ?? "",
+              ),
             )
           ) {
             result = {
