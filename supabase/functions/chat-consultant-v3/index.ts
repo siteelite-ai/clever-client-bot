@@ -120,6 +120,7 @@ import {
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
   sourceProvenSelectionPool,
+  unscopedSourceProvenCardinalityAttempt,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
   buildDerivedSelectionReasoningMessages,
@@ -13354,14 +13355,28 @@ async function runExpertLoop(
             summary:
               `plan=${shortfallPlan.length}; initial=${eligible.length}; minimum=${resultCardinality.minimum}; application=${sourceProofCriteria.filter((criterion) => criterion.proof_scope === "application_suitability").length}; customer_eq=${sourceProofCriteria.filter((criterion) => criterion.op === "eq" && criterion.evidence === "user_explicit" && criterion.proof_scope !== "application_suitability").length}`,
           });
-          for (const attempt of shortfallPlan) {
+          const recoveryQueue: Array<{
+            attempt: SelectionSearchRecoveryAttempt;
+            scope: "leaf" | "unscoped";
+          }> = shortfallPlan.map((attempt) => ({
+            attempt,
+            scope: "leaf",
+          }));
+          let unscopedAttempted = false;
+          const recoveryDeadline = Math.min(
+            TURN_TIMEOUT_MS - 6_000,
+            now() + 9_000,
+          );
+          for (let i = 0; i < recoveryQueue.length; i++) {
+            const { attempt, scope } = recoveryQueue[i];
             // The catalog may retry 429 twice, so its own per-request 8 s
             // timer is not an end-to-end cap. Abort this optional recovery
             // independently and leave room for final evidence rendering.
-            if (now() > TURN_TIMEOUT_MS - 12_000) break;
+            if (now() > TURN_TIMEOUT_MS - 12_000 ||
+              now() >= recoveryDeadline - 500) break;
             const recoveryBudgetMs = Math.min(
-              8_500,
-              Math.max(1, TURN_TIMEOUT_MS - now() - 4_000),
+              6_000,
+              Math.max(1, recoveryDeadline - now()),
             );
             const recovered: ToolResult = await runWithDeadline(
               (signal) =>
@@ -13382,6 +13397,21 @@ async function runExpertLoop(
               error_code: "catalog_timeout",
               message: "bounded cardinality recovery timed out",
             }));
+            if (
+              scope === "leaf" && !unscopedAttempted && recovered.ok &&
+              recovered.tool === "search_catalog" &&
+              recovered.results.length === 0
+            ) {
+              // An empty catalog full-text × leaf intersection does not prove
+              // that the literal feature is absent. Try the same word once
+              // unscoped; every candidate still faces the original frozen
+              // application, feature, target, visible and budget gates.
+              recoveryQueue.splice(i + 1, 0, {
+                attempt: unscopedSourceProvenCardinalityAttempt(attempt),
+                scope: "unscoped",
+              });
+              unscopedAttempted = true;
+            }
             const candidatePool = recovered.ok &&
                 recovered.tool === "search_catalog"
               ? filterSelectionRecoveryPool(recovered.results, attempt)
@@ -13396,13 +13426,14 @@ async function runExpertLoop(
               tool: "selection_recovery",
               phase: "result",
               summary:
-                `retrieved=${recovered.ok && recovered.tool === "search_catalog" ? recovered.results.length : 0}; candidate=${candidatePool.length}; proven=${sourceProvenRecovered.length}; pooled=${eligible.length}; error=${recovered.ok ? "none" : recovered.error_code}`,
+                `scope=${scope}; total=${recovered.ok && recovered.tool === "search_catalog" ? recovered.total : 0}; retrieved=${recovered.ok && recovered.tool === "search_catalog" ? recovered.results.length : 0}; candidate=${candidatePool.length}; proven=${sourceProvenRecovered.length}; pooled=${eligible.length}; error=${recovered.ok ? "none" : recovered.error_code}`,
             });
             steps.push({
               step: "v3_source_proven_cardinality_recovery",
               ms: now(),
               meta: {
                 kind: attempt.kind,
+                scope,
                 before: result.results.length,
                 recovered: candidatePool.length,
                 eligible: eligible.length,

@@ -20,6 +20,7 @@ import {
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
   sourceProvenSelectionPool,
+  unscopedSourceProvenCardinalityAttempt,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
 import { type Criterion, resolveTerminalSelectionCriteria } from "./criteria-gate.ts";
@@ -505,6 +506,15 @@ Deno.test("frozen application alternative survives final composition and activat
     per_page: 50,
   });
   assertEquals(plan[0].evidence_required_criteria, mandatory);
+  const unscoped = unscopedSourceProvenCardinalityAttempt(plan[0]);
+  assertEquals(unscoped.args, {
+    mode: "by_query",
+    query: "движения",
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(unscoped.evidence_required_criteria, mandatory);
+  assertEquals(unscoped.revalidate, plan[0].revalidate);
 });
 
 Deno.test("cardinality recovery never widens an explicit narrow class", () => {

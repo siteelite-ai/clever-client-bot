@@ -329,6 +329,22 @@ export function buildSourceProvenCardinalityRecoveryPlan(
   }));
 }
 
+/** Some catalog indexes do not combine full-text and leaf category filters.
+ * If the scoped literal lookup returns no rows, retry the identical literal
+ * once without that retrieval hint. Eligibility does not widen: the caller
+ * must reapply the unchanged source, target, visible and budget gates. */
+export function unscopedSourceProvenCardinalityAttempt(
+  scoped: SelectionSearchRecoveryAttempt,
+): SelectionSearchRecoveryAttempt {
+  const { category: _category, category_in: _categoryIn, ...args } = scoped.args;
+  return {
+    ...scoped,
+    args,
+    relaxed_inputs: [...scoped.relaxed_inputs, "leaf_retrieval_only"],
+    evidence_required_criteria: scoped.evidence_required_criteria.map(criterion => ({ ...criterion })),
+  };
+}
+
 /**
  * Evidence belongs to the exact catalog request that produced a pool. Once a
  * recovery attempt replaces that request, even an intentionally empty proof
