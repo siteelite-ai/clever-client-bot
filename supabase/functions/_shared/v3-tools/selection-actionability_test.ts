@@ -1089,6 +1089,49 @@ Deno.test("a visible minimum capacity outranks an exact model ID copied from the
   }]);
 });
 
+Deno.test("an exact model ID copied from a room size is not a customer-owned product capacity", () => {
+  const facets = [{
+    key: "max_area",
+    caption: "Максимальная площадь освещения, м2",
+    type: "checkbox",
+    unit: null,
+    values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+  }];
+  const reasoning =
+    "Максимальная площадь освещения у люстры — значение 30 м², прямое соответствие комнате.";
+  const declared = {
+    reasoning,
+    measurement_scope: "per_product",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v1"],
+    explicit_customer_classifications: [],
+  };
+  const resolved = resolveDerivedSelectionReasoning(
+    declared,
+    facets,
+    "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+  );
+  assertEquals(resolved?.requiredFacetValues, []);
+  assertEquals(resolved?.text.includes("Обязательные параметры"), false);
+
+  const exact = resolveDerivedSelectionReasoning(
+    declared,
+    facets,
+    "Нужна максимальная площадь освещения товара ровно 30 м²",
+  );
+  assertEquals(exact?.requiredFacetValues, [{
+    key: "Максимальная площадь освещения, м2",
+    value: "30",
+  }]);
+  const explicitlyDirectional = resolveDerivedSelectionReasoning(
+    declared,
+    facets,
+    "Нужна люстра для гостиной площадью не менее 30 м²",
+  );
+  assertEquals(explicitlyDirectional?.requiredFacetValues, []);
+});
+
 Deno.test("a spatial calculation cannot masquerade as one-product evidence", () => {
   const customer =
     "Нужен светодиодный светильник для гостиной площадью 25 кв. м";

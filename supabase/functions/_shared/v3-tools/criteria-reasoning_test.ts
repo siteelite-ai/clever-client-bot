@@ -1134,6 +1134,103 @@ Deno.test("natural customer area projects onto an ASCII-square live facet", () =
   }]);
 });
 
+Deno.test("a copied room area cannot own an exact product capacity", () => {
+  const facet = {
+    key: "max_area",
+    caption: "Максимальная площадь освещения, м2",
+    type: "checkbox",
+    unit: null,
+    values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+  };
+  const criterion: Criterion = {
+    key: facet.caption,
+    op: "eq",
+    value: "30",
+    level: "A",
+  };
+  const customer =
+    "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?";
+  const reasoning =
+    "Максимальная площадь освещения у люстры — значение 30 м², прямое соответствие комнате.";
+  assertEquals(
+    customerOwnsDerivedExactFacetValue(
+      criterion,
+      customer,
+      reasoning,
+      [facet],
+    ),
+    false,
+  );
+  assertEquals(
+    projectLiteralMeasuredCriteria([], customer, reasoning, [facet]).added,
+    [{ key: facet.caption, op: "min", value: "30", unit: "м²", level: "A" }],
+  );
+  const corrected = projectLiteralMeasuredCriteria(
+    [criterion],
+    customer,
+    reasoning,
+    [facet],
+    [],
+  );
+  assertEquals(corrected.criteria, [{
+    key: facet.caption,
+    op: "min",
+    value: "30",
+    unit: "м²",
+    level: "A",
+  }]);
+  assertEquals(corrected.matched, corrected.criteria);
+  assertEquals(
+    projectLiteralMeasuredCriteria(
+      [],
+      "Нужна максимальная площадь освещения товара ровно 30 м²",
+      reasoning,
+      [facet],
+    ).added[0]?.op,
+    "eq",
+  );
+  assertEquals(
+    projectLiteralMeasuredCriteria(
+      [],
+      "Для комнаты ровно 30 м² нужен светильник",
+      reasoning,
+      [facet],
+    ).added[0]?.op,
+    "min",
+  );
+  assertEquals(
+    customerOwnsDerivedExactFacetValue(
+      criterion,
+      "Нужна максимальная площадь освещения товара ровно 30 м²",
+      reasoning,
+      [facet],
+    ),
+    true,
+  );
+});
+
+Deno.test("contextual capacity projection is generic across maximum and minimum live facets", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен узел для участка длиной 10 м",
+    "Ищу узел с подходящей длиной участка.",
+    [{
+      key: "min_segment",
+      caption: "Минимальная длина обслуживаемого участка, м",
+      type: "number",
+      unit: "м",
+      values: [{ value: "10" }, { value: "15" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Минимальная длина обслуживаемого участка, м",
+    op: "max",
+    value: "10",
+    unit: "м",
+    level: "A",
+  }]);
+});
+
 Deno.test("направленная величина клиента не сужается до точного равенства", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

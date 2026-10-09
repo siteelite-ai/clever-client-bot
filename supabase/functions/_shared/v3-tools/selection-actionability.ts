@@ -16,6 +16,7 @@ import {
 import {
   canonicalMeasurementUnit,
   customerOwnsDerivedExactFacetValue,
+  projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
 } from "./criteria-reasoning.ts";
 import type { Criterion } from "./criteria-gate.ts";
@@ -1294,6 +1295,20 @@ export function resolveDerivedSelectionReasoning(
     originalReasoning,
     liveMeasuredFacets,
   );
+  const customerDirectionalCriteria = [
+    ...projectLiteralMeasuredCriteria(
+      [],
+      customerEvidence,
+      customerEvidence,
+      liveMeasuredFacets,
+      [],
+    ).added,
+    ...projectReasoningRangeCriteria(
+      [],
+      customerEvidence,
+      liveMeasuredFacets,
+    ).added,
+  ];
   const declaredRequiredIds = new Set(
     (Array.isArray(args.required_facet_values)
       ? args.required_facet_values
@@ -1392,6 +1407,13 @@ export function resolveDerivedSelectionReasoning(
         originalReasoning,
         liveMeasuredFacets,
       );
+    const directionalCustomerCapacity = !customerOwnsExactProductValue &&
+      Number.isFinite(exactNumericValue) &&
+      customerDirectionalCriteria.some((criterion) =>
+        facetIdentities.has(normalizeLiteralEvidence(criterion.key)) &&
+        (criterion.op === "min" || criterion.op === "max") &&
+        Number(criterion.value) === exactNumericValue
+      );
     const coveredByVisibleRange = !customerOwnsExactProductValue &&
       Number.isFinite(exactNumericValue) &&
       visibleReasoningRanges.added.some((criterion) =>
@@ -1404,7 +1426,7 @@ export function resolveDerivedSelectionReasoning(
     // A structured exact ID cannot collapse the visible directional or range
     // contract that owns this live axis. An exact value explicitly requested
     // for the product by the customer remains binding.
-    if (coveredByVisibleRange) continue;
+    if (coveredByVisibleRange || directionalCustomerCapacity) continue;
     if (
       !customerOwned && !declaredRequiredIds.has(choice.id) &&
       !requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds)
