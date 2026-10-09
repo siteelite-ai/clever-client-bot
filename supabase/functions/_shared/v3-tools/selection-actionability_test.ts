@@ -219,6 +219,79 @@ Deno.test("direct live projection or prior derivation does not add a reasoning d
   );
 });
 
+Deno.test("a live before/after pair requires visible derivation even when its object scalar projects directly", () => {
+  for (const value of [12, 10]) {
+    assertEquals(
+      shouldRequireDerivedSelectionReasoning({
+        intentMode: "select",
+        phase: "search_after_discovery",
+        catalogSearchAttempted: false,
+        directMeasuredCriteriaCount: 1,
+        pairedCompatibilityUnproven: true,
+        userMessage: `подбери изделие для объекта диаметром ${value} мм`,
+        reasoningText:
+          `Размер до установки не менее ${value} мм и после изменения не более ${value} мм.`,
+      }),
+      true,
+    );
+  }
+  assertEquals(
+    shouldRequireDerivedSelectionReasoning({
+      intentMode: "select",
+      phase: "search_after_discovery",
+      catalogSearchAttempted: false,
+      directMeasuredCriteriaCount: 1,
+      pairedCompatibilityUnproven: false,
+      userMessage: "Нужно изделие диаметром 12 мм",
+      reasoningText: "",
+    }),
+    false,
+  );
+});
+
+Deno.test("derived reasoning instructions distinguish paired strict fit from an exact object-size facet", () => {
+  const system = buildDerivedSelectionReasoningMessages(
+    "подбери изделие для объекта диаметром 12 мм",
+    "Изделия",
+    [],
+  )[0].content;
+  assertEquals(system.includes("строго больше"), true);
+  assertEquals(system.includes("строго меньше"), true);
+  assertEquals(system.includes("точное значение фасета"), true);
+});
+
+Deno.test("derived declaration cannot turn a paired object reference into an exact live value", () => {
+  const facets = [{
+    key: "diameter_before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "12" }, { value: "16" }],
+  }, {
+    key: "diameter_after",
+    caption: "Внутренний диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "6" }, { value: "8" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для объекта диаметром 12 мм внутренний диаметр до установки должен быть строго больше 12 мм, после изменения строго меньше 12 мм.",
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект диаметром 12 мм",
+    "Изделия",
+    {
+      value: 12,
+      facetKeys: ["diameter_before", "diameter_after"],
+    },
+  );
+  assertEquals(declaration?.requiredFacetValues, []);
+  assertEquals(declaration?.text.includes("Обязательные параметры"), false);
+});
+
 Deno.test("visible derived reasoning cannot be replaced by hidden later tool prose", () => {
   assertEquals(
     measuredSelectionContractEvidence(

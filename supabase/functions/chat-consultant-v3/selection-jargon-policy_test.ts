@@ -10,6 +10,7 @@ import {
   enforceTerminalPairedFit,
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
+  omitPairedObjectReferenceExactCriteria,
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
@@ -397,6 +398,99 @@ Deno.test("terminal jargon fit proves strict high > 10 > low from live paired sc
     ).map((product) => product.id),
     ["ok"],
   );
+});
+
+Deno.test("paired object measurements never become exact product sizes at 12 or 10 mm", () => {
+  for (const value of [12, 10]) {
+    const reference = { value, unit: "мм" };
+    const decision = terminalPairedFitDecision(
+      reference,
+      `подбери трубку для кабеля диаметром ${value} мм`,
+      `До установки внутренний диаметр должен быть строго больше ${value} мм, а после изменения внутренний диаметр должен быть строго меньше ${value} мм.`,
+      pairedFacets,
+    );
+    assertEquals(decision.state, "required");
+    assertEquals(
+      omitPairedObjectReferenceExactCriteria(
+        [
+          criterion(String(value), "diameter_before"),
+          criterion(String(value), "diameter_after"),
+          criterion("красный", "Цвет"),
+        ],
+        decision,
+        pairedFacets,
+      ).map(({ key }) => key),
+      ["Цвет"],
+    );
+    assertEquals(
+      enforceTerminalPairedFit(
+        [
+          item("equal-before", `Изделие ${value}/${value / 2}`),
+          item("strict-fit", `Изделие ${value + 4}/${value / 2}`),
+        ],
+        decision,
+        `До установки внутренний диаметр должен быть строго больше ${value} мм, а после изменения внутренний диаметр должен быть строго меньше ${value} мм.`,
+      ).map(({ id }) => id),
+      ["strict-fit"],
+    );
+  }
+});
+
+Deno.test("an unproven unique live pair still identifies its facets without authorizing cards", () => {
+  const decision = terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    "подбери трубку для кабеля диаметром 12 мм",
+    "До установки диаметр не менее 12 мм, после установки не более 12 мм.",
+    pairedFacets,
+  );
+  assertEquals(decision.state, "unproven");
+  assertEquals(decision.selected_pair?.before_facet_key, "diameter_before");
+  assertEquals(decision.selected_pair?.after_facet_key, "diameter_after");
+  assertEquals(
+    enforceTerminalPairedFit([item("tempting", "Изделие 16/8")], decision, ""),
+    [],
+  );
+});
+
+Deno.test("live caption-only units identify the same strict pair for both customer sizes", () => {
+  const facets: CompatibilityFacet[] = [
+    {
+      key: "before_diameter",
+      caption: "Внутр диаметр до термоусадки,мм",
+      unit: null,
+      values: [{ value: "12" }, { value: "16" }],
+    },
+    {
+      key: "after_diameter",
+      caption: "Внутр диаметр после термоусадки,мм",
+      unit: null,
+      values: [{ value: "6" }, { value: "8" }],
+    },
+  ];
+  for (const value of [12, 10]) {
+    const request = `подбери трубку для кабеля диаметром ${value} мм`;
+    const decision = terminalPairedFitDecision(
+      { value, unit: "мм" },
+      request,
+      "",
+      facets,
+    );
+    assertEquals(decision.state, "unproven");
+    assertEquals(decision.selected_pair?.before_facet_key, "before_diameter");
+    assertEquals(
+      omitPairedObjectReferenceExactCriteria(
+        [{
+          key: "Внутр диаметр до термоусадки,мм",
+          op: "eq",
+          value: String(value),
+          evidence: "user_explicit",
+        }],
+        decision,
+        facets,
+      ),
+      [],
+    );
+  }
 });
 
 Deno.test("live pair schema is an obligation, never a substitute for model reasoning", () => {

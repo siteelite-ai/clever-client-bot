@@ -208,6 +208,7 @@ import {
   enforceTerminalPairedFit,
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
+  omitPairedObjectReferenceExactCriteria,
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
@@ -436,6 +437,7 @@ import {
   productSupportsVisibleRequestContract,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
+  type VisibleRequestContractContext,
 } from "../_shared/v3-tools/visible-request-contract.ts";
 import {
   type EscalateInput,
@@ -6044,6 +6046,25 @@ async function runExpertLoop(
   let activeCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
+  const adoptValidatedPairedRelations = (
+    decision: ReturnType<typeof terminalPairedFitDecision>,
+    facets: DiscoverCategoryOk["facets"],
+  ) => {
+    const pair = decision.selected_pair;
+    if (decision.state !== "required" || !pair) return;
+    const selectedKeys = new Set(
+      facets.filter((facet) =>
+        facet.key === pair.before_facet_key ||
+        facet.key === pair.after_facet_key
+      ).flatMap((facet) => [facet.key, facet.caption].map(normalizeForMatch)),
+    );
+    activeCompatibilityRelations = [
+      ...activeCompatibilityRelations.filter((relation) =>
+        !selectedKeys.has(normalizeForMatch(relation.product_key))
+      ),
+      ...decision.relations,
+    ];
+  };
   // Terminal recovery is allowed only after a complete render contract has
   // passed all target/criteria/compatibility checks. A rejected render must
   // never be able to bypass a missing relation by falling through to recovery.
@@ -6085,11 +6106,18 @@ async function runExpertLoop(
       report: applyCriteriaGate(products, adjusted.criteria),
     };
   };
-  const guardVisibleCardinality = (ids: string[]) => {
+  const guardVisibleCardinality = (
+    ids: string[],
+    visibleContext: Pick<
+      VisibleRequestContractContext,
+      "productClass" | "taxonomyClass"
+    > = {},
+  ) => {
     const visibleRequestContract = buildVisibleRequestContract(userMessage, {
-      productClass: activeSelectionTarget ??
+      productClass: visibleContext.productClass ?? activeSelectionTarget ??
         lastDiscover?.category?.pagetitle ?? "",
-      taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
+      taxonomyClass: visibleContext.taxonomyClass ??
+        lastDiscover?.category?.pagetitle ?? "",
       // A modifier proven by an earlier narrow pool remains monotonic even if
       // a later recovery pool contains only broader sibling cards.
       candidateTitles: [...ctx.cache.values()].map((product) =>
@@ -6961,10 +6989,16 @@ async function runExpertLoop(
     return guarded;
   };
 
-  const guardFinalRenderIds = (ids: string[]): string[] => {
+  const guardFinalRenderIds = (
+    ids: string[],
+    visibleContext: Pick<
+      VisibleRequestContractContext,
+      "productClass" | "taxonomyClass"
+    > = {},
+  ): string[] => {
     const structurallySafe = guardReplacementRenderIds(
       filterProductIdsByNamedSeries(
-        guardVisibleCardinality(ids).ids,
+        guardVisibleCardinality(ids, visibleContext).ids,
         ctx.cache,
         namedSeriesToken,
       ),
@@ -7514,13 +7548,37 @@ async function runExpertLoop(
           let declarationCall = structuredReasoning.toolCalls.find((
             toolCall,
           ) => toolCall.name === "declare_selection_reasoning");
-          let declaration = declarationCall
-            ? resolveDerivedSelectionReasoning(
-              declarationCall.args,
-              lastDiscover.facets ?? [],
+          const pairedDeclarationDecision = (
+            args: Record<string, unknown>,
+          ) =>
+            terminalPairedFitDecision(
+              extractSingleMeasuredReference(userMessage),
               userMessage,
-              activeSelectionTarget ?? lastDiscover.category?.pagetitle ?? "",
-            )
+              String(args.reasoning ?? ""),
+              lastDiscover?.facets ?? [],
+            );
+          const resolvePairedDeclaration = (
+            args: Record<string, unknown>,
+          ) => {
+            const pair = pairedDeclarationDecision(args);
+            return resolveDerivedSelectionReasoning(
+              args,
+              lastDiscover?.facets ?? [],
+              userMessage,
+              activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
+              pair.reference && pair.selected_pair
+                ? {
+                  value: pair.reference.value,
+                  facetKeys: [
+                    pair.selected_pair.before_facet_key,
+                    pair.selected_pair.after_facet_key,
+                  ],
+                }
+                : null,
+            );
+          };
+          let declaration = declarationCall
+            ? resolvePairedDeclaration(declarationCall.args)
             : null;
           const missingRequiredProductMeasurement = () => {
             if (!unresolvedProductMeasurementRequired || !declaration) {
@@ -7543,8 +7601,14 @@ async function runExpertLoop(
                 declaration.measurementEvidence,
               );
           };
+          const missingPairedFitProof = () => {
+            if (!declarationCall) return false;
+            const pair = pairedDeclarationDecision(declarationCall.args);
+            return Boolean(pair.selected_pair) && pair.state !== "required";
+          };
           if (
-            declaration?.text.trim() && missingRequiredProductMeasurement() &&
+            declaration?.text.trim() &&
+            (missingRequiredProductMeasurement() || missingPairedFitProof()) &&
             derivedReasoningProviderAttempts < 2
           ) {
             const correctionTimeout = boundedAgentStepTimeout(
@@ -7558,11 +7622,14 @@ async function runExpertLoop(
                 ...message,
               }));
               if (correctionMessages[0]?.role === "system") {
+                const correction = missingPairedFitProof()
+                  ? "Предыдущая попытка не доказала обе стороны парного размера из живой схемы. Для измеренного клиентом объекта явно назови один и тот же параметр изделия до установки и после изменения: до установки строго больше размера объекта, после изменения строго меньше. Равенство не подходит; не копируй размер объекта в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу."
+                  : "Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.";
                 correctionMessages[0] = {
                   ...correctionMessages[0],
                   content: `${
                     correctionMessages[0].content
-                  }\n\n<correction>Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.</correction>`,
+                  }\n\n<correction>${correction}</correction>`,
                 };
               }
               structuredReasoning = await callOpenRouter(
@@ -7583,13 +7650,7 @@ async function runExpertLoop(
                 toolCall,
               ) => toolCall.name === "declare_selection_reasoning");
               declaration = declarationCall
-                ? resolveDerivedSelectionReasoning(
-                  declarationCall.args,
-                  lastDiscover.facets ?? [],
-                  userMessage,
-                  activeSelectionTarget ??
-                    lastDiscover.category?.pagetitle ?? "",
-                )
+                ? resolvePairedDeclaration(declarationCall.args)
                 : null;
               steps.push({
                 step: "v3_derived_selection_measurement_retry",
@@ -7599,7 +7660,8 @@ async function runExpertLoop(
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
                     declaration?.text.trim() &&
-                      !missingRequiredProductMeasurement(),
+                      !missingRequiredProductMeasurement() &&
+                      !missingPairedFitProof(),
                   ),
                 },
               });
@@ -10753,8 +10815,12 @@ async function runExpertLoop(
           // interpretation. Later catalog facts (voltages, temperature ranges,
           // input/output labels) cannot manufacture a fit problem that the
           // customer never asked about.
-          const initialCompatibilityEvidence =
-            `${userMessage}\n${firstAssistantText}`;
+          const initialCompatibilityEvidence = `${userMessage}\n${
+            measuredSelectionContractEvidence(
+              derivedSelectionReasoningEvidence,
+              firstAssistantText,
+            )
+          }`;
           const parsedCompatibilityRelations = parseCompatibilityRelations(
             (tc.args as Record<string, unknown>).compatibility_relations,
           );
@@ -12056,13 +12122,18 @@ async function runExpertLoop(
           // itself supply the consultant's reasoning. Apply the same policy at
           // the model's render boundary, not just terminal recovery: otherwise
           // a direct render can bypass an absent or one-sided model proof.
-          const visiblePairReasoning =
-            `${firstAssistantText}\n${derivedSelectionReasoningEvidence}`
-              .trim();
+          const visiblePairReasoning = measuredSelectionContractEvidence(
+            derivedSelectionReasoningEvidence,
+            firstAssistantText,
+          );
           const modelPairDecision = terminalPairedFitDecision(
             extractSingleMeasuredReference(userMessage),
             userMessage,
             visiblePairReasoning,
+            lastDiscover?.facets ?? [],
+          );
+          adoptValidatedPairedRelations(
+            modelPairDecision,
             lastDiscover?.facets ?? [],
           );
           if (modelPairDecision.state !== "not_applicable") {
@@ -13997,41 +14068,68 @@ async function runExpertLoop(
                 inheritedExplicit?.user_backed ?? [],
                 currentUserBacked,
               );
-              const explicitCriteria: Criterion[] = explicitKept.map(
-                ({ key, value }) => {
-                  const facet = lastDiscover?.facets.find((candidate) =>
-                    candidate.key === key
-                  );
-                  return {
-                    key: facet?.caption || key,
-                    op: "eq",
-                    value,
-                    level: "A" as const,
-                  };
-                },
-              );
-              const explicitUserBackedCriteria: Criterion[] = explicitUserBacked
-                .map(({ key, value }) => {
-                  const facet = lastDiscover?.facets.find((candidate) =>
-                    candidate.key === key
-                  );
-                  return {
-                    key: facet?.caption || key,
-                    op: "eq",
-                    value,
-                    level: "A" as const,
-                    evidence: "user_explicit" as const,
-                  };
-                });
-              const measuredCriteria = projectReasoningRangeCriteria(
-                [],
+              // A measured object can line up numerically with a live
+              // before/after product facet. That coincidence is a fit
+              // reference, not the customer's request for an exact product
+              // size. Resolve the unique paired graph before any literal
+              // facet projector freezes the scalar into search criteria.
+              const discoveryPairedDecision = terminalPairedFitDecision(
+                extractSingleMeasuredReference(userMessage),
                 userMessage,
+                measuredSelectionContractEvidence(
+                  derivedSelectionReasoningEvidence,
+                  firstAssistantText,
+                ),
                 lastDiscover.facets,
-              ).added.map((criterion) => ({
-                ...criterion,
-                level: "A" as const,
-                evidence: "user_explicit" as const,
-              }));
+              );
+              const discoveryFacets = lastDiscover.facets;
+              const omitPairedExact = (criteria: Criterion[]) =>
+                omitPairedObjectReferenceExactCriteria(
+                  criteria,
+                  discoveryPairedDecision,
+                  discoveryFacets,
+                );
+              const explicitCriteria: Criterion[] = omitPairedExact(
+                explicitKept.map(
+                  ({ key, value }) => {
+                    const facet = lastDiscover?.facets.find((candidate) =>
+                      candidate.key === key
+                    );
+                    return {
+                      key: facet?.caption || key,
+                      op: "eq",
+                      value,
+                      level: "A" as const,
+                    };
+                  },
+                ),
+              );
+              const explicitUserBackedCriteria: Criterion[] = omitPairedExact(
+                explicitUserBacked
+                  .map(({ key, value }) => {
+                    const facet = lastDiscover?.facets.find((candidate) =>
+                      candidate.key === key
+                    );
+                    return {
+                      key: facet?.caption || key,
+                      op: "eq",
+                      value,
+                      level: "A" as const,
+                      evidence: "user_explicit" as const,
+                    };
+                  }),
+              );
+              const measuredCriteria = omitPairedExact(
+                projectReasoningRangeCriteria(
+                  [],
+                  userMessage,
+                  lastDiscover.facets,
+                ).added.map((criterion) => ({
+                  ...criterion,
+                  level: "A" as const,
+                  evidence: "user_explicit" as const,
+                })),
+              );
               const directLiteralMeasuredProjection =
                 projectLiteralMeasuredCriteria(
                   explicitCriteria,
@@ -14044,14 +14142,15 @@ async function runExpertLoop(
                   lastDiscover.facets,
                   explicitUserBackedCriteria,
                 );
-              const directLiteralMeasuredCriteria =
+              const directLiteralMeasuredCriteria = omitPairedExact(
                 directLiteralMeasuredProjection.added
                   .map((criterion) => ({
                     ...criterion,
                     evidence: "user_explicit" as const,
-                  }));
+                  })),
+              );
               const directMeasuredCriteriaCount = measuredCriteria.length +
-                directLiteralMeasuredProjection.matched.length;
+                omitPairedExact(directLiteralMeasuredProjection.matched).length;
               const directApplicationCriteriaForReasoning =
                 minimumCompatibilityRelationCount(userMessage) < 2 &&
                   !reasoningNeedsCompatibilityRelations(userMessage)
@@ -14100,14 +14199,14 @@ async function runExpertLoop(
                 lastDiscover.facets,
                 explicitUserBackedCriteria,
               );
-              const literalMeasuredCriteria = [
+              const literalMeasuredCriteria = omitPairedExact([
                 ...literalMeasuredProjection.added,
                 ...literalMeasuredProjection.matched,
               ].map((criterion) => ({
                 ...criterion,
                 level: "A" as const,
                 evidence: "user_explicit" as const,
-              }));
+              })));
               const before = userBackedSearchCriteria.length;
               userBackedSearchCriteria = mergeUserBackedCriteria(
                 userBackedSearchCriteria,
@@ -14148,6 +14247,9 @@ async function runExpertLoop(
                   phase: "search_after_discovery",
                   catalogSearchAttempted,
                   directMeasuredCriteriaCount,
+                  pairedCompatibilityUnproven:
+                    discoveryPairedDecision.state === "unproven" &&
+                    Boolean(discoveryPairedDecision.selected_pair),
                   directApplicationCriteriaCount:
                     directApplicationCriteriaForReasoning.length +
                     (verifiedApplicationSelection?.criteria.length ?? 0),
@@ -14159,7 +14261,8 @@ async function runExpertLoop(
                 selectionReasoningOnlyRequired = true;
                 unresolvedProductMeasurementRequired =
                   directMeasuredCriteriaCount === 0 &&
-                  hasSelectionMeasurementContext(userMessage);
+                  hasSelectionMeasurementContext(userMessage) &&
+                  !discoveryPairedDecision.selected_pair;
                 steps.push({
                   step: "v3_unprojected_selection_context_requires_reasoning",
                   ms: now(),
@@ -14167,6 +14270,7 @@ async function runExpertLoop(
                     category: lastDiscover.category?.pagetitle ?? "",
                     measured_contexts: true,
                     direct_measured_criteria: directMeasuredCriteriaCount,
+                    paired_fit_proof_state: discoveryPairedDecision.state,
                     direct_application_criteria:
                       directApplicationCriteriaForReasoning.length +
                       (verifiedApplicationSelection?.criteria.length ?? 0),
@@ -15398,14 +15502,27 @@ async function runExpertLoop(
       )
       : [];
     const terminalPairedReference = extractSingleMeasuredReference(userMessage);
-    const terminalVisibleModelReasoning =
-      `${firstAssistantText}\n${derivedSelectionReasoningEvidence}`.trim();
+    const terminalVisibleModelReasoning = measuredSelectionContractEvidence(
+      derivedSelectionReasoningEvidence,
+      firstAssistantText,
+    );
     const terminalPairDecision = terminalPairedFitDecision(
       terminalPairedReference,
       userMessage,
       terminalVisibleModelReasoning,
       terminalDiscover?.facets ?? [],
     );
+    if (terminalDiscover) {
+      terminalSelectionCriteria = omitPairedObjectReferenceExactCriteria(
+        terminalSelectionCriteria,
+        terminalPairDecision,
+        terminalDiscover.facets,
+      );
+      adoptValidatedPairedRelations(
+        terminalPairDecision,
+        terminalDiscover.facets,
+      );
+    }
     const terminalPairedSafeIds = (
       ids: string[],
       source: string,
@@ -17273,8 +17390,15 @@ async function runExpertLoop(
       terminalSelectionTarget &&
       !broadAssortmentRequest
     ) {
-      const visibleContract = buildVisibleRequestContract(userMessage, {
+      // Both the recovery precheck and the final card guard must use this
+      // server-grounded terminal scope, not a stale latest discovery or a
+      // broader earlier class declaration.
+      const terminalVisibleContext = {
         productClass: terminalSelectionTarget,
+        taxonomyClass: terminalDiscover.category.pagetitle,
+      };
+      const visibleContract = buildVisibleRequestContract(userMessage, {
+        ...terminalVisibleContext,
         candidateTitles: [...ctx.cache.values()].map((product) =>
           product.pagetitle
         ),
@@ -17337,7 +17461,10 @@ async function runExpertLoop(
             .filter((id) => targetIds.has(id) && criteriaIds.has(id));
           let recoveredCandidateCount = recovered.results.length;
           let diagnosticCandidateIds = candidateIds;
-          let safeIds = guardFinalRenderIds(candidateIds);
+          let safeIds = guardFinalRenderIds(
+            candidateIds,
+            terminalVisibleContext,
+          );
           safeIds = filterProductIdsByBudgetCap(
             safeIds,
             ctx.cache,
@@ -17403,7 +17530,10 @@ async function runExpertLoop(
                 .filter((id) =>
                   queryTargetIds.has(id) && queryCriteriaIds.has(id)
                 );
-              let querySafeIds = guardFinalRenderIds(queryCandidateIds);
+              let querySafeIds = guardFinalRenderIds(
+                queryCandidateIds,
+                terminalVisibleContext,
+              );
               querySafeIds = filterProductIdsByBudgetCap(
                 querySafeIds,
                 ctx.cache,
@@ -17434,6 +17564,7 @@ async function runExpertLoop(
           }
           const diagnosticGuard = guardVisibleCardinality(
             diagnosticCandidateIds,
+            terminalVisibleContext,
           );
           const requirementCoverage = diagnosticGuard.visibleRequestContract
             .map((requirement) => {

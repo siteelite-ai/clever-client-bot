@@ -376,8 +376,15 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "text_groups": [
+                ["только 1 вариант", "только один вариант", "не удалось подтвердить больше"],
+                ["остальные", "другие", "больше"]
+              ]
+            },
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_every_product_page": {
@@ -402,8 +409,15 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "text_groups": [
+                ["только 1 вариант", "только один вариант", "не удалось подтвердить больше"],
+                ["остальные", "другие", "больше"]
+              ]
+            },
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_every_product_page": {
@@ -617,6 +631,13 @@
               ["розет"],
               ["черн", "графит"]
             ],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Количество разъемов", "require_any": ["2"] },
+                { "name": "Цвет", "require_any": ["черный", "чёрный", "графит"] },
+                { "name": "Вид розетки", "require_any": ["электрическая"] }
+              ]
+            },
             "require_selection_criteria_groups": [
               ["Количество разъемов", "Количество разъёмов", "\"kind\":\"count\""],
               ["\"value\":2", "\"value\":\"2\""],

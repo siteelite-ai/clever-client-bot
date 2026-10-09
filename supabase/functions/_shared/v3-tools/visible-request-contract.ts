@@ -1,8 +1,15 @@
-import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+import {
+  extractClientQuantities,
+  normalizeUnit,
+} from "./criteria-consistency.ts";
 import { selectionTargetIsDeclared } from "./selection-contract.ts";
 
 export interface VisibleRequestRequirement {
-  kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
+  kind:
+    | "linear_measurement"
+    | "bounded_measurement"
+    | "count"
+    | "literal_modifier";
   label: string;
   op?: "eq" | "min" | "max";
   value?: string | number;
@@ -29,7 +36,8 @@ export interface VisibleRequestContractContext {
   semanticallyMappedCustomerPhrases?: string[];
 }
 
-const RU_ADJECTIVE_TOKEN = String.raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
+const RU_ADJECTIVE_TOKEN = String
+  .raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
 
 function hasDoubleSocketPhrase(source: string): boolean {
   const between = `(?:\\s+${RU_ADJECTIVE_TOKEN}){0,3}`;
@@ -55,10 +63,13 @@ function hasSingleSocketPhrase(source: string): boolean {
 function doubleSocketEvidenceMatches(evidence: string): boolean {
   const lines = String(evidence ?? "").split(/\r?\n/u);
   const title = lines[0] ?? "";
-  const auxiliaryPortContext = /(?<![\p{L}\p{N}])(?:usb|rj(?:[-\s]?\d{0,2})?|type[-\s]?c|hdmi|ethernet|lan)(?![\p{L}\p{N}])/iu
-    .test(evidence);
-  const countNoun = String.raw`(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|гн\.?|разъ[её]м\p{L}*|пост\p{L}*)`;
-  const qualifier = String.raw`(?:силов\p{L}*|электрическ\p{L}*|штепсельн\p{L}*)`;
+  const auxiliaryPortContext =
+    /(?<![\p{L}\p{N}])(?:usb|rj(?:[-\s]?\d{0,2})?|type[-\s]?c|hdmi|ethernet|lan)(?![\p{L}\p{N}])/iu
+      .test(evidence);
+  const countNoun = String
+    .raw`(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|гн\.?|разъ[её]м\p{L}*|пост\p{L}*)`;
+  const qualifier = String
+    .raw`(?:силов\p{L}*|электрическ\p{L}*|штепсельн\p{L}*)`;
   // A free-text "гнездо" or "разъем" may be an auxiliary port. Count-first
   // proof is limited to unmistakable outlet/place/post wording in the title.
   const directOutletNoun = String.raw`(?:мест\p{L}*|розет\p{L}*|пост\p{L}*)`;
@@ -87,7 +98,8 @@ function doubleSocketEvidenceMatches(evidence: string): boolean {
       const fieldNoun = field[2];
       const count = Number(field[3]);
       const socketNoun = /^розет/iu.test(fieldNoun);
-      const strongMains = socketNoun && /^(?:силов|штепсельн)/iu.test(fieldQualifier);
+      const strongMains = socketNoun &&
+        /^(?:силов|штепсельн)/iu.test(fieldQualifier);
       const weakOutletContradiction = socketNoun &&
         /^электрическ/iu.test(fieldQualifier) && count !== 2;
       if (strongMains || !auxiliaryPortContext) record(count, true);
@@ -113,9 +125,40 @@ function doubleSocketEvidenceMatches(evidence: string): boolean {
 }
 
 const WORKFLOW_WORDS = new Set([
-  "покажи", "покажите", "найди", "найдите", "подбери", "подберите",
-  "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "есть", "дайте",
-  "мне", "нам", "самый", "самая", "самые", "дешевый", "дешевле",
+  "покажи",
+  "покажите",
+  "найди",
+  "найдите",
+  "подбери",
+  "подберите",
+  "нужен",
+  "нужна",
+  "нужно",
+  "нужны",
+  "хочу",
+  "ищу",
+  "есть",
+  "дайте",
+  "мне",
+  "нам",
+  "самый",
+  "самая",
+  "самые",
+  "дешевый",
+  "дешевле",
+]);
+
+// These prepositions govern an application object, not a refinement of the
+// selected product class: "трубка для кабеля", "держатель на кабель". An
+// equipped-product relation ("с кабелем") is deliberately not included.
+const APPLICATION_RELATIONS = new Set([
+  "для",
+  "на",
+  "к",
+  "ко",
+  "под",
+  "for",
+  "to",
 ]);
 
 function normalizeToken(value: string): string {
@@ -136,28 +179,71 @@ function tokenStem(value: string): string {
   return stripped.length >= 4 ? stripped : token;
 }
 
+function sameTaxonomyModifier(
+  sourceToken: string,
+  taxonomyToken: string,
+): boolean {
+  const sourceStem = tokenStem(sourceToken);
+  const taxonomyStem = tokenStem(taxonomyToken);
+  // Normal inflections have the same stem. Derivational variants can share a
+  // longer lexical base, but a short class prefix (for example "термо-") is
+  // not enough to conflate distinct refinements.
+  return sourceStem === taxonomyStem || (
+    sourceStem.length >= 8 && taxonomyStem.length >= 8 &&
+    sourceStem.slice(0, 8) === taxonomyStem.slice(0, 8)
+  );
+}
+
 function canonicalUnit(raw: string): string {
   const unit = normalizeUnit(raw);
   const aliases: Record<string, string> = {
-    ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
-    люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",
-    вольт: "в", вольта: "в", вольтов: "в", volt: "в", volts: "в", v: "в",
-    ампер: "а", ампера: "а", амперов: "а", amp: "а", amps: "а", a: "а",
+    ватт: "вт",
+    ватта: "вт",
+    ваттов: "вт",
+    watt: "вт",
+    watts: "вт",
+    w: "вт",
+    люмен: "лм",
+    люмена: "лм",
+    люменов: "лм",
+    lumen: "лм",
+    lumens: "лм",
+    lm: "лм",
+    вольт: "в",
+    вольта: "в",
+    вольтов: "в",
+    volt: "в",
+    volts: "в",
+    v: "в",
+    ампер: "а",
+    ампера: "а",
+    амперов: "а",
+    amp: "а",
+    amps: "а",
+    a: "а",
   };
   return aliases[unit] ?? unit;
 }
 
 function isCurrencyUnit(raw: string): boolean {
   const unit = normalizeToken(raw);
-  return /^(?:тенге|тг|kzt|руб(?:ль|ля|лей)?|rub|доллар(?:а|ов)?|usd|евро|eur)$/u.test(unit);
+  return /^(?:тенге|тг|kzt|руб(?:ль|ля|лей)?|rub|доллар(?:а|ов)?|usd|евро|eur)$/u
+    .test(unit);
 }
 
 /** A physical number can describe the environment rather than the product.
  * Placement height is input for the consultant's sizing calculation and must
  * not become an exact length that every product card has to contain. */
-function isPlacementContextMeasurement(source: string, measurementIndex: number): boolean {
-  const prefix = source.slice(Math.max(0, measurementIndex - 64), measurementIndex);
-  return /(?:высот\p{L}*(?:\s+(?:установ\p{L}*|монтаж\p{L}*))?|(?:установ\p{L}*|монтаж\p{L}*)\s+на\s+высот\p{L}*)[^.!?\n]{0,24}$/iu.test(prefix);
+function isPlacementContextMeasurement(
+  source: string,
+  measurementIndex: number,
+): boolean {
+  const prefix = source.slice(
+    Math.max(0, measurementIndex - 64),
+    measurementIndex,
+  );
+  return /(?:высот\p{L}*(?:\s+(?:установ\p{L}*|монтаж\p{L}*))?|(?:установ\p{L}*|монтаж\p{L}*)\s+на\s+высот\p{L}*)[^.!?\n]{0,24}$/iu
+    .test(prefix);
 }
 
 /** Route/line length describes the installation task, not the physical length
@@ -177,15 +263,24 @@ function isRouteContextMeasurement(
 
 function titleSatisfiesBound(
   title: string,
-  expected: { value: number; unit: string; direction: "min" | "max"; exclusive: boolean },
+  expected: {
+    value: number;
+    unit: string;
+    direction: "min" | "max";
+    exclusive: boolean;
+  },
 ): boolean {
   const unit = canonicalUnit(expected.unit);
   return extractClientQuantities(title).some((quantity) => {
     if (canonicalUnit(quantity.unit) !== unit) return false;
     if (expected.direction === "min") {
-      return expected.exclusive ? quantity.value > expected.value : quantity.value >= expected.value;
+      return expected.exclusive
+        ? quantity.value > expected.value
+        : quantity.value >= expected.value;
     }
-    return expected.exclusive ? quantity.value < expected.value : quantity.value <= expected.value;
+    return expected.exclusive
+      ? quantity.value < expected.value
+      : quantity.value <= expected.value;
   });
 }
 
@@ -208,12 +303,16 @@ function literalRequestModifiers(
   // final selection gate; no category vocabulary is duplicated here.
   const taxonomyProvesCompleteClass = Boolean(
     context.productClass &&
-    context.taxonomyClass &&
-    selectionTargetIsDeclared(context.productClass, context.taxonomyClass),
+      context.taxonomyClass &&
+      selectionTargetIsDeclared(context.productClass, context.taxonomyClass),
   );
   const taxonomyBackedClassStems = taxonomyProvesCompleteClass
     ? new Set(classTokens.map(tokenStem).filter(Boolean))
     : new Set([classHead]);
+  const taxonomyClassTokens = taxonomyProvesCompleteClass
+    ? (String(context.taxonomyClass).match(/[a-zа-я0-9]+/giu) ?? [])
+      .filter((token) => tokenStem(token) !== classHead)
+    : [];
   const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
   const mappedStems = new Set(
     (context.semanticallyMappedCustomerPhrases ?? [])
@@ -230,7 +329,18 @@ function literalRequestModifiers(
   const modifiers = new Map<string, string>();
   const precedesDirectionalMeasurement = (index: number): boolean => {
     const tail = sourceTokens.slice(index + 1, index + 6).join(" ");
-    return /^(?:(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s+)\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,10}[²³]?\d?(?:\s|$)/iu.test(tail);
+    return /^(?:(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s+)\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,10}[²³]?\d?(?:\s|$)/iu
+      .test(tail);
+  };
+  const describesMeasurement = (index: number): boolean => {
+    const token = normalizeToken(sourceTokens[index] ?? "");
+    // Instrumental nouns such as "диаметром", "сечением" or "мощностью"
+    // label the following quantity; they are not title-language modifiers.
+    if (!/(?:ом|ем|ью)$/u.test(token)) return false;
+    const quantity = sourceTokens[index + 1] ?? "";
+    const unit = sourceTokens[index + 2] ?? "";
+    return /^\d+(?:[.,]\d+)?$/u.test(quantity) &&
+      /^[a-zа-я°]{1,10}[²³]?\d?$/iu.test(unit);
   };
   for (let index = 0; index < sourceTokens.length; index += 1) {
     if (tokenStem(sourceTokens[index]) !== classHead) continue;
@@ -238,12 +348,20 @@ function literalRequestModifiers(
       const modifierIndex = index + offset;
       const token = normalizeToken(sourceTokens[modifierIndex] ?? "");
       const stem = tokenStem(token);
+      const governsApplicationObject = APPLICATION_RELATIONS.has(
+        normalizeToken(sourceTokens[modifierIndex - 1] ?? ""),
+      );
+      const taxonomyProvesModifierIsClass = taxonomyClassTokens.some((
+        taxonomyToken,
+      ) => sameTaxonomyModifier(token, taxonomyToken));
       if (
         !stem || stem.length < 4 || stem === classHead ||
         mappedStems.has(stem) ||
         taxonomyBackedClassStems.has(stem) ||
+        taxonomyProvesModifierIsClass || governsApplicationObject ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
+        describesMeasurement(modifierIndex) ||
         !liveTitleStems.has(stem)
       ) continue;
       modifiers.set(stem, token);
@@ -272,13 +390,23 @@ export function buildVisibleRequestContract(
     requirements.push(requirement);
   };
 
-  for (const match of source.matchAll(/(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:м|m)(?![\p{L}\p{N}²³])/giu)) {
+  for (
+    const match of source.matchAll(
+      /(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:м|m)(?![\p{L}\p{N}²³])/giu,
+    )
+  ) {
     if (
       isPlacementContextMeasurement(source, match.index ?? 0) ||
       isRouteContextMeasurement(source, match.index ?? 0)
     ) continue;
-    const prefix = source.slice(Math.max(0, (match.index ?? 0) - 24), match.index ?? 0);
-    if (/(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*$/iu.test(prefix)) {
+    const prefix = source.slice(
+      Math.max(0, (match.index ?? 0) - 24),
+      match.index ?? 0,
+    );
+    if (
+      /(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*$/iu
+        .test(prefix)
+    ) {
       continue;
     }
     const raw = match[1];
@@ -290,14 +418,19 @@ export function buildVisibleRequestContract(
       op: "eq",
       value: Number(canonical),
       unit: "м",
-      matches: (title) => new RegExp(
-        `(?<!\\d)${escaped}\\s*(?:м|m)(?![\\p{L}\\p{N}²³])`,
-        "iu",
-      ).test(title),
+      matches: (title) =>
+        new RegExp(
+          `(?<!\\d)${escaped}\\s*(?:м|m)(?![\\p{L}\\p{N}²³])`,
+          "iu",
+        ).test(title),
     });
   }
 
-  for (const match of source.matchAll(/(?<!\d)(\d+)\s*(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*)(?!\p{L})/giu)) {
+  for (
+    const match of source.matchAll(
+      /(?<!\d)(\d+)\s*(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*)(?!\p{L})/giu,
+    )
+  ) {
     const count = match[1];
     add(`count:${count}`, {
       kind: "count",
@@ -333,16 +466,23 @@ export function buildVisibleRequestContract(
   // The check is purely number+unit based and therefore applies equally to
   // power, current, voltage, length, luminous flux and future catalog scales.
   // Area/volume describe application context and are deliberately excluded.
-  const boundPattern = /(?:(не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*)(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/giu;
+  const boundPattern =
+    /(?:(не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*)(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/giu;
   for (const match of source.matchAll(boundPattern)) {
-    const marker = match[1].toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/\s+/g, " ");
+    const marker = match[1].toLocaleLowerCase("ru-RU").replace(/ё/g, "е")
+      .replace(/\s+/g, " ");
     const value = Number(match[2].replace(",", "."));
     const unit = canonicalUnit(match[3]);
     // Price is first-class catalog evidence and is guarded independently.
     // Requiring a currency amount in a product title would reject every valid
     // card even when its structured price satisfies the customer's ceiling.
-    if (!Number.isFinite(value) || !unit || /[²³]/u.test(unit) || isCurrencyUnit(unit)) continue;
-    const direction = /^(?:не менее|минимум|от|больше|свыше)$/u.test(marker) ? "min" : "max";
+    if (
+      !Number.isFinite(value) || !unit || /[²³]/u.test(unit) ||
+      isCurrencyUnit(unit)
+    ) continue;
+    const direction = /^(?:не менее|минимум|от|больше|свыше)$/u.test(marker)
+      ? "min"
+      : "max";
     const exclusive = /^(?:больше|свыше|меньше|менее)$/u.test(marker);
     const label = `${marker} ${match[2]} ${match[3]}`;
     add(`bound:${direction}:${exclusive}:${value}:${unit}`, {
@@ -352,7 +492,8 @@ export function buildVisibleRequestContract(
       value,
       unit,
       exclusive,
-      matches: (title) => titleSatisfiesBound(title, { value, unit, direction, exclusive }),
+      matches: (title) =>
+        titleSatisfiesBound(title, { value, unit, direction, exclusive }),
     });
   }
 
@@ -371,7 +512,10 @@ export function buildVisibleRequestContract(
       label: modifier.label,
       op: "eq",
       value: modifier.label,
-      matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
+      matches: (title) =>
+        (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) =>
+          tokenStem(token) === modifier.stem
+        ),
     });
   }
 
@@ -398,7 +542,9 @@ export function productSupportsVisibleRequestContract(
 ): boolean {
   const evidence = [
     String(product?.pagetitle ?? ""),
-    ...(Array.isArray(product?.short_traits) ? product.short_traits.map(String) : []),
+    ...(Array.isArray(product?.short_traits)
+      ? product.short_traits.map(String)
+      : []),
   ].join("\n");
   return requirements.every((requirement) => requirement.matches(evidence));
 }

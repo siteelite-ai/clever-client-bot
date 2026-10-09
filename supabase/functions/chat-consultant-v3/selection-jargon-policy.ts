@@ -660,6 +660,11 @@ export function terminalPairedFitDecision(
     return { state: "unproven", reference, relations: [] };
   }
   const selected = matchingGraphs[0];
+  const selectedPair = {
+    before_facet_key: selected.beforeFacet.key,
+    after_facet_key: selected.afterFacet.key,
+    require_facet_values: graphs.length > 1,
+  };
   // A global mention of the property cannot lend unrelated numeric claims a
   // false proof. Each strict direction must belong to a local clause naming
   // the selected property, without a competing physical quantity.
@@ -670,7 +675,12 @@ export function terminalPairedFitDecision(
       reference,
     )
   ) {
-    return { state: "unproven", reference, relations: [] };
+    return {
+      state: "unproven",
+      reference,
+      relations: [],
+      selected_pair: selectedPair,
+    };
   }
   const validated = completePairedCompatibilityRelations(
     [],
@@ -689,13 +699,55 @@ export function terminalPairedFitDecision(
       state: "required",
       reference,
       relations: directions,
-      selected_pair: {
-        before_facet_key: selected.beforeFacet.key,
-        after_facet_key: selected.afterFacet.key,
-        require_facet_values: graphs.length > 1,
-      },
+      selected_pair: selectedPair,
     }
-    : { state: "unproven", reference, relations: [] };
+    : {
+      state: "unproven",
+      reference,
+      relations: [],
+      selected_pair: selectedPair,
+    };
+}
+
+/**
+ * The customer's object measurement is a reference for the paired fit, not
+ * an exact size of either product state. A generic literal-facet projector can
+ * otherwise freeze `before = reference` before the two-sided derivation runs.
+ * Remove only that copied equality on the uniquely selected live pair;
+ * other dimensions and independently requested product values remain intact.
+ */
+export function omitPairedObjectReferenceExactCriteria<T extends Criterion>(
+  criteria: T[],
+  decision: TerminalPairedFitDecision,
+  facets: CompatibilityFacet[],
+): T[] {
+  if (!decision.reference || !decision.selected_pair) return [...criteria];
+  const { before_facet_key, after_facet_key } = decision.selected_pair;
+  const selected = facets.filter((facet) =>
+    facet.key === before_facet_key || facet.key === after_facet_key
+  );
+  if (selected.length !== 2) return [...criteria];
+  const selectedLabels = selected.flatMap((facet) =>
+    [facet.key, facet.caption].map(normalize).filter(Boolean)
+  );
+  return criteria.filter((criterion) => {
+    if (criterion.op !== "eq") return true;
+    const key = normalize(criterion.key);
+    if (
+      !selectedLabels.some((label) =>
+        key === label || key.length >= 8 &&
+          (label.startsWith(`${key} `) || key.startsWith(`${label} `))
+      )
+    ) return true;
+    if (
+      criterion.unit &&
+      normalize(criterion.unit) !== normalize(decision.reference!.unit)
+    ) return true;
+    return exactFacetScalar(
+      [String(criterion.value)],
+      decision.reference!.unit,
+    ) !== decision.reference!.value;
+  });
 }
 
 /** Revalidate cached cards immediately before terminal rendering. */
