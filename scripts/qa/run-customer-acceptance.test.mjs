@@ -21,6 +21,22 @@ const notionSuite = JSON.parse(notionBytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
+test('household motion scenarios require several source-backed alternatives across catalog classes', () => {
+  for (const id of [
+    'customer-new-household-motion-without-mount',
+    'customer-new-household-motion-joined-currency',
+  ]) {
+    const scenario = acceptanceSuite.cases.find((item) => item.id === id);
+    assert(scenario, `missing ${id}`);
+    const expected = scenario.turns[0].expect;
+    assert.equal(expected.min_products, 3);
+    assert.equal(expected.require_products_or_text_groups, undefined);
+    assert.equal(expected.max_product_price, 4000);
+    assert.equal(expected.require_every_product_page.all_of.length, 2);
+    assert(expected.require_every_product_page.all_of.every((rule) => rule.any_of.length >= 2));
+  }
+});
+
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
 }
