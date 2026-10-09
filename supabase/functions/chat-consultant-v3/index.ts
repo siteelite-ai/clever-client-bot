@@ -55,6 +55,7 @@ import {
 import {
   applyCriteriaGate,
   buildCriteriaQuery,
+  checkCriterion,
   type Criterion,
   type CriterionEvidence,
   extendSelectionCriteriaPlan,
@@ -6215,12 +6216,27 @@ async function runExpertLoop(
     });
     const exactCountRemoved = afterCompact - guarded.length;
     const afterExactCount = guarded.length;
+    const affirmativeFeatureCriteria = mergeMandatorySelectionCriteria([
+      ...userBackedSearchCriteria,
+      ...(selectionCriteriaPlan?.mandatory_criteria ?? []),
+    ]).filter((criterion) =>
+      criterion.op === "eq" &&
+      /^(?:да|yes|true)$/iu.test(String(criterion.value).trim()) &&
+      (criterion.evidence === "user_explicit" ||
+        criterion.evidence === "derived_required")
+    );
     guarded = guarded.filter((id) => {
       const product = ctx.cache.get(id);
       return Boolean(
         product && productSupportsVisibleRequestContract(
           product,
           visibleRequestContract,
+          (requirement) =>
+            affirmativeFeatureCriteria.some((criterion) =>
+              normalizeForMatch(criterion.key).split(" ").includes(
+                normalizeForMatch(requirement.label),
+              ) && checkCriterion(product, criterion).verdict === "pass"
+            ),
         ),
       );
     });

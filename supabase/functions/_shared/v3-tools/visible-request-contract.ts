@@ -607,6 +607,7 @@ export function titleSupportsVisibleRequestContract(
 export function productSupportsVisibleRequestContract(
   product: VisibleRequestProductEvidence,
   requirements: VisibleRequestRequirement[],
+  verifiedFeatureEquivalent?: (requirement: VisibleRequestRequirement) => boolean,
 ): boolean {
   const evidence = [
     String(product?.pagetitle ?? ""),
@@ -614,7 +615,11 @@ export function productSupportsVisibleRequestContract(
       ? product.short_traits.map(String)
       : []),
   ].join("\n");
-  return requirements.every((requirement) => requirement.matches(evidence));
+  return requirements.every((requirement) =>
+    requirement.matches(evidence) ||
+    (requirement.kind === "literal_modifier" &&
+      verifiedFeatureEquivalent?.(requirement) === true)
+  );
 }
 
 /**

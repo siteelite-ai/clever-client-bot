@@ -125,6 +125,44 @@ Deno.test("structured catalog traits prove a card attribute omitted from its tit
   );
 });
 
+Deno.test("a source-proven affirmative feature can satisfy its literal title synonym without weakening other modifiers", () => {
+  const contract = buildVisibleRequestContract(
+    "нужен бытовой светильник с датчиком движения",
+    {
+      productClass: "светильник",
+      taxonomyClass: "Светильники",
+      candidateTitles: [
+        "Светильник с датчиком движения",
+        "Светильник с микроволновым сенсором",
+      ],
+    },
+  );
+  assertEquals(contract.some((requirement) => requirement.label === "датчиком"), true);
+  const sensor = { pagetitle: "Светильник с микроволновым сенсором", short_traits: [] };
+  assertEquals(productSupportsVisibleRequestContract(sensor, contract), false);
+  assertEquals(
+    productSupportsVisibleRequestContract(
+      sensor,
+      contract,
+      (requirement) => requirement.label === "датчиком",
+    ),
+    true,
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract(sensor, contract, () => false),
+    false,
+  );
+  const lengthContract = buildVisibleRequestContract("удлинитель на 50 м");
+  assertEquals(
+    productSupportsVisibleRequestContract(
+      { pagetitle: "Удлинитель 30 м" },
+      lengthContract,
+      () => true,
+    ),
+    false,
+  );
+});
+
 Deno.test("structured outlet count proves a double socket without title wording", () => {
   const contract = buildVisibleRequestContract("двойные розетки", {
     productClass: "розетки",
