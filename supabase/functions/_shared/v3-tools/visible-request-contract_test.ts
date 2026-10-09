@@ -105,6 +105,186 @@ Deno.test("structured outlet count proves a double socket without title wording"
   );
 });
 
+Deno.test("final-card visible contract subsumes only duplicate double-socket wording", () => {
+  const contract = buildVisibleRequestContract(
+    "Найди двойные черные розетки электрические",
+    {
+      productClass: "розетки",
+      candidateTitles: ["Розетка двойная черная", "Розетка серии G"],
+    },
+  );
+  assertEquals(
+    contract.map(({ kind, label, value }) => ({ kind, label, value })),
+    [
+      { kind: "count", label: "двойная розетка", value: 2 },
+      { kind: "literal_modifier", label: "черные", value: "черные" },
+    ],
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2", "Цвет: черный"],
+    }, contract),
+    true,
+  );
+  // A title alone still cannot prove the missing count or the colour.
+  assertEquals(titleSupportsVisibleRequestContract("Розетка серии G", contract), false);
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2"],
+    }, contract),
+    false,
+  );
+});
+
+Deno.test("final-card double-socket count rejects absent, ambiguous and contradictory evidence", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка двойная", "Розетка серии G"],
+  });
+  assertEquals(contract.map(({ kind, label }) => ({ kind, label })), [
+    { kind: "count", label: "двойная розетка" },
+  ]);
+  for (const product of [
+    { pagetitle: "Розетка серии G", short_traits: [] },
+    { pagetitle: "Розетка серии G", short_traits: ["Количество USB-разъемов: 2"] },
+    { pagetitle: "Розетка серии G", short_traits: ["Количество USB разъемов: 2"] },
+    { pagetitle: "Розетка одинарная серии G", short_traits: ["Количество разъемов: 2"] },
+    { pagetitle: "Розетка двойная серии G", short_traits: ["Количество разъемов: 1"] },
+  ]) {
+    assertEquals(productSupportsVisibleRequestContract(product, contract), false);
+  }
+});
+
+Deno.test("auxiliary port counts cannot stand in for two mains outlets", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка двойная", "Розетка USB"],
+  });
+  for (const product of [
+    {
+      pagetitle: "Розетка USB",
+      short_traits: ["USB: 2 гнезда", "Количество силовых розеток: 1"],
+    },
+    {
+      pagetitle: "Розетка USB",
+      short_traits: ["2 гнезда USB", "Количество силовых розеток: 1"],
+    },
+    { pagetitle: "Розетка USB 2 гнезда", short_traits: [] },
+    { pagetitle: "Розетка серии G", short_traits: ["RJ45: 2 гнезда"] },
+    { pagetitle: "Розетка серии G", short_traits: ["2 гнезда Type-C"] },
+    { pagetitle: "Розетка USB", short_traits: ["Количество разъемов: 2"] },
+    { pagetitle: "Розетка USB", short_traits: ["Количество розеток: 2"] },
+    { pagetitle: "Розетка RJ45", short_traits: ["Количество разъемов: 2"] },
+    {
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2", "Type-C: 1 порт"],
+    },
+    {
+      pagetitle: "Розетка двойная USB",
+      short_traits: ["USB: 2 гнезда", "Количество силовых розеток: 1"],
+    },
+  ]) {
+    assertEquals(productSupportsVisibleRequestContract(product, contract), false);
+  }
+});
+
+Deno.test("explicit mains outlet proof survives auxiliary port context", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка двойная", "Розетка USB"],
+  });
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка USB",
+      short_traits: ["USB: 2 гнезда", "Количество силовых розеток: 2"],
+    }, contract),
+    true,
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка двойная USB",
+      short_traits: ["Количество USB-разъемов: 2"],
+    }, contract),
+    true,
+  );
+});
+
+Deno.test("qualified count-first mains evidence contradicts double wording", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка двойная USB"],
+  });
+  for (const product of [
+    {
+      pagetitle: "Розетка двойная USB",
+      short_traits: ["1 силовая розетка", "USB: 2 гнезда"],
+    },
+    { pagetitle: "Розетка двойная USB, 1 силовая розетка", short_traits: [] },
+    { pagetitle: "Розетка двойная USB, 1 электрическая розетка", short_traits: [] },
+    { pagetitle: "Розетка двойная USB", short_traits: ["1 штепсельная розетка"] },
+  ]) {
+    assertEquals(productSupportsVisibleRequestContract(product, contract), false);
+  }
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка USB",
+      short_traits: ["2 силовые розетки", "USB: 1 гнездо"],
+    }, contract),
+    true,
+  );
+});
+
+Deno.test("electrical connector wording does not prove two mains sockets with USB", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка двойная", "Розетка USB"],
+  });
+  for (const product of [
+    { pagetitle: "Розетка USB, 2 электрических разъема USB", short_traits: [] },
+    {
+      pagetitle: "Розетка USB",
+      short_traits: ["Количество электрических разъемов: 2", "USB Type-C"],
+    },
+    {
+      pagetitle: "Розетка USB",
+      short_traits: ["Количество силовых разъемов: 2", "USB Type-C"],
+    },
+  ]) {
+    assertEquals(productSupportsVisibleRequestContract(product, contract), false);
+  }
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка USB",
+      short_traits: ["Количество силовых розеток: 2", "USB Type-C"],
+    }, contract),
+    true,
+  );
+});
+
+Deno.test("double-socket wording subsumption leaves exact length mandatory", () => {
+  const contract = buildVisibleRequestContract("двойная розетка с кабелем 5 м", {
+    productClass: "розетка",
+    candidateTitles: ["Розетка двойная"],
+  });
+  assertEquals(contract.map(({ kind }) => kind), ["linear_measurement", "count"]);
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2", "Длина кабеля: 4 м"],
+    }, contract),
+    false,
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2", "Длина кабеля: 5 м"],
+    }, contract),
+    true,
+  );
+});
+
 Deno.test("directional measurements remain visible and preserve their bound", () => {
   const contract = buildVisibleRequestContract("Покажите прожекторы мощностью от 100 Вт");
   assertEquals(titleSupportsVisibleRequestContract("Прожектор LED 150W", contract), true);

@@ -39,6 +39,79 @@ function hasDoubleSocketPhrase(source: string): boolean {
   ).test(source);
 }
 
+function hasSingleSocketPhrase(source: string): boolean {
+  const between = `(?:\\s+${RU_ADJECTIVE_TOKEN}){0,3}`;
+  const single = String.raw`(?:одинарн|одноместн)\p{L}*`;
+  return new RegExp(
+    `(?:${single}${between}\\s+розет\\p{L}*|розет\\p{L}*${between}\\s+${single})`,
+    "iu",
+  ).test(source);
+}
+
+/** A double socket's exact count can be proved by title wording or a
+ * first-party count. In USB/RJ/Type-C context, only a count explicitly naming
+ * силовая/штепсельная розетка proves two mains outlets. A stated one-outlet
+ * count still vetoes a favourable but contradictory double title. */
+function doubleSocketEvidenceMatches(evidence: string): boolean {
+  const lines = String(evidence ?? "").split(/\r?\n/u);
+  const title = lines[0] ?? "";
+  const auxiliaryPortContext = /(?<![\p{L}\p{N}])(?:usb|rj(?:[-\s]?\d{0,2})?|type[-\s]?c|hdmi|ethernet|lan)(?![\p{L}\p{N}])/iu
+    .test(evidence);
+  const countNoun = String.raw`(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|гн\.?|разъ[её]м\p{L}*|пост\p{L}*)`;
+  const qualifier = String.raw`(?:силов\p{L}*|электрическ\p{L}*|штепсельн\p{L}*)`;
+  // A free-text "гнездо" or "разъем" may be an auxiliary port. Count-first
+  // proof is limited to unmistakable outlet/place/post wording in the title.
+  const directOutletNoun = String.raw`(?:мест\p{L}*|розет\p{L}*|пост\p{L}*)`;
+  const countField = new RegExp(
+    `^(?:(?:количеств\\p{L}*|числ\\p{L}*)\\s+)?(${qualifier}\\s+)?(${countNoun})(?:\\s*,?\\s*шт\\.?)?\\s*(?::|=|[-–—])\\s*(\\d+)(?:\\s*шт\\.?)?\\s*$`,
+    "iu",
+  );
+  const countFirst = new RegExp(
+    `(?<!\\d)(\\d+)\\s*(?:[-–—]?\\s*)?${directOutletNoun}(?!\\p{L})`,
+    "giu",
+  );
+  const qualifiedOutletCountFirst = new RegExp(
+    `(?<![\\p{L}\\p{N}])(\\d+)\\s*(?:[-–—]?\\s*)?(?:${qualifier}\\s+розет\\p{L}*|розет\\p{L}*\\s+${qualifier})(?!\\p{L})`,
+    "giu",
+  );
+  let contradiction = false;
+  let provenTwo = false;
+  const record = (count: number, provesMains: boolean) => {
+    if (count !== 2) contradiction = true;
+    else if (provesMains) provenTwo = true;
+  };
+  for (const line of lines) {
+    const field = line.trim().match(countField);
+    if (field) {
+      const fieldQualifier = field[1] ?? "";
+      const fieldNoun = field[2];
+      const count = Number(field[3]);
+      const socketNoun = /^розет/iu.test(fieldNoun);
+      const strongMains = socketNoun && /^(?:силов|штепсельн)/iu.test(fieldQualifier);
+      const weakOutletContradiction = socketNoun &&
+        /^электрическ/iu.test(fieldQualifier) && count !== 2;
+      if (strongMains || !auxiliaryPortContext) record(count, true);
+      else if (weakOutletContradiction) record(count, false);
+    }
+    for (const match of line.matchAll(qualifiedOutletCountFirst)) {
+      const count = Number(match[1]);
+      const strongMains = /(?:силов|штепсельн)\p{L}*/iu.test(match[0]);
+      if (count !== 2 || strongMains || !auxiliaryPortContext) {
+        record(count, strongMains || !auxiliaryPortContext);
+      }
+    }
+  }
+  if (!auxiliaryPortContext) {
+    for (const match of title.matchAll(countFirst)) {
+      record(Number(match[1]), true);
+    }
+  }
+  if (contradiction || hasSingleSocketPhrase(title)) {
+    return false;
+  }
+  return provenTwo || hasDoubleSocketPhrase(title);
+}
+
 const WORKFLOW_WORDS = new Set([
   "покажи", "покажите", "найди", "найдите", "подбери", "подберите",
   "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "есть", "дайте",
@@ -192,6 +265,7 @@ export function buildVisibleRequestContract(
   const source = String(userMessage ?? "");
   const requirements: VisibleRequestRequirement[] = [];
   const seen = new Set<string>();
+  const structurallyCoveredModifierStems = new Set<string>();
   const add = (key: string, requirement: VisibleRequestRequirement) => {
     if (seen.has(key)) return;
     seen.add(key);
@@ -250,10 +324,9 @@ export function buildVisibleRequestContract(
       label: "двойная розетка",
       op: "eq",
       value: 2,
-      matches: (evidence) =>
-        /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(evidence) ||
-        /(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)\s*(?::|=|-|–|—)?\s*(?<!\d)2(?!\d)/iu.test(evidence),
+      matches: doubleSocketEvidenceMatches,
     });
+    structurallyCoveredModifierStems.add(tokenStem("двойная"));
   }
 
   // Preserve explicit directional quantities at the final card boundary.
@@ -288,6 +361,11 @@ export function buildVisibleRequestContract(
   // dictionaries and prevents a later broad recovery from mixing cards that
   // satisfy different halves of the request (for example type vs power).
   for (const modifier of literalRequestModifiers(source, context)) {
+    // The explicit double-socket count above already owns this customer
+    // requirement. Its matcher accepts a trusted count trait without forcing
+    // the same Russian adjective into the title; other nearby modifiers
+    // (such as colour) remain independent mandatory checks.
+    if (structurallyCoveredModifierStems.has(modifier.stem)) continue;
     add(`modifier:${modifier.stem}`, {
       kind: "literal_modifier",
       label: modifier.label,
