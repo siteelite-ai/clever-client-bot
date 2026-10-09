@@ -13,6 +13,7 @@ import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import { extractCustomerOwnedDiscoveryTarget } from "./category-reasoning-guard.ts";
 
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
+const DISCOVERY_REQUEST_TIMEOUT_MS = 10_000;
 const MODEL = "google/gemini-2.5-flash";
 
 interface CategoryNode {
@@ -700,7 +701,12 @@ async function fetchCategories(
   }
 
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const first = await fetchCategoriesPage(fetchImpl, deps, 1);
+  // /categories can have several pages. Bound the whole taxonomy load, not
+  // each page independently, so a slow paginated response cannot outlive the
+  // chat turn by multiplying the per-request timeout.
+  const deadline = Date.now() +
+    (deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS);
+  const first = await fetchCategoriesPage(fetchImpl, deps, 1, deadline);
   const acc = {
     flat: [] as CategoryCandidate[],
     byId: new Map<number, CategoryNode>(),
@@ -710,7 +716,7 @@ async function fetchCategories(
 
   const pages = Math.max(1, Number(first.pagination?.pages) || 1);
   for (let page = 2; page <= pages; page++) {
-    const next = await fetchCategoriesPage(fetchImpl, deps, page);
+    const next = await fetchCategoriesPage(fetchImpl, deps, page, deadline);
     collectCategories(next.results, null, acc);
   }
 
@@ -731,6 +737,38 @@ async function fetchCategories(
     ts: Date.now(),
   };
   return categoriesCache;
+}
+
+/** Keep both HTTP headers and body decoding inside the same abortable deadline. */
+async function withDiscoveryTimeout<T>(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  decode: (response: Response) => Promise<T>,
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    throw new DOMException("discover_category_timeout", "AbortError");
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new DOMException("discover_category_timeout", "AbortError");
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    // Native fetch and Response.json obey signal. The race is also necessary
+    // for injected transports or a body reader that ignores abort entirely.
+    return await Promise.race([
+      fetchImpl(url, { ...init, signal: controller.signal }).then(decode),
+      timedOut,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -794,6 +832,7 @@ async function fetchCategoriesPage(
   fetchImpl: typeof fetch,
   deps: DiscoverCategoryDeps,
   page: number,
+  deadline: number,
 ): Promise<{ results: unknown[]; pagination?: { pages?: number } }> {
   const params = new URLSearchParams({
     parent: "0",
@@ -801,24 +840,31 @@ async function fetchCategoriesPage(
     per_page: "200",
     page: String(page),
   });
-  const res = await fetchImpl(`${deps.baseUrl}/categories?${params}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${deps.apiToken}`,
-      "Content-Type": "application/json",
+  return await withDiscoveryTimeout(
+    fetchImpl,
+    `${deps.baseUrl}/categories?${params}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${deps.apiToken}`,
+        "Content-Type": "application/json",
+      },
     },
-  });
-  if (!res.ok) throw new Error(`categories ${res.status}`);
-  const raw = await res.json() as {
-    data?: { results?: unknown[]; pagination?: { pages?: number } };
-    results?: unknown[];
-    pagination?: { pages?: number };
-  };
-  const data = raw.data ?? raw;
-  return {
-    results: Array.isArray(data.results) ? data.results : [],
-    pagination: data.pagination,
-  };
+    deadline - Date.now(),
+    async (res) => {
+      if (!res.ok) throw new Error(`categories ${res.status}`);
+      const raw = await res.json() as {
+        data?: { results?: unknown[]; pagination?: { pages?: number } };
+        results?: unknown[];
+        pagination?: { pages?: number };
+      };
+      const data = raw.data ?? raw;
+      return {
+        results: Array.isArray(data.results) ? data.results : [],
+        pagination: data.pagination,
+      };
+    },
+  );
 }
 
 /** Токены строки для overlap-сравнения (lowercase, ё→е, без пунктуации, длиннее 1 символа). */
@@ -993,7 +1039,8 @@ async function resolvePagetitle(
   const query = [input.semantic_query?.trim(), noun].filter(Boolean).join(
     "\nNOUN: ",
   );
-  const res = await (deps.fetchImpl ?? fetch)(
+  const json = await withDiscoveryTimeout(
+    deps.fetchImpl ?? fetch,
     "https://openrouter.ai/api/v1/chat/completions",
     {
       method: "POST",
@@ -1021,11 +1068,18 @@ async function resolvePagetitle(
         ],
       }),
     },
+    deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS,
+    async (res) => {
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
+        return null;
+      }
+      return await res.json() as {
+        choices?: Array<{ message?: { content?: string | null } }>;
+      };
+    },
   );
-  if (!res.ok) return { unresolved: true, diagnostics };
-  const json = await res.json() as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-  };
+  if (!json) return { unresolved: true, diagnostics };
   const candidates = parseResolverCandidates(
     json.choices?.[0]?.message?.content ?? "",
     new Set(flat.map((c) => c.pagetitle)),
@@ -1074,104 +1128,111 @@ async function fetchFacetsForPagetitle(
   }
 > {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 10000;
+  const timeoutMs = deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS;
 
   const params = new URLSearchParams();
   params.append("pagetitle", pagetitle);
 
   const url = `${deps.baseUrl}/categories/options?${params}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetchImpl(url, {
+  const fetched = await withDiscoveryTimeout(
+    fetchImpl,
+    url,
+    {
       method: "GET",
       headers: {
         Authorization: `Bearer ${deps.apiToken}`,
         "Content-Type": "application/json",
       },
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return {
-        ok: false,
-        status: res.status,
-        message: text.slice(0, 200) || String(res.status),
-      };
-    }
-
-    const json = await res.json() as {
-      data?: {
-        data?: unknown;
-        category?: { id?: number; pagetitle?: string; total_products?: number };
-        options?: Array<{
-          key?: string;
-          caption_ru?: string;
-          type?: string;
-          unit?: string | null;
-          min?: number | null;
-          max?: number | null;
-          values?: Array<{ value_ru?: string; products_count?: number }>;
-        }>;
-      };
-    };
-    const envelope =
-      json?.data && "data" in json.data && !("options" in json.data)
-        ? json.data.data as typeof json.data
-        : json.data;
-    const cat = envelope?.category ?? {};
-    const rawOptions = Array.isArray(envelope?.options) ? envelope.options : [];
-
-    const facets: Facet[] = [];
-    for (const o of rawOptions) {
-      const key = cleanText(o?.key);
-      const caption = cleanText(o?.caption_ru);
-      if (!key || !caption) continue;
-      if (isAdministrativeCatalogField({ key, caption })) continue;
-      const values: FacetValue[] = [];
-      if (Array.isArray(o.values)) {
-        for (const v of o.values) {
-          const vv = cleanText(v?.value_ru);
-          if (!vv) continue;
-          values.push({
-            value: vv,
-            products_count: typeof v.products_count === "number"
-              ? v.products_count
-              : undefined,
-          });
-        }
+    },
+    timeoutMs,
+    async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false as const,
+          status: res.status,
+          message: text.slice(0, 200) || String(res.status),
+        };
       }
-      facets.push({
-        key,
-        caption,
-        type: o.type ?? "string",
-        unit: o.unit ?? null,
-        min: o.min ?? null,
-        max: o.max ?? null,
-        values,
-      });
-    }
-
-    return {
-      ok: true,
-      data: {
-        ok: true,
-        category: {
-          id: typeof cat.id === "number" ? cat.id : null,
-          pagetitle: cleanText(cat.pagetitle) || pagetitle,
-          total_products: typeof cat.total_products === "number"
-            ? cat.total_products
-            : 0,
+      return {
+        ok: true as const,
+        json: await res.json() as {
+          data?: {
+            data?: unknown;
+            category?: {
+              id?: number;
+              pagetitle?: string;
+              total_products?: number;
+            };
+            options?: Array<{
+              key?: string;
+              caption_ru?: string;
+              type?: string;
+              unit?: string | null;
+              min?: number | null;
+              max?: number | null;
+              values?: Array<{ value_ru?: string; products_count?: number }>;
+            }>;
+          };
         },
-        facets,
-        leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
-      },
-    };
-  } finally {
-    clearTimeout(timer);
+      };
+    },
+  );
+  if (!fetched.ok) return fetched;
+
+  const json = fetched.json;
+  const envelope =
+    json?.data && "data" in json.data && !("options" in json.data)
+      ? json.data.data as typeof json.data
+      : json.data;
+  const cat = envelope?.category ?? {};
+  const rawOptions = Array.isArray(envelope?.options) ? envelope.options : [];
+
+  const facets: Facet[] = [];
+  for (const o of rawOptions) {
+    const key = cleanText(o?.key);
+    const caption = cleanText(o?.caption_ru);
+    if (!key || !caption) continue;
+    if (isAdministrativeCatalogField({ key, caption })) continue;
+    const values: FacetValue[] = [];
+    if (Array.isArray(o.values)) {
+      for (const v of o.values) {
+        const vv = cleanText(v?.value_ru);
+        if (!vv) continue;
+        values.push({
+          value: vv,
+          products_count: typeof v.products_count === "number"
+            ? v.products_count
+            : undefined,
+        });
+      }
+    }
+    facets.push({
+      key,
+      caption,
+      type: o.type ?? "string",
+      unit: o.unit ?? null,
+      min: o.min ?? null,
+      max: o.max ?? null,
+      values,
+    });
   }
+
+  return {
+    ok: true,
+    data: {
+      ok: true,
+      category: {
+        id: typeof cat.id === "number" ? cat.id : null,
+        pagetitle: cleanText(cat.pagetitle) || pagetitle,
+        total_products: typeof cat.total_products === "number"
+          ? cat.total_products
+          : 0,
+      },
+      facets,
+      leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
+    },
+  };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  executeDiscoverCategory,
   liftUngroundedLeafToCustomerHeadAncestor,
   resolveGroundedCategoryHeadToken,
   resolveHeadCategoryByFacetEvidence,
@@ -7,6 +8,195 @@ import {
   resolveHeadCategoryByLiveHierarchy,
   resolveLocalCategoryPagetitles,
 } from "./discover-category.ts";
+
+Deno.test("live category discovery bounds taxonomy and resolver headers and bodies", async () => {
+  const baseDeps = {
+    baseUrl: "https://catalog.example.test",
+    apiToken: "test-token",
+    openrouterApiKey: "test-model-token",
+    timeoutMs: 20,
+  };
+  const pending = () => new Promise<Response>(() => {});
+  const hangingBody = () =>
+    ({
+      ok: true,
+      json: () => new Promise<unknown>(() => {}),
+    }) as Response;
+  const requestSignals: AbortSignal[] = [];
+
+  const fetchNeverSettles =
+    ((_url: string | URL | Request, init?: RequestInit) => {
+      requestSignals.push(init?.signal as AbortSignal);
+      return pending();
+    }) as typeof fetch;
+  const taxonomyHeaders = await executeDiscoverCategory(
+    { noun: "Светильники" },
+    { ...baseDeps, fetchImpl: fetchNeverSettles },
+  );
+  assertEquals(taxonomyHeaders.ok, false);
+  if (!taxonomyHeaders.ok) {
+    assertEquals(taxonomyHeaders.error_code, "catalog_timeout");
+  }
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  const fetchBodyNeverSettles =
+    ((_url: string | URL | Request, init?: RequestInit) => {
+      requestSignals.push(init?.signal as AbortSignal);
+      return Promise.resolve(hangingBody());
+    }) as typeof fetch;
+  const taxonomyBody = await executeDiscoverCategory(
+    { noun: "Светильники" },
+    { ...baseDeps, fetchImpl: fetchBodyNeverSettles },
+  );
+  assertEquals(taxonomyBody.ok, false);
+  if (!taxonomyBody.ok) {
+    assertEquals(taxonomyBody.error_code, "catalog_timeout");
+  }
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  let taxonomyLoads = 0;
+  const fetchLive = ((url: string | URL | Request) => {
+    const path = String(url);
+    if (path.includes("/categories?")) {
+      taxonomyLoads++;
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            results: [{ id: 501, pagetitle: "Светильники", children: [] }],
+            pagination: { pages: 1 },
+          },
+        })),
+      );
+    }
+    if (path.includes("/categories/options?")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            category: { id: 501, pagetitle: "Светильники", total_products: 2 },
+            options: [{
+              key: "shape",
+              caption_ru: "Форма",
+              type: "string",
+              values: [{ value_ru: "круглый", products_count: 2 }],
+            }],
+          },
+        })),
+      );
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+  const exact = await executeDiscoverCategory(
+    { noun: "Светильники" },
+    { ...baseDeps, fetchImpl: fetchLive },
+  );
+  assertEquals(exact.ok, true);
+  if (exact.ok) {
+    assertEquals(exact.category.pagetitle, "Светильники");
+    assertEquals(exact.resolution_method, "exact");
+    assertEquals(exact.leaf_categories, [{
+      id: 501,
+      pagetitle: "Светильники",
+    }]);
+  }
+  assertEquals(taxonomyLoads, 1);
+
+  const optionsHeaders = await executeDiscoverCategory(
+    { noun: "Светильники" },
+    {
+      ...baseDeps,
+      fetchImpl: ((url: string | URL | Request, init?: RequestInit) => {
+        assertEquals(String(url).includes("/categories/options?"), true);
+        requestSignals.push(init?.signal as AbortSignal);
+        return pending();
+      }) as typeof fetch,
+    },
+  );
+  assertEquals(optionsHeaders.ok, false);
+  if (!optionsHeaders.ok) {
+    assertEquals(optionsHeaders.error_code, "catalog_timeout");
+  }
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  const optionsBody = await executeDiscoverCategory(
+    { noun: "Светильники" },
+    {
+      ...baseDeps,
+      fetchImpl: ((url: string | URL | Request, init?: RequestInit) => {
+        assertEquals(String(url).includes("/categories/options?"), true);
+        requestSignals.push(init?.signal as AbortSignal);
+        return Promise.resolve(hangingBody());
+      }) as typeof fetch,
+    },
+  );
+  assertEquals(optionsBody.ok, false);
+  if (!optionsBody.ok) assertEquals(optionsBody.error_code, "catalog_timeout");
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  // Once taxonomy is cached, an unrelated noun must take the model resolver.
+  // Its own fetch and body reader must both end as a timeout, never as an
+  // invented category or an indefinitely pending accepted request.
+  const resolverHeaders = await executeDiscoverCategory(
+    { noun: "несуществующий товар" },
+    {
+      ...baseDeps,
+      fetchImpl: ((url: string | URL | Request, init?: RequestInit) => {
+        assertEquals(String(url).includes("openrouter.ai"), true);
+        requestSignals.push(init?.signal as AbortSignal);
+        return pending();
+      }) as typeof fetch,
+    },
+  );
+  assertEquals(resolverHeaders.ok, false);
+  if (!resolverHeaders.ok) {
+    assertEquals(resolverHeaders.error_code, "catalog_timeout");
+  }
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  const resolverBody = await executeDiscoverCategory(
+    { noun: "несуществующий товар" },
+    {
+      ...baseDeps,
+      fetchImpl: ((url: string | URL | Request, init?: RequestInit) => {
+        assertEquals(String(url).includes("openrouter.ai"), true);
+        requestSignals.push(init?.signal as AbortSignal);
+        return Promise.resolve(hangingBody());
+      }) as typeof fetch,
+    },
+  );
+  assertEquals(resolverBody.ok, false);
+  if (!resolverBody.ok) {
+    assertEquals(resolverBody.error_code, "catalog_timeout");
+  }
+  assertEquals(requestSignals.at(-1)?.aborted, true);
+
+  const resolverSuccess = await executeDiscoverCategory(
+    { noun: "несуществующий товар" },
+    {
+      ...baseDeps,
+      fetchImpl: ((url: string | URL | Request) => {
+        if (String(url).includes("openrouter.ai")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    candidates: [{ pagetitle: "Светильники", confidence: 0.9 }],
+                  }),
+                },
+              }],
+            })),
+          );
+        }
+        return fetchLive(url);
+      }) as typeof fetch,
+    },
+  );
+  assertEquals(resolverSuccess.ok, true);
+  if (resolverSuccess.ok) {
+    assertEquals(resolverSuccess.category.pagetitle, "Светильники");
+    assertEquals(resolverSuccess.resolution_method, "model");
+  }
+});
 
 Deno.test("a generic live head selects the uniquely least-specialized sibling", () => {
   const nodes = [
