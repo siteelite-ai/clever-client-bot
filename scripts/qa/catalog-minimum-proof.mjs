@@ -26,6 +26,7 @@ export function validCatalogMinimumContract(value) {
     typeof value.source_url === 'string' && catalogUrl(value.source_url) === value.source_url &&
     typeof value.title_prefix === 'string' && value.title_prefix === value.title_prefix.trim() &&
     value.title_prefix.length >= 8 && value.title_prefix.length <= 120 &&
+    exactScopeFromPrefix(value.title_prefix) &&
     typeof value.unit === 'string' && value.unit === value.unit.trim() &&
     /^[\p{L}\p{N}²³./%\- ]{1,20}$/u.test(value.unit));
 }
@@ -41,12 +42,45 @@ function normalizedMarking(value) {
     .replace(/(\d)[,.](\d)/gu, '$1.$2');
 }
 
-function startsWithExactMarking(title, prefix) {
-  const name = normalizedMarking(title);
+const COMPOUND_MARKING = /\b(\d{1,3})\*(\d+(?:\.\d+)?)\b/gu;
+
+function exactScopeFromPrefix(prefix) {
+  if (typeof prefix !== 'string') return null;
   const target = normalizedMarking(prefix);
-  if (!name.startsWith(target)) return false;
-  const next = name.slice(target.length, target.length + 1);
-  return next === '' || /[^\p{L}\p{N}.,*]/u.test(next);
+  const markings = [...target.matchAll(COMPOUND_MARKING)];
+  if (markings.length !== 1) return null;
+  const marking = markings[0];
+  if (marking.index + marking[0].length !== target.length) return null;
+  const classPart = target.slice(0, marking.index).trim();
+  const classTokens = classPart.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const first = Number(marking[1]);
+  const second = Number(marking[2]);
+  if (classPart.length < 5 || !classTokens.length || first <= 0 || second <= 0) return null;
+  return { first, second, marking: marking[0], classTokens };
+}
+
+/** Independent, conservative title relation for the public-category oracle.
+ * Descriptors may intervene between ordered class words and the size. A
+ * same-size card whose class or extra dimensions cannot be proved is not
+ * silently discarded: it invalidates the claimed complete-category minimum.
+ */
+function exactTitleRelation(title, scope) {
+  const name = normalizedMarking(title);
+  const markings = [...name.matchAll(COMPOUND_MARKING)];
+  const sameSize = markings.filter((marking) =>
+    Number(marking[1]) === scope.first && Number(marking[2]) === scope.second);
+  if (!sameSize.length) return 'unrelated';
+  if (markings.length !== 1 || sameSize[0][0] !== scope.marking) return 'ambiguous';
+  const marking = sameSize[0];
+  const after = name.slice(marking.index + marking[0].length);
+  if (/^\s*[xх×*]\s*\d/iu.test(after)) return 'ambiguous';
+  const beforeTokens = name.slice(0, marking.index).match(/[\p{L}\p{N}]+/gu) ?? [];
+  let matched = 0;
+  for (const token of beforeTokens) {
+    if (token === scope.classTokens[matched]) matched++;
+    if (matched === scope.classTokens.length) return 'match';
+  }
+  return 'ambiguous';
 }
 
 function positivePrice(value) {
@@ -76,7 +110,8 @@ function publicStorage(row) {
 
 function categoryPageEvidence(html, sourceUrl, titlePrefix) {
   const source = catalogUrl(sourceUrl);
-  if (!source || !titlePrefix || typeof html !== 'string' ||
+  const scope = exactScopeFromPrefix(titlePrefix);
+  if (!source || !scope || typeof html !== 'string' ||
       Buffer.byteLength(html) > MAX_HTML_BYTES) {
     throw new Error('invalid or oversized category evidence');
   }
@@ -118,7 +153,11 @@ function categoryPageEvidence(html, sourceUrl, titlePrefix) {
         throw new Error(`category card lacks a valid product identity: ${title}`);
       }
       identities.push({ id, url: itemUrl });
-      if (!startsWithExactMarking(title, titlePrefix)) continue;
+      const relation = exactTitleRelation(title, scope);
+      if (relation === 'unrelated') continue;
+      if (relation === 'ambiguous') {
+        throw new Error(`matching category card has ambiguous class or marking: ${title}`);
+      }
       const storage = publicStorage(row);
       if (!storage) throw new Error(`matching category card has no parseable stock and unit: ${title}`);
       const listedPrice = positivePrice(displayText(row.querySelector('.product__buy-info-price-actual_value')?.textContent));

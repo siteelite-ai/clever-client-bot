@@ -42,25 +42,40 @@ test('proves minimum from all complete public-category cards, not from sort orde
   ]);
   const proof = catalogMinimumFromHtml(html, source, contract);
   assert.deepEqual({ ...proof, eligible_products: undefined }, {
-    source_url: source, listed_total: 6, matching_available: 3,
+    source_url: source, listed_total: 6, matching_available: 4,
     eligible_products: undefined,
     excluded_out_of_stock: 1, excluded_other_units: 1,
-    minimum_price: 301,
-    winners: [{ url: 'https://220volt.kz/catalog/cables/vvg/product-3/',
-      title: 'Кабель ВВГ 3*1,5 ГОСТ IK', price: 301, unit: 'м', id: '3' }],
+    minimum_price: 100,
+    winners: [{ url: 'https://220volt.kz/catalog/cables/vvg/product-1/',
+      title: 'Кабель ВВГ нг 3*1,5', price: 100, unit: 'м', id: '1' }],
   });
-  assert.equal(proof.eligible_products.length, 3);
+  assert.equal(proof.eligible_products.length, 4);
 });
 
-test('allows tied winners, rejects alternate marking and 3×1,50 false prefix', () => {
+test('allows intervening descriptors and tied winners but excludes a different size', () => {
   const html = category([
-    card('1', 'Кабель ВВГ 3*1,5 ГК', '301.00'),
+    card('1', 'Кабель силовой ВВГ нг 3*1,5 ГК', '301.00'),
     card('2', 'Кабель ВВГ 3х1.5 Тк', '301.00'),
-    card('3', 'Кабель ВВГ 3*1,50', '1.00'),
+    card('3', 'Кабель ВВГ 2*1,5', '1.00'),
   ]);
   const proof = catalogMinimumFromHtml(html, source, contract);
   assert.equal(proof.minimum_price, 301);
   assert.deepEqual(proof.winners.map((item) => item.id), ['1', '2']);
+});
+
+test('same-size cards with unproven class or extra dimensions invalidate the minimum', () => {
+  const valid = card('1', 'Кабель ВВГ 3*1,5', '301.00');
+  for (const ambiguous of [
+    'Кабель 3*1,5',
+    'Провод ВВГ 3*1,5',
+    'Кабель ВВГ 3*1,5 4*2,5',
+    'Кабель ВВГ 3*1,5*4',
+    'Кабель ВВГ 3*1,50',
+  ]) {
+    assert.throws(() => catalogMinimumFromHtml(category([
+      valid, card('2', ambiguous, '1.00'),
+    ]), source, contract), /ambiguous class or marking/u, ambiguous);
+  }
 });
 
 test('fails closed on incomplete, duplicate, ambiguous and spoofed category evidence', () => {
@@ -112,6 +127,8 @@ test('source fetch is bounded, same-origin, redirect-free and rejects non-HTML',
     { ...fullContract, source_url: 'https://evil.example/catalog/cables/vvg/3-1.5/' },
     { ...fullContract, source_url: `${source}?page=2` },
     { ...fullContract, title_prefix: 'Кабель' },
+    { ...fullContract, title_prefix: 'Кабель ВВГ 3*1,5 2*1,5' },
+    { ...fullContract, title_prefix: 'Кабель ВВГ 3*1,5 ГОСТ' },
     { ...fullContract, unit: '' },
     { ...fullContract, pagination: true },
   ]) assert.equal(validCatalogMinimumContract(invalid), false);
