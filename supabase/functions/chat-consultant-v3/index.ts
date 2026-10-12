@@ -520,6 +520,10 @@ import {
   selectCompleteCategoryPrice,
 } from "../_shared/v3-tools/complete-category-price.ts";
 import {
+  exactCompoundSaleUnitChoices,
+  exactCompoundUnitScopeNotice,
+} from "../_shared/v3-tools/exact-compound-sale-unit-choice.ts";
+import {
   mustStopUnprovenSemanticCompoundSuperlative,
   semanticCompoundSuperlativeIntent,
   unprovenSemanticCompoundSuperlativeNotice,
@@ -4975,9 +4979,27 @@ async function selectVerifiedExactCompoundProducts(
       duration_ms: elapsed,
       summary: proof?.ok
         ? "Точная маркировка: цена проверена по полной категории"
+        : proof?.reason === "unit_not_found"
+        ? "Точная маркировка: единица продажи проверена по полной категории, доступных товаров нет"
         : "Точная маркировка: полную категорию проверить не удалось",
     });
     if (!proof?.ok) {
+      if (proof?.reason === "unit_not_found" && request.saleUnit) {
+        send({
+          type: "delta",
+          origin: "server",
+          content: `В проверенной категории нет доступного товара с единицей продажи «${request.saleUnit}». Цены за другие единицы не подменяю.`,
+        });
+        const alternatives = exactCompoundSaleUnitChoices(
+          request,
+          proof.unit_options ?? [],
+        );
+        if (alternatives) {
+          send({ type: "delta", origin: "server", content: `\n\n${alternatives.question}` });
+          emitSideEffects(executeProposeClarification(alternatives), send);
+        }
+        return [];
+      }
       send({
         type: "delta",
         origin: "server",
@@ -5025,6 +5047,16 @@ async function selectVerifiedExactCompoundProducts(
       });
       return [];
     }
+    if (proof.evidence.incomparable_unit_count > 0) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: `\n\n${exactCompoundUnitScopeNotice(
+          request.priceDirection,
+          proof.evidence.unit,
+        )}`,
+      });
+    }
     const exactMarking = `${request.first}×${String(request.second).replace(".", ",")}`;
     const exactPlan = extendSelectionCriteriaPlan(null, [{
       key: "Точная составная маркировка",
@@ -5053,6 +5085,16 @@ async function selectVerifiedExactCompoundProducts(
         })),
       },
     });
+    if (proof.evidence.incomparable_unit_count > 0) {
+      const alternatives = exactCompoundSaleUnitChoices(
+        request,
+        proof.evidence.unit_options,
+      );
+      if (alternatives) {
+        send({ type: "delta", origin: "server", content: `\n\n${alternatives.question}` });
+        emitSideEffects(executeProposeClarification(alternatives), send);
+      }
+    }
     steps.push({
       step: "v3_exact_compound_complete_price_rendered",
       ms: Date.now() - t0,
@@ -5062,6 +5104,8 @@ async function selectVerifiedExactCompoundProducts(
         selected_price: proof.evidence.selected_price,
         tied_count: proof.evidence.tied_count,
         candidate_count: proof.evidence.matching_available,
+        other_unit_candidates: proof.evidence.incomparable_unit_count,
+        unit_options: proof.evidence.unit_options,
         rendered: rendered.rendered_count,
       },
     });

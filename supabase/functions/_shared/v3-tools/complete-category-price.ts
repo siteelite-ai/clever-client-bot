@@ -48,6 +48,10 @@ export interface CompleteCategoryPriceEvidence {
   restricted_excluded: number;
   unpriced_excluded: number;
   zero_stock_excluded: number;
+  /** Selected unit first, then other source-backed units in stable rank order. */
+  unit_options: string[];
+  /** Available exact candidates excluded because their sale unit is different. */
+  incomparable_unit_count: number;
   unit: string;
   selected_price: number;
   tied_count: number;
@@ -59,9 +63,9 @@ export type CompleteCategoryPriceResult =
     ok: false;
     reason:
       | "invalid_scope" | "catalog_failure" | "catalog_partial" | "catalog_cap"
-      | "duplicate_page" | "unverified_candidate" | "mixed_units" | "no_candidate";
+      | "duplicate_page" | "unverified_candidate" | "mixed_units" | "unit_not_found" | "no_candidate";
     message: string;
-    /** Source-backed choices for a unit clarification; only on mixed_units. */
+    /** Source-backed choices when the explicitly requested unit is absent. */
     unit_options?: string[];
   };
 
@@ -79,6 +83,18 @@ function normalize(value: string): string {
     .replace(/(\d)\s*[xх×*]\s*(\d)/giu, "$1*$2")
     .replace(/(\d)[,.](\d)/gu, "$1.$2")
     .replace(/\s+/gu, " ").trim();
+}
+
+/** A catalog sale unit may become a customer-visible choice. Reject markup,
+ * control characters and free-form catalog text rather than echoing them. */
+function normalizedSaleUnit(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) return null;
+  const unit = value.normalize("NFKC").trim().toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/\s+/gu, " ").replace(/\.$/u, "");
+  return unit.length > 0 && unit.length <= 12 &&
+      /^[\p{L}\p{N}][\p{L}\p{N}./% -]*$/u.test(unit)
+    ? unit : null;
 }
 
 /** The literal product-class phrase that must exactly resolve in live taxonomy. */
@@ -162,6 +178,7 @@ function titleRelation(title: string, request: ExactCompoundMarkingRequest): Tit
 function validScope(input: CompleteCategoryPriceInput): CompleteScope | null {
   const { request, discovery } = input;
   if (!request || !["cheapest", "expensive"].includes(request.priceDirection ?? "") ||
+      (request.saleUnit !== undefined && normalizedSaleUnit(request.saleUnit) === null) ||
       request.exhaustive || !Number.isFinite(request.first) || !Number.isFinite(request.second) ||
       request.first <= 0 || request.second <= 0 ||
       typeof request.query !== "string" || !request.query.trim() || request.query.length > 160 ||
@@ -412,23 +429,43 @@ export async function selectCompleteCategoryPrice(
     if (stock === "zero") { zeroStockExcluded++; continue; }
     if (stock !== "positive") return fail("unverified_candidate", `stock is unverified for catalog row ${raw.id}`);
     if (relation === "ambiguous") return fail("unverified_candidate", `title class or marking is ambiguous for catalog row ${raw.id}`);
-    const unit = extractUnit(raw)?.normalize("NFKC").trim().toLocaleLowerCase("ru-RU").replace(/\.$/u, "");
+    const unit = normalizedSaleUnit(extractUnit(raw));
     if (!unit || !normalizeProductUrl(raw.url)) {
       return fail("unverified_candidate", `unit or product URL is unverified for catalog row ${raw.id}`);
     }
     candidates.push({ raw, leaf, unit, price });
   }
-  if (!candidates.length) return fail("no_candidate", "no available, priced, exact-title candidate in the complete category");
-  const units = [...new Set(candidates.map((candidate) => candidate.unit))];
-  if (units.length !== 1) return {
-    ...fail("mixed_units", "exact candidates use incomparable catalog sale units"),
-    unit_options: units.slice(0, 5),
+  if (!candidates.length) return input.request.saleUnit === undefined
+    ? fail("no_candidate", "no available, priced, exact-title candidate in the complete category")
+    : {
+      ...fail("unit_not_found", "the requested sale unit has no available exact candidate in the complete category"),
+      unit_options: [],
+    };
+  const byUnit = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    const group = byUnit.get(candidate.unit) ?? [];
+    group.push(candidate);
+    byUnit.set(candidate.unit, group);
+  }
+  // Ranking is independent of catalog pagination/order. It only selects a
+  // presentation group; no prices from different units are ever compared.
+  const rankedUnits = [...byUnit.keys()].sort((left, right) =>
+    byUnit.get(right)!.length - byUnit.get(left)!.length ||
+    (left < right ? -1 : left > right ? 1 : 0));
+  const requestedUnit = input.request.saleUnit === undefined
+    ? null : normalizedSaleUnit(input.request.saleUnit);
+  if (requestedUnit !== null && !byUnit.has(requestedUnit)) return {
+    ...fail("unit_not_found", "the requested sale unit has no available exact candidate in the complete category"),
+    unit_options: rankedUnits.slice(0, 5),
   };
+  const selectedUnit = requestedUnit ?? rankedUnits[0];
+  const unitOptions = [selectedUnit, ...rankedUnits.filter((unit) => unit !== selectedUnit)].slice(0, 5);
+  const selectedCandidates = byUnit.get(selectedUnit)!;
   const direction = input.request.priceDirection === "expensive" ? -1 : 1;
-  candidates.sort((left, right) => direction * (left.price - right.price) ||
+  selectedCandidates.sort((left, right) => direction * (left.price - right.price) ||
     String(left.raw.id).localeCompare(String(right.raw.id)));
-  const winner = candidates[0];
-  const full = productFromRaw(winner.raw, winner.leaf, units[0]);
+  const winner = selectedCandidates[0];
+  const full = productFromRaw(winner.raw, winner.leaf, selectedUnit);
   cache.set(full.id, full);
   const { url: _url, warehouse_evidence: _warehouse, facet_values: _facets, ...product } = full;
   return {
@@ -441,13 +478,15 @@ export async function selectCompleteCategoryPrice(
       skipped_other_marking_leaves: scope.skippedOtherMarkingLeaves,
       leaf_categories: leaves,
       raw_rows: declaredRawTotal,
-      matching_available: candidates.length,
+      matching_available: selectedCandidates.length,
       restricted_excluded: restrictedExcluded,
       unpriced_excluded: unpricedExcluded,
       zero_stock_excluded: zeroStockExcluded,
-      unit: units[0],
+      unit_options: unitOptions,
+      incomparable_unit_count: candidates.length - selectedCandidates.length,
+      unit: selectedUnit,
       selected_price: winner.price,
-      tied_count: candidates.filter((item) => item.price === winner.price).length,
+      tied_count: selectedCandidates.filter((item) => item.price === winner.price).length,
     },
   };
 }

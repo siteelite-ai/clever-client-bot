@@ -1,0 +1,153 @@
+{
+  "suite_file": "sale-unit-choice-cases.json",
+  "suite_version": 3,
+  "suite_sha256": "f3409f341d37d12240f2c9a76e618ce3c8a2b2b40d9f35bada67243d07cc2a0f",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T14:54:40.393Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "sale-unit-vvg-3x1_5-package": 1
+  },
+  "cases": [
+    {
+      "id": "sale-unit-vvg-3x1_5-package",
+      "title": "An explicit catalog sale unit keeps exact marking and price proof",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_sale-unit-vvg-3x1_5-package_base_1791816880395_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»",
+              "synthetic_scenario": true,
+              "status": 200,
+              "duration_ms": 6479,
+              "network_attempts": 1,
+              "log_id": "2e0d4c14-1597-43ca-8102-ab1d0cfaaa24",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost-(buxta-100m)",
+                  "verified": true,
+                  "sku": "Ем000036170",
+                  "name": "Кабель ВВГ нг 3*1,5 ГК ГОСТ (Бухта 100м)",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Гарантийный срок, лет": "5",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Срок службы, мес": "360",
+                    "Производитель": "Harmony Cable",
+                    "Температура монтажа": "-15+50 °C",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Единица измерения": "уп.",
+                    "Количество жил": "3",
+                    "Вес, кг.": "13.1",
+                    "Негорючесть": "Да",
+                    "Материал проводника": "медь",
+                    "Изоляция": "ПВХ пластикат",
+                    "Объем, м3": "0.006",
+                    "Бронированный": "Нет",
+                    "Бренд": "ВВГ",
+                    "Оболочка": "ПВХ пластикат",
+                    "Код ТН ВЭД": "8544499509",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "7.84",
+                    "Страна происхождения": "КАЗАХСТАН"
+                  },
+                  "offerPrice": 46500,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost-(buxta-100m)/",
+                  "description_excerpt": "Кабель ВВГ нг - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката пониженной пожарной опасности, без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, он может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительны"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Кабель ВВГ нг 3*1,5 ГК ГОСТ (Бухта 100м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost-%28buxta-100m%29/",
+                  "price": 46500,
+                  "stockLine": "Астана (223 уп)",
+                  "cardText": "- **[Кабель ВВГ нг 3*1,5 ГК ГОСТ (Бухта 100м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost-%28buxta-100m%29/)**\n  Цена: *46 500* ₸/уп\n  Наличие: Астана (223 уп)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 3*1,5», цены и единицы продажи; товары с другим составным размером не показываю.\n\nВ каталоге есть товары с разными единицами продажи. Показываю минимальную цену среди товаров за «уп». Цены за разные единицы напрямую не сравниваю.\n\nНужна цена за другую единицу продажи? Выберите вариант:",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-9f8755a0",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "3×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "sale_unit",
+                "options_count": 2,
+                "values": [
+                  "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»",
+                  "найди кабель ввг 3*1,5 самый дешевый за единицу «м»"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 2318
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "product Ем000036170 facet Единица измерения: source value уп. is not one of уп"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-12T14:54:49.179Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "2e0d4c14-1597-43ca-8102-ab1d0cfaaa24"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": false
+}

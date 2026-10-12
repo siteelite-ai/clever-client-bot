@@ -3,6 +3,7 @@ import {
   canonicalizeCompoundMarkingForCatalog,
   classifyExactCompoundMarkingRequest,
   compoundRecoveryQueries,
+  exactCompoundMarkingIntro,
   extractExplicitCompoundMarking,
   extractRecommendedCompoundMarking,
   isExhaustiveCompoundRequest,
@@ -40,6 +41,86 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
   assertEquals(
     classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"),
     null,
+  );
+});
+
+Deno.test("selected sale unit keeps the exact class-and-marking route and leaves no semantic modifier", () => {
+  const base = {
+    query: "кабель ввг 3*1,5",
+    first: 3,
+    second: 1.5,
+    priceDirection: "cheapest",
+    exhaustive: false,
+  } as const;
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
+    ),
+    { ...base, saleUnit: "м" },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»",
+    ),
+    { ...base, saleUnit: "уп" },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «м²»",
+    ),
+    { ...base, saleUnit: "м2" },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «пог. м»",
+    ),
+    { ...base, saleUnit: "пог. м" },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "найди кабель ввг 3*1,5 самый дешевый за м",
+    ),
+    { ...base, saleUnit: "м" },
+  );
+  assertEquals(
+    semanticCompoundSourceQuery(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
+    ),
+    "кабель ввг",
+  );
+  assertEquals(
+    requiresSemanticCompoundEvidence(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»",
+    ),
+    false,
+  );
+});
+
+Deno.test("sale-unit parsing never consumes an ordinary trailing purpose clause", () => {
+  for (const purpose of ["за двор", "за квартиру"]) {
+    const message = `найди кабель ввг 3*1,5 самый дешевый ${purpose}`;
+    assertEquals(semanticCompoundSourceQuery(message), `кабель ввг ${purpose}`);
+    assertEquals(classifyExactCompoundMarkingRequest(message), null);
+  }
+  assertEquals(
+    semanticCompoundSourceQuery("найди кабель ввг 3*1,5 за единицу «м»"),
+    "кабель ввг за единицу «м",
+  );
+  assertEquals(
+    semanticCompoundSourceQuery(
+      "найди кабель ввг 3*1,5 самый дешевый за единицу «сверхдлинныйтокен»",
+    ),
+    "кабель ввг за единицу «сверхдлинныйтокен",
+  );
+});
+
+Deno.test("exact compound intro checks sale units without promising an unproved cross-unit ranking", () => {
+  const request = classifyExactCompoundMarkingRequest(
+    "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
+  )!;
+  assertEquals(
+    exactCompoundMarkingIntro(request),
+    "Проверяю в каталоге точную маркировку «кабель ввг 3*1,5», цены и единицы продажи; товары с другим составным размером не показываю.",
   );
 });
 
