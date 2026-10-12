@@ -7,6 +7,8 @@ export interface ExactCompoundMarkingRequest {
   second: number;
   priceDirection: "cheapest" | "expensive" | null;
   exhaustive: boolean;
+  /** Explicit customer-selected catalog sale unit; never inferred from product class. */
+  saleUnit?: string;
 }
 
 export interface ExplicitCompoundMarking {
@@ -28,6 +30,42 @@ const SELECT_INTENT =
 const INQUIRY_ONLY =
   /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можно\s+ли|совместим\p{L}*)(?=$|[^\p{L}])/u;
 const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
+const SALE_UNIT_TOKEN = "[\\p{L}\\p{N}][\\p{L}\\p{N}./% -]{0,11}";
+const EXPLICIT_TRAILING_SALE_UNIT = new RegExp(
+  `\\s+за\\s+единицу\\s+«(${SALE_UNIT_TOKEN})»\\s*[.!?…]*\\s*$`,
+  "iu",
+);
+// A one-letter bare unit covers natural requests such as «за м». Longer bare
+// words are ambiguous («за двор», «за квартиру»), so generated choice chips
+// use the explicit quoted «за единицу «…»» form instead.
+const SHORT_TRAILING_SALE_UNIT = /\s+за\s+(\p{L})\s*[.!?…]*\s*$/iu;
+
+function priceDirectionFor(input: string): "cheapest" | "expensive" | null {
+  return /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u
+      .test(input)
+    ? "cheapest"
+    : /(?:сам\p{L}*\s+)?(?:дорог\p{L}*|премиум\p{L}*)/u.test(input)
+    ? "expensive"
+    : null;
+}
+
+function explicitTrailingSaleUnit(
+  input: string,
+): { unit: string; start: number } | null {
+  if (!extractExplicitCompoundMarking(input) || !priceDirectionFor(input)) {
+    return null;
+  }
+  const match = input.match(EXPLICIT_TRAILING_SALE_UNIT) ??
+    input.match(SHORT_TRAILING_SALE_UNIT);
+  if (!match || match.index === undefined) return null;
+  const unit = norm(match[1].normalize("NFKC")).replace(/\s+/gu, " ")
+    .replace(/\.$/u, "").trim();
+  if (
+    unit.length === 0 || unit.length > 12 ||
+    !/^[\p{L}\p{N}][\p{L}\p{N}./% -]*$/u.test(unit)
+  ) return null;
+  return { unit, start: match.index };
+}
 
 /**
  * Produces one punctuation-only catalog spelling for an explicit N×S token.
@@ -135,10 +173,12 @@ export function requiresSemanticCompoundEvidence(message: string): boolean {
     2;
 }
 
-/** Model-owned lexical source for semantic recovery, with only request/sort
- * language and the literal N×S constraint removed. */
+/** Model-owned lexical source for semantic recovery, with request/sort language,
+ * the literal N×S constraint and an explicit sale-unit choice removed. */
 export function semanticCompoundSourceQuery(message: string): string {
-  return norm(message)
+  const normalized = norm(message);
+  const saleUnit = explicitTrailingSaleUnit(normalized);
+  return (saleUnit ? normalized.slice(0, saleUnit.start) : normalized)
     .replace(/[?!]/gu, " ")
     // Relative availability clauses describe request/cardinality semantics,
     // not an additional product property. Keeping them here makes an exact
@@ -443,12 +483,8 @@ export function classifyExactCompoundMarkingRequest(
   if (!marking) return null;
   const { first, second } = marking;
 
-  const priceDirection =
-    /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u.test(input)
-      ? "cheapest"
-      : /(?:сам\p{L}*\s+)?(?:дорог\p{L}*|премиум\p{L}*)/u.test(input)
-      ? "expensive"
-      : null;
+  const priceDirection = priceDirectionFor(input);
+  const saleUnit = explicitTrailingSaleUnit(input)?.unit;
 
   const sourceQuery = semanticCompoundSourceQuery(input);
   const literal = `${first}*${String(second).replace(".", ",")}`;
@@ -467,6 +503,7 @@ export function classifyExactCompoundMarkingRequest(
     second,
     priceDirection,
     exhaustive: isExhaustiveCompoundRequest(message),
+    ...(saleUnit ? { saleUnit } : {}),
   };
 }
 
@@ -498,12 +535,7 @@ export function selectExactCompoundMarkedProducts(
 export function exactCompoundMarkingIntro(
   request: ExactCompoundMarkingRequest,
 ): string {
-  const price = request.priceDirection === "cheapest"
-    ? " и сортирую точные совпадения от самой низкой цены"
-    : request.priceDirection === "expensive"
-    ? " и сортирую точные совпадения от самой высокой цены"
-    : "";
-  return `Ищу в каталоге точную маркировку «${request.query}»${price}; товары с другим составным размером не показываю.`;
+  return `Проверяю в каталоге точную маркировку «${request.query}», цены и единицы продажи; товары с другим составным размером не показываю.`;
 }
 
 export function exactCompoundMarkingEmpty(

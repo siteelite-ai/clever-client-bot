@@ -39,6 +39,12 @@ function raw(id: string, title: string, price: number, options: Array<Record<str
   };
 }
 
+function rawWithUnit(id: string, title: string, price: number, unit: string) {
+  const item = raw(id, title, price);
+  item.options[0].value_ru = unit;
+  return item;
+}
+
 function page(rows: unknown[], total = rows.length, status = 200): Response {
   return new Response(JSON.stringify({ data: { results: rows, pagination: { total } } }), {
     status, headers: { "content-type": "application/json" },
@@ -323,24 +329,126 @@ Deno.test("one failed leaf invalidates the entire discovered multi-leaf scope", 
   assertEquals(result.ok, false);
 });
 
-Deno.test("mixed or missing unit prevents comparing incomparable exact candidates", async () => {
-  const metre = raw("1", "Кабель ВВГ 3*1,5", 301);
-  const packageUnit = raw("2", "Кабель ВВГ 3*1,5 упаковка", 250, [
-    { key: "edinica_izmereniya", caption_ru: "Единица измерения", value_ru: "уп" },
-  ]);
-  packageUnit.options = packageUnit.options.filter((option) => option.key !== "edinica_izmereniya" || option.value_ru === "уп");
-  const mixed = await selectCompleteCategoryPrice(input,
-    deps(() => Promise.resolve(page([metre, packageUnit]))), new Map());
-  assertEquals(mixed.ok, false);
-  if (!mixed.ok) {
-    assertEquals(mixed.reason, "mixed_units");
-    assertEquals(mixed.unit_options, ["м", "уп"]);
+Deno.test("mixed units prove a minimum only within the largest exact unit group", async () => {
+  const rows = [
+    rawWithUnit("metre-2", "Кабель ВВГ 3*1,5 B", 350, "М."),
+    rawWithUnit("package", "Кабель ВВГ 3*1,5 упаковка", 1, "уп"),
+    rawWithUnit("metre-1", "Кабель ВВГ 3*1,5 A", 301, "м"),
+  ];
+  for (const order of [rows, [...rows].reverse()]) {
+    const result = await selectCompleteCategoryPrice(input,
+      deps(() => Promise.resolve(page(order))), new Map());
+    assert(result.ok);
+    assertEquals(result.product.id, "metre-1");
+    assertEquals(result.evidence.unit, "м");
+    assertEquals(result.evidence.unit_options, ["м", "уп"]);
+    assertEquals(result.evidence.matching_available, 2);
+    assertEquals(result.evidence.incomparable_unit_count, 1);
+    assertEquals(result.evidence.selected_price, 301);
+    assertEquals(result.evidence.tied_count, 1);
   }
-  const missingUnit = { ...metre, options: [] };
-  const missing = await selectCompleteCategoryPrice(input,
-    deps(() => Promise.resolve(page([missingUnit]))), new Map());
-  assertEquals(missing.ok, false);
-  if (!missing.ok) assertEquals(missing.reason, "unverified_candidate");
+});
+
+Deno.test("an explicit sale unit selects its own group and a missing unit fails closed", async () => {
+  const rows = [
+    rawWithUnit("metre-1", "Кабель ВВГ 3*1,5 A", 301, "м"),
+    rawWithUnit("metre-2", "Кабель ВВГ 3*1,5 B", 350, "м"),
+    rawWithUnit("package", "Кабель ВВГ 3*1,5 упаковка", 250, "УП."),
+  ];
+  const chosen = await selectCompleteCategoryPrice({ ...input, request: { ...request, saleUnit: "уп" } },
+    deps(() => Promise.resolve(page(rows))), new Map());
+  assert(chosen.ok);
+  assertEquals(chosen.product.id, "package");
+  assertEquals(chosen.evidence.unit_options, ["уп", "м"]);
+  assertEquals(chosen.evidence.matching_available, 1);
+  assertEquals(chosen.evidence.incomparable_unit_count, 2);
+  assertEquals(chosen.evidence.selected_price, 250);
+
+  const cache: ProductCache = new Map();
+  const absent = await selectCompleteCategoryPrice({ ...input, request: { ...request, saleUnit: "шт" } },
+    deps(() => Promise.resolve(page(rows))), cache);
+  assertEquals(absent.ok, false);
+  if (!absent.ok) {
+    assertEquals(absent.reason, "unit_not_found");
+    assertEquals(absent.unit_options, ["м", "уп"]);
+  }
+  assertEquals(cache.size, 0);
+
+  const noExact = await selectCompleteCategoryPrice({ ...input, request: { ...request, saleUnit: "шт" } },
+    deps(() => Promise.resolve(page([raw("wrong", "Кабель ВВГ 2*1,5", 20)]))), new Map());
+  assertEquals(noExact.ok, false);
+  if (!noExact.ok) {
+    assertEquals(noExact.reason, "unit_not_found");
+    assertEquals(noExact.unit_options, []);
+  }
+});
+
+Deno.test("unit ranking, capped choices and both price directions are stable across catalog order", async () => {
+  const units = ["шт", "компл", "уп", "м", "кг", "рул"];
+  const rows = units.map((unit, index) =>
+    rawWithUnit(String(index + 1), `Кабель ВВГ 3*1,5 ${index + 1}`, 100 + index, unit));
+  for (const order of [rows, [...rows].reverse()]) {
+    for (const priceDirection of ["cheapest", "expensive"] as const) {
+      const result = await selectCompleteCategoryPrice({ ...input, request: { ...request, priceDirection } },
+        deps(() => Promise.resolve(page(order))), new Map());
+      assert(result.ok);
+      assertEquals(result.evidence.unit, "кг");
+      assertEquals(result.evidence.unit_options, ["кг", "компл", "м", "рул", "уп"]);
+      assertEquals(result.evidence.incomparable_unit_count, 5);
+      assertEquals(result.evidence.matching_available, 1);
+    }
+  }
+});
+
+Deno.test("sale-unit grouping applies to another exact compound product class", async () => {
+  const otherInput: CompleteCategoryPriceInput = {
+    request: { query: "трубка ТТУ 10*5", first: 10, second: 5, priceDirection: "expensive", exhaustive: false },
+    discovery: { ...input.discovery,
+      category: { id: 10, pagetitle: "Трубка ТТУ", total_products: 3 },
+      leaf_categories: [{ id: 11, pagetitle: "10x5" }],
+    },
+  };
+  const rows = [
+    rawWithUnit("short", "Трубка ТТУ 10*5 A", 500, "м"),
+    rawWithUnit("long", "Трубка ТТУ 10*5 B", 600, "м"),
+    rawWithUnit("package", "Трубка ТТУ 10*5 упаковка", 5000, "уп"),
+  ];
+  const result = await selectCompleteCategoryPrice(otherInput,
+    deps(() => Promise.resolve(page(rows))), new Map());
+  assert(result.ok);
+  assertEquals(result.product.id, "long");
+  assertEquals(result.evidence.unit_options, ["м", "уп"]);
+  assertEquals(result.evidence.selected_price, 600);
+});
+
+Deno.test("missing or unsafe catalog units fail closed before offering customer-visible choices", async () => {
+  const metre = raw("1", "Кабель ВВГ 3*1,5", 301);
+  for (const item of [
+    { ...metre, options: [] },
+    rawWithUnit("1", "Кабель ВВГ 3*1,5", 301, "<script>"),
+    rawWithUnit("1", "Кабель ВВГ 3*1,5", 301, "м\nуп"),
+  ]) {
+    const result = await selectCompleteCategoryPrice(input,
+      deps(() => Promise.resolve(page([item]))), new Map());
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.reason, "unverified_candidate");
+  }
+});
+
+Deno.test("unsafe selected unit is rejected before catalog calls; unverified other-unit stock poisons proof", async () => {
+  const unsafe = await selectCompleteCategoryPrice({ ...input, request: { ...request, saleUnit: "<b>м</b>" } },
+    deps(() => { throw new Error("must not fetch"); }), new Map());
+  assertEquals(unsafe.ok, false);
+  if (!unsafe.ok) assertEquals(unsafe.reason, "invalid_scope");
+
+  const rows = [
+    rawWithUnit("metre", "Кабель ВВГ 3*1,5", 301, "м"),
+    { ...rawWithUnit("package", "Кабель ВВГ 3*1,5", 250, "уп"), warehouses: [] },
+  ];
+  const result = await selectCompleteCategoryPrice(input,
+    deps(() => Promise.resolve(page(rows))), new Map());
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.reason, "unverified_candidate");
 });
 
 Deno.test("restricted, unpriced and explicit-zero items cannot win a superlative", async () => {

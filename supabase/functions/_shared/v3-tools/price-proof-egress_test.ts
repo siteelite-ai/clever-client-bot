@@ -53,6 +53,8 @@ const completeProof = {
     restricted_excluded: 0,
     unpriced_excluded: 0,
     zero_stock_excluded: 2,
+    unit_options: ["м"],
+    incomparable_unit_count: 0,
     unit: "м",
     selected_price: 100,
     tied_count: 1,
@@ -117,6 +119,36 @@ Deno.test("exact VVG complete-category verifier alone can certify its request, s
     request: vvgRequest,
     proof: { ...completeProof, evidence: { ...completeProof.evidence, direction: "expensive" } },
     winner,
+  }), null);
+});
+
+Deno.test("mixed-unit complete proof certifies only the selected sale-unit winner", () => {
+  const proof = { ...completeProof, evidence: {
+    ...completeProof.evidence,
+    unit_options: ["м", "уп"],
+    incomparable_unit_count: 3,
+    matching_available: 14,
+  } };
+  const certificate = certificateFromCompleteCategory({
+    requestMessage: vvgMessage,
+    request: vvgRequest,
+    proof,
+    winner,
+  });
+  assertEquals(certificate?.unit, "м");
+  assertEquals(certificate?.compared_count, 14);
+  assertEquals(priceCertificateCoversCardBlock({
+    requestMessage: vvgMessage,
+    requestedExtreme: "cheapest",
+    certificate,
+    renderedCount: 1,
+    renderedWinnerId: winner.id,
+  }), true);
+  assertEquals(certificateFromCompleteCategory({
+    requestMessage: vvgMessage,
+    request: vvgRequest,
+    proof,
+    winner: product("vvg-a", 100, "уп"),
   }), null);
 });
 

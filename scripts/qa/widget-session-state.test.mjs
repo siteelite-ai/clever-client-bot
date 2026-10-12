@@ -2391,6 +2391,59 @@ test('complete server clarification renders keyboard-accessible chips and sends 
   dom.window.close();
 });
 
+test('a verified unit-scoped product card can keep sale-unit chips for a full-query follow-up', async () => {
+  const replies = [
+    { value: 'найди кабель ввг 3*1,5 самый дешевый за единицу «м»', label: 'За м' },
+    { value: 'найди кабель ввг 3*1,5 самый дешевый за единицу «уп»', label: 'За уп' },
+  ];
+  const payloads = [];
+  const firstEvents = [
+    { v3_event: { type: 'diagnostic', log_id: 'unit-choice-log', phase: 'start' } },
+    { choices: [{ delta: { content: 'Проверяю цены и единицы продажи.' } }] },
+    { choices: [{ delta: { content: 'Минимальная цена среди товаров за «м».' } }] },
+    { v3_event: { type: 'products_block', count: 1,
+      markdown: '- **[Кабель ВВГ 3*1,5 ГОСТ IK](https://220volt.kz/catalog/cables/vvg/)**\n  Цена: *301* ₸/м',
+    } },
+    { choices: [{ delta: { content: 'Нужна цена за другую единицу продажи? Выберите вариант:' } }] },
+    { v3_event: { type: 'quick_replies', facet_key: 'sale_unit', replies } },
+    { v3_event: { type: 'slot_update', slots: { pending_clarification: {
+      status: 'pending', slot_id: 'unit-choice-slot', facet_key: 'sale_unit',
+      question: 'Нужна цена за другую единицу продажи? Выберите вариант:', options: replies,
+    } } } },
+    { v3_event: { type: 'diagnostic', log_id: 'unit-choice-log', phase: 'complete', products_count: 1 } },
+  ];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const events = payloads.length === 1 ? firstEvents : [
+        { v3_event: { type: 'diagnostic', log_id: 'unit-choice-followup-log', phase: 'start' } },
+        { choices: [{ delta: { content: 'Проверяю товары за «уп».' } }] },
+        { v3_event: { type: 'slot_update', slots: {} } },
+        { v3_event: { type: 'diagnostic', log_id: 'unit-choice-followup-log', phase: 'complete', products_count: 0 } },
+      ];
+      const sse = events.map((event) => `data: ${JSON.stringify(event)}`)
+        .concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'найди кабель ввг 3*1,5 самый дешевый';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2,
+    'unit chips should remain visible after a product card');
+  assert.match(visibleMessages(dom), /Кабель ВВГ 3\*1,5 ГОСТ IK/u);
+  assert.deepEqual([...dom.window.document.querySelectorAll('.volt-quick-reply')]
+    .map((chip) => chip.textContent), ['За м', 'За уп']);
+  dom.window.document.querySelectorAll('.volt-quick-reply')[1].click();
+  await waitForWidget(() => payloads.length === 2, 'unit chip should send a self-contained request');
+  assert.equal(payloads[1].message, replies[1].value);
+  assert.equal(payloads[1].dialogSlots.pending_clarification.facet_key, 'sale_unit');
+  await waitForWidget(() => visibleMessages(dom).includes('Проверяю товары за «уп».') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'unit-choice follow-up should complete before closing the widget');
+  dom.window.close();
+});
+
 test('quick-reply labels are inert text and free-text follow-up removes the chips', async () => {
   const attackLabel = '<img src=x onerror="globalThis.__widgetChipXss = true">';
   const replies = [
