@@ -6,7 +6,10 @@ on:
       - 'supabase/functions/chat-consultant/**'
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
+      - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/_shared/**'
+      - 'supabase/config.toml'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
@@ -23,7 +26,10 @@ on:
       - 'supabase/functions/chat-consultant/**'
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
+      - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/_shared/**'
+      - 'supabase/config.toml'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
@@ -79,5 +85,5 @@ jobs:
       - name: Verify pinned release inventory
         run: node scripts/qa/build-release-ledger.mjs --check
 
-      - name: Test shared v3 safeguards
-        run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts
+      - name: Test shared and function-level v3 safeguards
+        run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts supabase/functions/chat-consultant-v3/*_test.ts
