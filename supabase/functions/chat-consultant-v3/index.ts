@@ -5767,6 +5767,18 @@ async function answerBroadAssortmentRequest(
   });
 }
 
+// PostgREST treats an array argument to `.contains` as a PostgreSQL array and
+// joins its elements. For a JSONB array of event objects that becomes the
+// invalid literal `{[object Object]}` (22P02). Pass serialized JSON instead;
+// the database still evaluates JSONB containment and verifies the boundary.
+function conversationBoundaryJsonbContainment(sessionId: string): string {
+  return JSON.stringify([{
+    type: "conversation_boundary",
+    mode: "new_task",
+    session_id: sessionId,
+  }]);
+}
+
 async function loadVerifiedBroadAssortmentChoice(
   supabase: SupabaseClient,
   sessionId: string,
@@ -5819,11 +5831,10 @@ async function loadVerifiedBroadAssortmentChoice(
             .select("session_id,user_query,error,response_events")
             .eq("pipeline", "v3")
             .neq("id", currentLogId)
-            .contains("response_events", [{
-              type: "conversation_boundary",
-              mode: "new_task",
-              session_id: sessionId,
-            }])
+            .contains(
+              "response_events",
+              conversationBoundaryJsonbContainment(sessionId),
+            )
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -5885,11 +5896,10 @@ async function loadVerifiedActiveSelectionScope(
           .eq("pipeline", "v3")
           .neq("id", currentLogId)
           .gte("created_at", earliestCreatedAt)
-          .contains("response_events", [{
-            type: "conversation_boundary",
-            mode: "new_task",
-            session_id: sessionId,
-          }])
+          .contains(
+            "response_events",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -5958,11 +5968,10 @@ async function loadVerifiedSelectionReadinessPending(
           .select("session_id,error,response_events")
           .eq("pipeline", "v3")
           .neq("id", currentLogId)
-          .contains("response_events", [{
-            type: "conversation_boundary",
-            mode: "new_task",
-            session_id: sessionId,
-          }])
+          .contains(
+            "response_events",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
