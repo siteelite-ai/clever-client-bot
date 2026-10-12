@@ -1,0 +1,202 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T10:28:24.295Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-gallant-broad-assortment": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-gallant-broad-assortment",
+      "title": "Широкий ассортимент Gallant сначала уточняется",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-gallant-broad-assortment_base_1791800904299_1",
+          "turns": [
+            {
+              "message": "покажи ассортимент Gallant на сайте",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6317,
+              "network_attempts": 1,
+              "log_id": "353554e6-220b-45b3-9f4d-cc51e4e1b81d",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками. В каталоге уже видны разделы: Выключатели, Розетки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "catalog_section",
+                "options_count": 2,
+                "values": [
+                  "Выключатели",
+                  "Розетки"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "двойные электрические розетки",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 20728,
+              "network_attempts": 1,
+              "log_id": "43bfd58a-41b2-4055-8e77-44f639eac06c",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072135 (черный/хром)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/",
+                  "price": 6343,
+                  "stockLine": "Караганда (38 шт), Шымкент (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072135 (черный/хром)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/)**\n  Цена: *6 343* ₸\n  Бренд: Werkel\n  Наличие: Караганда (38 шт), Шымкент (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072104 (графит рифленый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072104-%28grafit-riflenyij%29/",
+                  "price": 5385,
+                  "stockLine": "Караганда (23 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072104 (графит рифленый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072104-%28grafit-riflenyij%29/)**\n  Цена: *5 385* ₸\n  Бренд: Werkel\n  Наличие: Караганда (23 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072110 (шампань рифленый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072110-%28shampan-riflenyij%29/",
+                  "price": 5722,
+                  "stockLine": "Шымкент (18 шт), Караганда (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072110 (шампань рифленый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072110-%28shampan-riflenyij%29/)**\n  Цена: *5 722* ₸\n  Бренд: Werkel\n  Наличие: Шымкент (18 шт), Караганда (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072101 (белый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072101-%28belyij%29/",
+                  "price": 4595,
+                  "stockLine": "Караганда (11 шт), Шымкент (1 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072101 (белый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072101-%28belyij%29/)**\n  Цена: *4 595* ₸\n  Бренд: Werkel\n  Наличие: Караганда (11 шт), Шымкент (1 шт)"
+                }
+              ],
+              "text": "Клиент запросил двойные электрические розетки. «Двойная» означает розетку с двумя разъёмами для подключения двух вилок одновременно. В живой схеме это соответствует характеристике «Количество разъемов» со значением 2 и характеристике «Вид розетки» со значением «электрическая». Обязательные параметры: вид розетки — электрическая, количество разъёмов — 2. По классу «Вид розетки» выбираю «электрическая». Явно указанное свойство «электрические розетки» соответствует «Вид розетки: электрическая».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-3aa1cb87",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Коллекция",
+                    "op": "eq",
+                    "value": "Gallant",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 5821
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 5",
+                  "duration_ms": 349
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T10:28:51.349Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "353554e6-220b-45b3-9f4d-cc51e4e1b81d",
+    "43bfd58a-41b2-4055-8e77-44f639eac06c"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}
