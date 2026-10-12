@@ -6,8 +6,12 @@ The public widget has no authenticated user identity. Browser-provided
 identities, so none is used as a limiter key. A global cap can protect aggregate
 LLM/catalog spend, but an attacker can exhaust it and reject legitimate users.
 
-The additive migration is
-`supabase/migrations/20261009150000_chat_v3_admission_guard.sql`. It creates two
+The additive migration is prepared as
+[`chat-v3-admission-guard-pending.sql`](chat-v3-admission-guard-pending.sql),
+outside `supabase/migrations` so merging the functional release cannot apply
+it automatically. After isolated PostgreSQL and concurrency tests, move it to
+`supabase/migrations/20261009150000_chat_v3_admission_guard.sql` in a separate
+security release. It creates two
 new RLS-enabled tables with no client policies and two `SECURITY INVOKER` RPCs.
 It does not alter any existing table, policy, log row, or function. `anon` and
 `authenticated` have neither table access nor RPC `EXECUTE`; only
@@ -17,7 +21,7 @@ service-role key server-side.
 The current v3 candidate calls this guard only after a new log claim and
 releases an admitted reservation before SSE completion. With the Edge mode
 unset/`off`, it performs no admission RPC. The code is deployed only to the
-isolated `chat-consultant-v3-closure-preview` function (v14 as of 12 October
+isolated `chat-consultant-v3-closure-preview` function (v16 as of 12 October
 2026); production v3 remains unchanged. The migration is unapplied, so the
 real database/RPC path has not passed the release gates below.
 
