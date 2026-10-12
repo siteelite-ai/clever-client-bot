@@ -33,4 +33,6 @@ Deno.test("sensitive backup-power answer derives sizing and preserves every safe
   assert(answer.includes("600 ВА"));
   assert(answer.includes("пусковой ток"));
   assert(answer.includes("формы выходного сигнала"));
+  assert(answer.includes("не могу подтвердить наличие карточки ИБП"));
+  assert(answer.toLowerCase().includes("в каталоге"));
 });

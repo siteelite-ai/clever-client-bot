@@ -1,0 +1,344 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T13:20:41.214Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-chandelier-25m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791811241219_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6712,
+              "network_attempts": 1,
+              "log_id": "b3597748-de02-430f-a0d9-e78d6a08c98f",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002740",
+                  "name": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Бренд": "Estares",
+                    "Материал основы": "алюминий",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Страна происхождения": "КИТАЙ",
+                    "Форма люстры": "паук",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Вес, кг.": "7.2",
+                    "Тип крепления": "монтажная планка",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.18",
+                    "Количество рожков": "8"
+                  },
+                  "offerPrice": 23666,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — Модель MATEO от бренда Estares сочетает современный дизайн и интеллектуальные технологии для дома. Люстра управляется напрямую от выключателя, обеспечивая простое и удобное включение и выключение света. Объемная светящаяся конструкция равномерно освещает помещение, а мощность 100 Вт позволяет освещать комнаты до 35 м². Надежные материалы — алюминий, ударопрочный акрил и оптический силикон — гарантируют долгий ср"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002741",
+                  "name": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Бренд": "Estares",
+                    "Материал основы": "алюминий",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Страна происхождения": "КИТАЙ",
+                    "Форма люстры": "снежинка",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Вес, кг.": "5.5",
+                    "Тип крепления": "монтажная планка",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.14",
+                    "Количество рожков": "6"
+                  },
+                  "offerPrice": 18167,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 Estares Артикул: 8R-ON/OFF-915*250 Люстра MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 предназначена для создания комфортного и современного освещения в жилых и коммерческих помещениях. Она обеспечивает равномерное заливное освещение без резких теней, эффективно освещает пространство до 25–28 м² и легко вписывается в интерьер благодаря минималистичному дизайну и компактной высоте. Назначение и область применения"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002744",
+                  "name": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Бренд": "Estares",
+                    "Материал основы": "алюминий",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "25",
+                    "Назначение": "зал; гостиная; спальня; кафе; кухня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Страна происхождения": "КИТАЙ",
+                    "Форма люстры": "кольцо",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Да",
+                    "Диаметр люстры, см": "60",
+                    "Наличие пульта": "Да",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Да",
+                    "Вес, кг.": "2.8",
+                    "Тип крепления": "монтажная планка",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.05",
+                    "Количество рожков": "3"
+                  },
+                  "offerPrice": 18324,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая Maysun AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20 – Интеллектуальная люстра, минимализм и высокие технологии в одном устройстве. Это баланс между эстетикой и функциональностью. Тонкий черный профиль в сочетании с кристально чистым акрилом создает эффект легкого, парящего в воздухе кольца, которое гармонично вписывается в интерьеры в стиле лофт, хай-тек, неоклассика. Благодаря управлению через смартфон или пульт, вы можете мгновенно превратить комнату и"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002745",
+                  "name": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Бренд": "Estares",
+                    "Материал основы": "алюминий",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "зал; гостиная; спальня; прихожая",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Страна происхождения": "КИТАЙ",
+                    "Форма люстры": "кольцо",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "51",
+                    "Наличие пульта": "Да",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Вес, кг.": "2.7",
+                    "Тип крепления": "монтажная планка",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.042",
+                    "Количество рожков": "3"
+                  },
+                  "offerPrice": 19550,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20 — интеллектуальная люстра, сочетание мягких форм и высокой мощности для современного дома. Модель выполнена в виде объёмного светящегося диска, который наполняет помещение ровным светом без резких теней. Мощность 80 Вт позволяет эффективно освещать комнаты до 28 м², заменяя несколько обычных светильников. Управление через пульт или смартфон позволяет мгновенно менять яркость и цветовую температуру света — от бодрящего "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002746",
+                  "name": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Бренд": "Estares",
+                    "Материал основы": "алюминий",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Страна происхождения": "КИТАЙ",
+                    "Форма люстры": "кольцо",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "50",
+                    "Наличие пульта": "Да",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Вес, кг.": "3.8",
+                    "Тип крепления": "монтажная планка",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.045",
+                    "Количество рожков": "2"
+                  },
+                  "offerPrice": 29961,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20, бренд Estares Артикул: SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20 Люстра светодиодная управляемая SOFIA 100W коллекции Estares сочетает футуристичный дизайн и интеллектуальные технологии для современного дома. Модель оснащена прозрачным акриловым плафоном и двойным кольцом светодиодов, что обеспечивает равномерное освещение помещений до 35–38 м². Управление осуществляется через мобильное приложение (APP) и пуль"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "price": 23666,
+                  "stockLine": "Караганда (10 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/)**\n  Цена: *23 666* ₸\n  Бренд: Estares\n  Наличие: Караганда (10 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "price": 18167,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/)**\n  Цена: *18 167* ₸\n  Бренд: Estares\n  Наличие: Караганда (1 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "price": 18324,
+                  "stockLine": "Караганда (5 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/)**\n  Цена: *18 324* ₸\n  Бренд: Estares\n  Наличие: Караганда (5 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "price": 19550,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/)**\n  Цена: *19 550* ₸\n  Бренд: Estares\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "price": 29961,
+                  "stockLine": "Караганда (7 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/)**\n  Цена: *29 961* ₸\n  Бренд: Estares\n  Наличие: Караганда (7 шт)"
+                }
+              ],
+              "text": "Для расширения поиска проверил названный вами исходный класс «Люстры»; это не обзор всех видов светодиодного освещения. У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «гостиной», максимальная площадь освещения не менее 25 м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-f639b265",
+                "mandatory_criteria": [
+                  {
+                    "key": "Максимальная площадь освещения, м2",
+                    "op": "min",
+                    "value": 25,
+                    "unit": "м²",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "application",
+                    "label": "Назначение",
+                    "value": "гостиной"
+                  },
+                  {
+                    "kind": "technology",
+                    "label": "Светодиодное исполнение"
+                  },
+                  {
+                    "kind": "availability",
+                    "label": "Положительный складской остаток"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю целевой тип и подтверждённую применимость товаров…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Проверено подходящих карточек: 5; целевой поиск: catalog_timeout; исходный класс: ok",
+                  "duration_ms": 4000
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T13:20:51.450Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "b3597748-de02-430f-a0d9-e78d6a08c98f"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 5,
+    "verified": 5,
+    "unverified": 0
+  },
+  "passed": true
+}

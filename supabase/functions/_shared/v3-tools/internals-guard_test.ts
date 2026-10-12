@@ -152,6 +152,27 @@ Deno.test("intro reasoning retains customer codes and explicit derived criteria"
   );
 });
 
+Deno.test("intro reasoning does not invent typical technical codes before product evidence", () => {
+  const result = stripUngroundedIntroTechnicalAttributes(
+    "У таких ламп типичные цоколи E27/E40. Проверяю точное название и характеристики по каталогу.",
+    "А у вас есть лампы кукуруза?",
+  );
+  assertEquals(result.text, "Проверяю точное название и характеристики по каталогу.");
+  assertEquals(result.removed, ["У таких ламп типичные цоколи E27/E40."]);
+});
+
+Deno.test("intro reasoning keeps a customer-requested code and independently reasoned requirement", () => {
+  const result = stripUngroundedIntroTechnicalAttributes(
+    "У таких ламп типичные цоколи E27/E40. Для улицы нужен класс защиты IP65, поэтому проверяю его.",
+    "Нужна лампа кукуруза E27 для улицы",
+  );
+  assertEquals(
+    result.text,
+    "У таких ламп типичные цоколи E27. Для улицы нужен класс защиты IP65, поэтому проверяю его.",
+  );
+  assertEquals(result.removed, ["E40"]);
+});
+
 Deno.test("alias generalization drops unrequested codes in parenthetical prose", () => {
   assertEquals(
     stripUngroundedIntroTechnicalAttributes(

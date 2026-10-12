@@ -1,0 +1,178 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "28c3a21666610684124b54b5647edff6c99d81dda53a5bc6d8317198fd8bbabc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:42:31.257Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-black-double-sockets": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-black-double-sockets",
+      "title": "Чёрные двойные электрические розетки сохраняют оба признака",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-black-double-sockets_base_1791553351271_1",
+          "turns": [
+            {
+              "message": "Найди двойные черные розетки электрические",
+              "status": 200,
+              "duration_ms": 17173,
+              "network_attempts": 1,
+              "log_id": "1bf3a36c-c4a3-4c81-ac38-5f529e0f3e0d",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Розетка РА 16-260 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "price": 692,
+                  "stockLine": "Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-260 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/)**\n  Цена: *692* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1453 шт), Шымкент (528 шт), Астана (173 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РА 16-261 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "price": 932,
+                  "stockLine": "Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-261 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/)**\n  Цена: *932* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (2280 шт), Астана (941 шт), Шымкент (712 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РС 16-343 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "price": 964,
+                  "stockLine": "Караганда (1091 шт)",
+                  "cardText": "- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/)**\n  Цена: *964* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1091 шт)"
+                },
+                {
+                  "title": "Розетка РС 16-348 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-348-chernyij/",
+                  "price": 1173,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Розетка РС 16-348 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-348-chernyij/)**\n  Цена: *1 173* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1 шт)"
+                }
+              ],
+              "text": "Клиент ищет электрическую розетку с двумя разъёмами чёрного цвета. «Двойная» означает количество разъёмов = 2, что проверяется характеристикой «Количество разъемов». Цвет = чёрный проверяется характеристикой «Цвет». Вид розетки = электрическая — обязательный класс для данного применения. Других технических ограничений клиент не указал; стандартные параметры (напряжение 220–230 В, ток 10–16 А, заземление) определяются выбором конкретной серии. По классу «Вид розетки» выбираю «электрическая». Явно указанное свойство «электрические» соответствует «Вид розетки: электрическая».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-fee35ec0",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Напряжение, В",
+                    "op": "range",
+                    "value": [
+                      220,
+                      230
+                    ],
+                    "unit": "в",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  },
+                  {
+                    "kind": "literal_modifier",
+                    "label": "черные",
+                    "op": "eq",
+                    "value": "черные"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 45, листьев 1",
+                  "duration_ms": 5362
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 35",
+                  "duration_ms": 1589
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T13:42:48.447Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "1bf3a36c-c4a3-4c81-ac38-5f529e0f3e0d"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

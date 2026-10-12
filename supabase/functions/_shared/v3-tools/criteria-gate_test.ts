@@ -197,6 +197,92 @@ Deno.test("render criteria: explicit user filters override inferred filters on t
   );
 });
 
+Deno.test("customer application proof remains an OR alternative beside exact live classes", () => {
+  const exact = ["Бытовые приборы настольные", "Бытовые приборы подвесные"]
+    .map((value): Criterion => ({
+      key: "Класс применения",
+      op: "eq",
+      value,
+      level: "A",
+      evidence: "user_explicit",
+    }));
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const feature: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const modelClass: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "Промышленные приборы",
+    level: "A",
+    evidence: "model_assumption",
+  };
+  const criteria = resolveTerminalSelectionCriteria(
+    [...exact, application, feature],
+    [modelClass, application],
+    [exact[0]],
+  );
+  assertEquals(criteria, [...exact, application, feature]);
+  const candidate = (id: string, description: string): ProductRef => ({
+    ...product(id, [
+      "Класс применения: Приборы для учреждений",
+      "С датчиком движения: да",
+    ]),
+    description_excerpt: description,
+  });
+  assertEquals(
+    applyCriteriaGate([
+      candidate("home", "Предназначен для бытового применения."),
+      candidate("factory", "Предназначен только для промышленного применения."),
+    ], criteria).passed_ids,
+    ["home"],
+  );
+  assertEquals(
+    resolveTerminalSelectionCriteria(
+      [...exact, application],
+      [modelClass],
+      exact,
+      true,
+    ),
+    exact,
+  );
+});
+
+Deno.test("application denial is scoped to its own adversative clause", () => {
+  const criterion: Criterion = {
+    key: "Назначение",
+    op: "eq",
+    value: "гостиная",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const withDescription = (description: string): ProductRef => ({
+    ...product("room", []),
+    description_excerpt: description,
+  });
+  assertEquals(checkCriterion(withDescription(
+    "Предназначен для гостиной, но не подходит для ванной.",
+  ), criterion).verdict, "pass");
+  assertEquals(checkCriterion(withDescription(
+    "Не подходит для гостиной, но подходит для ванной.",
+  ), criterion).verdict, "fail");
+  assertEquals(checkCriterion(withDescription(
+    "Подходит для гостиной, но не рекомендован для гостиной.",
+  ), criterion).verdict, "fail");
+});
+
 Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
   const first = [{
     key: "Connector",
@@ -316,7 +402,7 @@ Deno.test("rendered-card consensus restores a user-owned emission contract", () 
   assertEquals(
     projectCommonRenderedUserCriteria(
       products,
-      "Покажи ACME на 16 ампер и на 3 полюса",
+      "Покажи бренд ACME на 16 ампер и на 3 полюса",
     ),
     [
       {
@@ -399,7 +485,7 @@ Deno.test("rendered-card consensus uses common title measurements when compact c
   assertEquals(
     projectCommonRenderedUserCriteria(
       products,
-      "Покажи ACME на 16 ампер и на 3 полюса",
+      "Покажи бренд ACME на 16 ампер и на 3 полюса",
     ),
     [
       {
@@ -447,6 +533,62 @@ Deno.test("one generic class word cannot promote a compound rendered identity", 
   );
 });
 
+Deno.test("rendered marking text cannot invent a customer-owned brand", () => {
+  const request = "какой есть кабель ввг 3*1,5 негорючий покажи все позиции";
+  const products = ["one", "two"].map((id) => ({
+    ...product(id, []),
+    pagetitle: `Кабель ВВГ нг 3*1,5 ${id}`,
+    vendor: "ВВГ",
+  }));
+  const markdown = products.map((item) =>
+    `- **[${item.pagetitle}](https://example.test/${item.id})**\n  Цена: *100* ₸\n  Бренд: ВВГ`
+  ).join("\n\n");
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, request).some((criterion) =>
+      criterion.key === "Бренд"
+    ),
+    false,
+  );
+  assertEquals(
+    projectCommonRenderedMarkdownUserCriteria(markdown, request).some((
+      criterion,
+    ) => criterion.key === "Бренд"),
+    false,
+  );
+});
+
+Deno.test("explicit brand relation survives emission in both card formats", () => {
+  for (
+    const [request, brand] of [
+      ["Покажи автоматы бренда Schneider", "Schneider Electric"],
+      ["Покажи розетки производителя Gallant", "Gallant"],
+    ]
+  ) {
+    const products = ["one", "two"].map((id) => ({
+      ...product(id, []),
+      pagetitle: `Товар ${id}`,
+      vendor: brand,
+    }));
+    const markdown = products.map((item) =>
+      `- **[${item.pagetitle}](https://example.test/${item.id})**\n  Цена: *100* ₸\n  Бренд: ${brand}`
+    ).join("\n\n");
+    for (
+      const criteria of [
+        projectCommonRenderedUserCriteria(products, request),
+        projectCommonRenderedMarkdownUserCriteria(markdown, request),
+      ]
+    ) {
+      assertEquals(
+        criteria.some((criterion) =>
+          criterion.key === "Бренд" && criterion.value === brand
+        ),
+        true,
+        request,
+      );
+    }
+  }
+});
+
 Deno.test("deterministic markdown cards preserve the same common emission contract", () => {
   const markdown = [
     "- **[Device one 3P 16A](https://example.test/one)**\n  Цена: *100* ₸\n  Бренд: ACME Electric",
@@ -455,7 +597,7 @@ Deno.test("deterministic markdown cards preserve the same common emission contra
   assertEquals(
     projectCommonRenderedMarkdownUserCriteria(
       markdown,
-      "Покажи ACME на 16 ампер и на 3 полюса",
+      "Покажи бренд ACME на 16 ампер и на 3 полюса",
     ),
     [
       {
@@ -1020,6 +1162,88 @@ Deno.test("checkCriterion: affirmative boolean remains unknown without feature e
   );
 });
 
+Deno.test("explicit acoustic-only product prose quarantines a contradictory motion facet", () => {
+  const motion: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const acousticIEK = {
+    ...product("iek-acoustic", ["С датчиком движения: да"]),
+    pagetitle: "Светильник LED ДПО 1002 12Вт 4000К с акуст.датч. ИЭК",
+    description_excerpt:
+      "Оптико-акустический датчик автоматически реагирует на звук.",
+  };
+  const gaussHall = {
+    ...product("gauss-hall", ["С датчиком движения: да"]),
+    pagetitle: "Светильник Gauss HALL с микроволновым сенсором",
+    description_excerpt:
+      "Микроволновый датчик реагирует на движение в помещении.",
+  };
+  const sparse = {
+    ...product("sparse", ["С датчиком движения: да"]),
+    description_excerpt: "",
+  };
+  assertEquals(checkCriterion(acousticIEK, motion).verdict, "fail");
+  assertEquals(checkCriterion(gaussHall, motion).verdict, "pass");
+  assertEquals(checkCriterion(sparse, motion).verdict, "pass");
+  const conflictingTitle = {
+    ...acousticIEK,
+    id: "conflicting-title",
+    pagetitle: "Светильник с датчиком движения",
+  };
+  assertEquals(checkCriterion(conflictingTitle, motion).verdict, "fail");
+  const conflictingTitleWithoutFacet = {
+    ...conflictingTitle,
+    id: "conflicting-title-without-facet",
+    short_traits: [],
+  };
+  assertEquals(
+    checkCriterion(conflictingTitleWithoutFacet, motion).verdict,
+    "fail",
+  );
+  const explicitlyNegatedMotion = {
+    ...gaussHall,
+    id: "explicitly-negated-motion",
+    description_excerpt:
+      "Датчик реагирует только на звук; не реагирует на движение.",
+  };
+  assertEquals(checkCriterion(explicitlyNegatedMotion, motion).verdict, "fail");
+  assertEquals(
+    checkCriterion({ ...explicitlyNegatedMotion, short_traits: [] }, motion)
+      .verdict,
+    "fail",
+  );
+  const exclusiveAcousticResponse = {
+    ...gaussHall,
+    id: "exclusive-acoustic-response",
+    pagetitle: "Датчик реагирует на движение",
+    description_excerpt: "Датчик реагирует только на звук.",
+  };
+  assertEquals(
+    checkCriterion(exclusiveAcousticResponse, motion).verdict,
+    "fail",
+  );
+  assertEquals(
+    checkCriterion({ ...exclusiveAcousticResponse, short_traits: [] }, motion)
+      .verdict,
+    "fail",
+  );
+  const dualResponse = {
+    ...acousticIEK,
+    id: "dual-response",
+    description_excerpt:
+      "Датчик реагирует на звук и движение; включает свет при движении.",
+  };
+  assertEquals(checkCriterion(dualResponse, motion).verdict, "pass");
+  assertEquals(
+    applyCriteriaGate([acousticIEK, gaussHall, sparse], [motion]).passed_ids,
+    ["gauss-hall", "sparse"],
+  );
+});
+
 Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelated prose", () => {
   const p = {
     ...product("1", []),
@@ -1254,6 +1478,26 @@ Deno.test("mandatory option wins a same-facet advisory conflict", () => {
       sheath: ["PVC"],
       purpose: ["Radio-frequency cables"],
     },
+  );
+});
+
+Deno.test("overlapping subtype advice cannot narrow a mandatory OR family", () => {
+  assertEquals(
+    overlayMandatoryFacetOptions(
+      { use: ["Бытовые накладные", "Бытовые подвесные"] },
+      { use: ["Бытовые накладные"], sensor: ["да"] },
+    ),
+    {
+      use: ["Бытовые накладные", "Бытовые подвесные"],
+      sensor: ["да"],
+    },
+  );
+  assertEquals(
+    overlayMandatoryFacetOptions(
+      { use: [] },
+      { use: ["Бытовые накладные"] },
+    ),
+    { use: ["Бытовые накладные"] },
   );
 });
 

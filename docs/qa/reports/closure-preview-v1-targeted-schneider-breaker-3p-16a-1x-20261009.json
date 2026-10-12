@@ -1,0 +1,169 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:55:04.158Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-schneider-breaker-3p-16a": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-schneider-breaker-3p-16a",
+      "title": "Автоматы Schneider 16 А на три полюса сохраняют все обязательные оси",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-schneider-breaker-3p-16a_base_1791554104159_1",
+          "turns": [
+            {
+              "message": "Покажи все автоматические выключатели Schneider на 16 ампер, на 3 полюса",
+              "status": 200,
+              "duration_ms": 12097,
+              "network_attempts": 1,
+              "log_id": "c3bb76e9-4641-49db-8b0e-8e11422fb994",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Авт.выкл-ль iC60N 3П 16А С /A9F79316/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-ic60n-3p-16a-s-a9f79316/",
+                  "price": 14154,
+                  "stockLine": "Астана (29 шт), Шымкент (11 шт), Караганда (1 шт)",
+                  "cardText": "- **[Авт.выкл-ль iC60N 3П 16А С /A9F79316/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-ic60n-3p-16a-s-a9f79316/)**\n  Цена: *14 154* ₸\n  Бренд: Schneider Electric\n  Наличие: Астана (29 шт), Шымкент (11 шт), Караганда (1 шт)"
+                },
+                {
+                  "title": "Авт.выкл-ль 16А ВА63 3п domovoy (Шнайдер)  /11223/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-16a-va63-3p-domovoy-%28shnajder%29-11223/",
+                  "price": 2200,
+                  "stockLine": "Астана (5 шт)",
+                  "cardText": "- **[Авт.выкл-ль 16А ВА63 3п domovoy (Шнайдер)  /11223/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-16a-va63-3p-domovoy-%28shnajder%29-11223/)**\n  Цена: *2 200* ₸\n  Бренд: Schneider Electric\n  Наличие: Астана (5 шт)"
+                },
+                {
+                  "title": "Авт.выкл-ль EASY 9 3P 16A C 4,5кА 400В /EZ9F34316/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-easy-9-3p-16a-c-4,5ka-400v-ez9f34316/",
+                  "price": 5206,
+                  "stockLine": "Алматы (278 шт), Актобе (177 шт), Астана (162 шт) и ещё 2 городов",
+                  "cardText": "- **[Авт.выкл-ль EASY 9 3P 16A C 4,5кА 400В /EZ9F34316/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-easy-9-3p-16a-c-4,5ka-400v-ez9f34316/)**\n  Цена: *5 206* ₸\n  Бренд: Schneider Electric\n  Наличие: Алматы (278 шт), Актобе (177 шт), Астана (162 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автоматический выключатель (АВ) С 16A 3P 6000A /R9F12316/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-%28av%29-s-16a-3p-6000a-r9f12316/",
+                  "price": 6691,
+                  "stockLine": "Алматы (87 шт), Караганда (2 шт), Астана (1 шт)",
+                  "cardText": "- **[Автоматический выключатель (АВ) С 16A 3P 6000A /R9F12316/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-%28av%29-s-16a-3p-6000a-r9f12316/)**\n  Цена: *6 691* ₸\n  Бренд: Schneider Electric\n  Наличие: Алматы (87 шт), Караганда (2 шт), Астана (1 шт)"
+                },
+                {
+                  "title": "Автоматический выключатель G125E 15kA 3П3Т 16A фиксированный /G12E3F16/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-g125e-15ka-3p3t-16a-fiksirovannyij-g12e3f16/",
+                  "price": 15147,
+                  "stockLine": "Астана (5 шт), Алматы (4 шт), Караганда (3 шт)",
+                  "cardText": "- **[Автоматический выключатель G125E 15kA 3П3Т 16A фиксированный /G12E3F16/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-g125e-15ka-3p3t-16a-fiksirovannyij-g12e3f16/)**\n  Цена: *15 147* ₸\n  Бренд: Schneider Electric\n  Наличие: Астана (5 шт), Алматы (4 шт), Караганда (3 шт)"
+                }
+              ],
+              "text": "Клиент запросил автоматические выключатели Schneider Electric с номинальным током 16 А и количеством полюсов 3. Это прямые технические параметры товара: бренд Schneider Electric, номинальный ток 16 А и количество полюсов 3. Все три параметра явно указаны клиентом и физически необходимы для каждого отдельного товара. Обязательные параметры: «Количество полюсов: 3»; «Номинальный ток: 16».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-fe02471d",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество полюсов",
+                    "op": "eq",
+                    "value": "3",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Номинальный ток",
+                    "op": "eq",
+                    "value": "16",
+                    "unit": "а",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Бренд",
+                    "op": "eq",
+                    "value": "Schneider Electric",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "полюса",
+                    "op": "eq",
+                    "value": 3,
+                    "unit": "pole",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 8,
+                  "minimum": 3,
+                  "mode": "exhaustive",
+                  "explicit": true
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Автоматические выключатели»: 1311 тов., фасетов 41, листьев 1",
+                  "duration_ms": 3510
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 7",
+                  "duration_ms": 205
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T13:55:16.258Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "c3bb76e9-4641-49db-8b0e-8e11422fb994"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

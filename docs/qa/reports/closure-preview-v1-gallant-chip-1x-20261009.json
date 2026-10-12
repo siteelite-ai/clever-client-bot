@@ -1,0 +1,164 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "28c3a21666610684124b54b5647edff6c99d81dda53a5bc6d8317198fd8bbabc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:40:57.453Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-gallant-catalog-section-chip": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-gallant-catalog-section-chip",
+      "title": "Выбор раздела после широкого ассортимента сохраняет серию и категорию",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-gallant-catalog-section-chip_base_1791553257457_1",
+          "turns": [
+            {
+              "message": "покажи ассортимент Gallant на сайте",
+              "status": 200,
+              "duration_ms": 5274,
+              "network_attempts": 1,
+              "log_id": "d11b12c8-3dbf-4c0e-af18-dbf299894514",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками. В каталоге уже видны разделы: Выключатели, Розетки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Розетки",
+              "status": 200,
+              "duration_ms": 2976,
+              "network_attempts": 1,
+              "log_id": "f8762618-4a3e-4fb8-aacd-f9ab280feaa7",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Розетка влагозащ. с зазем. с защит.крышкой и шторками Gallant /WL15-02-04 (слоновая кость)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashh.-s-zazem.-s-zashhit.kryishkoj-i-shtorkami-gallant-wl15-02-04-%28slonovaya-kost%29/",
+                  "price": 3193,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Розетка влагозащ. с зазем. с защит.крышкой и шторками Gallant /WL15-02-04 (слоновая кость)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashh.-s-zazem.-s-zashhit.kryishkoj-i-shtorkami-gallant-wl15-02-04-%28slonovaya-kost%29/)**\n  Цена: *3 193* ₸\n  Бренд: Werkel\n  Наличие: Караганда (1 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071210 (шампань рифл)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071210-%28shampan-rifl%29/",
+                  "price": 5061,
+                  "stockLine": "Караганда (8 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071210 (шампань рифл)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071210-%28shampan-rifl%29/)**\n  Цена: *5 061* ₸\n  Бренд: Werkel\n  Наличие: Караганда (8 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071203 (слоновая кос)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071203-%28slonovaya-kos%29/",
+                  "price": 4149,
+                  "stockLine": "Караганда (3 шт), Астана (1 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071203 (слоновая кос)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071203-%28slonovaya-kos%29/)**\n  Цена: *4 149* ₸\n  Бренд: Werkel\n  Наличие: Караганда (3 шт), Астана (1 шт)"
+                },
+                {
+                  "title": "Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071201 (белый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071201-%28belyij%29/",
+                  "price": 4149,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Розетка влагозащищенная с заземлением с защитной крышкой и шторками Gallant /W5071201 (белый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-vlagozashhishhennaya-s-zazemleniem-s-zashhitnoj-kryishkoj-i-shtorkami-gallant-w5071201-%28belyij%29/)**\n  Цена: *4 149* ₸\n  Бренд: Werkel\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072135 (черный/хром)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/",
+                  "price": 6343,
+                  "stockLine": "Караганда (40 шт), Шымкент (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072135 (черный/хром)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/)**\n  Цена: *6 343* ₸\n  Бренд: Werkel\n  Наличие: Караганда (40 шт), Шымкент (2 шт)"
+                }
+              ],
+              "text": "Показываю подтверждённые товары серии «Gallant» в разделе «Розетки».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-d7d09458",
+                "mandatory_criteria": [
+                  {
+                    "key": "Серия",
+                    "op": "eq",
+                    "value": "Gallant",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Раздел каталога",
+                    "op": "eq",
+                    "value": "Розетки",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю выбранный раздел и серию в каталоге…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Подтверждённых товаров: 27",
+                  "duration_ms": 1580
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T13:41:05.710Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "d11b12c8-3dbf-4c0e-af18-dbf299894514",
+    "f8762618-4a3e-4fb8-aacd-f9ab280feaa7"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

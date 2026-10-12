@@ -294,9 +294,11 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
 const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,17}(?![\p{L}\p{N}])/gu;
 // JavaScript's `\b` is ASCII-centric even with /u, so it cannot be used as a
 // Cyrillic word boundary. Use Unicode-letter boundaries for Russian prose.
-const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|речь\s+(?:идет\s+)?про|проход\p{L}*\s+как)/iu;
+const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|типичн\p{L}*|как\s+правило|чаще\s+всего|речь\s+(?:идет\s+)?про|проход\p{L}*\s+как)/iu;
 const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру(?!\p{L})|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
 const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
+const TYPICAL_TECHNICAL_CLAIM_RE = /(?<!\p{L})типичн\p{L}*(?!\p{L})/iu;
+const COMPACT_TECHNICAL_CODE_LIST_RE = /(?<![\p{L}\p{N}])(?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*[\p{L}]*\d[\p{L}\d.-]*)+(?![\p{L}\p{N}])/giu;
 const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|это\s+ближе\s+всего|ближе\s+всего\s+к|проход\p{L}*\s+как)/iu;
 const ALIAS_GENERALIZATION_FOLLOWUP_RE = /^\s*(?:обычно|как\s+правило|чаще\s+всего)\s+(?:это|такие|они)(?!\p{L})/iu;
 
@@ -324,6 +326,19 @@ export function stripUngroundedIntroTechnicalAttributes(
     const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [paragraph];
     return sentences.map((sentence) => {
       if (!ALIAS_OR_GENERALIZATION_RE.test(sentence) || EXPLICIT_CRITERION_RE.test(sentence)) return sentence.trim();
+      const sentenceCodes = sentence.match(COMPACT_TECHNICAL_CODE_RE) ?? [];
+      // A generic "typical E27/E40" assertion is not evidence for the
+      // customer's nickname. When neither code came from the request, the
+      // entire claim is unsupported; retaining only "typical sockets" would
+      // turn the guard into an awkward and still speculative statement.
+      if (
+        TYPICAL_TECHNICAL_CLAIM_RE.test(sentence) &&
+        sentenceCodes.some((code) => !requestedCodes.has(normalizeCompactCode(code))) &&
+        !sentenceCodes.some((code) => requestedCodes.has(normalizeCompactCode(code)))
+      ) {
+        removed.push(sentence.trim());
+        return "";
+      }
       const withoutAttributeLists = sentence.replace(
         TECHNICAL_ATTRIBUTE_CODE_LIST_RE,
         (whole, prefix: string, codeList: string) => {
@@ -337,11 +352,28 @@ export function stripUngroundedIntroTechnicalAttributes(
           return `${prefix}${kept.join(" или ")}${trailingPunctuation}`;
         },
       );
+      // Bare code sequences do not have a preceding technical noun for the
+      // attribute-list rule above ("типичные E27/E40"). Treat them as one
+      // list so dropping one code never leaves a dangling slash or "или".
+      const withoutBareCodeLists = withoutAttributeLists.replace(
+        COMPACT_TECHNICAL_CODE_LIST_RE,
+        (list) => {
+          const trailingPunctuation = list.match(/[.!?]+$/u)?.[0] ?? "";
+          const codeBody = trailingPunctuation
+            ? list.slice(0, -trailingPunctuation.length)
+            : list;
+          const codes = codeBody.match(COMPACT_TECHNICAL_CODE_RE) ?? [];
+          const kept = codes.filter((code) => requestedCodes.has(normalizeCompactCode(code)));
+          if (kept.length === codes.length) return list;
+          removed.push(...codes.filter((code) => !requestedCodes.has(normalizeCompactCode(code))));
+          return `${kept.join(" или ")}${trailingPunctuation}`;
+        },
+      );
       // Generalisations can also place codes in parentheses or after a
       // different preposition ("для патронов (E27, E40)"). The evidence rule
       // is the same: an unrequested compact code must not become visible just
       // because the model chose another sentence shape.
-      return withoutAttributeLists.replace(
+      return withoutBareCodeLists.replace(
         COMPACT_TECHNICAL_CODE_RE,
         (code) => {
           if (requestedCodes.has(normalizeCompactCode(code))) return code;

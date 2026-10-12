@@ -1,4 +1,8 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertRejects,
+  assertStrictEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createProviderQuotaCooldown,
   fetchChatCompletionWithFailover,
@@ -252,4 +256,315 @@ Deno.test("non-quota client errors never open the cooldown", async () => {
   assertEquals(first.primarySkipped, false);
   assertEquals(second.primarySkipped, false);
   assertEquals(calls, 2);
+});
+
+Deno.test("a rejected primary network fetch uses one fallback without opening quota cooldown", async () => {
+  const urls: string[] = [];
+  const cooldown = createProviderQuotaCooldown();
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes("primary")) throw new TypeError("fetch failed");
+    return Response.json({ choices: [{ message: { content: "recovered" } }] });
+  }) as typeof fetch;
+  const request = {
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [] },
+    fetchImpl,
+    quotaCooldown: cooldown,
+  };
+
+  const first = await fetchChatCompletionWithFailover(request);
+  const second = await fetchChatCompletionWithFailover(request);
+  assertEquals(first.provider, "fallback");
+  assertEquals(first.failedOver, true);
+  assertEquals(first.primarySkipped, false);
+  assertEquals(first.primaryStatus, undefined);
+  assertEquals(
+    (await first.response.json()).choices[0].message.content,
+    "recovered",
+  );
+  assertEquals(second.primarySkipped, false);
+  assertEquals(urls, [
+    "https://primary.test/chat",
+    "https://fallback.test/chat",
+    "https://primary.test/chat",
+    "https://fallback.test/chat",
+  ]);
+});
+
+Deno.test("HTTP 200 unusable completion envelopes use only one fallback", async () => {
+  const unusableBodies = [
+    "not json",
+    JSON.stringify({ error: { message: "upstream unavailable" } }),
+    JSON.stringify({ choices: [] }),
+    JSON.stringify({
+      choices: [{ finish_reason: "error", message: { content: "" } }],
+    }),
+    JSON.stringify({ choices: [{ finish_reason: "stop" }] }),
+  ];
+  for (const primaryBody of unusableBodies) {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      return url.includes("primary")
+        ? new Response(primaryBody, { status: 200 })
+        : Response.json({ choices: [{ message: { content: "fallback" } }] });
+    }) as typeof fetch;
+
+    const result = await fetchChatCompletionWithFailover({
+      primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+      fallback: {
+        id: "fallback",
+        url: "https://fallback.test/chat",
+        apiKey: "f",
+      },
+      body: { messages: [] },
+      fetchImpl,
+    });
+    assertEquals(result.provider, "fallback");
+    assertEquals(result.failedOver, true);
+    assertEquals(result.primaryStatus, 200);
+    assertEquals(
+      (await result.response.json()).choices[0].message.content,
+      "fallback",
+    );
+    assertEquals(urls, [
+      "https://primary.test/chat",
+      "https://fallback.test/chat",
+    ]);
+  }
+});
+
+Deno.test("a usable HTTP 200 completion remains on the primary with its body readable", async () => {
+  let calls = 0;
+  const payload = {
+    choices: [{ finish_reason: "stop", message: { content: "ok" } }],
+  };
+  const fetchImpl = (async () => {
+    calls += 1;
+    return Response.json(payload);
+  }) as typeof fetch;
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [] },
+    fetchImpl,
+  });
+  assertEquals(result.provider, "primary");
+  assertEquals(result.failedOver, false);
+  assertEquals(await result.response.json(), payload);
+  assertEquals(calls, 1);
+});
+
+Deno.test("HTTP 200 envelope validation does not reinterpret caller-specific content", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return Response.json({
+      choices: [{ finish_reason: "stop", message: { content: null } }],
+    });
+  }) as typeof fetch;
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [] },
+    fetchImpl,
+  });
+  assertEquals(result.failedOver, false);
+  assertEquals(calls, 1);
+});
+
+Deno.test("without an enabled fallback the primary HTTP 200 body remains untouched", async () => {
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    body: { messages: [] },
+    fetchImpl: (async () =>
+      new Response("not json", { status: 200 })) as typeof fetch,
+  });
+  assertEquals(result.failedOver, false);
+  assertEquals(result.provider, "primary");
+  assertEquals(await result.response.text(), "not json");
+});
+
+Deno.test("a network rejection without a fallback preserves the original error", async () => {
+  const failure = new TypeError("fetch failed");
+  const fetchImpl = (async () => {
+    throw failure;
+  }) as typeof fetch;
+  const caught = await assertRejects(() =>
+    fetchChatCompletionWithFailover({
+      primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+      body: { messages: [] },
+      fetchImpl,
+    })
+  );
+  assertStrictEquals(caught, failure);
+});
+
+Deno.test("abort, timeout and non-network exceptions never switch providers", async () => {
+  for (
+    const failure of [
+      new DOMException("cancelled", "AbortError"),
+      new DOMException("deadline", "TimeoutError"),
+      new Error("bug in fetch implementation"),
+    ]
+  ) {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      throw failure;
+    }) as typeof fetch;
+    const caught = await assertRejects(() =>
+      fetchChatCompletionWithFailover({
+        primary: {
+          id: "primary",
+          url: "https://primary.test/chat",
+          apiKey: "p",
+        },
+        fallback: {
+          id: "fallback",
+          url: "https://fallback.test/chat",
+          apiKey: "f",
+        },
+        body: { messages: [] },
+        fetchImpl,
+      })
+    );
+    assertStrictEquals(caught, failure);
+    assertEquals(calls, 1);
+  }
+});
+
+Deno.test("an aborted signal prevents failover even if fetch rejects with TypeError", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    controller.abort(new DOMException("deadline", "TimeoutError"));
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  await assertRejects(() =>
+    fetchChatCompletionWithFailover({
+      primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+      fallback: {
+        id: "fallback",
+        url: "https://fallback.test/chat",
+        apiKey: "f",
+      },
+      body: { messages: [] },
+      signal: controller.signal,
+      fetchImpl,
+    }), TypeError);
+  assertEquals(calls, 1);
+});
+
+Deno.test("a deadline during HTTP 200 envelope inspection never starts fallback", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    controller.abort(new DOMException("deadline", "TimeoutError"));
+    return Response.json({ choices: [] });
+  }) as typeof fetch;
+  await assertRejects(
+    () =>
+      fetchChatCompletionWithFailover({
+        primary: {
+          id: "primary",
+          url: "https://primary.test/chat",
+          apiKey: "p",
+        },
+        fallback: {
+          id: "fallback",
+          url: "https://fallback.test/chat",
+          apiKey: "f",
+        },
+        body: { messages: [] },
+        signal: controller.signal,
+        fetchImpl,
+      }),
+    DOMException,
+  );
+  assertEquals(calls, 1);
+});
+
+Deno.test("request serialization errors are not mistaken for network failures", async () => {
+  const body: Record<string, unknown> = { messages: [] };
+  body.circular = body;
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return Response.json({ choices: [] });
+  }) as typeof fetch;
+  await assertRejects(() =>
+    fetchChatCompletionWithFailover({
+      primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+      fallback: {
+        id: "fallback",
+        url: "https://fallback.test/chat",
+        apiKey: "f",
+      },
+      body,
+      fetchImpl,
+    }), TypeError);
+  assertEquals(calls, 0);
+});
+
+Deno.test("a fallback response is returned once even when its envelope is unusable", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return Response.json({ choices: [] });
+  }) as typeof fetch;
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [] },
+    fetchImpl,
+  });
+  assertEquals(result.provider, "fallback");
+  assertEquals(result.failedOver, true);
+  assertEquals(calls, 2);
+});
+
+Deno.test("streaming completions are not parsed as JSON by the failover wrapper", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response('data: {"choices":[]}\n\n', {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  const result = await fetchChatCompletionWithFailover({
+    primary: { id: "primary", url: "https://primary.test/chat", apiKey: "p" },
+    fallback: {
+      id: "fallback",
+      url: "https://fallback.test/chat",
+      apiKey: "f",
+    },
+    body: { messages: [], stream: true },
+    fetchImpl,
+  });
+  assertEquals(result.failedOver, false);
+  assertEquals(await result.response.text(), 'data: {"choices":[]}\n\n');
+  assertEquals(calls, 1);
 });

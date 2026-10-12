@@ -23,6 +23,7 @@ import {
 } from "./criteria-gate.ts";
 import {
   extractClientQuantities,
+  normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 
@@ -1443,7 +1444,22 @@ export function projectLiteralMeasuredCriteria(
         span.max === quantity.value;
     })?.value;
     if (liveValue === undefined) continue;
-    const representedCriterion = next.find((criterion) => {
+    const facetMeaning = normalizeEvidence(facet.caption || facet.key);
+    const facetDirection =
+      /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
+        ? "min" as const
+        : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
+        ? "max" as const
+        : "eq" as const;
+    const explicitExactProductValue = facetDirection !== "eq" &&
+      customerExplicitlyOwnsExactDirectionalFacetValue(
+        customerText,
+        quantity.value,
+        unit,
+        facet.caption || facet.key,
+      );
+    const projectedOp = explicitExactProductValue ? "eq" : facetDirection;
+    const representedIndex = next.findIndex((criterion) => {
       const key = normalizeEvidence(criterion.key);
       const facetKey = normalizeEvidence(facet.caption || facet.key);
       if (
@@ -1452,7 +1468,10 @@ export function projectLiteralMeasuredCriteria(
       return criterion.op === "eq" &&
         String(criterion.value) === String(liveValue);
     });
-    if (representedCriterion) {
+    const representedCriterion = representedIndex >= 0
+      ? next[representedIndex]
+      : null;
+    if (representedCriterion && projectedOp === "eq") {
       if (
         !matched.some((criterion) =>
           criteriaIdentityMatches(criterion, representedCriterion)
@@ -1462,28 +1481,97 @@ export function projectLiteralMeasuredCriteria(
       }
       continue;
     }
-    const facetMeaning = normalizeEvidence(facet.caption || facet.key);
-    const facetDirection =
-      /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
-        ? "min" as const
-        : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
-        ? "max" as const
-        : "eq" as const;
+    // An upstream exact criterion may have copied the customer's application
+    // size into the live product facet. It is not customer-owned equality:
+    // replace it with the facet's directional suitability relationship.
+    if (representedCriterion) next.splice(representedIndex, 1);
     const criterion: Criterion = {
       key: facet.caption || facet.key,
       // The customer's application size is a required capacity, not an exact
       // product identity. A product's declared maximum must cover at least the
       // application value; conversely its declared minimum must not exceed it.
-      op: facetDirection,
+      op: projectedOp,
       value: liveValue,
       unit: facet.unit ?? unit,
       level: "A",
     };
-    next.push(criterion);
-    added.push(criterion);
-    matched.push(criterion);
+    const alreadyProjected = next.find((candidate) =>
+      candidate.op === criterion.op &&
+      criteriaIdentityMatches(candidate, criterion)
+    );
+    if (alreadyProjected) {
+      if (
+        !matched.some((candidate) =>
+          criteriaIdentityMatches(candidate, alreadyProjected)
+        )
+      ) matched.push({ ...alreadyProjected });
+    } else {
+      next.push(criterion);
+      added.push(criterion);
+      matched.push(criterion);
+    }
   }
   return { criteria: next, added, matched };
+}
+
+/** A customer's application measurement is not an exact product value merely
+ * because both use the same scalar. For maximum/minimum live facets, preserve
+ * equality only when the customer explicitly names that product-side facet
+ * and says the value must be exact in the same local clause. */
+function customerExplicitlyOwnsExactDirectionalFacetValue(
+  customerText: string,
+  value: number,
+  unit: string,
+  facetLabel: string,
+): boolean {
+  const text = normalizeMeasurementText(customerText);
+  const escapedValue = String(value).replace(".", "[.,]");
+  const measured = new RegExp(
+    `${escapedValue}\\s*([a-zа-я°]{1,6}[²³]?\\d?)(?![a-zа-я])`,
+    "giu",
+  );
+  const labelTokens = normalizeEvidence(facetLabel).split(" ").filter((token) =>
+    token.length >= 3 && canonicalMeasurementUnit(token) !== unit
+  );
+  const directionalTokens = labelTokens.filter((token) =>
+    /^(?:максимал|минимал|maximum|minimum|max|min)/iu.test(token)
+  );
+  const meaningTokens = labelTokens.filter((token) =>
+    !directionalTokens.includes(token)
+  );
+  if (directionalTokens.length === 0 || meaningTokens.length === 0) {
+    return false;
+  }
+  for (const match of text.matchAll(measured)) {
+    if (canonicalMeasurementUnit(match[1]) !== unit) continue;
+    const occurrence = match.index ?? 0;
+    const clauseStart = Math.max(
+      text.lastIndexOf(".", occurrence),
+      text.lastIndexOf("?", occurrence),
+      text.lastIndexOf("!", occurrence),
+      text.lastIndexOf(";", occurrence),
+      text.lastIndexOf("\n", occurrence),
+    );
+    const prefix = normalizeEvidence(
+      text.slice(Math.max(clauseStart + 1, occurrence - 150), occurrence),
+    );
+    if (
+      !/(?:^| )(?:ровно|точно|строго|именно|конкретно)(?: |$)/iu.test(prefix)
+    ) {
+      continue;
+    }
+    const prefixTokens = prefix.split(" ");
+    const hasToken = (labelToken: string): boolean =>
+      prefixTokens.some((token) =>
+        token === labelToken ||
+        token.length >= 4 && labelToken.length >= 4 &&
+          token.slice(0, 4) === labelToken.slice(0, 4)
+      );
+    if (directionalTokens.some(hasToken) && meaningTokens.some(hasToken)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1509,6 +1597,17 @@ export function customerOwnsDerivedExactFacetValue(
   >,
 ): boolean {
   if (!criterion || criterion.op !== "eq") return false;
+  const directional = projectLiteralMeasuredCriteria(
+    [],
+    customerText,
+    customerText,
+    facets,
+    [],
+  ).added.find((candidate) =>
+    (candidate.op === "min" || candidate.op === "max") &&
+    criteriaIdentityMatches(candidate, criterion)
+  );
+  if (directional) return false;
   const projection = projectLiteralMeasuredCriteria(
     [criterion],
     customerText,

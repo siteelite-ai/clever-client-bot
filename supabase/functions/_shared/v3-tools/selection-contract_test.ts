@@ -26,6 +26,7 @@ import {
   selectionTargetIsDeclared,
   selectionTargetMayUseGroundedBase,
   selectionTargetPreservesGroundedBase,
+  verifyReplacementDestinationFit,
   verifySelectionTarget,
   verifySelectionTargetWithExactLiveCategoryContract,
   verifySelectionTargetWithGroundedSearch,
@@ -100,6 +101,207 @@ Deno.test("selection projection separates product class from application context
   ]);
   assertEquals(report.passed_ids, ["indoor", "street"]);
   assertEquals(report.rejected_ids, []);
+});
+
+Deno.test("a replacement with a measured room requires card-level room and area proof", () => {
+  const request =
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
+  const products = [
+    {
+      ...product("home", "Люстра светодиодная MATEO 75W", "Люстры"),
+      short_traits: [
+        "Назначение: Гостиная",
+        "Максимальная площадь освещения: 28 м²",
+      ],
+    },
+    {
+      ...product("office", "Светильник ДПО 48W", "Светильники"),
+      short_traits: [
+        "Назначение: Офис",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+    },
+    {
+      ...product("traffic", "Светофор светодиодный 100W", "Светофоры"),
+      short_traits: ["Площадь освещения: 30 м²"],
+    },
+    {
+      ...product("small", "Светильник для гостиной", "Светильники"),
+      short_traits: ["Максимальная площадь освещения: 12 м²"],
+    },
+    {
+      ...product("unsupported", "Светильник светодиодный", "Светильники"),
+      short_traits: ["Мощность: 48 Вт"],
+    },
+  ];
+  assertEquals(verifyReplacementDestinationFit(request, products), {
+    required: true,
+    place: "гостиной",
+    minimum_area_m2: 25,
+    passed_ids: ["home"],
+    rejected_ids: ["office", "traffic", "small", "unsupported"],
+  });
+});
+
+Deno.test("replacement site proof is grammatical, first-party, and category-neutral", () => {
+  const report = verifyReplacementDestinationFit(
+    "Хочу поменять светильник в зале 30 квадратов",
+    [
+      {
+        ...product("home-in-description", "Новый светильник", "ЖКХ"),
+        description_excerpt:
+          "Подходит для зала. Рекомендуемая площадь освещения: 35 м².",
+      },
+      {
+        ...product("negated", "Новый светильник", "Светильники"),
+        description_excerpt:
+          "Не подходит для зала. Максимальная площадь освещения: 35 м².",
+      },
+      {
+        ...product("unmeasured", "Светильник для зала", "Светильники"),
+        short_traits: ["Мощность: 100 Вт"],
+      },
+      {
+        ...product("normalized-unit", "Новый светильник", "Светильники"),
+        short_traits: [
+          "Назначение: Зал",
+          "Максимальная площадь освещения (м²): 35",
+        ],
+      },
+    ],
+  );
+  assertEquals(report.passed_ids, ["home-in-description", "normalized-unit"]);
+  assertEquals(report.rejected_ids, ["negated", "unmeasured"]);
+});
+
+Deno.test("negative suitability cannot prove a replacement destination", () => {
+  const request = "Хочу заменить люстру в гостиной 25 м²";
+  const negativeClaims = [
+    "Назначение: Не для гостиной",
+    "Назначение: Не в гостиной",
+    "Назначение: Не рекомендуется для гостиной",
+    "Назначение: Не подходит для гостиной",
+    "Назначение: Не предназначен для гостиной",
+    "Назначение: Исключая гостиную",
+    "Назначение: Кроме гостиной",
+    "Назначение: За исключением гостиной",
+    "Назначение: Для гостиной не подходит",
+  ];
+  const traitProducts = negativeClaims.map((claim, index) => ({
+    ...product(`negative-trait-${index}`, "Светильник", "Светильники"),
+    short_traits: [claim, "Максимальная площадь освещения: 30 м²"],
+  }));
+  const descriptionProducts = [
+    "Не для гостиной.",
+    "Не рекомендуется для гостиной.",
+    "Не подходит для гостиной.",
+    "Исключая гостиную.",
+    "Подходит для гостиной не рекомендуется.",
+  ].map((claim, index) => ({
+    ...product(`negative-description-${index}`, "Светильник", "Светильники"),
+    description_excerpt: `${claim} Площадь освещения: 30 м².`,
+  }));
+  const products = [
+    ...traitProducts,
+    ...descriptionProducts,
+    {
+      ...product(
+        "excluded-despite-title",
+        "Светильник для гостиной",
+        "Светильники",
+      ),
+      short_traits: [
+        "Назначение: Исключая гостиную",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+    },
+    {
+      ...product("excluded-despite-trait", "Светильник", "Светильники"),
+      short_traits: [
+        "Назначение: Гостиная",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+      description_excerpt: "Кроме гостиной.",
+    },
+  ];
+  const report = verifyReplacementDestinationFit(request, products);
+  assertEquals(report.passed_ids, []);
+  assertEquals(report.rejected_ids, products.map((item) => item.id));
+});
+
+Deno.test("positive room proof survives a separate exclusion for another room", () => {
+  const request = "Хочу заменить люстру в гостиной 25 м²";
+  const products = [
+    {
+      ...product("separate-trait", "Светильник", "Светильники"),
+      short_traits: [
+        "Назначение: Для гостиной; не для офиса",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+    },
+    {
+      ...product("separate-description", "Светильник", "Светильники"),
+      description_excerpt:
+        "Подходит для гостиной. Не рекомендуется для офиса. Площадь освещения: 30 м².",
+    },
+    {
+      ...product("contradictory", "Светильник для гостиной", "Светильники"),
+      short_traits: ["Максимальная площадь освещения: 30 м²"],
+      description_excerpt: "Не рекомендуется для гостиной.",
+    },
+    {
+      ...product("other-room-only", "Светильник", "Светильники"),
+      short_traits: [
+        "Назначение: Для офиса, но не для гостиной",
+        "Максимальная площадь освещения: 30 м²",
+      ],
+    },
+  ];
+  const report = verifyReplacementDestinationFit(request, products);
+  assertEquals(report.passed_ids, ["separate-trait", "separate-description"]);
+  assertEquals(report.rejected_ids, ["contradictory", "other-room-only"]);
+});
+
+Deno.test("home hall shares living-room proof but an unspecified hall does not", () => {
+  const products = [{
+    ...product("living-room", "Люстра светодиодная MATEO", "Люстры"),
+    short_traits: [
+      "Назначение: Гостиная",
+      "Максимальная площадь освещения: 35 м²",
+    ],
+  }];
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу поменять дома люстру в зале 30 квадратов. Что предложишь?",
+      products,
+    ).passed_ids,
+    ["living-room"],
+  );
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу поменять люстру в зале 30 квадратов. Что предложишь?",
+      products,
+    ).passed_ids,
+    [],
+  );
+});
+
+Deno.test("unmeasured replacement and ordinary selection keep their existing routes", () => {
+  const products = [product("ordinary", "Светильник")];
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Хочу заменить люстру на светильник в гостиной",
+      products,
+    ).required,
+    false,
+  );
+  assertEquals(
+    verifyReplacementDestinationFit(
+      "Нужен светильник для гостиной 25 м²",
+      products,
+    ).passed_ids,
+    ["ordinary"],
+  );
 });
 
 Deno.test("only customer-grounded application context can become a live facet obligation", () => {

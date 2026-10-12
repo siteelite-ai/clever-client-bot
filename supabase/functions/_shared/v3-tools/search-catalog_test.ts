@@ -104,6 +104,42 @@ Deno.test("live facet keys stay in the internal cache without inflating tool res
   assertEquals(cache.get("c16")?.facet_values, { nominal_current: ["16"] });
 });
 
+Deno.test("catalog cache distinguishes absent warehouse rows from explicit zero without changing public stock", async () => {
+  const rows = [
+    { id: "absent" },
+    { id: "empty", warehouses: [] },
+    { id: "zero", warehouses: [{ city: "Алматы", amount: 0 }] },
+    { id: "positive", warehouses: [{ city: "Алматы", amount: 2 }] },
+    { id: "unverified", warehouses: [{ city: "Алматы", amount: "unknown" }] },
+  ].map((row) => ({
+    pagetitle: `Светодиодная люстра ${row.id}`,
+    price: 1000,
+    url: `https://220volt.kz/catalog/test/products/${row.id}/`,
+    ...row,
+  }));
+  const cache: ProductCache = new Map();
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "люстра",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: { results: rows, pagination: { total: rows.length } },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, cache);
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map(({ stock }) => stock), [
+    "in_stock", "in_stock", "in_stock", "low", "in_stock",
+  ]);
+  assertEquals(result.results.every((entry) => !("warehouse_evidence" in entry)), true);
+  assertEquals(rows.map(({ id }) => cache.get(id)?.warehouse_evidence), [
+    "missing", "missing", "explicit_zero", "positive", "unverified",
+  ]);
+});
+
 Deno.test("catalog retries an equivalent compound spelling only after an empty result", async () => {
   const queries: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
@@ -216,6 +252,29 @@ Deno.test("catalog retries a rate-limited single request instead of returning a 
   if (!result.ok) return;
   assertEquals(result.results.map((product) => product.id), ["recovered"]);
   assertEquals(result.warnings, ["rate_limit_retry_recovered"]);
+});
+
+Deno.test("an outer recovery deadline prevents further catalog retries", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "motion",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    signal: controller.signal,
+    fetchImpl: (_input, init) => {
+      calls += 1;
+      assertEquals(init?.signal?.aborted, false);
+      controller.abort();
+      return Promise.resolve(new Response("", { status: 429 }));
+    },
+  }, new Map());
+
+  assertEquals(calls, 1);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "catalog_timeout");
 });
 
 Deno.test("catalog materializes a bounded later-page window when upstream total has no usable first-page cards", async () => {

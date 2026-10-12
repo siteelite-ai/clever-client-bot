@@ -15,6 +15,24 @@ Deno.test("measured single-phase breaker guidance exposes calculation, standard 
   assertMatch(result?.answer ?? "", /кабел/iu);
 });
 
+Deno.test("explicit single-phase installation wording stays on measured safety guidance", () => {
+  for (
+    const message of [
+      "Какой автомат поставить в однофазной квартире при нагрузке 7 кВт?",
+      "Какой автомат лучше ставить в однофазной квартире при нагрузке 7 кВт?",
+      "Какой автомат установить в однофазной квартире при нагрузке 7 кВт?",
+      "Какой автомат выбрать в однофазной квартире при нагрузке 7 кВт?",
+    ]
+  ) {
+    const result = buildMeasuredBreakerGuidance(message);
+    assertEquals(result?.supply, "single_phase", message);
+    assertEquals(result?.conditional_supply, false, message);
+    assertEquals(result?.suggested_rating_a, 32, message);
+    assertMatch(result?.answer ?? "", /7\s*кВт\s*\/\s*230\s*В/iu);
+    assertMatch(result?.answer ?? "", /только после проверки сечения и материала кабеля/iu);
+  }
+});
+
 Deno.test("explicit three-phase measured load uses phase-current formula", () => {
   const result = buildMeasuredBreakerGuidance(
     "Какой автомат нужен для нагрузки 7 кВт при трёхфазном вводе 400 В?",
@@ -28,6 +46,7 @@ Deno.test("explicit three-phase measured load uses phase-current formula", () =>
 
 Deno.test("direct catalogue selection and unrelated measurements stay outside guidance", () => {
   assertEquals(buildMeasuredBreakerGuidance("Подбери автомат для квартиры с нагрузкой 7 кВт"), null);
+  assertEquals(buildMeasuredBreakerGuidance("Подбери, какой автомат поставить в однофазной квартире при нагрузке 7 кВт"), null);
   assertEquals(buildMeasuredBreakerGuidance("Какой кабель нужен для нагрузки 7 кВт?"), null);
   assertEquals(buildMeasuredBreakerGuidance("Какой автомат нужен для квартиры?"), null);
 });

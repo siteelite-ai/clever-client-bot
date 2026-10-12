@@ -1,0 +1,147 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "0e039a2c1dbcdb9e3293941e7a8513d8eb31986e493ef220a78bf43b39093aa0",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T12:43:46.610Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-corn-lamp-jargon": 1
+  },
+  "cases": [
+    {
+      "id": "customer-corn-lamp-jargon",
+      "title": "Жаргон «лампа-кукуруза» остаётся в категории ламп",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-corn-lamp-jargon_base_1791549826615_1",
+          "turns": [
+            {
+              "message": "а у тебя есть лампы кукуруза?",
+              "status": 200,
+              "duration_ms": 15271,
+              "network_attempts": 1,
+              "log_id": "eb689a02-5eff-44d2-803a-73382fcd18e2",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 476,
+                  "stockLine": "Караганда (95 шт), Алматы (2 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *476* ₸\n  Бренд: IEK\n  Наличие: Караганда (95 шт), Алматы (2 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 448,
+                  "stockLine": "Астана (56 шт), Иргели (210 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *448* ₸\n  Бренд: IEK\n  Наличие: Астана (56 шт), Иргели (210 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/",
+                  "price": 560,
+                  "stockLine": "Караганда (58 шт), Иргели (140 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/)**\n  Цена: *560* ₸\n  Бренд: IEK\n  Наличие: Караганда (58 шт), Иргели (140 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/",
+                  "price": 626,
+                  "stockLine": "Иргели (20 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/)**\n  Цена: *626* ₸\n  Бренд: IEK\n  Наличие: Иргели (20 шт)"
+                }
+              ],
+              "text": "Показываю варианты класса «corn», прошедшие проверку соответствия заявленному типу товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 2508
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "jargon_recover_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 17",
+                  "duration_ms": 5352
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 17",
+                  "duration_ms": null
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-09T12:44:01.890Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "eb689a02-5eff-44d2-803a-73382fcd18e2"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

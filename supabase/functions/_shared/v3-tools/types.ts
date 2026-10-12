@@ -33,6 +33,12 @@ export interface ProductRef {
 export interface ProductFull extends ProductRef {
   url: string;
   /**
+   * Internal provenance of the raw catalog warehouse payload. The public
+   * ProductRef keeps its existing availability contract; this distinction
+   * lets strict selection routes tell absent rows from explicit zero stock.
+   */
+  warehouse_evidence?: "missing" | "positive" | "explicit_zero" | "unverified";
+  /**
    * Internal catalog evidence keyed by the same live facet keys returned by
    * category discovery. Stored only in the request cache; omitted from tool
    * results so it does not inflate or instruct the language model.
@@ -67,6 +73,7 @@ export interface ToolError {
     | "incomplete_filter"
     | "no_products"
     | "all_zero_price"
+    | "jargon_unavailable"
     | "knowledge_unavailable"
     | "contacts_unavailable"
     | "internal";

@@ -1,0 +1,208 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:58:15.968Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 2,
+  "requested_repetitions": {
+    "customer-new-heat-shrink-12mm": 1,
+    "customer-new-heat-shrink-10mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-12mm_base_1791554295973_1",
+          "turns": [
+            {
+              "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              "status": 200,
+              "duration_ms": 15487,
+              "network_attempts": 1,
+              "log_id": "8951d597-bc1e-4a61-af12-7952377e3f06",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [
+                {
+                  "title": "Трубка термо NST-14/7-10-21 71 122 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/",
+                  "price": 530,
+                  "stockLine": "Астана (79 уп.), Караганда (32 уп.)",
+                  "cardText": "- **[Трубка термо NST-14/7-10-21 71 122 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/)**\n  Цена: *530* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (79 уп.), Караганда (32 уп.)"
+                },
+                {
+                  "title": "Трубка термо NST-16/8-10-21 71 123 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "price": 606,
+                  "stockLine": "Астана (98 уп.), Караганда (22 уп.), Шымкент (10 уп.)",
+                  "cardText": "- **[Трубка термо NST-16/8-10-21 71 123 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/)**\n  Цена: *606* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (98 уп.), Караганда (22 уп.), Шымкент (10 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 16/8 черная 100м/упак. ИЭК (уп.)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-168-chernaya-100mupak.-iek-%28up.%29/",
+                  "price": 21419,
+                  "stockLine": "Иргели (3 уп.)",
+                  "cardText": "- **[Трубка ТТУ 16/8 черная 100м/упак. ИЭК (уп.)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-168-chernaya-100mupak.-iek-%28up.%29/)**\n  Цена: *21 419* ₸/уп\n  Бренд: IEK\n  Наличие: Иргели (3 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Актобе (290 м), Астана (287 м), Шымкент (114 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (290 м), Астана (287 м), Шымкент (114 м) и ещё 2 городов"
+                }
+              ],
+              "text": "Для кабеля диаметром 12 мм нужна термоусадочная трубка, которая в состоянии до усадки свободно наденется на кабель, а после усадки плотно обожмёт его. Внутренний диаметр трубки до усадки должен быть строго больше 12 мм, чтобы обеспечить свободную установку. Внутренний диаметр после усадки должен быть строго меньше 12 мм для плотной фиксации. В схеме представлены значения: до усадки — 12 мм не подходит (равенство не обеспечивает свободного надевания); диапазон проводов 12.8–24 мм указывает на трубку, которая после усадки охватывает провода от 12,8 мм, что больше требуемого диаметра 12 мм. Подходит диапазон 6.8–12 мм: трубка после усадки охватывает провода до 12 мм включительно, а до усадки её диаметр больше верхней границы диапазона. Обязательные параметры: «Диапазон диаметров проводов: 12.8-24».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-413aea13",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 1426
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 364",
+                  "duration_ms": 2245
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "forbidden assistant text: 24 мм"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1791554311462_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "status": 200,
+              "duration_ms": 13897,
+              "network_attempts": 1,
+              "log_id": "4e1abd3d-013b-48ec-8520-83b07daf0ee7",
+              "diagnostic_error": "upstream_quota_exceeded",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nОнлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 1142
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "selection contract misses required groups: [\"op\":\"min\"] [\"op\":\"max\"] [\"value\":10] [\"exclusive\":true]",
+                "diagnostic error: upstream_quota_exceeded"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T13:58:45.359Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 2,
+    "recorded_cases": 2,
+    "planned_runs": 2,
+    "recorded_runs": 2,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "8951d597-bc1e-4a61-af12-7952377e3f06",
+    "4e1abd3d-013b-48ec-8520-83b07daf0ee7"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

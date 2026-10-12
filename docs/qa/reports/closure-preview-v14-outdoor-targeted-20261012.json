@@ -1,0 +1,372 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T07:15:38.278Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-outdoor-floodlight-warehouse-priority": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-outdoor-floodlight-warehouse-priority",
+      "title": "Уличный прожектор для двора сначала уточняет параметры подбора",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-outdoor-floodlight-warehouse-priority_base_1791789338282_1",
+          "turns": [
+            {
+              "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 3068,
+              "network_attempts": 1,
+              "log_id": "c095572a-2639-4f98-af0c-09e3aa818d94",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "mounting_height",
+                "options_count": 3,
+                "values": [
+                  "До 4 м",
+                  "4–8 м",
+                  "Выше 8 м"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Площадь около 120 м², высота установки 4 м",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13013,
+              "network_attempts": 1,
+              "log_id": "3ca157ee-9ac4-487f-a20f-6194ec026e6e",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl",
+                  "verified": true,
+                  "sku": "Ем000019929",
+                  "name": "Светодиодный прожектор GLANZEN FAD-0002-20-SL",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Вес, кг.": "0.145",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "103",
+                    "Объем, м3": "0.00038",
+                    "Бренд": "Glanzen",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405401002",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "1600",
+                    "Страна происхождения": "КИТАЙ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "29",
+                    "Высота, мм": "65",
+                    "Гарантийный срок, лет": "1",
+                    "Диапазон рабочих температур": "от -45° до +50°С",
+                    "Мощность, вт": "20",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65"
+                  },
+                  "offerPrice": 1406,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/",
+                  "description_excerpt": "Светодиодный прожектор GLANZEN FAD - это эффективное решение для освещения различных объектов внутри и снаружи помещений. Он оснащен яркими светодиодами, которые обеспечивают высокую яркость света и долговечность. GLANZEN FAD имеет компактный и стильный дизайн, который подходит для любого интерьера и экстерьера. Он легок в установке и имеет угол наклона 120 градусов, что позволяет направлять свет туда, где это необходимо. Прожектор имеет алюминиевый корпус, который обеспечивает прочность и долго"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek",
+                  "verified": true,
+                  "sku": "Ем000017204",
+                  "name": "Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Вес, кг.": "0.2",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "94.5",
+                    "Объем, м3": "0.00026",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405420012",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "1600",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "107.5",
+                    "Высота, мм": "25.5",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "20",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65"
+                  },
+                  "offerPrice": 1872,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek",
+                  "verified": true,
+                  "sku": "Ем000018122",
+                  "name": "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Вес, кг.": "0.24",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "106",
+                    "Объем, м3": "0.00035",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405490019",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "127",
+                    "Высота, мм": "26",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "30",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65"
+                  },
+                  "offerPrice": 2390,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl",
+                  "verified": true,
+                  "sku": "Ем000018686",
+                  "name": "Светодиодный прожектор GLANZEN FAD-0003-30-SL",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Вес, кг.": "0.246",
+                    "Срок службы, часов": "35000",
+                    "Ширина, мм": "140",
+                    "Объем, м3": "0.000597",
+                    "Бренд": "Glanzen",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405401002",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "КИТАЙ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "35",
+                    "Высота, мм": "104",
+                    "Гарантийный срок, лет": "1",
+                    "Диапазон рабочих температур": "от -45° до +50°С",
+                    "Мощность, вт": "30",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65"
+                  },
+                  "offerPrice": 1478,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/",
+                  "description_excerpt": "Светодиодный прожектор GLANZEN FAD - это эффективное решение для освещения различных объектов внутри и снаружи помещений. Он оснащен яркими светодиодами, которые обеспечивают высокую яркость света и долговечность. GLANZEN FAD имеет компактный и стильный дизайн, который подходит для любого интерьера и экстерьера. Он легок в установке и имеет угол наклона 120 градусов, что позволяет направлять свет туда, где это необходимо. Прожектор имеет алюминиевый корпус, который обеспечивает прочность и долго"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek",
+                  "verified": true,
+                  "sku": "Ем000017274",
+                  "name": "Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Вес, кг.": "0.24",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "106",
+                    "Объем, м3": "0.00035",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405490019",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "нейтральный",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "4000",
+                    "Длина, мм": "127",
+                    "Высота, мм": "26",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "30",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65"
+                  },
+                  "offerPrice": 2390,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0002-20-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/",
+                  "price": 1406,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0002-20-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/)**\n  Цена: *1 406* ₸\n  Бренд: Glanzen\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 1872,
+                  "stockLine": "Караганда (162 шт), Астана (123 шт), Актобе (50 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *1 872* ₸\n  Бренд: IEK\n  Наличие: Караганда (162 шт), Астана (123 шт), Актобе (50 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 2390,
+                  "stockLine": "Караганда (293 шт), Шымкент (87 шт), Актобе (72 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *2 390* ₸\n  Бренд: IEK\n  Наличие: Караганда (293 шт), Шымкент (87 шт), Актобе (72 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0003-30-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/",
+                  "price": 1478,
+                  "stockLine": "Астана (24 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0003-30-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/)**\n  Цена: *1 478* ₸\n  Бренд: Glanzen\n  Наличие: Астана (24 шт)"
+                },
+                {
+                  "title": "Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/",
+                  "price": 2390,
+                  "stockLine": "Караганда (78 шт), Астана (52 шт), Алматы (45 шт) и ещё 1 городов",
+                  "cardText": "- **[Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/)**\n  Цена: *2 390* ₸\n  Бренд: IEK\n  Наличие: Караганда (78 шт), Астана (52 шт), Алматы (45 шт) и ещё 1 городов"
+                }
+              ],
+              "text": "Для освещения двора частного дома площадью 120 м² рекомендуется обеспечить освещённость 10–20 лк (минимальный комфортный уровень для придомовой территории). Световой поток = 120 м² × 15 лк (средний ориентир) = 1800 лм. При высоте установки 4 м и типичном угле раскрытия прожектора можно использовать один прожектор мощностью 20–30 Вт (световой поток около 2000–3000 лм) либо два прожектора по 10–15 Вт, распределённых по зоне. Обязательные требования: степень защиты не менее IP65 для уличной эксплуатации (защита от пыли и струй воды), напряжение 220 В (стандартная сеть). Световой поток не менее 1800 лм суммарно обеспечит базовую видимость; для более яркого освещения можно выбрать прожектор с потоком 3000–5000 лм. Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки. Обязательные параметры: «Степень защиты: IP65».\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность 1 800 лм. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-383102c5",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1268
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=27; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 653
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T07:15:57.429Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "c095572a-2639-4f98-af0c-09e3aa818d94",
+    "3ca157ee-9ac4-487f-a20f-6194ec026e6e"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 5,
+    "verified": 5,
+    "unverified": 0
+  },
+  "passed": true
+}

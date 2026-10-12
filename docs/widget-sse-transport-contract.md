@@ -9,16 +9,24 @@ selection and replay must never be re-executed merely because delivery failed.
   quick fallback when one hostname is unreachable from the customer's network.
 - Protocol acceptance: 15 seconds per route. SSE comments prove byte-level
   liveness but do not prove that the backend durably claimed the logical turn.
-  A diagnostic carrying the request log id is the durable acceptance signal.
+  This timer begins after HTTP response headers, not at request start. A
+  diagnostic carrying the request log id is the durable acceptance signal.
 - Inactivity: 30 seconds, refreshed by every response byte, including SSE
   comments. The v3 backend sends a heartbeat every 10 seconds, so a healthy
   long-running request is not aborted.
-- Whole turn: 155 seconds shared by initial delivery, route fallback and replay.
-  Routes do not receive independent full-turn budgets.
+- Whole turn: 155 seconds by default for initial delivery, fallback and replay.
+  Only when the proxy times out before acceptance may the direct fallback
+  receive a fresh 155-second budget, capped at 185 seconds from the start of
+  the logical turn (15 seconds proxy connection + 15 seconds proxy acceptance
+  + 155 seconds backend/transport). HTTP failures and direct-first fallback do
+  not extend that deadline. Replay keeps the same logical `messageId`.
 
 The Cloudflare proxy is the primary route because it is intended for networks
 where the Supabase project hostname is unavailable. Direct Supabase is the
-fallback.
+fallback. If the proxy connection times out but the direct route completes a
+turn, that open widget instance prefers direct for three minutes; the proxy
+remains its fallback and automatically becomes primary again after expiry.
+This route preference is not persisted across reloads.
 
 ## Completion and recovery
 
@@ -62,6 +70,10 @@ fallback.
 - idle abort when no response bytes arrive;
 - `[DONE]` on a transport that remains physically open;
 - fast proxy-to-direct failover;
+- slow response headers followed by a full application-acceptance window;
+- a proxy pre-acceptance timeout followed by a long valid direct response;
+- temporary direct-first preference, proxy recovery and same-`messageId`
+  partial replay in direct-first mode;
 - an existing in-progress request accepting the replay connection before its
   potentially long completion wait;
 - one shared deadline when both routes are unavailable;

@@ -1,5 +1,44 @@
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 
+export type BoundedRequestBodyResult =
+  | { ok: true; text: string }
+  | { ok: false; reason: "too_large" | "read_error" };
+
+// Content-Length is only a fast precheck: callers can omit or forge it. Bound
+// the bytes while reading so an oversized body is never buffered in full.
+export async function readRequestTextBounded(
+  request: Request,
+  maxBytes = MAX_REQUEST_BODY_BYTES,
+): Promise<BoundedRequestBodyResult> {
+  if (!request.body) return { ok: true, text: "" };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteCount = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteCount += value.byteLength;
+      if (byteCount > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, reason: "read_error" };
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(byteCount);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, text: new TextDecoder().decode(bytes) };
+}
+
 const MAX_MESSAGE_CHARS = 2_000;
 const MAX_HISTORY_ITEMS = 20;
 const MAX_USER_HISTORY_CHARS = 2_000;

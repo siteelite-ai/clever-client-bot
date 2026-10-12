@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   compactFacetCodeSupportScore,
+  proveCustomerNumericAxisAliasFromProducts,
   resolveAbbreviatedNumericFacetValueEvidence,
   resolveCompactFacetCodeEvidence,
   resolveCompactFacetCodeEvidenceFromProducts,
@@ -497,6 +498,111 @@ Deno.test("numeric axis abbreviations resolve only through one unique live facet
       token: "1P",
       axis: { key: "poles", caption: "Количество полюсов", value: "1" },
     }],
+  );
+});
+
+Deno.test("customer 1-pole wording and live product axes prove a compact 1P alias", () => {
+  const customer =
+    "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика C";
+  const products = [
+    {
+      pagetitle: "Автомат 1Р 16А",
+      short_traits: ["Количество полюсов: 1"],
+    },
+    {
+      pagetitle: "Автомат NXB 1P 16А",
+      facet_values: { poles: ["1"] },
+    },
+    {
+      pagetitle: "Автомат 2P 16А",
+      short_traits: ["Количество полюсов: 2"],
+    },
+  ];
+  const proof = proveCustomerNumericAxisAliasFromProducts(
+    "1P",
+    customer,
+    facets,
+    products,
+  );
+  assertEquals(proof.status, "proven");
+  assertEquals(proof.axis, {
+    key: "poles",
+    caption: "Количество полюсов",
+    value: "1",
+  });
+  assertEquals(proof.products.map((product) => product.pagetitle), [
+    "Автомат 1Р 16А",
+    "Автомат NXB 1P 16А",
+  ]);
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1Р",
+      "Найди однополюсный автомат",
+      facets,
+      products,
+    ).status,
+    "proven",
+  );
+});
+
+Deno.test("numeric alias proof fails closed without customer, unique schema or card proof", () => {
+  const card = {
+    pagetitle: "Автомат 1P 16А",
+    short_traits: ["Количество полюсов: 1"],
+  };
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P", "Найди автомат 16 А", facets, [card]
+    ).status,
+    "customer_axis_unresolved",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P", "Найди 3 полюсной автомат", facets, [card]
+    ).status,
+    "customer_axis_unresolved",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P",
+      "Найди 1 полюсной автомат",
+      [
+        ...facets,
+        { key: "positions", caption: "Количество позиций", values: ["1"] },
+      ],
+      [card],
+    ).status,
+    "live_axis_unresolved",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P", "Найди 1 полюсной автомат", facets,
+      [{ pagetitle: "Автомат 1P 16А", short_traits: [] }],
+    ).status,
+    "product_axis_unproven",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P", "Найди 1 полюсной автомат", facets,
+      [{
+        pagetitle: "Автомат 1P 16А",
+        short_traits: ["Количество полюсов: 1", "Количество полюсов: 2"],
+      }],
+    ).status,
+    "product_axis_unproven",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "1P", "Найди 1 полюсной автомат", facets,
+      [{ pagetitle: "Автомат 2P 16А", short_traits: ["Количество полюсов: 1"] }],
+    ).status,
+    "product_axis_unproven",
+  );
+  assertEquals(
+    proveCustomerNumericAxisAliasFromProducts(
+      "полюс", "Найди 1 полюсной автомат", facets, [card]
+    ).status,
+    "not_numeric_axis_alias",
   );
 });
 

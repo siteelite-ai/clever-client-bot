@@ -8,6 +8,7 @@ import {
   extractUnrepresentedPostNominalCatalogQualifier,
   filterProductsByDeclaredAlias,
   retainRequiredCatalogAlias,
+  resolveRenderAliasClaim,
   titleContainsDeclaredAlias,
 } from "./declared-alias-contract.ts";
 
@@ -110,6 +111,17 @@ Deno.test("a grounded lexical spelling remains required through later criteria g
   assertEquals(retainRequiredCatalogAlias(null, "CORN"), "CORN");
   assertEquals(retainRequiredCatalogAlias("кукуруза", "CORN"), "кукуруза");
   assertEquals(retainRequiredCatalogAlias(null, "  "), null);
+});
+
+Deno.test("a failed first render cannot lose or replace the customer-owned alias", () => {
+  const required = retainRequiredCatalogAlias(null, "Кукуруза");
+  assertEquals(
+    resolveRenderAliasClaim(required, "другая метка", null),
+    "Кукуруза",
+  );
+  assertEquals(resolveRenderAliasClaim(null, null, "1P"), "1P");
+  assertEquals(resolveRenderAliasClaim(null, "CORN", null), "CORN");
+  assertEquals(resolveRenderAliasClaim(null, " ", null), null);
 });
 
 Deno.test("an inflected product class is not treated as a separate alias", () => {

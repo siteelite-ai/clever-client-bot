@@ -54,9 +54,9 @@ export function canFinalizeTimedOutAgentStep(input: {
   return input.catalogLookupCompleted || input.productsRendered > 0;
 }
 
-/** A successful discovery still needs one model-owned search plan. This is a
- * required proof-building step, not final rendering, and receives the same
- * bounded long-call profile as derived technical reasoning. */
+/** Discovery, corrective rediscovery, and the forced post-jargon search still
+ * need a model-owned catalog plan. None is final rendering merely because the
+ * preceding tool result made the context large. */
 export function requiresCatalogPlanningBudget(input: {
   intentMode: "select" | "inquire";
   phase: AgentPhase;
@@ -64,9 +64,69 @@ export function requiresCatalogPlanningBudget(input: {
   requiredReasoningPending: boolean;
 }): boolean {
   return input.intentMode === "select" &&
-    input.phase === "search_after_discovery" &&
     !input.catalogLookupCompleted &&
-    !input.requiredReasoningPending;
+    !input.requiredReasoningPending && (
+      input.phase === "search_after_discovery" ||
+      input.phase === "rediscover_after_failed_discovery" ||
+      input.phase === "jargon_after_failed_discovery" ||
+      input.phase === "search_after_jargon"
+    );
+}
+
+export type AgentStepTimeoutPhase =
+  | "intro"
+  | "tool_decision"
+  | "catalog_planning"
+  | "derived_reasoning"
+  | "final_render";
+
+export type AgentStepSoftDeadlineProfile =
+  | "turn"
+  | "catalog_planning"
+  | "derived_reasoning";
+
+/** Decide both the per-call phase and soft-deadline profile from protocol
+ * progress. The 15 KB heuristic can distinguish a heavy render only after a
+ * completed lookup and a phase where a final response is actually relevant. */
+export function agentStepTimeoutDecision(input: {
+  intentMode: "select" | "inquire";
+  phase: AgentPhase;
+  catalogLookupCompleted: boolean;
+  requiredReasoningPending: boolean;
+  stepIndex: number;
+  lastIsToolResult: boolean;
+  contextBytes: number;
+}): {
+  phase: AgentStepTimeoutPhase;
+  softDeadlineProfile: AgentStepSoftDeadlineProfile;
+} {
+  if (input.requiredReasoningPending) {
+    return {
+      phase: "derived_reasoning",
+      softDeadlineProfile: "derived_reasoning",
+    };
+  }
+  if (requiresCatalogPlanningBudget(input)) {
+    return {
+      phase: "catalog_planning",
+      softDeadlineProfile: "catalog_planning",
+    };
+  }
+  if (input.stepIndex === 0) {
+    return { phase: "intro", softDeadlineProfile: "turn" };
+  }
+  if (
+    input.lastIsToolResult &&
+    input.contextBytes > 15_000 &&
+    input.catalogLookupCompleted && (
+      input.phase === "terminal_after_search" ||
+      input.phase === "inquiry_with_results" ||
+      input.phase === "inquiry_explanation_ready"
+    )
+  ) {
+    return { phase: "final_render", softDeadlineProfile: "turn" };
+  }
+  return { phase: "tool_decision", softDeadlineProfile: "turn" };
 }
 
 /**

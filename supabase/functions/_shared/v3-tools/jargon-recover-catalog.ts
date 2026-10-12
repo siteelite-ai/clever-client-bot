@@ -184,6 +184,14 @@ export function classifyGroundedJargonEvidence(
   return partialMatch && unresolvedModifiers.length > 0 ? "axis_split" : "exact";
 }
 
+/** A later verified render resolves a failed helper; an unrendered turn does not. */
+export function shouldReportJargonRecoveryUnavailable(
+  recoveryUnavailable: boolean,
+  productsRendered: number,
+): boolean {
+  return recoveryUnavailable && productsRendered === 0;
+}
+
 function productHaystack(p: ProductRef): string {
   return normalize(`${p.pagetitle} ${p.vendor ?? ""} ${p.short_traits.join(" ")}`);
 }
@@ -303,6 +311,11 @@ export async function executeJargonRecoverCatalog(
       fetchImpl: deps.fetchImpl,
       timeoutMs: deps.timeoutMs,
     });
+  // The helper is optional for a successful literal/title-proven card, but a
+  // failed required model or catalog probe cannot prove that no such card
+  // exists. Keep that distinction until every recovery route is exhausted.
+  let modelAttemptFailed = Boolean(jargon && !jargon.ok);
+  let catalogAttemptFailed = false;
   const candidates = [
     ...(jargon?.ok ? jargon.candidates : []),
     source,
@@ -386,7 +399,10 @@ export async function executeJargonRecoverCatalog(
         max_price: input.max_price,
         per_page: perPage,
       }, deps, cache);
-      if (!result.ok) continue;
+      if (!result.ok) {
+        catalogAttemptFailed = true;
+        continue;
+      }
 
       // A non-empty search response is not lexical proof: catalog search may
       // broaden or tokenize a candidate and return products that contain only
@@ -422,6 +438,8 @@ export async function executeJargonRecoverCatalog(
               )
             )
           );
+        } else {
+          catalogAttemptFailed = true;
         }
       }
       let filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
@@ -450,6 +468,7 @@ export async function executeJargonRecoverCatalog(
             titleSupportsGroundedJargonQuery(product.pagetitle, candidate)
           )
           : [];
+        if (!combined.ok) catalogAttemptFailed = true;
         if (combinedGrounded.length === 0 && liveCategoryNames.size > 0) {
           const unscopedCombined = await executeSearchCatalog({
             mode: "by_query",
@@ -468,6 +487,8 @@ export async function executeJargonRecoverCatalog(
                 )
               )
             );
+          } else {
+            catalogAttemptFailed = true;
           }
         }
         filtered = combinedGrounded.filter((product) => productMatchesModifiers(product, activeModifiers));
@@ -531,6 +552,7 @@ export async function executeJargonRecoverCatalog(
       fetchImpl: deps.fetchImpl,
       timeoutMs: deps.timeoutMs,
     });
+    if (!translated.ok) modelAttemptFailed = true;
     const translatedCandidates = (translated.ok ? translated.candidates : [])
       .map((candidate) => candidate.trim())
       .filter(Boolean)
@@ -561,6 +583,7 @@ export async function executeJargonRecoverCatalog(
         fetchImpl: deps.fetchImpl,
         timeoutMs: deps.timeoutMs,
       });
+      if (!bridgeJargon.ok) modelAttemptFailed = true;
       const bridgeCandidates = [
         ...(bridgeJargon.ok ? bridgeJargon.candidates : []),
         bridgeSource,
@@ -628,6 +651,21 @@ export async function executeJargonRecoverCatalog(
       partial_match: true,
       unmatched_tokens,
       semantic_bridge_matched: false,
+    };
+  }
+
+  if (modelAttemptFailed || catalogAttemptFailed) {
+    return {
+      tool: "jargon_recover_catalog",
+      ok: false,
+      error_code: "jargon_unavailable",
+      // Never relay a provider response or exception: it may contain billing
+      // details or credentials. Logs retain only this safe failure class.
+      message: modelAttemptFailed && catalogAttemptFailed
+        ? "model_and_catalog_recovery_incomplete"
+        : modelAttemptFailed
+        ? "model_recovery_incomplete"
+        : "catalog_recovery_incomplete",
     };
   }
 

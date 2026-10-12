@@ -1,0 +1,180 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T10:29:20.309Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-vvg-exact-cheapest": 1
+  },
+  "cases": [
+    {
+      "id": "customer-vvg-exact-cheapest",
+      "title": "Точная маркировка ВВГ 2×1,5 и минимальная цена",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvg-exact-cheapest_base_1791800960312_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 2*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6045,
+              "network_attempts": 1,
+              "log_id": "be812cbe-785f-4be8-b7a0-694f08500117",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost",
+                  "verified": true,
+                  "sku": "Ем000024789",
+                  "name": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Гарантийный срок, лет": "5",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Срок службы, мес": "360",
+                    "Производитель": "Harmony Cable",
+                    "Температура монтажа": "-15+50 °C",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Единица измерения": "м",
+                    "Количество жил": "2",
+                    "Вес, кг.": "0.112",
+                    "Негорючесть": "Нет",
+                    "Материал проводника": "медь",
+                    "Изоляция": "ПВХ пластикат",
+                    "Объем, м3": "0.000023",
+                    "Бронированный": "Нет",
+                    "Бренд": "ВВГ",
+                    "Оболочка": "ПВХ пластикат",
+                    "Код ТН ВЭД": "8544499509",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.33",
+                    "Страна происхождения": "КАЗАХСТАН"
+                  },
+                  "offerPrice": 309,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "description_excerpt": "Кабель ВВГ - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительных устройствах, а также в обычных жилы"
+                }
+              ],
+              "catalog_minimum_evidence": {
+                "verified": true,
+                "checked_at": "2026-10-12T10:29:31.334Z",
+                "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/",
+                "listed_total": 32,
+                "matching_available": 2,
+                "eligible_products": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5/",
+                    "title": "Кабель ВВГ 2*1,5",
+                    "price": 316,
+                    "unit": "м",
+                    "id": "19812"
+                  }
+                ],
+                "excluded_out_of_stock": 0,
+                "excluded_other_units": 0,
+                "minimum_price": 309,
+                "winners": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  }
+                ]
+              },
+              "products": [
+                {
+                  "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "price": 309,
+                  "stockLine": "Караганда (18556 м), Алматы (246 м), Шымкент (16 м)",
+                  "cardText": "- **[Кабель ВВГ 2*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/)**\n  Цена: *309* ₸/м\n  Наличие: Караганда (18556 м), Алматы (246 м), Шымкент (16 м)"
+                }
+              ],
+              "text": "Ищу в каталоге точную маркировку «кабель ввг 2*1,5» и сортирую точные совпадения от самой низкой цены; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-92d36121",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "2×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 4457
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T10:29:31.512Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "be812cbe-785f-4be8-b7a0-694f08500117"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": true
+}

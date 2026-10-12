@@ -13,6 +13,10 @@ import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import { extractCustomerOwnedDiscoveryTarget } from "./category-reasoning-guard.ts";
 
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
+const DISCOVERY_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_COMPLETE_TAXONOMY_PAGES = 64;
+const REQUESTED_TAXONOMY_PAGE_SIZE = 200;
+const REQUESTED_TAXONOMY_DEPTH = 10;
 const MODEL = "google/gemini-2.5-flash";
 
 interface CategoryNode {
@@ -46,6 +50,20 @@ export interface DiscoverCategoryInput {
 
 export interface DiscoverCategoryDeps extends CatalogClientDeps {
   openrouterApiKey?: string | null;
+  /** Price superlatives must not use the ordinary one-hour taxonomy cache. */
+  forceFreshTaxonomy?: boolean;
+  /** Complete-price proof accepts an exact taxonomy title, never a guessed scope. */
+  requireExactPagetitle?: boolean;
+}
+
+interface CategoryPage {
+  results: unknown[];
+  pagination?: {
+    page?: unknown;
+    per_page?: unknown;
+    pages?: unknown;
+    total?: unknown;
+  };
 }
 
 interface CategoryCandidate {
@@ -695,12 +713,24 @@ function collectCategories(
 async function fetchCategories(
   deps: DiscoverCategoryDeps,
 ): Promise<CategoriesCache> {
-  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) {
+  if (
+    !deps.forceFreshTaxonomy && categoriesCache &&
+    Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS
+  ) {
     return categoriesCache;
   }
 
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const first = await fetchCategoriesPage(fetchImpl, deps, 1);
+  // /categories can have several pages. Bound the whole taxonomy load, not
+  // each page independently, so a slow paginated response cannot outlive the
+  // chat turn by multiplying the per-request timeout.
+  const deadline = Date.now() +
+    (deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS);
+  const first = await fetchCategoriesPage(fetchImpl, deps, 1, deadline);
+  const complete = deps.forceFreshTaxonomy === true;
+  const expectedPagination = complete
+    ? requireCompleteTaxonomyPage(first, 1)
+    : null;
   const acc = {
     flat: [] as CategoryCandidate[],
     byId: new Map<number, CategoryNode>(),
@@ -708,10 +738,23 @@ async function fetchCategories(
   };
   collectCategories(first.results, null, acc);
 
-  const pages = Math.max(1, Number(first.pagination?.pages) || 1);
+  const pages = expectedPagination?.pages ??
+    Math.max(1, Number(first.pagination?.pages) || 1);
   for (let page = 2; page <= pages; page++) {
-    const next = await fetchCategoriesPage(fetchImpl, deps, page);
+    const next = await fetchCategoriesPage(fetchImpl, deps, page, deadline);
+    if (expectedPagination) {
+      requireCompleteTaxonomyPage(next, page, expectedPagination);
+    }
     collectCategories(next.results, null, acc);
+  }
+  if (complete) {
+    if (
+      acc.byId.size !== acc.flat.length ||
+      new Set(acc.flat.map((node) => normalize(node.pagetitle))).size !==
+        acc.flat.length
+    ) {
+      throw new Error("category taxonomy has duplicate or invalid identities");
+    }
   }
 
   const flatDeduped = Array.from(
@@ -731,6 +774,93 @@ async function fetchCategories(
     ts: Date.now(),
   };
   return categoriesCache;
+}
+
+function requireCompleteTaxonomyPage(
+  page: CategoryPage,
+  requestedPage: number,
+  baseline?: { pages: number; perPage: number; total: number },
+): { pages: number; perPage: number; total: number } {
+  const pagination = page.pagination;
+  const current = pagination?.page;
+  const perPage = pagination?.per_page;
+  const pages = pagination?.pages;
+  const total = pagination?.total;
+  if (
+    !Number.isSafeInteger(current) || current !== requestedPage ||
+    !Number.isSafeInteger(perPage) || !(Number(perPage) > 0) ||
+    Number(perPage) > REQUESTED_TAXONOMY_PAGE_SIZE ||
+    !Number.isSafeInteger(pages) || !(Number(pages) > 0) ||
+    Number(pages) > MAX_COMPLETE_TAXONOMY_PAGES ||
+    !Number.isSafeInteger(total) || !(Number(total) >= 0) ||
+    Number(pages) !== Math.max(1, Math.ceil(Number(total) / Number(perPage))) ||
+    (baseline &&
+      (pages !== baseline.pages || perPage !== baseline.perPage ||
+        total !== baseline.total))
+  ) {
+    throw new Error("category taxonomy pagination is missing or changed");
+  }
+  const expectedLength = Math.min(
+    Number(perPage),
+    Math.max(0, Number(total) - (requestedPage - 1) * Number(perPage)),
+  );
+  if (page.results.length !== expectedLength) {
+    throw new Error("category taxonomy page is incomplete");
+  }
+  const validateNodes = (nodes: unknown[], depth: number): void => {
+    for (const raw of nodes) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error("category taxonomy node is invalid");
+      }
+      const node = raw as { id?: unknown; pagetitle?: unknown; children?: unknown };
+      if (
+        !Number.isSafeInteger(node.id) || !(Number(node.id) > 0) ||
+        typeof node.pagetitle !== "string" || !node.pagetitle.trim() ||
+        !Array.isArray(node.children) || depth >= REQUESTED_TAXONOMY_DEPTH
+      ) {
+        throw new Error("category taxonomy node is incomplete");
+      }
+      validateNodes(node.children, depth + 1);
+    }
+  };
+  validateNodes(page.results, 0);
+  return {
+    pages: Number(pages),
+    perPage: Number(perPage),
+    total: Number(total),
+  };
+}
+
+/** Keep both HTTP headers and body decoding inside the same abortable deadline. */
+async function withDiscoveryTimeout<T>(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  decode: (response: Response) => Promise<T>,
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    throw new DOMException("discover_category_timeout", "AbortError");
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new DOMException("discover_category_timeout", "AbortError");
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    // Native fetch and Response.json obey signal. The race is also necessary
+    // for injected transports or a body reader that ignores abort entirely.
+    return await Promise.race([
+      fetchImpl(url, { ...init, signal: controller.signal }).then(decode),
+      timedOut,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -794,31 +924,42 @@ async function fetchCategoriesPage(
   fetchImpl: typeof fetch,
   deps: DiscoverCategoryDeps,
   page: number,
-): Promise<{ results: unknown[]; pagination?: { pages?: number } }> {
+  deadline: number,
+): Promise<CategoryPage> {
   const params = new URLSearchParams({
     parent: "0",
-    depth: "10",
-    per_page: "200",
+    depth: String(REQUESTED_TAXONOMY_DEPTH),
+    per_page: String(REQUESTED_TAXONOMY_PAGE_SIZE),
     page: String(page),
   });
-  const res = await fetchImpl(`${deps.baseUrl}/categories?${params}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${deps.apiToken}`,
-      "Content-Type": "application/json",
+  return await withDiscoveryTimeout(
+    fetchImpl,
+    `${deps.baseUrl}/categories?${params}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${deps.apiToken}`,
+        "Content-Type": "application/json",
+      },
     },
-  });
-  if (!res.ok) throw new Error(`categories ${res.status}`);
-  const raw = await res.json() as {
-    data?: { results?: unknown[]; pagination?: { pages?: number } };
-    results?: unknown[];
-    pagination?: { pages?: number };
-  };
-  const data = raw.data ?? raw;
-  return {
-    results: Array.isArray(data.results) ? data.results : [],
-    pagination: data.pagination,
-  };
+    deadline - Date.now(),
+    async (res) => {
+      if (!res.ok) throw new Error(`categories ${res.status}`);
+      const raw = await res.json() as {
+        data?: CategoryPage;
+        results?: unknown[];
+        pagination?: CategoryPage["pagination"];
+      };
+      const data = raw.data ?? raw;
+      if (deps.forceFreshTaxonomy && !Array.isArray(data.results)) {
+        throw new Error("category taxonomy response has no results array");
+      }
+      return {
+        results: Array.isArray(data.results) ? data.results : [],
+        pagination: data.pagination,
+      };
+    },
+  );
 }
 
 /** Токены строки для overlap-сравнения (lowercase, ё→е, без пунктуации, длиннее 1 символа). */
@@ -881,6 +1022,9 @@ async function resolvePagetitle(
       candidates: [exact.pagetitle],
       cache,
     };
+  }
+  if (deps.requireExactPagetitle) {
+    return { unresolved: true, diagnostics: { head_candidates: [] } };
   }
   const completeQueryText = [input.semantic_query ?? "", input.noun].join(" ");
   const queryText = extractCustomerOwnedDiscoveryTarget(completeQueryText) ??
@@ -993,7 +1137,8 @@ async function resolvePagetitle(
   const query = [input.semantic_query?.trim(), noun].filter(Boolean).join(
     "\nNOUN: ",
   );
-  const res = await (deps.fetchImpl ?? fetch)(
+  const json = await withDiscoveryTimeout(
+    deps.fetchImpl ?? fetch,
     "https://openrouter.ai/api/v1/chat/completions",
     {
       method: "POST",
@@ -1021,11 +1166,18 @@ async function resolvePagetitle(
         ],
       }),
     },
+    deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS,
+    async (res) => {
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
+        return null;
+      }
+      return await res.json() as {
+        choices?: Array<{ message?: { content?: string | null } }>;
+      };
+    },
   );
-  if (!res.ok) return { unresolved: true, diagnostics };
-  const json = await res.json() as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-  };
+  if (!json) return { unresolved: true, diagnostics };
   const candidates = parseResolverCandidates(
     json.choices?.[0]?.message?.content ?? "",
     new Set(flat.map((c) => c.pagetitle)),
@@ -1074,104 +1226,111 @@ async function fetchFacetsForPagetitle(
   }
 > {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const timeoutMs = deps.timeoutMs ?? 10000;
+  const timeoutMs = deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS;
 
   const params = new URLSearchParams();
   params.append("pagetitle", pagetitle);
 
   const url = `${deps.baseUrl}/categories/options?${params}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetchImpl(url, {
+  const fetched = await withDiscoveryTimeout(
+    fetchImpl,
+    url,
+    {
       method: "GET",
       headers: {
         Authorization: `Bearer ${deps.apiToken}`,
         "Content-Type": "application/json",
       },
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return {
-        ok: false,
-        status: res.status,
-        message: text.slice(0, 200) || String(res.status),
-      };
-    }
-
-    const json = await res.json() as {
-      data?: {
-        data?: unknown;
-        category?: { id?: number; pagetitle?: string; total_products?: number };
-        options?: Array<{
-          key?: string;
-          caption_ru?: string;
-          type?: string;
-          unit?: string | null;
-          min?: number | null;
-          max?: number | null;
-          values?: Array<{ value_ru?: string; products_count?: number }>;
-        }>;
-      };
-    };
-    const envelope =
-      json?.data && "data" in json.data && !("options" in json.data)
-        ? json.data.data as typeof json.data
-        : json.data;
-    const cat = envelope?.category ?? {};
-    const rawOptions = Array.isArray(envelope?.options) ? envelope.options : [];
-
-    const facets: Facet[] = [];
-    for (const o of rawOptions) {
-      const key = cleanText(o?.key);
-      const caption = cleanText(o?.caption_ru);
-      if (!key || !caption) continue;
-      if (isAdministrativeCatalogField({ key, caption })) continue;
-      const values: FacetValue[] = [];
-      if (Array.isArray(o.values)) {
-        for (const v of o.values) {
-          const vv = cleanText(v?.value_ru);
-          if (!vv) continue;
-          values.push({
-            value: vv,
-            products_count: typeof v.products_count === "number"
-              ? v.products_count
-              : undefined,
-          });
-        }
+    },
+    timeoutMs,
+    async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false as const,
+          status: res.status,
+          message: text.slice(0, 200) || String(res.status),
+        };
       }
-      facets.push({
-        key,
-        caption,
-        type: o.type ?? "string",
-        unit: o.unit ?? null,
-        min: o.min ?? null,
-        max: o.max ?? null,
-        values,
-      });
-    }
-
-    return {
-      ok: true,
-      data: {
-        ok: true,
-        category: {
-          id: typeof cat.id === "number" ? cat.id : null,
-          pagetitle: cleanText(cat.pagetitle) || pagetitle,
-          total_products: typeof cat.total_products === "number"
-            ? cat.total_products
-            : 0,
+      return {
+        ok: true as const,
+        json: await res.json() as {
+          data?: {
+            data?: unknown;
+            category?: {
+              id?: number;
+              pagetitle?: string;
+              total_products?: number;
+            };
+            options?: Array<{
+              key?: string;
+              caption_ru?: string;
+              type?: string;
+              unit?: string | null;
+              min?: number | null;
+              max?: number | null;
+              values?: Array<{ value_ru?: string; products_count?: number }>;
+            }>;
+          };
         },
-        facets,
-        leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
-      },
-    };
-  } finally {
-    clearTimeout(timer);
+      };
+    },
+  );
+  if (!fetched.ok) return fetched;
+
+  const json = fetched.json;
+  const envelope =
+    json?.data && "data" in json.data && !("options" in json.data)
+      ? json.data.data as typeof json.data
+      : json.data;
+  const cat = envelope?.category ?? {};
+  const rawOptions = Array.isArray(envelope?.options) ? envelope.options : [];
+
+  const facets: Facet[] = [];
+  for (const o of rawOptions) {
+    const key = cleanText(o?.key);
+    const caption = cleanText(o?.caption_ru);
+    if (!key || !caption) continue;
+    if (isAdministrativeCatalogField({ key, caption })) continue;
+    const values: FacetValue[] = [];
+    if (Array.isArray(o.values)) {
+      for (const v of o.values) {
+        const vv = cleanText(v?.value_ru);
+        if (!vv) continue;
+        values.push({
+          value: vv,
+          products_count: typeof v.products_count === "number"
+            ? v.products_count
+            : undefined,
+        });
+      }
+    }
+    facets.push({
+      key,
+      caption,
+      type: o.type ?? "string",
+      unit: o.unit ?? null,
+      min: o.min ?? null,
+      max: o.max ?? null,
+      values,
+    });
   }
+
+  return {
+    ok: true,
+    data: {
+      ok: true,
+      category: {
+        id: typeof cat.id === "number" ? cat.id : null,
+        pagetitle: cleanText(cat.pagetitle) || pagetitle,
+        total_products: typeof cat.total_products === "number"
+          ? cat.total_products
+          : 0,
+      },
+      facets,
+      leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
+    },
+  };
 }
 
 /**
@@ -1228,6 +1387,14 @@ export async function executeDiscoverCategory(
         error_code: "category_not_found",
         message: `no category for "${noun}"`,
         resolution_diagnostics: resolved.diagnostics,
+      };
+    }
+    if (deps.requireExactPagetitle && resolved.resolutionMethod !== "exact") {
+      return {
+        tool: "discover_category",
+        ok: false,
+        error_code: "category_not_found",
+        message: `no exact category for "${noun}"`,
       };
     }
 

@@ -5,16 +5,17 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  agentStepTimeoutDecision,
   boundedAgentStepTimeout,
   buildInquiryKnowledgeSynthesisMessages,
   canFinalizeTimedOutAgentStep,
   compactCatalogResultForLlm,
   deterministicInitialDiscoveryToolCall,
-  isServerCompiledInitialDiscoveryCall,
   establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isGroundedToolCallAllowed,
+  isServerCompiledInitialDiscoveryCall,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   requiresCatalogPlanningBudget,
@@ -107,6 +108,175 @@ Deno.test("agent deadline: selection search planning is a required bounded step"
       catalogLookupCompleted: false,
       requiredReasoningPending: false,
     }),
+  );
+  for (
+    const phase of [
+      "rediscover_after_failed_discovery",
+      "jargon_after_failed_discovery",
+      "search_after_jargon",
+    ] as const
+  ) {
+    assert(requiresCatalogPlanningBudget({
+      intentMode: "select",
+      phase,
+      catalogLookupCompleted: false,
+      requiredReasoningPending: false,
+    }));
+  }
+});
+
+Deno.test("agent deadline: discovery at 6.5 s keeps the 18 s planning budget", () => {
+  const successPhase = nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: true,
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(successPhase, "search_after_discovery");
+  const retryPhase = nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "category_not_found",
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(retryPhase, "rediscover_after_failed_discovery");
+  for (const phase of [successPhase, retryPhase]) {
+    const decision = agentStepTimeoutDecision({
+      intentMode: "select",
+      phase,
+      catalogLookupCompleted: false,
+      requiredReasoningPending: false,
+      stepIndex: 1,
+      lastIsToolResult: true,
+      contextBytes: 15_001,
+    });
+    assertEquals(decision, {
+      phase: "catalog_planning",
+      softDeadlineProfile: "catalog_planning",
+    });
+  }
+  assertEquals(boundedAgentStepTimeout(15_000, 6_500, 18_000, 2_500), 11_500);
+  assertEquals(boundedAgentStepTimeout(11_000, 6_500, 13_000, 2_500), 6_500);
+});
+
+Deno.test("agent deadline: corrective discovery and forced catalog search remain planning", () => {
+  const base = {
+    intentMode: "select" as const,
+    catalogLookupCompleted: false,
+    requiredReasoningPending: false,
+    stepIndex: 2,
+    lastIsToolResult: true,
+    contextBytes: 30_000,
+  };
+  for (
+    const phase of [
+      "search_after_discovery",
+      "rediscover_after_failed_discovery",
+      "jargon_after_failed_discovery",
+      "search_after_jargon",
+    ] as const
+  ) {
+    assertEquals(agentStepTimeoutDecision({ ...base, phase }), {
+      phase: "catalog_planning",
+      softDeadlineProfile: "catalog_planning",
+    });
+  }
+  assertEquals(agentStepTimeoutDecision({ ...base, phase: "open" }), {
+    phase: "tool_decision",
+    softDeadlineProfile: "turn",
+  });
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "terminal_after_search",
+    }),
+    {
+      phase: "tool_decision",
+      softDeadlineProfile: "turn",
+    },
+  );
+});
+
+Deno.test("agent deadline: final render requires completed lookup and a post-search phase", () => {
+  const base = {
+    intentMode: "select" as const,
+    catalogLookupCompleted: true,
+    requiredReasoningPending: false,
+    stepIndex: 2,
+    lastIsToolResult: true,
+    contextBytes: 15_001,
+  };
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "terminal_after_search",
+    }),
+    { phase: "final_render", softDeadlineProfile: "turn" },
+  );
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      intentMode: "inquire",
+      phase: "inquiry_with_results",
+    }),
+    { phase: "final_render", softDeadlineProfile: "turn" },
+  );
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      intentMode: "inquire",
+      phase: "inquiry_explanation_ready",
+    }),
+    { phase: "final_render", softDeadlineProfile: "turn" },
+  );
+  for (const phase of ["open", "search_after_discovery"] as const) {
+    assertEquals(
+      agentStepTimeoutDecision({ ...base, phase }).phase,
+      "tool_decision",
+    );
+  }
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "terminal_after_search",
+      contextBytes: 15_000,
+    }).phase,
+    "tool_decision",
+  );
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "terminal_after_search",
+      lastIsToolResult: false,
+    }).phase,
+    "tool_decision",
+  );
+});
+
+Deno.test("agent deadline: derived reasoning outranks heavy final and planning states", () => {
+  const base = {
+    intentMode: "select" as const,
+    requiredReasoningPending: true,
+    stepIndex: 2,
+    lastIsToolResult: true,
+    contextBytes: 30_000,
+  };
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "search_after_discovery",
+      catalogLookupCompleted: false,
+    }),
+    { phase: "derived_reasoning", softDeadlineProfile: "derived_reasoning" },
+  );
+  assertEquals(
+    agentStepTimeoutDecision({
+      ...base,
+      phase: "terminal_after_search",
+      catalogLookupCompleted: true,
+    }),
+    { phase: "derived_reasoning", softDeadlineProfile: "derived_reasoning" },
   );
 });
 

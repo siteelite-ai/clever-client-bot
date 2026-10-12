@@ -11,12 +11,14 @@ import {
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
+  productContainsExactModelCode,
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
+  resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
   shouldApplyReplacementExclusionGuard,
 } from "./replacement-preflight.ts";
@@ -523,6 +525,119 @@ Deno.test("source model exclusion is structural", () => {
       "DN027B",
     ]),
     false,
+  );
+});
+
+Deno.test("exact-item model code excludes sibling package and revision suffixes", () => {
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5 (блистер)" },
+    "NBT-CR2025-BP5",
+  ), true);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT CR2025 BP5, блистер" },
+    "NBT-CR2025-BP5",
+  ), true);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5-10 (иная комплектация)" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP50" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка NBT-CR2025-BP5+10" },
+    "NBT-CR2025-BP5",
+  ), false);
+  assertEquals(productContainsExactModelCode(
+    { pagetitle: "Батарейка Panasonic CR2025, аналог NBT-CR2025-BP5" },
+    "NBT-CR2025-BP5",
+  ), false);
+  // Analogue family exclusion intentionally remains broader than exact-item lookup.
+  assertEquals(productContainsSourceModel(
+    { pagetitle: "Батарейка NBT-CR2025-BP5-10" },
+    ["NBT-CR2025-BP5"],
+  ), true);
+});
+
+Deno.test("replacement source identity does not consume later technical title codes", () => {
+  const request =
+    "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500";
+  assertEquals(
+    resolveReplacementSourceModelCodes(request, anchor),
+    ["DN027B"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes(request, {
+      ...anchor,
+      short_traits: ["Модель: DN027B", "Серия: LED6/NW"],
+    }),
+    ["DN027B"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes(request),
+    ["DN027B"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes("Нужен аналог LED6/NW", anchor),
+    [],
+  );
+  assertEquals(
+    productContainsSourceModel(
+      { pagetitle: "Светильник BN068C LED6/NW 7W 220-240V D90" },
+      resolveReplacementSourceModelCodes(request, anchor),
+    ),
+    false,
+  );
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Светильник BN068C LED6/NW 7W 220-240V D90",
+      ["D90", "7W", "220-240V"],
+    ),
+    true,
+  );
+});
+
+Deno.test("live model and technical traits separate source identity across code shapes", () => {
+  const lamp = {
+    pagetitle: "Лампа GX53 NLL-GX53-13-230 13W",
+    short_traits: [
+      "Тип цоколя: GX53",
+      "Модель: NLL-GX53-13-230",
+      "Мощность: 13W",
+    ],
+  };
+  assertEquals(
+    resolveReplacementSourceModelCodes(
+      "Найди аналог лампы GX53 NLL-GX53-13-230 13W",
+      lamp,
+    ),
+    ["NLL-GX53-13-230"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes("Найди аналог лампы GX53", lamp),
+    [],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes(
+      "Модель АБ 47-29 16 А 4,5 кА — предложи замену",
+      { pagetitle: "Автомат АБ 47-29 1P 16A 4,5кА" },
+    ),
+    ["АБ47-29"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes(
+      "Покажи аналог батарейки NBT-CR2025-BP5",
+      { pagetitle: "Батарейка NBT-CR2025-BP5" },
+    ),
+    ["NBT-CR2025-BP5"],
+  );
+  assertEquals(
+    resolveReplacementSourceModelCodes(
+      "Подбери аналог Schneider Acti9 C16",
+      { pagetitle: "Выключатель Schneider Acti9 C16" },
+    ),
+    ["Acti9"],
   );
 });
 

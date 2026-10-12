@@ -25,6 +25,7 @@ export interface CompoundFacetValueEvidence {
 }
 
 export interface CompactCodeProductEvidence {
+  pagetitle?: string;
   short_traits?: string[];
   facet_values?: Record<string, string[]>;
 }
@@ -678,6 +679,72 @@ function productSupportsAxis(
   return productAxisEvidenceValues(product, axis).some((actualRaw) =>
     facetValuesEquivalent(axis.value, actualRaw)
   );
+}
+
+export interface CustomerNumericAxisAliasProof<T> {
+  status:
+    | "proven"
+    | "not_numeric_axis_alias"
+    | "live_axis_unresolved"
+    | "customer_axis_unresolved"
+    | "product_axis_unproven";
+  axis: CompoundFacetValueEvidence["axis"] | null;
+  products: T[];
+}
+
+/**
+ * A model's compact label such as `1P` is not a product-title obligation when
+ * the customer independently requested `1 полюсной` and both expressions
+ * resolve to the same unique live facet/value. Still require that exact value
+ * on each candidate's own live traits or keyed facet values. A title-shaped
+ * code alone, an ambiguous schema, or conflicting card values never proves
+ * the alias. This discharges only the alias representation; callers must keep
+ * their category, remaining criteria, price and stock gates unchanged.
+ */
+export function proveCustomerNumericAxisAliasFromProducts<
+  T extends CompactCodeProductEvidence,
+>(
+  alias: string,
+  customerMessage: string,
+  facets: CompactCodeFacet[],
+  products: T[],
+): CustomerNumericAxisAliasProof<T> {
+  const token = String(alias ?? "").trim();
+  const empty = (status: CustomerNumericAxisAliasProof<T>["status"],
+    axis: CompoundFacetValueEvidence["axis"] | null = null,
+  ): CustomerNumericAxisAliasProof<T> => ({ status, axis, products: [] });
+  if (!/^\d+(?:[.,]\d+)?[\p{L}]$/u.test(token)) {
+    return empty("not_numeric_axis_alias");
+  }
+  const canonicalToken = normalizeCompactCode(token);
+  const resolved = resolveAbbreviatedNumericFacetValueEvidence(token, facets)
+    .filter((candidate) =>
+      normalizeCompactCode(candidate.token) === canonicalToken
+    );
+  if (resolved.length !== 1) return empty("live_axis_unresolved");
+  const axis = resolved[0].axis;
+  const customerEvidence = [
+    ...resolveLabeledFacetValueEvidence(customerMessage, facets),
+    ...resolveCompoundFacetValueEvidence(customerMessage, facets),
+    ...resolveAbbreviatedNumericFacetValueEvidence(customerMessage, facets),
+  ];
+  if (!customerEvidence.some((candidate) =>
+    candidate.axis.key === axis.key &&
+    facetValuesEquivalent(axis.value, candidate.axis.value)
+  )) return empty("customer_axis_unresolved", axis);
+  const suffix = canonicalToken.match(/[a-z]$/u)?.[0] ?? "";
+  const proven = (Array.isArray(products) ? products : []).filter((product) => {
+    const values = productAxisEvidenceValues(product, axis);
+    const titleAxisTokens = String(product.pagetitle ?? "").match(
+      /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?[\p{L}](?![\p{L}\p{N}])/gu,
+    )?.map(normalizeCompactCode).filter((value) => value.endsWith(suffix)) ?? [];
+    return values.length > 0 && values.every((value) =>
+      facetValuesEquivalent(axis.value, value)
+    ) && titleAxisTokens.every((value) => value === canonicalToken);
+  });
+  return proven.length > 0
+    ? { status: "proven", axis, products: proven }
+    : empty("product_axis_unproven", axis);
 }
 
 /**

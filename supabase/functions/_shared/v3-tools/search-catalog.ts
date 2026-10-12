@@ -106,6 +106,8 @@ export interface CatalogClientDeps {
   apiToken: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Optional turn-level deadline for bounded recovery searches. */
+  signal?: AbortSignal;
 }
 
 export interface SearchCatalogInput {
@@ -149,14 +151,38 @@ function extractWarehouses(p: Record<string, unknown>): Array<{ city: string; qt
   for (const w of wh) {
     const city = typeof w?.city === "string" ? w.city.trim() : "";
     // API 220volt отдаёт `amount`; на всякий случай поддерживаем и `qty`.
-    const qtyRaw = typeof w?.amount === "number" ? w.amount
-      : typeof w?.qty === "number" ? w.qty
-      : 0;
-    if (!city || !Number.isFinite(qtyRaw) || qtyRaw <= 0) continue;
+    const qtyRaw = rawWarehouseQuantity(w);
+    if (!city || qtyRaw === null || qtyRaw <= 0) continue;
     out.push({ city, qty: qtyRaw });
   }
   out.sort((a, b) => b.qty - a.qty);
   return out;
+}
+
+function rawWarehouseQuantity(row: unknown): number | null {
+  if (!row || typeof row !== "object") return null;
+  const warehouse = row as { amount?: unknown; qty?: unknown };
+  const value = typeof warehouse.amount === "number" ? warehouse.amount
+    : typeof warehouse.qty === "number" ? warehouse.qty
+    : null;
+  return value !== null && Number.isFinite(value) ? value : null;
+}
+
+function warehouseEvidence(
+  p: Record<string, unknown>,
+): "missing" | "positive" | "explicit_zero" | "unverified" {
+  // Preserve this distinction only in the internal cache. Existing public
+  // stock behaviour intentionally treats active products without rows as
+  // available; strict selection still needs to reject an explicit all-zero
+  // payload rather than mistaking it for missing data.
+  const rows = p.warehouses;
+  if (rows === undefined || rows === null) return "missing";
+  if (!Array.isArray(rows)) return "unverified";
+  if (rows.length === 0) return "missing";
+  const quantities = rows.map(rawWarehouseQuantity);
+  if (quantities.some((qty) => qty !== null && qty > 0)) return "positive";
+  if (quantities.every((qty) => qty === 0)) return "explicit_zero";
+  return "unverified";
 }
 
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
@@ -323,10 +349,15 @@ async function singleSearch(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    if (deps.signal?.aborted) {
+      return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
+    }
     const res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
-      signal: controller.signal,
+      signal: deps.signal
+        ? AbortSignal.any([controller.signal, deps.signal])
+        : controller.signal,
     });
 
     if (!res.ok) {
@@ -375,13 +406,15 @@ async function singleSearch(
       cache.set(id, {
         ...ref,
         url: u,
+        warehouse_evidence: warehouseEvidence(raw),
         ...(Object.keys(facetValues).length > 0 ? { facet_values: facetValues } : {}),
       });
       results.push(ref);
     }
     return { ok: true, total, results };
   } catch (e) {
-    const isAbort = (e as { name?: string })?.name === "AbortError";
+    const isAbort = controller.signal.aborted || deps.signal?.aborted ||
+      (e as { name?: string })?.name === "AbortError";
     return { ok: false, error_code: isAbort ? "catalog_timeout" : "transport_5xx", message: (e as Error)?.message ?? "fetch failed" };
   } finally {
     clearTimeout(timer);
@@ -577,7 +610,9 @@ async function searchWithRateLimitRetry(
 ): Promise<SingleSearchResult> {
   let result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
   for (let attempt = 1; !result.ok && result.error_code === "rate_limited" && attempt <= 2; attempt++) {
+    if (deps.signal?.aborted) return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
     await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    if (deps.signal?.aborted) return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
     result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
     if (result.ok && !warnings.includes("rate_limit_retry_recovered")) warnings.push("rate_limit_retry_recovered");
   }

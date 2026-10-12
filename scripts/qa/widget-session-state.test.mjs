@@ -134,6 +134,53 @@ test('recent stored dialogue is restored visibly instead of becoming hidden mode
   dom.window.close();
 });
 
+test('restored assistant content cannot inject HTML or event handlers through markdown links', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  state.history[2].content = '<img src=x onerror="globalThis.__xss=1"> [ссылка](https://example.com/" onmouseover="bad) [товар](https://220volt.kz/catalog/item/?a=1&b=2)';
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__xss, undefined);
+  assert.match(messages.textContent, /<img src=x onerror=/u);
+  const link = messages.querySelector('a[href^="https://example.com/"]');
+  assert.ok(link);
+  assert.equal(link.getAttribute('onmouseover'), null);
+  assert.equal(
+    messages.querySelector('a[href^="https://220volt.kz/"]')?.getAttribute('href'),
+    'https://220volt.kz/catalog/item/?a=1&b=2',
+  );
+  dom.window.close();
+});
+
+test('markdown formatting preserves URL underscores and cannot promote URL content into HTML', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  const productUrl = 'https://220volt.kz/catalog/__line__/item?series=foo__bar__baz&x=1';
+  const escapedProductUrl = 'https://220volt.kz/catalog/product\\_model';
+  const suspiciousUrl = 'https://example.com/" onmouseover="window.__xss__=1';
+  state.history[2].content = [
+    `1. [**Товар**](${productUrl})`,
+    `2. [Товар с экранированным знаком](${escapedProductUrl})`,
+    `- [ссылка](${suspiciousUrl})`,
+    '<img src=x onerror="window.__xss__=1">',
+  ].join('\n');
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = messages.querySelectorAll('a');
+
+  assert.equal(links.length, 3);
+  assert.equal(links[0].getAttribute('href'), productUrl);
+  assert.equal(links[0].querySelector('strong')?.textContent, 'Товар', 'link label markdown should remain formatted');
+  assert.equal(links[1].getAttribute('href'), 'https://220volt.kz/catalog/product_model');
+  assert.equal(links[2].getAttribute('href'), suspiciousUrl);
+  assert.equal(links[2].getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__xss, undefined);
+  dom.window.close();
+});
+
 test('expired dialogue is discarded on initialization', () => {
   const now = 1_800_000_000_000;
   const dom = bootWidget({ state: savedDialogue(now - SESSION_TTL_MS - 1), now });
@@ -389,6 +436,33 @@ test('widget renders user and assistant HTML as inert text', async () => {
   assert.equal(messages.querySelectorAll('a[href^="javascript:"]').length, 0);
   assert.match(messages.textContent, /<svg onload=alert\(3\)>найди лампу<\/svg>/u);
   assert.match(messages.textContent, /<img src=x onerror=alert\(1\)>/u);
+  dom.window.close();
+});
+
+test('customer text echoed by an exact-price response remains inert in streamed assistant HTML', async () => {
+  const echoedQuery = 'кабель ВВГ 3*1,5 <img src=x onerror="window.__echoXss=1"> [ссылка](https://example.com/" onmouseover="window.__echoXss=2)';
+  const assistantText = `Ищу в каталоге точную маркировку «${echoedQuery}» и проверяю цену.`;
+  const sse = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: assistantText } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'echo-xss-test', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = echoedQuery;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  await waitForWidget(() => readState(dom)?.history?.at(-1)?.content === assistantText,
+    'streamed echoed query should complete');
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  assert.equal(messages.querySelector('img'), null);
+  assert.equal(dom.window.__echoXss, undefined);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]')?.getAttribute('onmouseover'), null);
+  assert.match(messages.textContent, /<img src=x onerror=/u);
   dom.window.close();
 });
 
@@ -1766,7 +1840,433 @@ test('an unreachable proxy fails over quickly to direct Supabase', async () => {
   dom.window.close();
 });
 
-test('all routes share one deadline instead of waiting a full timeout each', async () => {
+test('slow HTTP headers do not consume the separate application-acceptance budget', async () => {
+  const urls = [];
+  const answer = 'Заголовки и подтверждение пришли в пределах отдельных бюджетов.';
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 120, accept: 120, idle: 250, total: 450 }),
+    fetchImpl: (url, init) => new Promise((resolve, reject) => {
+      urls.push(String(url));
+      const headersTimer = setTimeout(() => {
+        const body = new ReadableStream({
+          start(controller) {
+            const acceptanceTimer = setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode([
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'slow-headers-log', phase: 'start' } })}`,
+                `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'slow-headers-log', phase: 'complete', products_count: 0 } })}`,
+                'data: [DONE]',
+                '',
+              ].join('\n\n')));
+              controller.close();
+            }, 85);
+            init.signal.addEventListener('abort', () => {
+              clearTimeout(acceptanceTimer);
+              try { controller.error(new DOMException('Aborted', 'AbortError')); } catch {}
+            }, { once: true });
+          },
+        });
+        resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+      }, 85);
+      init.signal.addEventListener('abort', () => {
+        clearTimeout(headersTimer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  });
+
+  const started = Date.now();
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка отдельных таймеров';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes(answer) &&
+    !dom.window.document.querySelector('#volt-widget-send').disabled,
+    'one slow-header route should finish without fallback', 1_000);
+
+  assert.ok(Date.now() - started > 120, 'the complete response must cross one isolated timeout window');
+  assert.equal(urls.length, 1, 'the proxy must not be abandoned before its independent acceptance budget');
+  assert.match(urls[0], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('a late-header proxy with no acknowledgement cannot starve a long healthy direct answer', async () => {
+  const calls = [];
+  const answer = 'Долгий ответ прямого маршрута завершён полностью.';
+  let proxyInterval = null;
+  let directInterval = null;
+  let directFinishTimer = null;
+  const dom = bootWidget({
+    // Scaled budgets: proxy uses 55ms for headers + 70ms for acceptance,
+    // then direct legitimately needs 180ms (> the original 240ms turn cap).
+    source: withTransportTimeouts({ connect: 70, accept: 70, idle: 80, total: 240 }),
+    fetchImpl: async (url, init) => {
+      const payload = JSON.parse(init.body);
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      calls.push({ route, messageId: payload.messageId, sessionId: payload.sessionId });
+      if (route === 'proxy') {
+        await new Promise((resolve, reject) => {
+          const headersTimer = setTimeout(resolve, 55);
+          init.signal.addEventListener('abort', () => {
+            clearTimeout(headersTimer);
+            reject(new DOMException('Aborted', 'AbortError'));
+          }, { once: true });
+        });
+        let streamController = null;
+        const body = new ReadableStream({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(new TextEncoder().encode(': stream-open\n\n'));
+            proxyInterval = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 20);
+          },
+          cancel() { if (proxyInterval) clearInterval(proxyInterval); },
+        });
+        init.signal.addEventListener('abort', () => {
+          if (proxyInterval) clearInterval(proxyInterval);
+          try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+        }, { once: true });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      let streamController = null;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'long-direct-log', phase: 'start' } })}\n\n`,
+          ));
+          directInterval = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 25);
+          directFinishTimer = setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'long-direct-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+          }, 180);
+        },
+        cancel() {
+          if (directInterval) clearInterval(directInterval);
+          if (directFinishTimer) clearTimeout(directFinishTimer);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        if (directInterval) clearInterval(directInterval);
+        if (directFinishTimer) clearTimeout(directFinishTimer);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const started = Date.now();
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка долгого ответа после тайм-аута прокси';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes(answer) &&
+    !dom.window.document.querySelector('#volt-widget-send').disabled,
+    'direct route should complete despite the proxy consuming its own acceptance window', 1_000);
+
+  assert.deepEqual(calls.map((call) => call.route), ['proxy', 'direct']);
+  assert.equal(calls[0].messageId, calls[1].messageId);
+  assert.equal(calls[0].sessionId, calls[1].sessionId);
+  assert.ok(Date.now() - started > 240, 'answer must cross the old shared deadline');
+  assert.ok(Date.now() - started < 380, 'failover is still bounded by the two pre-acceptance windows');
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('proxy connection circuit uses direct first briefly, retains fallback, and auto-recovers', async () => {
+  const calls = [];
+  let proxyMode = 'blackhole';
+  let failNextDirect = false;
+  let simulatedNow = Date.now();
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 20, accept: 80, idle: 90, total: 240 }),
+    fetchImpl: async (url, init) => {
+      const payload = JSON.parse(init.body);
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      calls.push({ route, message: payload.message, messageId: payload.messageId, sessionId: payload.sessionId });
+      if (route === 'proxy' && proxyMode === 'blackhole') {
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      }
+      if (route === 'direct' && failNextDirect) {
+        failNextDirect = false;
+        throw new TypeError('direct network failure');
+      }
+      const answer = `Ответ: ${payload.message}`;
+      const sse = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'circuit-test-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'circuit-test-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  dom.window.Date.now = () => simulatedNow;
+
+  async function ask(query) {
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    input.value = query;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => visibleMessages(dom).includes(`Ответ: ${query}`) &&
+      !dom.window.document.querySelector('#volt-widget-send').disabled,
+      `answer for ${query} should complete`);
+  }
+
+  await ask('Первый запрос');
+  assert.deepEqual(calls.map((call) => call.route), ['proxy', 'direct']);
+  assert.equal(calls[0].messageId, calls[1].messageId, 'fallback must retain the idempotency key');
+  assert.equal(calls[0].sessionId, calls[1].sessionId);
+
+  proxyMode = 'healthy';
+  failNextDirect = true;
+  await ask('Второй запрос');
+  assert.deepEqual(calls.slice(2).map((call) => call.route), ['direct', 'proxy'],
+    'the proxy remains an available fallback while direct is preferred');
+  assert.equal(calls[2].messageId, calls[3].messageId);
+
+  await ask('Третий запрос');
+  assert.deepEqual(calls.slice(4).map((call) => call.route), ['proxy'],
+    'a healthy fallback proxy immediately restores normal priority');
+
+  proxyMode = 'blackhole';
+  await ask('Четвёртый запрос');
+  assert.deepEqual(calls.slice(5).map((call) => call.route), ['proxy', 'direct']);
+  await ask('Пятый запрос');
+  assert.deepEqual(calls.slice(7).map((call) => call.route), ['direct'],
+    'the degraded proxy is skipped on the next turn');
+
+  simulatedNow += 3 * 60 * 1000 + 1;
+  proxyMode = 'healthy';
+  await ask('Шестой запрос');
+  assert.deepEqual(calls.slice(8).map((call) => call.route), ['proxy'],
+    'the bounded preference must expire and probe the proxy automatically');
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('direct-first connection timeout leaves a full bounded window for proxy fallback', async () => {
+  const calls = [];
+  const firstQuery = 'Открыть прямой маршрут';
+  const secondQuery = 'Долгий ответ после отказа прямого маршрута';
+  const proxyAnswer = 'Восстановленный ответ прокси';
+  const completeSse = (logId, content) => [
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 25, accept: 40, idle: 50, total: 110 }),
+    fetchImpl: async (url, init) => {
+      const payload = JSON.parse(init.body);
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      calls.push({ route, message: payload.message });
+      if ((payload.message === firstQuery && route === 'proxy') ||
+          (payload.message === secondQuery && route === 'direct')) {
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      }
+      if (payload.message === firstQuery) {
+        return new Response(completeSse('direct-first-log', 'Первый ответ'), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      let streamController;
+      let heartbeat;
+      let finishTimer;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-fallback-log', phase: 'start' } })}\n\n`,
+          ));
+          heartbeat = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 10);
+          finishTimer = setTimeout(() => {
+            clearInterval(heartbeat);
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: proxyAnswer } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-fallback-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+            controller.close();
+          }, 95);
+        },
+        cancel() {
+          clearInterval(heartbeat);
+          clearTimeout(finishTimer);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        clearTimeout(finishTimer);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  async function ask(query, expected) {
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    input.value = query;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => visibleMessages(dom).includes(expected) &&
+      !dom.window.document.querySelector('#volt-widget-send').disabled,
+    `answer for ${query} should complete`, 800);
+  }
+  await ask(firstQuery, 'Первый ответ');
+  await ask(secondQuery, proxyAnswer);
+  assert.deepEqual(calls.map((call) => call.route), ['proxy', 'direct', 'direct', 'proxy']);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('stalled HTTP error body cannot consume the fallback response window', async () => {
+  const routes = [];
+  const answer = 'Длинный ответ после ошибки прокси';
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 25, accept: 20, idle: 50, total: 150 }),
+    fetchImpl: async (url, init) => {
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      routes.push(route);
+      if (route === 'proxy') {
+        let errorBodyController;
+        const body = new ReadableStream({
+          start(controller) { errorBodyController = controller; },
+        });
+        init.signal.addEventListener('abort', () => {
+          try { errorBodyController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+        }, { once: true });
+        return new Response(body, { status: 503, headers: { 'Content-Type': 'text/plain' } });
+      }
+      let streamController;
+      let heartbeat;
+      let finishTimer;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'http-fallback-log', phase: 'start' } })}\n\n`,
+          ));
+          heartbeat = setInterval(() => controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')), 10);
+          finishTimer = setTimeout(() => {
+            clearInterval(heartbeat);
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'http-fallback-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+            controller.close();
+          }, 120);
+        },
+        cancel() {
+          clearInterval(heartbeat);
+          clearTimeout(finishTimer);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        clearTimeout(finishTimer);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка резервного ответа';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes(answer) &&
+    !dom.window.document.querySelector('#volt-widget-send').disabled,
+  'fallback after stalled HTTP error body should complete', 800);
+  assert.deepEqual(routes, ['proxy', 'direct']);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('direct-first accepted partial response replays once through the proxy with the same messageId', async () => {
+  const calls = [];
+  const firstQuery = 'Первый запрос для открытия прямого маршрута';
+  const secondQuery = 'Второй запрос с прерванным ответом';
+  const canonicalAnswer = 'Единственный восстановленный ответ.';
+  const completeSse = (logId, content) => [
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 20, accept: 60, idle: 100, total: 350 }),
+    fetchImpl: async (url, init) => {
+      const payload = JSON.parse(init.body);
+      const route = String(url).includes('supabase-proxy') ? 'proxy' : 'direct';
+      calls.push({ route, ...payload });
+      if (payload.message === firstQuery && route === 'proxy') {
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      }
+      if (payload.message === firstQuery) {
+        return new Response(completeSse('first-direct-log', 'Первый ответ получен.'),
+          { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      if (route === 'direct' && !payload.resumeOnly) {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'second-direct-log', phase: 'start' } })}`,
+              `data: ${JSON.stringify({ choices: [{ delta: { content: 'Временное вступление.' } }] })}`,
+              '',
+            ].join('\n\n')));
+            setTimeout(() => controller.error(new Error('interrupted accepted stream')), 5);
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      assert.equal(route, 'proxy', 'the opposite route should replay the accepted direct response first');
+      assert.equal(payload.resumeOnly, true, 'replay must never start another backend execution');
+      return new Response(completeSse('second-direct-log', canonicalAnswer),
+        { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  async function ask(query, expected) {
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    input.value = query;
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => visibleMessages(dom).includes(expected) &&
+      !dom.window.document.querySelector('#volt-widget-send').disabled,
+      `${query} should finish`);
+  }
+
+  await ask(firstQuery, 'Первый ответ получен.');
+  await ask(secondQuery, canonicalAnswer);
+  assert.deepEqual(calls.map((call) => call.route), ['proxy', 'direct', 'direct', 'proxy']);
+  assert.equal(calls[2].messageId, calls[3].messageId);
+  assert.equal(calls[2].sessionId, calls[3].sessionId);
+  assert.equal(calls.filter((call) => call.message === secondQuery && !call.resumeOnly).length, 1);
+  assert.equal(visibleMessages(dom).split(canonicalAnswer).length - 1, 1,
+    'a replayed canonical answer must appear once');
+  assert.doesNotMatch(visibleMessages(dom), /Временное вступление|Ответ получен не полностью|ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('two blackholed routes remain bounded even with the direct failover reserve', async () => {
   let fetchCount = 0;
   const dom = bootWidget({
     source: withTransportTimeouts({ connect: 25, idle: 50, total: 35 }),
@@ -1790,7 +2290,7 @@ test('all routes share one deadline instead of waiting a full timeout each', asy
   }
 
   assert.equal(fetchCount, 2);
-  assert.ok(Date.now() - started < 90, 'the second route must receive only the shared remaining budget');
+  assert.ok(Date.now() - started < 90, 'the direct fallback must not wait beyond its bounded reserve');
   assert.match(visibleMessages(dom), /ошибка соединения/iu);
   dom.window.close();
 });

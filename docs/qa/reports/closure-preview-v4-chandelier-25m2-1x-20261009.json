@@ -1,0 +1,89 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T14:42:01.224Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-chandelier-25m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791556921228_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "status": 200,
+              "duration_ms": 20873,
+              "network_attempts": 1,
+              "log_id": "5bdc27be-6c58-4e4a-bc60-61e04f751627",
+              "diagnostic_error": "upstream_unavailable",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nОнлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 38, листьев 1",
+                  "duration_ms": 6078
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "none of required text fragments found: лм, люмен, гостин, основн",
+                "diagnostic error: upstream_unavailable"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T14:42:22.103Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "5bdc27be-6c58-4e4a-bc60-61e04f751627"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

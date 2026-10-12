@@ -1,0 +1,289 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "82f82192146df6fd447a0efbd8ff31c282b8ced067402fc24049bcdbe21e22f1",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-09T13:58:15.968Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-chandelier-30m2": 1,
+    "customer-corn-lamp-jargon": 1,
+    "customer-new-chandelier-25m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-chandelier-30m2_base_1791554295973_1",
+          "turns": [
+            {
+              "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+              "status": 200,
+              "duration_ms": 32773,
+              "network_attempts": 1,
+              "log_id": "f8512437-0bee-43f5-8fcd-1fa168a57ea5",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Для жилой гостиной (зала) площадью 30 м² при базовом ориентире 150–200 лк требуется световой поток примерно 4500–6000 лм. Живая схема содержит характеристика «Максимальная площадь освещения, м2» со значением 30 м² — это прямое соответствие вашей задаче. Современный стиль — это предпочтение по внешнему виду, не обязательный технический параметр; покажу разные варианты люстр, подходящих по площади освещения 30 м². Обязательные параметры: «Максимальная площадь освещения, м2: 30». По классу «Назначение» выбираю «зал; гостиная; спальня; кафе; кухня». Явно указанное свойство «зале» соответствует «Назначение: зал; гостиная; спальня; кафе; кухня».\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Люстры»: 29 тов., фасетов 31, листьев 1",
+                  "duration_ms": 1280
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 0",
+                  "duration_ms": 429
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Перепроверяю итоговый набор по обязательным параметрам…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Итоговая перепроверка: подтверждено 0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Сверяю поиск с выбранным типом товара…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Сверка по выбранному типу: подтверждено 0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 0",
+                  "duration_ms": null
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3"
+              ]
+            },
+            {
+              "message": "Они точно подходят для освещения 30 квадратных метров?",
+              "status": 200,
+              "duration_ms": 1282,
+              "network_attempts": 1,
+              "log_id": "6a900ae6-1226-44c4-b269-9200157063c7",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Не удалось вовремя подготовить надёжный консультационный ответ. Повторите вопрос — поиск товаров при этом не запускался.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "none of required text fragments found: светов, люмен, мощн, не могу подтвердить, нельзя гарантировать"
+              ]
+            },
+            {
+              "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+              "status": 200,
+              "duration_ms": 937,
+              "network_attempts": 1,
+              "log_id": "d758d9ba-d1b1-43b1-8ee9-5f5e2f76d333",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "Не удалось вовремя подготовить надёжный консультационный ответ. Повторите вопрос — поиск товаров при этом не запускался.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "none of required text fragments found: цен, мощн, управ, характерист"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-corn-lamp-jargon",
+      "title": "Жаргон «лампа-кукуруза» остаётся в категории ламп",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-corn-lamp-jargon_base_1791554330966_1",
+          "turns": [
+            {
+              "message": "а у тебя есть лампы кукуруза?",
+              "status": 200,
+              "duration_ms": 3287,
+              "network_attempts": 1,
+              "log_id": "756181a9-7f9e-4b02-9c3d-0ac19b0b6981",
+              "diagnostic_error": "upstream_quota_exceeded",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nОнлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 1304
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 1",
+                "none of required product-title fragments found: CORN",
+                "diagnostic error: upstream_quota_exceeded"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791554334253_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "status": 200,
+              "duration_ms": 2223,
+              "network_attempts": 1,
+              "log_id": "4446ee4b-08bc-4599-9a1c-493a8e07aebd",
+              "diagnostic_error": "upstream_quota_exceeded",
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "products": [],
+              "text": "\n\nОнлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "ошибка: category_not_found",
+                  "duration_ms": 1215
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3",
+                "none of required text fragments found: лм, люмен, гостин, основн",
+                "diagnostic error: upstream_quota_exceeded"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-09T13:58:56.476Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 5,
+    "recorded_turns": 5
+  },
+  "log_ids": [
+    "f8512437-0bee-43f5-8fcd-1fa168a57ea5",
+    "6a900ae6-1226-44c4-b269-9200157063c7",
+    "d758d9ba-d1b1-43b1-8ee9-5f5e2f76d333",
+    "756181a9-7f9e-4b02-9c3d-0ac19b0b6981",
+    "4446ee4b-08bc-4599-9a1c-493a8e07aebd"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}
