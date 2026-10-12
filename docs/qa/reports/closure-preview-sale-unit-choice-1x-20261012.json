@@ -1,0 +1,157 @@
+{
+  "suite_file": "notion-legacy-bug-cases-v3.json",
+  "suite_version": 3,
+  "suite_sha256": "3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T14:43:23.883Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "bt923-vvg-3x1_5-unit": 1
+  },
+  "cases": [
+    {
+      "id": "bt923-vvg-3x1_5-unit",
+      "title": "BT-923: cheapest VVG 3x1.5 uses metre unit",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_bt923-vvg-3x1_5-unit_base_1791816203887_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 3*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 9341,
+              "network_attempts": 1,
+              "log_id": "8795a48f-9dfe-46ce-ad78-106da5504038",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik",
+                  "verified": true,
+                  "sku": "Ем000033662",
+                  "name": "Кабель ВВГ 3*1,5 ГОСТ IK",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Гарантийный срок, лет": "5",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Срок службы, мес": "360",
+                    "Производитель": "INCOKABEL",
+                    "Температура монтажа": "-15+50 °C",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Единица измерения": "м",
+                    "Количество жил": "3",
+                    "Вес, кг.": "0.131",
+                    "Негорючесть": "Нет",
+                    "Материал проводника": "медь",
+                    "Изоляция": "ПВХ пластикат",
+                    "Объем, м3": "0.0001",
+                    "Бронированный": "Нет",
+                    "Бренд": "ВВГ",
+                    "Оболочка": "ПВХ пластикат",
+                    "Код ТН ВЭД": "8544499509",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "7.84",
+                    "Страна происхождения": "УЗБЕКИСТАН"
+                  },
+                  "offerPrice": 301,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik/",
+                  "description_excerpt": "Кабель ВВГ - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительных устройствах, а также в обычных жилы"
+                }
+              ],
+              "catalog_minimum_evidence": {
+                "verified": false,
+                "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/3-1.5/",
+                "reason": "category is incomplete: 36 cards of 77"
+              },
+              "products": [
+                {
+                  "title": "Кабель ВВГ 3*1,5 ГОСТ IK",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik/",
+                  "price": 301,
+                  "stockLine": "Караганда (98 м)",
+                  "cardText": "- **[Кабель ВВГ 3*1,5 ГОСТ IK](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik/)**\n  Цена: *301* ₸/м\n  Наличие: Караганда (98 м)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 3*1,5», цены и единицы продажи; товары с другим составным размером не показываю.В каталоге есть товары с разными единицами продажи. Показываю минимальную цену среди товаров за «м». Цены за разные единицы напрямую не сравниваю.Нужна цена за другую единицу продажи? Выберите вариант:",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-9f8755a0",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "3×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "sale_unit",
+                "options_count": 2,
+                "values": [
+                  "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
+                  "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 3583
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "catalog minimum is not independently verified: category is incomplete: 36 cards of 77"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-12T14:43:37.815Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "8795a48f-9dfe-46ce-ad78-106da5504038"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": false
+}

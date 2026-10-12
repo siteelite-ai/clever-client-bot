@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 
 const MAX_HTML_BYTES = 1_000_000;
 const MAX_LISTED_PRODUCTS = 120;
+const MAX_CATEGORY_PAGES = 8;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 function catalogUrl(raw) {
@@ -73,14 +74,9 @@ function publicStorage(row) {
   }
 }
 
-/**
- * Proves a minimum only when the site's declared category total is completely
- * visible in one bounded HTML response. This is deliberately not an inference
- * from the bot's own search results or from the site's sort order.
- */
-export function catalogMinimumFromHtml(html, sourceUrl, { title_prefix: titlePrefix, unit }) {
+function categoryPageEvidence(html, sourceUrl, titlePrefix) {
   const source = catalogUrl(sourceUrl);
-  if (!source || !titlePrefix || !unit || typeof html !== 'string' ||
+  if (!source || !titlePrefix || typeof html !== 'string' ||
       Buffer.byteLength(html) > MAX_HTML_BYTES) {
     throw new Error('invalid or oversized category evidence');
   }
@@ -96,30 +92,33 @@ export function catalogMinimumFromHtml(html, sourceUrl, { title_prefix: titlePre
     if (!Number.isSafeInteger(total) || total < 1 || total > MAX_LISTED_PRODUCTS) {
       throw new Error('category has no bounded, unambiguous product total');
     }
+    const activePages = [...document.querySelectorAll('.pagination__item.page.active')];
+    if (activePages.length > 1) throw new Error('category has ambiguous active pagination');
+    const activeText = activePages.length ? displayText(activePages[0].textContent) : '';
+    const activePage = activeText ? (/^[1-9]\d*$/u.test(activeText) ? Number(activeText) : null) : null;
+    if (activePages.length && !Number.isSafeInteger(activePage)) {
+      throw new Error('category has invalid active pagination');
+    }
     const rows = [...document.querySelectorAll('#mse2_results .card__item')];
-    if (rows.length !== total) throw new Error(`category is incomplete: ${rows.length} cards of ${total}`);
+    if (!rows.length || rows.length > total) throw new Error('category has an invalid page size');
     const parentPath = new URL(source).pathname.replace(/[^/]+\/$/u, '');
-    const seenIds = new Set();
-    const seenUrls = new Set();
+    const identities = [];
     const candidates = [];
     let excludedOutOfStock = 0;
-    let excludedOtherUnits = 0;
     for (const row of rows) {
       const titleElement = row.querySelector('a.card__title[href]');
       const title = displayText(titleElement?.textContent);
-      if (!startsWithExactMarking(title, titlePrefix)) continue;
       const form = row.querySelector('form.js-cart-add[data-id][data-item-price]');
       const id = form?.getAttribute('data-id');
       const href = titleElement?.getAttribute('href');
       const itemUrl = href && catalogUrl(new URL(href.replace(/^\/?/u, '/'), 'https://220volt.kz').toString());
-      if (!id || !/^\d+$/u.test(id) || seenIds.has(id) || !itemUrl || itemUrl === source ||
+      if (!title || !id || !/^\d+$/u.test(id) || !itemUrl || itemUrl === source ||
           !new URL(itemUrl).pathname.startsWith(parentPath) ||
-          new URL(itemUrl).pathname.slice(parentPath.length).split('/').filter(Boolean).length !== 1 ||
-          seenUrls.has(itemUrl)) {
-        throw new Error(`matching category card lacks a unique product identity: ${title}`);
+          new URL(itemUrl).pathname.slice(parentPath.length).split('/').filter(Boolean).length !== 1) {
+        throw new Error(`category card lacks a valid product identity: ${title}`);
       }
-      seenIds.add(id);
-      seenUrls.add(itemUrl);
+      identities.push({ id, url: itemUrl });
+      if (!startsWithExactMarking(title, titlePrefix)) continue;
       const storage = publicStorage(row);
       if (!storage) throw new Error(`matching category card has no parseable stock and unit: ${title}`);
       const listedPrice = positivePrice(displayText(row.querySelector('.product__buy-info-price-actual_value')?.textContent));
@@ -136,27 +135,118 @@ export function catalogMinimumFromHtml(html, sourceUrl, { title_prefix: titlePre
       if (listedPrice === null || dataPrice === null || listedPrice !== dataPrice) {
         throw new Error(`matching in-stock category card has no corroborated price: ${title}`);
       }
-      if (storage.unit !== unitName(unit)) {
-        excludedOtherUnits++;
-        continue;
-      }
       candidates.push({ url: itemUrl, title, price: listedPrice, unit: storage.unit, id });
     }
-    if (!candidates.length) throw new Error('category contains no available, priced products matching the requested marking and unit');
-    const minimumPrice = Math.min(...candidates.map((item) => item.price));
-    return {
-      source_url: source,
-      listed_total: total,
-      matching_available: candidates.length,
-      eligible_products: candidates,
-      excluded_out_of_stock: excludedOutOfStock,
-      excluded_other_units: excludedOtherUnits,
-      minimum_price: minimumPrice,
-      winners: candidates.filter((item) => item.price === minimumPrice),
-    };
+    return { total, activePage, rowCount: rows.length, identities, candidates, excludedOutOfStock };
   } finally {
     dom.window.close();
   }
+}
+
+function proofFromPages(pages, sourceUrl, unit) {
+  const source = catalogUrl(sourceUrl);
+  if (!source || !unit || !pages.length) throw new Error('invalid category proof input');
+  const total = pages[0].total;
+  const pageSize = pages[0].rowCount;
+  const pageCount = Math.ceil(total / pageSize);
+  if (pageCount > MAX_CATEGORY_PAGES) throw new Error('category exceeds bounded pagination limit');
+  if (pages.length !== pageCount) {
+    throw new Error(`category is incomplete: ${pages.length} pages of ${pageCount}`);
+  }
+  const seenIds = new Set();
+  const seenUrls = new Set();
+  const candidates = [];
+  let excludedOutOfStock = 0;
+  let excludedOtherUnits = 0;
+  let counted = 0;
+  for (const [index, page] of pages.entries()) {
+    const expectedCount = Math.min(pageSize, total - index * pageSize);
+    if (page.total !== total || page.rowCount !== expectedCount ||
+        (pageCount > 1 && page.activePage !== index + 1) ||
+        (pageCount === 1 && page.activePage !== null && page.activePage !== 1)) {
+      throw new Error(`category pagination drift on page ${index + 1}`);
+    }
+    counted += page.rowCount;
+    for (const identity of page.identities) {
+      if (seenIds.has(identity.id) || seenUrls.has(identity.url)) {
+        throw new Error('category repeats a product identity across pages');
+      }
+      seenIds.add(identity.id);
+      seenUrls.add(identity.url);
+    }
+    excludedOutOfStock += page.excludedOutOfStock;
+    for (const item of page.candidates) {
+      if (item.unit !== unitName(unit)) {
+        excludedOtherUnits++;
+        continue;
+      }
+      candidates.push(item);
+    }
+  }
+  if (counted !== total || seenIds.size !== total || seenUrls.size !== total) {
+    throw new Error(`category is incomplete: ${counted} unique cards of ${total}`);
+  }
+  if (!candidates.length) {
+    throw new Error('category contains no available, priced products matching the requested marking and unit');
+  }
+  const minimumPrice = Math.min(...candidates.map((item) => item.price));
+  return {
+    source_url: source,
+    listed_total: total,
+    matching_available: candidates.length,
+    eligible_products: candidates,
+    excluded_out_of_stock: excludedOutOfStock,
+    excluded_other_units: excludedOtherUnits,
+    minimum_price: minimumPrice,
+    winners: candidates.filter((item) => item.price === minimumPrice),
+  };
+}
+
+/** A minimum is proven only against every unique product in a bounded category. */
+export function catalogMinimumFromHtmlPages(htmlPages, sourceUrl, { title_prefix: titlePrefix, unit }) {
+  if (!Array.isArray(htmlPages) || htmlPages.length < 1 || htmlPages.length > MAX_CATEGORY_PAGES) {
+    throw new Error('invalid category page collection');
+  }
+  return proofFromPages(htmlPages.map((html) => categoryPageEvidence(html, sourceUrl, titlePrefix)), sourceUrl, unit);
+}
+
+export function catalogMinimumFromHtml(html, sourceUrl, contract) {
+  return catalogMinimumFromHtmlPages([html], sourceUrl, contract);
+}
+
+async function boundedCategoryHtml(response) {
+  if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+  if (!/^text\/html(?:\s*;|$)/iu.test(response.headers?.get('content-type') ?? '')) {
+    throw new Error('category response is not HTML');
+  }
+  const contentLength = Number(response.headers?.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_HTML_BYTES) {
+    throw new Error('category page exceeds HTML size limit');
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let html = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_HTML_BYTES) throw new Error('category page exceeds HTML size limit');
+        html += decoder.decode(value, { stream: true });
+      }
+      return html + decoder.decode();
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const html = await response.text();
+  if (Buffer.byteLength(html) > MAX_HTML_BYTES) throw new Error('category page exceeds HTML size limit');
+  return html;
 }
 
 export async function verifyCatalogMinimum(sourceUrl, contract, {
@@ -177,21 +267,22 @@ export async function verifyCatalogMinimum(sourceUrl, contract, {
       }, timeoutMs);
     });
     const request = (async () => {
-      const response = await fetchImpl(source, {
-        method: 'GET', redirect: 'manual', credentials: 'omit',
-        headers: { Accept: 'text/html' }, signal: controller.signal,
-      });
-      if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-      if (!/^text\/html(?:\s*;|$)/iu.test(response.headers?.get('content-type') ?? '')) {
-        throw new Error('category response is not HTML');
+      const pages = [];
+      for (let pageNumber = 1; ; pageNumber++) {
+        const pageUrl = pageNumber === 1 ? source : `${source}?page=${pageNumber}`;
+        const response = await fetchImpl(pageUrl, {
+          method: 'GET', redirect: 'manual', credentials: 'omit',
+          headers: { Accept: 'text/html' }, signal: controller.signal,
+        });
+        if (response.url && response.url !== pageUrl) throw new Error('category fetch changed URL');
+        const html = await boundedCategoryHtml(response);
+        pages.push(categoryPageEvidence(html, source, contract.title_prefix));
+        const pageCount = Math.ceil(pages[0].total / pages[0].rowCount);
+        if (pageCount > MAX_CATEGORY_PAGES) throw new Error('category exceeds bounded pagination limit');
+        if (pageNumber === pageCount) break;
       }
-      const contentLength = Number(response.headers?.get('content-length'));
-      if (Number.isFinite(contentLength) && contentLength > MAX_HTML_BYTES) {
-        throw new Error('category page exceeds HTML size limit');
-      }
-      const html = await response.text();
       return { verified: true, checked_at: new Date().toISOString(),
-        ...catalogMinimumFromHtml(html, source, contract) };
+        ...proofFromPages(pages, source, contract.unit) };
     })();
     return await Promise.race([request, deadline]);
   } catch (error) {
