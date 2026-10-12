@@ -23,3 +23,22 @@ Deno.test("exact price/unit evidence survives completed-request replay", () => {
   );
   assertEquals(replayableSseEvents(null), []);
 });
+
+Deno.test("server-issued active selection scope survives idempotent replay", () => {
+  const scope = {
+    type: "active_selection_scope",
+    scope: {
+      kind: "named_series_section",
+      entity: "Gallant",
+      leaf: "Розетки",
+      source_slot_id: "catalog-chip-1",
+    },
+  };
+  const original = [
+    { type: "products_block", count: 5 },
+    scope,
+    { type: "diagnostic", phase: "complete", products_count: 5 },
+    { type: "done" },
+  ];
+  assertEquals(replayableSseEvents(original), original);
+});

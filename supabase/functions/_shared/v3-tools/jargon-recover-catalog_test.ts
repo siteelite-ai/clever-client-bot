@@ -7,6 +7,7 @@ import {
   executeJargonRecoverCatalog,
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
+  shouldReportJargonRecoveryUnavailable,
   splitSemanticJargonModifiers,
   titleSupportsGroundedAxis,
   titleSupportsLiveCategoryLabel,
@@ -33,6 +34,16 @@ Deno.test("translated title evidence is exact unless a separate modifier is unre
   assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, []), "exact");
   assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, ["E27"]), "axis_split");
   assertEquals(classifyGroundedJargonEvidence(false, "", 17, []), "empty");
+});
+
+Deno.test("unavailable jargon recovery is final only until a later verified render", () => {
+  let unavailable = false;
+  let productsRendered = 0;
+  assertEquals(shouldReportJargonRecoveryUnavailable(unavailable, productsRendered), false);
+  unavailable = true; // failed in-loop or terminal helper
+  assertEquals(shouldReportJargonRecoveryUnavailable(unavailable, productsRendered), true);
+  productsRendered = 2; // later successful render from another proven route
+  assertEquals(shouldReportJargonRecoveryUnavailable(unavailable, productsRendered), false);
 });
 
 Deno.test("literal compact recovery skips the language model and verifies the live title", async () => {
@@ -79,6 +90,117 @@ Deno.test("literal compact recovery skips the language model and verifies the li
   assertEquals(catalogQueries.includes("C16"), true);
   assertEquals(result.ok ? result.total : 0, 1);
   assertEquals(result.ok ? result.matched_query : null, "C16");
+});
+
+Deno.test("failed jargon model attempts cannot become a proven empty catalog", async () => {
+  for (const failure of ["http_403", "no_tool_call"] as const) {
+    let modelCalls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes("openrouter.ai")) {
+        modelCalls += 1;
+        return failure === "http_403"
+          ? new Response("upstream billing detail must not be relayed", { status: 403 })
+          : new Response(JSON.stringify({ choices: [{ message: { content: "no tool" } }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+      }
+      return new Response(JSON.stringify({ data: { results: [], pagination: { total: 0 } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const result = await executeJargonRecoverCatalog({
+      query: "кукуруза",
+      category: "Лампы",
+    }, {
+      baseUrl: "https://catalog.test/api",
+      apiToken: "catalog-token",
+      openrouterApiKey: "router-token",
+      fetchImpl,
+    }, new Map());
+    assertEquals(modelCalls > 0, true);
+    assertEquals(result.ok, false);
+    if (!result.ok) {
+      assertEquals(result.error_code, "jargon_unavailable");
+      assertEquals(result.message, "model_recovery_incomplete");
+    }
+  }
+});
+
+Deno.test("valid jargon candidates with no title-proven cards remain an honest zero", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: { results: [], pagination: { total: 0 } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const result = await executeJargonRecoverCatalog({ query: "кукуруза", category: "Лампы" }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+  assertEquals(result.ok, true);
+  assertEquals(result.ok ? result.total : -1, 0);
+  assertEquals(result.ok ? result.matched_query : "unexpected_error", null);
+});
+
+Deno.test("a title-proven literal card survives a failed optional jargon model", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes("openrouter.ai")) {
+      return new Response("unavailable", { status: 403 });
+    }
+    const query = new URL(String(input)).searchParams.get("query");
+    const results = query === "CORN"
+      ? [{
+        id: 24780,
+        pagetitle: "Лампа LED CORN капсула 5Вт",
+        price: 476,
+        url: "https://220volt.kz/catalog/svetotexnika/lampyi/24780/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const result = await executeJargonRecoverCatalog({ query: "CORN", category: "Лампы" }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+  assertEquals(result.ok, true);
+  assertEquals(result.ok ? result.total : 0, 1);
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+});
+
+Deno.test("failed catalog verification is inconclusive even with valid model candidates", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response("catalog unavailable", { status: 503 });
+  };
+  const result = await executeJargonRecoverCatalog({ query: "кукуруза", category: "Лампы" }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "jargon_unavailable");
 });
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {

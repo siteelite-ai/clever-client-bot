@@ -43,9 +43,11 @@ import {
   type JargonRecoverCatalogInput,
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
+  shouldReportJargonRecoveryUnavailable,
   titleSupportsGroundedAxis,
   titleSupportsGroundedJargonQuery,
 } from "../_shared/v3-tools/jargon-recover-catalog.ts";
+import { guardJargonAxisSplitSections } from "../_shared/v3-tools/jargon-axis-split-guard.ts";
 
 import {
   executeLookupKnowledge,
@@ -119,6 +121,15 @@ import {
   type PriceDirection,
   unprovenCatalogPriceNotice,
 } from "../_shared/v3-tools/price-scope-policy.ts";
+import {
+  certificateFromCompleteCategory,
+  certificateFromRecentSet,
+  guardPriceEgressText,
+  priceCertificateApplies,
+  priceCertificateCoversCardBlock,
+  unverifiedPriceScopeDisclosure,
+  type PriceExtremeCertificate,
+} from "../_shared/v3-tools/price-proof-egress.ts";
 import {
   buildAnchorMissingRecoveryQueries,
   buildCatalogEmptySynthesisMessages,
@@ -236,6 +247,23 @@ import {
   type VerifiedBroadAssortmentChoice,
   type VerifiedBroadAssortmentConstrainedContinuation,
 } from "../_shared/v3-tools/broad-assortment.ts";
+import {
+  activeSelectionScopeLookupCreatedAfter,
+  classifyActivePrepositionalRefinement,
+  explicitlyChangesActiveSelectionEntity,
+  isIndependentNominalRequestOutsideActiveScope,
+  isSameSectionNominalRefinement,
+  isShortAttributeSelectionFollowup,
+  isVerifiedReadinessScopeReply,
+  mayBeActivePrepositionalRefinement,
+  mayBeNominalRefinement,
+  productMatchesActiveSection,
+  scopeFromCompletedServerLog,
+  stripClientActiveSelectionScope,
+  trustedActiveSelectionScope,
+  type ActiveNamedSeriesSectionScope,
+  type ActiveSelectionScopeLog,
+} from "../_shared/v3-tools/active-selection-scope.ts";
 import {
   auditTerminalClarificationProtocol,
   buildTerminalFreeformSlot,
@@ -418,6 +446,10 @@ import {
   rankSplitReplacementCandidates,
 } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
+  directReplacementEmptyOutcome,
+  productProvesDirectReplacementAxes,
+} from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
+import {
   compileLiveCompactReplacementContract,
   derivePortableAxisTitleRequirements,
   extractExplicitSingleLetterCodes,
@@ -430,7 +462,6 @@ import {
   productBelongsToReplacementSourceScope,
   productContainsExactModelCode,
   productContainsSourceModel,
-  productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
@@ -628,7 +659,7 @@ const MIN_AGENT_STEP_BUDGET_MS = 2_500;
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
 type SseEvent =
-  | { type: "delta"; content: string }
+  | { type: "delta"; content: string; origin?: "model" | "server" }
   | {
     type: "price_unit_evidence";
     product_url: string;
@@ -644,6 +675,10 @@ type SseEvent =
     error?: string | null;
   }
   | { type: "conversation_boundary"; mode: "new_task"; session_id: string }
+  | {
+    type: "active_selection_scope";
+    scope: ActiveNamedSeriesSectionScope;
+  }
   | {
     type: "assistant_turn_break";
     reason:
@@ -665,6 +700,8 @@ type SseEvent =
     markdown: string;
     count: number;
     total_available?: number;
+    /** Internal only: a price certificate is valid for this exact rendered SKU. */
+    price_winner_id?: string;
     selection_contract?: {
       hash: string;
       mandatory_criteria: Array<
@@ -3517,6 +3554,7 @@ async function answerVerifiedNamedSeriesInquiry(
       coverage,
       grounded.searchedAllPages,
     ),
+    origin: "model",
   });
   steps.push({
     step: "v3_named_series_direct_explanation",
@@ -3809,7 +3847,7 @@ async function answerVerifiedExactProductInquiry(
       answer = buildDeterministicEvidenceAnswer(evidence, userMessage);
     }
   }
-  send({ type: "delta", content: answer });
+  send({ type: "delta", content: answer, origin: "model" });
 
   let shownProducts: ProductFull[] = [];
   if (!shouldSuppressNegativeSuitabilityCard(userMessage, answer)) {
@@ -4101,11 +4139,15 @@ async function selectVerifiedCompactReplacementContinuation(
   const options = Object.fromEntries(
     contract.axes.map(({ key, value }) => [key, [value]]),
   );
+  const budgetCap = extractBudgetCap(userMessage);
   const filtered = await executeSearchCatalog({
     mode: "by_filter",
     category_in: leaves,
     options,
     min_price: 1,
+    ...(budgetCap !== null
+      ? { max_price: budgetCap, sort_cheapest: true }
+      : {}),
     per_page: 20,
   }, {
     baseUrl: CATALOG_BASE_URL,
@@ -4123,7 +4165,9 @@ async function selectVerifiedCompactReplacementContinuation(
     .filter((product) =>
       !productMatchesExcludedReplacementIdentity(product, excludedIdentity)
     )
-    .filter((product) => product.price > 0)
+    .filter((product) =>
+      productProvesDirectReplacementAxes(product, contract.axes, budgetCap)
+    )
     .sort((left, right) =>
       left.price - right.price || left.pagetitle.localeCompare(right.pagetitle)
     )
@@ -4138,6 +4182,21 @@ async function selectVerifiedCompactReplacementContinuation(
   });
 
   if (selected.length === 0) {
+    if (filtered.total > 0) {
+      // The API filter may include cards with absent or contradictory option
+      // payloads. Do not turn that into a false "none exist" or a contract.
+      steps.push({
+        step: "v3_compact_replacement_continuation_unverified_facets",
+        ms: Date.now() - t0,
+        meta: {
+          category: discovery.category.pagetitle,
+          axes: contract.axes,
+          filtered_total: filtered.total,
+          budget_cap: budgetCap,
+        },
+      });
+      return null;
+    }
     send({
       type: "delta",
       content: `По подтверждённому сочетанию (${
@@ -4161,7 +4220,7 @@ async function selectVerifiedCompactReplacementContinuation(
 
   const rendered = executeRenderProducts({
     product_ids: selected.map(({ id }) => id),
-    total_available: filtered.total,
+    total_available: selected.length,
   }, ctx.cache);
   if (!rendered.ok) {
     return {
@@ -4170,19 +4229,30 @@ async function selectVerifiedCompactReplacementContinuation(
       outcome: "upstream_error",
     };
   }
+  const selectionCriteria: Criterion[] = contract.axes.map((axis) => {
+    const facet = discovery.facets.find(({ key }) => key === axis.key);
+    return {
+      key: axis.caption,
+      op: "eq",
+      value: axis.value,
+      ...(facet?.unit ? { unit: facet.unit } : {}),
+      level: "A",
+      evidence: "user_explicit",
+    };
+  });
+  if (budgetCap !== null) {
+    selectionCriteria.push({
+      key: "Цена",
+      op: "max",
+      value: budgetCap,
+      unit: "₸",
+      level: "A",
+      evidence: "user_explicit",
+    });
+  }
   const plan = extendSelectionCriteriaPlan(
     null,
-    contract.axes.map((axis) => {
-      const facet = discovery.facets.find(({ key }) => key === axis.key);
-      return {
-        key: axis.caption,
-        op: "eq" as const,
-        value: axis.value,
-        ...(facet?.unit ? { unit: facet.unit } : {}),
-        level: "A" as const,
-        evidence: "user_explicit" as const,
-      };
-    }),
+    selectionCriteria,
     "guarded_search",
   );
   send({
@@ -4198,7 +4268,7 @@ async function selectVerifiedCompactReplacementContinuation(
     type: "products_block",
     markdown: rendered.markdown,
     count: rendered.rendered_count,
-    total_available: filtered.total,
+    total_available: selected.length,
     selection_contract: {
       hash: plan.hash,
       mandatory_criteria: plan.mandatory_criteria.map((
@@ -4223,6 +4293,8 @@ async function selectVerifiedCompactReplacementContinuation(
       excluded_identity: excludedIdentity,
       literal_evidence: compactEvidence.length,
       filtered_total: filtered.total,
+      exact_live_facet_proof: true,
+      budget_cap: budgetCap,
       rendered: rendered.rendered_count,
       duration_ms: elapsed,
     },
@@ -4557,18 +4629,29 @@ async function selectVerifiedOrdinaryReplacement(
       unit: null,
       isDiameter: false,
     }));
-  const isCandidate = (product: ProductRef): boolean =>
-    !excludedIds.has(product.id) &&
-    !productContainsSourceModel(product, sourceModels) &&
-    productTitleSupportsMandatoryAxes(product.pagetitle, axes) &&
-    requiredVisibleCodes.every((code) => {
+  const unverifiedFacetCandidateIds = new Set<string>();
+  const isCandidate = (product: ProductRef): boolean => {
+    if (
+      excludedIds.has(product.id) ||
+      productContainsSourceModel(product, sourceModels) ||
+      (budgetCap !== null && product.price > budgetCap)
+    ) return false;
+    if (!requiredVisibleCodes.every((code) => {
       const titleCodes = new Set(
         (product.pagetitle.match(/[\p{L}\p{N}]+/gu) ?? []).map(
           normalizeCodeLike,
         ),
       );
       return titleCodes.has(code);
-    });
+    })) return false;
+    const proven = productProvesDirectReplacementAxes(
+      ctx.cache.get(product.id),
+      axes,
+      budgetCap,
+    );
+    if (!proven) unverifiedFacetCandidateIds.add(product.id);
+    return proven;
+  };
   const baseSearch: Pick<
     SearchCatalogInput,
     "category" | "anchor_leaf_category" | "min_price" | "per_page"
@@ -4596,26 +4679,8 @@ async function selectVerifiedOrdinaryReplacement(
       .filter((product) => budgetCap === null || product.price <= budgetCap)
       .slice(0, 4)
     : [];
-  let nearMatch = false;
-
-  const replacementAxes: ReplacementAxis[] = axes.map((axis) => ({
-    key: axis.key,
-    caption: axis.caption,
-    values: [axis.value],
-    unit: null,
-    isDiameter: false,
-  }));
-  if (equivalentOnly && selected.length > 0) {
-    const exactVisibleIds = new Set(filterReplacementCompatibleIds(
-      selected.map((product) => product.id),
-      replacementAxes,
-      ctx.cache,
-      null,
-      true,
-      false,
-    ));
-    selected = selected.filter((product) => exactVisibleIds.has(product.id));
-  }
+  let splitSearchTotals: Array<number | null> = [];
+  let broadSearchTotal: number | null | undefined;
 
   if (selected.length === 0) {
     const splitSearches = await Promise.all(axes.map(async (axis) => ({
@@ -4634,7 +4699,10 @@ async function selectVerifiedOrdinaryReplacement(
         ctx.cache,
       ),
     })));
-    let ranked = rankSplitReplacementCandidates(
+    splitSearchTotals = splitSearches.map(({ result }) =>
+      result.ok ? result.total : null
+    );
+    const ranked = rankSplitReplacementCandidates(
       splitSearches.map(({ axis, result }) => ({
         key: axis.key,
         total: result.ok ? result.total : axis.total,
@@ -4650,38 +4718,11 @@ async function selectVerifiedOrdinaryReplacement(
       excludedIds,
       4,
     );
-    if (equivalentOnly) {
-      const splitAxisSets = new Map(splitSearches.map(({ axis, result }) =>
-        [
-          axis.key,
-          new Set(
-            result.ok
-              ? result.results
-                .filter(isCandidate)
-                .filter((product) =>
-                  budgetCap === null || product.price <= budgetCap
-                )
-                .map((product) => product.id)
-              : [],
-          ),
-        ] as const
-      ));
-      const exactVisibleIds = new Set(filterReplacementCompatibleIds(
-        ranked.map((candidate) => candidate.id),
-        replacementAxes,
-        ctx.cache,
-        splitAxisSets,
-        true,
-        false,
-      ));
-      ranked = ranked.filter((candidate) => exactVisibleIds.has(candidate.id));
-    }
     selected = ranked
       .map((candidate) => ctx.cache.get(candidate.id))
       .filter((product): product is ProductFull =>
         Boolean(product && isCandidate(product))
       );
-    nearMatch = !equivalentOnly && selected.length > 0;
   }
 
   if (equivalentOnly && selected.length === 0) {
@@ -4701,8 +4742,9 @@ async function selectVerifiedOrdinaryReplacement(
         { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
         ctx.cache,
       );
+      broadSearchTotal = broad.ok ? broad.total : null;
       if (broad.ok) {
-        selected = broad.results
+        const broadCandidates = broad.results
           .filter(isCandidate)
           .filter((product) => budgetCap === null || product.price <= budgetCap)
           .filter((product) =>
@@ -4711,49 +4753,20 @@ async function selectVerifiedOrdinaryReplacement(
               portableRequirements,
             )
           )
-          .slice(0, 4)
           .map((product) => ctx.cache.get(product.id))
           .filter((product): product is ProductFull => Boolean(product));
+        // Broad recovery omits facet filters. The shared isCandidate gate
+        // verifies every live axis on each card before it can be rendered.
+        selected = broadCandidates.slice(0, 4);
       }
     }
   }
-
-  if (nearMatch) {
-    // A split-axis intersection can recommend a card that misses one hard
-    // customer condition. Let the reasoning/criteria route explain the gap.
-    steps.push({
-      step: "v3_replacement_direct_partial_axes_delegated",
-      ms: Date.now() - t0,
-      meta: { explicit_axes: axes.length },
-    });
-    return {
-      handled: false,
-      products: [],
-      outcome: "query_inconsistent",
-      source_candidate_ids: [...sourceCandidateIds],
-    };
-  }
-  // Mandatory portable codes remain customer requirements; only source
-  // identity codes may be omitted from a cross-brand analogue.
-  const identityWords = [anchor.vendor, ...sourceModels].filter(
-    (value): value is string => typeof value === "string" && Boolean(value),
-  );
-  const lexicallyProven = selected.filter((product) =>
-    directProductProvesLiteralWords(sourceDescription, product, identityWords)
-  );
-  if (lexicallyProven.length !== selected.length) {
-    steps.push({
-      step: "v3_replacement_direct_literal_unproven_delegated",
-      ms: Date.now() - t0,
-      meta: { selected: selected.length, proven: lexicallyProven.length },
-    });
-    return {
-      handled: false,
-      products: [],
-      outcome: "query_inconsistent",
-      source_candidate_ids: [...sourceCandidateIds],
-    };
-  }
+  // This path admits a source-only replacement request. Its title, article,
+  // brand and model codes identify the item being replaced, not mandatory
+  // literals on the analogue. Transferable customer requirements have already
+  // been checked through live facet axes, visible mandatory codes, category,
+  // price and source-family exclusion above. Geometry not proven by those axes
+  // remains explicitly caveated in the response below.
 
   const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(
     ", ",
@@ -4772,6 +4785,12 @@ async function selectVerifiedOrdinaryReplacement(
   });
 
   if (selected.length === 0) {
+    const emptyOutcome = directReplacementEmptyOutcome({
+      strictTotal: strict.ok ? strict.total : null,
+      splitTotals: splitSearchTotals,
+      broadTotal: broadSearchTotal,
+      unverifiedFacetCount: unverifiedFacetCandidateIds.size,
+    });
     steps.push({
       step: "v3_replacement_preflight_delegated",
       ms: Date.now() - t0,
@@ -4783,22 +4802,26 @@ async function selectVerifiedOrdinaryReplacement(
         required_visible_codes: requiredVisibleCodes,
         equivalent_only: equivalentOnly,
         budget_cap: budgetCap,
+        strict_total: strict.ok ? strict.total : null,
+        split_totals: splitSearchTotals,
+        broad_total: broadSearchTotal ?? null,
+        unverified_facet_candidates: unverifiedFacetCandidateIds.size,
+        outcome: emptyOutcome,
         duration_ms: elapsed,
       },
     });
     return {
       handled: false,
       products: [],
-      outcome: "confirmed_empty",
+      outcome: emptyOutcome,
       source_candidate_ids: [...new Set([...sourceCandidateIds, anchor.id])],
     };
   }
 
   send({
     type: "delta",
-    content: nearMatch
-      ? `Точного совпадения по всем параметрам исходной модели в каталоге не подтвердилось. Показываю ближайшие аналоги, найденные отдельно по критериям (${axesLabel}); перед заменой сверьте монтажные размеры и остальные характеристики.`
-      : `Нашёл аналоги в той же категории с подтверждёнными параметрами (${axesLabel}). Перед заменой сверьте монтажные размеры и остальные характеристики.`,
+    content:
+      `Нашёл аналоги в той же категории с подтверждёнными параметрами (${axesLabel}). Перед заменой сверьте монтажные размеры и остальные характеристики.`,
   });
   const ids = selected.map((product) => product.id);
   const rendered = executeRenderProducts({
@@ -4813,11 +4836,60 @@ async function selectVerifiedOrdinaryReplacement(
     });
     return { handled: true, products: [], outcome: "upstream_error" };
   }
+  const selectionCriteria: Criterion[] = axes.map((axis) => {
+    const facet = discovery.facets.find(({ key }) => key === axis.key);
+    return {
+      key: axis.caption,
+      op: "eq",
+      value: axis.value,
+      ...(facet?.unit ? { unit: facet.unit } : {}),
+      level: "A",
+      // The source model is only an identity. These transferable axes are
+      // separately grounded in the live source card and catalog facets.
+      evidence: "derived_required",
+    };
+  });
+  if (budgetCap !== null) {
+    selectionCriteria.push({
+      key: "Цена",
+      op: "max",
+      value: budgetCap,
+      unit: "₸",
+      level: "A",
+      evidence: "user_explicit",
+    });
+  }
+  const selectionPlan = extendSelectionCriteriaPlan(
+    null,
+    selectionCriteria,
+    "guarded_search",
+  );
   send({
     type: "products_block",
     markdown: rendered.markdown,
     count: rendered.rendered_count,
     total_available: selected.length,
+    selection_contract: {
+      hash: selectionPlan.hash,
+      mandatory_criteria: selectionPlan.mandatory_criteria.map((
+        { key, op, value, unit, evidence },
+      ) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(evidence ? { evidence } : {}),
+      })),
+      ...(requiredVisibleCodes.length > 0
+        ? {
+          visible_requirements: requiredVisibleCodes.map((code) => ({
+            kind: "title_code",
+            label: "Код в названии товара",
+            value: code.toLocaleUpperCase("ru-RU"),
+          })),
+        }
+        : {}),
+    },
   });
   steps.push({
     step: "v3_replacement_preflight_rendered",
@@ -4829,10 +4901,11 @@ async function selectVerifiedOrdinaryReplacement(
       axes,
       mandatory_axes: mandatoryAxes,
       strict_total: strict.ok ? strict.total : 0,
-      near_match: nearMatch,
+      exact_live_facet_proof: true,
       equivalent_only: equivalentOnly,
       required_visible_codes: requiredVisibleCodes,
       budget_cap: budgetCap,
+      selection_contract_hash: selectionPlan.hash,
       rendered: rendered.rendered_count,
       duration_ms: elapsed,
     },
@@ -4845,10 +4918,12 @@ async function selectVerifiedOrdinaryReplacement(
 
 async function selectVerifiedExactCompoundProducts(
   request: ExactCompoundMarkingRequest,
+  userMessage: string,
   ctx: ToolContext,
   send: (event: SseEvent) => void,
   steps: StepLog[],
   t0: number,
+  registerPriceProof: (certificate: PriceExtremeCertificate) => boolean,
 ): Promise<ProductFull[]> {
   const started = Date.now();
   if (request.priceDirection) {
@@ -4905,6 +4980,7 @@ async function selectVerifiedExactCompoundProducts(
     if (!proof?.ok) {
       send({
         type: "delta",
+        origin: "server",
         content: proof?.reason === "mixed_units"
           ? "Товары с этой точной маркировкой продаются в разных единицах. Их цены напрямую сравнивать нельзя — уточните нужную единицу продажи."
           : proof?.reason === "no_candidate"
@@ -4935,6 +5011,20 @@ async function selectVerifiedExactCompoundProducts(
       });
       return [];
     }
+    const certificate = certificateFromCompleteCategory({
+      requestMessage: userMessage,
+      request,
+      proof,
+      winner,
+    });
+    if (!certificate || !registerPriceProof(certificate)) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: "Полную проверку цены не удалось связать с текущим запросом. Не буду утверждать минимум или максимум; повторите запрос позже.",
+      });
+      return [];
+    }
     const exactMarking = `${request.first}×${String(request.second).replace(".", ",")}`;
     const exactPlan = extendSelectionCriteriaPlan(null, [{
       key: "Точная составная маркировка",
@@ -4948,6 +5038,7 @@ async function selectVerifiedExactCompoundProducts(
       markdown: rendered.markdown,
       count: rendered.rendered_count,
       total_available: proof.evidence.matching_available,
+      price_winner_id: winner.id,
       selection_contract: {
         hash: exactPlan.hash,
         mandatory_criteria: exactPlan.mandatory_criteria.map((
@@ -5141,7 +5232,7 @@ async function selectVerifiedSemanticCompoundProducts(
     // The semantic recovery pool is bounded and may omit a cheaper exact item.
     // `handled: true` is essential: falling through to the expert loop would
     // reintroduce an unverified superlative through another render path.
-    send({ type: "delta", content: unprovenExtremeNotice });
+    send({ type: "delta", content: unprovenExtremeNotice, origin: "server" });
     steps.push({
       step: "v3_semantic_compound_superlative_unverified",
       ms: Date.now() - t0,
@@ -5468,6 +5559,7 @@ async function selectVerifiedRecentPriceFollowup(
   send: (event: SseEvent) => void,
   steps: StepLog[],
   t0: number,
+  registerPriceProof: (certificate: PriceExtremeCertificate) => boolean,
 ): Promise<{ handled: boolean; products: ProductFull[] }> {
   const intent = detectPriceDirection(userMessage);
   if (
@@ -5515,6 +5607,7 @@ async function selectVerifiedRecentPriceFollowup(
     send({
       type: "delta",
       content: notice,
+      origin: "server",
     });
     steps.push({
       step: "v3_recent_price_followup_unverified",
@@ -5548,6 +5641,24 @@ async function selectVerifiedRecentPriceFollowup(
     });
     return { handled: true, products: [] };
   }
+  // The recent-set verifier also supports relative tier wording (for example
+  // «бюджетный из этих»). Only an *explicit absolute* request needs the outer
+  // egress certificate; do not regress otherwise verified comparisons.
+  if (classifyCatalogPriceExtreme(userMessage)) {
+    const certificate = certificateFromRecentSet({
+      requestMessage: userMessage,
+      expected: latestEvidence,
+      proof,
+    });
+    if (!certificate || !registerPriceProof(certificate)) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: "Не удалось связать проверку цен с текущим списком товаров. Минимальную или максимальную цену из списка сейчас надёжно назвать нельзя.",
+      });
+      return { handled: true, products: [] };
+    }
+  }
   send({
     type: "delta",
     content: `Среди ${proof.compared_count} ранее показанных товаров с подтверждённым наличием ${
@@ -5555,12 +5666,14 @@ async function selectVerifiedRecentPriceFollowup(
         ? "максимальная"
         : "минимальная"
     } цена сейчас у этой позиции.`,
+    origin: "server",
   });
   send({
     type: "products_block",
     markdown: rendered.markdown,
     count: rendered.rendered_count,
     total_available: proof.compared_count,
+    price_winner_id: proof.winner.id,
   });
   steps.push({
     step: "v3_recent_price_followup_rendered",
@@ -5738,6 +5851,77 @@ async function loadVerifiedBroadAssortmentChoice(
       matchedIssuedOption: false,
       lookupFailed: true,
     };
+  }
+}
+
+async function loadVerifiedActiveSelectionScope(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+): Promise<{
+  scope: ActiveNamedSeriesSectionScope | null;
+  lookupFailed: boolean;
+}> {
+  try {
+    const earliestCreatedAt = activeSelectionScopeLookupCreatedAfter();
+    // Only the immediately preceding completed server response can carry the
+    // active selection. Never search older matching products or client prose:
+    // a newer task, even one without cards, must break that chain.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let { data, error } = await supabase.from("chat_request_logs")
+        .select("session_id,created_at,error,response_events")
+        .eq("session_id", sessionId)
+        .eq("pipeline", "v3")
+        .neq("id", currentLogId)
+        .gte("created_at", earliestCreatedAt)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && !data) {
+        // A boundary rotates the browser session inside the previous response;
+        // the durable log still has the original transport session ID.
+        const rotated = await supabase.from("chat_request_logs")
+          .select("session_id,created_at,error,response_events")
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", earliestCreatedAt)
+          .contains("response_events", [{
+            type: "conversation_boundary",
+            mode: "new_task",
+            session_id: sessionId,
+          }])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        data = rotated.data;
+        error = rotated.error;
+      }
+      if (error) {
+        console.error("[v3] active selection scope lookup failed", {
+          code: error.code ?? "database_error",
+        });
+        return { scope: null, lookupFailed: true };
+      }
+      if (!data) {
+        // A fresh session has no scope to restore. This is different from a
+        // failed lookup or a prior request still being finalized.
+        return { scope: null, lookupFailed: false };
+      }
+      if (data && data.error !== "in_progress") {
+        return {
+          scope: scopeFromCompletedServerLog(
+            data as ActiveSelectionScopeLog,
+            sessionId,
+          ),
+          lookupFailed: false,
+        };
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return { scope: null, lookupFailed: true };
+  } catch (error) {
+    console.error("[v3] active selection scope lookup exception:", error);
+    return { scope: null, lookupFailed: true };
   }
 }
 
@@ -5963,6 +6147,19 @@ async function answerVerifiedBroadAssortmentChoice(
           ...(evidence ? { evidence } : {}),
         }),
       ),
+    },
+  });
+  // The clarification itself is consumed, but its verified series and live
+  // section remain the active selection for a later same-section refinement.
+  // This event is persisted with the completed server log; widget storage is
+  // never allowed to author the constraint on a later turn.
+  send({
+    type: "active_selection_scope",
+    scope: {
+      kind: "named_series_section",
+      entity: choice.entity,
+      leaf: choice.leaf,
+      source_slot_id: choice.slot_id,
     },
   });
   steps.push({
@@ -6246,6 +6443,7 @@ async function runExpertLoop(
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
   const now = () => Date.now() - t0;
+  const activeSelectionScope = trustedActiveSelectionScope(slots);
   // Category scope comes from the request that produced the latest rendered
   // batch; constraints are compiled separately below so the current attribute
   // can replace, rather than be ANDed with, the previous value of that facet.
@@ -6354,7 +6552,7 @@ async function runExpertLoop(
   let latestRenderCriteria: Criterion[] = [];
   let selectionCriteriaPlan: SelectionCriteriaPlan | null = null;
   const disclosedUnverifiedCriterionSignatures = new Set<string>();
-  let pendingUnverifiedRecoveryCriteria: Criterion[] = [];
+  const pendingUnverifiedRecoveryCriteria: Criterion[] = [];
   let unverifiedRecoveryNoticeSent = false;
   const omitDisclosedUnverifiedCriteria = (
     criteria: Criterion[],
@@ -6538,7 +6736,7 @@ async function runExpertLoop(
     }
     if (catalogPriceExtreme && !priceScopeNoticeSent) {
       const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, true);
-      rawSend({ type: "delta", content: `\n\n${notice}` });
+      rawSend({ type: "delta", content: `\n\n${notice}`, origin: "server" });
       finalText += `${finalText ? "\n\n" : ""}${notice}`;
       priceScopeNoticeSent = true;
       steps.push({
@@ -7078,6 +7276,26 @@ async function runExpertLoop(
   // model-owned reasoning/search while preventing both redundant searches and
   // unrelated lexical fallbacks.
   let groundedJargonTerminal = false;
+  // A failed lexical helper is not evidence that the live catalog is empty.
+  // Later successful rendering can still resolve the turn; only a final
+  // unrendered turn needs a retryable technical notice.
+  let jargonRecoveryUnavailable = false;
+  const finishWithJargonUnavailable = (route: "in_loop" | "terminal") => {
+    const notice = "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.";
+    send({ type: "delta", content: `${finalText ? "\n\n" : ""}${notice}` });
+    finalText += `${finalText ? "\n\n" : ""}${notice}`;
+    steps.push({
+      step: "v3_jargon_recovery_technical_notice",
+      ms: now(),
+      meta: { route, products_rendered: productsRendered },
+    });
+    steps.push({
+      step: "v3_turn_end",
+      ms: now(),
+      meta: { reason: "jargon_recovery_unavailable" },
+    });
+    return { finalText, productsRendered, shownProductIds: [...shownIds] };
+  };
   let groundedCompoundSearchTerminal = false;
   type PendingJargonAxisSplit = {
     source: string;
@@ -7187,10 +7405,14 @@ async function runExpertLoop(
       },
     });
   };
-  const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
+  // A verified section has already resolved the broad assortment ambiguity.
+  // Keep the expert's generic broad-catalog clarification from reopening it.
+  const broadAssortmentRequest = !activeSelectionScope &&
+    isBroadAssortmentRequest(userMessage);
   const namedSeriesToken =
     resolveNamedSeriesToken(userMessage, history.slice(-8)) ??
-      resolvePendingBroadAssortmentScope(slots, history.slice(-8));
+      resolvePendingBroadAssortmentScope(slots, history.slice(-8)) ??
+      activeSelectionScope?.entity ?? null;
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" &&
     requiresCatalogGroundingForInquiry(userMessage);
   const seriesTurnRequiresGrounding = Boolean(namedSeriesToken);
@@ -7694,9 +7916,24 @@ async function runExpertLoop(
       "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ): string[] => {
+    const sectionSafeIds = activeSelectionScope
+      ? ids.filter((id) => productMatchesActiveSection(
+        ctx.cache.get(id)?.leaf_category,
+        activeSelectionScope,
+      ))
+      : ids;
+    // The active identity is an independent server-verified requirement. A
+    // named token inferred from this turn or older prose must not replace it.
+    const scopeSafeIds = activeSelectionScope
+      ? filterProductIdsByNamedSeries(
+        sectionSafeIds,
+        ctx.cache,
+        activeSelectionScope.entity,
+      )
+      : sectionSafeIds;
     const structurallySafe = guardReplacementRenderIds(
       filterProductIdsByNamedSeries(
-        guardVisibleCardinality(ids, visibleContext).ids,
+        guardVisibleCardinality(scopeSafeIds, visibleContext).ids,
         ctx.cache,
         namedSeriesToken,
       ),
@@ -7747,16 +7984,26 @@ async function runExpertLoop(
         severeOutputGapFactor: 2,
       },
     );
-    if (ranking.excludedVeryLowOutput.length > 0) {
+    const rankingChanged = ranking.rankingEligible && (
+      ranking.retained.length !== classificationSafe.length ||
+      ranking.retained.some(({ product }, index) =>
+        product.id !== classificationSafe[index]
+      )
+    );
+    if (rankingChanged) {
       steps.push({
         step: "v3_system_total_relative_output_ranked",
         ms: now(),
         meta: {
           before: classificationSafe.length,
           retained: ranking.retained.length,
-          excluded: ranking.excludedVeryLowOutput.length,
+          excluded: ranking.excludedVeryLowOutput.length +
+            ranking.excludedUnverifiedOutput.length,
+          excluded_unverified_output: ranking.excludedUnverifiedOutput.length,
+          ranking_basis: "visible_system_total_proximity",
           output_facet: totalRequirement.outputFacet.key,
           unit: totalRequirement.unit,
+          minimum_total: totalRequirement.minimumTotal,
           system_sufficiency_proven: false,
         },
       });
@@ -9490,11 +9737,29 @@ async function runExpertLoop(
               },
             });
           }
+          if (
+            shouldReportJargonRecoveryUnavailable(
+              jargonRecoveryUnavailable,
+              productsRendered,
+            )
+          ) {
+            // The model may say "not found" after receiving a tool error.
+            // Do not stream that false catalog conclusion before the server's
+            // retryable technical notice below.
+            outText = "";
+            steps.push({
+              step: "v3_jargon_unavailable_final_text_suppressed",
+              ms: now(),
+              meta: { fragment_index: step },
+            });
+          }
           if (outText.trim()) {
             if (!isFirstTurn) {
               send({ type: "assistant_turn_break", reason: "final_text" });
             }
-            send({ type: "delta", content: outText });
+            // The model paragraph still crosses the shared egress guard. Its
+            // separately appended deterministic refusal is preserved there.
+            send({ type: "delta", content: outText, origin: "model" });
             finalText += outText;
             if (isFirstTurn) {
               firstAssistantText = outText.trim();
@@ -9728,6 +9993,9 @@ async function runExpertLoop(
         // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
         // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
         // правильный search_catalog по правилам <price_anchoring>.
+        if (shouldReportJargonRecoveryUnavailable(jargonRecoveryUnavailable, productsRendered)) {
+          return finishWithJargonUnavailable("in_loop");
+        }
         steps.push({
           step: "v3_turn_end",
           ms: now(),
@@ -13537,6 +13805,17 @@ async function runExpertLoop(
             rememberCompoundRecoveryHint(candidate);
           }
         }
+        if (
+          tc.name === "jargon_recover_catalog" && !result.ok &&
+          result.error_code === "jargon_unavailable"
+        ) {
+          jargonRecoveryUnavailable = true;
+          steps.push({
+            step: "v3_jargon_recovery_unavailable",
+            ms: now(),
+            meta: { route: "in_loop", error_code: result.error_code },
+          });
+        }
 
         // A jargon lookup may load relevant base products and then return zero
         // because conversational modifiers do not occur as identical word
@@ -16799,6 +17078,7 @@ async function runExpertLoop(
         candidateCount: number;
       }
       | { kind: "partial"; split: PendingJargonAxisSplit }
+      | { kind: "unavailable"; errorCode: string }
       | null
     > => {
       if (!terminalDiscover || !terminalSelectionTarget || !source.trim()) {
@@ -16846,7 +17126,12 @@ async function runExpertLoop(
         phase: "result",
         summary: summariseToolResult("jargon_recover_catalog", jargonResult),
       });
-      if (!jargonResult.ok || jargonResult.tool !== "jargon_recover_catalog") {
+      if (!jargonResult.ok) {
+        return jargonResult.error_code === "jargon_unavailable"
+          ? { kind: "unavailable", errorCode: jargonResult.error_code }
+          : null;
+      }
+      if (jargonResult.tool !== "jargon_recover_catalog") {
         return null;
       }
       const matchedQuery = String(jargonResult.matched_query ?? "").trim();
@@ -16943,6 +17228,26 @@ async function runExpertLoop(
         split.modifiers.length === 0 ||
         terminalPairDecision.state !== "not_applicable"
       ) return false;
+      // An axis split deliberately shows independent partial matches. The
+      // full final-card guard would wrongly require every original modifier
+      // in each half, so reuse only its section and named-series predicates.
+      // Apply them before the three-card cap: unrelated cheap results must
+      // not crowd out admissible cards later in the pool.
+      const guardScopedSplitIds = (ids: string[]): string[] =>
+        activeSelectionScope
+          ? filterProductIdsByNamedSeries(
+            filterProductIdsByNamedSeries(
+              ids.filter((id) => productMatchesActiveSection(
+                ctx.cache.get(id)?.leaf_category,
+                activeSelectionScope,
+              )),
+              ctx.cache,
+              activeSelectionScope.entity,
+            ),
+            ctx.cache,
+            namedSeriesToken,
+          )
+          : ids;
       const target = terminalSelectionTarget;
       const budgetCap = extractBudgetCap(userMessage);
       const baseProducts = split.baseIds
@@ -16961,13 +17266,13 @@ async function runExpertLoop(
         target,
         baseProducts,
       );
-      const baseIds = filterProductIdsByBudgetCap(
+      const baseIds = guardScopedSplitIds(filterProductIdsByBudgetCap(
         baseProducts.map((product) => product.id).filter((id) =>
           baseTarget.passed_ids.includes(id)
         ),
         ctx.cache,
         budgetCap,
-      ).ids.slice(0, 3);
+      ).ids).slice(0, 3);
       if (baseIds.length === 0) return false;
 
       const sections: Array<{ label: string; ids: string[]; total: number }> = [
@@ -17019,7 +17324,7 @@ async function runExpertLoop(
             target,
             axisProducts,
           );
-          return filterProductIdsByBudgetCap(
+          return guardScopedSplitIds(filterProductIdsByBudgetCap(
             axisProducts
               .map((product) => product.id)
               .filter((id) =>
@@ -17027,7 +17332,7 @@ async function runExpertLoop(
               ),
             ctx.cache,
             budgetCap,
-          ).ids.slice(0, 3);
+          ).ids).slice(0, 3);
         };
         let axisIds = evaluateAxisResult(axisResult);
         // Mirror the taxonomy/API-shape recovery used by jargon search. This
@@ -17065,12 +17370,24 @@ async function runExpertLoop(
       // One independent pool is not a split. Keep the ordinary honest-empty
       // path rather than silently relaxing the original request.
       if (sections.length < 2) return false;
+      // A second check at the emission boundary protects the whole labelled
+      // split. If any segment loses its cards, do not publish a misleading
+      // caption or a partial pool from a different section/series.
+      const safeSections = activeSelectionScope
+        ? guardJargonAxisSplitSections(sections, guardScopedSplitIds)
+        : sections;
+      if (!safeSections) return false;
 
       const markdownSections: string[] = [];
       let renderedCount = 0;
-      for (const section of sections) {
+      for (const section of safeSections) {
         const rendered = executeRenderProducts(
-          { product_ids: section.ids, total_available: section.total },
+          {
+            product_ids: section.ids,
+            total_available: activeSelectionScope
+              ? section.ids.length
+              : section.total,
+          },
           ctx.cache,
         );
         if (!rendered.ok) continue;
@@ -17085,7 +17402,7 @@ async function runExpertLoop(
 
       const caption = buildGroundedAxisSplitCaption(
         split.matchedQuery,
-        sections.slice(1).map((section) => section.label),
+        safeSections.slice(1).map((section) => section.label),
       );
       const captionDelta = `${finalText ? "\n\n" : ""}${caption}`;
       send({ type: "assistant_turn_break", reason: "text_before_render" });
@@ -17095,12 +17412,16 @@ async function runExpertLoop(
         type: "products_block",
         markdown: markdownSections.join("\n\n"),
         count: renderedCount,
-        total_available: sections.reduce(
-          (sum, section) => sum + section.total,
+        total_available: safeSections.reduce(
+          (sum, section) => sum + (activeSelectionScope
+            ? section.ids.length
+            : section.total),
           0,
         ),
       });
-      for (const id of usedIds) shownIds.add(id);
+      for (const section of safeSections) {
+        for (const id of section.ids) shownIds.add(id);
+      }
       productsRendered += renderedCount;
       steps.push({
         step: "v3_jargon_axis_split_rendered",
@@ -17108,7 +17429,7 @@ async function runExpertLoop(
         meta: {
           source: split.source,
           matched_query: split.matchedQuery,
-          sections: sections.map((section) => ({
+          sections: safeSections.map((section) => ({
             label: section.label,
             rendered: section.ids.length,
           })),
@@ -18380,6 +18701,17 @@ async function runExpertLoop(
       const recoveredJargon = await attemptTerminalJargonRecovery(
         terminalLexicalRecoverySource,
       );
+      if (recoveredJargon?.kind === "unavailable") {
+        jargonRecoveryUnavailable = true;
+        steps.push({
+          step: "v3_terminal_jargon_recovery_unavailable",
+          ms: now(),
+          meta: {
+            source: terminalLexicalRecoverySource,
+            error_code: recoveredJargon.errorCode,
+          },
+        });
+      }
       if (
         recoveredJargon?.kind === "partial" &&
         await renderJargonAxisSplit(recoveredJargon.split)
@@ -18415,11 +18747,13 @@ async function runExpertLoop(
         });
         return { finalText, productsRendered, shownProductIds: [...shownIds] };
       }
-      steps.push({
-        step: "v3_terminal_jargon_recovery_empty",
-        ms: now(),
-        meta: { source: terminalLexicalRecoverySource },
-      });
+      if (recoveredJargon?.kind !== "unavailable") {
+        steps.push({
+          step: "v3_terminal_jargon_recovery_empty",
+          ms: now(),
+          meta: { source: terminalLexicalRecoverySource },
+        });
+      }
     }
 
     if (
@@ -18910,6 +19244,10 @@ async function runExpertLoop(
       }
     }
 
+    if (shouldReportJargonRecoveryUnavailable(jargonRecoveryUnavailable, productsRendered)) {
+      return finishWithJargonUnavailable("terminal");
+    }
+
     // A forced catalog phase may consume the complete agent loop without ever
     // producing visible prose. Preserve the consultant role with one compact,
     // tool-free synthesis. Product facts stay closed and the deterministic
@@ -19027,7 +19365,7 @@ async function runExpertLoop(
       (catalogSearchAttempted || catalogLookupCompleted)
     ) {
       const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, false);
-      send({ type: "delta", content: `\n\n${notice}` });
+      send({ type: "delta", content: `\n\n${notice}`, origin: "server" });
       finalText += `${finalText ? "\n\n" : ""}${notice}`;
       priceScopeNoticeSent = true;
       steps.push({
@@ -19120,7 +19458,10 @@ Deno.serve(async (req) => {
   const sessionId = body.sessionId ?? crypto.randomUUID();
   const history = body.history;
   const rawSlots = body.slots ?? body.dialogSlots;
-  const slots = rawSlots ?? {};
+  const slots = stripClientActiveSelectionScope(rawSlots ?? {});
+  // Reserved server-only state is reconstructed from the last completed log.
+  // A browser may send this key, but it must never influence classification,
+  // planning, or rendering before that independent verification.
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
@@ -19131,6 +19472,29 @@ Deno.serve(async (req) => {
 
   const t0 = Date.now();
   const steps: StepLog[] = [];
+  const requestedPriceExtreme = classifyCatalogPriceExtreme(userMessage);
+  let priceProof: PriceExtremeCertificate | null = null;
+  let priceScopeDisclosureSent = false;
+  const registerPriceProof = (certificate: PriceExtremeCertificate): boolean => {
+    if (!priceCertificateApplies({
+      requestMessage: userMessage,
+      requestedExtreme: requestedPriceExtreme,
+      certificate,
+    })) return false;
+    priceProof = certificate;
+    steps.push({
+      step: "v3_price_extreme_proof_registered",
+      ms: Date.now() - t0,
+      meta: {
+        kind: certificate.scope.kind,
+        direction: certificate.direction,
+        unit: certificate.unit,
+        winner_id: certificate.winner_id,
+        compared_count: certificate.compared_count,
+      },
+    });
+    return true;
+  };
   let errorMsg: string | null = null;
   let publicDiagnosticError: string | null = null;
   let finalTextAccum = "";
@@ -19160,19 +19524,81 @@ Deno.serve(async (req) => {
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
         let out = ev;
         if (ev.type === "delta") {
-          const r = redactInternals(ev.content);
+          const origin = ev.origin ?? "model";
+          const priceGuard = guardPriceEgressText({
+            text: ev.content,
+            // Unknown authorship is untrusted. Server-authored negative proof
+            // notices explicitly opt out; a new model route cannot bypass
+            // this common output boundary merely by omitting an origin tag.
+            origin,
+            requestMessage: userMessage,
+            requestedExtreme: requestedPriceExtreme,
+            certificate: priceProof,
+          });
+          const r = redactInternals(priceGuard.text);
           if (r.redacted) {
             steps.push({
               step: "v3_internals_redacted",
               ms: Date.now() - t0,
               meta: { matched: r.matched, original: ev.content },
             });
-            out = { type: "delta", content: r.text };
-          } else if (r.text !== ev.content) {
-            out = { type: "delta", content: r.text };
           }
-          finalTextAccum += (out as { content: string }).content;
+          let content = r.text;
+          if (priceGuard.claimRemoved) {
+            steps.push({
+              step: "v3_unproved_price_claim_removed",
+              ms: Date.now() - t0,
+              meta: { origin },
+            });
+          }
+          if (requestedPriceExtreme && !priceProof) {
+            const knownNotices = [
+              unprovenCatalogPriceNotice(requestedPriceExtreme, true),
+              unprovenCatalogPriceNotice(requestedPriceExtreme, false),
+              unverifiedPriceScopeDisclosure(requestedPriceExtreme),
+            ];
+            if (priceScopeDisclosureSent) {
+              // A generic route may append its own identical server notice
+              // after the outer guard has already placed it before the cards.
+              for (const notice of knownNotices) {
+                content = content.replace(notice, "").trim();
+              }
+            } else if (knownNotices.some((notice) => content.includes(notice))) {
+              priceScopeDisclosureSent = true;
+            }
+            if (origin === "model" && !priceScopeDisclosureSent) {
+              const notice = unverifiedPriceScopeDisclosure(requestedPriceExtreme);
+              content = `${content.trim()}${content.trim() ? "\n\n" : ""}${notice}`;
+              priceScopeDisclosureSent = true;
+            }
+          }
+          if (!content.trim()) return;
+          out = { type: "delta", content };
+          finalTextAccum += content;
         } else if (ev.type === "products_block") {
+          const cardPriceProofApplies = priceCertificateCoversCardBlock({
+            requestMessage: userMessage,
+            requestedExtreme: requestedPriceExtreme,
+            certificate: priceProof,
+            renderedCount: ev.count,
+            renderedWinnerId: ev.price_winner_id ?? null,
+          });
+          if (
+            requestedPriceExtreme && !priceScopeDisclosureSent &&
+            !cardPriceProofApplies
+          ) {
+            const notice = unprovenCatalogPriceNotice(requestedPriceExtreme, true);
+            const disclosure: SseEvent = { type: "delta", content: notice };
+            responseEvents.push(disclosure);
+            emit(disclosure);
+            finalTextAccum += `${finalTextAccum ? "\n\n" : ""}${notice}`;
+            priceScopeDisclosureSent = true;
+            steps.push({
+              step: "v3_unproved_price_scope_disclosed_before_cards",
+              ms: Date.now() - t0,
+              meta: { direction: requestedPriceExtreme },
+            });
+          }
           // Product cards must never leave the server without an explicit
           // machine trace. Legacy/direct branches may legitimately have no
           // hard criterion yet; represent that honestly as an empty immutable
@@ -19186,8 +19612,10 @@ Deno.serve(async (req) => {
             hash: emptyPlan!.hash,
             mandatory_criteria: [],
           };
+          // The winning ID is an internal proof binding, not widget protocol.
+          const { price_winner_id: _priceWinnerId, ...publicBlock } = ev;
           out = {
-            ...ev,
+            ...publicBlock,
             selection_contract: {
               ...selectionContract,
               result_cardinality: selectionContract.result_cardinality ?? {
@@ -19515,7 +19943,112 @@ Deno.serve(async (req) => {
                   ),
                 },
               );
-            const boundary = verifiedBroadChoiceState.matchedIssuedOption
+            // The browser's history and pending slot are hints, never scope
+            // authority. In particular a stale catalog_section slot must not
+            // suppress the completed server log's active Gallant section.
+            const readinessScopeReply = isVerifiedReadinessScopeReply(
+              userMessage,
+              verifiedReadinessState.slot,
+              Boolean(readinessNewTask),
+            );
+            const activeScopeLookupNeeded =
+              mayBeNominalRefinement(userMessage) ||
+              mayBeActivePrepositionalRefinement(userMessage) ||
+              isShortAttributeSelectionFollowup(userMessage) ||
+              Boolean(verifiedReadinessState.slot);
+            const activeScopeState = activeScopeLookupNeeded
+              ? await loadVerifiedActiveSelectionScope(
+                supabase,
+                sessionId,
+                logId,
+              )
+              : { scope: null, lookupFailed: false };
+            if (
+              activeScopeState.lookupFailed ||
+              verifiedReadinessState.lookupFailed
+            ) {
+              // An unverified previous state may contain an active identity.
+              // Never substitute unscoped cards when its read failed.
+              errorMsg = "selection_context_lookup_failed";
+              publicDiagnosticError = "request_unavailable";
+              send({
+                type: "delta",
+                content:
+                  "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже.",
+              });
+              steps.push({
+                step: "v3_selection_context_lookup_failed_closed",
+                ms: Date.now() - t0,
+                meta: {
+                  active_scope: activeScopeState.lookupFailed,
+                  readiness_slot: verifiedReadinessState.lookupFailed,
+                },
+              });
+              return;
+            }
+            const activePrepositionalRefinement = activeScopeState.scope
+              ? classifyActivePrepositionalRefinement(
+                userMessage,
+                activeScopeState.scope,
+              )
+              : "not_applicable";
+            if (
+              activePrepositionalRefinement === "ambiguous" &&
+              activeScopeState.scope
+            ) {
+              // A short dependent phrase can also name a different series.
+              // Keep the verified identity for the answer to the clarification,
+              // but do not allow an unscoped product route to guess here.
+              send({
+                type: "active_selection_scope",
+                scope: activeScopeState.scope,
+              });
+              send({
+                type: "delta",
+                content:
+                  "Неясно, относится ли уточнение к выбранной серии и разделу. Напишите, пожалуйста, запрос целиком и укажите нужные товар и бренд.",
+              });
+              steps.push({
+                step: "v3_active_selection_prepositional_ambiguous",
+                ms: Date.now() - t0,
+              });
+              return;
+            }
+            const activeScopeEntityChanged = Boolean(
+              activeScopeState.scope && explicitlyChangesActiveSelectionEntity(
+                userMessage,
+                activeScopeState.scope,
+              ),
+            );
+            const activeScopeClassChanged = Boolean(
+              activeScopeState.scope &&
+                isIndependentNominalRequestOutsideActiveScope(
+                  userMessage,
+                  activeScopeState.scope,
+                ),
+            );
+            const activeScopeExplicitBoundary = activeScopeEntityChanged ||
+              activeScopeClassChanged;
+            const sameSectionScope = activeScopeState.scope &&
+                !activeScopeExplicitBoundary &&
+                (isSameSectionNominalRefinement(
+                  userMessage,
+                  activeScopeState.scope,
+                ) || isShortAttributeSelectionFollowup(userMessage) ||
+                  activePrepositionalRefinement === "continue" ||
+                  readinessScopeReply)
+              ? activeScopeState.scope
+              : null;
+            const boundary = activeScopeExplicitBoundary
+              ? {
+                mode: "new_task" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: activeScopeEntityChanged
+                  ? "explicit_active_selection_entity_change"
+                  : "independent_nominal_selection_outside_active_scope",
+              }
+              : verifiedBroadChoiceState.matchedIssuedOption
               ? {
                 mode: "continuation" as const,
                 confidence: 1,
@@ -19524,6 +20057,13 @@ Deno.serve(async (req) => {
               }
               : readinessNewTask
               ? { ...readinessNewTask, source: "local" as const }
+              : sameSectionScope
+              ? {
+                mode: "continuation" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: "server_verified_same_section_refinement",
+              }
               : await classifyConversationBoundary(
                 userMessage,
                 priorHistory,
@@ -19537,7 +20077,11 @@ Deno.serve(async (req) => {
             const scopedSelectionRequest = resolveSelectionReadinessRequest(
               userMessage,
               boundarySlots,
-              { newTaskBoundary: Boolean(readinessNewTask) },
+              {
+                newTaskBoundary: Boolean(
+                  readinessNewTask || activeScopeExplicitBoundary
+                ),
+              },
             );
             const matchedPendingClarification = Boolean(
               verifiedBroadChoiceState.matchedIssuedOption ||
@@ -19550,26 +20094,36 @@ Deno.serve(async (req) => {
                 isRecentProductShowFollowup(userMessage) ||
                 isRecentProductPriceSelectionFollowup(userMessage)
               );
-            const startsNewTask = Boolean(readinessNewTask) ||
+            const startsNewTask = activeScopeExplicitBoundary ||
+              Boolean(readinessNewTask) ||
               shouldStartNewConversation(boundary, {
                 matchedPendingClarification,
                 activeScopedClarification: scopedSelectionRequest.scoped,
                 referencesRenderedProducts,
-              }) || shouldResetUnverifiedBroadAssortmentTask(
-                userMessage,
-                clientCatalogClarification,
-                verifiedBroadChoiceState.verifiedSlot,
-              );
+              }) || (!sameSectionScope &&
+                shouldResetUnverifiedBroadAssortmentTask(
+                  userMessage,
+                  clientCatalogClarification,
+                  verifiedBroadChoiceState.verifiedSlot,
+                ));
             // Only after a continuation decision may a server-verified free-form
             // broad scope reach the old expert route. Exact chips take the bounded
             // deterministic route below. A stale/forged scope is never restored.
-            const trustedSlots = !startsNewTask && clientCatalogClarification &&
+            const trustedSlotsBase = !startsNewTask && clientCatalogClarification &&
                 verifiedBroadChoiceState.verifiedSlot
               ? {
                 ...slots,
                 pending_clarification: verifiedBroadChoiceState.verifiedSlot,
               }
               : boundarySlots;
+            // The browser may submit arbitrary slot keys. Always overwrite
+            // this internal key with the completed server-log decision.
+            const trustedSlots = {
+              ...trustedSlotsBase,
+              __server_active_selection_scope: !startsNewTask
+                ? sameSectionScope
+                : undefined,
+            };
             const pendingBroadAssortmentScope =
               resolvePendingBroadAssortmentScope(
                 trustedSlots,
@@ -19600,6 +20154,11 @@ Deno.serve(async (req) => {
                 matched_pending_clarification: matchedPendingClarification,
                 pending_broad_assortment_scope: pendingBroadAssortmentScope,
                 verified_broad_assortment_choice: Boolean(verifiedBroadChoice),
+                verified_active_selection_scope: Boolean(sameSectionScope),
+                active_selection_entity_changed: activeScopeEntityChanged,
+                active_selection_class_changed: activeScopeClassChanged,
+                active_selection_scope_lookup_failed:
+                  activeScopeState.lookupFailed,
                 catalog_slot_validation_failed: clientCatalogClarification &&
                   !verifiedBroadChoiceState.verifiedSlot,
                 catalog_slot_lookup_failed:
@@ -19628,6 +20187,14 @@ Deno.serve(async (req) => {
               // choice into an unrelated future turn. A later clarification in this
               // same response can establish a fresh slot normally.
               send({ type: "slot_update", slots: {} });
+            }
+            if (!startsNewTask && sameSectionScope) {
+              // Reissue the same server-verified identity so later narrowing
+              // turns can still inherit it after the original chip is spent.
+              send({
+                type: "active_selection_scope",
+                scope: sameSectionScope,
+              });
             }
 
             const cache: ProductCache = new Map();
@@ -19890,7 +20457,8 @@ Deno.serve(async (req) => {
               );
             } else if (
               clientCatalogClarification &&
-              !verifiedBroadChoiceState.verifiedSlot && !startsNewTask
+              !verifiedBroadChoiceState.verifiedSlot && !startsNewTask &&
+              !sameSectionScope
             ) {
               send({
                 type: "delta",
@@ -20065,6 +20633,51 @@ Deno.serve(async (req) => {
               });
               send({ type: "delta", content: measuredBreakerGuidance.answer });
               productsCount = 0;
+            } else if (sameSectionScope && !startsNewTask) {
+              // The active series/section is a server-verified constraint. A
+              // broad wording such as "ассортимент двойных розеток" must not
+              // take the unscoped broad (or any later direct-catalog) route.
+              steps.push({
+                step: "v3_active_selection_scope_expert_route",
+                ms: Date.now() - t0,
+                meta: {
+                  entity: sameSectionScope.entity,
+                  leaf: sameSectionScope.leaf,
+                },
+              });
+              const out = await runExpertLoop(
+                additionalSelectionRequest
+                  ? `${ellipticalBaseRequest}\n${userMessage}`
+                  : scopedSelectionRequest.message,
+                effectiveHistory,
+                effectiveSlots,
+                settings.openrouter_api_key!,
+                ctx,
+                send,
+                steps,
+                t0,
+                {
+                  anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                  relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                  criteriaGateEnabled: true,
+                },
+                recentProductEvidence,
+                [],
+                null,
+                ellipticalContinuation,
+                priorShownProductUrls,
+              );
+              productsCount = out.productsRendered;
+              const shownProducts = out.shownProductIds
+                .map((id) => ctx.cache.get(id))
+                .filter((product): product is NonNullable<typeof product> =>
+                  Boolean(product)
+                );
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                shownProducts,
+              );
             } else if (broadAssortmentRequest) {
               await answerBroadAssortmentRequest(
                 broadAssortmentToken,
@@ -20155,6 +20768,20 @@ Deno.serve(async (req) => {
                 effectiveSessionId,
                 products,
               );
+            } else if (outdoorPoeIntent === "assessment") {
+              steps.push({
+                step: "v3_outdoor_poe_assessment",
+                ms: Date.now() - t0,
+              });
+              send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
+              productsCount = 0;
+            } else if (outdoorPoeIntent === "explanation") {
+              steps.push({
+                step: "v3_outdoor_poe_explanation",
+                ms: Date.now() - t0,
+              });
+              send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
+              productsCount = 0;
             } else if (
               unavailableProductReference
             ) {
@@ -20197,6 +20824,7 @@ Deno.serve(async (req) => {
                 send,
                 steps,
                 t0,
+                registerPriceProof,
               );
               productsCount = selection.products.length;
               await persistRecentProductEvidence(
@@ -20272,14 +20900,17 @@ Deno.serve(async (req) => {
               send({
                 type: "delta",
                 content: exactCompoundMarkingIntro(exactCompoundMarkingRequest),
+                origin: "server",
               });
               const selectedProducts =
                 await selectVerifiedExactCompoundProducts(
                   exactCompoundMarkingRequest,
+                  userMessage,
                   ctx,
                   send,
                   steps,
                   t0,
+                  registerPriceProof,
                 );
               productsCount = selectedProducts.length;
               await persistRecentProductEvidence(
@@ -20287,20 +20918,6 @@ Deno.serve(async (req) => {
                 effectiveSessionId,
                 selectedProducts,
               );
-            } else if (outdoorPoeIntent === "assessment") {
-              steps.push({
-                step: "v3_outdoor_poe_assessment",
-                ms: Date.now() - t0,
-              });
-              send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
-              productsCount = 0;
-            } else if (outdoorPoeIntent === "explanation") {
-              steps.push({
-                step: "v3_outdoor_poe_explanation",
-                ms: Date.now() - t0,
-              });
-              send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
-              productsCount = 0;
             } else if (
               outdoorPoeIntent === "selection" && outdoorPoeDirectAdmitted
             ) {
@@ -20413,6 +21030,8 @@ Deno.serve(async (req) => {
               const replacementDirectAdmitted = admitDirectSelectionRoute({
                 route: "replacement",
                 userMessage: replacementSourceRequest,
+                coversBudgetCap:
+                  extractBudgetCap(replacementSourceRequest) !== null,
               });
               if (!replacementDirectAdmitted) {
                 direct = {

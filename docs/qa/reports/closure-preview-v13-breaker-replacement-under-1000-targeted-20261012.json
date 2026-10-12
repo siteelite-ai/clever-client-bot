@@ -1,0 +1,110 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "87dbedf1c28db8aefb3b983b1063967c7f024ab5e7e28df72464775c3e4ac944",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T07:04:09.862Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-breaker-replacement-under-1000": 1
+  },
+  "cases": [
+    {
+      "id": "customer-breaker-replacement-under-1000",
+      "title": "Равноценная замена автомата 1P 16 А C до 1 000 ₸",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-breaker-replacement-under-1000_base_1791788649863_1",
+          "turns": [
+            {
+              "message": "Автомат 1P ВА 47-29 16 А 4,5кА характеристика C GENERICA ИЭК предложи равноценную замену этому автомату по цене не дороже 1000 тг",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13195,
+              "network_attempts": 1,
+              "log_id": "eb0ceba1-03dc-4b6b-841b-991d8cac9d16",
+              "diagnostic_error": null,
+              "products_count": 2,
+              "unique_products_count": 2,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/",
+                  "price": 562,
+                  "stockLine": "Караганда (12313 шт), Алматы (10964 шт), Астана (7755 шт) и ещё 2 городов",
+                  "cardText": "- **[Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/)**\n  Цена: *562* ₸\n  Бренд: Himel\n  Наличие: Караганда (12313 шт), Алматы (10964 шт), Астана (7755 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/",
+                  "price": 656,
+                  "stockLine": "Алматы Чинт (55032 шт), Караганда (12674 шт), Алматы (4055 шт) и ещё 3 городов",
+                  "cardText": "- **[Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/)**\n  Цена: *656* ₸\n  Бренд: CHINT\n  Наличие: Алматы Чинт (55032 шт), Караганда (12674 шт), Алматы (4055 шт) и ещё 3 городов"
+                }
+              ],
+              "text": "Нашёл аналоги в той же категории с подтверждёнными параметрами (Номинальный ток: 16, Количество полюсов: 1, Номинальная откл способность, кА: 4.5). Перед заменой сверьте монтажные размеры и остальные характеристики.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Replacement preflight: подтверждено 2; обязательные оси: нет",
+                  "duration_ms": 11848
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T07:04:23.061Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "eb0ceba1-03dc-4b6b-841b-991d8cac9d16"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

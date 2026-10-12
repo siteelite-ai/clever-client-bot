@@ -1,0 +1,372 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "87dbedf1c28db8aefb3b983b1063967c7f024ab5e7e28df72464775c3e4ac944",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T07:04:21.421Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-outdoor-floodlight-warehouse-priority": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-outdoor-floodlight-warehouse-priority",
+      "title": "Уличный прожектор для двора сначала уточняет параметры подбора",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-outdoor-floodlight-warehouse-priority_base_1791788661422_1",
+          "turns": [
+            {
+              "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 882,
+              "network_attempts": 1,
+              "log_id": "47f6b168-c2a9-40f7-81d6-5f5857ece953",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "mounting_height",
+                "options_count": 3,
+                "values": [
+                  "До 4 м",
+                  "4–8 м",
+                  "Выше 8 м"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Площадь около 120 м², высота установки 4 м",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 11037,
+              "network_attempts": 1,
+              "log_id": "38e51d63-abc6-447e-a110-97aa9abfd692",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-1000w-100000lm-5000k-ip65-ledar",
+                  "verified": true,
+                  "sku": "Ем000027855",
+                  "name": "LED ПРОЖЕКТОР MEGA 1000W 100000Lm 5000K IP65 LEDAR",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Гарантийный срок, лет": "1",
+                    "Мощность, вт": "1000",
+                    "Диапазон рабочих температур": "от -30 до +60°С",
+                    "Степень защиты": "IP65",
+                    "Единица измерения": "шт",
+                    "Срок службы, часов": "50000",
+                    "Вес, кг.": "14.8",
+                    "Ширина, мм": "360",
+                    "Объем, м3": "0.047",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Бренд": "LEDAR",
+                    "Напряжение, В": "185-265",
+                    "Код ТН ВЭД": "9405420012",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "литой алюминий",
+                    "Цвет свечения": "дневной",
+                    "Световой поток, Лм": "100000",
+                    "Цветовая температура, К": "5000",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, мм": "970",
+                    "Высота, мм": "100"
+                  },
+                  "offerPrice": 93539,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-1000w-100000lm-5000k-ip65-ledar/",
+                  "description_excerpt": "Прожектор светодиодный высокой мощности серии MEGA торговой марки LEDAR® снабжен монтажным креплением на кронштейн и предназначен для освещения архитектурных фасадов, строительных площадок, футбольных полей, складов, открытых площадок, парковок и других площадей, требующих качественного и хорошего освещения."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-600w-60000lm-5000k-ip65-ledar",
+                  "verified": true,
+                  "sku": "Ем000027858",
+                  "name": "LED ПРОЖЕКТОР MEGA 600W 60000Lm 5000K IP65 LEDAR",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Гарантийный срок, лет": "1",
+                    "Мощность, вт": "600",
+                    "Диапазон рабочих температур": "от -30 до +60°С",
+                    "Степень защиты": "IP65",
+                    "Единица измерения": "шт",
+                    "Срок службы, часов": "50000",
+                    "Вес, кг.": "6.9",
+                    "Ширина, мм": "357",
+                    "Объем, м3": "0.025",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Бренд": "LEDAR",
+                    "Напряжение, В": "185-265",
+                    "Код ТН ВЭД": "9405420012",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "литой алюминий",
+                    "Цвет свечения": "дневной",
+                    "Световой поток, Лм": "60000",
+                    "Цветовая температура, К": "5000",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, мм": "628",
+                    "Высота, мм": "87"
+                  },
+                  "offerPrice": 51405,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-600w-60000lm-5000k-ip65-ledar/",
+                  "description_excerpt": "Прожектор светодиодный высокой мощности серии MEGA торговой марки LEDAR® снабжен монтажным креплением на кронштейн и предназначен для освещения архитектурных фасадов, строительных площадок, футбольных полей, складов, открытых площадок, парковок и других площадей, требующих качественного и хорошего освещения."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-500w-50000lm-5000k-ip65-ledar",
+                  "verified": true,
+                  "sku": "Ем000027857",
+                  "name": "LED ПРОЖЕКТОР MEGA 500W 50000Lm 5000K IP65 LEDAR",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Гарантийный срок, лет": "1",
+                    "Мощность, вт": "500",
+                    "Диапазон рабочих температур": "от -30 до +60°С",
+                    "Степень защиты": "IP65",
+                    "Единица измерения": "шт",
+                    "Срок службы, часов": "50000",
+                    "Вес, кг.": "6.6",
+                    "Ширина, мм": "357",
+                    "Объем, м3": "0.025",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Бренд": "LEDAR",
+                    "Напряжение, В": "185-265",
+                    "Код ТН ВЭД": "9405420012",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "литой алюминий",
+                    "Цвет свечения": "дневной",
+                    "Световой поток, Лм": "50000",
+                    "Цветовая температура, К": "5000",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, мм": "628",
+                    "Высота, мм": "87"
+                  },
+                  "offerPrice": 48969,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-500w-50000lm-5000k-ip65-ledar/",
+                  "description_excerpt": "Прожектор светодиодный высокой мощности серии MEGA торговой марки LEDAR® снабжен монтажным креплением на кронштейн и предназначен для освещения архитектурных фасадов, строительных площадок, футбольных полей, складов, открытых площадок, парковок и других площадей, требующих качественного и хорошего освещения."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-400w-40000lm-5000k-ip65-ledar",
+                  "verified": true,
+                  "sku": "Ем000027856",
+                  "name": "LED ПРОЖЕКТОР MEGA 400W 40000Lm 5000K IP65 LEDAR",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Гарантийный срок, лет": "1",
+                    "Мощность, вт": "400",
+                    "Диапазон рабочих температур": "от -30 до +60°С",
+                    "Степень защиты": "IP65",
+                    "Единица измерения": "шт",
+                    "Срок службы, часов": "50000",
+                    "Вес, кг.": "5.3",
+                    "Ширина, мм": "346",
+                    "Объем, м3": "0.02",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Бренд": "LEDAR",
+                    "Напряжение, В": "185-265",
+                    "Код ТН ВЭД": "9405420012",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "литой алюминий",
+                    "Цвет свечения": "дневной",
+                    "Световой поток, Лм": "40000",
+                    "Цветовая температура, К": "5000",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, мм": "528",
+                    "Высота, мм": "85"
+                  },
+                  "offerPrice": 39150,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-400w-40000lm-5000k-ip65-ledar/",
+                  "description_excerpt": "Прожектор светодиодный высокой мощности серии MEGA торговой марки LEDAR® снабжен монтажным креплением на кронштейн и предназначен для освещения архитектурных фасадов, строительных площадок, футбольных полей, складов, открытых площадок, парковок и других площадей, требующих качественного и хорошего освещения."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-sdo-07-30rgb-multicolor-ip65-seryij-iek",
+                  "verified": true,
+                  "sku": "Ем000027359",
+                  "name": "Прожектор LED СДО 07-30RGB multicolor IP65 серый ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Гарантийный срок, лет": "2",
+                    "Мощность, вт": "30",
+                    "Диапазон рабочих температур": "от -40 до +50 °C",
+                    "Степень защиты": "IP65",
+                    "Единица измерения": "шт",
+                    "Срок службы, часов": "50000",
+                    "Вес, кг.": "0.74",
+                    "Ширина, мм": "28",
+                    "Объем, м3": "0.00245",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Бренд": "IEK",
+                    "Напряжение, В": "220-240",
+                    "Код ТН ВЭД": "8539514012",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "серый",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "RGB",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, мм": "185",
+                    "Высота, мм": "180"
+                  },
+                  "offerPrice": 12278,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-sdo-07-30rgb-multicolor-ip65-seryij-iek/",
+                  "description_excerpt": "Прожекторы светодиодные СДО 07 цветного свечения предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колонн, деревьев, открытых пространств и объектов, спортивных сооружений. Подходят как для внутреннего, так и для наружного применения."
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Прожектор LED MEGA 1000W 100000Lm 5000K IP65 LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-1000w-100000lm-5000k-ip65-ledar/",
+                  "price": 93539,
+                  "stockLine": "Актобе (21 шт), Караганда (6 шт), Астана (2 шт)",
+                  "cardText": "- **[Прожектор LED MEGA 1000W 100000Lm 5000K IP65 LEDAR](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-1000w-100000lm-5000k-ip65-ledar/)**\n  Цена: *93 539* ₸\n  Бренд: LEDAR\n  Наличие: Актобе (21 шт), Караганда (6 шт), Астана (2 шт)"
+                },
+                {
+                  "title": "Прожектор LED MEGA 600W 60000Lm 5000K IP65 LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-600w-60000lm-5000k-ip65-ledar/",
+                  "price": 51405,
+                  "stockLine": "Караганда (69 шт), Актобе (24 шт), Шымкент (9 шт) и ещё 1 городов",
+                  "cardText": "- **[Прожектор LED MEGA 600W 60000Lm 5000K IP65 LEDAR](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-600w-60000lm-5000k-ip65-ledar/)**\n  Цена: *51 405* ₸\n  Бренд: LEDAR\n  Наличие: Караганда (69 шт), Актобе (24 шт), Шымкент (9 шт) и ещё 1 городов"
+                },
+                {
+                  "title": "Прожектор LED MEGA 500W 50000Lm 5000K IP65 LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-500w-50000lm-5000k-ip65-ledar/",
+                  "price": 48969,
+                  "stockLine": "Караганда (81 шт), Актобе (29 шт), Астана (18 шт) и ещё 2 городов",
+                  "cardText": "- **[Прожектор LED MEGA 500W 50000Lm 5000K IP65 LEDAR](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-500w-50000lm-5000k-ip65-ledar/)**\n  Цена: *48 969* ₸\n  Бренд: LEDAR\n  Наличие: Караганда (81 шт), Актобе (29 шт), Астана (18 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Прожектор LED MEGA 400W 40000Lm 5000K IP65 LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-400w-40000lm-5000k-ip65-ledar/",
+                  "price": 39150,
+                  "stockLine": "Астана (42 шт), Караганда (40 шт), Актобе (31 шт) и ещё 1 городов",
+                  "cardText": "- **[Прожектор LED MEGA 400W 40000Lm 5000K IP65 LEDAR](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-mega-400w-40000lm-5000k-ip65-ledar/)**\n  Цена: *39 150* ₸\n  Бренд: LEDAR\n  Наличие: Астана (42 шт), Караганда (40 шт), Актобе (31 шт) и ещё 1 городов"
+                },
+                {
+                  "title": "Прожектор LED СДО 07-30RGB multicolor IP65 серый ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-sdo-07-30rgb-multicolor-ip65-seryij-iek/",
+                  "price": 12278,
+                  "stockLine": "Шымкент (1 шт)",
+                  "cardText": "- **[Прожектор LED СДО 07-30RGB multicolor IP65 серый ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-led-sdo-07-30rgb-multicolor-ip65-seryij-iek/)**\n  Цена: *12 278* ₸\n  Бренд: IEK\n  Наличие: Шымкент (1 шт)"
+                }
+              ],
+              "text": "Для освещения двора частного дома площадью 120 м² рекомендуется обеспечить освещённость 10–20 лк (базовый уровень для придомовой территории). Световой поток = 120 м² × 15 лк (средний ориентир) = 1800 лм. При высоте установки 4 м и с учётом потерь можно использовать один прожектор мощностью 20–30 Вт (световой поток около 2000–3000 лм) либо несколько менее мощных светильников для равномерного распределения света. Обязательные требования: степень защиты не менее IP65 для уличного применения (защита от пыли и струй воды), напряжение 220 В (стандартная сеть), световой поток не менее 1800 лм суммарно. Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки. Обязательные параметры: «Степень защиты: IP65».\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность 1 800 лм. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-383102c5",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1539
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=27; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 628
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "product Ем000027359 facet Световой поток, Лм: source field is missing"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-12T07:04:37.165Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "47f6b168-c2a9-40f7-81d6-5f5857ece953",
+    "38e51d63-abc6-447e-a110-97aa9abfd692"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 5,
+    "verified": 5,
+    "unverified": 0
+  },
+  "passed": false
+}

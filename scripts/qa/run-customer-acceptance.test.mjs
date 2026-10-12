@@ -1381,6 +1381,44 @@ test('SKU-backed shorter title can expand only with canonical and price proof, n
     { requireVerifiedPages: true }).some((failure) => failure.includes('price disagrees')));
 });
 
+test('source-backed dotted and hyphenated noun abbreviations keep model, URL, price and stock gates', () => {
+  const url = 'https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avt.vyikl-l-ic60n-3p-16a-s-a9f79316/';
+  const identity = productUrlIdentity(url);
+  const sourceName = 'Автоматический выключатель модульный iC60N 3П 16А С /A9F79316/';
+  const shownName = 'Авт.выкл-ль iC60N 3П 16А С /A9F79316/';
+  const proof = {
+    identity, verified: true, sku: 'Ем000009462', canonicalUrl: url,
+    name: sourceName, offerPrice: 14154, availability: 'https://schema.org/InStock',
+    facets: { 'Количество полюсов': '3', 'Номинальный ток': '16' }, description: '',
+  };
+  const base = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-abbreviated-title', diagnosticError: null, serverProductsCount: 1,
+    links: [{ title: shownName, url, price: 14154, stockLine: 'Астана (29 шт)' }],
+    verifiedProductPages: new Map([[identity, proof]]),
+  };
+  assert.deepEqual(evaluate({}, base, { requireVerifiedPages: true }), []);
+  for (const wrongTitle of [
+    'Авт.выкл-ль iC60P 3П 16А С /A9F79316/',
+    'Авт.выкл-ль iC60N 3П 25А С /A9F79316/',
+    'Розетка авт.выкл-ль iC60N 3П 16А С /A9F79316/',
+  ]) {
+    assert(evaluate({}, { ...base, links: [{ ...base.links[0], title: wrongTitle }] },
+      { requireVerifiedPages: true }).some((failure) => failure.includes('name disagrees')), wrongTitle);
+  }
+  for (const altered of [
+    { ...proof, canonicalUrl: undefined },
+    { ...proof, canonicalUrl: 'https://220volt.kz/catalog/other/product/' },
+    { ...proof, offerPrice: 14155 },
+    { ...proof, availability: 'https://schema.org/OutOfStock' },
+  ]) {
+    assert(evaluate({}, { ...base, verifiedProductPages: new Map([[identity, altered]]) },
+      { requireVerifiedPages: true }).length > 0);
+  }
+  assert(evaluate({}, { ...base, links: [{ ...base.links[0], stockLine: null }] },
+    { requireVerifiedPages: true }).some((failure) => failure.includes('stock is missing')));
+});
+
 test('alternative follow-up rejects a previously verified SKU', () => {
   const url = 'https://220volt.kz/catalog/svetotexnika/svetilniki/old-light/';
   const identity = productUrlIdentity(url);
@@ -1455,6 +1493,81 @@ test('live product verification is bounded, cached and fails closed on categorie
   });
   assert.equal(hanging.verified, false);
   assert.match(hanging.reason, /deadline/u);
+});
+
+test('product-page proof retries one transient timeout, but never an identity or redirect failure', async () => {
+  const productUrl = 'https://220volt.kz/catalog/a/b/item/';
+  const productHtml = `<script type="application/ld+json">${JSON.stringify({
+    '@type': 'Product', '@id': productUrl, name: 'Светодиодная лампа CORN E27', sku: 'SKU-CORN-E27',
+  })}</script>`;
+  let attempts = 0;
+  const recovered = await verifyProductPage(productUrl, {
+    timeoutMs: 10,
+    fetchImpl: async () => {
+      attempts++;
+      return attempts === 1 ? await new Promise(() => {}) :
+        new Response(productHtml, { headers: { 'Content-Type': 'text/html' } });
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(recovered.verified, true);
+  assert.equal(recovered.sku, 'SKU-CORN-E27');
+
+  attempts = 0;
+  const stillUnavailable = await verifyProductPage(productUrl, {
+    timeoutMs: 10,
+    fetchImpl: async () => { attempts++; return await new Promise(() => {}); },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(stillUnavailable.verified, false);
+  assert.match(stillUnavailable.reason, /deadline/u);
+
+  for (const response of [
+    new Response(null, { status: 302, headers: { Location: 'https://example.com/' } }),
+    new Response('<html><h1>Каталог</h1></html>', { headers: { 'Content-Type': 'text/html' } }),
+  ]) {
+    attempts = 0;
+    const rejected = await verifyProductPage(productUrl, {
+      fetchImpl: async () => { attempts++; return response; },
+    });
+    assert.equal(attempts, 1);
+    assert.equal(rejected.verified, false);
+  }
+});
+
+test('transient page failure gets one later cache recovery without hiding unresolved proof gaps', async () => {
+  const productUrl = 'https://220volt.kz/catalog/a/b/corn-lamp/';
+  const html = `<script type="application/ld+json">${JSON.stringify({
+    '@type': 'Product', '@id': productUrl, name: 'Лампа CORN E27', sku: 'SKU-CORN',
+  })}</script>`;
+  const links = [{ url: productUrl, title: 'Лампа CORN E27' }];
+  const identity = productUrlIdentity(productUrl);
+  const cache = new Map();
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    return attempts <= 2 ? await new Promise(() => {}) :
+      new Response(html, { headers: { 'Content-Type': 'text/html' } });
+  };
+  const first = await verifyProductLinks(links, { fetchImpl, cache, timeoutMs: 10 });
+  assert.equal(first.get(identity).verified, false);
+  assert.equal(attempts, 2);
+  const second = await verifyProductLinks(links, { fetchImpl, cache, timeoutMs: 10 });
+  assert.equal(second.get(identity).verified, true);
+  assert.equal(attempts, 3);
+  await verifyProductLinks(links, { fetchImpl, cache, timeoutMs: 10 });
+  assert.equal(attempts, 3);
+  assert.equal(cache.size, 1);
+
+  const rejectedCache = new Map();
+  let invalidAttempts = 0;
+  const invalidFetch = async () => {
+    invalidAttempts++;
+    return new Response('<h1>Категория</h1>', { headers: { 'Content-Type': 'text/html' } });
+  };
+  await verifyProductLinks(links, { fetchImpl: invalidFetch, cache: rejectedCache });
+  await verifyProductLinks(links, { fetchImpl: invalidFetch, cache: rejectedCache });
+  assert.equal(invalidAttempts, 1);
 });
 
 test('source-backed household and motion contract rejects acoustic-only and ЖКХ cards', async () => {
@@ -1544,6 +1657,60 @@ test('source-backed numeric and exact facet checks reject underpowered and non-c
   } }, { ...base, links: [{ title: 'Кабель витая пара', url: cableUrl }] });
   assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Материал проводника')));
   assert(cableFailures.some((failure) => failure.includes('CCA-PVC facet Оболочка')));
+});
+
+test('yard-floodlight oracle keeps 1800 lm as a system total while requiring usable source-backed cards', () => {
+  const scenario = acceptanceSuite.cases.find((item) => item.id === 'customer-new-outdoor-floodlight-warehouse-priority');
+  assert(scenario);
+  const expect = scenario.turns[1].expect;
+  const links = [1, 2, 3].map((number) => ({
+    url: `https://220volt.kz/catalog/svetotexnika/prozhektoryi/yard-${number}/`,
+    title: `Прожектор для двора ${number} 30W`, price: 3000 + number,
+    stockLine: 'Караганда (5 шт)',
+  }));
+  const pages = new Map(links.map((link, index) => [productUrlIdentity(link.url), {
+    verified: true, sku: `YARD-${index + 1}`, canonicalUrl: link.url,
+    name: link.title, offerPrice: link.price, availability: 'https://schema.org/InStock',
+    facets: { 'Степень защиты': 'IP65', 'Световой поток, Лм': '800' }, description: '',
+  }]));
+  const response = {
+    text: 'Суммарная потребность системы — 1800 лм. Показанные товары — отдельные варианты, не подтверждённая схема.',
+    productsMarkdown: '', links, completed: true, terminalDiagnosticSeen: true,
+    logId: 'yard-source-proof', diagnosticError: null, serverProductsCount: links.length,
+    selectionContract: { mandatory_criteria: [{
+      key: 'Степень защиты', op: 'eq', value: 'IP65', evidence: 'derived_required',
+    }] },
+    verifiedProductPages: pages,
+  };
+  assert.deepEqual(evaluate(expect, response, { requireVerifiedPages: true }), []);
+  assert.deepEqual(evaluate(expect, { ...response,
+    text: 'Для всей системы нужен общий световой поток 1800 лм. Эти товары не составляют готовую схему: сначала нужно определить количество и расположение.',
+  }, { requireVerifiedPages: true }), []);
+  assert(evaluate(expect, { ...response,
+    text: 'Для двора 120 м² показываю три прожектора.',
+  }, { requireVerifiedPages: true }).some((failure) => failure.includes('assistant text misses')));
+  const first = productUrlIdentity(links[0].url);
+  const original = pages.get(first);
+  for (const [facets, fragment] of [
+    [{ 'Степень защиты': 'IP65' }, 'source field is missing'],
+    [{ 'Степень защиты': 'IP65', 'Световой поток, Лм': '0' }, 'source numeric value 0 < 1'],
+    [{ 'Степень защиты': 'IP65', 'Световой поток, Лм': '800–1000' }, 'source scalar numeric value'],
+    [{ 'Степень защиты': 'IP44', 'Световой поток, Лм': '800' }, 'source value IP44'],
+  ]) {
+    pages.set(first, { ...original, facets });
+    assert(evaluate(expect, response, { requireVerifiedPages: true })
+      .some((failure) => failure.includes(fragment)), JSON.stringify(facets));
+  }
+  pages.set(first, original);
+  pages.set(first, { ...original, name: `Промышленный ${original.name}` });
+  assert(evaluate(expect, response, { requireVerifiedPages: true })
+    .some((failure) => failure.includes('forbidden source fragment')));
+  pages.set(first, original);
+  assert(evaluate(expect, { ...response, selectionContract: { mandatory_criteria: [
+    ...response.selectionContract.mandatory_criteria,
+    { key: 'Световой поток, Лм', op: 'min', value: 1800, evidence: 'derived_required' },
+  ] } }, { requireVerifiedPages: true })
+    .some((failure) => failure.includes('forbidden selection criterion')));
 });
 
 test('heat-shrink source proof enforces both strict diameters and the requested TTU class', () => {

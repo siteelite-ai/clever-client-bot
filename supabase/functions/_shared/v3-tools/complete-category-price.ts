@@ -18,7 +18,10 @@ import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import type { ProductCache, ProductFull, ProductRef } from "./types.ts";
 
 const PAGE_SIZE = 50;
-const MAX_RAW_ROWS = 200;
+// The complete-price route must cover ordinary live categories spanning more
+// than four pages (the VVG parent currently has 226 rows), while remaining
+// bounded and fail-closed for genuinely broad scopes.
+const MAX_RAW_ROWS = 500;
 const MAX_SCANNED_LEAVES = 8;
 const MAX_TAXONOMY_LEAVES = 256;
 const MAX_RESPONSE_BYTES = 2_000_000;
@@ -32,6 +35,7 @@ export interface CompleteCategoryPriceInput {
 }
 
 export interface CompleteCategoryPriceEvidence {
+  direction: "cheapest" | "expensive";
   scope_category: string;
   /** All taxonomy leaves in the exactly resolved parent, before safe pruning. */
   taxonomy_leaf_count: number;
@@ -431,6 +435,7 @@ export async function selectCompleteCategoryPrice(
     ok: true,
     product,
     evidence: {
+      direction: input.request.priceDirection!,
       scope_category: input.discovery.category.pagetitle,
       taxonomy_leaf_count: scope.taxonomyLeafCount,
       skipped_other_marking_leaves: scope.skippedOtherMarkingLeaves,

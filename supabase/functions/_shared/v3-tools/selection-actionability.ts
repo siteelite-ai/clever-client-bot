@@ -231,6 +231,7 @@ function derivedRequiredFacetChoices(
         id: `f${facetIndex}v${valueIndex}`,
         facet: facetName,
         value: String(candidate?.value ?? "")
+          // eslint-disable-next-line no-control-regex -- Catalog facet values can contain ASCII control bytes.
           .replace(/[\u0000-\u001f\u007f]+/gu, " ")
           .trim()
           .slice(0, 80),
@@ -370,6 +371,7 @@ function derivedClassificationChoices(
           .entries()
     ) {
       const value = String(candidate?.value ?? "").replace(
+        // eslint-disable-next-line no-control-regex -- Catalog facet values can contain ASCII control bytes.
         /[\u0000-\u001f\u007f]+/gu,
         " ",
       ).trim().slice(0, 160);
@@ -418,6 +420,32 @@ const CLASSIFICATION_GLUE_STEMS = new Set([
 // category names. Exact variants (mounting, size, series) remain facet-bound.
 const APPLICATION_USE_ROOT =
   /^(?:бытов|домаш|жил|офис|промыш|производ|улич|наруж|внутрен|обществен|склад)/u;
+
+/** A room/use mentioned as the customer's setting is not an exact property
+ * of every eligible product. Catalog `Назначение` values can be incomplete or
+ * combine several uses, so a locative phrase remains an application hint and
+ * must not become a mandatory equality filter. Direct product qualifiers and
+ * explicit facet assertions are still eligible for exact grounding. */
+function isCircumstantialPurposeStem(
+  stem: string,
+  customerEvidence: string,
+  facet: string,
+): boolean {
+  if (!/(?:назначен|применен|использован|помещен|область\s+применен|сфера\s+применен)/iu.test(facet)) {
+    return false;
+  }
+  const words = normalizeLiteralEvidence(customerEvidence).split(" ").filter(Boolean);
+  let found = false;
+  for (const [index, word] of words.entries()) {
+    if (classificationLexicalStem(word) !== stem) continue;
+    found = true;
+    const preceding = words.slice(Math.max(0, index - 2), index);
+    if (!preceding.some((token) => /^(?:в|во|на|для|под|при)$/u.test(token))) {
+      return false;
+    }
+  }
+  return found;
+}
 
 function broadApplicationAlternatives(
   family: DerivedClassificationChoice[],
@@ -645,6 +673,7 @@ function customerGroundedClassificationChoices(
         ),
       }))
       .filter(({ stem, matches }) =>
+        !isCircumstantialPurposeStem(stem, customerEvidence, choices[0].facet) &&
         matches.length > 0 && matches.length < choices.length &&
         (matches.length === 1 ||
           customerOwnsClassificationFamilyStem(
@@ -916,6 +945,7 @@ function pairedObjectRangeChoices(
   high: number;
   axisStems: string[];
   includesObject: boolean;
+  unitVerified: boolean;
 }> {
   const beforeAfter = reference.facetKeys.map((key) =>
     facets.find((facet) => String(facet.key ?? "") === key)
@@ -932,6 +962,7 @@ function pairedObjectRangeChoices(
     high: number;
     axisStems: string[];
     includesObject: boolean;
+    unitVerified: boolean;
   }> = [];
   for (const [facetIndex, facet] of facets.entries()) {
     if (reference.facetKeys.includes(String(facet.key ?? ""))) continue;
@@ -941,15 +972,15 @@ function pairedObjectRangeChoices(
     const declaredUnit = facetMeasurementUnit(facet);
     if (declaredUnit && declaredUnit !== requiredUnit) continue;
     for (const [valueIndex, value] of (facet.values ?? []).entries()) {
-      const match = String(value.value ?? "").trim().match(
+      const match = String(value.value ?? "").trim().replace(
+        /(\d)[.,]\s+(\d)/gu,
+        "$1.$2",
+      ).match(
         /^(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*([\p{L}°²³]+)?$/u,
       );
       if (!match) continue;
       const valueUnit = canonicalMeasurementUnit(match[3] ?? "");
-      if (
-        (!valueUnit && !declaredUnit) ||
-        (valueUnit && valueUnit !== requiredUnit)
-      ) continue;
+      if (valueUnit && valueUnit !== requiredUnit) continue;
       const low = Number(match[1].replace(",", "."));
       const high = Number(match[2].replace(",", "."));
       if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) {
@@ -961,10 +992,36 @@ function pairedObjectRangeChoices(
         high,
         axisStems,
         includesObject: reference.value >= low && reference.value <= high,
+        unitVerified: Boolean(valueUnit || declaredUnit),
       });
     }
   }
   return ranges;
+}
+
+/** A unitless catalog interval on the same axis cannot establish product fit.
+ * Remove only clauses that repeat that unverified interval; preserve the
+ * consultant's independent before/after reasoning and product constraints. */
+function omitUnverifiedPairedRangeClauses(
+  reasoning: string,
+  ranges: ReturnType<typeof pairedObjectRangeChoices>,
+): string {
+  const unknown = ranges.filter((range) => !range.unitVerified);
+  if (unknown.length === 0) return reasoning;
+  return String(reasoning).replace(/(\d)[.,]\s+(\d)/gu, "$1.$2")
+    .split(/(?<=[.!?;])\s+(?=\p{Lu})|(?<=;)\s*/u).filter((clause) => {
+    const normalized = clause;
+    for (const match of normalized.matchAll(
+      /(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/gu,
+    )) {
+      const low = Number(match[1].replace(",", "."));
+      const high = Number(match[2].replace(",", "."));
+      if (unknown.some((range) => range.low === low && range.high === high)) {
+        return false;
+      }
+    }
+    return true;
+  }).join(" ").replace(/\s+/gu, " ").trim();
 }
 
 function affirmsIncompatiblePairedRange(
@@ -1064,6 +1121,7 @@ export function compileApplicationSuitabilityAlternatives(
 
 function visibleFacetText(value: string): string {
   return String(value ?? "")
+    // eslint-disable-next-line no-control-regex -- External facet text must not render ASCII control bytes.
     .replace(/[\u0000-\u001f\u007f]+/gu, " ")
     .replace(/</gu, "‹")
     .replace(/>/gu, "›")
@@ -1136,15 +1194,19 @@ export function resolveDerivedSelectionReasoning(
   productClass = "",
   pairedObjectReference: PairedObjectReference | null = null,
 ): ResolvedDerivedSelectionReasoning | null {
-  const originalReasoning = stripDerivedSchemaIds(
+  const sourceReasoning = stripDerivedSchemaIds(
     visibleFacetText(String(args.reasoning ?? "")),
   ).slice(0, 1600);
-  if (originalReasoning.length < 20) return null;
   const pairedObjectRanges = pairedObjectReference
     ? pairedObjectRangeChoices(facets, pairedObjectReference)
     : [];
+  const originalReasoning = omitUnverifiedPairedRangeClauses(
+    sourceReasoning,
+    pairedObjectRanges,
+  );
+  if (originalReasoning.length < 20) return null;
   const incompatiblePairedRanges = pairedObjectRanges.filter((range) =>
-    !range.includesObject
+    range.unitVerified && !range.includesObject
   );
   if (
     affirmsIncompatiblePairedRange(originalReasoning, incompatiblePairedRanges)
@@ -1225,6 +1287,15 @@ export function resolveDerivedSelectionReasoning(
       const normalizedPhrase = normalizeLiteralEvidence(phrase);
       const choice = byId.get(String(record.classification_id ?? ""));
       if (!choice || normalizedPhrase.length < 3) continue;
+      if (
+        classificationLexicalTokens(phrase).some((stem) =>
+          isCircumstantialPurposeStem(
+            stem,
+            customerClassificationEvidence,
+            choice.facet,
+          )
+        )
+      ) continue;
       if (
         !customerOwnsExactTransparentClassification(
           phrase,

@@ -552,8 +552,19 @@
             "max_products": 5,
             "require_every_product_title_any": ["прожектор"],
             "require_every_product_page": {
-              "facets": [{ "name": "Световой поток, Лм", "min_numeric": 1800 }]
+              "name": { "forbid_any": ["промышлен", "industrial"] },
+              "facets": [
+                { "name": "Степень защиты", "exact_any": ["IP65", "IP66", "IP67", "IP68", "IP69", "IP69K"] },
+                { "name": "Световой поток, Лм", "min_numeric": 1, "require_scalar_numeric": true }
+              ]
             },
+            "require_text_groups": [
+              ["суммарн", "общая потребност", "общий световой поток", "совокупн", "поток всей системы"],
+              ["отдельные варианты", "не подтвержд", "не доказан", "не проверен", "не гарант", "не составляют готовую схему", "нужно определить количество"]
+            ],
+            "require_selection_criteria_groups": [["Степень защиты"], ["IP65", "IP66", "IP67", "IP68", "IP69"]],
+            "require_selection_criteria_evidence": true,
+            "forbid_selection_criteria_any": ["Световой поток"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

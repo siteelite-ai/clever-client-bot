@@ -14,11 +14,12 @@ It does not alter any existing table, policy, log row, or function. `anon` and
 `service_role` is granted the required access. The Edge Function must keep the
 service-role key server-side.
 
-The current local v3 candidate calls this guard only after a new log claim and
+The current v3 candidate calls this guard only after a new log claim and
 releases an admitted reservation before SSE completion. With the Edge mode
-unset/`off`, it performs no admission RPC. This is code preparation only: the
-migration is unapplied, the candidate is not live on preview or production,
-and the real database/RPC path has not passed the release gates below.
+unset/`off`, it performs no admission RPC. The code is deployed only to the
+isolated `chat-consultant-v3-closure-preview` function (v14 as of 12 October
+2026); production v3 remains unchanged. The migration is unapplied, so the
+real database/RPC path has not passed the release gates below.
 
 ## Call sequence
 

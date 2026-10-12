@@ -194,11 +194,34 @@ export function admitDirectSelectionRoute(input: {
     );
     const sourceOffset = raw.indexOf(normalizedSource);
     if (sourceOffset < 0) return false;
-    const frame = normalize(
-      `${raw.slice(0, sourceOffset)} ${
-        raw.slice(sourceOffset + normalizedSource.length)
-      }`,
+    let frameText = `${raw.slice(0, sourceOffset)} ${
+      raw.slice(sourceOffset + normalizedSource.length)
+    }`;
+    // The direct replacement search applies a proved upper price bound at
+    // retrieval and again before rendering. Accept exactly one such clause
+    // outside the source title only when the caller opts into that guarantee.
+    // A naked/exact price or multiple conflicting amounts remain expert work.
+    const currencyAmounts = [...frameText.matchAll(
+      /\d[\d\s]{0,9}\s*(?:₸|тенге|тг|kzt)(?=$|[^\p{L}\p{N}])/giu,
+    )];
+    const upperBudgetClauses = [...frameText.matchAll(
+      /(?:^|\s)(?:по\s+цене\s+)?(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+\d[\d\s]{0,9}\s*(?:₸|тенге|тг|kzt)(?=$|[^\p{L}\p{N}])/giu,
+    )];
+    if (currencyAmounts.length > 0) {
+      if (
+        !input.coversBudgetCap || extractBudgetCap(input.userMessage) === null ||
+        currencyAmounts.length !== 1 || upperBudgetClauses.length !== 1
+      ) return false;
+      frameText = frameText.replace(upperBudgetClauses[0][0], " ");
+    }
+    // A deictic noun after «замену» refers back to the named source product.
+    // It is not an independent fit criterion; qualifiers after that noun are
+    // still left in the frame and will fail the allowlist below.
+    frameText = frameText.replace(
+      /(?:^|\s)(?:этому|этой|этого|этот|эту)\s+\p{L}{3,}(?=$|\s)/giu,
+      " ",
     );
+    const frame = normalize(frameText);
     const requestWords = new Set([
       "найди",
       "найдите",
@@ -233,14 +256,23 @@ export function admitDirectSelectionRoute(input: {
       /\d[\d\s]{0,9}\s*(?:₸|тенге|тг|kzt)(?!\p{L})/iu.test(normalizedSource)
     ) return false;
     // Source names may legitimately contain electrical nameplate specs such
-    // as 7W/220V. A separate length, area or diameter needs fit reasoning.
+    // as 7W/220V, 4.5kA and 1P. A separate length, area or diameter still
+    // needs fit reasoning.
     if (
       extractClientQuantities(normalizedSource).some(({ unit }) =>
         isPhysicalMeasurementUnit(unit) &&
-        !/^(?:w|вт|ватт|ватта|ваттов|v|в|вольт|вольта|вольтов|a|а|ампер|ампера|амперов)$/u
+        !/^(?:w|вт|ватт|ватта|ваттов|v|в|вольт|вольта|вольтов|a|а|ампер|ампера|амперов|ka|ка|кa|kа|p|р)$/u
           .test(unit)
       )
     ) return false;
+    // In the source-first grammar, the imperative is an explicit end marker
+    // for the whole source description. A late brand or technical phrase in
+    // that description must not be mistaken for a new target requirement.
+    if (
+      sourceOffset === 0 &&
+      /^[\s,;:–—-]+(?:предлож\p{L}*|подбер\p{L}*|найд\p{L}*|покаж\p{L}*)\s+(?:равноцен\p{L}*\s+)?(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*)/iu
+        .test(raw.slice(normalizedSource.length))
+    ) return true;
     // The lookup extractor intentionally omits short source codes such as
     // D90. They are still structural boundaries inside a long source name,
     // not a new customer criterion after the replacement instruction.

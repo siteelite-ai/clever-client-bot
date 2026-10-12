@@ -8,16 +8,16 @@ import {
 
 /** A caller-supplied policy, never an inferred installation plan. */
 export interface SystemTotalRankingPolicy {
-  /** Normally the lower bound of the requested alternative-card count. */
+  /** Below this many verified choices, unverified cards remain as fallback. */
   minimumVerifiedAlternatives: number;
-  /** A severe relative gap (at least 2×), not an absolute unit threshold. */
+  /** Conservative caller policy retained for compatibility; no output is pruned solely for being low. */
   severeOutputGapFactor: number;
 }
 
 export type SystemTotalRankingRequirement =
   & Pick<
     SystemTotalCapacityRequirement,
-    "outputFacet" | "unit"
+    "outputFacet" | "unit" | "minimumTotal"
   >
   & { measurementScope: string | null };
 
@@ -36,24 +36,28 @@ export interface RankedSystemTotalCandidate {
 export interface SystemTotalCandidateRanking {
   /** False means even relative output ranking is not evidence-backed. */
   rankingEligible: boolean;
-  /** Stronger verified per-unit outputs first; unknown outputs remain visible. */
+  /** Verified outputs closest to the total need first; unknowns only as fallback. */
   retained: RankedSystemTotalCandidate[];
-  /** Only verified severe low-output outliers can be removed. */
+  /** Legacy diagnostic: a low-output unit may still be part of a valid system. */
   excludedVeryLowOutput: RankedSystemTotalCandidate[];
+  /** Unknown output is not a useful alternative once enough proven choices exist. */
+  excludedUnverifiedOutput: RankedSystemTotalCandidate[];
   /** Ranking alternatives never proves quantity, layout, or total capacity. */
   canClaimSystemSufficiency: false;
 }
 
 /**
- * Rank already-admissible candidates by independently verified per-unit output.
+ * Rank already-admissible candidates by independently verified per-unit output
+ * relative to the visible total need. A very powerful unit is not automatically
+ * the best alternative to an appropriately sized system. Distance is symmetric
+ * on a ratio scale: a unit below the total can still be combined with others,
+ * while a unit above it may be oversized. Neither case is a per-card gate.
  * Category, budget, availability, fit and all mandatory criteria must have
- * been enforced upstream. An output-only comparison is not overall product
- * dominance and never proves that any item or group meets the system total.
- *
- * A candidate is pruned only when at least the required number of *other*
- * distinct, verified products each have a severe relative output advantage.
- * Unknown or mixed-unit outputs are retained but cannot serve as proof for
- * pruning. Repeated product IDs cannot inflate the alternative count.
+ * been enforced upstream. Output proximity is not overall product dominance
+ * and never proves that any item or group meets the system total. Unknown or
+ * mixed-unit outputs remain fallback choices only if fewer than the requested
+ * minimum of distinct verified alternatives exist. Repeated IDs cannot inflate
+ * that count.
  */
 export function rankSystemTotalCandidates(
   requirement: SystemTotalRankingRequirement,
@@ -64,6 +68,8 @@ export function rankSystemTotalCandidates(
   const rankingEligible = requirement.measurementScope === "system_total" &&
     Boolean(requirement.outputFacet.key) &&
     Boolean(unit) && isPhysicalMeasurementUnit(unit) &&
+    Number.isFinite(requirement.minimumTotal) &&
+    requirement.minimumTotal > 0 &&
     Number.isSafeInteger(policy.minimumVerifiedAlternatives) &&
     policy.minimumVerifiedAlternatives >= 1 &&
     Number.isFinite(policy.severeOutputGapFactor) &&
@@ -104,6 +110,7 @@ export function rankSystemTotalCandidates(
       rankingEligible: false,
       retained: unique,
       excludedVeryLowOutput: [],
+      excludedUnverifiedOutput: [],
       canClaimSystemSufficiency: false,
     };
   }
@@ -111,31 +118,28 @@ export function rankSystemTotalCandidates(
   const verified = unique.filter((candidate) =>
     candidate.perUnitOutput !== null
   );
-  const excludedVeryLowOutput = verified.filter((candidate) => {
-    const severeThreshold = (candidate.perUnitOutput ?? 0) *
-      policy.severeOutputGapFactor;
-    if (!Number.isFinite(severeThreshold)) return false;
-    const strongerAlternatives = verified.filter((other) =>
-      other.product.id !== candidate.product.id &&
-      (other.perUnitOutput ?? 0) >= severeThreshold
-    );
-    return strongerAlternatives.length >= policy.minimumVerifiedAlternatives;
-  });
-  const excludedIds = new Set(
-    excludedVeryLowOutput.map((candidate) => candidate.product.id),
-  );
+  const excludedUnverifiedOutput = verified.length >=
+      policy.minimumVerifiedAlternatives
+    ? unique.filter((candidate) => candidate.perUnitOutput === null)
+    : [];
+  const distanceFromTotal = (output: number | null): number =>
+    output === null
+      ? Number.POSITIVE_INFINITY
+      : Math.abs(Math.log(output) - Math.log(requirement.minimumTotal));
   const retained = unique.filter((candidate) =>
-    !excludedIds.has(candidate.product.id)
+    !excludedUnverifiedOutput.includes(candidate)
   ).sort((left, right) =>
     Number(right.perUnitOutput !== null) -
       Number(left.perUnitOutput !== null) ||
-    (right.perUnitOutput ?? 0) - (left.perUnitOutput ?? 0) ||
+    distanceFromTotal(left.perUnitOutput) -
+      distanceFromTotal(right.perUnitOutput) ||
     left.inputIndex - right.inputIndex
   );
   return {
     rankingEligible: true,
     retained,
-    excludedVeryLowOutput,
+    excludedVeryLowOutput: [],
+    excludedUnverifiedOutput,
     canClaimSystemSufficiency: false,
   };
 }

@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-v3-20261009.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v4-20261012.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
@@ -15,7 +15,7 @@ const outputFile = path.join(root, 'docs/qa/release-inventory-v3-20261009.json')
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
-    sha256: '7c8a908bc82f8dfaecf648cce43af895be333a78b45bbc1b151c30d3379f0173',
+    sha256: '8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc',
     caseCount: 27, sourceTurnCount: 42, runCount: 81, evaluatedTurnCount: 126,
     repeat: 3,
   },
@@ -237,6 +237,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
+    revision_note: 'V4 re-pins the current customer suite after correcting the yard-floodlight oracle: 1800 lm is a system total, while each alternative still needs source-backed IP protection and a positive measured light output. The historical V3 inventory remains unchanged; candidate evidence is NOT_RUN.',
     candidate: {
       commit_sha: null,
       preview_version: null,

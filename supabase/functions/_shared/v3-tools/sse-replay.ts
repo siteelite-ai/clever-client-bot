@@ -5,6 +5,7 @@ const REPLAYABLE_TYPES = new Set([
   "price_unit_evidence",
   "diagnostic",
   "conversation_boundary",
+  "active_selection_scope",
   "assistant_turn_break",
   "tool_event",
   "products_block",

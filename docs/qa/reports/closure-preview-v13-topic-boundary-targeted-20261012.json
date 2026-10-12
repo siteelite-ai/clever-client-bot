@@ -1,0 +1,232 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "87dbedf1c28db8aefb3b983b1063967c7f024ab5e7e28df72464775c3e4ac944",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-12T07:03:30.301Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-automatic-topic-boundary": 1
+  },
+  "cases": [
+    {
+      "id": "customer-automatic-topic-boundary",
+      "title": "Новая самостоятельная тема автоматически изолируется, уточнение сохраняется",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "session_0e83596f-e614-4045-8b00-3e81797dcf3a",
+          "turns": [
+            {
+              "message": "найди кабель ввг 2*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 4382,
+              "network_attempts": 1,
+              "log_id": "51526205-6ac8-4b29-adab-5a9ce5a98144",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "price": 309,
+                  "stockLine": "Караганда (19782 м), Алматы (246 м), Шымкент (16 м)",
+                  "cardText": "- **[Кабель ВВГ 2*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/)**\n  Цена: *309* ₸/м\n  Наличие: Караганда (19782 м), Алматы (246 м), Шымкент (16 м)"
+                }
+              ],
+              "text": "Ищу в каталоге точную маркировку «кабель ввг 2*1,5» и сортирую точные совпадения от самой низкой цены; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-92d36121",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "2×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 2433
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "а у тебя есть лампы кукуруза?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13331,
+              "network_attempts": 1,
+              "log_id": "3f6a53c5-aeb0-433f-a4f8-9dfb8acec9ac",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 476,
+                  "stockLine": "Караганда (95 шт), Алматы (2 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *476* ₸\n  Бренд: IEK\n  Наличие: Караганда (95 шт), Алматы (2 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/",
+                  "price": 448,
+                  "stockLine": "Астана (56 шт), Иргели (210 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek/)**\n  Цена: *448* ₸\n  Бренд: IEK\n  Наличие: Астана (56 шт), Иргели (210 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/",
+                  "price": 560,
+                  "stockLine": "Караганда (58 шт), Иргели (140 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g9-iek/)**\n  Цена: *560* ₸\n  Бренд: IEK\n  Наличие: Караганда (58 шт), Иргели (140 шт)"
+                },
+                {
+                  "title": "Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/",
+                  "price": 626,
+                  "stockLine": "Иргели (20 шт)",
+                  "cardText": "- **[Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3vt-12v-4000k-keramika-g4-iek/)**\n  Цена: *626* ₸\n  Бренд: IEK\n  Наличие: Иргели (20 шт)"
+                }
+              ],
+              "text": "Форму колбы проверим поиском по жаргону «кукуруза», так как точного значения характеристики нет. Обязательные параметры: «Форма колбы: цилиндрическая». Как рабочую гипотезу сначала проверяю «Вид лампы (принцип работы): светодиодная»; без подтверждения клиента это не становится обязательным фильтром.",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_0e83596f-e614-4045-8b00-3e81797dcf3a"
+              },
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Лампы»: 658 тов., фасетов 34, листьев 3",
+                  "duration_ms": 1172
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю каталожное название…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "jargon_recover_catalog",
+                  "phase": "result",
+                  "summary": "найдено 17",
+                  "duration_ms": null
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Почему эти варианты отличаются по цене?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1101,
+              "network_attempts": 1,
+              "log_id": "e8c8e77b-cb36-4857-b6e5-d41792744138",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Сравниваю цены и подтверждённые характеристики ранее показанных вариантов:\n1. Лампа LED CORN капсула 5Вт 230В 4000К керамика G4 ИЭК — 476 ₸/шт; Диаметр, мм: 16; Длина, мм: 46; Эквивалент лампы накаливания, Вт: 45; Мощность, Вт: 5; Напряжение, В: 207-253; Световой поток, Лм: 475; Цветовая температура, К: 4000; Гарантия, год: 2.\n2. Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК — 448 ₸/шт; Диаметр, мм: 16; Длина, мм: 46; Эквивалент лампы накаливания, Вт: 30; Мощность, Вт: 3.5; Напряжение, В: 207-253; Световой поток, Лм: 333; Цветовая температура, К: 4000; Гарантия, год: 2.\n3. Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G9 ИЭК — 560 ₸/шт; Диаметр, мм: 16; Длина, мм: 51; Эквивалент лампы накаливания, Вт: 30; Мощность, Вт: 3.5; Напряжение, В: 207-253; Световой поток, Лм: 333; Цветовая температура, К: 4000; Гарантия, год: 2.\n4. Лампа LED CORN капсула 3Вт 12В 4000К керамика G4 ИЭК — 626 ₸/шт; Диаметр, мм: 14; Длина, мм: 42; Эквивалент лампы накаливания, Вт: 25; Мощность, Вт: 3; Напряжение, В: 10-14; Световой поток, Лм: 285; Цветовая температура, К: 4000; Гарантия, год: 2.\nЕсли нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-12T07:03:49.125Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "51526205-6ac8-4b29-adab-5a9ce5a98144",
+    "3f6a53c5-aeb0-433f-a4f8-9dfb8acec9ac",
+    "e8c8e77b-cb36-4857-b6e5-d41792744138"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

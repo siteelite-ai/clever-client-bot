@@ -10,6 +10,7 @@ const requirement: SystemTotalRankingRequirement = {
   measurementScope: "system_total",
   outputFacet: { key: "flux", caption: "Световой поток, лм", unit: "лм" },
   unit: "лм",
+  minimumTotal: 1800,
 };
 
 const policy: SystemTotalRankingPolicy = {
@@ -30,7 +31,7 @@ function ids(products: { product: SystemPlanProductEvidence }[]): string[] {
   return products.map(({ product }) => product.id);
 }
 
-Deno.test("800 lm is output-dominated when three verified 1800+ alternatives remain", () => {
+Deno.test("800 lm remains a possible multi-unit choice alongside closer verified options", () => {
   const ranking = rankSystemTotalCandidates(requirement, [
     product("low", "800 лм"),
     product("mid", "1 800 лм"),
@@ -38,9 +39,9 @@ Deno.test("800 lm is output-dominated when three verified 1800+ alternatives rem
     product("middle", "1 900 лм"),
   ], policy);
   assertEquals(ranking.rankingEligible, true);
-  assertEquals(ids(ranking.retained), ["high", "middle", "mid"]);
-  assertEquals(ids(ranking.excludedVeryLowOutput), ["low"]);
-  assertEquals(ranking.retained[0].perUnitOutput, 2400);
+  assertEquals(ids(ranking.retained), ["mid", "middle", "high", "low"]);
+  assertEquals(ranking.excludedVeryLowOutput, []);
+  assertEquals(ranking.retained[0].perUnitOutput, 1800);
   assertEquals(ranking.canClaimSystemSufficiency, false);
 });
 
@@ -50,11 +51,11 @@ Deno.test("a low-output option stays when not enough stronger verified alternati
     product("mid", "1 800 лм"),
     product("high", "2 000 лм"),
   ], policy);
-  assertEquals(ids(ranking.retained), ["high", "mid", "low"]);
+  assertEquals(ids(ranking.retained), ["mid", "high", "low"]);
   assertEquals(ranking.excludedVeryLowOutput, []);
 });
 
-Deno.test("missing and mixed-unit outputs are never counted as stronger proof", () => {
+Deno.test("missing and mixed-unit outputs are not offered when enough verified alternatives exist", () => {
   const ranking = rankSystemTotalCandidates(requirement, [
     product("low", "800 лм"),
     product("strong-a", "1 800 лм"),
@@ -63,35 +64,27 @@ Deno.test("missing and mixed-unit outputs are never counted as stronger proof", 
     product("wrong-unit", "3 000 Вт"),
   ], policy);
   assertEquals(ids(ranking.retained), [
-    "strong-b",
     "strong-a",
+    "strong-b",
     "low",
+  ]);
+  assertEquals(ranking.excludedVeryLowOutput, []);
+  assertEquals(ids(ranking.excludedUnverifiedOutput), [
     "missing",
     "wrong-unit",
   ]);
-  assertEquals(ranking.excludedVeryLowOutput, []);
-  assertEquals(ranking.retained[3].outputIssue, "missing_output");
-  assertEquals(ranking.retained[4].outputIssue, "unit_mismatch");
-  assertEquals(ranking.retained[3].perUnitOutput, null);
-  assertEquals(ranking.retained[4].perUnitOutput, null);
+  assertEquals(ranking.excludedUnverifiedOutput[0].outputIssue, "missing_output");
+  assertEquals(ranking.excludedUnverifiedOutput[1].outputIssue, "unit_mismatch");
 });
 
-Deno.test("unknown outputs remain visible even when verified low output is pruned", () => {
+Deno.test("unknown output is a fallback only when verified choices fall short", () => {
   const ranking = rankSystemTotalCandidates(requirement, [
-    product("low", "800 лм"),
     product("strong-a", "1 800 лм"),
-    product("strong-b", "1 900 лм"),
-    product("strong-c", "2 000 лм"),
     product("range", "800–1000 лм"),
   ], policy);
-  assertEquals(ids(ranking.retained), [
-    "strong-c",
-    "strong-b",
-    "strong-a",
-    "range",
-  ]);
-  assertEquals(ids(ranking.excludedVeryLowOutput), ["low"]);
-  assertEquals(ranking.retained[3].outputIssue, "ambiguous_output");
+  assertEquals(ids(ranking.retained), ["strong-a", "range"]);
+  assertEquals(ranking.excludedUnverifiedOutput, []);
+  assertEquals(ranking.retained[1].outputIssue, "ambiguous_output");
 });
 
 Deno.test("distinct live SKUs, not duplicate search hits, set the safety margin", () => {
@@ -101,7 +94,7 @@ Deno.test("distinct live SKUs, not duplicate search hits, set the safety margin"
     product("strong-a", "1 800 лм"),
     product("strong-b", "2 000 лм"),
   ], policy);
-  assertEquals(ids(ranking.retained), ["strong-b", "strong-a", "low"]);
+  assertEquals(ids(ranking.retained), ["strong-a", "strong-b", "low"]);
   assertEquals(ranking.excludedVeryLowOutput, []);
 });
 
@@ -114,6 +107,7 @@ Deno.test("relative output policy is unit-neutral and not a per-card total thres
       unit: "кг",
     },
     unit: "кг",
+    minimumTotal: 10,
   };
   const options: SystemPlanProductEvidence[] = [
     { id: "low", facet_values: { yield: ["4 кг"] } },
@@ -122,8 +116,8 @@ Deno.test("relative output policy is unit-neutral and not a per-card total thres
     { id: "c", facet_values: { yield: ["11 кг"] } },
   ];
   const ranking = rankSystemTotalCandidates(outputRequirement, options, policy);
-  assertEquals(ids(ranking.retained), ["c", "b", "a"]);
-  assertEquals(ids(ranking.excludedVeryLowOutput), ["low"]);
+  assertEquals(ids(ranking.retained), ["b", "c", "a", "low"]);
+  assertEquals(ranking.excludedVeryLowOutput, []);
   assertEquals(ranking.canClaimSystemSufficiency, false);
 });
 
@@ -145,4 +139,62 @@ Deno.test("scope or overly aggressive pruning policy fails closed", () => {
   assertEquals(weakGap.rankingEligible, false);
   assertEquals(ids(weakGap.retained), ["low", "high"]);
   assertEquals(weakGap.excludedVeryLowOutput, []);
+});
+
+Deno.test("system-total proximity ranks moderately sized proven options before MEGA and unknown", () => {
+  const ranking = rankSystemTotalCandidates(requirement, [
+    product("mega-1000w", "100 000 лм"),
+    product("mega-600w", "60 000 лм"),
+    product("mega-400w", "40 000 лм"),
+    product("compact-800", "800 лм"),
+    product("compact-1500", "1 500 лм"),
+    product("compact-1800", "1 800 лм"),
+    product("compact-2200", "2 200 лм"),
+    product("compact-3000", "3 000 лм"),
+    { id: "rgb-no-flow", facet_values: {} },
+  ], policy);
+  assertEquals(ids(ranking.retained).slice(0, 5), [
+    "compact-1800",
+    "compact-1500",
+    "compact-2200",
+    "compact-3000",
+    "compact-800",
+  ]);
+  assertEquals(ids(ranking.retained).slice(5), [
+    "mega-400w",
+    "mega-600w",
+    "mega-1000w",
+  ]);
+  assertEquals(ids(ranking.excludedUnverifiedOutput), ["rgb-no-flow"]);
+  assertEquals(ranking.canClaimSystemSufficiency, false);
+});
+
+Deno.test("a pool containing only oversized proven cards cannot invent suitable alternatives", () => {
+  const ranking = rankSystemTotalCandidates(requirement, [
+    product("mega-1000w", "100 000 лм"),
+    product("mega-600w", "60 000 лм"),
+    product("mega-500w", "50 000 лм"),
+    product("mega-400w", "40 000 лм"),
+    { id: "rgb-no-flow", facet_values: {} },
+  ], policy);
+  assertEquals(ids(ranking.retained), [
+    "mega-400w",
+    "mega-500w",
+    "mega-600w",
+    "mega-1000w",
+  ]);
+  assertEquals(ids(ranking.excludedUnverifiedOutput), ["rgb-no-flow"]);
+  assertEquals(ranking.canClaimSystemSufficiency, false);
+});
+
+Deno.test("missing total proof or non-total scope cannot reorder other applications", () => {
+  const options = [product("first", "5 000 лм"), product("second", "2 000 лм")];
+  const noTotal = rankSystemTotalCandidates(
+    { ...requirement, minimumTotal: NaN },
+    options,
+    policy,
+  );
+  assertEquals(noTotal.rankingEligible, false);
+  assertEquals(ids(noTotal.retained), ["first", "second"]);
+  assertEquals(noTotal.excludedUnverifiedOutput, []);
 });

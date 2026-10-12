@@ -186,6 +186,24 @@ Deno.test("a cheapest product omitted from page one still wins after full pagina
   assertEquals(seenPages, ["1", "2"]);
 });
 
+Deno.test("complete-price proof scans every page of a 226-row category before selecting", async () => {
+  const rows = Array.from({ length: 226 }, (_, index) =>
+    raw(String(index + 1), `Кабель ВВГ 3*1,5 ${index + 1}`, 500 + index));
+  rows[225] = raw("226", "Кабель ВВГ 3*1,5 последняя страница", 309);
+  const seenPages: number[] = [];
+  const result = await selectCompleteCategoryPrice(input, deps((url) => {
+    const pageNumber = Number(new URL(String(url)).searchParams.get("page"));
+    seenPages.push(pageNumber);
+    const start = (pageNumber - 1) * 50;
+    return Promise.resolve(page(rows.slice(start, start + 50), rows.length));
+  }), new Map());
+  assert(result.ok);
+  assertEquals(result.product.id, "226");
+  assertEquals(result.evidence.raw_rows, 226);
+  assertEquals(result.evidence.matching_available, 226);
+  assertEquals(seenPages, [1, 2, 3, 4, 5]);
+});
+
 Deno.test("expensive direction selects highest price only after complete scan", async () => {
   const rows = [raw("1", "Кабель ВВГ 3*1,5 A", 301), raw("2", "Кабель ВВГ 3*1,5 B", 462)];
   const result = await selectCompleteCategoryPrice({ ...input, request: { ...request, priceDirection: "expensive" } },
@@ -199,9 +217,9 @@ Deno.test("raw cap and too many leaves never become a partial superlative", asyn
   let calls = 0;
   const overCap = await selectCompleteCategoryPrice(input, deps(() => {
     calls++;
-    return Promise.resolve(page([raw("1", "Кабель ВВГ 3*1,5", 301)], 201));
+    return Promise.resolve(page([raw("1", "Кабель ВВГ 3*1,5", 301)], 501));
   }), new Map());
-  assertEquals(overCap, { ok: false, reason: "catalog_cap", message: "complete category exceeds 200 raw rows" });
+  assertEquals(overCap, { ok: false, reason: "catalog_cap", message: "complete category exceeds 500 raw rows" });
   assertEquals(calls, 1);
 
   const tooMany = await selectCompleteCategoryPrice({ ...input, discovery: {

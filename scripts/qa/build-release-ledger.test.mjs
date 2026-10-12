@@ -13,7 +13,7 @@ import {
 } from './build-release-ledger.mjs';
 import { resolveCaseExecutions, resolveExpectations } from './run-customer-acceptance.mjs';
 
-const ledgerFile = new URL('../../docs/qa/release-inventory-v3-20261009.json', import.meta.url);
+const ledgerFile = new URL('../../docs/qa/release-inventory-v4-20261012.json', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function withChangedJson(filename, change, manifestChange = (manifest) => manifest) {

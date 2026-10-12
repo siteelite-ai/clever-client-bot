@@ -14,6 +14,9 @@ export const ACCEPTANCE_TURN_TIMEOUT_MS = 55_000;
 export const PRODUCT_PAGE_TIMEOUT_MS = 10_000;
 const PRODUCT_PAGE_MAX_HTML_BYTES = 2_000_000;
 const PRODUCT_PAGE_CONCURRENCY = 6;
+const PRODUCT_PAGE_TRANSIENT_RETRIES = 1;
+const PRODUCT_PAGE_RETRY_DELAY_MS = 250;
+const productPageCacheRecoveries = new WeakMap();
 const casesFileArg = process.argv.find((arg) => arg.startsWith('--cases-file='))?.slice('--cases-file='.length).trim();
 const casesPath = casesFileArg
   ? path.resolve(process.cwd(), casesFileArg)
@@ -94,7 +97,7 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: '7c8a908bc82f8dfaecf648cce43af895be333a78b45bbc1b151c30d3379f0173',
+    sha256: '8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc',
     repeat: 3,
     turns: 42,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
@@ -1186,19 +1189,16 @@ export function productProofFromHtml(html, requestedIdentity) {
   }
 }
 
-export async function verifyProductPage(rawUrl, {
-  fetchImpl = fetch,
-  timeoutMs = PRODUCT_PAGE_TIMEOUT_MS,
-} = {}) {
-  const identity = productUrlIdentity(rawUrl);
-  if (!identity) return { identity: null, verified: false, reason: 'invalid 220volt.kz catalog URL' };
+async function verifyProductPageAttempt(rawUrl, identity, { fetchImpl, timeoutMs }) {
   const parsed = new URL(rawUrl);
   const fetchUrl = `https://220volt.kz${parsed.pathname}`;
   const controller = new AbortController();
   let timer;
+  let timedOut = false;
   try {
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         controller.abort();
         reject(new Error(`product page exceeded ${timeoutMs}ms deadline`));
       }, timeoutMs);
@@ -1229,12 +1229,41 @@ export async function verifyProductPage(rawUrl, {
       if (!proof) throw new Error('matching JSON-LD Product identity not found (SKU or canonical/name/price/stock fallback)');
       return { identity, verified: true, ...proof };
     })();
-    return await Promise.race([request, deadline]);
+    return { proof: await Promise.race([request, deadline]), retryable: false };
   } catch (error) {
-    return { identity, verified: false, reason: String(error?.message ?? error) };
+    const reason = timedOut
+      ? `product page exceeded ${timeoutMs}ms deadline`
+      : String(error?.message ?? error);
+    // Retry only transport/transient failures. A redirect, malformed HTML,
+    // oversized page or mismatched Product identity must remain a hard failure.
+    const retryable = timedOut || /^HTTP (?:502|503|504)$/u.test(reason) ||
+      error?.name === 'AbortError' ||
+      (error instanceof TypeError && /(?:fetch failed|network|socket)/iu.test(reason));
+    return { proof: { identity, verified: false, reason }, retryable };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function verifyProductPage(rawUrl, {
+  fetchImpl = fetch,
+  timeoutMs = PRODUCT_PAGE_TIMEOUT_MS,
+} = {}) {
+  const identity = productUrlIdentity(rawUrl);
+  if (!identity) return { identity: null, verified: false, reason: 'invalid 220volt.kz catalog URL' };
+  for (let attempt = 0; attempt <= PRODUCT_PAGE_TRANSIENT_RETRIES; attempt++) {
+    const { proof, retryable } = await verifyProductPageAttempt(rawUrl, identity, { fetchImpl, timeoutMs });
+    if (!retryable || attempt === PRODUCT_PAGE_TRANSIENT_RETRIES) return proof;
+    await new Promise((resolve) => setTimeout(resolve, PRODUCT_PAGE_RETRY_DELAY_MS));
+  }
+}
+
+function isTransientProductPageFailure(proof) {
+  return proof?.verified === false && (
+    /^product page exceeded \d+ms deadline$/u.test(proof.reason ?? '') ||
+    /^HTTP (?:502|503|504)$/u.test(proof.reason ?? '') ||
+    /(?:fetch failed|network|socket|operation was aborted)/iu.test(proof.reason ?? '')
+  );
 }
 
 export async function verifyProductLinks(links = [], {
@@ -1249,11 +1278,32 @@ export async function verifyProductLinks(links = [], {
   }
   const entries = [...urls];
   const verified = new Map();
+  let recoveries = productPageCacheRecoveries.get(cache);
+  if (!recoveries) {
+    recoveries = new Set();
+    productPageCacheRecoveries.set(cache, recoveries);
+  }
   for (let start = 0; start < entries.length; start += PRODUCT_PAGE_CONCURRENCY) {
     const batch = entries.slice(start, start + PRODUCT_PAGE_CONCURRENCY);
     const results = await Promise.all(batch.map(async ([identity, url]) => {
-      if (!cache.has(identity)) cache.set(identity, verifyProductPage(url, { fetchImpl, timeoutMs }));
-      return [identity, await cache.get(identity)];
+      let pending = cache.get(identity);
+      if (!pending) {
+        pending = verifyProductPage(url, { fetchImpl, timeoutMs });
+        cache.set(identity, pending);
+      } else {
+        const prior = await pending;
+        // A single transient failure must not poison every later customer
+        // repeat. Permit one cache recovery per identity; all failed attempts
+        // still fail closed and the same URL remains in the report inventory.
+        if (isTransientProductPageFailure(prior) && !recoveries.has(identity) && cache.get(identity) === pending) {
+          recoveries.add(identity);
+          pending = verifyProductPage(url, { fetchImpl, timeoutMs });
+          cache.set(identity, pending);
+        } else {
+          pending = cache.get(identity);
+        }
+      }
+      return [identity, await pending];
     }));
     for (const [identity, result] of results) verified.set(identity, result);
   }
@@ -1321,6 +1371,41 @@ function sourceNameAllowsLexicalExpansion(displayed, source) {
   const sourceNumbers = numbers(source);
   return shownNumbers.length > 0 && shownNumbers.length === sourceNumbers.length &&
     shownNumbers.every((part, index) => part === sourceNumbers[index]);
+}
+
+function sourceNameAllowsVerifiedAbbreviations(displayed, source) {
+  // Catalog titles may shorten adjacent nouns ("Авт.выкл-ль") while the
+  // product page spells them out. Derive each expansion from this very page;
+  // do not treat an arbitrary abbreviation as an identity assertion.
+  const sourceWords = exactProductName(source).toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е').match(/\p{L}{5,}/gu) ?? [];
+  const raw = exactProductName(displayed).toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  const shorthand = /(?<![\p{L}\p{N}])(\p{L}{3,5})(?:\.(?!\p{N})|-(\p{L}{1,3})(?![\p{L}\p{N}]))/giu;
+  let expanded = '';
+  let lastEnd = 0;
+  let sourceIndex = 0;
+  let count = 0;
+  for (const match of raw.matchAll(shorthand)) {
+    const prefix = match[1];
+    const suffix = match[2] ?? '';
+    const index = sourceWords.findIndex((word, position) => position >= sourceIndex &&
+      word.startsWith(prefix) && (!suffix || word.endsWith(suffix)) && word.length > prefix.length);
+    if (index < 0) return false;
+    expanded += raw.slice(lastEnd, match.index) + sourceWords[index] + ' ';
+    lastEnd = match.index + match[0].length;
+    sourceIndex = index + 1;
+    count++;
+  }
+  if (count < 2) return false;
+  expanded += raw.slice(lastEnd);
+  // Alphanumeric model/part codes are not prose abbreviations. They must
+  // remain exact even when the nouns can be expanded.
+  const modelCodes = (value) => (String(value).toLocaleLowerCase('ru-RU')
+    .match(/[\p{L}\p{N}]+/gu) ?? [])
+    .filter((part) => part.length >= 4 && /\p{L}/u.test(part) && /\d/u.test(part));
+  const sourceCodes = new Set(modelCodes(source));
+  if (!modelCodes(displayed).every((code) => sourceCodes.has(code))) return false;
+  return sourceNameAllowsLexicalExpansion(expanded, source);
 }
 
 // An exact customer model must end at a model boundary: BP5-10 is not BP5.
@@ -1544,7 +1629,8 @@ export function evaluate(expect = {}, response, {
         productUrlIdentity(proof.canonicalUrl) === identity &&
         Number.isFinite(link.price) && link.price === proof.offerPrice &&
         /^https?:\/\/schema\.org\/InStock$/iu.test(proof.availability ?? '') &&
-        sourceNameAllowsLexicalExpansion(link.title, proof.name));
+        (sourceNameAllowsLexicalExpansion(link.title, proof.name) ||
+          sourceNameAllowsVerifiedAbbreviations(link.title, proof.name)));
       if (proof.sku
         ? nameTokenRecall(link.title, proof.name) < 0.6 && !skuNameExpansionIsProven
         : exactProductName(link.title) !== exactProductName(proof.name)) {

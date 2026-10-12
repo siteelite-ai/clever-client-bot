@@ -13,6 +13,7 @@ export type RecentPriceProofFailure =
 export type RecentPriceProof =
   | {
     ok: true;
+    direction: "cheapest" | "expensive";
     winner: ProductFull;
     compared_count: number;
     unit: string;
@@ -96,6 +97,7 @@ export function proveRecentPriceSet(
   );
   return {
     ok: true,
+    direction,
     winner: ordered[0],
     compared_count: ordered.length,
     unit: commonUnit!,

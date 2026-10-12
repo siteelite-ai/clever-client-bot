@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import { MATRIX_MANIFESTS, buildReleaseLedger } from './build-release-ledger.mjs';
@@ -105,6 +106,13 @@ test('complete synthetic four-suite evidence passes with exact inventory coverag
   assert.equal(summary.verdict_scope, 'strict_matrix_evidence_only');
   assert.equal(summary.release_readiness, 'NOT_ASSESSED');
   assert(!JSON.stringify(summary).includes('SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY'));
+});
+
+test('historical v3 inventory cannot be substituted for the re-pinned v4 matrix', () => {
+  const evidence = syntheticEvidence();
+  evidence.inventory = JSON.parse(fs.readFileSync(
+    new URL('../../docs/qa/release-inventory-v3-20261009.json', import.meta.url), 'utf8'));
+  expectFailure(evidence, 'inventory_suite_matrix_mismatch');
 });
 
 test('stale v11-style reports are rejected when they predate deployment observation', () => {

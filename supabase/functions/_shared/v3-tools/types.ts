@@ -73,6 +73,7 @@ export interface ToolError {
     | "incomplete_filter"
     | "no_products"
     | "all_zero_price"
+    | "jargon_unavailable"
     | "knowledge_unavailable"
     | "contacts_unavailable"
     | "internal";

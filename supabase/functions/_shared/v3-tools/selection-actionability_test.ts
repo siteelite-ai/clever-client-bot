@@ -474,6 +474,49 @@ Deno.test("live-like paired diameter declaration never requires a range excludin
   }
 });
 
+Deno.test("unitless related catalog ranges never become verified paired-fit claims", () => {
+  const facets = [{
+    key: "diameter_before",
+    caption: "Внутренний диаметр до усадки, мм",
+    unit: "мм",
+    values: [{ value: "14" }],
+  }, {
+    key: "diameter_after",
+    caption: "Внутренний диаметр после усадки, мм",
+    unit: "мм",
+    values: [{ value: "7" }],
+  }, {
+    key: "wire_diameter_range",
+    caption: "Диапазон диаметров проводов",
+    unit: null,
+    values: [{ value: "12.8-24" }, { value: "6.8-12" }],
+  }];
+  const paired = {
+    value: 12,
+    unit: "мм",
+    facetKeys: ["diameter_before", "diameter_after"],
+  };
+  const strict = "Для кабеля 12 мм внутренний диаметр трубки до усадки строго больше 12 мм, а после усадки строго меньше 12 мм.";
+  const result = resolveDerivedSelectionReasoning(
+    {
+      reasoning: `${strict} Диапазон диаметров проводов 12. 8–24 мм указывает на совместимость.`,
+      required_facet_values: ["f2v0"],
+      compatible_classifications: ["f2v0"],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужна термоусадочная трубка для кабеля диаметром 12 мм",
+    "Трубки термоусаживаемые",
+    paired,
+  );
+  assertEquals(result?.requiredFacetValues, []);
+  assertEquals(result?.customerGroundedCompatible, []);
+  assertEquals(result?.text.includes("24 мм"), false);
+  assertEquals(result?.text.includes("12.8-24"), false);
+  assertEquals(result?.text.includes("Обязательные параметры"), false);
+  assertEquals(result?.text.includes("строго больше 12 мм"), true);
+});
+
 Deno.test("visible derived reasoning cannot be replaced by hidden later tool prose", () => {
   assertEquals(
     measuredSelectionContractEvidence(
@@ -1428,6 +1471,82 @@ Deno.test("a literal customer modifier may map to one exact live classification 
     ),
     true,
   );
+});
+
+Deno.test("a room circumstance cannot become an exact catalog purpose filter", () => {
+  const facets = [{
+    key: "purpose",
+    caption: "Назначение",
+    type: "string",
+    values: [
+      { value: "зал; гостиная; спальня; кафе; кухня" },
+      { value: "офис" },
+      { value: "улица" },
+    ],
+  }];
+  const declared = {
+    reasoning: "Подбираю люстру с подтверждённой площадью освещения.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [{
+      customer_phrase: "зале",
+      classification_id: "f0v0",
+    }],
+  };
+  const room = resolveDerivedSelectionReasoning(
+    declared,
+    facets,
+    "Хочу поменять дома люстру в зале 30 квадратов",
+    "Люстры",
+  );
+  assertEquals(room?.explicitCustomerMappings, []);
+  assertEquals(room?.customerGroundedCompatible, []);
+  assertEquals(room?.compatible, [{
+    key: "Назначение",
+    value: "зал; гостиная; спальня; кафе; кухня",
+  }]);
+  assertEquals(room?.text.includes("не становится обязательным фильтром"), true);
+
+  const forRoom = resolveDerivedSelectionReasoning(
+    { ...declared, explicit_customer_classifications: [{
+      customer_phrase: "гостиной",
+      classification_id: "f0v0",
+    }] },
+    facets,
+    "Нужен светильник для гостиной площадью 30 м²",
+    "Светильники",
+  );
+  assertEquals(forRoom?.explicitCustomerMappings, []);
+  assertEquals(forRoom?.customerGroundedCompatible, []);
+});
+
+Deno.test("a direct product-use qualifier remains customer-owned", () => {
+  const facets = [{
+    key: "purpose",
+    caption: "Назначение",
+    type: "string",
+    values: [{ value: "бытовой" }, { value: "промышленный" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Подбираю бытовой светильник по заявленному применению.",
+      compatible_classifications: ["f0v0"],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [{
+        customer_phrase: "бытовой",
+        classification_id: "f0v0",
+      }],
+    },
+    facets,
+    "Нужен бытовой светильник",
+    "Светильники",
+  );
+  assertEquals(resolved?.customerGroundedCompatible, [{
+    key: "Назначение",
+    value: "бытовой",
+  }]);
 });
 
 Deno.test("an umbrella customer phrase cannot own a narrower compound live subtype", () => {
