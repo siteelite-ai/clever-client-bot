@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL('../../supabase/functions/chat-consultant-v3/index.ts', import.meta.url),
   'utf8',
 );
+const recoverySource = readFileSync(
+  new URL('../../supabase/functions/_shared/v3-tools/selection-search-recovery.ts', import.meta.url),
+  'utf8',
+);
 
 test('an unavailable in-loop jargon recovery is recorded and cannot finish as an honest zero', () => {
   assert.match(source, /tc\.name === "jargon_recover_catalog" && !result\.ok &&\s*result\.error_code === "jargon_unavailable"/);
@@ -14,7 +18,7 @@ test('an unavailable in-loop jargon recovery is recorded and cannot finish as an
   const ordinaryNoToolEnd = source.indexOf('meta: { reason: "ok", step_count:', noToolFinish);
   assert.ok(noToolFinish >= 0 && ordinaryNoToolEnd > noToolFinish);
   assert.match(source.slice(noToolFinish, ordinaryNoToolEnd),
-    /if \(shouldReportJargonRecoveryUnavailable\(jargonRecoveryUnavailable, productsRendered\)\) \{\s*return finishWithJargonUnavailable\("in_loop"\);/);
+    /if \(shouldReportJargonRecoveryUnavailable\(jargonRecoveryUnavailable, productsRendered\)\) \{\s*return finishWithCatalogTechnicalNotice\("in_loop", "jargon_recovery"\);/);
 });
 
 test('terminal helper failure is diagnostic, retryable, and not an empty result', () => {
@@ -35,12 +39,22 @@ test('terminal helper failure is diagnostic, retryable, and not an empty result'
 });
 
 test('technical notice is finalized before empty synthesis or an empty-catalog claim', () => {
-  const technicalGuard = source.indexOf('return finishWithJargonUnavailable("terminal");');
+  const technicalGuard = source.indexOf('return finishWithCatalogTechnicalNotice("terminal", "jargon_recovery");');
   const emptySynthesis = source.indexOf('buildCatalogEmptySynthesisMessages(', technicalGuard);
   const emptyClaim = source.indexOf('Не нашёл подходящие товары по этому сочетанию параметров.', technicalGuard);
   assert.ok(technicalGuard >= 0 && emptySynthesis > technicalGuard && emptyClaim > emptySynthesis);
-  assert.match(source, /Не могу подтвердить, что подходящих товаров нет\. Повторите запрос позже\./);
-  assert.match(source, /step: "v3_jargon_recovery_technical_notice"/);
+  assert.match(source.slice(technicalGuard - 150, technicalGuard),
+    /shouldReportJargonRecoveryUnavailable\(jargonRecoveryUnavailable, productsRendered\)/);
+  const helperStart = source.indexOf('const finishWithCatalogTechnicalNotice = (');
+  const helperEnd = source.indexOf('let groundedCompoundSearchTerminal = false;', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  assert.match(helper, /const notice = TRANSIENT_CATALOG_FAILURE_NOTICE;/);
+  assert.match(helper, /send\(\{ type: "delta", content: .*notice.* \}\);/);
+  assert.match(helper, /steps\.push\(\{\s*step: source === "jargon_recovery"\s*\? "v3_jargon_recovery_technical_notice"/);
+  assert.match(helper, /source === "jargon_recovery"\s*\? "jargon_recovery_unavailable"\s*: "catalog_tool_unavailable"/);
+  assert.match(recoverySource,
+    /TRANSIENT_CATALOG_FAILURE_NOTICE\s*=\s*"[^"]*Не могу подтвердить, что подходящих товаров нет\. Повторите запрос позже\."/);
 });
 
 test('model final prose is suppressed before streaming when an unavailable search has no rendered card', () => {
