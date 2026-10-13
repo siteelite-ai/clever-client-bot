@@ -1,0 +1,60 @@
+name: Chat v3 admission PostgreSQL 16
+
+on:
+  push:
+    paths:
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'docs/security/chat-v3-admission-guard-local-test.sql'
+      - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
+      - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
+      - '.github/workflows/chat-v3-admission-postgres.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'docs/security/chat-v3-admission-guard-local-test.sql'
+      - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
+      - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
+      - '.github/workflows/chat-v3-admission-postgres.yml'
+
+jobs:
+  admission-sql:
+    name: disposable PostgreSQL 16 admission tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: admission_ci
+          POSTGRES_PASSWORD: admission-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d admission_ci"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGPASSWORD: admission-ci-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql --version
+
+      - name: Apply disposable schema and candidate admission SQL
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/chat-v3-admission-guard-ci-schema.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261009150000_chat_v3_admission_guard.sql
+
+      - name: Run transactional SQL behavior and privilege checks
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/chat-v3-admission-guard-local-test.sql
+
+      - name: Run two-connection limit and replay races
+        run: timeout 35s bash scripts/qa/test-chat-v3-admission-concurrency.sh

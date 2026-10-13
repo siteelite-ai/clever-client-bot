@@ -594,8 +594,9 @@ import {
 } from "../_shared/v3-tools/public-failure.ts";
 import {
   type ChatV3AdmissionResult,
-  checkChatV3Admission,
+  checkChatV3AdmissionWithDeadline,
   releaseChatV3Admission,
+  resolveChatV3AdmissionScope,
 } from "../_shared/v3-tools/chat-admission.ts";
 import {
   fetchChatCompletionWithFailover,
@@ -619,6 +620,11 @@ const DEPLOYMENT_VARIANT = (globalThis as typeof globalThis & {
   }).__VOLT220_FUNCTION_VARIANT__ === "preview"
   ? "preview"
   : "production";
+const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
+  (globalThis as typeof globalThis & {
+    __VOLT220_ADMISSION_SCOPE__?: "preview";
+  }).__VOLT220_ADMISSION_SCOPE__,
+);
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,
   globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
@@ -19995,13 +20001,11 @@ Deno.serve(async (req) => {
         // returned above and never spend a second admission reservation.
         // With the default `off` mode this makes no database call and leaves
         // the current production pipeline untouched.
-        admission = await runWithDeadline(
-          () =>
-            checkChatV3Admission(
-              logId,
-              (name, args) => supabase.rpc(name, args),
-            ),
+        admission = await checkChatV3AdmissionWithDeadline(
+          logId,
+          (name, args) => supabase.rpc(name, args),
           ADMISSION_RPC_TIMEOUT_MS,
+          ADMISSION_SCOPE,
         );
         steps.push({
           step: "v3_admission_checked",

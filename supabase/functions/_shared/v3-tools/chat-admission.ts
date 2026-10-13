@@ -7,7 +7,10 @@
  * no browser field is accepted as a mode, threshold, or limiter identity.
  */
 
+import { runWithDeadline } from "./turn-deadline.ts";
+
 export type ChatV3AdmissionMode = "off" | "observe" | "enforce";
+export type ChatV3AdmissionScope = "production" | "preview";
 export type ChatV3AdmissionFailure =
   | "invalid_mode"
   | "invalid_limit_per_minute"
@@ -15,6 +18,7 @@ export type ChatV3AdmissionFailure =
   | "missing_enforcement_limit"
   | "invalid_log_id"
   | "rpc_error"
+  | "rpc_timeout"
   | "invalid_rpc_response"
   | null;
 
@@ -166,7 +170,7 @@ function parseDecision(raw: unknown): ChatV3AdmissionResult | null {
 
 function rpcFailure(
   mode: "observe" | "enforce",
-  failure: "rpc_error" | "invalid_rpc_response",
+  failure: "rpc_error" | "rpc_timeout" | "invalid_rpc_response",
 ): ChatV3AdmissionResult {
   // This is deliberately secret-free and independently visible in Edge logs.
   // The same failure code is returned for the caller's structured turn steps.
@@ -174,16 +178,75 @@ function rpcFailure(
   return noDecision(
     mode === "observe",
     mode,
-    mode === "observe" ? "rpc_error_open" : "rpc_error_closed",
+    `${failure === "rpc_timeout" ? "rpc_timeout" : "rpc_error"}_${
+      mode === "observe" ? "open" : "closed"
+    }`,
     failure,
     true,
   );
 }
 
+/** Only an isolate-local marker installed by a server-owned function wrapper
+ * can select preview scope. Requests never supply this value. */
+export function resolveChatV3AdmissionScope(
+  serverMarker: unknown,
+): ChatV3AdmissionScope {
+  return serverMarker === "preview" ? "preview" : "production";
+}
+
+/**
+ * Bound a possibly hung database check without changing the admission policy.
+ * A timed-out RPC may already have committed a reservation, so the returned
+ * decision always requests an idempotent release on the terminal path.
+ */
+export async function checkChatV3AdmissionWithDeadline(
+  logId: string,
+  rpc: ChatV3AdmissionRpc,
+  timeoutMs: number,
+  scope: ChatV3AdmissionScope = "production",
+  readEnv: EnvReader = (name) => Deno.env.get(name),
+): Promise<ChatV3AdmissionResult> {
+  // Project Edge secrets are shared across functions. Preview must never
+  // consume a production admission reservation or be denied by its limits.
+  if (scope === "preview") return noDecision(true, "off", "off");
+  const configuredMode = readEnv("CHAT_V3_ADMISSION_MODE");
+  const snapshotEnv: EnvReader = (name) =>
+    name === "CHAT_V3_ADMISSION_MODE" ? configuredMode : readEnv(name);
+  // The default path has no database call, and needs no deadline timer.
+  if (configuredMode === undefined || configuredMode === "off") {
+    return checkChatV3Admission(logId, rpc, snapshotEnv);
+  }
+
+  let deadlineExpired = false;
+  try {
+    return await runWithDeadline(
+      () => checkChatV3Admission(logId, rpc, snapshotEnv),
+      timeoutMs,
+      () => {
+        deadlineExpired = true;
+      },
+    );
+  } catch (error) {
+    if (!deadlineExpired) throw error;
+    if (configuredMode === "observe" || configuredMode === "enforce") {
+      return rpcFailure(configuredMode, "rpc_timeout");
+    }
+    // An invalid mode must never acquire paid work after an ambiguous timeout.
+    return noDecision(
+      false,
+      "invalid",
+      "rpc_timeout_closed",
+      "rpc_timeout",
+      true,
+    );
+  }
+}
+
 /**
  * Make one idempotent check RPC for a newly claimed log. Off mode makes zero
- * RPC calls. Observe is fail-open only for transport/malformed-response errors;
- * explicit RPC denials such as `claim_not_in_progress` remain denials.
+ * RPC calls. Observe is fail-open only for transport, deadline, or malformed-
+ * response errors; explicit RPC denials such as `claim_not_in_progress` remain
+ * denials.
  */
 export async function checkChatV3Admission(
   logId: string,

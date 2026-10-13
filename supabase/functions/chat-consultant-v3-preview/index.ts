@@ -6,4 +6,10 @@
   __VOLT220_FUNCTION_VARIANT__?: "preview";
 }).__VOLT220_FUNCTION_VARIANT__ = "preview";
 
+// Edge secrets are project-wide; keep preview outside production admission.
+// This server-only isolate marker is never derived from a request field.
+(globalThis as typeof globalThis & {
+  __VOLT220_ADMISSION_SCOPE__?: "preview";
+}).__VOLT220_ADMISSION_SCOPE__ = "preview";
+
 await import("../chat-consultant-v3/index.ts");

@@ -6,6 +6,7 @@ on:
       - 'supabase/functions/chat-consultant/**'
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
+      - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
@@ -26,6 +27,7 @@ on:
       - 'supabase/functions/chat-consultant/**'
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
+      - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
@@ -72,6 +74,9 @@ jobs:
 
       - name: Type-check chat-consultant-v3
         run: deno check supabase/functions/chat-consultant-v3/index.ts
+
+      - name: Type-check chat-consultant-v3 previews
+        run: deno check supabase/functions/chat-consultant-v3-preview/index.ts supabase/functions/chat-consultant-v3-closure-preview/index.ts
 
       - name: Type-check widget
         run: deno check public/widget.js

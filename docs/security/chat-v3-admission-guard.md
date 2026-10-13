@@ -6,24 +6,27 @@ The public widget has no authenticated user identity. Browser-provided
 identities, so none is used as a limiter key. A global cap can protect aggregate
 LLM/catalog spend, but an attacker can exhaust it and reject legitimate users.
 
-The additive migration is prepared as
-[`chat-v3-admission-guard-pending.sql`](chat-v3-admission-guard-pending.sql),
-outside `supabase/migrations` so merging the functional release cannot apply
-it automatically. After isolated PostgreSQL and concurrency tests, move it to
-`supabase/migrations/20261009150000_chat_v3_admission_guard.sql` in a separate
-security release. It creates two
+The additive migration is
+[`20261009150000_chat_v3_admission_guard.sql`](../../supabase/migrations/20261009150000_chat_v3_admission_guard.sql)
+in a separate security release from the functional widget changes. It is
+applied as one transaction and has passed the disposable PostgreSQL 16 SQL,
+privilege, and two-connection concurrency checks in
+[`chat-v3-admission-postgres.yml`](../../.github/workflows/chat-v3-admission-postgres.yml).
+It creates two
 new RLS-enabled tables with no client policies and two `SECURITY INVOKER` RPCs.
 It does not alter any existing table, policy, log row, or function. `anon` and
 `authenticated` have neither table access nor RPC `EXECUTE`; only
 `service_role` is granted the required access. The Edge Function must keep the
 service-role key server-side.
 
-The current v3 candidate calls this guard only after a new log claim and
-releases an admitted reservation before SSE completion. With the Edge mode
-unset/`off`, it performs no admission RPC. The code is deployed only to the
-isolated `chat-consultant-v3-closure-preview` function (v16 as of 12 October
-2026); production v3 remains unchanged. The migration is unapplied, so the
-real database/RPC path has not passed the release gates below.
+Production v3 already contains the off-by-default guard. It calls the guard
+only after a new log claim and releases an admitted reservation before SSE
+completion. With the Edge mode unset/`off`, it performs no admission RPC.
+Both preview wrappers force admission off via a server-owned isolate marker;
+their provider policy is independent of this admission scope. As of the
+13 October 2026 read-only preflight, the migration had not yet been applied
+to the shared project. The real database/RPC path still requires an `observe`
+rollout before enforcement.
 
 ## Call sequence
 
@@ -77,24 +80,25 @@ minutes if the worker dies; current v3 accepted work is bounded to about 40
 seconds. Expiry prevents permanent lockout but means this is not an absolute
 concurrency guarantee if paid work outlives the TTL. Fixed-window boundaries
 can allow a short burst approaching twice the per-minute setting. Decisions
-are retained for 24 hours; a bounded lazy cleanup removes only expired rows
-from the **new** decision table.
+become eligible for deletion after 24 hours; a bounded lazy cleanup removes
+expired rows from the **new** decision table only when a later admission check
+runs. Switching admission off does not itself delete them.
 
-## Shared-project preflight: do not apply yet
+## Shared-project preflight and rollout gate
 
-Preview and production functions use the same Supabase project. Do **not**
-apply this migration or switch modes until database access is available and a
-targeted read-only preflight confirms:
+Preview and production functions use the same Supabase project. Project-level
+Edge secrets are shared, but the preview wrappers explicitly keep their
+admission mode off. Before applying the migration or switching modes, a
+targeted read-only preflight must confirm:
 
 - `chat_request_logs` exists with `id`, `message_id`, `pipeline`, and `error`,
   and the unique partial `message_id` index is present and valid;
 - neither new table nor either RPC signature already exists, and the
   migration history has no conflicting version;
 - `anon`, `authenticated`, and `service_role` roles exist with expected grants;
-- a disposable local/staging database has passed the SQL transaction test in
+- a disposable PostgreSQL database has passed the SQL transaction test in
   [chat-v3-admission-guard-local-test.sql](chat-v3-admission-guard-local-test.sql),
-  including a two-connection concurrency check if a staging database is
-  available;
+  including a two-connection concurrency check;
 - real production/QA request rates, concurrent accepted work, error rates,
   and database RPC latency have been measured to select safe initial limits.
 
@@ -116,11 +120,26 @@ WHERE n.nspname = 'public'
   AND p.proname IN ('check_chat_v3_admission', 'release_chat_v3_admission');
 ```
 
-After a tested migration, start with `off`; then observe on a limited Edge
-deployment while reviewing `observed_limit`, latency, and decision counts.
-Because the database is shared, even preview observation writes to the same
-bucket. Turn on `enforce` only after an owner approves measured thresholds and
-the operational impact of a global cap. The immediate non-destructive rollback
+The 13 October read-only preflight found no colliding admission tables/RPC, a
+valid unique message-ID index, the required roles, and service-role log access.
+For v3, the trailing seven days contained 375 logged turns, with a peak of 27
+in one minute and an estimated peak of three overlapping turns. The last 24
+hours contained 100 turns, one terminal error, and a peak of six per minute.
+These figures justify only an initial observation threshold, not immediate
+enforcement.
+
+After a tested migration, start with `off`; then use `observe` while reviewing
+`observed_limit`, RPC latency, release failures, and decision counts. A slow
+or failed observation RPC must not turn into a customer-facing connection
+error. Before changing the project-wide Edge secret, deploy and verify **both**
+preview wrappers and production v3 from this commit. Older preview deployments
+do not have the isolate-local admission marker and would otherwise consume the
+shared production bucket. Turn on `enforce` only after measured thresholds and
+the operational impact of a global cap have been reviewed. In particular,
+confirm that observation RPC timeouts and reservation-release failures are
+negligible: an RPC that commits after its Edge deadline can temporarily leave
+an in-flight reservation until the three-minute expiry. The immediate
+non-destructive rollback
 is to set the Edge mode to `off` (or deploy the prior Edge version); leave the
 new tables and their telemetry intact. A later schema removal would require a
 separately reviewed data-retention/export decision and is **not** part of this

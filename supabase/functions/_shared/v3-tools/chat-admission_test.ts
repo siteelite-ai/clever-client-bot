@@ -2,7 +2,9 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   type ChatV3AdmissionRpc,
   checkChatV3Admission,
+  checkChatV3AdmissionWithDeadline,
   releaseChatV3Admission,
+  resolveChatV3AdmissionScope,
 } from "./chat-admission.ts";
 
 const LOG_ID = "00000000-0000-4000-8000-000000000001";
@@ -50,8 +52,150 @@ Deno.test("unset/off mode never calls either RPC, even with bad limits", async (
       released: false,
       failure: null,
     });
+    const bounded = await checkChatV3AdmissionWithDeadline(
+      LOG_ID,
+      rpc,
+      1,
+      "production",
+      env({ CHAT_V3_ADMISSION_MODE: mode }),
+    );
+    assertEquals(bounded.allowed, true);
+    assertEquals(bounded.reason, "off");
+    assertEquals(bounded.rpcCalled, false);
   }
   assertEquals(calls, 0);
+});
+
+Deno.test("only the server preview marker selects admission bypass", async () => {
+  assertEquals(resolveChatV3AdmissionScope("preview"), "preview");
+  for (const marker of [undefined, null, "production", "PREVIEW", true]) {
+    assertEquals(resolveChatV3AdmissionScope(marker), "production");
+  }
+
+  let calls = 0;
+  const rpc: ChatV3AdmissionRpc = () => {
+    calls++;
+    throw new Error("preview must not reach admission RPC");
+  };
+  for (const mode of ["observe", "enforce", "invalid"]) {
+    const preview = await checkChatV3AdmissionWithDeadline(
+      LOG_ID,
+      rpc,
+      1,
+      resolveChatV3AdmissionScope("preview"),
+      env({
+        CHAT_V3_ADMISSION_MODE: mode,
+        CHAT_V3_ADMISSION_LIMIT_PER_MINUTE: "1",
+        CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT: "1",
+      }),
+    );
+    assertEquals(preview.allowed, true);
+    assertEquals(preview.mode, "off");
+    assertEquals(preview.reason, "off");
+    assertEquals(preview.rpcCalled, false);
+    assertEquals(preview.releaseRequired, false);
+  }
+  assertEquals(calls, 0);
+});
+
+Deno.test("production scope still applies its project admission mode", async () => {
+  let calls = 0;
+  const rpc: ChatV3AdmissionRpc = () => {
+    calls++;
+    return Promise.resolve({
+      data: decision({
+        allowed: false,
+        reason: "limit_exceeded",
+        would_reject: true,
+        limit_reason: "minute_limit",
+        retry_after_seconds: 10,
+      }),
+      error: null,
+    });
+  };
+  const admission = await checkChatV3AdmissionWithDeadline(
+    LOG_ID,
+    rpc,
+    100,
+    resolveChatV3AdmissionScope(undefined),
+    env({
+      CHAT_V3_ADMISSION_MODE: "enforce",
+      CHAT_V3_ADMISSION_LIMIT_PER_MINUTE: "1",
+      CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT: "1",
+    }),
+  );
+  assertEquals(admission.allowed, false);
+  assertEquals(admission.reason, "limit_exceeded");
+  assertEquals(admission.rpcCalled, true);
+  assertEquals(calls, 1);
+});
+
+Deno.test("observe timeout fails open and still attempts to release an ambiguous reservation", async () => {
+  const calls: string[] = [];
+  const rpc: ChatV3AdmissionRpc = (name) => {
+    calls.push(name);
+    if (name === "check_chat_v3_admission") {
+      return new Promise<{ data: unknown; error?: unknown }>(() => {});
+    }
+    return Promise.resolve({ data: false, error: null });
+  };
+  const admission = await checkChatV3AdmissionWithDeadline(
+    LOG_ID,
+    rpc,
+    10,
+    "production",
+    env({ CHAT_V3_ADMISSION_MODE: "observe" }),
+  );
+  assertEquals(admission.allowed, true);
+  assertEquals(admission.reason, "rpc_timeout_open");
+  assertEquals(admission.failure, "rpc_timeout");
+  assertEquals(admission.rpcCalled, true);
+  assertEquals(admission.releaseRequired, true);
+  assertEquals(await releaseChatV3Admission(LOG_ID, admission, rpc), {
+    attempted: true,
+    released: false,
+    failure: null,
+  });
+  assertEquals(calls, [
+    "check_chat_v3_admission",
+    "release_chat_v3_admission",
+  ]);
+});
+
+Deno.test("enforce timeout fails closed and still releases an ambiguous reservation", async () => {
+  const calls: string[] = [];
+  const rpc: ChatV3AdmissionRpc = (name) => {
+    calls.push(name);
+    if (name === "check_chat_v3_admission") {
+      return new Promise<{ data: unknown; error?: unknown }>(() => {});
+    }
+    return Promise.resolve({ data: true, error: null });
+  };
+  const admission = await checkChatV3AdmissionWithDeadline(
+    LOG_ID,
+    rpc,
+    10,
+    "production",
+    env({
+      CHAT_V3_ADMISSION_MODE: "enforce",
+      CHAT_V3_ADMISSION_LIMIT_PER_MINUTE: "10",
+      CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT: "2",
+    }),
+  );
+  assertEquals(admission.allowed, false);
+  assertEquals(admission.reason, "rpc_timeout_closed");
+  assertEquals(admission.failure, "rpc_timeout");
+  assertEquals(admission.rpcCalled, true);
+  assertEquals(admission.releaseRequired, true);
+  assertEquals(await releaseChatV3Admission(LOG_ID, admission, rpc), {
+    attempted: true,
+    released: true,
+    failure: null,
+  });
+  assertEquals(calls, [
+    "check_chat_v3_admission",
+    "release_chat_v3_admission",
+  ]);
 });
 
 Deno.test("observe passes only server limits and records would-reject telemetry", async () => {
