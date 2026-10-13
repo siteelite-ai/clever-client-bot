@@ -3,14 +3,14 @@ name: Chat v3 admission PostgreSQL 16
 on:
   push:
     paths:
-      - 'docs/security/chat-v3-admission-guard-pending.sql'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
       - '.github/workflows/chat-v3-admission-postgres.yml'
   pull_request:
     paths:
-      - 'docs/security/chat-v3-admission-guard-pending.sql'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
@@ -49,7 +49,7 @@ jobs:
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
             -f docs/security/chat-v3-admission-guard-ci-schema.sql
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
-            -f docs/security/chat-v3-admission-guard-pending.sql
+            -f supabase/migrations/20261009150000_chat_v3_admission_guard.sql
 
       - name: Run transactional SQL behavior and privilege checks
         run: |

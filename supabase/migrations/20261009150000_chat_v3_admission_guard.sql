@@ -1,5 +1,4 @@
--- PREPARED, NOT DEPLOYABLE YET: restore this file to supabase/migrations only
--- after an isolated PostgreSQL test and measured rollout thresholds.
+-- Admission guard, validated in disposable PostgreSQL 16 CI before rollout.
 -- Optional global cost guard for the public v3 Edge Function. This migration
 -- only creates new objects; it does not change existing chat logs or policies.
 -- The Edge Function must first win the existing unique message_id log claim,
