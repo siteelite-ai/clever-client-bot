@@ -194,6 +194,99 @@ const IDENTITY_FACET =
 const BOOLEAN_FACET_VALUE =
   /^(?:0|1|да|нет|есть|отсутствует|true|false|yes|no)$/iu;
 
+const GENERIC_FACET_AXIS_WORDS = new Set([
+  "цвет", "значение", "параметр", "характеристика", "свойство",
+  "value", "parameter", "property", "characteristic",
+]);
+
+function requiredFacetAxisTokens(facet: string): string[] {
+  const tokens = normalizeLiteralEvidence(facet).split(" ").filter((token) =>
+    token.length >= 4 && !GENERIC_FACET_AXIS_WORDS.has(token)
+  );
+  return tokens.length > 0 ? tokens : normalizeLiteralEvidence(facet).split(" ")
+    .filter((token) => token.length >= 4);
+}
+
+function sameFacetAxisWord(left: string, right: string): boolean {
+  return left.length >= 4 && right.length >= 4 &&
+    left.slice(0, 4) === right.slice(0, 4);
+}
+
+/** The literal value is not enough to identify a property: the customer's
+ * nearby words must name the actual live facet axis. Thus `белый свет`
+ * cannot own `Цвет корпуса = белый`, while `белый корпус` can. */
+function customerNamesRequiredFacetAxisNearValue(
+  choice: DerivedRequiredFacetChoice,
+  customerEvidence: string,
+): boolean {
+  const valueTokens = normalizeLiteralEvidence(choice.value).split(" ")
+    .filter(Boolean);
+  const axisTokens = requiredFacetAxisTokens(choice.facet);
+  if (valueTokens.length === 0 || axisTokens.length === 0) return false;
+  for (const clause of String(customerEvidence ?? "").split(/[,.!?;\n]+/u)) {
+    const tokens = normalizeLiteralEvidence(clause).split(" ").filter(Boolean);
+    for (let index = 0; index <= tokens.length - valueTokens.length; index++) {
+      if (!valueTokens.every((token, offset) => tokens[index + offset] === token)) {
+        continue;
+      }
+      const nearby = tokens.slice(Math.max(0, index - 4), index + valueTokens.length + 4);
+      if (axisTokens.some((axis) =>
+        nearby.some((word) => sameFacetAxisWord(axis, word))
+      )) return true;
+    }
+  }
+  return false;
+}
+
+/** Exact enum ownership excludes interval endpoints and one-sided bounds.
+ * They remain directional/range criteria, never one mandatory live value. */
+function customerExactNumericEvidence(customerEvidence: string): string {
+  return String(customerEvidence ?? "")
+    .replace(/(?:^|[^\p{L}])от\s+(\d+(?:[.,]\d+)?)\s+до\s+(\d+(?:[.,]\d+)?)\s*([a-zа-я°²³]+)?/giu, " ")
+    .replace(/(?<!\d)\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu, " ")
+    .replace(/(?:^|[^\p{L}])(?:не\s+(?:более|менее|выше|ниже)|до|от|минимум|максимум)\s+\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu, " ");
+}
+
+/** A value which the customer attached to a different noun must not be
+ * rebound to this facet merely because the model later states its label.
+ * Compare with the live facet and selected class, not with product lists. */
+function customerQualifiesValueOutsideFacet(
+  choice: DerivedRequiredFacetChoice,
+  customerEvidence: string,
+  productClass: string,
+): boolean {
+  const valueTokens = normalizeLiteralEvidence(choice.value).split(" ")
+    .filter(Boolean);
+  if (valueTokens.length !== 1 || !/^[a-zа-я]{4,}$/iu.test(valueTokens[0])) {
+    return false;
+  }
+  if (customerNamesRequiredFacetAxisNearValue(choice, customerEvidence)) {
+    return false;
+  }
+  const productTokens = normalizeLiteralEvidence(productClass).split(" ")
+    .filter((token) => token.length >= 4);
+  const axisTokens = requiredFacetAxisTokens(choice.facet);
+  const nonQualifierWords = new Set([
+    "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "найди",
+    "подбери", "покажи", "вариант", "варианты", "для", "со", "без",
+    "это", "цвет", "типа", "тип",
+  ]);
+  for (const clause of String(customerEvidence ?? "").split(/[,.!?;\n]+/u)) {
+    const tokens = normalizeLiteralEvidence(clause).split(" ").filter(Boolean);
+    for (const [index, token] of tokens.entries()) {
+      if (token !== valueTokens[0]) continue;
+      const adjacent = [tokens[index + 1], tokens[index - 1]].filter((word) =>
+        Boolean(word) && word.length >= 4 && !nonQualifierWords.has(word)
+      );
+      if (adjacent.some((word) =>
+        !axisTokens.some((axis) => sameFacetAxisWord(axis, word)) &&
+        !productTokens.some((product) => sameFacetAxisWord(product, word))
+      )) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Bounded exact live values that the reasoning model may declare necessary.
  * High-cardinality identifiers, classification axes and boolean metadata are
@@ -206,7 +299,11 @@ function derivedRequiredFacetChoices(
 ): DerivedRequiredFacetChoice[] {
   const normalizedEvidence = normalizeLiteralEvidence(customerEvidence);
   const evidenceTokens = new Set(normalizedEvidence.split(" ").filter(Boolean));
-  const customerQuantities = extractClientQuantities(customerEvidence)
+  const exactNumericEvidence = customerExactNumericEvidence(customerEvidence);
+  const exactNumericTokens = new Set(
+    normalizeLiteralEvidence(exactNumericEvidence).split(" ").filter(Boolean),
+  );
+  const customerQuantities = extractClientQuantities(exactNumericEvidence)
     .map((quantity) => ({
       value: quantity.value,
       unit: normalizeUnit(quantity.unit),
@@ -279,7 +376,10 @@ function derivedRequiredFacetChoices(
             : declaredUnit
             ? [declaredUnit]
             : [];
-          if (expectedUnits.length === 0) return evidenceTokens.has(token);
+          if (expectedUnits.length === 0) {
+            return exactNumericTokens.has(token) &&
+              customerNamesRequiredFacetAxisNearValue(choice, exactNumericEvidence);
+          }
           return customerQuantities.some((quantity) =>
             quantity.value === value && expectedUnits.includes(quantity.unit)
           );
@@ -300,6 +400,17 @@ function derivedRequiredFacetChoices(
         ) {
           continue;
         }
+        // A qualitative word can occur on several unrelated live axes. It
+        // becomes customer-owned only when the same local phrase identifies
+        // this facet, never from the word alone.
+        if (
+          !compactIdentifier && !numericLiteral &&
+          /[a-zа-я]/iu.test(normalizedValue) &&
+          !customerNamesRequiredFacetAxisNearValue(
+            choice,
+            customerEvidence,
+          )
+        ) continue;
       }
       choices.push(choice);
       if (choices.length >= 400) return choices;
@@ -1565,12 +1676,19 @@ export function resolveDerivedSelectionReasoning(
       reasoningTokens.has(token)
     );
     const customerOwned = customerOwnedRequiredIds.has(choice.id);
+    if (
+      !customerOwned && customerQualifiesValueOutsideFacet(
+        choice,
+        customerEvidence,
+        productClass,
+      )
+    ) continue;
     // A model-derived exact value must be stated together with the meaning of
     // its facet. The same word can occur on several axes (`белый` корпус vs
     // `белый` свет); a value-only match is not enough to bind the wrong axis.
     const statedInVisibleReasoning = customerOwned
       ? projectedChoiceVisible || literalChoiceVisible
-      : facetContextVisible && (projectedChoiceVisible || literalChoiceVisible);
+      : projectedChoiceVisible || facetContextVisible && literalChoiceVisible;
     // Visible reasoning is the canonical declaration. The structured ID is
     // still useful as an audit signal, but a probabilistic serializer may omit
     // it after the model already made an exact, schema-projectable statement.
@@ -1624,7 +1742,8 @@ export function resolveDerivedSelectionReasoning(
     if (coveredByVisibleRange || directionalCustomerCapacity) continue;
     if (
       !customerOwned && !declaredRequiredIds.has(choice.id) &&
-      !requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds)
+      !requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds) &&
+      !projectedChoiceVisible
     ) continue;
     const identity = captionKey.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
       .trim();
@@ -1994,9 +2113,14 @@ export function systemTotalReasoningDeclaresPerProductMeasurement(
   reasoningText: string,
 ): boolean {
   const clauses = String(reasoningText ?? "").split(
-    /(?<!\d)[.!?]+(?!\d)|\n+/u,
+    /(?<!\d)[.!?;]+(?!\d)|\n+/u,
   );
   return clauses.some((clause) =>
+    // A total and an illustrative distribution in one clause are still a
+    // system-level estimate. Only a separate per-item statement may reopen
+    // the generic scalar projector for individual cards.
+    !/(?:суммар\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|поток\p{L}*|мощност\p{L}*)|всего\s+\d|на\s+весь\s+объект)/iu
+      .test(clause) &&
     /(?:кажд\p{L}*|на\s+(?:один|одно|одну|единиц\p{L}*)|per\s+(?:item|unit))/iu
       .test(clause) &&
     /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,8}[²³]?/iu

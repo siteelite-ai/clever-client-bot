@@ -48,7 +48,7 @@ export function resolveResultCardinality(
   message: string,
   context: ResultCardinalityContext,
 ): ResultCardinalityContract {
-  if (!context.selection || context.exactLookup) {
+  if (!context.selection) {
     return { target: 1, minimum: 1, mode: "single", explicit: false };
   }
 
@@ -92,6 +92,13 @@ export function resolveResultCardinality(
       mode: "alternatives",
       explicit: true,
     };
+  }
+
+  // A token such as IP65 can look like a model code to the separate lookup
+  // parser. It must not override the customer's explicit request for several
+  // choices. An unqualified true SKU lookup still defaults to one card.
+  if (context.exactLookup) {
+    return { target: 1, minimum: 1, mode: "single", explicit: false };
   }
 
   // Price direction and result quantity are independent contracts. Russian

@@ -363,6 +363,12 @@ async function singleSearch(
     if (!res.ok) {
       await res.body?.cancel();
       if (res.status === 429) return { ok: false, error_code: "rate_limited", message: `429 from catalog` };
+      // Credential/permission failures or a missing upstream /products route
+      // are not bad customer input. Keep them on the technical-error path so
+      // an outage cannot be reported as "no matching products".
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        return { ok: false, error_code: "transport_5xx", message: `${res.status}` };
+      }
       if (res.status >= 500) return { ok: false, error_code: "transport_5xx", message: `${res.status}` };
       return { ok: false, error_code: "bad_input", message: `${res.status}` };
     }
@@ -456,6 +462,7 @@ async function recoverUnmaterializedCatalogWindow(
   const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   const pagesToScan = Math.max(1, Math.ceil(Math.min(primary.total, MAX_SORT_FETCH) / SORT_PAGE_SIZE));
   const recoveredById = new Map<string, ProductRef>();
+  let recoveryError: Extract<SingleSearchResult, { ok: false }> | undefined;
 
   // Use a stable 50-row page size for the recovery window. Requests are
   // sequential and stop on the first page with usable cards, so a malformed
@@ -468,7 +475,12 @@ async function recoverUnmaterializedCatalogWindow(
       categoryOverride,
     );
     if (!candidatePage.ok) {
-      if (candidatePage.error_code === "rate_limited") break;
+      recoveryError ??= candidatePage;
+      if (
+        candidatePage.error_code === "rate_limited" ||
+        candidatePage.error_code === "catalog_timeout" ||
+        candidatePage.error_code === "transport_5xx"
+      ) break;
       continue;
     }
     for (const product of candidatePage.results) {
@@ -481,6 +493,10 @@ async function recoverUnmaterializedCatalogWindow(
     warnings.push(`catalog_materialization_recovered:${recovered.length}/${primary.total}`);
     return { ok: true, total: primary.total, results: recovered };
   }
+
+  // The bounded recovery window was interrupted, so zero renderable cards is
+  // not evidence of an empty catalog. Preserve the upstream failure instead.
+  if (recoveryError) return recoveryError;
 
   warnings.push(`catalog_unmaterialized_total:${primary.total}`);
   return { ok: true, total: 0, results: [] };
@@ -542,6 +558,7 @@ async function singleSearchSorted(
   const totalApi = first.total;
   const cap = Math.min(totalApi, MAX_SORT_FETCH);
   const pagesNeeded = Math.ceil(cap / SORT_PAGE_SIZE);
+  let pageError: Extract<SingleSearchResult, { ok: false }> | undefined;
   if (pagesNeeded > 1) {
     const extra = await Promise.all(
       Array.from({ length: pagesNeeded - 1 }, (_, i) =>
@@ -550,8 +567,12 @@ async function singleSearchSorted(
     );
     for (const r of extra) {
       if (r.ok) all.push(...r.results);
+      else pageError ??= r;
     }
   }
+  // A partial page window cannot establish the global cheapest/most-expensive
+  // order, even when an earlier page yielded otherwise valid cards.
+  if (pageError) return pageError;
   // Дедуп по id (на случай если API повторит товар на стыке страниц).
   const byId = new Map<string, ProductRef>();
   for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
@@ -703,6 +724,14 @@ export async function executeSearchCatalog(
     const firstErr = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> => !r.ok)!;
     return { tool: "search_catalog", ok: false, error_code: firstErr.error_code, message: firstErr.message };
   }
+  if (input.sort_cheapest || input.sort_expensive) {
+    // In a sorted request, one failed leaf can contain a cheaper/more expensive
+    // card than every successful leaf. A partial pool is not a valid ranking.
+    const incompleteSort = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> => !r.ok);
+    if (incompleteSort) {
+      return { tool: "search_catalog", ok: false, error_code: incompleteSort.error_code, message: incompleteSort.message };
+    }
+  }
   const mergedById = new Map<string, ProductRef>();
   let totalSum = 0;
   for (const r of okResults) {
@@ -712,11 +741,15 @@ export async function executeSearchCatalog(
     }
   }
   if (mergedById.size === 0) {
-    const rateLimitError = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> =>
-      !r.ok && r.error_code === "rate_limited"
+    const transientError = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> =>
+      !r.ok && (
+        r.error_code === "rate_limited" ||
+        r.error_code === "catalog_timeout" ||
+        r.error_code === "transport_5xx"
+      )
     );
-    if (rateLimitError) {
-      return { tool: "search_catalog", ok: false, error_code: rateLimitError.error_code, message: rateLimitError.message };
+    if (transientError) {
+      return { tool: "search_catalog", ok: false, error_code: transientError.error_code, message: transientError.message };
     }
   }
   const merged = [...mergedById.values()];

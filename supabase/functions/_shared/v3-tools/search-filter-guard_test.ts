@@ -152,6 +152,124 @@ Deno.test("elliptical attribute evidence keeps mounting and replaces colour thro
   ]);
 });
 
+Deno.test("white light does not become white housing through overlapping live colour axes", () => {
+  const live = [{
+    key: "body",
+    caption: "Цвет корпуса",
+    values: [{ value: "белый" }, { value: "чёрный" }],
+  }, {
+    key: "emission",
+    caption: "Цвет свечения",
+    values: [{ value: "холодный белый" }, { value: "зелёный" }],
+  }, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }],
+  }];
+  const user = "Нужен прожектор, белый свет 4000 K и IP65";
+  const completed = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    user,
+    user,
+    user,
+    buildVisibleRequestContract(user),
+  );
+  assertEquals(completed.user_backed.some(({ key }) => key === "body"), false);
+  assertEquals(
+    (completed.args.options as Record<string, string[]> | undefined)?.body,
+    undefined,
+  );
+
+  const modelProvided = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        body: ["белый"],
+        emission: ["холодный белый"],
+        protection: ["IP65"],
+      },
+    },
+    live,
+    "Цвет корпуса белый; Цвет свечения холодный белый; IP65",
+    user,
+    user,
+    buildVisibleRequestContract(user),
+  );
+  assertEquals(modelProvided.dropped.some(({ key }) => key === "body"), true);
+  assertEquals(modelProvided.args.options, {
+    emission: ["холодный белый"],
+    protection: ["IP65"],
+  });
+
+  const explicitHousing = "Нужен прожектор: белый корпус, IP65";
+  const housingResult = guardSearchFilters(
+    { mode: "by_filter", options: { body: ["белый"] } },
+    live,
+    "Цвет корпуса белый; IP65",
+    explicitHousing,
+    explicitHousing,
+    buildVisibleRequestContract(explicitHousing),
+  );
+  assertEquals(housingResult.kept.some(({ key }) => key === "body"), true);
+  assertEquals(housingResult.user_backed.some(({ key }) => key === "body"), true);
+});
+
+Deno.test("large live facet vocabulary keeps empty evidence cheap and axis ownership exact", () => {
+  // The production discovery response can expose hundreds of choices. Keep
+  // this shape in regression coverage without a wall-clock threshold that
+  // would make CI depend on machine speed.
+  const live = [{
+    key: "body",
+    caption: "Цвет корпуса",
+    values: [{ value: "белый" }, { value: "чёрный" }],
+  }, {
+    key: "emission",
+    caption: "Цвет свечения",
+    values: [{ value: "холодный белый" }, { value: "зелёный" }],
+  }, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }],
+  }, ...Array.from({ length: 36 }, (_, index) => ({
+    key: `noise_${index}`,
+    caption: `Параметр линии ${index}`,
+    values: Array.from({ length: index === 0 ? 35 : 16 }, (_, valueIndex) => ({
+      value: `Вариант ${valueIndex}`,
+    })),
+  }))];
+  assertEquals(live.length, 39);
+  assertEquals(live.reduce((total, facet) => total + facet.values.length, 0), 600);
+
+  const empty = guardSearchFilters({ mode: "by_filter" }, live, "", "", "");
+  assertEquals(empty.kept, []);
+  assertEquals(empty.inferred, []);
+  assertEquals(empty.args, { mode: "by_filter" });
+
+  const whiteLight = "Нужен прожектор с белым светом и IP65";
+  const ambiguous = guardSearchFilters(
+    { mode: "by_filter", options: { body: ["белый"], protection: ["IP65"] } },
+    live,
+    "Цвет корпуса белый; степень защиты IP65",
+    whiteLight,
+    whiteLight,
+    buildVisibleRequestContract(whiteLight),
+  );
+  assertEquals(ambiguous.args.options, { protection: ["IP65"] });
+  assertEquals(ambiguous.dropped.some(({ key }) => key === "body"), true);
+
+  const whiteHousing = "Нужен прожектор: белый корпус, IP65";
+  const explicit = guardSearchFilters(
+    { mode: "by_filter", options: { body: ["белый"], protection: ["IP65"] } },
+    live,
+    "Цвет корпуса белый; степень защиты IP65",
+    whiteHousing,
+    whiteHousing,
+    buildVisibleRequestContract(whiteHousing),
+  );
+  assertEquals(explicit.args.options, { body: ["белый"], protection: ["IP65"] });
+});
+
 Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   const result = guardSearchFilters(
     {

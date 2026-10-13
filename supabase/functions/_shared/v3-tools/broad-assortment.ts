@@ -124,6 +124,13 @@ export interface VerifiedBroadAssortmentConstrainedContinuation {
   issued_slot: Record<string, unknown>;
 }
 
+/** A typed refinement of one uniquely named, server-issued leaf. */
+export interface VerifiedBroadAssortmentTypedContinuation
+  extends VerifiedBroadAssortmentConstrainedContinuation {
+  /** Original customer wording remains in effective_request for facet/criteria gates. */
+  typed_request: string;
+}
+
 /**
  * The exact-chip shortcut has no general criteria compiler. Admit it only for
  * an unqualified, structurally plain assortment request. Any extra wording
@@ -338,6 +345,19 @@ function isIndependentBroadAssortmentRequest(
   options: string[],
 ): boolean {
   if (hasDistinctBareNamedQualifier(currentMessage, entity)) return true;
+  if (
+    options.length >= 2 &&
+    namesAnotherEntity(currentMessage, entity, options)
+  ) return true;
+  const mentionedLeaves = options.filter((option) =>
+    hasLexicalLeafProof(currentMessage, option)
+  );
+  if (
+    mentionedLeaves.length > 0 &&
+    mentionedLeaves.every((option) =>
+      !leafIsSelectionHead(currentMessage, option)
+    )
+  ) return true;
   if (standaloneCatalogRequestObject(currentMessage) === null) return false;
   const answer = normalize(currentMessage);
   const mentionsIssuedScope = [entity, ...options].some((value) =>
@@ -583,6 +603,140 @@ function resolveExactIssuedBroadAssortmentLeaf(
   return matching.length === 1 ? matching[0] : null;
 }
 
+function negatesIssuedLeaf(message: string, leaf: string): boolean {
+  const leafWords = normalize(leaf).split(" ").filter(Boolean);
+  // Negation applies to its own clause, not every noun elsewhere in the
+  // answer. "Розетки, не хочу белые" still selects sockets, while "не хочу
+  // белые розетки" rejects that noun phrase. Attribute-only negation ("не
+  // двойные розетки") remains a refinement of the same product class.
+  const clauses = String(message ?? "").split(/[,.!?;:\n\r]+/u);
+  return clauses.some((clause) => {
+    if (!hasLexicalLeafProof(clause, leaf)) return false;
+    const words = normalize(clause).split(" ").filter(Boolean);
+    return words.some((word, index) =>
+      leafWords.some((leafWord) =>
+        (word === leafWord ||
+          (word.length >= 6 && leafWord.length >= 6 &&
+            word.slice(0, 5) === leafWord.slice(0, 5))) &&
+        (/^(?:без|не|кроме|исключая|помимо)$/u.test(
+          words[index - 1] ?? "",
+        ) || words.slice(0, index).some((prior, priorIndex) =>
+          prior === "не" &&
+          /^(?:хочу|нужн\p{L}*|надо|ищу|интересу\p{L}*)$/iu.test(
+            words[priorIndex + 1] ?? "",
+          )
+        ))
+      )
+    );
+  });
+}
+
+/** A dependent phrase names the use of another product, not the selected leaf. */
+function leafIsSelectionHead(message: string, leaf: string): boolean {
+  if (negatesIssuedLeaf(message, leaf)) return false;
+  const normalized = normalize(message);
+  // A fronted use/location adjunct belongs to the requested product, not to
+  // its head. Strip it only when an explicit request verb follows; a phrase
+  // like "автоматы для розеток" must keep "розетки" dependent on "автоматы".
+  const frontedRequest =
+    /^(?:для|в|во|на|при)\s+.+?\s+(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|посовет\p{L}*|подскаж\p{L}*|хочу|нужн\p{L}*|ищу|интересует)\s+(.+)$/iu
+      .exec(normalized);
+  const object = standaloneCatalogRequestObject(message) ??
+    frontedRequest?.[1] ?? message;
+  const words = normalize(object).split(" ").filter(Boolean);
+  const dependentStart = words.findIndex((word) =>
+    /^(?:для|к|ко|под|от|из|с|со|без|при|в|во|на|по)$/u.test(word)
+  );
+  return hasLexicalLeafProof(
+    (dependentStart < 0 ? words : words.slice(0, dependentStart)).join(" "),
+    leaf,
+  );
+}
+
+function namesAnotherEntity(
+  message: string,
+  entity: string,
+  options: string[],
+): boolean {
+  const tokens = message.match(/[\p{L}][\p{L}\p{N}-]*/gu) ?? [];
+  const issuedWords = new Set(normalize(entity).split(" ").filter(Boolean));
+  const leafWords = new Set(
+    options.flatMap((option) => normalize(option).split(" ").filter(Boolean)),
+  );
+  return tokens.some((token, index) => {
+    if (
+      issuedWords.has(normalize(token)) ||
+      leafWords.has(normalize(token))
+    ) return false;
+    if (index === 0) {
+      if (
+        SCOPE_TAIL_STOP.has(normalize(token)) ||
+        standaloneCatalogRequestObject(message) !== null ||
+        /^(?:нужн\p{L}*|хочу|ищу|есть|дайте|можно|пожалуйста)$/iu.test(
+          normalize(token),
+        )
+      ) return false;
+      return isProperNameToken(token) || /^[A-Z]{2,}[A-Z-]*$/u.test(token);
+    }
+    const previous = normalize(tokens[index - 1]);
+    const explicitlyNamed = /^(?:бренд|марк|сери|линейк)\p{L}*$/iu.test(
+      previous,
+    );
+    // Codes with digits (IP44, 16A, 3x1.5) are product criteria, not proof
+    // of a new named series. Unmarked all-letter capitals remain ambiguous.
+    // A trailing compact all-caps token may be a technical attribute (USB,
+    // LED); only an explicit brand marker makes it a new entity here.
+    const properName = isProperNameToken(token);
+    return explicitlyNamed ||
+      (properName && !SCOPE_TAIL_STOP.has(previous));
+  });
+}
+
+/**
+ * Bind a customer-written compound reply only to one of the completed
+ * server's offered leaves. This is not an exact chip: all extra words remain
+ * mandatory customer evidence for the ordinary criteria-aware route.
+ */
+export function resolveServerIssuedBroadAssortmentTypedContinuation(
+  clientSlots: Record<string, unknown>,
+  latestCompletedLog: CompletedClarificationLog | null,
+  currentMessage: string,
+  sessionId: string,
+): VerifiedBroadAssortmentTypedContinuation | null {
+  const pending = resolveServerIssuedBroadAssortmentPending(
+    clientSlots,
+    latestCompletedLog,
+    currentMessage,
+    sessionId,
+  );
+  if (!pending || pending.options.length < 2) return null;
+  if (resolveExactIssuedBroadAssortmentLeaf(pending.options, currentMessage)) {
+    return null;
+  }
+  if (namesAnotherEntity(currentMessage, pending.entity, pending.options)) {
+    return null;
+  }
+  const matching = pending.options.filter((option) =>
+    leafIsSelectionHead(currentMessage, option)
+  );
+  if (matching.length !== 1 || negatesIssuedLeaf(currentMessage, matching[0])) {
+    return null;
+  }
+  const leaf = matching[0];
+  return {
+    entity: pending.entity,
+    leaf,
+    original_request: pending.original_request,
+    typed_request: currentMessage,
+    // The expert route treats this as customer wording. Do not inject helper
+    // prose ("current criteria", "section" etc.): lexical recovery may read
+    // those words as customer-specified product attributes.
+    effective_request: `${pending.original_request}\n${currentMessage}`,
+    slot_id: pending.slot_id,
+    issued_slot: pending.issued_slot,
+  };
+}
+
 /**
  * An exact chip from a constrained assortment request must not become a new,
  * unconstrained request for that leaf. The browser's slots/history can be
@@ -640,6 +794,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
   constrainedContinuation:
     | VerifiedBroadAssortmentConstrainedContinuation
     | null;
+  typedContinuation: VerifiedBroadAssortmentTypedContinuation | null;
   verifiedSlot: Record<string, unknown> | null;
   matchedIssuedOption: boolean;
   lookupFailed: boolean;
@@ -673,6 +828,12 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
             currentMessage,
             sessionId,
           ),
+        typedContinuation: resolveServerIssuedBroadAssortmentTypedContinuation(
+          clientSlots,
+          row,
+          currentMessage,
+          sessionId,
+        ),
         verifiedSlot: pending?.issued_slot ?? null,
         matchedIssuedOption: Boolean(
           pending &&
@@ -688,6 +849,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
         choice: null,
         freeformCandidate: null,
         constrainedContinuation: null,
+        typedContinuation: null,
         verifiedSlot: null,
         matchedIssuedOption: false,
         lookupFailed: true,
@@ -699,6 +861,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
     choice: null,
     freeformCandidate: null,
     constrainedContinuation: null,
+    typedContinuation: null,
     verifiedSlot: null,
     matchedIssuedOption: false,
     lookupFailed: true,

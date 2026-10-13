@@ -1,0 +1,316 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-13T09:16:56.368Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-household-motion-joined-currency": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-household-motion-joined-currency",
+      "title": "Бюджет без пробела перед валютой не сужает окно кандидатов",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-joined-currency_base_1791883016373_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 19771,
+              "network_attempts": 1,
+              "log_id": "2f32dd31-062b-4587-a98e-63411c9dadf7",
+              "diagnostic_error": null,
+              "products_count": 3,
+              "unique_products_count": 3,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140",
+                  "verified": true,
+                  "sku": "Ем000033649",
+                  "name": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "бытовые светильники накладные",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "18",
+                    "Ширина, см": "18",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "48",
+                    "Количество ламп": "1",
+                    "Световой поток, Лм": "1520",
+                    "Диапазон рабочих температур": "-20 +40 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Срок службы, часы": "35000",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "200-240",
+                    "Вес, кг.": "0.15",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "40",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "светодиодный драйвер",
+                    "Объем, м3": "0.001",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "Gauss",
+                    "Материал рассеивателя": "поликарбонат",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал корпуса": "пластик",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "18"
+                  },
+                  "offerPrice": 3878,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "description_excerpt": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40 – Служат для освещения крытых помещений где не требуется высокая защищенность от пыли и влаги. Данная модель оборудована микроволновым сенсором (в линейке есть модели оборудованные оптико-акустическим датчиком). Сенсор автоматически включает светильник при появлении движущихся объектов в зоне обнаружения датчика и автоматически отключает осветительный прибор при выходе из зоны обнаружения датчика. "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000029834",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Ширина, см": "22",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Количество ламп": "нет",
+                    "Световой поток, Лм": "2850",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Мощность ламп, Вт": "30",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "230",
+                    "Вес, кг.": "0.7",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "не требуется",
+                    "Объем, м3": "0.009",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "LEDAR",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22"
+                  },
+                  "offerPrice": 2511,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К LEDAR с датчиком движения – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000031548",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Ширина, см": "22",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Количество ламп": "нет",
+                    "Световой поток, Лм": "1960",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "230",
+                    "Вес, кг.": "0.7",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "не требуется",
+                    "Объем, м3": "0.009",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "LEDAR",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22"
+                  },
+                  "offerPrice": 2381,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "price": 3878,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/)**\n  Цена: *3 878* ₸\n  Бренд: Gauss\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2511,
+                  "stockLine": "Астана (722 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 511* ₸\n  Бренд: LEDAR\n  Наличие: Астана (722 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2381,
+                  "stockLine": "Астана (1290 шт), Караганда (478 шт), Актобе (161 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 381* ₸\n  Бренд: LEDAR\n  Наличие: Астана (1290 шт), Караганда (478 шт), Актобе (161 шт) и ещё 1 городов"
+                }
+              ],
+              "text": "Клиент ищет бытовой светильник с датчиком движения для домашнего использования. Ценовое ограничение 4000 тенге — это бюджетный фильтр, а не технический параметр. Основные требования: наличие датчика движения (обязательный функциональный признак) и бытовое назначение. Для указанного применения сначала проверяю «Вид светильника: бытовые линейные светильники»; «Вид светильника: бытовые светильники накладные»; товар из другой рубрики допустим только если его собственная карточка прямо подтверждает то же применение. Внутри вашего класса в первую очередь проверяю «бытовые линейные светильники», «бытовые светильники накладные» как предпочтение, не исключая другие допустимые варианты.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-c48f7e7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "С датчиком движения",
+                    "op": "eq",
+                    "value": "да",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые линейные светильники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые светильники накладные",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовой",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "датчиком",
+                    "op": "eq",
+                    "value": "датчиком"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 39, листьев 1",
+                  "duration_ms": 2036
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=2; initial=1; minimum=3; application=1; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=unscoped; total=53; retrieved=50; candidate=4; proven=3; pooled=3; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 3",
+                  "duration_ms": 5112
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-13T09:17:19.219Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "2f32dd31-062b-4587-a98e-63411c9dadf7"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 3,
+    "verified": 3,
+    "unverified": 0
+  },
+  "passed": true
+}

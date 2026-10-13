@@ -254,6 +254,150 @@ Deno.test("catalog retries a rate-limited single request instead of returning a 
   assertEquals(result.warnings, ["rate_limit_retry_recovered"]);
 });
 
+for (const [status, expectedCode] of [
+  [401, "transport_5xx"],
+  [403, "transport_5xx"],
+  [404, "transport_5xx"],
+  [400, "bad_input"],
+  [422, "bad_input"],
+] as const) {
+  Deno.test(`catalog HTTP ${status} is classified as ${expectedCode}`, async () => {
+    const result = await executeSearchCatalog({ mode: "by_query", query: "socket" }, {
+      baseUrl: "https://catalog.test",
+      apiToken: "test",
+      fetchImpl: () => Promise.resolve(new Response("", { status })),
+    }, new Map());
+
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error_code, expectedCode);
+  });
+}
+
+for (const withVerifiedCard of [false, true]) {
+  Deno.test(`catalog fan-out ${withVerifiedCard ? "keeps a verified card" : "reports auth outage"} when one leaf returns HTTP 403`, async () => {
+    const result = await executeSearchCatalog({
+      mode: "by_filter",
+      category_in: ["Leaf A", "Leaf B"],
+      per_page: 10,
+    }, {
+      baseUrl: "https://catalog.test",
+      apiToken: "test",
+      fetchImpl: (input) => {
+        const leaf = new URL(String(input)).searchParams.get("category");
+        if (leaf === "Leaf B") return Promise.resolve(new Response("", { status: 403 }));
+        const results = withVerifiedCard
+          ? [{
+            id: "verified",
+            pagetitle: "Двойная розетка",
+            price: 500,
+            url: "https://220volt.kz/catalog/electric/sockets/verified/",
+            options: [],
+          }]
+          : [];
+        return Promise.resolve(new Response(JSON.stringify({
+          data: { results, pagination: { total: results.length } },
+        }), { status: 200, headers: { "content-type": "application/json" } }));
+      },
+    }, new Map());
+
+    if (withVerifiedCard) {
+      assertEquals(result.ok, true);
+      if (result.ok) assertEquals(result.results.map((product) => product.id), ["verified"]);
+    } else {
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+    }
+  });
+}
+
+Deno.test("catalog materialization recovery does not turn an auth outage into a false empty", async () => {
+  let calls = 0;
+  const result = await executeSearchCatalog({ mode: "by_query", query: "socket" }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => {
+      calls += 1;
+      if (calls > 1) return Promise.resolve(new Response("", { status: 401 }));
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "unrenderable",
+            pagetitle: "Archived socket",
+            price: 0,
+            url: "https://220volt.kz/catalog/electric/sockets/archived/",
+            options: [],
+          }],
+          pagination: { total: 100 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(calls, 2);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+});
+
+Deno.test("catalog price sort rejects incomplete pages despite a verified first-page card", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "socket",
+    sort_cheapest: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+      if (page === 2) return Promise.resolve(new Response("", { status: 403 }));
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "verified",
+            pagetitle: "Двойная розетка",
+            price: 500,
+            url: "https://220volt.kz/catalog/electric/sockets/verified/",
+            options: [],
+          }],
+          pagination: { total: 100 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+});
+
+Deno.test("catalog price sort rejects a partial leaf fan-out", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category_in: ["Leaf A", "Leaf B"],
+    sort_cheapest: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const leaf = new URL(String(input)).searchParams.get("category");
+      if (leaf === "Leaf B") return Promise.resolve(new Response("", { status: 403 }));
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: "verified",
+            pagetitle: "Двойная розетка",
+            price: 500,
+            url: "https://220volt.kz/catalog/electric/sockets/verified/",
+            options: [],
+          }],
+          pagination: { total: 1 },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+});
+
 Deno.test("an outer recovery deadline prevents further catalog retries", async () => {
   const controller = new AbortController();
   let calls = 0;

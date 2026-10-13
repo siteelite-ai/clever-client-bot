@@ -7,6 +7,7 @@ import {
 } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
 import type { ProductRef } from "./types.ts";
+import type { ToolError, ToolName } from "./types.ts";
 import {
   type DiscoveredCategoryScope,
   groundedCategoryRecoveryQueries,
@@ -372,12 +373,15 @@ export function shouldAttemptUnscopedSourceProvenCardinalityRecovery(
 export function unscopedSourceProvenCardinalityAttempt(
   scoped: SelectionSearchRecoveryAttempt,
 ): SelectionSearchRecoveryAttempt {
-  const { category: _category, category_in: _categoryIn, ...args } = scoped.args;
+  const { category: _category, category_in: _categoryIn, ...args } =
+    scoped.args;
   return {
     ...scoped,
     args,
     relaxed_inputs: [...scoped.relaxed_inputs, "leaf_retrieval_only"],
-    evidence_required_criteria: scoped.evidence_required_criteria.map(criterion => ({ ...criterion })),
+    evidence_required_criteria: scoped.evidence_required_criteria.map(
+      (criterion) => ({ ...criterion }),
+    ),
   };
 }
 
@@ -534,6 +538,55 @@ export function shouldAppendCatalogEmpty(
   if (input.products_rendered > 0) return false;
   if (input.intent_mode === "select") return true;
   return String(input.final_text ?? "").trim().length === 0;
+}
+
+/** A failed catalog request is not evidence that the requested products are
+ * absent. Keep this distinction at the tool-result boundary rather than
+ * trying to infer it from the model's final prose or a zero-card count. */
+export function isTransientCatalogToolFailure(result: {
+  tool: ToolName;
+  ok: boolean;
+  error_code?: ToolError["error_code"] | "category_not_found";
+}): boolean {
+  if (result.ok) return false;
+  if (
+    result.tool !== "discover_category" &&
+    result.tool !== "search_catalog" &&
+    result.tool !== "jargon_recover_catalog"
+  ) return false;
+  return result.error_code === "catalog_timeout" ||
+    result.error_code === "transport_5xx" ||
+    result.error_code === "rate_limited" ||
+    (result.tool === "jargon_recover_catalog" &&
+      result.error_code === "jargon_unavailable");
+}
+
+/** The failure remains relevant for this turn even after a later empty
+ * lookup. Only a verified rendered card resolves it. Both model-final and
+ * soft-deadline routes must use the same decision. */
+export function shouldReportTransientCatalogFailure(
+  failureSeen: boolean,
+  productsRendered: number,
+): boolean {
+  return failureSeen && productsRendered === 0;
+}
+
+export const TRANSIENT_CATALOG_FAILURE_NOTICE =
+  "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.";
+
+export function transientCatalogFailureFinalization(
+  route: "model_fragment" | "model_final" | "terminal",
+  failureSeen: boolean,
+  productsRendered: number,
+): { suppressModelText: boolean; technicalNotice: string | null } {
+  const unresolved = shouldReportTransientCatalogFailure(
+    failureSeen,
+    productsRendered,
+  );
+  return {
+    suppressModelText: route !== "terminal" && unresolved,
+    technicalNotice: unresolved ? TRANSIENT_CATALOG_FAILURE_NOTICE : null,
+  };
 }
 
 function normalizeQuery(value: string): string {

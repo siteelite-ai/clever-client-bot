@@ -812,7 +812,6 @@ Deno.test("customer-scoped reasoning schema omits unrelated exact technical valu
     }
   >;
   assertEquals(properties.required_facet_values.items?.enum, [
-    "f0v2",
     "f1v0",
     "f1v1",
   ]);
@@ -900,6 +899,119 @@ Deno.test("a model-derived exact value requires visible facet context", () => {
     key: "Цвет корпуса",
     value: "белый",
   }]);
+});
+
+Deno.test("a customer light qualifier cannot become a mandatory housing colour", () => {
+  const facets = [{
+    key: "body_colour",
+    caption: "Цвет корпуса",
+    values: [{ value: "белый" }, { value: "черный" }],
+  }, {
+    key: "emitted_colour",
+    caption: "Цвет свечения",
+    values: [{ value: "холодный белый" }, { value: "зеленый" }],
+  }, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP54" }, { value: "IP65" }],
+  }];
+  const customer = "Нужен прожектор IP65, белый свет 4000 K";
+  const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
+  const properties = (schema.function.parameters.properties ?? {}) as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f2v1"),
+    true,
+  );
+
+  for (const reasoning of [
+    "Для улицы нужен белый свет 4000 K и степень защиты IP65.",
+    "Цвет корпуса должен быть белый, степень защиты IP65.",
+  ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      {
+        reasoning,
+        required_facet_values: ["f0v0", "f2v1"],
+        compatible_classifications: [],
+        excluded_classifications: [],
+      },
+      facets,
+      customer,
+      "Прожекторы",
+    );
+    assertEquals(
+      resolved?.requiredFacetValues.some(({ key }) => key === "Цвет корпуса"),
+      false,
+    );
+  }
+
+  const explicitBody = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Цвет корпуса должен быть белый, степень защиты IP65.",
+      required_facet_values: ["f0v0", "f2v1"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен прожектор IP65, белый корпус",
+    "Прожекторы",
+  );
+  assertEquals(explicitBody?.requiredFacetValues.some(({ key, value }) =>
+    key === "Цвет корпуса" && value === "белый"
+  ), true);
+
+  const emitted = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Цвет свечения должен быть холодный белый, степень защиты IP65.",
+      required_facet_values: ["f1v0", "f2v1"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    customer,
+    "Прожекторы",
+  );
+  assertEquals(emitted?.requiredFacetValues.some(({ key, value }) =>
+    key === "Цвет свечения" && value === "холодный белый"
+  ), true);
+});
+
+Deno.test("customer range endpoints cannot own an exact live temperature", () => {
+  const facets = [{
+    key: "colour_temperature",
+    caption: "Цветовая температура, K",
+    unit: "K",
+    values: [{ value: "4000" }, { value: "6500" }],
+  }];
+  const options = (customer: string) => {
+    const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
+    const properties = (schema.function.parameters.properties ?? {}) as Record<
+      string,
+      { items?: { enum?: string[] } }
+    >;
+    return properties.required_facet_values.items?.enum ?? [];
+  };
+  assertEquals(options("Нужен белый свет 4000–6500 K"), []);
+  assertEquals(options("Нужен белый свет от 4000 до 6500 К"), []);
+  assertEquals(options("Нужна цветовая температура ровно 6500 K"), ["f0v1"]);
+});
+
+Deno.test("an aggregate estimate with illustrative per-item tiers stays a system total", () => {
+  const mixed =
+    "Нужен суммарный поток не менее 6000 лм (например, 2–3 изделия по 2000–3000 лм каждое).";
+  assertEquals(systemTotalReasoningDeclaresPerProductMeasurement(mixed), false);
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement("Двор 120 м²", mixed, "system_total"),
+    false,
+  );
+  assertEquals(
+    systemTotalReasoningDeclaresPerProductMeasurement(
+      `${mixed} Мощность каждого отдельного изделия должна быть 20–50 Вт.`,
+    ),
+    true,
+  );
 });
 
 Deno.test("a visible same-facet alternative cannot become one mandatory exact value", () => {

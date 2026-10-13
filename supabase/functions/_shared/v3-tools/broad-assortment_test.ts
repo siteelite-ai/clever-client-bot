@@ -20,6 +20,7 @@ import {
   resolveServerIssuedBroadAssortmentConstrainedContinuation,
   resolveServerIssuedBroadAssortmentFreeformCandidate,
   resolveServerIssuedBroadAssortmentPending,
+  resolveServerIssuedBroadAssortmentTypedContinuation,
   shouldResetUnverifiedBroadAssortmentTask,
   verifyServerIssuedBroadAssortmentFreeformLeaf,
 } from "./broad-assortment.ts";
@@ -1065,6 +1066,128 @@ Deno.test("typed refinements never enter the exact-chip shortcut", () => {
   );
 });
 
+Deno.test("a compound answer binds only a unique server-issued leaf and preserves every typed criterion", async () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant");
+  const typed = resolveServerIssuedBroadAssortmentTypedContinuation(
+    slots,
+    log,
+    "двойные электрические розетки черные до 7000 тенге в Алматы",
+    "session-A",
+  );
+  assertEquals(typed?.entity, "Gallant");
+  assertEquals(typed?.leaf, "Розетки");
+  assertEquals(typed?.original_request, log.user_query);
+  assertEquals(
+    typed!.effective_request,
+    `${log.user_query}\n${typed!.typed_request}`,
+    "only customer-authored words may enter the lexical recovery pipeline",
+  );
+  assertStringIncludes(typed!.effective_request, "двойные электрические");
+  assertStringIncludes(
+    typed!.effective_request,
+    "черные до 7000 тенге в Алматы",
+  );
+  const resolved = await resolveBroadAssortmentChoiceAfterReadRace(
+    slots,
+    typed!.typed_request,
+    "session-A",
+    async () => ({ row: log, error: false }),
+  );
+  assertEquals(resolved.choice, null, "typed text is never an exact chip");
+  assertEquals(resolved.typedContinuation, typed);
+  assertEquals(resolved.verifiedSlot?.slot_id, "server-slot-1");
+  for (
+    const technical of ["розетки IP44", "розетки 16А", "не двойные розетки"]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        technical,
+        "session-A",
+      )?.leaf,
+      "Розетки",
+      technical,
+    );
+  }
+  const constrainedOriginal =
+    "Покажи ассортимент серии Gallant в Алматы до 5000 тенге, только в наличии";
+  const constrained = resolveServerIssuedBroadAssortmentTypedContinuation(
+    slots,
+    { ...log, user_query: constrainedOriginal },
+    "двойные розетки",
+    "session-A",
+  );
+  assertStringIncludes(constrained!.effective_request, constrainedOriginal);
+  assertStringIncludes(constrained!.effective_request, "двойные розетки");
+});
+
+Deno.test("compound leaf binding fails closed on ambiguity, negation, another series or unverified slot", async () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant");
+  for (
+    const message of [
+      "двойные розетки и выключатели",
+      "без розеток",
+      "не нужны розетки",
+      "черные розетки Schneider",
+      "двойные Schneider розетки",
+      "розетки бренда IEK",
+      "найди кабель ВВГ",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+  }
+  assertEquals(
+    resolveServerIssuedBroadAssortmentTypedContinuation(
+      slots,
+      log,
+      "Розетки",
+      "session-A",
+    ),
+    null,
+    "exact chip retains its existing route",
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentTypedContinuation(
+      { pending_clarification: { slot_id: "forged" } },
+      log,
+      "двойные розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentTypedContinuation(
+      slots,
+      log,
+      "двойные розетки",
+      "session-B",
+    ),
+    null,
+  );
+  const failed = await resolveBroadAssortmentChoiceAfterReadRace(
+    slots,
+    "двойные розетки",
+    "session-A",
+    async () => ({ row: null, error: true }),
+    async () => {},
+  );
+  assertEquals(failed.typedContinuation, null);
+  assertEquals(failed.verifiedSlot, null);
+  assertEquals(failed.lookupFailed, true);
+});
+
 Deno.test("a self-contained unrelated request cannot inherit the server-issued entity", () => {
   const slots = { pending_clarification: { slot_id: "server-slot-1" } };
   const log = completedChoiceLog("Gallant");
@@ -1104,6 +1227,178 @@ Deno.test("a self-contained unrelated request cannot inherit the server-issued e
     )?.entity,
     "Gallant",
   );
+});
+
+Deno.test("a typed section answer requires the offered leaf as the selected object", () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant");
+  for (
+    const message of [
+      "найди автоматы для розеток Gallant",
+      "найди кабель к розеткам",
+      "Schneider розетки",
+      "IEK розетки",
+      "Шнайдер розетки",
+      "не нужны черные розетки",
+      "не хочу двойные розетки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+  }
+  for (
+    const message of [
+      "найди автоматы для розеток Gallant",
+      "найди кабель к розеткам",
+      "Schneider розетки",
+      "IEK розетки",
+      "Шнайдер розетки",
+      "не нужны черные розетки",
+      "не хочу двойные розетки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+  }
+  for (
+    const message of [
+      "двойные электрические розетки",
+      "розетки для кухни",
+      "Нужны черные розетки",
+      "не двойные розетки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        message,
+        "session-A",
+      )?.leaf,
+      "Розетки",
+      message,
+    );
+  }
+});
+
+Deno.test("attribute rejection keeps the server-issued section, while rejection of the leaf does not", () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant");
+  for (
+    const message of [
+      "двойные розетки, не хочу белые",
+      "не хочу белые, нужны двойные розетки",
+      "Мне нужны двойные розетки, но не белые",
+      "не белые двойные розетки",
+      "розетки, не хочу выключатели",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      )?.entity,
+      "Gallant",
+      message,
+    );
+    const typed = resolveServerIssuedBroadAssortmentTypedContinuation(
+      slots,
+      log,
+      message,
+      "session-A",
+    );
+    assertEquals(typed?.leaf, "Розетки", message);
+    assertEquals(typed?.effective_request, `${log.user_query}\n${message}`);
+  }
+  for (
+    const message of [
+      "не хочу розетки",
+      "не хочу двойные розетки",
+      "не нужны черные розетки",
+      "двойные розетки, не хочу розетки",
+      "не хочу белые двойные розетки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+  }
+});
+
+Deno.test("a fronted use or location phrase does not hide the selected leaf", () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant");
+  for (
+    const message of [
+      "Для кухни нужны двойные розетки",
+      "Для кухни покажи розетки",
+      "В Алматы нужны розетки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentTypedContinuation(
+        slots,
+        log,
+        message,
+        "session-A",
+      )?.leaf,
+      "Розетки",
+      message,
+    );
+  }
+  for (
+    const message of [
+      "Автоматы для розеток",
+      "Для кухни нужны автоматы для розеток",
+      "Для кухни покажи розетки Schneider",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+  }
 });
 
 Deno.test("short independent requests do not restore Gallant even when the classifier fails", async () => {

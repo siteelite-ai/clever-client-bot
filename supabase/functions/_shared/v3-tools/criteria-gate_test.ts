@@ -6,6 +6,7 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  criteriaProvenByExecutedFacetOptions,
   type Criterion,
   extendSelectionCriteriaPlan,
   filterProductIdsByBudgetCap,
@@ -452,6 +453,79 @@ Deno.test("rendered-card consensus never claims a trait that differs across card
   assertEquals(
     projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"),
     [],
+  );
+});
+
+Deno.test("a customer range endpoint never becomes an exact rendered title criterion", () => {
+  const products = ["one", "two"].map((id) => ({
+    ...product(id, []),
+    pagetitle: `Device ${id} 6500 K`,
+  }));
+  const markdown = products.map((item) =>
+    `- **[${item.pagetitle}](https://example.test/${item.id})**\n  Цена: *100* ₸`
+  ).join("\n\n");
+  for (
+    const request of [
+      "Нужны варианты 4000–6500 K",
+      "Нужны варианты от 4000 до 6500 K",
+      "Нужны варианты между 4000 и 6500 K",
+    ]
+  ) {
+    assertEquals(projectCommonRenderedUserCriteria(products, request), []);
+    assertEquals(projectCommonRenderedMarkdownUserCriteria(markdown, request), []);
+  }
+});
+
+Deno.test("a customer range endpoint never becomes an exact rendered trait criterion", () => {
+  const products = ["one", "two"].map((id) => ({
+    ...product(id, ["Color temperature, K: 6500 K"]),
+    pagetitle: `Device ${id}`,
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Нужны варианты с цветовой температурой 4000–6500 K",
+    ),
+    [],
+  );
+});
+
+Deno.test("an exact quantity outside a customer range remains customer-owned", () => {
+  const products = ["one", "two"].map((id) => ({
+    ...product(id, []),
+    pagetitle: `Device ${id} 6500 K 16A 3P`,
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Возможен диапазон 4000–6500 K, но нужен именно 6500 K, 16 ампер и 3 полюса",
+    ),
+    [
+      {
+        key: "k",
+        op: "eq",
+        value: 6500,
+        unit: "k",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "ампер",
+        op: "eq",
+        value: 16,
+        unit: "a",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "полюса",
+        op: "eq",
+        value: 3,
+        unit: "pole",
+        level: "A",
+        evidence: "user_explicit",
+      },
+    ],
   );
 });
 
@@ -1535,6 +1609,112 @@ Deno.test("successful canonical filter lineage proves an omitted compact trait",
   };
   const items = projectCatalogFilterEvidence([product("1", [])], [criterion]);
   assertEquals(applyCriteriaGate(items, [criterion]).passed_ids, ["1"]);
+});
+
+Deno.test("executed catalog options prove only their own mandatory axes", () => {
+  const criteria: Criterion[] = [
+    { key: "Степень защиты", op: "eq", value: "IP65", level: "A" },
+    {
+      key: "Цветовая температура",
+      op: "range",
+      value: [4000, 6500],
+      unit: "K",
+      level: "A",
+    },
+  ];
+  const facets = [
+    {
+      key: "ip",
+      caption: "Степень защиты",
+      unit: null,
+      values: [{ value: "IP65" }],
+    },
+    {
+      key: "temperature",
+      caption: "Цветовая температура",
+      unit: "K",
+      values: [{ value: "4000 K" }, { value: "6500 K" }],
+    },
+  ];
+  const proven = criteriaProvenByExecutedFacetOptions(
+    criteria,
+    { ip: ["IP65"] },
+    facets,
+  );
+  assertEquals(proven, [criteria[0]]);
+
+  const greenEmission = {
+    ...product("green-emission", [
+      "Степень защиты: IP65",
+      "Цвет свечения: зелёный",
+      "Цвет корпуса: чёрный",
+    ]),
+    pagetitle: "Прожектор с зелёным светом",
+  };
+  const greenHousing = {
+    ...product("green-housing", [
+      "Степень защиты: IP65",
+      "Цветовая температура: 4000 K",
+      "Цвет корпуса: зелёный",
+    ]),
+    pagetitle: "Прожектор 4000 K в зелёном корпусе",
+  };
+  const evidenced = projectCatalogFilterEvidence(
+    [greenEmission, greenHousing],
+    proven,
+  );
+  assertEquals(applyCriteriaGate(evidenced, criteria).passed_ids, [
+    "green-housing",
+  ]);
+  assertEquals(
+    criteriaProvenByExecutedFacetOptions(
+      criteria,
+      { ip: ["IP65"], temperature: ["4000 K", "6500 K"] },
+      facets,
+    ),
+    criteria,
+  );
+});
+
+Deno.test("catalog proof rejects wider executed options and preserves OR alternatives", () => {
+  const criteria: Criterion[] = [
+    { key: "Цвет", op: "eq", value: "чёрный", level: "A" },
+    { key: "Цвет", op: "eq", value: "графит", level: "A" },
+  ];
+  const facets = [{
+    key: "color",
+    caption: "Цвет",
+    unit: null,
+    values: [
+      { value: "чёрный" },
+      { value: "графит" },
+      { value: "белый" },
+    ],
+  }];
+  assertEquals(
+    criteriaProvenByExecutedFacetOptions(
+      criteria,
+      { color: ["чёрный", "графит"] },
+      facets,
+    ),
+    criteria,
+  );
+  assertEquals(
+    criteriaProvenByExecutedFacetOptions(
+      criteria,
+      { color: ["чёрный", "белый"] },
+      facets,
+    ),
+    [],
+  );
+  assertEquals(
+    criteriaProvenByExecutedFacetOptions(
+      [{ key: "Цвет", op: "eq", value: "зелёный", level: "A" }],
+      { color: ["зелёный"] },
+      facets,
+    ),
+    [],
+  );
 });
 
 Deno.test("applyCriteriaGate: уровень B не отсеивает", () => {

@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "source": "Targeted regression for catalog-filter provenance after the green-emission floodlight incident",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "white-yard-floodlight-provenance",
+      "title": "Уличный прожектор для двора не подменяет белый свет цветным свечением",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Подбери несколько уличных прожекторов IP65 для двора 120 м², высота установки 4 м, белый свет 4000–6500 K.",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": ["прожектор"],
+            "forbid_every_product_title_any": ["зелёного свечения", "зеленого свечения", "красного свечения"],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Степень защиты", "exact_any": ["IP65", "IP66", "IP67", "IP68", "IP69", "IP69K"] },
+                { "name": "Цветовая температура, К", "min_numeric": 4000, "less_than": 6501 }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
