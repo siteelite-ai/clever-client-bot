@@ -85,3 +85,48 @@ test('final expert card gate intersects live leaf, active entity, and independen
   assert.match(guard, /filterProductIdsByNamedSeries\(\s*sectionSafeIds,\s*ctx\.cache,\s*activeSelectionScope\.entity,/);
   assert.match(guard, /filterProductIdsByNamedSeries\(\s*guardVisibleCardinality\(scopeSafeIds, visibleContext\)\.ids,\s*ctx\.cache,\s*namedSeriesToken,/);
 });
+
+test('generic freeform assortment fallback verifies a live leaf, keeps compound criteria, and fails closed', () => {
+  const preflight = between(
+    'async function answerBroadAssortmentRequest(',
+    '// PostgREST treats an array argument',
+  );
+  assert.match(preflight, /catalogError = result\.error_code/);
+  assert.match(preflight, /catalog_error: catalogError/);
+  assert.match(preflight, /buildBroadAssortmentFreeformSlot\([\s\S]*?originalRequest/);
+
+  const decision = between(
+    'const freeformCandidate = verifiedBroadChoiceState.freeformCandidate;',
+    'const clientSelectionReadinessScope =',
+  );
+  assert.match(decision, /verifyServerIssuedBroadAssortmentFreeformLeaf\(/);
+  assert.match(decision, /executeDiscoverCategory\(\{ noun: leaf \}/);
+  assert.match(decision, /timeoutMs: 6_000/);
+  assert.match(decision, /one-hour cache/);
+  assert.doesNotMatch(decision, /openrouterApiKey:/,
+    'freeform section discovery must not need a model to invent a category');
+  assert.match(decision, /verifiedFreeformChoice\?\.exact/,
+    'only a bare exact section may bypass the criteria-aware expert');
+  assert.match(decision, /verifiedFreeformScope/);
+
+  const routes = between(
+    'if (verifiedBroadChoice && !startsNewTask) {',
+    '} else if (isMetaSelfQuestion(userMessage)) {',
+  );
+  const failurePosition = routes.indexOf('v3_broad_assortment_freeform_unverified');
+  const constrainedPosition = routes.indexOf('v3_broad_assortment_constrained_chip_expert_route');
+  assert.ok(failurePosition > 0 && constrainedPosition > failurePosition);
+  assert.match(routes, /buildBroadAssortmentFreeformSlot\([\s\S]*?freeformCandidate\.original_request/);
+  assert.match(routes, /freeformVerification\?\.status === "indeterminate"/);
+  assert.match(routes, /Это не означает, что товаров нет/);
+  assert.match(routes, /verifiedFreeformChoice && freeformCandidate/);
+  assert.match(routes, /\$\{freeformCandidate\.original_request\}/);
+  assert.match(routes, /Текущие критерии клиента: \$\{userMessage\}/);
+
+  const selected = between(
+    'async function answerVerifiedBroadAssortmentChoice(',
+    'async function',
+  );
+  assert.match(selected, /if \(qualified\.length === 0\) \{[\s\S]*?type: "active_selection_scope"/);
+  assert.match(selected, /catalog_error/);
+});

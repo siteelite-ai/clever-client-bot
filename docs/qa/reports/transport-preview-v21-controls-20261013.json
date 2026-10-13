@@ -1,0 +1,1253 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-13T06:55:11.355Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 4,
+  "requested_repetitions": {
+    "customer-new-household-motion-joined-currency": 1,
+    "customer-new-chandelier-25m2": 1,
+    "customer-new-outdoor-floodlight-warehouse-priority": 1,
+    "customer-new-heat-shrink-10mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-household-motion-joined-currency",
+      "title": "Бюджет без пробела перед валютой не сужает окно кандидатов",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-joined-currency_base_1791874511360_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 22680,
+              "network_attempts": 1,
+              "log_id": "f382ca1d-d198-4382-aecd-d9a2f17ba071",
+              "diagnostic_error": null,
+              "products_count": 3,
+              "unique_products_count": 3,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140",
+                  "verified": true,
+                  "sku": "Ем000033649",
+                  "name": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Материал корпуса": "пластик",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "18",
+                    "Вид светильника": "бытовые светильники накладные",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "18",
+                    "Тип лампы": "LED",
+                    "Ширина, см": "18",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Количество ламп": "1",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "48",
+                    "Мощность ламп, Вт": "20",
+                    "Световой поток, Лм": "1520",
+                    "Диапазон рабочих температур": "-20 +40 °C",
+                    "Напряжение, В": "200-240",
+                    "Срок службы, часы": "35000",
+                    "Единица измерения": "шт",
+                    "Способ монтажа": "накладной",
+                    "Вес, кг.": "0.15",
+                    "Степень защиты, IP": "40",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.001",
+                    "ПРА": "светодиодный драйвер",
+                    "Бренд": "Gauss",
+                    "Цвет корпуса": "белый",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал рассеивателя": "поликарбонат"
+                  },
+                  "offerPrice": 3878,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "description_excerpt": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40 – Служат для освещения крытых помещений где не требуется высокая защищенность от пыли и влаги. Данная модель оборудована микроволновым сенсором (в линейке есть модели оборудованные оптико-акустическим датчиком). Сенсор автоматически включает светильник при появлении движущихся объектов в зоне обнаружения датчика и автоматически отключает осветительный прибор при выходе из зоны обнаружения датчика. "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000029834",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Тип лампы": "LED",
+                    "Ширина, см": "22",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Количество ламп": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Мощность ламп, Вт": "30",
+                    "Световой поток, Лм": "2850",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Напряжение, В": "230",
+                    "Единица измерения": "шт",
+                    "Способ монтажа": "накладной",
+                    "Вес, кг.": "0.7",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.009",
+                    "ПРА": "не требуется",
+                    "Бренд": "LEDAR",
+                    "Цвет корпуса": "белый",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да"
+                  },
+                  "offerPrice": 2511,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К LEDAR с датчиком движения – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000031548",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Тип лампы": "LED",
+                    "Ширина, см": "22",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Количество ламп": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Мощность ламп, Вт": "20",
+                    "Световой поток, Лм": "1960",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Напряжение, В": "230",
+                    "Единица измерения": "шт",
+                    "Способ монтажа": "накладной",
+                    "Вес, кг.": "0.7",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.009",
+                    "ПРА": "не требуется",
+                    "Бренд": "LEDAR",
+                    "Цвет корпуса": "белый",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да"
+                  },
+                  "offerPrice": 2381,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "price": 3878,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/)**\n  Цена: *3 878* ₸\n  Бренд: Gauss\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2511,
+                  "stockLine": "Астана (727 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 511* ₸\n  Бренд: LEDAR\n  Наличие: Астана (727 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2381,
+                  "stockLine": "Астана (1295 шт), Караганда (478 шт), Актобе (168 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 381* ₸\n  Бренд: LEDAR\n  Наличие: Астана (1295 шт), Караганда (478 шт), Актобе (168 шт) и ещё 1 городов"
+                }
+              ],
+              "text": "Клиент ищет бытовой светильник с датчиком движения. Это готовое изделие со встроенным датчиком, предназначенное для автоматического включения света при обнаружении движения в жилых помещениях. Ключевое требование — наличие датчика движения (характеристика «С датчиком движения» должен быть положительным). Ценовое ограничение 4000 тенге — это бюджетный фильтр, не технический параметр. Других обязательных технических характеристик (мощность, световой поток, напряжение) клиент не указал, поэтому они остаются свободными для выбора из доступного ассортимента. Для указанного применения сначала проверяю «Вид светильника: бытовые линейные светильники»; «Вид светильника: бытовые светильники накладные»; товар из другой рубрики допустим только если его собственная карточка прямо подтверждает то же применение. Внутри вашего класса в первую очередь проверяю «бытовые линейные светильники», «бытовые светильники накладные» как предпочтение, не исключая другие допустимые варианты.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-c48f7e7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "С датчиком движения",
+                    "op": "eq",
+                    "value": "да",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые линейные светильники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые светильники накладные",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовой",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "датчиком",
+                    "op": "eq",
+                    "value": "датчиком"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 39, листьев 1",
+                  "duration_ms": 5259
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=2; initial=1; minimum=3; application=1; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=unscoped; total=53; retrieved=50; candidate=4; proven=3; pooled=3; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 3",
+                  "duration_ms": 6926
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1791874537792_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 5451,
+              "network_attempts": 1,
+              "log_id": "b6cc59e5-8cdd-4330-9093-8957980950ae",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002740",
+                  "name": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "паук",
+                    "Страна происхождения": "КИТАЙ",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "7.2",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "8",
+                    "Объем, м3": "0.18",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения"
+                  },
+                  "offerPrice": 23666,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — Модель MATEO от бренда Estares сочетает современный дизайн и интеллектуальные технологии для дома. Люстра управляется напрямую от выключателя, обеспечивая простое и удобное включение и выключение света. Объемная светящаяся конструкция равномерно освещает помещение, а мощность 100 Вт позволяет освещать комнаты до 35 м². Надежные материалы — алюминий, ударопрочный акрил и оптический силикон — гарантируют долгий ср"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002741",
+                  "name": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "снежинка",
+                    "Страна происхождения": "КИТАЙ",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "5.5",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "6",
+                    "Объем, м3": "0.14",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения"
+                  },
+                  "offerPrice": 18167,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 Estares Артикул: 8R-ON/OFF-915*250 Люстра MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 предназначена для создания комфортного и современного освещения в жилых и коммерческих помещениях. Она обеспечивает равномерное заливное освещение без резких теней, эффективно освещает пространство до 25–28 м² и легко вписывается в интерьер благодаря минималистичному дизайну и компактной высоте. Назначение и область применения"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002744",
+                  "name": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Максимальная площадь освещения, м2": "25",
+                    "Назначение": "зал; гостиная; спальня; кафе; кухня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Да",
+                    "Диаметр люстры, см": "60",
+                    "Наличие пульта": "Да",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Да",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "2.8",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "3",
+                    "Объем, м3": "0.05",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения"
+                  },
+                  "offerPrice": 18324,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая Maysun AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20 – Интеллектуальная люстра, минимализм и высокие технологии в одном устройстве. Это баланс между эстетикой и функциональностью. Тонкий черный профиль в сочетании с кристально чистым акрилом создает эффект легкого, парящего в воздухе кольца, которое гармонично вписывается в интерьеры в стиле лофт, хай-тек, неоклассика. Благодаря управлению через смартфон или пульт, вы можете мгновенно превратить комнату и"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002745",
+                  "name": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "зал; гостиная; спальня; прихожая",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Да",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "51",
+                    "Наличие пульта": "Да",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "2.7",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "3",
+                    "Объем, м3": "0.042",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения"
+                  },
+                  "offerPrice": 19550,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20 — интеллектуальная люстра, сочетание мягких форм и высокой мощности для современного дома. Модель выполнена в виде объёмного светящегося диска, который наполняет помещение ровным светом без резких теней. Мощность 80 Вт позволяет эффективно освещать комнаты до 28 м², заменяя несколько обычных светильников. Управление через пульт или смартфон позволяет мгновенно менять яркость и цветовую температуру света — от бодрящего "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002746",
+                  "name": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ",
+                    "Наличие ламп": "Нет",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "50",
+                    "Наличие пульта": "Да",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "3.8",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "2",
+                    "Объем, м3": "0.045",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал плафонов": "акрил",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения"
+                  },
+                  "offerPrice": 29961,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20, бренд Estares Артикул: SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20 Люстра светодиодная управляемая SOFIA 100W коллекции Estares сочетает футуристичный дизайн и интеллектуальные технологии для современного дома. Модель оснащена прозрачным акриловым плафоном и двойным кольцом светодиодов, что обеспечивает равномерное освещение помещений до 35–38 м². Управление осуществляется через мобильное приложение (APP) и пуль"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "price": 23666,
+                  "stockLine": "Караганда (10 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/)**\n  Цена: *23 666* ₸\n  Бренд: Estares\n  Наличие: Караганда (10 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "price": 18167,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/)**\n  Цена: *18 167* ₸\n  Бренд: Estares\n  Наличие: Караганда (1 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "price": 18324,
+                  "stockLine": "Караганда (5 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/)**\n  Цена: *18 324* ₸\n  Бренд: Estares\n  Наличие: Караганда (5 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "price": 19550,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/)**\n  Цена: *19 550* ₸\n  Бренд: Estares\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "price": 29961,
+                  "stockLine": "Караганда (7 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/)**\n  Цена: *29 961* ₸\n  Бренд: Estares\n  Наличие: Караганда (7 шт)"
+                }
+              ],
+              "text": "Для расширения поиска проверил названный вами исходный класс «Люстры»; это не обзор всех видов светодиодного освещения. У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «гостиной», максимальная площадь освещения не менее 25 м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-f639b265",
+                "mandatory_criteria": [
+                  {
+                    "key": "Максимальная площадь освещения, м2",
+                    "op": "min",
+                    "value": 25,
+                    "unit": "м²",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "application",
+                    "label": "Назначение",
+                    "value": "гостиной"
+                  },
+                  {
+                    "kind": "technology",
+                    "label": "Светодиодное исполнение"
+                  },
+                  {
+                    "kind": "availability",
+                    "label": "Положительный складской остаток"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "Проверяю целевой тип и подтверждённую применимость товаров…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Проверено подходящих карточек: 5; целевой поиск: catalog_timeout; исходный класс: ok",
+                  "duration_ms": 4532
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-outdoor-floodlight-warehouse-priority",
+      "title": "Уличный прожектор для двора сначала уточняет параметры подбора",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-outdoor-floodlight-warehouse-priority_base_1791874546279_1",
+          "turns": [
+            {
+              "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 745,
+              "network_attempts": 1,
+              "log_id": "aea5fea4-ed98-4470-9766-2fe9353bc706",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "mounting_height",
+                "options_count": 3,
+                "values": [
+                  "До 4 м",
+                  "4–8 м",
+                  "Выше 8 м"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Площадь около 120 м², высота установки 4 м",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14196,
+              "network_attempts": 1,
+              "log_id": "9f944370-6ab4-4199-a7aa-33ee2ae86ce6",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl",
+                  "verified": true,
+                  "sku": "Ем000019929",
+                  "name": "Светодиодный прожектор GLANZEN FAD-0002-20-SL",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65",
+                    "Вес, кг.": "0.145",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "103",
+                    "Объем, м3": "0.00038",
+                    "Бренд": "Glanzen",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405401002",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "1600",
+                    "Страна происхождения": "КИТАЙ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "29",
+                    "Высота, мм": "65",
+                    "Гарантийный срок, лет": "1",
+                    "Диапазон рабочих температур": "от -45° до +50°С",
+                    "Мощность, вт": "20"
+                  },
+                  "offerPrice": 1406,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/",
+                  "description_excerpt": "Светодиодный прожектор GLANZEN FAD - это эффективное решение для освещения различных объектов внутри и снаружи помещений. Он оснащен яркими светодиодами, которые обеспечивают высокую яркость света и долговечность. GLANZEN FAD имеет компактный и стильный дизайн, который подходит для любого интерьера и экстерьера. Он легок в установке и имеет угол наклона 120 градусов, что позволяет направлять свет туда, где это необходимо. Прожектор имеет алюминиевый корпус, который обеспечивает прочность и долго"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek",
+                  "verified": true,
+                  "sku": "Ем000017204",
+                  "name": "Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65",
+                    "Вес, кг.": "0.2",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "94.5",
+                    "Объем, м3": "0.00026",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405420012",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "1600",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "107.5",
+                    "Высота, мм": "25.5",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "20"
+                  },
+                  "offerPrice": 1872,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek",
+                  "verified": true,
+                  "sku": "Ем000018122",
+                  "name": "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65",
+                    "Вес, кг.": "0.24",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "106",
+                    "Объем, м3": "0.00035",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405490019",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "127",
+                    "Высота, мм": "26",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "30"
+                  },
+                  "offerPrice": 2390,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl",
+                  "verified": true,
+                  "sku": "Ем000018686",
+                  "name": "Светодиодный прожектор GLANZEN FAD-0003-30-SL",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65",
+                    "Вес, кг.": "0.246",
+                    "Срок службы, часов": "35000",
+                    "Ширина, мм": "140",
+                    "Объем, м3": "0.000597",
+                    "Бренд": "Glanzen",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405401002",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "КИТАЙ",
+                    "Цветовая температура, К": "6500",
+                    "Длина, мм": "35",
+                    "Высота, мм": "104",
+                    "Гарантийный срок, лет": "1",
+                    "Диапазон рабочих температур": "от -45° до +50°С",
+                    "Мощность, вт": "30"
+                  },
+                  "offerPrice": 1478,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/",
+                  "description_excerpt": "Светодиодный прожектор GLANZEN FAD - это эффективное решение для освещения различных объектов внутри и снаружи помещений. Он оснащен яркими светодиодами, которые обеспечивают высокую яркость света и долговечность. GLANZEN FAD имеет компактный и стильный дизайн, который подходит для любого интерьера и экстерьера. Он легок в установке и имеет угол наклона 120 градусов, что позволяет направлять свет туда, где это необходимо. Прожектор имеет алюминиевый корпус, который обеспечивает прочность и долго"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek",
+                  "verified": true,
+                  "sku": "Ем000017274",
+                  "name": "Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК",
+                  "facets": {
+                    "Категория": "Прожекторы",
+                    "Единица измерения": "шт",
+                    "Степень защиты": "IP65",
+                    "Вес, кг.": "0.24",
+                    "Срок службы, часов": "50000",
+                    "Ширина, мм": "106",
+                    "Объем, м3": "0.00035",
+                    "Бренд": "IEK",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код ТН ВЭД": "9405490019",
+                    "Напряжение, В": "220-240",
+                    "Способ монтажа": "монтажный кронштейн регулируемый",
+                    "Цвет корпуса": "черный",
+                    "Материал корпуса": "алюминий",
+                    "Цвет свечения": "нейтральный",
+                    "Световой поток, Лм": "2400",
+                    "Страна происхождения": "РОССИЯ",
+                    "Цветовая температура, К": "4000",
+                    "Длина, мм": "127",
+                    "Высота, мм": "26",
+                    "Гарантийный срок, лет": "2",
+                    "Диапазон рабочих температур": "от -25 до +40 °C",
+                    "Мощность, вт": "30"
+                  },
+                  "offerPrice": 2390,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/",
+                  "description_excerpt": "Прожекторы светодиодные мощностью 10, 20, 30, 50 Вт предназначены для декоративной и фасадной подсветки зданий, подсветки рекламных конструкций, памятников, колон, деревьев, открытых пространств и объектов, спортивных сооружений, а также промышленных зон. Подходят как для внутреннего, так и для наружного применения. Поставляются в двух вариантах цветовой температуры."
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0002-20-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/",
+                  "price": 1406,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0002-20-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0002-20-sl/)**\n  Цена: *1 406* ₸\n  Бренд: Glanzen\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 1872,
+                  "stockLine": "Караганда (162 шт), Астана (123 шт), Актобе (50 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-20 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-20-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *1 872* ₸\n  Бренд: IEK\n  Наличие: Караганда (162 шт), Астана (123 шт), Актобе (50 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 2390,
+                  "stockLine": "Караганда (283 шт), Шымкент (87 шт), Актобе (72 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *2 390* ₸\n  Бренд: IEK\n  Наличие: Караганда (283 шт), Шымкент (87 шт), Актобе (72 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0003-30-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/",
+                  "price": 1478,
+                  "stockLine": "Астана (24 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0003-30-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/)**\n  Цена: *1 478* ₸\n  Бренд: Glanzen\n  Наличие: Астана (24 шт)"
+                },
+                {
+                  "title": "Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/",
+                  "price": 2390,
+                  "stockLine": "Караганда (78 шт), Астана (52 шт), Алматы (45 шт) и ещё 1 городов",
+                  "cardText": "- **[Прожектор СДО 06-30 светодиодный черный IP65 4000 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-4000-k-iek/)**\n  Цена: *2 390* ₸\n  Бренд: IEK\n  Наличие: Караганда (78 шт), Астана (52 шт), Алматы (45 шт) и ещё 1 городов"
+                }
+              ],
+              "text": "Для освещения двора частного дома площадью 120 м² рекомендуется обеспечить освещённость 10–20 лк (минимальный комфортный уровень для придомовой территории). Световой поток = 120 м² × 15 лк (средний ориентир) = 1800 лм. При высоте установки 4 м и типичном угле раскрытия прожектора можно использовать один прожектор мощностью 20–30 Вт (световой поток около 2000–3000 лм) либо два прожектора по 10–15 Вт, распределённых по зоне. Обязательные требования: степень защиты не менее IP65 для уличной эксплуатации (защита от пыли и струй воды), напряжение 220 В (стандартная сеть). Световой поток не менее 1800 лм суммарно обеспечит базовую видимость; для более яркого освещения можно выбрать прожектор с потоком 3000–5000 лм. Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, а не требовать от одной карточки. Обязательные параметры: «Степень защиты: IP65».Показанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность 1 800 лм. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-383102c5",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1396
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=27; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 101",
+                  "duration_ms": 1045
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1791874565327_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14646,
+              "network_attempts": 1,
+              "log_id": "9c63997a-6dcb-4120-91f4-3d0bbccffc11",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000013731",
+                  "name": "Термоусадочная трубка ТТУ 12/6 черная 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "чёрный",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "50",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.0002",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C"
+                  },
+                  "offerPrice": 133,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026499",
+                  "name": "Термоусадочная трубка ТТУ 12/6 белая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "белый",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "50",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026500",
+                  "name": "Термоусадочная трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "жёлтый",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "50",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026502",
+                  "name": "Термоусадочная трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "зеленый",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "50",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Да",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C"
+                  },
+                  "offerPrice": 114,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка ТТУ 12/6 черная 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "price": 133,
+                  "stockLine": "Астана (460 м), Караганда (342 м), Актобе (231 м) и ещё 3 городов",
+                  "cardText": "- **[Трубка ТТУ 12/6 черная 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/)**\n  Цена: *133* ₸/м\n  Бренд: IEK\n  Наличие: Астана (460 м), Караганда (342 м), Актобе (231 м) и ещё 3 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 белая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Шымкент (294 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 белая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (294 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Актобе (161 м), Шымкент (65 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 желтая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (161 м), Шымкент (65 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "price": 114,
+                  "stockLine": "Шымкент (78 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 зеленая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/)**\n  Цена: *114* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (78 м)"
+                }
+              ],
+              "text": "Клиент указал диаметр кабеля 10 мм. Для термоусаживаемой трубки (ТТУ) критичны два размера: внутренний диаметр до усадки должен быть строго больше диаметра кабеля (чтобы трубка свободно надевалась), а после усадки — строго меньше (для плотной фиксации). Условия: диаметр до усадки › 10 мм, диаметр после усадки ‹ 10 мм. В схеме есть значение «Внутр диаметр до термоусадки,мм» = 10 мм, но оно равно диаметру кабеля и не обеспечит свободного надевания. Подходящие варианты должны иметь диаметр до усадки больше 10 мм (например, 12 мм или из диапазонов,,,,,, где встречаются значения ≥10 мм) и диаметр после усадки меньше 10 мм. Точное значение (10 мм до усадки) не является обязательным, так как не удовлетворяет строгому неравенству. Ищем трубки с подходящим диапазоном усадки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-f1361473",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 32, листьев 1",
+                  "duration_ms": 2448
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=37; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 415",
+                  "duration_ms": 961
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-13T06:56:23.182Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 4,
+    "recorded_cases": 4,
+    "planned_runs": 4,
+    "recorded_runs": 4,
+    "planned_turns": 5,
+    "recorded_turns": 5
+  },
+  "log_ids": [
+    "f382ca1d-d198-4382-aecd-d9a2f17ba071",
+    "b6cc59e5-8cdd-4330-9093-8957980950ae",
+    "aea5fea4-ed98-4470-9766-2fe9353bc706",
+    "9f944370-6ab4-4199-a7aa-33ee2ae86ce6",
+    "9c63997a-6dcb-4120-91f4-3d0bbccffc11"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 17,
+    "verified": 17,
+    "unverified": 0
+  },
+  "passed": true
+}

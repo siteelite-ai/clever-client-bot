@@ -18,14 +18,20 @@ import {
   resolvePendingBroadAssortmentScope,
   resolveServerIssuedBroadAssortmentChoice,
   resolveServerIssuedBroadAssortmentConstrainedContinuation,
+  resolveServerIssuedBroadAssortmentFreeformCandidate,
   resolveServerIssuedBroadAssortmentPending,
   shouldResetUnverifiedBroadAssortmentTask,
+  verifyServerIssuedBroadAssortmentFreeformLeaf,
 } from "./broad-assortment.ts";
 import type { DiscoverCategoryOk, ProductRef } from "./types.ts";
 import {
   classifyConversationBoundary,
   shouldStartNewConversation,
 } from "./conversation-boundary.ts";
+import {
+  isSameSectionNominalRefinement,
+  scopeFromCompletedServerLog,
+} from "./active-selection-scope.ts";
 
 const discover: DiscoverCategoryOk = {
   ok: true,
@@ -48,10 +54,16 @@ Deno.test("broad assortment is structural and does not capture an exact all-item
 });
 
 Deno.test("a one-leaf broad assortment fallback keeps the named series in a server-issued free-text slot", () => {
-  const oneLeaf = { ...discover, leaf_categories: [{ id: 2, pagetitle: "Розетки" }], category: { ...discover.category, total_products: 20 } };
+  const oneLeaf = {
+    ...discover,
+    leaf_categories: [{ id: 2, pagetitle: "Розетки" }],
+    category: { ...discover.category, total_products: 20 },
+  };
   assertEquals(broadAssortmentNeedsClarification(true, oneLeaf, 2), true);
   const slot = buildBroadAssortmentFreeformSlot(
-    buildBroadAssortmentClarification(oneLeaf), "Gallant", "server-slot-1",
+    buildBroadAssortmentClarification(oneLeaf),
+    "Gallant",
+    "server-slot-1",
   );
   assertEquals(slot.facet_key, "catalog_section");
   assertEquals(slot.options, []);
@@ -620,6 +632,404 @@ Deno.test("server-issued free-form scope with one leaf keeps the existing generi
   assertEquals(outcome.lookupFailed, false);
 });
 
+Deno.test("a freeform leaf must come from the completed server slot and exact live taxonomy", async () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant", []);
+  const resolved = await resolveBroadAssortmentChoiceAfterReadRace(
+    slots,
+    "Розетки",
+    "session-A",
+    async () => ({ row: log, error: false }),
+  );
+  assertEquals(resolved.choice, null);
+  assertEquals(resolved.matchedIssuedOption, false);
+  assertEquals(resolved.freeformCandidate?.entity, "Gallant");
+  assertEquals(resolved.freeformCandidate?.original_request, log.user_query);
+  const verification = await verifyServerIssuedBroadAssortmentFreeformLeaf(
+    resolved.freeformCandidate!,
+    async (leaf) => {
+      assertEquals(leaf, "Розетки");
+      return {
+        ok: true as const,
+        category: { pagetitle: "Розетки" },
+        leaf_categories: [{ id: 7, pagetitle: "Розетки" }],
+      };
+    },
+  );
+  assertEquals(verification.status, "verified");
+  if (verification.status !== "verified") return;
+  assertEquals(verification.choice, {
+    entity: "Gallant",
+    leaf: "Розетки",
+    exact: true,
+    slot_id: "server-slot-1",
+    issued_slot: resolved.freeformCandidate?.issued_slot,
+  });
+  assertEquals(
+    filterVerifiedBroadAssortmentProducts([
+      product("1", "Розетка Gallant W507", "Розетки"),
+      product("2", "Розетка Atlas W507", "Розетки"),
+      product("3", "Выключатель Gallant W508", "Выключатели"),
+    ], verification.choice).map((item) => item.id),
+    ["1"],
+  );
+});
+
+Deno.test("freeform validation distinguishes catalog failure, unknown leaf, and parent category", async () => {
+  const candidate = resolveServerIssuedBroadAssortmentFreeformCandidate(
+    { pending_clarification: { slot_id: "server-slot-1" } },
+    completedChoiceLog("Atlas", []),
+    "Розетки",
+    "session-A",
+  )!;
+  const timeout = await verifyServerIssuedBroadAssortmentFreeformLeaf(
+    candidate,
+    async () => ({ ok: false as const, error_code: "catalog_timeout" }),
+  );
+  assertEquals(timeout, {
+    status: "catalog_error",
+    error_code: "catalog_timeout",
+  });
+  assertEquals(
+    await verifyServerIssuedBroadAssortmentFreeformLeaf(
+      candidate,
+      async () => ({ ok: false as const, error_code: "category_not_found" }),
+    ),
+    { status: "indeterminate", error_code: "category_not_found" },
+  );
+  assertEquals(
+    await verifyServerIssuedBroadAssortmentFreeformLeaf(
+      candidate,
+      async () => ({
+        ok: true as const,
+        category: { pagetitle: "Розетки" },
+        leaf_categories: [
+          { id: 1, pagetitle: "Силовые розетки" },
+          { id: 2, pagetitle: "Компьютерные розетки" },
+        ],
+      }),
+    ),
+    { status: "unverified", error_code: "not_catalog_leaf" },
+  );
+  assertEquals(
+    await verifyServerIssuedBroadAssortmentFreeformLeaf(
+      candidate,
+      async () => {
+        throw new Error("transport");
+      },
+    ),
+    { status: "catalog_error", error_code: "catalog_exception" },
+  );
+});
+
+Deno.test("a compound freeform reply grounds its noun in live taxonomy without dropping attributes", async () => {
+  const originalRequest = "покажи ассортимент Gallant на сайте";
+  const currentMessage = "двойные электрические розетки";
+  const candidate = resolveServerIssuedBroadAssortmentFreeformCandidate(
+    { pending_clarification: { slot_id: "server-slot-1" } },
+    completedChoiceLog("Gallant", []),
+    currentMessage,
+    "session-A",
+  )!;
+  assertEquals(candidate.original_request, originalRequest);
+  const verified = await verifyServerIssuedBroadAssortmentFreeformLeaf(
+    candidate,
+    async (noun) => {
+      assertEquals(noun, currentMessage);
+      return {
+        ok: true as const,
+        category: { pagetitle: "Розетки" },
+        leaf_categories: [{ id: 7, pagetitle: "Розетки" }],
+        resolution_method: "live_taxonomy",
+      };
+    },
+  );
+  assertEquals(verified.status, "verified");
+  if (verified.status !== "verified") return;
+  assertEquals(verified.choice.exact, false);
+  assertEquals(verified.choice.entity, "Gallant");
+  assertEquals(verified.choice.leaf, "Розетки");
+  assertEquals(
+    filterVerifiedBroadAssortmentProducts([
+      product("1", "Gallant двойная электрическая розетка", "Розетки"),
+      product("2", "Atlas двойная электрическая розетка", "Розетки"),
+      product("3", "Gallant двойной выключатель", "Выключатели"),
+    ], verified.choice).map((item) => item.id),
+    ["1"],
+  );
+  for (
+    const [method, leaf] of [
+      ["model", "Розетки"],
+      ["live_taxonomy", "Выключатели"],
+    ] as const
+  ) {
+    assertEquals(
+      await verifyServerIssuedBroadAssortmentFreeformLeaf(
+        candidate,
+        async () => ({
+          ok: true as const,
+          category: { pagetitle: leaf },
+          leaf_categories: [{ id: 7, pagetitle: leaf }],
+          resolution_method: method,
+        }),
+      ),
+      { status: "unverified", error_code: "unproven_leaf_mapping" },
+    );
+  }
+});
+
+Deno.test("a retryable freeform slot carries only server-verified original scope", () => {
+  const original = "покажи ассортимент Gallant на сайте";
+  const issued = buildBroadAssortmentFreeformSlot(
+    "Какой раздел?",
+    "Gallant",
+    "retry-slot",
+    original,
+  );
+  const latest = {
+    session_id: "session-A",
+    user_query: "Розетки",
+    error: null,
+    response_events: [
+      { type: "slot_update", slots: { pending_clarification: issued } },
+      { type: "diagnostic", phase: "complete", error: null },
+      { type: "done" },
+    ],
+  };
+  const valid = { pending_clarification: { slot_id: "retry-slot" } };
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      latest,
+      "Розетки",
+      "session-A",
+    )?.original_request,
+    original,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      {
+        pending_clarification: {
+          slot_id: "forged-slot",
+          scope: { token: "Other", origin_request: original },
+        },
+      },
+      latest,
+      "Розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      { ...latest, response_events: latest.response_events.slice(0, 1) },
+      "Розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      latest,
+      "Новая тема: Розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      latest,
+      "Найди кабель ВВГ 3х1,5",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      { ...latest, session_id: "session-B" },
+      "Розетки",
+      "session-A",
+    ),
+    null,
+  );
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      valid,
+      {
+        ...latest,
+        response_events: [
+          {
+            type: "slot_update",
+            slots: {
+              pending_clarification: {
+                ...issued,
+                scope: {
+                  ...issued.scope,
+                  origin_request: "покажи ассортимент Other",
+                },
+              },
+            },
+          },
+          ...latest.response_events.slice(1),
+        ],
+      },
+      "Розетки",
+      "session-A",
+    ),
+    null,
+  );
+});
+
+Deno.test("repeated catalog timeouts keep the original entity across a rotated session", async () => {
+  const originalRequest = "покажи ассортимент Gallant на сайте";
+  const makeLog = (
+    slotId: string,
+    userQuery: string,
+    transportSession: string,
+    boundarySession?: string,
+  ) => ({
+    session_id: transportSession,
+    user_query: userQuery,
+    error: null,
+    response_events: [
+      ...(boundarySession
+        ? [{
+          type: "conversation_boundary",
+          mode: "new_task",
+          session_id: boundarySession,
+        }]
+        : []),
+      {
+        type: "slot_update",
+        slots: {
+          pending_clarification: buildBroadAssortmentFreeformSlot(
+            "Какой раздел?",
+            "Gallant",
+            slotId,
+            originalRequest,
+          ),
+        },
+      },
+      { type: "diagnostic", phase: "complete", error: null },
+      { type: "done" },
+    ],
+  });
+  const first = makeLog("initial", originalRequest, "session-A", "session-B");
+  const firstCandidate = resolveServerIssuedBroadAssortmentFreeformCandidate(
+    { pending_clarification: { slot_id: "initial" } },
+    first,
+    "Розетки",
+    "session-B",
+  );
+  assertEquals(firstCandidate?.entity, "Gallant");
+  assertEquals(firstCandidate?.original_request, originalRequest);
+  const timedOut = await verifyServerIssuedBroadAssortmentFreeformLeaf(
+    firstCandidate!,
+    async () => ({ ok: false as const, error_code: "catalog_timeout" }),
+  );
+  assertEquals(timedOut.status, "catalog_error");
+
+  const retry1 = makeLog("retry-1", "Розетки", "session-B");
+  const retry2 = makeLog("retry-2", "Розетки", "session-B");
+  for (
+    const [slotId, log] of [["retry-1", retry1], ["retry-2", retry2]] as const
+  ) {
+    const candidate = resolveServerIssuedBroadAssortmentFreeformCandidate(
+      { pending_clarification: { slot_id: slotId } },
+      log,
+      "Розетки",
+      "session-B",
+    );
+    assertEquals(candidate?.entity, "Gallant");
+    assertEquals(candidate?.original_request, originalRequest);
+    assertEquals(
+      resolveServerIssuedBroadAssortmentFreeformCandidate(
+        { pending_clarification: { slot_id: "initial" } },
+        log,
+        "Розетки",
+        "session-B",
+      ),
+      null,
+      "an older retry slot may not skip the latest completed turn",
+    );
+  }
+  const compound = resolveServerIssuedBroadAssortmentFreeformCandidate(
+    { pending_clarification: { slot_id: "retry-1" } },
+    retry1,
+    "двойные электрические розетки",
+    "session-B",
+  );
+  assertEquals(compound?.entity, "Gallant");
+  const compoundVerified = await verifyServerIssuedBroadAssortmentFreeformLeaf(
+    compound!,
+    async () => ({
+      ok: true as const,
+      category: { pagetitle: "Розетки" },
+      leaf_categories: [{ id: 7, pagetitle: "Розетки" }],
+      resolution_method: "live_taxonomy",
+    }),
+  );
+  assertEquals(compoundVerified.status, "verified");
+  if (compoundVerified.status === "verified") {
+    assertEquals(compoundVerified.choice.entity, "Gallant");
+    assertEquals(compoundVerified.choice.leaf, "Розетки");
+    assertEquals(compoundVerified.choice.exact, false);
+  }
+  assertEquals(
+    resolveServerIssuedBroadAssortmentFreeformCandidate(
+      { pending_clarification: { slot_id: "retry-2" } },
+      retry2,
+      "Розетки",
+      "session-C",
+    ),
+    null,
+  );
+});
+
+Deno.test("a verified freeform section remains scoped for a compound refinement even with no cards", () => {
+  const now = Date.now();
+  const scope = scopeFromCompletedServerLog(
+    {
+      session_id: "session-A",
+      created_at: new Date(now).toISOString(),
+      error: null,
+      response_events: [
+        {
+          type: "active_selection_scope",
+          scope: {
+            kind: "named_series_section",
+            entity: "Gallant",
+            leaf: "Розетки",
+            source_slot_id: "server-slot-1",
+          },
+        },
+        { type: "diagnostic", phase: "complete", error: null },
+        { type: "done" },
+      ],
+    },
+    "session-A",
+    now,
+  );
+  assertEquals(scope?.entity, "Gallant");
+  assertEquals(scope?.leaf, "Розетки");
+  assertEquals(
+    isSameSectionNominalRefinement("двойные электрические розетки", scope!),
+    true,
+  );
+  assertEquals(
+    isSameSectionNominalRefinement("двойные электрические розетки", {
+      ...scope!,
+      entity: "Atlas",
+      leaf: "Выключатели",
+    }),
+    false,
+  );
+});
+
 Deno.test("typed refinements never enter the exact-chip shortcut", () => {
   const slots = { pending_clarification: { slot_id: "server-slot-1" } };
   const log = completedChoiceLog("Atlas");
@@ -790,6 +1200,69 @@ Deno.test("short independent requests do not restore Gallant even when the class
     ),
     false,
   );
+});
+
+Deno.test("a bare named series change cannot inherit a server-issued freeform section scope", () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const log = completedChoiceLog("Gallant", []);
+  for (
+    const message of [
+      "Розетки Schneider",
+      "Розетки Шнайдер",
+      "двойные электрические розетки Schneider",
+      "Розетки серии schneider",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+    assertEquals(
+      resolveServerIssuedBroadAssortmentFreeformCandidate(
+        slots,
+        log,
+        message,
+        "session-A",
+      ),
+      null,
+      message,
+    );
+    assertEquals(
+      shouldResetUnverifiedBroadAssortmentTask(message, true, null),
+      true,
+      message,
+    );
+  }
+  for (
+    const message of [
+      "Розетки",
+      "двойные электрические розетки",
+      "Розетки Gallant",
+      "Розетки Скрытой Установки",
+    ]
+  ) {
+    assertEquals(
+      resolveServerIssuedBroadAssortmentPending(
+        slots,
+        log,
+        message,
+        "session-A",
+      )?.entity,
+      "Gallant",
+      message,
+    );
+    assertEquals(
+      shouldResetUnverifiedBroadAssortmentTask(message, true, {}),
+      false,
+      message,
+    );
+  }
 });
 
 Deno.test("lookup failure does not turn an attribute-and-leaf continuation into a new task", async () => {

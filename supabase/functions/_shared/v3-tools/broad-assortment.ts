@@ -177,9 +177,41 @@ export interface CompletedClarificationLog {
 
 export interface VerifiedBroadAssortmentPending {
   entity: string;
+  original_request: string;
   issued_slot: Record<string, unknown>;
   options: string[];
   slot_id: string;
+}
+
+/** A customer-written section is only a candidate until the live catalog confirms it. */
+export interface BroadAssortmentFreeformCandidate {
+  entity: string;
+  proposed_leaf: string;
+  original_request: string;
+  slot_id: string;
+  issued_slot: Record<string, unknown>;
+}
+
+export type BroadAssortmentFreeformVerification =
+  | { status: "verified"; choice: VerifiedBroadAssortmentChoice }
+  | { status: "indeterminate"; error_code: string }
+  | { status: "unverified"; error_code: string }
+  | { status: "catalog_error"; error_code: string };
+
+/** Product words must independently ground a discovered leaf in customer text. */
+function hasLexicalLeafProof(message: string, leaf: string): boolean {
+  const answerWords = normalize(message).split(" ").filter(Boolean);
+  const leafWords = normalize(leaf).split(" ").filter((word) =>
+    word.length >= 4
+  );
+  return leafWords.length > 0 &&
+    leafWords.every((leafWord) =>
+      answerWords.some((word) =>
+        word === leafWord ||
+        (word.length >= 6 && leafWord.length >= 6 &&
+          word.slice(0, 5) === leafWord.slice(0, 5))
+      )
+    );
 }
 
 const ATTRIBUTE_ENDING_RE =
@@ -192,6 +224,9 @@ export function shouldResetUnverifiedBroadAssortmentTask(
   verifiedSlot: Record<string, unknown> | null,
 ): boolean {
   if (!clientCatalogClarification || verifiedSlot) return false;
+  // A bare section answer that explicitly names another series must not
+  // inherit the old entity when its server-issued slot was rejected.
+  if (hasDistinctBareNamedQualifier(currentMessage)) return true;
   const object = standaloneCatalogRequestObject(currentMessage);
   if (!object) return false;
   // When the log is unavailable, "черные розетки" may answer the outstanding
@@ -240,6 +275,28 @@ function hasExplicitNamedQualifierAfterProduct(message: string): boolean {
   });
 }
 
+/** A named series in a bare section phrase is independent of the old slot. */
+function hasDistinctBareNamedQualifier(
+  message: string,
+  issuedEntity = "",
+): boolean {
+  if (standaloneCatalogRequestObject(message) !== null) return false;
+  const tokens = message.match(/[\p{L}][\p{L}\p{N}-]*/gu) ?? [];
+  const issuedWords = new Set(
+    normalize(issuedEntity).split(" ").filter(Boolean),
+  );
+  return tokens.some((token, index) => {
+    if (index === 0) return false;
+    const previous = normalize(tokens[index - 1]);
+    const explicitMarker = /^(?:бренд|марк|сери)\p{L}*$/iu.test(previous);
+    const followsProductWord = !SCOPE_TAIL_STOP.has(previous) &&
+      !ATTRIBUTE_ENDING_RE.test(previous) &&
+      (index === 1 || previous.length >= 4);
+    return !issuedWords.has(normalize(token)) &&
+      (explicitMarker || (followsProductWord && isProperNameToken(token)));
+  });
+}
+
 /** An explicit different named qualifier defeats an otherwise matching leaf. */
 function hasDistinctNamedQualifier(
   currentMessage: string,
@@ -280,6 +337,7 @@ function isIndependentBroadAssortmentRequest(
   entity: string,
   options: string[],
 ): boolean {
+  if (hasDistinctBareNamedQualifier(currentMessage, entity)) return true;
   if (standaloneCatalogRequestObject(currentMessage) === null) return false;
   const answer = normalize(currentMessage);
   const mentionsIssuedScope = [entity, ...options].some((value) =>
@@ -337,9 +395,18 @@ export function resolveServerIssuedBroadAssortmentPending(
     issued.status !== "pending" || issued.scope?.kind !== "broad_assortment" ||
     typeof issued.scope.token !== "string"
   ) return null;
-  const groundedEntity = extractBroadAssortmentScope(
-    String(latestCompletedLog.user_query ?? ""),
-  );
+  // A temporary catalog failure may reissue the same server question. Its
+  // durable log's user_query is then just the previous leaf answer, so carry
+  // the original request only in the new *server event*, never client slots.
+  const directRequest = String(latestCompletedLog.user_query ?? "");
+  const carriedRequest = typeof issued.scope.origin_request === "string" &&
+      issued.scope.origin_request.length <= 500
+    ? issued.scope.origin_request
+    : "";
+  const originalRequest = isBroadAssortmentRequest(directRequest)
+    ? directRequest
+    : carriedRequest;
+  const groundedEntity = extractBroadAssortmentScope(originalRequest);
   if (
     !groundedEntity ||
     normalize(groundedEntity) !== normalize(issued.scope.token)
@@ -370,6 +437,7 @@ export function resolveServerIssuedBroadAssortmentPending(
   }
   return {
     entity: groundedEntity,
+    original_request: originalRequest,
     issued_slot: issued as Record<string, unknown>,
     options,
     slot_id: clientId,
@@ -391,7 +459,7 @@ export function resolveServerIssuedBroadAssortmentChoice(
   if (!pending || pending.options.length < 2) return null;
   if (
     !isPlainBroadAssortmentRequest(
-      String(latestCompletedLog?.user_query ?? ""),
+      pending.original_request,
       pending.entity,
     )
   ) return null;
@@ -409,6 +477,100 @@ export function resolveServerIssuedBroadAssortmentChoice(
     exact: true,
     slot_id: pending.slot_id,
     issued_slot: pending.issued_slot,
+  };
+}
+
+/**
+ * A free-text answer to a completed, server-issued section question may name
+ * a category or combine its noun with product attributes. The slot supplies
+ * only the entity; it cannot assert that the customer's words are a real leaf.
+ * That proof happens separately against the catalog taxonomy.
+ */
+export function resolveServerIssuedBroadAssortmentFreeformCandidate(
+  clientSlots: Record<string, unknown>,
+  latestCompletedLog: CompletedClarificationLog | null,
+  currentMessage: string,
+  sessionId: string,
+): BroadAssortmentFreeformCandidate | null {
+  const pending = resolveServerIssuedBroadAssortmentPending(
+    clientSlots,
+    latestCompletedLog,
+    currentMessage,
+    sessionId,
+  );
+  if (!pending || pending.options.length !== 0) return null;
+  const proposedLeaf = currentMessage.trim();
+  if (
+    !proposedLeaf || proposedLeaf.length > 120 ||
+    /[.!?;:\n\r]/u.test(proposedLeaf) ||
+    standaloneCatalogRequestObject(proposedLeaf) !== null
+  ) return null;
+  return {
+    entity: pending.entity,
+    proposed_leaf: proposedLeaf,
+    original_request: pending.original_request,
+    slot_id: pending.slot_id,
+    issued_slot: pending.issued_slot,
+  };
+}
+
+/**
+ * A bare answer needs exact category identity. A compound answer may resolve
+ * a leaf via deterministic live taxonomy/facets only when its category words
+ * are present in the customer text. A taxonomy or options-endpoint failure is
+ * never interpreted as an empty product set; a parent cannot stand for leaves.
+ */
+export async function verifyServerIssuedBroadAssortmentFreeformLeaf(
+  candidate: BroadAssortmentFreeformCandidate,
+  discover: (leaf: string) => Promise<
+    | {
+      ok: true;
+      category: { pagetitle: string };
+      leaf_categories: Array<{ id: number; pagetitle: string }>;
+      resolution_method?: string;
+    }
+    | { ok: false; error_code: string }
+  >,
+): Promise<BroadAssortmentFreeformVerification> {
+  let result: Awaited<ReturnType<typeof discover>>;
+  try {
+    result = await discover(candidate.proposed_leaf);
+  } catch {
+    return { status: "catalog_error", error_code: "catalog_exception" };
+  }
+  if (!result.ok) {
+    // discover_category also returns category_not_found when /options fails.
+    // It does not prove that the taxonomy lacks this title, so do not tell the
+    // customer the section is invalid or resume an unscoped expert search.
+    return result.error_code === "category_not_found"
+      ? { status: "indeterminate", error_code: result.error_code }
+      : { status: "catalog_error", error_code: result.error_code };
+  }
+  const canonical = result.category.pagetitle.trim();
+  const onlyLeaf = result.leaf_categories.length === 1
+    ? result.leaf_categories[0]
+    : null;
+  if (
+    !canonical || !onlyLeaf || !Number.isInteger(onlyLeaf.id) ||
+    onlyLeaf.id <= 0 ||
+    normalize(onlyLeaf.pagetitle) !== normalize(canonical)
+  ) return { status: "unverified", error_code: "not_catalog_leaf" };
+  const exact = normalize(canonical) === normalize(candidate.proposed_leaf);
+  if (
+    !exact &&
+    !(["live_taxonomy", "live_facet_schema"].includes(
+      result.resolution_method ?? "",
+    ) && hasLexicalLeafProof(candidate.proposed_leaf, canonical))
+  ) return { status: "unverified", error_code: "unproven_leaf_mapping" };
+  return {
+    status: "verified",
+    choice: {
+      entity: candidate.entity,
+      leaf: canonical,
+      exact,
+      slot_id: candidate.slot_id,
+      issued_slot: candidate.issued_slot,
+    },
   };
 }
 
@@ -441,10 +603,7 @@ export function resolveServerIssuedBroadAssortmentConstrainedContinuation(
     sessionId,
   );
   if (!pending || pending.options.length < 2) return null;
-  const originalRequest = latestCompletedLog?.user_query;
-  if (typeof originalRequest !== "string" || !originalRequest.trim()) {
-    return null;
-  }
+  const originalRequest = pending.original_request;
   if (isPlainBroadAssortmentRequest(originalRequest, pending.entity)) {
     return null;
   }
@@ -477,6 +636,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
     new Promise((resolve) => setTimeout(resolve, 80)),
 ): Promise<{
   choice: VerifiedBroadAssortmentChoice | null;
+  freeformCandidate: BroadAssortmentFreeformCandidate | null;
   constrainedContinuation:
     | VerifiedBroadAssortmentConstrainedContinuation
     | null;
@@ -495,6 +655,12 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
       );
       return {
         choice: resolveServerIssuedBroadAssortmentChoice(
+          clientSlots,
+          row,
+          currentMessage,
+          sessionId,
+        ),
+        freeformCandidate: resolveServerIssuedBroadAssortmentFreeformCandidate(
           clientSlots,
           row,
           currentMessage,
@@ -520,6 +686,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
     if (attempt === 2) {
       return {
         choice: null,
+        freeformCandidate: null,
         constrainedContinuation: null,
         verifiedSlot: null,
         matchedIssuedOption: false,
@@ -530,6 +697,7 @@ export async function resolveBroadAssortmentChoiceAfterReadRace(
   }
   return {
     choice: null,
+    freeformCandidate: null,
     constrainedContinuation: null,
     verifiedSlot: null,
     matchedIssuedOption: false,
@@ -732,6 +900,7 @@ export function buildBroadAssortmentFreeformSlot(
   question: string,
   seriesToken: string,
   slotId: string,
+  originalRequest?: string,
 ) {
   return {
     status: "pending" as const,
@@ -739,6 +908,12 @@ export function buildBroadAssortmentFreeformSlot(
     facet_key: "catalog_section" as const,
     question,
     options: [] as Array<{ value: string; label: string }>,
-    scope: { kind: "broad_assortment" as const, token: seriesToken },
+    scope: {
+      kind: "broad_assortment" as const,
+      token: seriesToken,
+      ...(originalRequest && originalRequest.length <= 500
+        ? { origin_request: originalRequest }
+        : {}),
+    },
   };
 }

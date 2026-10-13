@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-2013a726bdde9cbc';
+  var WIDGET_VERSION = 'widget-1eeab2ab4674ce43';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -71,6 +71,11 @@
   let quickReplyState = null;
   // Стабильный UUID одного сообщения для валидации, журналирования и будущей дедупликации.
   let currentMessageId = '';
+  // A failed two-route transport may have reached the server before the
+  // browser saw an acknowledgement. Keep the original idempotency key and
+  // byte-identical request in this open conversation for an explicit retry.
+  // Never persist it as hidden dialogue context across a page reload.
+  let retryableTurn = null;
   function generateMessageId() {
     try {
       if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -440,6 +445,7 @@
     acceptedPendingTurn = null;
     quickReplyState = null;
     currentMessageId = '';
+    retryableTurn = null;
     lastActivityAt = Date.now();
   }
   // Try to restore from sessionStorage
@@ -1415,6 +1421,7 @@
   function applyAutomaticConversationBoundary(nextSessionId, currentMessage, messageId) {
     if (!isValidSessionId(nextSessionId) || nextSessionId === sessionId) return false;
     clearQuickReplies();
+    retryableTurn = null;
     sessionId = nextSessionId;
     dialogSlots = {};
     conversationHistory = [
@@ -1508,7 +1515,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken — вызывается при первом токене (убрать typing).
   // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt, requestPayloads) {
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt, requestPayloads, onProtocolAccepted) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
@@ -1551,6 +1558,7 @@
     function markProtocolAccepted() {
       if (acceptTimer) clearTimeout(acceptTimer);
       acceptTimer = null;
+      if (typeof onProtocolAccepted === 'function') onProtocolAccepted();
     }
 
     function markTurnDurablyAccepted(diagnosticEvent) {
@@ -1914,6 +1922,15 @@
     expireConversationIfNeeded(true);
     var message = input.value.trim();
     if (!message) return;
+    var previousRetryableTurn = retryableTurn &&
+      retryableTurn.sessionId === sessionId && retryableTurn.message === message &&
+      retryableTurn.requestPayloads.sessionId === sessionId &&
+      Date.now() <= retryableTurn.expiresAt &&
+      retryableTurn.userBubble.isConnected && retryableTurn.failureBubble.isConnected
+      ? retryableTurn : null;
+    // A changed answer, new topic, or completed retry must not inherit a
+    // possibly claimed idempotency key from a different semantic turn.
+    retryableTurn = null;
 
     // Keep the previous completed clarification only for a genuinely
     // unaccepted transport failure. A normal send removes its old buttons
@@ -1927,22 +1944,28 @@
     sendBtn.disabled = true;
     newChatBtn.disabled = true;
 
-    // При любом ретрае в рамках одного sendMessage отправляется тот же UUID.
-    currentMessageId = generateMessageId();
+    // Both route failover and an explicit retry of the same visible turn use
+    // one UUID. The server can replay a claim instead of running it twice.
+    currentMessageId = previousRetryableTurn
+      ? previousRetryableTurn.messageId : generateMessageId();
     var requestMessageId = currentMessageId;
     var requestSessionId = sessionId;
     // Freeze the model context before adding the current bubble. The current
     // query belongs in `message` only, never twice in message + history.
-    var requestPayloads = createRequestPayloads(
-      message,
-      requestSessionId,
-      requestMessageId,
-      conversationHistory,
-      dialogSlots,
-      acceptedPendingTurn
-    );
+    var requestPayloads = previousRetryableTurn
+      ? previousRetryableTurn.requestPayloads
+      : createRequestPayloads(
+        message,
+        requestSessionId,
+        requestMessageId,
+        conversationHistory,
+        dialogSlots,
+        acceptedPendingTurn
+      );
 
-    addMessage(message, 'user');
+    if (previousRetryableTurn) previousRetryableTurn.failureBubble.remove();
+    var userBubble = previousRetryableTurn
+      ? previousRetryableTurn.userBubble : addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message, messageId: requestMessageId });
     saveState();
 
@@ -2014,6 +2037,7 @@
     var lastError = null;
     var routeFailures = [];
     var proxyConnectTimedOut = false;
+    var protocolAccepted = false;
 
     // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
@@ -2053,7 +2077,8 @@
             openProductsBubble,
             false,
             requestDeadlineAt,
-            requestPayloads
+            requestPayloads,
+            function() { protocolAccepted = true; }
           );
           return;
         } catch (err) {
@@ -2299,7 +2324,20 @@
         routeFailures.every(function(failure) {
           return failure.status === null || failure.status === 429 || failure.status >= 500;
         });
-      if (failedUserRolledBack && !firstTokenArrived &&
+      if (failedUserRolledBack && !firstTokenArrived && !protocolAccepted &&
+          transientPreAcceptanceFailure && requestSessionId === sessionId &&
+          userBubble.isConnected && failureMessage.isConnected) {
+        retryableTurn = {
+          message: message,
+          messageId: requestMessageId,
+          sessionId: requestSessionId,
+          expiresAt: Date.now() + SESSION_TTL_MS,
+          requestPayloads: requestPayloads,
+          userBubble: userBubble,
+          failureBubble: failureMessage
+        };
+      }
+      if (failedUserRolledBack && !firstTokenArrived && !protocolAccepted &&
           transientPreAcceptanceFailure && previousQuickReplyState &&
           requestSessionId === sessionId && Date.now() <= previousQuickReplyExpiresAt &&
           quickRepliesMatchVisibleTurn(previousQuickReplyState)) {
