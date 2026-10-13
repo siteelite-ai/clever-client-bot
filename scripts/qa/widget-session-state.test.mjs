@@ -99,6 +99,15 @@ function freeformClarificationSse({ complete = true, includeSlot = true, slotId 
   return events.map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
 }
 
+function completeAnswerSse(answer, logId = 'transport-retry-answer') {
+  return [
+    { v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } },
+    { choices: [{ delta: { content: answer } }] },
+    { v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } },
+  ].map((event) => `data: ${JSON.stringify(event)}`)
+    .concat('data: [DONE]', '').join('\n\n');
+}
+
 async function waitForWidget(predicate, message, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
@@ -3113,4 +3122,279 @@ test('freeform action expires while idle and is removed on new topic', async () 
   assert.equal(topicDom.window.document.querySelectorAll('.volt-custom-reply').length, 0);
   assert.equal(readState(topicDom).quickReplyState, null);
   topicDom.window.close();
+});
+
+test('explicit retry after proxy connect timeout and direct fetch failure reuses the claimed turn', async () => {
+  const query = 'Нужен уличный прожектор для двора';
+  const calls = [];
+  const backendClaims = new Set();
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 15, accept: 60, idle: 60, total: 180 }),
+    fetchImpl: (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push({ url, rawBody: init.body, body });
+      if (calls.length === 1) {
+        // The server can claim a request even when the browser never sees an ACK.
+        backendClaims.add(body.messageId);
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      if (calls.length === 2) throw new TypeError('Failed to fetch');
+      backendClaims.add(body.messageId);
+      return Promise.resolve(new Response(completeAnswerSse('Найдены варианты для двора.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  input.value = query;
+  send.click();
+  await waitForWidget(() => calls.length === 2 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'the first two routes should fail before protocol acceptance');
+  assert.equal(readState(dom).history.some((item) => item.content === query), false);
+  const originalId = calls[0].body.messageId;
+  assert.equal(calls[1].body.messageId, originalId, 'route failover must retain the original ID');
+
+  input.value = query;
+  send.click();
+  await waitForWidget(() => calls.length === 3 && visibleMessages(dom).includes('Найдены варианты для двора.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'the explicit retry should complete');
+  assert.equal(calls[2].body.messageId, originalId);
+  assert.equal(calls[2].rawBody, calls[0].rawBody, 'retry must use the original frozen request body');
+  assert.equal(backendClaims.size, 1, 'one ID can claim only one paid backend pipeline');
+  assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
+    .filter((bubble) => bubble.textContent === query).length, 1,
+  'retry should reuse the visible user bubble');
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('retrying the same quick reply keeps its ID and frozen choice context', async () => {
+  const replies = [
+    { value: 'Однофазное', label: 'Однофазное' },
+    { value: 'Трёхфазное', label: 'Трёхфазное' },
+  ];
+  const calls = [];
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 15, accept: 60, idle: 60, total: 180 }),
+    fetchImpl: (url, init) => {
+      calls.push({ url, rawBody: init.body, body: JSON.parse(init.body) });
+      if (calls.length === 1) return Promise.resolve(new Response(clarificationSse({ replies }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+      if (calls.length === 2) return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+      if (calls.length === 3) throw new TypeError('Failed to fetch');
+      return Promise.resolve(new Response(completeAnswerSse('Подбираю однофазный вариант.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Нужен стабилизатор';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'clarification should complete');
+  dom.window.document.querySelectorAll('.volt-quick-reply')[0].click();
+  await waitForWidget(() => calls.length === 3 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'failed choice should restore the same buttons');
+  const originalChoiceId = calls[1].body.messageId;
+  dom.window.document.querySelectorAll('.volt-quick-reply')[0].click();
+  await waitForWidget(() => calls.length === 4 && visibleMessages(dom).includes('Подбираю однофазный вариант.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'repeated choice should complete');
+  assert.equal(calls[3].body.messageId, originalChoiceId);
+  assert.equal(calls[3].rawBody, calls[1].rawBody);
+  assert.equal(calls[3].body.dialogSlots.pending_clarification.facet_key, 'power_phase');
+  assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
+    .filter((bubble) => bubble.textContent === replies[0].value).length, 1);
+  dom.window.close();
+});
+
+test('changed quick-reply selection starts a new turn after a transient failure', async () => {
+  const replies = [
+    { value: 'Накладной', label: 'Накладной' },
+    { value: 'Подвесной', label: 'Подвесной' },
+  ];
+  const payloads = [];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      if (payloads.length === 1) return new Response(clarificationSse({ replies }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+      if (payloads.length < 4) return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+        status: 503, headers: { 'Content-Type': 'application/json' },
+      });
+      return new Response(completeAnswerSse('Ищу подвесные модели.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Нужен светильник';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'clarification should complete');
+  dom.window.document.querySelectorAll('.volt-quick-reply')[0].click();
+  await waitForWidget(() => payloads.length === 3 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'first choice should fail transiently');
+  dom.window.document.querySelectorAll('.volt-quick-reply')[1].click();
+  await waitForWidget(() => payloads.length === 4 && visibleMessages(dom).includes('Ищу подвесные модели.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'changed choice should complete');
+  assert.equal(payloads[3].message, replies[1].value);
+  assert.notEqual(payloads[3].messageId, payloads[1].messageId);
+  dom.window.close();
+});
+
+test('new dialogue and HTTP 400 or conflict never reuse a failed turn ID', async () => {
+  for (const failureStatus of [400, 409, 503]) {
+    const payloads = [];
+    const dom = bootWidget({
+      fetchImpl: async (_url, init) => {
+        payloads.push(JSON.parse(init.body));
+        if (payloads.length <= 2) return new Response(JSON.stringify({ error: 'request_rejected' }), {
+          status: failureStatus, headers: { 'Content-Type': 'application/json' },
+        });
+        return new Response(completeAnswerSse('Новый запрос выполнен.'), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+    });
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    const send = dom.window.document.querySelector('#volt-widget-send');
+    input.value = 'Нужен кабель';
+    send.click();
+    await waitForWidget(() => payloads.length === 2 && !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+      `HTTP ${failureStatus} should settle`);
+    const originalId = payloads[0].messageId;
+    const originalSession = payloads[0].sessionId;
+    if (failureStatus === 503) {
+      dom.window.document.querySelector('[aria-label="Новый диалог"]').click();
+      assert.notEqual(readState(dom).sessionId, originalSession);
+    }
+    input.value = 'Нужен кабель';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    send.click();
+    await waitForWidget(() => payloads.length === 3 && visibleMessages(dom).includes('Новый запрос выполнен.') &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'subsequent request should complete');
+    assert.notEqual(payloads[2].messageId, originalId,
+      `HTTP ${failureStatus} or a new dialogue must not reuse the old ID`);
+    if (failureStatus === 503) assert.notEqual(payloads[2].sessionId, originalSession);
+    dom.window.close();
+  }
+});
+
+test('an unanswered first turn loses its retry eligibility after the session TTL', async () => {
+  let now = 1_800_000_000_000;
+  const payloads = [];
+  const dom = bootWidget({
+    now,
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      if (payloads.length <= 2) return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+        status: 503, headers: { 'Content-Type': 'application/json' },
+      });
+      return new Response(completeAnswerSse('Свежий ответ.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  input.value = 'Покажи кабель';
+  send.click();
+  await waitForWidget(() => payloads.length === 2 && !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    'first turn should fail on both routes');
+  const originalId = payloads[0].messageId;
+  now += SESSION_TTL_MS + 1;
+  dom.window.Date.now = () => now;
+  input.value = 'Покажи кабель';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  send.click();
+  await waitForWidget(() => payloads.length === 3 && visibleMessages(dom).includes('Свежий ответ.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'same text after TTL should complete as a fresh request');
+  assert.notEqual(payloads[2].messageId, originalId);
+  dom.window.close();
+});
+
+test('an accepted partial stream cannot become an unacknowledged retry candidate', async () => {
+  const payloads = [];
+  const partial = [
+    { v3_event: { type: 'diagnostic', log_id: 'accepted-partial-retry-guard', phase: 'start' } },
+    { choices: [{ delta: { content: 'Проверяю ассортимент.' } }] },
+  ].map((event) => `data: ${JSON.stringify(event)}`)
+    .concat('data: [DONE]', '').join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      if (payloads.length === 1) return new Response(partial, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+      if (payloads.length <= 3) throw new TypeError('Failed to fetch');
+      return new Response(completeAnswerSse('Новый ответ готов.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  input.value = 'Покажи розетки';
+  send.click();
+  await waitForWidget(() => payloads.length === 3 &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'accepted partial response should finish replay attempts');
+  assert.match(visibleMessages(dom), /Проверяю ассортимент/u);
+  input.value = 'Покажи розетки';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  send.click();
+  await waitForWidget(() => payloads.length === 4 && visibleMessages(dom).includes('Новый ответ готов.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'a later same-text request is a new turn after acceptance');
+  assert.notEqual(payloads[3].messageId, payloads[0].messageId);
+  dom.window.close();
+});
+
+test('a protocol-accepted event without text is not misclassified as an unaccepted transport failure', async () => {
+  const payloads = [];
+  const acknowledged = `data: ${JSON.stringify({ v3_event: { type: 'slot_update', slots: {} } })}\n\ndata: [DONE]\n\n`;
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      if (payloads.length === 1) return new Response(acknowledged, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+      if (payloads.length === 2) throw new TypeError('Failed to fetch');
+      return new Response(completeAnswerSse('Ответ на новый запрос.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  input.value = 'Нужна розетка';
+  send.click();
+  await waitForWidget(() => payloads.length === 2 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'accepted event with no answer should settle after fallback');
+  input.value = 'Нужна розетка';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  send.click();
+  await waitForWidget(() => payloads.length === 3 && visibleMessages(dom).includes('Ответ на новый запрос.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'later same-text question should be a new request');
+  assert.notEqual(payloads[2].messageId, payloads[0].messageId);
+  dom.window.close();
 });

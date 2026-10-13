@@ -244,6 +244,9 @@ import {
   resolveBroadAssortmentChoiceAfterReadRace,
   resolvePendingBroadAssortmentScope,
   shouldResetUnverifiedBroadAssortmentTask,
+  verifyServerIssuedBroadAssortmentFreeformLeaf,
+  isPlainBroadAssortmentRequest,
+  type BroadAssortmentFreeformCandidate,
   type VerifiedBroadAssortmentChoice,
   type VerifiedBroadAssortmentConstrainedContinuation,
 } from "../_shared/v3-tools/broad-assortment.ts";
@@ -5738,6 +5741,7 @@ async function selectVerifiedRecentPriceFollowup(
 
 async function answerBroadAssortmentRequest(
   seriesToken: string | null,
+  originalRequest: string,
   ctx: ToolContext,
   send: (event: SseEvent) => void,
   steps: StepLog[],
@@ -5746,6 +5750,7 @@ async function answerBroadAssortmentRequest(
   const started = Date.now();
   const leaves: string[] = [];
   let total = 0;
+  let catalogError: string | null = null;
   if (seriesToken) {
     const result = await executeSearchCatalog(
       {
@@ -5764,13 +5769,16 @@ async function answerBroadAssortmentRequest(
         const leaf = String(product.leaf_category ?? "").trim();
         if (leaf && !leaves.includes(leaf)) leaves.push(leaf);
       }
+    } else {
+      catalogError = result.error_code;
     }
   }
   const suffix = leaves.length > 0
     ? ` В каталоге уже видны разделы: ${leaves.slice(0, 5).join(", ")}.`
     : "";
-  const answer =
-    `Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками.${suffix}`;
+  const answer = catalogError
+    ? "Не удалось проверить разделы каталога из-за временной ошибки. Напишите точное название нужного раздела, если знаете его, — проверю отдельно; либо повторите запрос позже."
+    : `Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками.${suffix}`;
   send({ type: "delta", content: answer });
   if (leaves.length >= 2) {
     const clarification = executeProposeClarification({
@@ -5794,6 +5802,7 @@ async function answerBroadAssortmentRequest(
             answer,
             seriesToken,
             crypto.randomUUID(),
+            originalRequest,
           )
           : buildTerminalFreeformSlot(answer, crypto.randomUUID()),
       },
@@ -5806,6 +5815,7 @@ async function answerBroadAssortmentRequest(
       series: seriesToken,
       total,
       leaf_categories: leaves,
+      catalog_error: catalogError,
       duration_ms: Date.now() - started,
     },
   });
@@ -5831,6 +5841,7 @@ async function loadVerifiedBroadAssortmentChoice(
   userMessage: string,
 ): Promise<{
   choice: VerifiedBroadAssortmentChoice | null;
+  freeformCandidate: BroadAssortmentFreeformCandidate | null;
   constrainedContinuation:
     | VerifiedBroadAssortmentConstrainedContinuation
     | null;
@@ -5845,6 +5856,7 @@ async function loadVerifiedBroadAssortmentChoice(
   ) {
     return {
       choice: null,
+      freeformCandidate: null,
       constrainedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
@@ -5901,6 +5913,7 @@ async function loadVerifiedBroadAssortmentChoice(
     );
     return {
       choice: null,
+      freeformCandidate: null,
       constrainedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
@@ -6112,6 +6125,18 @@ async function answerVerifiedBroadAssortmentChoice(
     summary: `Подтверждённых товаров: ${qualified.length}`,
   });
   if (qualified.length === 0) {
+    // The customer selected a server-issued section even when catalog search
+    // later failed. Preserve that identity for a narrower follow-up, without
+    // claiming any product exists or rendering an unverified card.
+    send({
+      type: "active_selection_scope",
+      scope: {
+        kind: "named_series_section",
+        entity: choice.entity,
+        leaf: choice.leaf,
+        source_slot_id: choice.slot_id,
+      },
+    });
     const answer = lookup.catalog_error
       ? "Не удалось надёжно проверить товары в выбранном разделе: каталог ответил с ошибкой. Повторите запрос позже."
       : lookup.coverage_incomplete
@@ -19956,7 +19981,63 @@ Deno.serve(async (req) => {
                 slots,
                 userMessage,
               );
-            const verifiedBroadChoice = verifiedBroadChoiceState.choice;
+            // When preflight could not issue chips, a typed section is not
+            // trusted from the browser. Resolve it only to a live leaf; a
+            // compound phrase additionally keeps its attributes for the
+            // criteria-aware route instead of pretending to be an exact chip.
+            const freeformCandidate = verifiedBroadChoiceState.freeformCandidate;
+            const freeformVerification = freeformCandidate
+              ? await verifyServerIssuedBroadAssortmentFreeformLeaf(
+                freeformCandidate,
+                (leaf) => executeDiscoverCategory({ noun: leaf }, {
+                  baseUrl: CATALOG_BASE_URL,
+                  apiToken: settings.volt220_api_token!,
+                  // The catalog-derived taxonomy has a one-hour cache. Reuse
+                  // it when warm: the final product proof still checks the
+                  // live leaf and series, while a cold load is bounded below.
+                  timeoutMs: 6_000,
+                }),
+              )
+              : null;
+            const verifiedFreeformChoice =
+              freeformVerification?.status === "verified"
+                ? freeformVerification.choice
+                : null;
+            const freeformPlainRequest = Boolean(
+              verifiedFreeformChoice?.exact && freeformCandidate &&
+                isPlainBroadAssortmentRequest(
+                  freeformCandidate.original_request,
+                  freeformCandidate.entity,
+                ),
+            );
+            const verifiedBroadChoice = verifiedBroadChoiceState.choice ??
+              (freeformPlainRequest ? verifiedFreeformChoice : null);
+            const verifiedFreeformScope: ActiveNamedSeriesSectionScope | null =
+              verifiedFreeformChoice
+                ? {
+                  kind: "named_series_section",
+                  entity: verifiedFreeformChoice.entity,
+                  leaf: verifiedFreeformChoice.leaf,
+                  source_slot_id: verifiedFreeformChoice.slot_id,
+                }
+                : null;
+            const matchedVerifiedBroadSelection = Boolean(
+              verifiedBroadChoiceState.matchedIssuedOption ||
+                verifiedFreeformChoice,
+            );
+            if (freeformCandidate) {
+              steps.push({
+                step: "v3_broad_assortment_freeform_taxonomy",
+                ms: Date.now() - t0,
+                meta: {
+                  status: freeformVerification?.status ?? "unverified",
+                  error_code: freeformVerification &&
+                      freeformVerification.status !== "verified"
+                    ? freeformVerification.error_code
+                    : null,
+                },
+              });
+            }
             const clientSelectionReadinessScope = Boolean(
               pendingScope && typeof pendingScope === "object" &&
                 !Array.isArray(pendingScope) &&
@@ -20101,12 +20182,16 @@ Deno.serve(async (req) => {
                   ? "explicit_active_selection_entity_change"
                   : "independent_nominal_selection_outside_active_scope",
               }
-              : verifiedBroadChoiceState.matchedIssuedOption
+              : matchedVerifiedBroadSelection || freeformCandidate
               ? {
                 mode: "continuation" as const,
                 confidence: 1,
                 source: "local" as const,
-                reason: "server_verified_catalog_option",
+                reason: verifiedFreeformChoice
+                  ? "server_verified_freeform_catalog_leaf"
+                  : freeformCandidate
+                  ? "server_issued_freeform_catalog_question"
+                  : "server_verified_catalog_option",
               }
               : readinessNewTask
               ? { ...readinessNewTask, source: "local" as const }
@@ -20137,7 +20222,7 @@ Deno.serve(async (req) => {
               },
             );
             const matchedPendingClarification = Boolean(
-              verifiedBroadChoiceState.matchedIssuedOption ||
+              matchedVerifiedBroadSelection || freeformCandidate ||
                 resolvePendingClarificationChoice(boundarySlots, userMessage),
             );
             const referencesRenderedProducts =
@@ -20174,7 +20259,7 @@ Deno.serve(async (req) => {
             const trustedSlots = {
               ...trustedSlotsBase,
               __server_active_selection_scope: !startsNewTask
-                ? sameSectionScope
+                ? verifiedFreeformScope ?? sameSectionScope
                 : undefined,
             };
             const pendingBroadAssortmentScope =
@@ -20207,6 +20292,8 @@ Deno.serve(async (req) => {
                 matched_pending_clarification: matchedPendingClarification,
                 pending_broad_assortment_scope: pendingBroadAssortmentScope,
                 verified_broad_assortment_choice: Boolean(verifiedBroadChoice),
+                verified_freeform_broad_assortment_leaf:
+                  Boolean(verifiedFreeformChoice),
                 verified_active_selection_scope: Boolean(sameSectionScope),
                 active_selection_entity_changed: activeScopeEntityChanged,
                 active_selection_class_changed: activeScopeClassChanged,
@@ -20241,12 +20328,13 @@ Deno.serve(async (req) => {
               // same response can establish a fresh slot normally.
               send({ type: "slot_update", slots: {} });
             }
-            if (!startsNewTask && sameSectionScope) {
+            const reissuedSelectionScope = verifiedFreeformScope ?? sameSectionScope;
+            if (!startsNewTask && reissuedSelectionScope) {
               // Reissue the same server-verified identity so later narrowing
               // turns can still inherit it after the original chip is spent.
               send({
                 type: "active_selection_scope",
-                scope: sameSectionScope,
+                scope: reissuedSelectionScope,
               });
             }
 
@@ -20481,7 +20569,7 @@ Deno.serve(async (req) => {
                 extractBroadAssortmentScope(userMessage)
               : null;
             const readinessClarification = additionalSelectionRequest ||
-                verifiedBroadChoiceState.matchedIssuedOption
+                matchedVerifiedBroadSelection || freeformCandidate
               ? null
               : selectReadinessClarification(
                 scopedSelectionRequest.message,
@@ -20509,6 +20597,41 @@ Deno.serve(async (req) => {
                 products,
               );
             } else if (
+              freeformCandidate && !verifiedFreeformChoice && !startsNewTask
+            ) {
+              // A failed taxonomy check cannot justify either an empty-catalog
+              // claim or an unconstrained expert search for another series.
+              send({
+                type: "delta",
+                content: freeformVerification?.status === "catalog_error" ||
+                    freeformVerification?.status === "indeterminate"
+                  ? "Не удалось сейчас подтвердить раздел в каталоге. Повторите название раздела позже — серию я сохранил. Это не означает, что товаров нет."
+                  : "Не удалось подтвердить точное название листового раздела каталога. Уточните раздел — серию я сохранил; непроверенные товары не показываю.",
+              });
+              send({
+                type: "slot_update",
+                slots: {
+                  pending_clarification: buildBroadAssortmentFreeformSlot(
+                    "Какой раздел каталога нужен?",
+                    freeformCandidate.entity,
+                    crypto.randomUUID(),
+                    freeformCandidate.original_request,
+                  ),
+                },
+              });
+              productsCount = 0;
+              steps.push({
+                step: "v3_broad_assortment_freeform_unverified",
+                ms: Date.now() - t0,
+                meta: {
+                  status: freeformVerification?.status ?? "unverified",
+                  error_code: freeformVerification &&
+                      freeformVerification.status !== "verified"
+                    ? freeformVerification.error_code
+                    : null,
+                },
+              });
+            } else if (
               clientCatalogClarification &&
               !verifiedBroadChoiceState.verifiedSlot && !startsNewTask &&
               !sameSectionScope
@@ -20516,7 +20639,7 @@ Deno.serve(async (req) => {
               send({
                 type: "delta",
                 content: verifiedBroadChoiceState.lookupFailed
-                  ? "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже."
+                  ? "Не удалось проверить контекст выбора из-за временной ошибки. Повторите полный запрос с серией и разделом позже."
                   : "Этот выбор раздела уже недействителен. Напишите серию и нужный раздел заново.",
               });
               productsCount = 0;
@@ -20562,11 +20685,22 @@ Deno.serve(async (req) => {
               });
               productsCount = 0;
             } else if (
-              verifiedBroadChoiceState.matchedIssuedOption &&
+              matchedVerifiedBroadSelection &&
               !verifiedBroadChoice && !startsNewTask
             ) {
-              const constrained =
-                verifiedBroadChoiceState.constrainedContinuation;
+              const constrained = verifiedBroadChoiceState
+                .constrainedContinuation ??
+                (verifiedFreeformChoice && freeformCandidate
+                  ? {
+                    entity: verifiedFreeformChoice.entity,
+                    leaf: verifiedFreeformChoice.leaf,
+                    original_request: freeformCandidate.original_request,
+                    effective_request:
+                      `${freeformCandidate.original_request}\nУточнение клиента по исходному запросу: раздел каталога «${verifiedFreeformChoice.leaf}». Текущие критерии клиента: ${userMessage}`,
+                    slot_id: verifiedFreeformChoice.slot_id,
+                    issued_slot: verifiedFreeformChoice.issued_slot,
+                  }
+                  : null);
               if (!constrained) {
                 // A verified chip without its durable original request cannot
                 // safely become an unconstrained standalone selection.
@@ -20734,6 +20868,7 @@ Deno.serve(async (req) => {
             } else if (broadAssortmentRequest) {
               await answerBroadAssortmentRequest(
                 broadAssortmentToken,
+                userMessage,
                 ctx,
                 send,
                 steps,
