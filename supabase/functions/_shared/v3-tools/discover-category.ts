@@ -113,6 +113,7 @@ export interface DiscoverCategoryErr {
     | "category_not_found"
     | "catalog_timeout"
     | "transport_5xx"
+    | "rate_limited"
     | "bad_input"
     | "internal";
   message: string;
@@ -129,6 +130,43 @@ export interface DiscoverCategoryErr {
 interface UnresolvedPagetitle {
   unresolved: true;
   diagnostics: NonNullable<DiscoverCategoryErr["resolution_diagnostics"]>;
+  prefetchFailures?: OptionsFetchFailure[];
+}
+
+interface OptionsFetchFailure {
+  ok: false;
+  status: number;
+  message: string;
+}
+
+type DiscoveryErrorCode = DiscoverCategoryErr["error_code"];
+
+class DiscoveryUpstreamError extends Error {
+  constructor(
+    readonly errorCode: DiscoveryErrorCode,
+    source: string,
+    status: number,
+  ) {
+    super(`${source} returned HTTP ${status}`);
+    this.name = "DiscoveryUpstreamError";
+  }
+}
+
+/** A 404 means no match only for a validated /categories/options title.
+ * Any failed taxonomy or resolver request leaves catalog verification incomplete.
+ * `transport_5xx` is the existing shared retryable upstream-error code. */
+function discoveryHttpErrorCode(status: number): DiscoveryErrorCode;
+function discoveryHttpErrorCode(
+  status: number,
+  optionsRequest: true,
+): DiscoveryErrorCode | null;
+function discoveryHttpErrorCode(
+  status: number,
+  optionsRequest = false,
+): DiscoveryErrorCode | null {
+  if (status === 404 && optionsRequest) return null;
+  if (status === 429) return "rate_limited";
+  return "transport_5xx";
 }
 
 function normalize(s: string): string {
@@ -944,7 +982,14 @@ async function fetchCategoriesPage(
     },
     deadline - Date.now(),
     async (res) => {
-      if (!res.ok) throw new Error(`categories ${res.status}`);
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
+        throw new DiscoveryUpstreamError(
+          discoveryHttpErrorCode(res.status),
+          "categories",
+          res.status,
+        );
+      }
       const raw = await res.json() as {
         data?: CategoryPage;
         results?: unknown[];
@@ -1009,6 +1054,7 @@ async function resolvePagetitle(
     candidates: string[];
     cache: CategoriesCache;
     prefetched?: Map<string, DiscoverCategoryOk>;
+    prefetchFailures?: OptionsFetchFailure[];
   } | UnresolvedPagetitle
 > {
   const noun = input.noun.trim();
@@ -1078,12 +1124,15 @@ async function resolvePagetitle(
       cache,
     };
   }
+  const prefetchFailures: OptionsFetchFailure[] = [];
   if (headCandidates.length > 1 && headCandidates.length <= 6) {
     const prefetched = new Map<string, DiscoverCategoryOk>();
     await Promise.all(headCandidates.map(async (pagetitle) => {
       const facets = await fetchFacetsForPagetitle(pagetitle, deps);
       if (facets.ok && isUsefulDiscovery(facets.data)) {
         prefetched.set(pagetitle, facets.data);
+      } else if (!facets.ok && discoveryHttpErrorCode(facets.status, true)) {
+        prefetchFailures.push(facets);
       }
     }));
     const schemaWinner = resolveHeadCategoryByFacetEvidence(
@@ -1103,6 +1152,7 @@ async function resolvePagetitle(
         candidates: [schemaWinner],
         cache,
         prefetched,
+        prefetchFailures,
       };
     }
     const leastSpecializedWinner = resolveHeadCategoryByLeastSpecializedSibling(
@@ -1121,10 +1171,13 @@ async function resolvePagetitle(
         candidates: [leastSpecializedWinner],
         cache,
         prefetched,
+        prefetchFailures,
       };
     }
   }
-  if (!deps.openrouterApiKey) return { unresolved: true, diagnostics };
+  if (!deps.openrouterApiKey) {
+    return { unresolved: true, diagnostics, prefetchFailures };
+  }
 
   const list = flat
     .map((c, i) => {
@@ -1170,14 +1223,18 @@ async function resolvePagetitle(
     async (res) => {
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});
-        return null;
+        throw new DiscoveryUpstreamError(
+          discoveryHttpErrorCode(res.status),
+          "category resolver",
+          res.status,
+        );
       }
       return await res.json() as {
         choices?: Array<{ message?: { content?: string | null } }>;
       };
     },
   );
-  if (!json) return { unresolved: true, diagnostics };
+  if (!json) return { unresolved: true, diagnostics, prefetchFailures };
   const candidates = parseResolverCandidates(
     json.choices?.[0]?.message?.content ?? "",
     new Set(flat.map((c) => c.pagetitle)),
@@ -1185,7 +1242,9 @@ async function resolvePagetitle(
   const usable = candidates.filter((c) => c.confidence >= 0.45).map((c) =>
     c.pagetitle
   );
-  if (usable.length === 0) return { unresolved: true, diagnostics };
+  if (usable.length === 0) {
+    return { unresolved: true, diagnostics, prefetchFailures };
+  }
   // Страховка: если победитель — GROUP, и среди его листьев есть более конкретный по токенам запроса — берём лист.
   const qTokens = tokensOf([input.semantic_query ?? "", noun].join(" "));
   const refined = usable.map((p) => {
@@ -1212,19 +1271,14 @@ async function resolvePagetitle(
     resolutionMethod: "model",
     candidates: finalList,
     cache,
+    prefetchFailures,
   };
 }
 
 async function fetchFacetsForPagetitle(
   pagetitle: string,
   deps: DiscoverCategoryDeps,
-): Promise<
-  { ok: true; data: DiscoverCategoryOk } | {
-    ok: false;
-    status: number;
-    message: string;
-  }
-> {
+): Promise<{ ok: true; data: DiscoverCategoryOk } | OptionsFetchFailure> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS;
 
@@ -1315,7 +1369,6 @@ async function fetchFacetsForPagetitle(
       values,
     });
   }
-
   return {
     ok: true,
     data: {
@@ -1381,6 +1434,19 @@ export async function executeDiscoverCategory(
     // so we never hit /options without a validated pagetitle from the real catalog.
     const resolved = await resolvePagetitle(input, deps);
     if ("unresolved" in resolved) {
+      const failure = resolved.prefetchFailures?.find((item) =>
+        item.status === 429
+      ) ?? resolved.prefetchFailures?.[0];
+      const failureCode = failure && discoveryHttpErrorCode(failure.status, true);
+      if (failureCode) {
+        return {
+          tool: "discover_category",
+          ok: false,
+          error_code: failureCode,
+          message: `categories/options returned HTTP ${failure.status}`,
+          resolution_diagnostics: resolved.diagnostics,
+        };
+      }
       return {
         tool: "discover_category",
         ok: false,
@@ -1398,6 +1464,9 @@ export async function executeDiscoverCategory(
       };
     }
 
+    let upstreamFailure: OptionsFetchFailure | undefined =
+      resolved.prefetchFailures?.find((item) => item.status === 429) ??
+      resolved.prefetchFailures?.[0];
     for (const pagetitle of resolved.candidates) {
       const prefetched = resolved.prefetched?.get(pagetitle);
       const facets = prefetched
@@ -1417,6 +1486,21 @@ export async function executeDiscoverCategory(
           resolution_method: resolved.resolutionMethod,
         };
       }
+      if (
+        !facets.ok && discoveryHttpErrorCode(facets.status, true) &&
+        (!upstreamFailure || facets.status === 429)
+      ) {
+        upstreamFailure = facets;
+      }
+    }
+    if (upstreamFailure) {
+      return {
+        tool: "discover_category",
+        ok: false,
+        error_code: discoveryHttpErrorCode(upstreamFailure.status, true) ??
+          "internal",
+        message: `categories/options returned HTTP ${upstreamFailure.status}`,
+      };
     }
     return {
       tool: "discover_category",
@@ -1425,6 +1509,14 @@ export async function executeDiscoverCategory(
       message: `no category facets for "${noun}"`,
     };
   } catch (e) {
+    if (e instanceof DiscoveryUpstreamError) {
+      return {
+        tool: "discover_category",
+        ok: false,
+        error_code: e.errorCode,
+        message: e.message,
+      };
+    }
     const isAbort = (e as { name?: string })?.name === "AbortError";
     return {
       tool: "discover_category",

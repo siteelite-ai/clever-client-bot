@@ -13,18 +13,150 @@ import {
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
   isRecoverableSparseBooleanProofShortfall,
+  isTransientCatalogToolFailure,
   mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
-  shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldAppendCatalogEmpty,
+  shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
+  shouldReportTransientCatalogFailure,
   sourceProvenSelectionPool,
+  TRANSIENT_CATALOG_FAILURE_NOTICE,
+  transientCatalogFailureFinalization,
   unscopedSourceProvenCardinalityAttempt,
 } from "./selection-search-recovery.ts";
 import type { ProductRef } from "./types.ts";
-import { type Criterion, resolveTerminalSelectionCriteria } from "./criteria-gate.ts";
+import {
+  type Criterion,
+  resolveTerminalSelectionCriteria,
+} from "./criteria-gate.ts";
+
+Deno.test("only retryable catalog-tool failures establish transient uncertainty", () => {
+  for (
+    const tool of [
+      "discover_category",
+      "search_catalog",
+      "jargon_recover_catalog",
+    ] as const
+  ) {
+    for (
+      const error_code of [
+        "catalog_timeout",
+        "transport_5xx",
+        "rate_limited",
+      ] as const
+    ) {
+      assertEquals(
+        isTransientCatalogToolFailure({ tool, ok: false, error_code }),
+        true,
+        `${tool}:${error_code}`,
+      );
+    }
+  }
+  assertEquals(
+    isTransientCatalogToolFailure({
+      tool: "jargon_recover_catalog",
+      ok: false,
+      error_code: "jargon_unavailable",
+    }),
+    true,
+  );
+  for (
+    const error_code of [
+      "category_not_found",
+      "no_products",
+      "incomplete_filter",
+      "bad_input",
+    ] as const
+  ) {
+    assertEquals(
+      isTransientCatalogToolFailure({
+        tool: "discover_category",
+        ok: false,
+        error_code,
+      }),
+      false,
+      error_code,
+    );
+  }
+  assertEquals(
+    isTransientCatalogToolFailure({
+      tool: "lookup_knowledge",
+      ok: false,
+      error_code: "transport_5xx",
+    }),
+    false,
+  );
+  assertEquals(
+    isTransientCatalogToolFailure({
+      tool: "search_catalog",
+      ok: true,
+    }),
+    false,
+  );
+});
+
+Deno.test("an early model final after catalog outage is suppressed before egress", () => {
+  assertEquals(shouldReportTransientCatalogFailure(true, 0), true);
+  assertEquals(transientCatalogFailureFinalization("model_final", true, 0), {
+    suppressModelText: true,
+    technicalNotice: TRANSIENT_CATALOG_FAILURE_NOTICE,
+  });
+  assertEquals(transientCatalogFailureFinalization("model_final", false, 0), {
+    suppressModelText: false,
+    technicalNotice: null,
+  });
+});
+
+Deno.test("terminal soft-deadline does not turn a failed catalog into honest-empty", () => {
+  assertEquals(transientCatalogFailureFinalization("terminal", true, 0), {
+    suppressModelText: false,
+    technicalNotice: TRANSIENT_CATALOG_FAILURE_NOTICE,
+  });
+  assertEquals(transientCatalogFailureFinalization("terminal", false, 0), {
+    suppressModelText: false,
+    technicalNotice: null,
+  });
+  assertEquals(transientCatalogFailureFinalization("terminal", true, 2), {
+    suppressModelText: false,
+    technicalNotice: null,
+  });
+});
+
+Deno.test("failed discovery keeps model-with-tool prose closed after a later empty lookup", () => {
+  let transientFailureSeen = false;
+  const discover = {
+    tool: "discover_category" as const,
+    ok: false,
+    error_code: "transport_5xx" as const,
+  };
+  transientFailureSeen ||= isTransientCatalogToolFailure(discover);
+  assertEquals(
+    transientCatalogFailureFinalization(
+      "model_fragment",
+      transientFailureSeen,
+      0,
+    ).suppressModelText,
+    true,
+  );
+  // A follow-up search that happens to return no rows is not proof that the
+  // failed discovery path contained no matching products.
+  const emptySearch = { tool: "search_catalog" as const, ok: true };
+  transientFailureSeen ||= isTransientCatalogToolFailure(emptySearch);
+  assertEquals(
+    transientCatalogFailureFinalization("terminal", transientFailureSeen, 0)
+      .technicalNotice,
+    TRANSIENT_CATALOG_FAILURE_NOTICE,
+  );
+  // A later verified render, unlike an empty lookup, resolves the outage.
+  assertEquals(
+    transientCatalogFailureFinalization("terminal", transientFailureSeen, 1)
+      .technicalNotice,
+    null,
+  );
+});
 
 Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
   const messages = buildCatalogEmptySynthesisMessages(
@@ -461,7 +593,10 @@ Deno.test("a nonempty short selection gets bounded literal recovery in the live 
 });
 
 Deno.test("frozen application alternative survives final composition and activates generic shortfall recovery", () => {
-  const exact: Criterion[] = ["Бытовые устройства настольные", "Бытовые устройства подвесные"]
+  const exact: Criterion[] = [
+    "Бытовые устройства настольные",
+    "Бытовые устройства подвесные",
+  ]
     .map((value) => ({
       key: "Класс применения",
       op: "eq",
@@ -492,7 +627,8 @@ Deno.test("frozen application alternative survives final composition and activat
       max_price: 4000,
       options: { class: [exact[0].value], sensor: ["да"] },
     },
-    customer_message: "Нужны бытовые устройства с датчиком движения до 4000, несколько вариантов",
+    customer_message:
+      "Нужны бытовые устройства с датчиком движения до 4000, несколько вариантов",
     mandatory_criteria: mandatory,
     leaf_categories: ["Устройства"],
     source_proven_count: 1,
@@ -602,7 +738,8 @@ Deno.test("nonempty acoustic-only scoped rows still permit one source-verified u
     price: 3000,
     stock: "in_stock",
     short_traits: ["Вид светильника: Промышленные светильники"],
-    description_excerpt: "Для промышленного применения. Датчик реагирует на движение.",
+    description_excerpt:
+      "Для промышленного применения. Датчик реагирует на движение.",
   };
   const valid: ProductRef = {
     id: "motion",

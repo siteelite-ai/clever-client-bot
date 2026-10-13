@@ -950,6 +950,76 @@ function facetMeaningIsDisambiguatedForValue(
   );
 }
 
+/**
+ * A colour/material/etc. value alone cannot identify which of two live
+ * property axes the customer meant. In particular, `белый свет` is not proof
+ * of `Цвет корпуса = белый` merely because the adjective matches. Use the
+ * discovered sibling axes (rather than a product or colour dictionary) and
+ * require the distinguishing axis word next to the customer's value.
+ *
+ * A short noun may name the same axis as a longer live label (`свет` next to
+ * `свечения`); this narrow prefix allowance is local to the value phrase and
+ * cannot turn a longer product noun (`светильник`) into the shorter axis.
+ */
+function customerOwnsFacetValueAxis(
+  facet: SearchFacet,
+  value: string,
+  facets: SearchFacet[],
+  userEvidence: string,
+): boolean {
+  const labelTokens = (candidate: SearchFacet) =>
+    norm(candidate.caption || candidate.key).split(" ").filter((token) =>
+      token.length >= 4
+    );
+  const ownTokens = labelTokens(facet);
+  const valueTokens = significantValueTokens(value);
+  if (ownTokens.length < 2 || valueTokens.length === 0) return true;
+
+  const siblings = facets.filter((candidate) => {
+    if (candidate.key === facet.key) return false;
+    const otherTokens = labelTokens(candidate);
+    if (otherTokens.length < 2) return false;
+    const sharedLabel = ownTokens.some((token) =>
+      otherTokens.some((other) =>
+        token === other || tokensMatchByStem(token, other)
+      )
+    );
+    const overlappingValue = candidate.values.some(({ value: otherValue }) =>
+      significantValueTokens(otherValue).some((other) =>
+        valueTokens.some((token) =>
+          token === other || tokensMatchByStem(token, other)
+        )
+      )
+    );
+    return sharedLabel && overlappingValue;
+  });
+  if (siblings.length === 0) return true;
+
+  const siblingTokens = siblings.flatMap(labelTokens);
+  const discriminators = ownTokens.filter((token) =>
+    !siblingTokens.some((other) =>
+      token === other || tokensMatchByStem(token, other)
+    )
+  );
+  if (discriminators.length === 0) return false;
+
+  const userTokens = norm(userEvidence).split(" ").filter(Boolean);
+  const axisMatches = (axis: string, word: string) =>
+    axis === word || tokensMatchByStem(axis, word) ||
+    (word.length >= 4 && word.length <= 6 &&
+      axis.length >= word.length + 3 &&
+      axis.slice(0, 3) === word.slice(0, 3));
+  return userTokens.some((word, index) =>
+    discriminators.some((axis) => axisMatches(axis, word)) &&
+    userTokens.some((candidate, valueIndex) =>
+      Math.abs(index - valueIndex) <= 3 &&
+      valueTokens.some((token) =>
+        token === stemRu(candidate) || tokensMatchByStem(token, candidate)
+      )
+    )
+  );
+}
+
 const COMPOUND_COUNT_PREFIXES: ReadonlyArray<readonly [string, number]> = [
   ["одиннадцати", 11],
   ["двенадцати", 12],
@@ -1646,6 +1716,21 @@ export function guardSearchFilters(
         dropped.push({ key, value: canonical, reason: "negated_by_user" });
         continue;
       }
+      if (
+        !customerOwnsFacetValueAxis(
+          facet,
+          canonical,
+          facets,
+          userEvidence,
+        )
+      ) {
+        dropped.push({
+          key,
+          value: canonical,
+          reason: "not_declared_in_reasoning",
+        });
+        continue;
+      }
       if (facetValueAppearsOnlyAsMeasurementNoun(canonical, userEvidence)) {
         dropped.push({
           key,
@@ -1835,20 +1920,35 @@ export function guardSearchFilters(
       if (
         facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)
       ) return false;
-      // One-letter values need a unique live-axis proof below. Letting the
-      // generic token matcher handle them would apply the same `C` to every
-      // facet that happened to expose that code.
+      // The live schema can expose hundreds of values. First establish that
+      // this value is actually present in the customer's text; only those
+      // few candidates need the more expensive sibling-axis ambiguity check.
+      // The numeric path has its own local-axis proof below.
       if (/^[a-zа-я]$/u.test(normalized)) return false;
-      if (!/[a-zа-я]/iu.test(normalized)) {
-        return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
+      const hasLetters = /[a-zа-я]/iu.test(normalized);
+      if (
+        hasLetters &&
+        !explicitlyAffirmedByUser(candidate.value, userEvidence)
+      ) return false;
+      if (
+        !hasLetters &&
+        !(/^\d+(?:[.,]\d+)?$/u.test(normalized) &&
           numericFacetValueIsLocallyEvidenced(
             candidate.value,
             facet,
             userEvidence,
           ) &&
-          facetStateQualifierIsUserBacked(facet, userEvidence);
-      }
-      return explicitlyAffirmedByUser(candidate.value, userEvidence);
+          facetStateQualifierIsUserBacked(facet, userEvidence))
+      ) return false;
+      if (
+        !customerOwnsFacetValueAxis(
+          facet,
+          candidate.value,
+          facets,
+          userEvidence,
+        )
+      ) return false;
+      return true;
     });
     if (evidenced.length !== 1) continue;
     const value = evidenced[0].value;
@@ -1903,11 +2003,25 @@ export function guardSearchFilters(
         return false;
       }
       if (
+        !explicitlyAffirmedByFacetReasoning(
+          candidate.value,
+          inferenceEvidence,
+        )
+      ) return false;
+      if (
         !facetMeaningIsDisambiguatedForValue(
           facet,
           candidate.value,
           facets,
           inferenceEvidence,
+        )
+      ) return false;
+      if (
+        !customerOwnsFacetValueAxis(
+          facet,
+          candidate.value,
+          facets,
+          userEvidence,
         )
       ) return false;
       if (
@@ -1918,10 +2032,7 @@ export function guardSearchFilters(
           inferenceEvidence,
         )
       ) return false;
-      return explicitlyAffirmedByFacetReasoning(
-        candidate.value,
-        inferenceEvidence,
-      );
+      return true;
     });
     if (evidenced.length !== 1) continue;
     const value = evidenced[0].value;

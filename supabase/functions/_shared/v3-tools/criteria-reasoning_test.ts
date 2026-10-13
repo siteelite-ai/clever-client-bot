@@ -736,6 +736,40 @@ Deno.test("Latin and Cyrillic unit glyphs preserve one exact live measurement", 
   assertEquals(projected.matched, projected.added);
 });
 
+Deno.test("a customer range endpoint is not an exact measured product value", () => {
+  const facets = [{
+    key: "colour_temperature",
+    caption: "Цветовая температура, К",
+    type: "checkbox",
+    unit: "К",
+    values: [{ value: "4000" }, { value: "6500" }],
+  }];
+  for (const customer of [
+    "Нужен белый свет 4000–6500 K",
+    "Нужен белый свет от 4000 до 6500 K",
+  ]) {
+    assertEquals(
+      projectLiteralMeasuredCriteria([], customer, customer, facets).added,
+      [],
+    );
+  }
+  assertEquals(
+    projectLiteralMeasuredCriteria(
+      [],
+      "Допустимо 4000–6500 K, но нужен вариант ровно 6500 K",
+      "Допустимо 4000–6500 K, но нужен вариант ровно 6500 K",
+      facets,
+    ).added,
+    [{
+      key: "Цветовая температура, К",
+      op: "eq",
+      value: "6500",
+      unit: "К",
+      level: "A",
+    }],
+  );
+});
+
 Deno.test("guarded exact criterion disambiguates an otherwise ambiguous literal measurement", () => {
   const existing: Criterion = {
     key: "Цветовая температура, К",

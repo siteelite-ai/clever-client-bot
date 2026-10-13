@@ -1251,7 +1251,15 @@ export function projectLiteralMeasuredCriteria(
   const added: Criterion[] = [];
   const matched: Criterion[] = [];
   const bounds = collapseBounds(extractReasoningBounds(reasoningText));
-  const quantities = extractClientQuantities(customerText);
+  // A range endpoint is not a second, exact customer requirement. Extract
+  // literal equalities only from text outside customer-authored intervals;
+  // the range projector above owns both endpoints. An independently stated
+  // exact value after the interval remains available here.
+  const exactCustomerText = String(customerText ?? "").replace(
+    /(?<![\p{L}\p{N}])(?:от\s+)?\d+(?:[.,]\d+)?\s*(?:[–—-]|до)\s*\d+(?:[.,]\d+)?\s*(?:[\p{L}°²³/%]+)?/giu,
+    " ",
+  );
+  const quantities = extractClientQuantities(exactCustomerText);
 
   for (const quantity of quantities) {
     const unit = canonicalMeasurementUnit(quantity.unit);

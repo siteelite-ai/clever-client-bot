@@ -422,6 +422,23 @@ function renderedValueIsCustomerOwned(
   );
 }
 
+/**
+ * A range endpoint is not an independently requested exact value. The range
+ * remains in the frozen selection plan; this emission-only projection uses
+ * only the customer's text outside numeric intervals when looking for exact
+ * values shared by the rendered cards. Keeping the units/text after a range
+ * intact preserves an independently stated exact value later in the request.
+ */
+function customerExactValueEvidenceText(userMessage: string): string {
+  return String(userMessage ?? "").replace(
+    /(?<![\p{L}\p{N}])(?:от\s+)?\d+(?:[.,]\d+)?\s*(?:[–—-]|до)\s*\d+(?:[.,]\d+)?/giu,
+    " ",
+  ).replace(
+    /(?<![\p{L}\p{N}])между\s+\d+(?:[.,]\d+)?\s+и\s+\d+(?:[.,]\d+)?/giu,
+    " ",
+  );
+}
+
 function canonicalRenderedUnit(value: string): string {
   const unit = normalizeUnit(value);
   const aliases: Record<string, string> = {
@@ -464,6 +481,7 @@ export function projectCommonRenderedUserCriteria(
   userMessage: string,
 ): Criterion[] {
   if (!Array.isArray(products) || products.length === 0) return [];
+  const exactEvidenceText = customerExactValueEvidenceText(userMessage);
   const firstTraits = parsedProductTraits(products[0]);
   const criteria: Criterion[] = [];
   for (const first of firstTraits) {
@@ -471,7 +489,7 @@ export function projectCommonRenderedUserCriteria(
       !renderedValueIsCustomerOwned(
         first.label,
         first.value,
-        userMessage,
+        exactEvidenceText,
         products[0].leaf_category ?? "",
       )
     ) {
@@ -492,7 +510,7 @@ export function projectCommonRenderedUserCriteria(
       evidence: "user_explicit",
     });
   }
-  for (const quantity of extractClientQuantities(userMessage)) {
+  for (const quantity of extractClientQuantities(exactEvidenceText)) {
     if (
       criteria.some((criterion) =>
         criterion.op === "eq" &&
@@ -1698,6 +1716,59 @@ export function projectCriteriaFacetOptions(
     proven_criteria: proven,
     unmatched_keys: unmatched,
   };
+}
+
+/**
+ * A successful by_filter pool proves only obligations covered by the exact
+ * options sent to the catalog. The frozen render contract can contain other
+ * mandatory criteria (including post-filter-only measurements); those still
+ * need evidence on each returned product. Equality alternatives for one facet
+ * are an OR group, so they are verified together against the executed values.
+ */
+export function criteriaProvenByExecutedFacetOptions(
+  criteria: Criterion[],
+  executedOptions: Record<string, unknown> | null | undefined,
+  facets: CriteriaFacet[],
+): Criterion[] {
+  if (!executedOptions || !Array.isArray(facets) || facets.length === 0) {
+    return [];
+  }
+  const groups = new Map<string, Criterion[]>();
+  (Array.isArray(criteria) ? criteria : []).forEach((criterion, index) => {
+    if (!criterion?.key || (criterion.level ?? "A") !== "A") return;
+    const groupKey = criterion.op === "eq"
+      ? `eq:${normalizeKey(criterion.key)}`
+      : `single:${index}`;
+    groups.set(groupKey, [...(groups.get(groupKey) ?? []), criterion]);
+  });
+
+  const proven: Criterion[] = [];
+  for (const group of groups.values()) {
+    // Application suitability is evidenced by product use, not a scalar
+    // catalog facet whose coincidental wording might match the criterion.
+    if (group.some((criterion) =>
+      criterion.proof_scope === "application_suitability"
+    )) continue;
+    // The executed request cannot extend the live facet schema: an unknown
+    // option may have been ignored by the catalog and proves nothing.
+    const projection = projectCriteriaFacetOptions(group, facets);
+    if (projection.proven_criteria.length !== group.length) continue;
+    const keys = Object.keys(projection.options);
+    if (keys.length !== 1) continue;
+    const key = keys[0];
+    const executedValues = executedOptions[key];
+    if (
+      !Array.isArray(executedValues) || executedValues.length === 0 ||
+      !executedValues.every((value) =>
+        typeof value === "string" && value.length > 0
+      )
+    ) continue;
+    const accepted = new Set(projection.options[key]);
+    if (executedValues.every((value) => accepted.has(value))) {
+      proven.push(...group);
+    }
+  }
+  return proven.map((criterion) => ({ ...criterion }));
 }
 
 /**

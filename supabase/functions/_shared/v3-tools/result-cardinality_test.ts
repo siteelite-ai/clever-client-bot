@@ -40,6 +40,23 @@ Deno.test("cardinality honors alternatives, explicit counts and exhaustive reque
   );
 });
 
+Deno.test("an explicit request for choices survives a model-like technical code", () => {
+  assertEquals(
+    resolveResultCardinality(
+      "Подбери несколько уличных прожекторов IP65 для двора",
+      { selection: true, exactLookup: true },
+    ),
+    { target: 5, minimum: 3, mode: "alternatives", explicit: true },
+  );
+  assertEquals(
+    resolveResultCardinality("Покажи 4 варианта с IP65", {
+      selection: true,
+      exactLookup: true,
+    }),
+    { target: 4, minimum: 4, mode: "explicit", explicit: true },
+  );
+});
+
 Deno.test("single-result intents remain single", () => {
   assertEquals(
     resolveResultCardinality("найди самый дешевый кабель", {

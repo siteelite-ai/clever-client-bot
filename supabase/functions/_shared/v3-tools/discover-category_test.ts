@@ -8,6 +8,7 @@ import {
   resolveHeadCategoryByLiveHierarchy,
   resolveLocalCategoryPagetitles,
 } from "./discover-category.ts";
+import { isTransientCatalogToolFailure } from "./selection-search-recovery.ts";
 
 Deno.test("live category discovery bounds taxonomy and resolver headers and bodies", async () => {
   const baseDeps = {
@@ -195,6 +196,210 @@ Deno.test("live category discovery bounds taxonomy and resolver headers and bodi
   if (resolverSuccess.ok) {
     assertEquals(resolverSuccess.category.pagetitle, "Светильники");
     assertEquals(resolverSuccess.resolution_method, "model");
+  }
+});
+
+Deno.test("discovery distinguishes failed options HTTP from a genuinely absent category", async () => {
+  const cases = [
+    { status: 503, expected: "transport_5xx" },
+    { status: 429, expected: "rate_limited" },
+    { status: 401, expected: "transport_5xx" },
+    { status: 403, expected: "transport_5xx" },
+    { status: 404, expected: "category_not_found" },
+    { status: 200, expected: "category_not_found" },
+  ] as const;
+  for (const { status, expected } of cases) {
+    const fetchImpl = ((url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes("/categories?")) {
+        return Promise.resolve(new Response(JSON.stringify({ data: {
+          results: [{ id: 70_001, pagetitle: "Контрольная категория", children: [] }],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        } })));
+      }
+      if (path.includes("/categories/options?")) {
+        return Promise.resolve(status === 200
+          ? new Response(JSON.stringify({ data: {
+            category: {
+              id: 70_001,
+              pagetitle: "Контрольная категория",
+              total_products: 0,
+            },
+            options: [],
+          } }))
+          : new Response(`HTTP ${status}`, { status }));
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    }) as typeof fetch;
+    const result = await executeDiscoverCategory(
+      { noun: "Контрольная категория" },
+      {
+        baseUrl: "https://catalog.example.test",
+        apiToken: "test-token",
+        forceFreshTaxonomy: true,
+        fetchImpl,
+      },
+    );
+    assertEquals(result.ok, false, `HTTP ${status}`);
+    if (!result.ok) {
+      assertEquals(result.error_code, expected, `HTTP ${status}`);
+      assertEquals(
+        isTransientCatalogToolFailure(result),
+        status !== 404 && status !== 200,
+        `HTTP ${status} finalization`,
+      );
+    }
+  }
+});
+
+Deno.test("taxonomy HTTP failures remain retryable verification failures", async () => {
+  const cases = [
+    { status: 503, expected: "transport_5xx" },
+    { status: 429, expected: "rate_limited" },
+    { status: 401, expected: "transport_5xx" },
+    { status: 403, expected: "transport_5xx" },
+    { status: 404, expected: "transport_5xx" },
+  ] as const;
+  for (const { status, expected } of cases) {
+    const result = await executeDiscoverCategory(
+      { noun: "Светильники" },
+      {
+        baseUrl: "https://catalog.example.test",
+        apiToken: "test-token",
+        forceFreshTaxonomy: true,
+        fetchImpl: (() =>
+          Promise.resolve(new Response(`HTTP ${status}`, { status }))) as typeof fetch,
+      },
+    );
+    assertEquals(result.ok, false, `taxonomy HTTP ${status}`);
+    if (!result.ok) {
+      assertEquals(result.error_code, expected, `taxonomy HTTP ${status}`);
+      assertEquals(
+        isTransientCatalogToolFailure(result),
+        true,
+        `taxonomy HTTP ${status} finalization`,
+      );
+    }
+  }
+});
+
+Deno.test("resolver HTTP failures do not become category_not_found", async () => {
+  const cases = [
+    { status: 503, expected: "transport_5xx" },
+    { status: 429, expected: "rate_limited" },
+    { status: 401, expected: "transport_5xx" },
+    { status: 403, expected: "transport_5xx" },
+    { status: 404, expected: "transport_5xx" },
+    { status: 200, expected: "category_not_found" },
+  ] as const;
+  for (const { status, expected } of cases) {
+    const fetchImpl = ((url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes("/categories?")) {
+        return Promise.resolve(new Response(JSON.stringify({ data: {
+          results: [{ id: 71_001, pagetitle: "Светильники", children: [] }],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        } })));
+      }
+      if (path.includes("openrouter.ai")) {
+        return Promise.resolve(status === 200
+          ? new Response(JSON.stringify({ choices: [{ message: {
+            content: JSON.stringify({ candidates: [] }),
+          } }] }))
+          : new Response(`HTTP ${status}`, { status }));
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    }) as typeof fetch;
+    const result = await executeDiscoverCategory(
+      { noun: "несуществующая вещь" },
+      {
+        baseUrl: "https://catalog.example.test",
+        apiToken: "test-token",
+        openrouterApiKey: "test-model-token",
+        forceFreshTaxonomy: true,
+        fetchImpl,
+      },
+    );
+    assertEquals(result.ok, false, `HTTP ${status}`);
+    if (!result.ok) {
+      assertEquals(result.error_code, expected, `HTTP ${status}`);
+      assertEquals(
+        isTransientCatalogToolFailure(result),
+        status !== 200,
+        `resolver HTTP ${status} finalization`,
+      );
+    }
+  }
+});
+
+Deno.test("ambiguous category prefetch retains failures without hiding a usable candidate", async () => {
+  const request = { noun: "нужен кабель" };
+  const taxonomy = new Response(JSON.stringify({ data: {
+    results: [
+      { id: 72_001, pagetitle: "Кабели силовые", children: [] },
+      { id: 72_002, pagetitle: "Кабели сигнальные", children: [] },
+    ],
+    pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
+  } }));
+  const fetchImpl = ((url: string | URL | Request) => {
+    const path = String(url);
+    if (path.includes("/categories?")) return Promise.resolve(taxonomy.clone());
+    if (path.includes("/categories/options?")) {
+      return Promise.resolve(new URL(path).searchParams.get("pagetitle") ===
+          "Кабели силовые"
+        ? new Response("unavailable", { status: 503 })
+        : new Response("missing", { status: 404 }));
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+  const deps = {
+    baseUrl: "https://catalog.example.test",
+    apiToken: "test-token",
+    forceFreshTaxonomy: true,
+    fetchImpl,
+  };
+  const failed = await executeDiscoverCategory(request, deps);
+  assertEquals(failed.ok, false);
+  if (!failed.ok) assertEquals(failed.error_code, "transport_5xx");
+
+  const recovered = await executeDiscoverCategory(request, {
+    ...deps,
+    openrouterApiKey: "test-model-token",
+    fetchImpl: ((url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes("/categories?")) return Promise.resolve(taxonomy.clone());
+      if (path.includes("/categories/options?")) {
+        return Promise.resolve(new URL(path).searchParams.get("pagetitle") ===
+            "Кабели силовые"
+          ? new Response("unavailable", { status: 503 })
+          : new Response(JSON.stringify({ data: {
+            category: {
+              id: 72_002,
+              pagetitle: "Кабели сигнальные",
+              total_products: 2,
+            },
+            options: [{
+              key: "type",
+              caption_ru: "Тип",
+              type: "string",
+              values: [{ value_ru: "контрольный", products_count: 2 }],
+            }],
+          } })));
+      }
+      if (path.includes("openrouter.ai")) {
+        return Promise.resolve(new Response(JSON.stringify({ choices: [{
+          message: { content: JSON.stringify({ candidates: [{
+            pagetitle: "Кабели сигнальные",
+            confidence: 0.9,
+          }] }) },
+        }] })));
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    }) as typeof fetch,
+  });
+  assertEquals(recovered.ok, true);
+  if (recovered.ok) {
+    assertEquals(recovered.category.pagetitle, "Кабели сигнальные");
   }
 });
 

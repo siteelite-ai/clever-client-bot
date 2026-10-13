@@ -65,6 +65,7 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  criteriaProvenByExecutedFacetOptions,
   type Criterion,
   type CriterionEvidence,
   extendSelectionCriteriaPlan,
@@ -140,6 +141,7 @@ import {
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
   isRecoverableSparseBooleanProofShortfall,
+  isTransientCatalogToolFailure,
   mergeSourceProvenSelectionPools,
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
@@ -149,6 +151,8 @@ import {
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
   sourceProvenSelectionPool,
+  TRANSIENT_CATALOG_FAILURE_NOTICE,
+  transientCatalogFailureFinalization,
   unscopedSourceProvenCardinalityAttempt,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
@@ -249,6 +253,7 @@ import {
   type BroadAssortmentFreeformCandidate,
   type VerifiedBroadAssortmentChoice,
   type VerifiedBroadAssortmentConstrainedContinuation,
+  type VerifiedBroadAssortmentTypedContinuation,
 } from "../_shared/v3-tools/broad-assortment.ts";
 import {
   activeSelectionScopeLookupCreatedAfter,
@@ -833,6 +838,7 @@ interface ToolContext {
   sessionId: string;
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
+  observeCatalogToolResult?: (result: ToolResult) => void;
 }
 
 async function runTool(
@@ -842,20 +848,24 @@ async function runTool(
 ): Promise<ToolResult> {
   const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   if (name === "search_catalog") {
-    return executeSearchCatalog(
+    const result = await executeSearchCatalog(
       args as unknown as SearchCatalogInput,
       catalogDeps,
       ctx.cache,
     );
+    ctx.observeCatalogToolResult?.(result);
+    return result;
   }
   if (name === "discover_category") {
-    return executeDiscoverCategory(
+    const result = await executeDiscoverCategory(
       args as unknown as DiscoverCategoryInput,
       { ...catalogDeps, openrouterApiKey: ctx.openrouterKey },
     ) as unknown as ToolResult;
+    ctx.observeCatalogToolResult?.(result);
+    return result;
   }
   if (name === "jargon_recover_catalog") {
-    return executeJargonRecoverCatalog(
+    const result = await executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
       {
         ...catalogDeps,
@@ -867,6 +877,8 @@ async function runTool(
       },
       ctx.cache,
     );
+    ctx.observeCatalogToolResult?.(result);
+    return result;
   }
   if (name === "lookup_knowledge") {
     return executeLookupKnowledge(
@@ -5845,6 +5857,7 @@ async function loadVerifiedBroadAssortmentChoice(
   constrainedContinuation:
     | VerifiedBroadAssortmentConstrainedContinuation
     | null;
+  typedContinuation: VerifiedBroadAssortmentTypedContinuation | null;
   verifiedSlot: Record<string, unknown> | null;
   matchedIssuedOption: boolean;
   lookupFailed: boolean;
@@ -5858,6 +5871,7 @@ async function loadVerifiedBroadAssortmentChoice(
       choice: null,
       freeformCandidate: null,
       constrainedContinuation: null,
+      typedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
       lookupFailed: false,
@@ -5915,6 +5929,7 @@ async function loadVerifiedBroadAssortmentChoice(
       choice: null,
       freeformCandidate: null,
       constrainedContinuation: null,
+      typedContinuation: null,
       verifiedSlot: null,
       matchedIssuedOption: false,
       lookupFailed: true,
@@ -6517,16 +6532,29 @@ async function runExpertLoop(
   selectionPlan: ReplacementSelectionPlan | null = null,
   ellipticalContinuation: EllipticalSelectionContinuation | null = null,
   preExcludedProductUrls: string[] = [],
+  verifiedInitialDiscoveryLeaf: string | null = null,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
   const now = () => Date.now() - t0;
+  const observedSearchCatalog = async (
+    ...args: Parameters<typeof executeSearchCatalog>
+  ): Promise<Awaited<ReturnType<typeof executeSearchCatalog>>> => {
+    const result = await executeSearchCatalog(...args);
+    ctx.observeCatalogToolResult?.({ ...result, tool: "search_catalog" });
+    return result;
+  };
   const activeSelectionScope = trustedActiveSelectionScope(slots);
   // Category scope comes from the request that produced the latest rendered
   // batch; constraints are compiled separately below so the current attribute
   // can replace, rather than be ANDed with, the previous value of that facet.
   const selectionDiscoveryMessage = ellipticalContinuation?.baseUserMessage ??
     userMessage;
+  // A compound answer may bind uniquely to a completed server-issued leaf.
+  // Only the first mandatory taxonomy lookup uses that leaf; the full request
+  // remains the source for every facet, exclusion and render criterion.
+  const initialDiscoveryMessage = verifiedInitialDiscoveryLeaf ??
+    selectionDiscoveryMessage;
   let finalText = "";
   let productsRendered = 0;
   // The generic expert route has candidate search, not a complete catalog
@@ -7200,6 +7228,7 @@ async function runExpertLoop(
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
     | null = null;
+  let derivedStructuredSearchProvenCriteria: Criterion[] = [];
   // Keep the exact live taxonomy scope that produced a server-compiled
   // structured search. A later terminal ranker deliberately rejects a broad
   // category when its full display title is not repeated verbatim by the
@@ -7358,19 +7387,49 @@ async function runExpertLoop(
   // Later successful rendering can still resolve the turn; only a final
   // unrendered turn needs a retryable technical notice.
   let jargonRecoveryUnavailable = false;
-  const finishWithJargonUnavailable = (route: "in_loop" | "terminal") => {
-    const notice = "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.";
-    send({ type: "delta", content: `${finalText ? "\n\n" : ""}${notice}` });
-    finalText += `${finalText ? "\n\n" : ""}${notice}`;
+  // Tool errors are observed at the shared dispatcher, including bounded
+  // recovery calls. A later empty result cannot erase an earlier timeout.
+  let transientCatalogFailureSeen = false;
+  ctx.observeCatalogToolResult = (result) => {
+    if (
+      isTransientCatalogToolFailure(result) &&
+      !transientCatalogFailureSeen
+    ) {
+      transientCatalogFailureSeen = true;
+      steps.push({
+        step: "v3_catalog_transient_failure_seen",
+        ms: now(),
+        meta: {
+          tool: result.tool,
+          error_code: result.ok ? null : result.error_code,
+        },
+      });
+    }
+  };
+  const finishWithCatalogTechnicalNotice = (
+    route: "in_loop" | "terminal",
+    source: "jargon_recovery" | "catalog_tool",
+  ) => {
+    const notice = TRANSIENT_CATALOG_FAILURE_NOTICE;
+    if (!finalText.includes(notice)) {
+      send({ type: "delta", content: `${finalText ? "\n\n" : ""}${notice}` });
+      finalText += `${finalText ? "\n\n" : ""}${notice}`;
+    }
     steps.push({
-      step: "v3_jargon_recovery_technical_notice",
+      step: source === "jargon_recovery"
+        ? "v3_jargon_recovery_technical_notice"
+        : "v3_catalog_tool_technical_notice",
       ms: now(),
-      meta: { route, products_rendered: productsRendered },
+      meta: { route, source, products_rendered: productsRendered },
     });
     steps.push({
       step: "v3_turn_end",
       ms: now(),
-      meta: { reason: "jargon_recovery_unavailable" },
+      meta: {
+        reason: source === "jargon_recovery"
+          ? "jargon_recovery_unavailable"
+          : "catalog_tool_unavailable",
+      },
     });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
@@ -7734,7 +7793,7 @@ async function runExpertLoop(
       | Awaited<ReturnType<typeof executeSearchCatalog>>
       | null;
     for (const query of semanticBridgeQueries()) {
-      const bridge = await executeSearchCatalog(
+      const bridge = await observedSearchCatalog(
         {
           mode: "by_query",
           query,
@@ -7761,12 +7820,12 @@ async function runExpertLoop(
       break;
     }
     if (!result && !allowBroadFallback) return 0;
-    result ??= await executeSearchCatalog(searchInput, {
+    result ??= await observedSearchCatalog(searchInput, {
       baseUrl: CATALOG_BASE_URL,
       apiToken: ctx.catalogToken,
     }, ctx.cache);
     if (result.ok && result.results.length === 0 && leaves.length > 0) {
-      result = await executeSearchCatalog(
+      result = await observedSearchCatalog(
         { ...searchInput, category_in: undefined },
         { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
         ctx.cache,
@@ -7780,7 +7839,7 @@ async function runExpertLoop(
         max_price: searchInput.max_price,
         per_page: searchInput.per_page,
       };
-      result = await executeSearchCatalog(queryFallback, {
+      result = await observedSearchCatalog(queryFallback, {
         baseUrl: CATALOG_BASE_URL,
         apiToken: ctx.catalogToken,
       }, ctx.cache);
@@ -8114,7 +8173,7 @@ async function runExpertLoop(
     const category = typeof runArgs.category === "string"
       ? runArgs.category
       : undefined;
-    const recovered = await executeSearchCatalog(
+    const recovered = await observedSearchCatalog(
       {
         mode: "by_query",
         query: requirements.join(" "),
@@ -8320,7 +8379,7 @@ async function runExpertLoop(
       const compiledInitialDiscovery = step === 0 && agentPhase === "open"
         ? deterministicInitialDiscoveryToolCall(
           forcedToolName,
-          selectionDiscoveryMessage,
+          initialDiscoveryMessage,
         )
         : null;
       const compiledAdjacentApplicationSearch =
@@ -9214,7 +9273,7 @@ async function runExpertLoop(
         if (step === 0 && timeout && !turnController.signal.aborted) {
           const deterministicDiscovery = deterministicInitialDiscoveryToolCall(
             forcedToolName,
-            selectionDiscoveryMessage,
+            initialDiscoveryMessage,
           );
           if (deterministicDiscovery) {
             resp = {
@@ -9447,6 +9506,24 @@ async function runExpertLoop(
             meta: { fragment_index: step, chars: resp.text.length },
           });
         }
+        resp = { ...resp, text: "" };
+      }
+      if (
+        transientCatalogFailureFinalization(
+          "model_fragment",
+          transientCatalogFailureSeen,
+          productsRendered,
+        ).suppressModelText && resp.text.trim()
+      ) {
+        // Even a response with another tool call may contain a premature
+        // "not found" claim. Suppress all model prose after unresolved catalog
+        // failure before SSE or proof contracts consume it; the tool call and
+        // terminal recovery remain available.
+        steps.push({
+          step: "v3_catalog_failure_model_final_suppressed",
+          ms: now(),
+          meta: { fragment_index: step, phase: agentPhase },
+        });
         resp = { ...resp, text: "" };
       }
       const rawModelResponseText = resp.text;
@@ -10072,7 +10149,16 @@ async function runExpertLoop(
         // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
         // правильный search_catalog по правилам <price_anchoring>.
         if (shouldReportJargonRecoveryUnavailable(jargonRecoveryUnavailable, productsRendered)) {
-          return finishWithJargonUnavailable("in_loop");
+          return finishWithCatalogTechnicalNotice("in_loop", "jargon_recovery");
+        }
+        if (
+          transientCatalogFailureFinalization(
+            "model_final",
+            transientCatalogFailureSeen,
+            productsRendered,
+          ).technicalNotice
+        ) {
+          return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
         }
         steps.push({
           step: "v3_turn_end",
@@ -11339,7 +11425,7 @@ async function runExpertLoop(
             isServerCompiledInitialDiscoveryCall(
               resp.finishReason,
               tc.args.noun,
-              selectionDiscoveryMessage,
+              initialDiscoveryMessage,
             );
           const schemaGroundableNamedReplacement = replacementIntent &&
             agentPhase === "rediscover_after_failed_discovery" &&
@@ -12693,18 +12779,28 @@ async function runExpertLoop(
               criteria,
               measuredReasoning,
             );
-            const promoted = promoteMeasuredReasoningCriteria(
-              aligned.criteria,
-              measuredReasoning,
-              lastDiscover?.facets ?? [],
-            );
+            // An aggregate requirement (for example total lumens for a yard)
+            // is not a minimum for every SKU. The earlier retrieval compiler
+            // obeys this scope; rendering must not re-promote it from prose.
+            const individualMeasurement =
+              derivedMeasurementMayConstrainIndividualProducts(
+                derivedSelectionMeasurementScope,
+              );
+            const promoted = individualMeasurement
+              ? promoteMeasuredReasoningCriteria(
+                aligned.criteria,
+                measuredReasoning,
+                lastDiscover?.facets ?? [],
+              )
+              : { criteria: aligned.criteria, promoted: [] as string[] };
             const importance = alignCriteriaImportanceWithReasoning(
               promoted.criteria,
               measuredReasoning,
               userBackedSearchCriteria,
               protectedReasoningCriteria,
             );
-            const fallbackMeasured = intentMode === "select" &&
+            const fallbackMeasured = individualMeasurement &&
+                intentMode === "select" &&
                 !replacementIntent &&
                 !seriesTurnRequiresGrounding &&
                 !compatibilityRequired &&
@@ -13746,7 +13842,7 @@ async function runExpertLoop(
               isServerCompiledInitialDiscoveryCall(
                 resp.finishReason,
                 requestedNoun,
-                selectionDiscoveryMessage,
+                initialDiscoveryMessage,
               ) && (result as DiscoverCategoryOk).leaf_categories.some(
                 (leaf) => Number.isInteger(leaf.id) && leaf.id > 0,
               ),
@@ -13992,7 +14088,7 @@ async function runExpertLoop(
                   facetEvidence,
                   runArgs as Partial<SearchCatalogInput>,
                 );
-                const facetRecovered = await executeSearchCatalog(
+                const facetRecovered = await observedSearchCatalog(
                   recoveryInput,
                   { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
                   ctx.cache,
@@ -14013,7 +14109,7 @@ async function runExpertLoop(
             // exact-token lookup when the first pool contains no matching
             // titles, then keep only products that prove that token visibly.
             if (grounded.length === 0) {
-              const canonicalQuery = await executeSearchCatalog(
+              const canonicalQuery = await observedSearchCatalog(
                 buildCanonicalEntityRecoveryInput(namedSeriesToken),
                 { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
                 ctx.cache,
@@ -14543,7 +14639,7 @@ async function runExpertLoop(
             );
             const recovered: ToolResult = await runWithDeadline(
               (signal) =>
-                executeSearchCatalog(
+                observedSearchCatalog(
                   attempt.args as unknown as SearchCatalogInput,
                   {
                     baseUrl: CATALOG_BASE_URL,
@@ -14823,7 +14919,7 @@ async function runExpertLoop(
           let attempted = 0;
           for (const query of recoveryPlan.queries) {
             attempted += 1;
-            const recovered = await executeSearchCatalog(
+            const recovered = await observedSearchCatalog(
               { mode: "by_query", query, min_price: 1, per_page: 50 },
               { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
               ctx.cache,
@@ -15222,7 +15318,7 @@ async function runExpertLoop(
                 : {}),
               per_page: 50,
             };
-            let broad = await executeSearchCatalog(
+            let broad = await observedSearchCatalog(
               {
                 mode: "by_filter",
                 ...(categoryIn.length > 0
@@ -15234,7 +15330,7 @@ async function runExpertLoop(
               ctx.cache,
             );
             if (!broad.ok || broad.results.length === 0) {
-              broad = await executeSearchCatalog(
+              broad = await observedSearchCatalog(
                 {
                   mode: "by_filter",
                   category: lastDiscover.category.pagetitle,
@@ -16402,16 +16498,20 @@ async function runExpertLoop(
                 typeof runArgs.options === "object"
                 ? Object.keys(runArgs.options as Record<string, unknown>).length
                 : 0;
-            const provenSearchCriteria = resolveSelectionSearchEvidence(
-              // A post-filter-only criterion did not shape this catalog
-              // request, so the resulting pool cannot inherit it as proven
-              // evidence. It remains mandatory in latestRenderCriteria and
-              // is checked against every materialized card before rendering.
-              enforcedSearchCriteria.filter((criterion) =>
-                !isPostFilterOnlyReasoningCriterion(criterion)
-              ),
-              selectedSearchRecoveryAttempt,
-            );
+            const provenSearchCriteria = runArgs.mode === "by_filter"
+              ? criteriaProvenByExecutedFacetOptions(
+                resolveSelectionSearchEvidence(
+                  enforcedSearchCriteria.filter((criterion) =>
+                    !isPostFilterOnlyReasoningCriterion(criterion)
+                  ),
+                  selectedSearchRecoveryAttempt,
+                ),
+                runArgs.options && typeof runArgs.options === "object"
+                  ? runArgs.options as Record<string, unknown>
+                  : null,
+                lastDiscover?.facets ?? [],
+              )
+              : [];
             if (
               tc.name === "search_catalog" && optionCount > 0 &&
               provenSearchCriteria.length > 0
@@ -16480,6 +16580,9 @@ async function runExpertLoop(
               derivedStructuredSearchResult = result as SearchCatalogOk & {
                 tool: "search_catalog";
               };
+              // Proof belongs to this exact executed search, not to every
+              // mandatory criterion in the accumulated render contract.
+              derivedStructuredSearchProvenCriteria = provenSearchCriteria;
               steps.push({
                 step: "v3_derived_selection_search_routed_to_finalizer",
                 ms: now(),
@@ -17640,7 +17743,7 @@ async function runExpertLoop(
       const targetIds = new Set(targetReport.passed_ids);
       const evidenced = projectCatalogFilterEvidence(
         aliasGroundedProducts,
-        terminalSelectionCriteria,
+        derivedStructuredSearchProvenCriteria,
       );
       const criteriaGate = applyCriteriaGate(
         evidenced,
@@ -19323,7 +19426,16 @@ async function runExpertLoop(
     }
 
     if (shouldReportJargonRecoveryUnavailable(jargonRecoveryUnavailable, productsRendered)) {
-      return finishWithJargonUnavailable("terminal");
+      return finishWithCatalogTechnicalNotice("terminal", "jargon_recovery");
+    }
+    if (
+      transientCatalogFailureFinalization(
+        "terminal",
+        transientCatalogFailureSeen,
+        productsRendered,
+      ).technicalNotice
+    ) {
+      return finishWithCatalogTechnicalNotice("terminal", "catalog_tool");
     }
 
     // A forced catalog phase may consume the complete agent loop without ever
@@ -20023,6 +20135,7 @@ Deno.serve(async (req) => {
                 : null;
             const matchedVerifiedBroadSelection = Boolean(
               verifiedBroadChoiceState.matchedIssuedOption ||
+                verifiedBroadChoiceState.typedContinuation ||
                 verifiedFreeformChoice,
             );
             if (freeformCandidate) {
@@ -20690,6 +20803,7 @@ Deno.serve(async (req) => {
             ) {
               const constrained = verifiedBroadChoiceState
                 .constrainedContinuation ??
+                verifiedBroadChoiceState.typedContinuation ??
                 (verifiedFreeformChoice && freeformCandidate
                   ? {
                     entity: verifiedFreeformChoice.entity,
@@ -20742,6 +20856,8 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   ellipticalContinuation,
+                  [],
+                  verifiedBroadChoiceState.typedContinuation?.leaf ?? null,
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds

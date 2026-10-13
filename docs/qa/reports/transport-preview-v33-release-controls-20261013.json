@@ -1,0 +1,684 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-13T09:21:03.049Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-vvg-exact-cheapest": 1,
+    "customer-new-household-motion-joined-currency": 1,
+    "customer-new-gallant-broad-assortment": 1
+  },
+  "cases": [
+    {
+      "id": "customer-vvg-exact-cheapest",
+      "title": "Точная маркировка ВВГ 2×1,5 и минимальная цена",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvg-exact-cheapest_base_1791883263052_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 2*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 7778,
+              "network_attempts": 1,
+              "log_id": "e31e4a4d-4405-40bb-908f-613df7b753af",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost",
+                  "verified": true,
+                  "sku": "Ем000024789",
+                  "name": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Бронированный": "Нет",
+                    "Бренд": "ВВГ",
+                    "Оболочка": "ПВХ пластикат",
+                    "Код ТН ВЭД": "8544499509",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.33",
+                    "Страна происхождения": "КАЗАХСТАН",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Гарантийный срок, лет": "5",
+                    "Срок службы, мес": "360",
+                    "Производитель": "Harmony Cable",
+                    "Температура монтажа": "-15+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Количество жил": "2",
+                    "Единица измерения": "м",
+                    "Негорючесть": "Нет",
+                    "Вес, кг.": "0.112",
+                    "Материал проводника": "медь",
+                    "Изоляция": "ПВХ пластикат",
+                    "Объем, м3": "0.000023"
+                  },
+                  "offerPrice": 309,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "description_excerpt": "Кабель ВВГ - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительных устройствах, а также в обычных жилы"
+                }
+              ],
+              "catalog_minimum_evidence": {
+                "verified": true,
+                "checked_at": "2026-10-13T09:21:15.530Z",
+                "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/",
+                "listed_total": 32,
+                "matching_available": 10,
+                "eligible_products": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг 2*1,5 ГК ГОСТ",
+                    "price": 319,
+                    "unit": "м",
+                    "id": "20111"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 ГК ГОСТ",
+                    "price": 334,
+                    "unit": "м",
+                    "id": "20089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5/",
+                    "title": "Кабель ВВГ нг LS 2*1,5",
+                    "price": 330,
+                    "unit": "м",
+                    "id": "19937"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5/",
+                    "title": "Кабель ВВГ нг 2*1,5",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "19730"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5/",
+                    "title": "Кабель ВВГ 2*1,5",
+                    "price": 316,
+                    "unit": "м",
+                    "id": "19812"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-at/",
+                    "title": "Кабель ВВГ нг 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42015"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-frls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг FRLS 2*1,5 ГК ГОСТ",
+                    "price": 418,
+                    "unit": "м",
+                    "id": "32381"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-at/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-lsltx-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LSLTx 2*1,5 ГК ГОСТ",
+                    "price": 342,
+                    "unit": "м",
+                    "id": "34452"
+                  }
+                ],
+                "excluded_out_of_stock": 1,
+                "excluded_other_units": 0,
+                "minimum_price": 309,
+                "winners": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  }
+                ]
+              },
+              "products": [
+                {
+                  "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "price": 309,
+                  "stockLine": "Караганда (18402 м), Алматы (246 м), Шымкент (16 м)",
+                  "cardText": "- **[Кабель ВВГ 2*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/)**\n  Цена: *309* ₸/м\n  Наличие: Караганда (18402 м), Алматы (246 м), Шымкент (16 м)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 2*1,5», цены и единицы продажи; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-92d36121",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "2×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 4326
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-household-motion-joined-currency",
+      "title": "Бюджет без пробела перед валютой не сужает окно кандидатов",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-joined-currency_base_1791883275534_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13753,
+              "network_attempts": 1,
+              "log_id": "92fd1750-930f-4868-a44d-60a31078ae45",
+              "diagnostic_error": null,
+              "products_count": 3,
+              "unique_products_count": 3,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140",
+                  "verified": true,
+                  "sku": "Ем000033649",
+                  "name": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "бытовые светильники накладные",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "18",
+                    "Ширина, см": "18",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "48",
+                    "Количество ламп": "1",
+                    "Световой поток, Лм": "1520",
+                    "Диапазон рабочих температур": "-20 +40 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Срок службы, часы": "35000",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "200-240",
+                    "Вес, кг.": "0.15",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "40",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "светодиодный драйвер",
+                    "Объем, м3": "0.001",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "Gauss",
+                    "Материал рассеивателя": "поликарбонат",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал корпуса": "пластик",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "18"
+                  },
+                  "offerPrice": 3878,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "description_excerpt": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40 – Служат для освещения крытых помещений где не требуется высокая защищенность от пыли и влаги. Данная модель оборудована микроволновым сенсором (в линейке есть модели оборудованные оптико-акустическим датчиком). Сенсор автоматически включает светильник при появлении движущихся объектов в зоне обнаружения датчика и автоматически отключает осветительный прибор при выходе из зоны обнаружения датчика. "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000029834",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Ширина, см": "22",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Количество ламп": "нет",
+                    "Световой поток, Лм": "2850",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Мощность ламп, Вт": "30",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "230",
+                    "Вес, кг.": "0.7",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "не требуется",
+                    "Объем, м3": "0.009",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "LEDAR",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22"
+                  },
+                  "offerPrice": 2511,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К LEDAR с датчиком движения – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar",
+                  "verified": true,
+                  "sku": "Ем000031548",
+                  "name": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Вид светильника": "светильники для ЖКХ",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "22",
+                    "Ширина, см": "22",
+                    "Тип лампы": "LED",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Тип цоколя": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "120",
+                    "Количество ламп": "нет",
+                    "Световой поток, Лм": "1960",
+                    "Диапазон рабочих температур": "-20 +50 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "230",
+                    "Вес, кг.": "0.7",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "44",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "не требуется",
+                    "Объем, м3": "0.009",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "LEDAR",
+                    "Материал рассеивателя": "пластик",
+                    "С датчиком движения": "да",
+                    "Код ТН ВЭД": "9405110033",
+                    "Материал корпуса": "металл",
+                    "Цвет свечения": "холодный белый",
+                    "Гарантийный срок, мес": "12",
+                    "Диаметр, см": "22"
+                  },
+                  "offerPrice": 2381,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "description_excerpt": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR – осветительный прибор с современными светодиодами, предназначенный для общественного и бытового освещения. Светильник станет идеальным решением для при локального и общего освещения вестибюлей, холлов, санузлов и других второстепенных помещений. Отличается: низким энергопотреблением, высокими техническими характеристиками, компактностью, лаконичным дизайном, экологической чистотой, приятным ровным свечением без пул"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "price": 3878,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/)**\n  Цена: *3 878* ₸\n  Бренд: Gauss\n  Наличие: Караганда (3 шт)"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2511,
+                  "stockLine": "Астана (722 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 30Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-30vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 511* ₸\n  Бренд: LEDAR\n  Наличие: Астана (722 шт), Актобе (326 шт), Караганда (170 шт) и ещё 1 городов"
+                },
+                {
+                  "title": "Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/",
+                  "price": 2381,
+                  "stockLine": "Астана (1290 шт), Караганда (478 шт), Актобе (161 шт) и ещё 1 городов",
+                  "cardText": "- **[Светодиодный светильник СПБ для ЖКХ круглый 20Вт 6500К с датчиком движения LEDAR](https://220volt.kz/catalog/svetotexnika/svetilniki/svetodiodnyij-svetilnik-spb-dlya-zhkx-kruglyij-20vt-6500k-s-datchikom-dvizheniya-ledar/)**\n  Цена: *2 381* ₸\n  Бренд: LEDAR\n  Наличие: Астана (1290 шт), Караганда (478 шт), Актобе (161 шт) и ещё 1 городов"
+                }
+              ],
+              "text": "Клиент ищет бытовой светильник с датчиком движения для домашнего использования. Ценовое ограничение 4000 тенге — это бюджетный фильтр, а не технический параметр. Основные требования: наличие датчика движения (обязательный функциональный признак) и бытовое назначение. Датчик движения — ключевая функция, которая должна присутствовать в характеристиках товара. Для указанного применения сначала проверяю «Вид светильника: бытовые линейные светильники»; «Вид светильника: бытовые светильники накладные»; товар из другой рубрики допустим только если его собственная карточка прямо подтверждает то же применение. Внутри вашего класса в первую очередь проверяю «бытовые линейные светильники», «бытовые светильники накладные» как предпочтение, не исключая другие допустимые варианты.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-c48f7e7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "С датчиком движения",
+                    "op": "eq",
+                    "value": "да",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые линейные светильники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые светильники накладные",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовой",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "датчиком",
+                    "op": "eq",
+                    "value": "датчиком"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 39, листьев 1",
+                  "duration_ms": 1566
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=2; initial=1; minimum=3; application=1; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=unscoped; total=53; retrieved=50; candidate=4; proven=3; pooled=3; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 3",
+                  "duration_ms": 1859
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-gallant-broad-assortment",
+      "title": "Широкий ассортимент Gallant сначала уточняется",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-gallant-broad-assortment_base_1791883292259_1",
+          "turns": [
+            {
+              "message": "покажи ассортимент Gallant на сайте",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 4112,
+              "network_attempts": 1,
+              "log_id": "6107bab8-d0ed-4ff2-b882-47d4a1005389",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками. В каталоге уже видны разделы: Выключатели, Розетки.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "catalog_section",
+                "options_count": 2,
+                "values": [
+                  "Выключатели",
+                  "Розетки"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "двойные электрические розетки",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16442,
+              "network_attempts": 1,
+              "log_id": "4d0c02f0-5f0e-4534-aa91-9839958af49d",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072135 (черный/хром)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/",
+                  "price": 6343,
+                  "stockLine": "Караганда (38 шт), Шымкент (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072135 (черный/хром)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072135-%28chernyijxrom%29/)**\n  Цена: *6 343* ₸\n  Бренд: Werkel\n  Наличие: Караганда (38 шт), Шымкент (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072104 (графит рифленый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072104-%28grafit-riflenyij%29/",
+                  "price": 5385,
+                  "stockLine": "Караганда (23 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072104 (графит рифленый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072104-%28grafit-riflenyij%29/)**\n  Цена: *5 385* ₸\n  Бренд: Werkel\n  Наличие: Караганда (23 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072110 (шампань рифленый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072110-%28shampan-riflenyij%29/",
+                  "price": 5722,
+                  "stockLine": "Шымкент (18 шт), Караганда (2 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072110 (шампань рифленый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072110-%28shampan-riflenyij%29/)**\n  Цена: *5 722* ₸\n  Бренд: Werkel\n  Наличие: Шымкент (18 шт), Караганда (2 шт)"
+                },
+                {
+                  "title": "Розетка двойная с заземлением Gallant /W5072101 (белый)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072101-%28belyij%29/",
+                  "price": 4595,
+                  "stockLine": "Караганда (11 шт), Шымкент (1 шт)",
+                  "cardText": "- **[Розетка двойная с заземлением Gallant /W5072101 (белый)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya-s-zazemleniem-gallant-w5072101-%28belyij%29/)**\n  Цена: *4 595* ₸\n  Бренд: Werkel\n  Наличие: Караганда (11 шт), Шымкент (1 шт)"
+                }
+              ],
+              "text": "Клиент ищет двойные электрические розетки бренда Gallant. «Двойные» означает количество разъемов = 2, что является обязательным параметром для каждого отдельного товара. Вид розетки — электрическая, так как клиент явно указал «электрические розетки». Бренд Gallant будет передан как текстовый фильтр в поиске. Обязательные параметры: «Количество разъемов: 2». По классу «Вид розетки» выбираю «электрическая». Явно указанное свойство «электрические розетки» соответствует «Вид розетки: электрическая».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-3aa1cb87",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Коллекция",
+                    "op": "eq",
+                    "value": "Gallant",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1818 тов., фасетов 46, листьев 1",
+                  "duration_ms": 6148
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 5",
+                  "duration_ms": 356
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-13T09:21:52.814Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 4,
+    "recorded_turns": 4
+  },
+  "log_ids": [
+    "e31e4a4d-4405-40bb-908f-613df7b753af",
+    "92fd1750-930f-4868-a44d-60a31078ae45",
+    "6107bab8-d0ed-4ff2-b882-47d4a1005389",
+    "4d0c02f0-5f0e-4534-aa91-9839958af49d"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 4,
+    "verified": 4,
+    "unverified": 0
+  },
+  "passed": true
+}
