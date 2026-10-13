@@ -6,6 +6,8 @@
 -- then call this RPC before any paid catalog/LLM work. Existing/replayed turns
 -- never call this RPC and therefore never consume an admission slot.
 
+BEGIN;
+
 CREATE TABLE public.chat_v3_admission_buckets (
   mode text PRIMARY KEY CHECK (mode IN ('observe', 'enforce')),
   window_started_at timestamptz NOT NULL DEFAULT date_trunc('minute', now()),
@@ -286,3 +288,5 @@ GRANT EXECUTE ON FUNCTION public.check_chat_v3_admission(uuid, text, integer, in
   TO service_role;
 GRANT EXECUTE ON FUNCTION public.release_chat_v3_admission(uuid)
   TO service_role;
+
+COMMIT;
