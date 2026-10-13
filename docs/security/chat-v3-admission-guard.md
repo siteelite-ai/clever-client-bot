@@ -80,8 +80,9 @@ minutes if the worker dies; current v3 accepted work is bounded to about 40
 seconds. Expiry prevents permanent lockout but means this is not an absolute
 concurrency guarantee if paid work outlives the TTL. Fixed-window boundaries
 can allow a short burst approaching twice the per-minute setting. Decisions
-are retained for 24 hours; a bounded lazy cleanup removes only expired rows
-from the **new** decision table.
+become eligible for deletion after 24 hours; a bounded lazy cleanup removes
+expired rows from the **new** decision table only when a later admission check
+runs. Switching admission off does not itself delete them.
 
 ## Shared-project preflight and rollout gate
 
@@ -130,8 +131,15 @@ enforcement.
 After a tested migration, start with `off`; then use `observe` while reviewing
 `observed_limit`, RPC latency, release failures, and decision counts. A slow
 or failed observation RPC must not turn into a customer-facing connection
-error. Turn on `enforce` only after measured thresholds and the operational
-impact of a global cap have been reviewed. The immediate non-destructive rollback
+error. Before changing the project-wide Edge secret, deploy and verify **both**
+preview wrappers and production v3 from this commit. Older preview deployments
+do not have the isolate-local admission marker and would otherwise consume the
+shared production bucket. Turn on `enforce` only after measured thresholds and
+the operational impact of a global cap have been reviewed. In particular,
+confirm that observation RPC timeouts and reservation-release failures are
+negligible: an RPC that commits after its Edge deadline can temporarily leave
+an in-flight reservation until the three-minute expiry. The immediate
+non-destructive rollback
 is to set the Edge mode to `off` (or deploy the prior Edge version); leave the
 new tables and their telemetry intact. A later schema removal would require a
 separately reviewed data-retention/export decision and is **not** part of this
