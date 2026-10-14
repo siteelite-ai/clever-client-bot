@@ -23,3 +23,8 @@ test('public widget assets do not require the Lovable host', async () => {
   assert.doesNotMatch(loader + widget + html, /https:\/\/[^"'\s]*lovable\.app/);
   assert.match(widget, /new URL\('logo-220volt-widget\.svg', document\.currentScript\.src\)/);
 });
+
+test('the private cabinet asks crawlers not to index it', async () => {
+  const robots = await source('public/robots.txt');
+  assert.match(robots, /^User-agent: \*\nDisallow: \/\n$/);
+});
