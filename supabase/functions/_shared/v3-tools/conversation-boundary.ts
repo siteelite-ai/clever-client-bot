@@ -1,4 +1,5 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
+import { hasExplicitNewTaskPreface } from "./request-preface.ts";
 
 export type ConversationMessage = {
   role: "user" | "assistant";
@@ -33,8 +34,6 @@ const FOLLOWUP_INTENT_RE =
   /^(?:а\s+)?(?:почему|сравни|чем\s+они|какой\s+из|какая\s+из|какие\s+из|дешевле|дороже|самый\s+бюджетный|самая\s+бюджетная|подробнее|подтверждаю|да|нет)(?=\s|[?!:;.,-]|$)/iu;
 const COMPLETE_REQUEST_RE =
   /(?:^|\s)(?:найди|подбери|подберите|покажи|предложи|предложите|посоветуй|посоветуйте|хочу|мне\s+нужен|мне\s+нужна|мне\s+нужно|нам\s+нужен|нам\s+нужна|есть\s+ли|у\s+(?:вас|тебя)\s+есть|можно\s+ли|сколько|чем\s+отличается)(?:\s|[?!.,]|$)/iu;
-const EXPLICIT_NEW_TASK_RE =
-  /^(?:новая\s+тема|новый\s+вопрос)(?=\s|[?!:;.,-]|$)/iu;
 const ELLIPTICAL_ATTRIBUTE_RE =
   /^(?:а\s+)?(?:(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?|[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+[\p{L}-]{3,}){0,2}\s+есть)[?!.,]?$/iu;
 const INDEPENDENT_SELECTION_FRAME_RE =
@@ -189,7 +188,7 @@ export function classifyPendingSelectionReadinessNewTaskLocally(
   const original = scopeRecord.token.replace(/\p{Cc}/gu, " ")
     .replace(/\s+/gu, " ").trim();
   if (!current || !original || current.length > 800) return null;
-  if (EXPLICIT_NEW_TASK_RE.test(current)) {
+  if (hasExplicitNewTaskPreface(current)) {
     return {
       mode: "new_task",
       confidence: 1,
@@ -283,7 +282,7 @@ export function classifyConversationBoundaryLocally(
 ): ConversationBoundaryDecision | null {
   const text = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
   if (!text) return null;
-  if (EXPLICIT_NEW_TASK_RE.test(text)) {
+  if (hasExplicitNewTaskPreface(text)) {
     return {
       mode: "new_task",
       confidence: 1,
