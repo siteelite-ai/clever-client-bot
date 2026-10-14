@@ -1,0 +1,69 @@
+name: Build frontend for independent hosting
+
+on:
+  push:
+    paths:
+      - '.github/workflows/frontend-build.yml'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'postcss.config.js'
+      - 'public/**'
+      - 'scripts/qa/**'
+      - 'src/**'
+      - 'tailwind.config.ts'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - 'vitest.config.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/frontend-build.yml'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'postcss.config.js'
+      - 'public/**'
+      - 'scripts/qa/**'
+      - 'src/**'
+      - 'tailwind.config.ts'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - 'vitest.config.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run frontend and widget checks
+        run: |
+          npx tsc --noEmit
+          npm test
+          npm run qa:widget-contract
+          npm run qa:widget-loader
+          node --test scripts/qa/selfhost-frontend-contract.test.mjs
+      - name: Build static release
+        run: npm run build
+      - name: Verify expected files
+        run: |
+          test -s dist/index.html
+          test -s dist/embed.js
+          test -s dist/widget.js
+          test -s dist/widget-version.js
+          test -s dist/widget-version.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
