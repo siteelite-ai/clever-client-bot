@@ -3,12 +3,23 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 
-const widget = await readFile(new URL('../../dist-selfhost-test/widget.js', import.meta.url), 'utf8');
-const manifest = await readFile(new URL('../../dist-selfhost-test/widget-version.js', import.meta.url), 'utf8');
-const html = await readFile(new URL('../../dist-selfhost-test/index.html', import.meta.url), 'utf8');
-const json = JSON.parse(await readFile(new URL('../../dist-selfhost-test/widget-version.json', import.meta.url), 'utf8'));
+// The generic Edge QA job runs before any frontend build. Its environment has
+// no isolated test credentials, so only the dedicated post-build CI step should
+// load and exercise this generated artifact. If credentials are set, missing
+// build files remain a hard failure rather than being silently skipped.
+const hasBuildConfig = Boolean(process.env.SELFHOST_TEST_SUPABASE_URL &&
+  process.env.SELFHOST_TEST_SUPABASE_PUBLIC_KEY);
+const widget = hasBuildConfig
+  ? await readFile(new URL('../../dist-selfhost-test/widget.js', import.meta.url), 'utf8') : null;
+const manifest = hasBuildConfig
+  ? await readFile(new URL('../../dist-selfhost-test/widget-version.js', import.meta.url), 'utf8') : null;
+const html = hasBuildConfig
+  ? await readFile(new URL('../../dist-selfhost-test/index.html', import.meta.url), 'utf8') : null;
+const json = hasBuildConfig
+  ? JSON.parse(await readFile(new URL('../../dist-selfhost-test/widget-version.json', import.meta.url), 'utf8')) : null;
 
-test('synthetic selfhost widget sends only to the test backend using apikey', async () => {
+test('synthetic selfhost widget sends only to the test backend using apikey',
+  { skip: !hasBuildConfig }, async () => {
   const endpoint = `${process.env.SELFHOST_TEST_SUPABASE_URL}/functions/v1/chat-consultant-v3`;
   const publicKey = process.env.SELFHOST_TEST_SUPABASE_PUBLIC_KEY;
   assert.ok(endpoint.startsWith('https://'));
@@ -56,7 +67,8 @@ test('synthetic selfhost widget sends only to the test backend using apikey', as
   dom.window.close();
 });
 
-test('selfhost loader bootstrap, manifest, and widget share one content version', () => {
+test('selfhost loader bootstrap, manifest, and widget share one content version',
+  { skip: !hasBuildConfig }, () => {
   const widgetVersion = widget.match(/var WIDGET_VERSION = '(widget-[a-f0-9]{16})';/)?.[1];
   assert.ok(widgetVersion);
   assert.equal(json.version, widgetVersion);
