@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:selfhost-test": "node scripts/build-selfhost-test.mjs",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -13,6 +14,7 @@
     "qa:security-smoke": "node scripts/qa/run-security-smoke.mjs",
     "qa:widget-contract": "node scripts/qa/check-widget-release-contract.mjs",
     "qa:widget-loader": "node --test scripts/qa/widget-loader-contract.test.mjs",
+    "qa:selfhost-config": "node --test scripts/qa/selfhost-test-config.test.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

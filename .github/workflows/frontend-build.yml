@@ -5,11 +5,15 @@ on:
     paths:
       - '.github/workflows/frontend-build.yml'
       - 'index.html'
+      - '.env'
+      - '.env.selfhost-test.example'
+      - 'deploy/nginx/**'
+      - 'deploy/selfhost/**'
       - 'package.json'
       - 'package-lock.json'
       - 'postcss.config.js'
       - 'public/**'
-      - 'scripts/qa/**'
+      - 'scripts/**'
       - 'src/**'
       - 'tailwind.config.ts'
       - 'tsconfig*.json'
@@ -19,11 +23,15 @@ on:
     paths:
       - '.github/workflows/frontend-build.yml'
       - 'index.html'
+      - '.env'
+      - '.env.selfhost-test.example'
+      - 'deploy/nginx/**'
+      - 'deploy/selfhost/**'
       - 'package.json'
       - 'package-lock.json'
       - 'postcss.config.js'
       - 'public/**'
-      - 'scripts/qa/**'
+      - 'scripts/**'
       - 'src/**'
       - 'tailwind.config.ts'
       - 'tsconfig*.json'
@@ -52,6 +60,8 @@ jobs:
           npm run qa:widget-contract
           npm run qa:widget-loader
           node --test scripts/qa/selfhost-frontend-contract.test.mjs
+          npm run qa:selfhost-config
+          node --test deploy/selfhost/export-test-functions.test.mjs deploy/selfhost/export-test-migrations.test.mjs deploy/selfhost/validate-compose.test.mjs scripts/qa/admin-users-auth-boundary.test.mjs scripts/qa/knowledge-lovable-gate.test.mjs scripts/qa/knowledge-safe-fetch.test.mjs
       - name: Build static release
         run: npm run build
       - name: Verify expected files
@@ -67,3 +77,15 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
+      - name: Prove isolated test build with synthetic public credentials
+        env:
+          SELFHOST_TEST_BACKEND_KIND: selfhost
+          SELFHOST_TEST_SUPABASE_URL: https://api-volt-next.testdevops.ru
+          SELFHOST_TEST_SUPABASE_PUBLIC_KEY: sb_publishable_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        run: |
+          npm run build:selfhost-test
+          test -s dist-selfhost-test/index.html
+          test -s dist-selfhost-test/widget.js
+          test -s dist-selfhost-test/widget-version.js
+          test -s dist-selfhost-test/widget-version.json
+          node --test scripts/qa/selfhost-built-widget.test.mjs

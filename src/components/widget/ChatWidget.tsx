@@ -3,13 +3,11 @@ import { MessageSquare, X, Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatMessage, Product, QuickReply } from '@/types';
 import ReactMarkdown from 'react-markdown';
+import { SUPABASE_URL, SUPABASE_PUBLIC_KEY } from '@/lib/supabaseDeployment';
 
 interface ChatWidgetProps {
   isPreview?: boolean;
 }
-
-const SUPABASE_URL = "https://yngoixmvmxdfxokuafjp.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ";
 
 // V1/V2/V3 routing — endpoint is resolved once at widget mount via widget-config.
 // V1 = legacy frozen pipeline (chat-consultant).
@@ -119,11 +117,14 @@ async function streamChat({
         };
 
 
+    const publicKeyIsNotJwt = SUPABASE_PUBLIC_KEY.startsWith('sb_publishable_');
     const resp = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        ...(publicKeyIsNotJwt
+          ? { apikey: SUPABASE_PUBLIC_KEY }
+          : { Authorization: `Bearer ${SUPABASE_PUBLIC_KEY}` }),
       },
       body: JSON.stringify(body),
     });
