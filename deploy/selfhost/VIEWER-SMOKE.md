@@ -1,9 +1,12 @@
 # Isolated viewer-role smoke test
 
-**No server run has been performed.** The accompanying Node tests use only
-mocked HTTP and local in-memory journal storage. This runbook is for a later,
-separately approved check on the isolated server3 test stack; it is not a
-production procedure or evidence that the deployed permissions already pass.
+The accompanying Node tests use only mocked HTTP and local in-memory journal
+storage. On 14.10.2026, the exact one-time procedure below also passed against
+the isolated server3 loopback gateway: both protected function calls returned
+`403`, the viewer could not read the non-empty `app_settings` and admission
+control rows, and its own/foreign role checks behaved as expected. The test
+viewer and journal were removed; one synthetic administrator remains. This is
+not a production procedure or proof of browser/public-routing behavior.
 
 The helper creates only `qa-viewer-20261014@volt220.test` in the
 `volt220test` self-hosted Supabase, exercises its default `viewer` role, and
@@ -27,6 +30,9 @@ and the other release checks pass.
   `knowledge-process` list request can schedule orphan self-healing and paid
   embedding calls if entries exist. The helper checks for an empty table
   before its admin positive-control request and refuses a non-empty KB.
+  Before the 14.10.2026 run, `app_settings.openrouter_api_key` was also
+  confirmed `NULL`; do not repeat this smoke after installing a paid key
+  without independently checking for concurrent knowledge writes.
 - The Compose project must be `volt220test`, with `volt220test-db` running
   without a host port and the API gateway bound only to `127.0.0.1:18081`.
   The private `.env` must be the root-owned, mode `0600`, isolated test file.
