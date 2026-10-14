@@ -1,5 +1,6 @@
 import type { ProductRef } from "./types.ts";
 import type { Criterion } from "./criteria-gate.ts";
+import { stripExplicitNewTaskPreface } from "./request-preface.ts";
 
 export interface ExactCompoundMarkingRequest {
   query: string;
@@ -176,7 +177,7 @@ export function requiresSemanticCompoundEvidence(message: string): boolean {
 /** Model-owned lexical source for semantic recovery, with request/sort language,
  * the literal N×S constraint and an explicit sale-unit choice removed. */
 export function semanticCompoundSourceQuery(message: string): string {
-  const normalized = norm(message);
+  const normalized = norm(stripExplicitNewTaskPreface(message));
   const saleUnit = explicitTrailingSaleUnit(normalized);
   return (saleUnit ? normalized.slice(0, saleUnit.start) : normalized)
     .replace(/[?!]/gu, " ")

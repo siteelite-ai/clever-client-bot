@@ -16,6 +16,7 @@ import {
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
 } from "./exact-compound-marking-policy.ts";
+import { admitDirectSelectionRoute } from "../../chat-consultant-v3/selection-jargon-policy.ts";
 import type { ProductRef } from "./types.ts";
 
 const product = (id: string, pagetitle: string, price: number): ProductRef => ({
@@ -42,6 +43,74 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
     classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"),
     null,
   );
+});
+
+Deno.test("leading new-topic prefaces do not turn an exact cable request into semantic recovery", () => {
+  const request = "Найди кабель ВВГ 3*1,5 самый дешевый.";
+  const expected = classifyExactCompoundMarkingRequest(request);
+  assertEquals(expected, {
+    query: "кабель ввг 3*1,5",
+    first: 3,
+    second: 1.5,
+    priceDirection: "cheapest",
+    exhaustive: false,
+  });
+
+  for (
+    const prefaced of [
+      `Новая тема. ${request}`,
+      `Новая тема: ${request}`,
+      `Новый вопрос: ${request}`,
+    ]
+  ) {
+    assertEquals(semanticCompoundSourceQuery(prefaced), "кабель ввг", prefaced);
+    assertEquals(requiresSemanticCompoundEvidence(prefaced), false, prefaced);
+    assertEquals(
+      classifyExactCompoundMarkingRequest(prefaced),
+      expected,
+      prefaced,
+    );
+    assertEquals(
+      admitDirectSelectionRoute({
+        route: "compound",
+        userMessage: prefaced,
+        coveredCompound: expected!,
+      }),
+      true,
+      prefaced,
+    );
+  }
+});
+
+Deno.test("new-topic cleanup preserves genuine criteria and never deletes a later phrase", () => {
+  const withCriterion =
+    "Новая тема. Найди кабель ВВГ 3*1,5 негорючий самый дешевый.";
+  assertEquals(
+    semanticCompoundSourceQuery(withCriterion),
+    "кабель ввг негорючий",
+  );
+  assertEquals(requiresSemanticCompoundEvidence(withCriterion), true);
+  assertEquals(classifyExactCompoundMarkingRequest(withCriterion), null);
+
+  const withPurpose =
+    "Новая тема. Найди кабель ВВГ 3*1,5 самый дешевый для улицы.";
+  assertEquals(classifyExactCompoundMarkingRequest(withPurpose), null);
+  assertEquals(
+    admitDirectSelectionRoute({
+      route: "compound",
+      userMessage: withPurpose,
+      coveredCompound: { first: 3, second: 1.5 },
+    }),
+    false,
+  );
+
+  const laterPhrase = "Найди кабель ВВГ 3*1,5 самый дешевый. Новая тема.";
+  assertEquals(
+    semanticCompoundSourceQuery(laterPhrase),
+    "кабель ввг . новая тема",
+  );
+  assertEquals(requiresSemanticCompoundEvidence(laterPhrase), true);
+  assertEquals(classifyExactCompoundMarkingRequest(laterPhrase), null);
 });
 
 Deno.test("selected sale unit keeps the exact class-and-marking route and leaves no semantic modifier", () => {
