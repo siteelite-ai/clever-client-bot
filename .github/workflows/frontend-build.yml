@@ -61,7 +61,7 @@ jobs:
           npm run qa:widget-loader
           node --test scripts/qa/selfhost-frontend-contract.test.mjs
           npm run qa:selfhost-config
-          node --test deploy/selfhost/export-test-functions.test.mjs deploy/selfhost/export-test-migrations.test.mjs deploy/selfhost/validate-compose.test.mjs scripts/qa/admin-users-auth-boundary.test.mjs scripts/qa/knowledge-lovable-gate.test.mjs scripts/qa/knowledge-safe-fetch.test.mjs
+          node --test deploy/selfhost/bootstrap-test-admin.test.mjs deploy/selfhost/export-test-functions.test.mjs deploy/selfhost/export-test-migrations.test.mjs deploy/selfhost/validate-compose.test.mjs scripts/qa/admin-users-auth-boundary.test.mjs scripts/qa/knowledge-lovable-gate.test.mjs scripts/qa/knowledge-safe-fetch.test.mjs
       - name: Build static release
         run: npm run build
       - name: Verify expected files
