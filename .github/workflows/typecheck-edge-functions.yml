@@ -8,6 +8,8 @@ on:
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
+      - 'supabase/functions/admin-users/**'
+      - 'supabase/functions/knowledge-process/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
@@ -29,6 +31,8 @@ on:
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
+      - 'supabase/functions/admin-users/**'
+      - 'supabase/functions/knowledge-process/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
@@ -77,6 +81,9 @@ jobs:
 
       - name: Type-check chat-consultant-v3 previews
         run: deno check supabase/functions/chat-consultant-v3-preview/index.ts supabase/functions/chat-consultant-v3-closure-preview/index.ts
+
+      - name: Type-check cabinet administration and knowledge functions
+        run: deno check supabase/functions/admin-users/index.ts supabase/functions/knowledge-process/index.ts
 
       - name: Type-check widget
         run: deno check public/widget.js
