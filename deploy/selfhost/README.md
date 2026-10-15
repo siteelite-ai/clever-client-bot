@@ -171,8 +171,11 @@ This proves only connectivity, **not** a successful model response. Keep both
 new-site 503 gates until a dedicated capped OpenRouter key, separate catalogue
 credential, real administrator login, and a bounded model-backed smoke pass.
 See [`OPENROUTER-ROUTING.md`](./OPENROUTER-ROUTING.md) and
-[`openrouter-relay/README.md`](./openrouter-relay/README.md). The old production
-cabinet and widget remain unchanged.
+[`openrouter-relay/README.md`](./openrouter-relay/README.md). Enter the two
+new dedicated service keys only through the root-owned TTY helper described in
+[`SET-ISOLATED-SERVICE-KEYS.md`](./SET-ISOLATED-SERVICE-KEYS.md); it refuses to
+overwrite populated settings. The old production cabinet and widget remain
+unchanged.
 
 Official references: [Docker self-hosting](https://supabase.com/docs/guides/self-hosting/docker),
 [self-hosted auth keys](https://supabase.com/docs/guides/self-hosting/self-hosted-auth-keys),
