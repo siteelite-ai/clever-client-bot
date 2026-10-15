@@ -74,7 +74,10 @@ export function parseEnv(content) {
 }
 
 export function validatePrivateEnv(actual, upstreamExample) {
-  assert(!actual.has('LOVABLE_API_KEY'), 'LOVABLE_API_KEY must not be present in the test .env');
+  for (const key of ['LOVABLE_API_KEY', 'OPENROUTER_API_KEY', 'VOLT220_API_TOKEN',
+    'CATALOG_API_TOKEN']) {
+    assert(!actual.has(key), `${key} must not be present in the test .env`);
+  }
   for (const [key, expected] of Object.entries(EXPECTED_SETTINGS)) {
     assert(actual.get(key) === expected, `${key} must be the isolated test value`);
   }
@@ -207,8 +210,11 @@ export function validateRenderedConfig(config) {
     assert(String(services.functions.environment?.[key]) === expected,
       `Edge Function ${key} is not test-safe`);
   }
-  assert(!Object.prototype.hasOwnProperty.call(services.functions.environment ?? {}, 'LOVABLE_API_KEY'),
-    'Lovable API key must never be passed to the self-hosted test functions');
+  for (const key of ['LOVABLE_API_KEY', 'OPENROUTER_API_KEY', 'VOLT220_API_TOKEN',
+    'CATALOG_API_TOKEN']) {
+    assert(!Object.prototype.hasOwnProperty.call(services.functions.environment ?? {}, key),
+      `${key} must never be passed to the self-hosted test functions`);
+  }
   let privateKeys;
   let publicJwks;
   try {

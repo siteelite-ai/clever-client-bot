@@ -13,6 +13,8 @@ const widget = hasBuildConfig
   ? await readFile(new URL('../../dist-selfhost-test/widget.js', import.meta.url), 'utf8') : null;
 const manifest = hasBuildConfig
   ? await readFile(new URL('../../dist-selfhost-test/widget-version.js', import.meta.url), 'utf8') : null;
+const loader = hasBuildConfig
+  ? await readFile(new URL('../../dist-selfhost-test/embed.js', import.meta.url), 'utf8') : null;
 const html = hasBuildConfig
   ? await readFile(new URL('../../dist-selfhost-test/index.html', import.meta.url), 'utf8') : null;
 const json = hasBuildConfig
@@ -74,4 +76,12 @@ test('selfhost loader bootstrap, manifest, and widget share one content version'
   assert.equal(json.version, widgetVersion);
   assert.match(manifest, new RegExp(`window\\.__voltWidgetVersion = '${widgetVersion}'`));
   assert.match(html, new RegExp(`var version = '${widgetVersion}'`));
+});
+
+test('selfhost loader uses only its own fallback and preserves src-derived origins',
+  { skip: !hasBuildConfig }, () => {
+  assert.equal((loader.match(/\bvar base = /g) ?? []).length, 1);
+  assert.match(loader, /var base = 'https:\/\/chat-volt-next\.testdevops\.ru';/);
+  assert.doesNotMatch(loader, /clever-client-bot\.lovable\.app/);
+  assert.match(loader, /new URL\(self\.src, location\.href\)\.origin/);
 });

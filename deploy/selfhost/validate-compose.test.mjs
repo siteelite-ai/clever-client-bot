@@ -109,7 +109,9 @@ for (const [name, mutate, expected] of [
   ['remote knowledge import enabled', (c) => { c.services.functions.environment.KNOWLEDGE_REMOTE_IMPORT_ENABLED = 'true'; }, /safety flags/],
   ['chat admission off', (c) => { c.services.functions.environment.CHAT_V3_ADMISSION_MODE = 'off'; }, /ADMISSION_MODE/],
   ['Lovable failover on', (c) => { c.services.functions.environment.LOVABLE_AGENT_FAILOVER_ENABLED = 'true'; }, /LOVABLE_AGENT_FAILOVER_ENABLED/],
-  ['Lovable key present', (c) => { c.services.functions.environment.LOVABLE_API_KEY = 'forbidden'; }, /Lovable API key/],
+  ['Lovable key present', (c) => { c.services.functions.environment.LOVABLE_API_KEY = 'forbidden'; }, /LOVABLE_API_KEY/],
+  ['OpenRouter fallback key present', (c) => { c.services.functions.environment.OPENROUTER_API_KEY = 'forbidden'; }, /OPENROUTER_API_KEY/],
+  ['catalog fallback token present', (c) => { c.services.functions.environment.VOLT220_API_TOKEN = 'forbidden'; }, /VOLT220_API_TOKEN/],
 ]) {
   test(`rejects ${name}`, () => {
     const config = validConfig();
@@ -162,6 +164,12 @@ test('private env requires separate generated asymmetric gateway keys', () => {
   settings.set('ANON_KEY_ASYMMETRIC', generated.get('ANON_KEY_ASYMMETRIC'));
   settings.set('LOVABLE_API_KEY', 'forbidden');
   assert.throws(() => validatePrivateEnv(settings, upstream), /LOVABLE_API_KEY/);
+  settings.delete('LOVABLE_API_KEY');
+  settings.set('OPENROUTER_API_KEY', 'forbidden');
+  assert.throws(() => validatePrivateEnv(settings, upstream), /OPENROUTER_API_KEY/);
+  settings.delete('OPENROUTER_API_KEY');
+  settings.set('VOLT220_API_TOKEN', 'forbidden');
+  assert.throws(() => validatePrivateEnv(settings, upstream), /VOLT220_API_TOKEN/);
 });
 
 test('generated legacy and asymmetric JWTs verify with matching roles', () => {

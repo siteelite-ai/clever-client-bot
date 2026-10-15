@@ -19,7 +19,7 @@
   })();
 
   // Базовый origin берём из src самого embed.js, чтобы работало на своём домене.
-  var base = 'https://chat-volt-next.testdevops.ru';
+  var base = 'https://clever-client-bot.lovable.app';
   try {
     if (self && self.src) base = new URL(self.src, location.href).origin + new URL(self.src, location.href).pathname.replace(/\/embed\.js.*$/, '');
   } catch (e) {}

@@ -18,6 +18,13 @@ const respond = (status: number, payload: Record<string, unknown>) =>
   new Response(JSON.stringify(payload), { status, headers });
 
 serve(async (req) => {
+  // The self-hosted gateway reflects arbitrary Origin headers even when this
+  // function sets a fixed CORS response header. Enforce the browser origin in
+  // the handler as well; requests without Origin remain usable over SSH/CLI.
+  const origin = req.headers.get('origin');
+  if (origin && origin !== 'https://chat-volt-next.testdevops.ru') {
+    return respond(403, { error: 'origin_not_allowed' });
+  }
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers });
   if (req.method !== 'POST') return respond(405, { error: 'method_not_allowed' });
   // An accidental deployment to the production Supabase project stays inert.

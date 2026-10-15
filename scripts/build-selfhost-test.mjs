@@ -67,9 +67,11 @@ const widgetPath = path.join(pending, 'widget.js');
 const manifestPath = path.join(pending, 'widget-version.js');
 const jsonPath = path.join(pending, 'widget-version.json');
 const htmlPath = path.join(pending, 'index.html');
+const loaderPath = path.join(pending, 'embed.js');
 let widget = await readFile(widgetPath, 'utf8');
 let manifest = await readFile(manifestPath, 'utf8');
 let html = await readFile(htmlPath, 'utf8');
+let loader = await readFile(loaderPath, 'utf8');
 const json = JSON.parse(await readFile(jsonPath, 'utf8'));
 
 // These exact source markers are intentionally narrow. A changed widget must
@@ -121,6 +123,16 @@ if (config.publicKey.startsWith('sb_publishable_')) {
   );
 }
 
+// The checked-in loader keeps the Lovable fallback for the existing deployment.
+// Only the isolated self-hosted artifact redirects this one literal fallback;
+// src-derived origins continue to win unchanged in both environments.
+loader = replaceExactlyOnce(
+  loader,
+  "  var base = 'https://clever-client-bot.lovable.app';",
+  "  var base = 'https://chat-volt-next.testdevops.ru';",
+  'self-hosted loader fallback',
+);
+
 const versionMatch = widget.match(/var WIDGET_VERSION = '(widget-[a-f0-9]{16})';/g);
 if (!versionMatch || versionMatch.length !== 1) throw new Error('Widget version marker must occur exactly once');
 const originalVersion = versionMatch[0].slice("var WIDGET_VERSION = '".length, -2);
@@ -144,6 +156,7 @@ await Promise.all([
   writeFile(widgetPath, widget),
   writeFile(manifestPath, manifest),
   writeFile(htmlPath, html),
+  writeFile(loaderPath, loader),
   writeFile(jsonPath, `${JSON.stringify(json, null, 2)}\n`),
 ]);
 
@@ -160,6 +173,7 @@ const files = await filesBelow(pending);
 const forbidden = [
   'yngoixmvmxdfxokuafjp',
   'supabase-proxy.bold-dawn-058f.workers.dev',
+  'clever-client-bot.lovable.app',
   originalPublicKey,
 ];
 for (const file of files) {
@@ -183,7 +197,6 @@ if (config.publicKey.startsWith('sb_publishable_') &&
 if (!manifest.includes(version) || !html.includes(version) || json.version !== version) {
   throw new Error('Self-hosted widget release versions disagree');
 }
-const loader = await readFile(path.join(pending, 'embed.js'), 'utf8');
 if (!loader.includes("bootstrapFrame.setAttribute('sandbox', 'allow-scripts')") ||
     !loader.includes("encodeURIComponent(location.origin)") ||
     !loader.includes("'/widget.js?v=' + encodeURIComponent(version)")) {

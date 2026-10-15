@@ -1,9 +1,10 @@
 # Separate test Supabase on server3 (not a production cutover)
 
-This directory contains **only** a defensive overlay and read-only preflight
-for the official Supabase Docker release. It does not include credentials,
-database data, or a fork of Supabase. Do not point the existing 220volt widget,
-MODX, old cabinet, or production Supabase project at this stack.
+This directory contains the isolated Docker overlay, release checks, reviewed
+function/migration exporters, and new-domain Nginx boundary for the official
+Supabase Docker release. It does not include credentials, database data, or a
+fork of Supabase. Do not point the existing 220volt widget, MODX, old cabinet,
+or production Supabase project at this stack.
 
 ## Exact upstream source
 
@@ -66,10 +67,12 @@ disabled. Configure SMTP only if invitations/password reset are required.
 
 The official `FUNCTIONS_VERIFY_JWT` switch is global. This test configuration
 sets it to `false` for public `chat-consultant-v3` with a publishable key.
-Before lifting HTTP 503, copy **only** reviewed `chat-consultant-v3`,
-`admin-users`, `knowledge-process`, and required `_shared` code, then verify
-that the latter two enforce their own admin authentication. Do not blindly
-copy other unauthenticated preview/closure functions into this public stack.
+Before lifting HTTP 503, export and install **only** the four reviewed functions:
+`chat-consultant-v3`, `admin-users`, `knowledge-process`, `admin-settings`, and
+their required `_shared` code. Verify that all three admin functions enforce
+their own admin authentication. `admin-settings` must expose only key-presence
+flags and replace actions, never stored secret values. Do not blindly copy
+other unauthenticated preview/closure functions into this public stack.
 The official checkout contains a sample `volumes/functions/hello` endpoint;
 remove it from the served function directory before opening the API, after
 confirming the exact path in the isolated checkout. Keep the official
@@ -84,7 +87,17 @@ Before adding any test OpenRouter key, apply and check the admission-control
 RPC against the isolated test DB. Public chat runs in `enforce` mode with at
 most 3 admissions/minute and 2 in-flight requests. These limits protect
 concurrency but **do not** replace an independent dollar cap on the test
-OpenRouter key. Keep the API maintenance gate until both are verified.
+OpenRouter key. The paid model-ping action in `admin-settings` is disabled by
+default; enable it only after separate spending-cap review. Keep the API
+maintenance gate until both are verified.
+
+The isolated migration export contains 48 reviewed source versions plus three
+test-only hardening migrations, ending with
+`20261015100000_selfhost_protect_settings_secrets.sql`. The last migration
+removes authenticated direct REST access to the three `app_settings` secret
+columns. Apply it only to the isolated test DB after a backup and verify actual
+column privileges and admin/viewer behavior before public login. See
+[`MIGRATIONS.md`](./MIGRATIONS.md) and [`FUNCTIONS.md`](./FUNCTIONS.md).
 
 ## Safe Compose boundary
 
@@ -134,18 +147,32 @@ untouched.
 
 ## Public API and HTTPS
 
-`api-volt-next.testdevops.ru` must have a valid TLS certificate before browser
-traffic is allowed. The host Nginx should proxy **only** the required API
-prefixes (`/auth/v1/`, `/rest/v1/`, `/functions/v1/`, `/storage/v1/`, and
-`/realtime/v1/`) to `127.0.0.1:18081`, with WebSocket upgrade support for
-Realtime. Do **not** proxy `/` or Studio/admin routes to the public Internet.
-For test admin operations, use a restricted SSH tunnel to the loopback gateway
-or a separately authenticated internal path. The React customer cabinet at
-`chat-volt-next.testdevops.ru` is a different service from Supabase Studio.
+`api-volt-next.testdevops.ru` must have valid TLS before browser traffic is
+allowed. Its new-domain Nginx allowlist permits `/auth/v1/`, `/rest/v1/` and
+**exactly** `/functions/v1/chat-consultant-v3`, `/functions/v1/admin-users`,
+`/functions/v1/knowledge-process`, and `/functions/v1/admin-settings`.
+It does not publish `/storage/v1/`, `/realtime/v1/`, arbitrary function names,
+`/`, or Studio. These routes proxy only to `127.0.0.1:18081`. The React cabinet
+at `chat-volt-next.testdevops.ru` is a separate service from Supabase Studio.
+Both new vhosts need their site-specific allowlists because ISPmanager injects
+global webmail/admin locations. Install and verify the tracked Nginx files
+while both site-specific 503 gates remain in place; see
+[`NGINX-RELEASE.md`](./NGINX-RELEASE.md).
 
 Do not lift the maintenance gate on the new cabinet/API until the test schema,
-test credentials, function secrets, TLS, CORS, and frontend build are all
-verified to reference this isolated instance only.
+three hardening migrations, test credentials, four functions, secret grants,
+TLS, exact CORS, Nginx negative routes, and frontend build are verified to
+reference this isolated instance only. Direct OpenRouter egress from server3
+returns HTTP 403. On 2026-10-15 an isolated relay on 213.165.41.225 and
+SSH-only sidecar were deployed; a free `/api/v1/models` health check passed
+from inside `volt220test_internal`, and the isolated Edge volume now contains
+the reviewed bundle with all 17 OpenRouter URLs routed through that sidecar.
+This proves only connectivity, **not** a successful model response. Keep both
+new-site 503 gates until a dedicated capped OpenRouter key, separate catalogue
+credential, real administrator login, and a bounded model-backed smoke pass.
+See [`OPENROUTER-ROUTING.md`](./OPENROUTER-ROUTING.md) and
+[`openrouter-relay/README.md`](./openrouter-relay/README.md). The old production
+cabinet and widget remain unchanged.
 
 Official references: [Docker self-hosting](https://supabase.com/docs/guides/self-hosting/docker),
 [self-hosted auth keys](https://supabase.com/docs/guides/self-hosting/self-hosted-auth-keys),
