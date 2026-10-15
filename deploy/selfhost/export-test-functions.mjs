@@ -21,6 +21,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const defaultFunctionsRoot = join(repoRoot, 'supabase', 'functions');
 export const includedDirectories = Object.freeze([
   '_shared',
+  'admin-settings',
   'admin-users',
   'chat-consultant-v3',
   'knowledge-process',

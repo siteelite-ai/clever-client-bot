@@ -83,7 +83,7 @@ jobs:
         run: deno check supabase/functions/chat-consultant-v3-preview/index.ts supabase/functions/chat-consultant-v3-closure-preview/index.ts
 
       - name: Type-check cabinet administration and knowledge functions
-        run: deno check supabase/functions/admin-users/index.ts supabase/functions/knowledge-process/index.ts
+        run: deno check supabase/functions/admin-users/index.ts supabase/functions/admin-settings/index.ts supabase/functions/knowledge-process/index.ts
 
       - name: Type-check widget
         run: deno check public/widget.js
@@ -99,3 +99,6 @@ jobs:
 
       - name: Test shared and function-level v3 safeguards
         run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts supabase/functions/chat-consultant-v3/*_test.ts
+
+      - name: Test isolated cabinet secret redaction
+        run: deno test supabase/functions/admin-settings/security_test.ts

@@ -48,17 +48,18 @@ async function fixture(name) {
   };
 }
 
-test('reviewed 48-file history is followed by two isolated hardening migrations', async () => {
+test('reviewed 48-file history is followed by three isolated hardening migrations', async () => {
   const sources = await auditMigrationSources();
   const hardening = await auditIsolatedHardeningSources();
   assert.equal(reviewedMigrationCount, 48);
   assert.equal(sources.size, 48);
   assert.equal(omittedMigrationNames.length, 3);
   for (const name of omittedMigrationNames) assert.ok(sources.has(name));
-  assert.equal(hardening.size, 2);
+  assert.equal(hardening.size, 3);
   assert.deepEqual([...hardening.keys()], isolatedHardeningMigrationNames);
   assert.ok(isolatedHardeningMigrationNames[0] > [...sources.keys()].sort().at(-1));
   assert.ok(isolatedHardeningMigrationNames[1] > isolatedHardeningMigrationNames[0]);
+  assert.ok(isolatedHardeningMigrationNames[2] > isolatedHardeningMigrationNames[1]);
   const roleLookup = hardening.get(isolatedHardeningMigrationNames[0]).toString('utf8');
   assert.match(roleLookup, /_user_id = \(SELECT auth\.uid\(\)\)/);
   assert.match(roleLookup, /auth\.role\(\)\) = 'service_role'/);
@@ -77,19 +78,26 @@ test('reviewed 48-file history is followed by two isolated hardening migrations'
     assert.equal((tableGrants.match(new RegExp(`public\\.${table}\\b`, 'g')) || []).length, 2, table);
   }
   assert.doesNotMatch(tableGrants, /FROM service_role|FROM PUBLIC|REVOKE (SELECT|INSERT|UPDATE|DELETE) ON TABLE/);
+  const secretGrants = hardening.get(isolatedHardeningMigrationNames[2]).toString('utf8');
+  assert.match(secretGrants, /REVOKE SELECT, UPDATE ON TABLE public\.app_settings FROM authenticated;/);
+  assert.match(secretGrants, /GRANT SELECT \([\s\S]*id[\s\S]*\) ON TABLE public\.app_settings TO authenticated;/);
+  assert.match(secretGrants, /GRANT UPDATE \([\s\S]*ai_model[\s\S]*\) ON TABLE public\.app_settings TO authenticated;/);
+  assert.match(secretGrants, /REVOKE SELECT \([\s\S]*volt220_api_token, openrouter_api_key, google_api_key[\s\S]*\) ON TABLE public\.app_settings FROM authenticated;/);
+  assert.doesNotMatch(secretGrants, /TO anon|TO PUBLIC|FROM service_role/);
 });
 
-test('real 50-file export verifies against pinned hashes and detects later tampering', async () => {
+test('real 51-file export verifies against pinned hashes and detects later tampering', async () => {
   const root = join(fixtureRoot, 'real-reviewed');
   await mkdir(root, { mode: 0o700 });
   const output = join(root, 'bundle');
   const result = await exportTestMigrations(output);
   assert.equal(result.sourceCount, 48);
-  assert.equal(result.migrationCount, 50);
-  assert.equal(result.hardeningCount, 2);
-  assert.equal((await verifyTestBundle(output)).migrationCount, 50);
+  assert.equal(result.migrationCount, 51);
+  assert.equal(result.hardeningCount, 3);
+  assert.equal((await verifyTestBundle(output)).migrationCount, 51);
   const manifest = JSON.parse(await readFile(join(result.bundleDir, 'migration-manifest.json'), 'utf8'));
-  assert.deepEqual(manifest.files.slice(-2).map((item) => item.name), isolatedHardeningMigrationNames);
+  assert.deepEqual(manifest.files.slice(-3).map((item) => item.name), isolatedHardeningMigrationNames);
+  assert.equal(manifest.files.at(-3).isolatedHardening, true);
   assert.equal(manifest.files.at(-2).isolatedHardening, true);
   assert.equal(manifest.files.at(-1).isolatedHardening, true);
   for (const name of isolatedHardeningMigrationNames) {
@@ -109,9 +117,9 @@ test('exports byte-identical schema and a no-op historical data file to private 
   const result = await exportTestMigrations(output, f.options);
   assert.equal(result.bundleDir, join(output, 'supabase'));
   assert.equal(result.sourceCount, 2);
-  assert.equal(result.migrationCount, 4);
+  assert.equal(result.migrationCount, 5);
   assert.equal(result.omittedCount, 1);
-  assert.equal(result.hardeningCount, 2);
+  assert.equal(result.hardeningCount, 3);
   assert.deepEqual(await readFile(join(result.bundleDir, 'migrations', f.keepName)), f.keepSql);
   const omitted = await readFile(join(result.bundleDir, 'migrations', f.omitName), 'utf8');
   assert.match(omitted, /^SELECT 1;/);
@@ -121,10 +129,11 @@ test('exports byte-identical schema and a no-op historical data file to private 
   assert.doesNotMatch(config, /yngoixmvmxdfxokuafjp/);
   const manifest = JSON.parse(await readFile(join(result.bundleDir, 'migration-manifest.json'), 'utf8'));
   assert.equal(manifest.sourceCount, 2);
-  assert.equal(manifest.migrationCount, 4);
+  assert.equal(manifest.migrationCount, 5);
   assert.equal(manifest.omittedCount, 1);
-  assert.equal(manifest.hardeningCount, 2);
+  assert.equal(manifest.hardeningCount, 3);
   assert.equal(manifest.files.find((item) => item.name === f.omitName).omittedDataOnly, true);
+  assert.equal(manifest.files.at(-3).isolatedHardening, true);
   assert.equal(manifest.files.at(-2).isolatedHardening, true);
   assert.equal(manifest.files.at(-1).isolatedHardening, true);
   assert.equal((await stat(output)).mode & 0o777, 0o700);

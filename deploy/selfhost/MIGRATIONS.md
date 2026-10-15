@@ -13,7 +13,7 @@ Their omission is limited to this bundle; the production migration history is
 untouched. A changed, added, removed, or symlinked SQL file fails closed and
 requires a new review of the manifest.
 
-The exporter appends two **test-only** final migrations after the 48 reviewed
+The exporter appends three **test-only** final migrations after the 48 reviewed
 source migrations:
 
 - `20261014182000_selfhost_limit_role_lookup.sql` narrows the `has_role` RPC
@@ -24,12 +24,18 @@ source migrations:
   `authenticated` on exactly the 13 application tables. It does not revoke
   authenticated SELECT/INSERT/UPDATE/DELETE, service-role, sequence, or RPC
   privileges.
+- `20261015100000_selfhost_protect_settings_secrets.sql` replaces the
+  authenticated table-wide SELECT/UPDATE on `app_settings` with explicit
+  non-secret column grants. Direct REST reads/updates of the three API keys
+  are denied even for authenticated admins; the test-only `admin-settings`
+  function performs admin-authorized replacement server-side. Paid model
+  diagnostics remain disabled by default until a capped test key is installed.
 
-Both source files live under `deploy/selfhost`, not `supabase/migrations`;
+All three hardening files live under `deploy/selfhost`, not `supabase/migrations`;
 the production database and its migration history are unchanged. Their
 SHA-256 values are pinned and the exported files are checked on `--verify`.
-The resulting bundle contains **50 migrations: 45 unchanged source SQL files,
-three isolated no-op replacements, and two isolated hardening files**.
+The resulting bundle contains **51 migrations: 45 unchanged source SQL files,
+three isolated no-op replacements, and three isolated hardening files**.
 
 From the reviewed repository checkout, use an absolute new output path
 **outside the repository**, in a private directory:
@@ -54,7 +60,7 @@ host. No SQL body or secret appears in normal command output.
 
 The generated `supabase/config.toml` contains only the isolated test project
 name, never the repository's production Supabase project ID. The generated
-`migration-manifest.json` records hashes, the three omissions, and the two
+`migration-manifest.json` records hashes, the three omissions, and the three
 test-only hardening files, not SQL contents. Keep the whole bundle root-only
 and out of Git.
 
@@ -72,7 +78,10 @@ keys, Storage objects, or knowledge-base rows. Those require separate test
 data and explicit isolated credentials before public traffic is enabled.
 
 Before opening the Nginx maintenance gate, inspect the **applied** test DB's
-`pg_policies`, `has_table_privilege` and `has_function_privilege` results. Probe
+`pg_policies`, `has_table_privilege`, `has_column_privilege` and
+`has_function_privilege` results. Specifically verify authenticated has no
+SELECT/UPDATE privilege on `app_settings` API-key columns, while service_role
+retains access and the non-secret admin controls still work. Probe
 the REST API with both the publishable key alone and a viewer session: neither
 may read settings, knowledge, logs or classifier test data, mutate staff data,
 or call knowledge-search RPCs. A viewer may inspect their own profile/role but

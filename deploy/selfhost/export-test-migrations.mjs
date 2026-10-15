@@ -21,6 +21,7 @@ const sourceDir = join(repoRoot, 'supabase', 'migrations');
 const HARDENING_MANIFEST = new Map([
   ['20261014182000_selfhost_limit_role_lookup.sql', '3cef4648aada44b486ee051e257ecc42ea41a890f7e5fb59495884b4a875efb8'],
   ['20261014183000_selfhost_revoke_client_table_grants.sql', 'e72f17c2f57cbb77b9931a3f04a5b2bcd9f0e480d4ab9287cf6db6f2d253e5c5'],
+  ['20261015100000_selfhost_protect_settings_secrets.sql', 'eaf12200c5dc891c08062cac139b59ed6e2c72674ac72be68d070c41d0856ebc'],
 ]);
 
 // Reviewed filename/SHA-256 pairs. A source edit, addition, or deletion must
@@ -284,11 +285,11 @@ export async function verifyTestBundle(outputDir) {
     });
   }
   const actualManifest = JSON.parse(await checkPrivateFile(join(bundle, 'migration-manifest.json')));
-  const reviewedManifest = { sourceCount: 48, migrationCount: 50, omittedCount: 3, hardeningCount: 2, files: expectedManifest };
+  const reviewedManifest = { sourceCount: 48, migrationCount: 51, omittedCount: 3, hardeningCount: 3, files: expectedManifest };
   if (JSON.stringify(actualManifest) !== JSON.stringify(reviewedManifest)) {
     throw new Error('Bundle manifest mismatch');
   }
-  return { bundleDir: bundle, migrationCount: 50, sourceCount: 48, omittedCount: 3, hardeningCount: 2 };
+  return { bundleDir: bundle, migrationCount: 51, sourceCount: 48, omittedCount: 3, hardeningCount: 3 };
 }
 
 function parseArgs(args) {

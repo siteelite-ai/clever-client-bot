@@ -11,6 +11,27 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
 type PipelineVersion = 'v1' | 'v2' | 'v3';
+const IS_SELFHOST_TEST = import.meta.env.VITE_DEPLOY_TARGET === 'selfhost-test';
+
+interface SafeSettings {
+  id: string;
+  hasVolt220ApiToken: boolean;
+  hasOpenrouterKey: boolean;
+  ai_provider: string;
+  ai_model: string;
+  classifier_provider: string;
+  classifier_model: string;
+  classifier_prompt: string | null;
+  active_pipeline: string;
+}
+
+async function callSafeSettings(body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke('admin-settings', { body });
+  if (error || !data || typeof data !== 'object' || (data as { error?: string }).error) {
+    throw new Error('admin-settings request failed');
+  }
+  return data as Record<string, unknown>;
+}
 
 interface AppSettings {
   id: string;
@@ -75,6 +96,8 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
+  const [hasApiToken, setHasApiToken] = useState(false);
+  const [hasOpenrouterKey, setHasOpenrouterKey] = useState(false);
   const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
   const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash');
@@ -116,6 +139,25 @@ export default function Settings() {
 
   const fetchSettings = async () => {
     try {
+      if (IS_SELFHOST_TEST) {
+        const payload = await callSafeSettings({ action: 'read' });
+        const d = payload.settings as SafeSettings;
+        if (!d?.id) throw new Error('Settings response missing id');
+        // Stored credentials never enter browser state; the inputs are
+        // replace-only and the server returns presence booleans.
+        setSettings({ id: d.id } as AppSettings);
+        setApiToken('');
+        setOpenrouterKey('');
+        setHasApiToken(d.hasVolt220ApiToken);
+        setHasOpenrouterKey(d.hasOpenrouterKey);
+        setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
+        setSelectedModel(d.ai_model || 'google/gemini-2.5-flash');
+        setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
+        setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
+        setClassifierPrompt(d.classifier_prompt || '');
+        setActivePipeline((d.active_pipeline === 'v3' ? 'v3' : d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
+        return;
+      }
       const { data, error } = await supabase
         .from('app_settings')
         .select('*')
@@ -150,6 +192,23 @@ export default function Settings() {
     setSaving(true);
 
     try {
+      if (IS_SELFHOST_TEST) {
+        const result = await callSafeSettings({
+          action: 'save',
+          ai_provider: aiProvider,
+          ai_model: selectedModel,
+          classifier_provider: classifierProvider,
+          classifier_model: classifierModel,
+          ...(apiToken.trim() ? { replaceVolt220ApiToken: apiToken.trim() } : {}),
+          ...(openrouterKey.trim() ? { replaceOpenrouterKey: openrouterKey.trim() } : {}),
+        });
+        setHasApiToken(Boolean(result.hasVolt220ApiToken));
+        setHasOpenrouterKey(Boolean(result.hasOpenrouterKey));
+        setApiToken('');
+        setOpenrouterKey('');
+        toast.success('Настройки сохранены');
+        return;
+      }
       const { error } = await supabase
         .from('app_settings')
         .update({
@@ -180,11 +239,15 @@ export default function Settings() {
     if (!settings?.id || next === activePipeline) return;
     setPipelineSaving(true);
     try {
-      const { error } = await supabase
-        .from('app_settings')
-        .update({ active_pipeline: next } as any)
-        .eq('id', settings.id);
-      if (error) throw error;
+      if (IS_SELFHOST_TEST) {
+        await callSafeSettings({ action: 'switchPipeline', pipeline: next });
+      } else {
+        const { error } = await supabase
+          .from('app_settings')
+          .update({ active_pipeline: next } as any)
+          .eq('id', settings.id);
+        if (error) throw error;
+      }
       setActivePipeline(next);
       toast.success(
         next === 'v3'
@@ -207,11 +270,15 @@ export default function Settings() {
     if (!settings?.id) return;
     setClassifierPromptSaving(true);
     try {
-      const { error } = await supabase
-        .from('app_settings')
-        .update({ classifier_prompt: classifierPrompt.trim() || null } as any)
-        .eq('id', settings.id);
-      if (error) throw error;
+      if (IS_SELFHOST_TEST) {
+        await callSafeSettings({ action: 'saveClassifierPrompt', prompt: classifierPrompt });
+      } else {
+        const { error } = await supabase
+          .from('app_settings')
+          .update({ classifier_prompt: classifierPrompt.trim() || null } as any)
+          .eq('id', settings.id);
+        if (error) throw error;
+      }
       toast.success(classifierPrompt.trim() ? 'Промпт классификатора сохранён' : 'Промпт сброшен на встроенный по умолчанию');
     } catch (e) {
       console.error('Save classifier prompt failed:', e);
@@ -223,6 +290,24 @@ export default function Settings() {
 
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
+    if (IS_SELFHOST_TEST) {
+      if (!hasOpenrouterKey) {
+        toast.error('Сначала сохраните API ключ OpenRouter');
+        return;
+      }
+      if (openrouterKey.trim()) {
+        toast.info('Сначала сохраните новый ключ, затем проверьте модель');
+        return;
+      }
+      setPingResults(prev => ({ ...prev, [modelId]: 'loading' }));
+      try {
+        await callSafeSettings({ action: 'pingModel', model: modelId });
+        setPingResults(prev => ({ ...prev, [modelId]: 'ok' }));
+      } catch {
+        setPingResults(prev => ({ ...prev, [modelId]: 'error' }));
+      }
+      return;
+    }
     if (!openrouterKey) {
       toast.error('Введите API ключ OpenRouter для тестирования');
       return;
@@ -269,8 +354,12 @@ export default function Settings() {
 
   // Ping all OpenRouter models
   const pingAllModels = async () => {
-    if (!openrouterKey) {
+    if (!(IS_SELFHOST_TEST ? hasOpenrouterKey : openrouterKey)) {
       toast.error('Введите API ключ OpenRouter для тестирования');
+      return;
+    }
+    if (IS_SELFHOST_TEST && openrouterKey.trim()) {
+      toast.info('Сначала сохраните новый ключ, затем проверьте модели');
       return;
     }
     setPingAllLoading(true);
@@ -288,6 +377,26 @@ export default function Settings() {
   // Ping a classifier model (Google direct or OpenRouter)
   const pingClassifierModel = async (modelId: string, _provider: string) => {
     setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'loading' }));
+
+    if (IS_SELFHOST_TEST) {
+      if (!hasOpenrouterKey) {
+        toast.error('Сначала сохраните API ключ OpenRouter');
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+        return;
+      }
+      if (openrouterKey.trim()) {
+        toast.info('Сначала сохраните новый ключ, затем проверьте модель');
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+        return;
+      }
+      try {
+        await callSafeSettings({ action: 'pingModel', model: modelId });
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
+      } catch {
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+      }
+      return;
+    }
 
     try {
       const controller = new AbortController();
@@ -503,7 +612,7 @@ export default function Settings() {
                 <Input
                   id="apiToken"
                   type={showApiToken ? 'text' : 'password'}
-                  placeholder="Введите API токен 220volt"
+                  placeholder={IS_SELFHOST_TEST && hasApiToken ? 'Токен сохранён — введите новый для замены' : 'Введите API токен 220volt'}
                   value={apiToken}
                   onChange={(e) => setApiToken(e.target.value)}
                   className="input-focus pr-10"
@@ -517,7 +626,7 @@ export default function Settings() {
                 </button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Токен для доступа к API каталога товаров 220volt.kz
+                {IS_SELFHOST_TEST && hasApiToken ? 'Токен настроен. Пустое поле при сохранении оставит его без изменений.' : 'Токен для доступа к API каталога товаров 220volt.kz'}
               </p>
             </div>
           </div>
@@ -537,7 +646,7 @@ export default function Settings() {
                 <Input
                   id="openrouterKey"
                   type={showOpenrouterKey ? 'text' : 'password'}
-                  placeholder="sk-or-v1-..."
+                  placeholder={IS_SELFHOST_TEST && hasOpenrouterKey ? 'Ключ сохранён — введите новый для замены' : 'sk-or-v1-...'}
                   value={openrouterKey}
                   onChange={(e) => setOpenrouterKey(e.target.value)}
                   className="input-focus pr-10"
@@ -551,14 +660,20 @@ export default function Settings() {
                 </button>
               </div>
               <p className="text-xs text-muted-foreground">
+                {IS_SELFHOST_TEST && hasOpenrouterKey && 'Ключ настроен. Пустое поле при сохранении оставит его без изменений. '}
                 Получите ключ на{' '}
                 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                   openrouter.ai/keys
                 </a>
               </p>
-              {!openrouterKey && (
+              {!(IS_SELFHOST_TEST ? hasOpenrouterKey : openrouterKey) && (
                 <p className="text-xs text-destructive">
                   ⚠️ Без ключа OpenRouter AI-консультант и эмбеддинги не будут работать.
+                </p>
+              )}
+              {IS_SELFHOST_TEST && (
+                <p className="text-xs text-muted-foreground">
+                  Платная проверка моделей в тестовом кабинете отключена до установки отдельного лимита расходов.
                 </p>
               )}
             </div>
@@ -572,7 +687,7 @@ export default function Settings() {
                     variant="outline"
                     size="sm"
                     onClick={pingAllModels}
-                    disabled={pingAllLoading || !openrouterKey}
+                    disabled={IS_SELFHOST_TEST || pingAllLoading || !openrouterKey}
                     className="text-xs"
                   >
                     {pingAllLoading ? (
@@ -625,7 +740,7 @@ export default function Settings() {
                     <p className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">{model.id}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {aiProvider === 'openrouter' && (
+                    {aiProvider === 'openrouter' && !IS_SELFHOST_TEST && (
                       <button
                         type="button"
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingModel(model.id); }}
@@ -773,14 +888,14 @@ export default function Settings() {
                           {pingResults[`clf:${m.id}`] === 'loading' && (
                             <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                           )}
-                          <button
+                          {!IS_SELFHOST_TEST && <button
                             type="button"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingClassifierModel(m.id, m.forProvider); }}
                             className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-auto"
                             title="Проверить доступность"
                           >
                             <Wifi className="w-3.5 h-3.5" />
-                          </button>
+                          </button>}
                         </div>
                         <p className="text-xs text-muted-foreground">{m.description}</p>
                         <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>

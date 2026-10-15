@@ -29,7 +29,7 @@ async function fixture(name) {
   return { root, functionsRoot, options: { functionsRoot } };
 }
 
-test('real repository audit selects only three entrypoints and non-test shared TypeScript', async () => {
+test('real repository audit selects only four entrypoints and non-test shared TypeScript', async () => {
   const sources = await auditTestFunctionSources();
   assert.ok(sources.size > 50);
   for (const dir of includedDirectories.filter((name) => name !== '_shared')) {
@@ -55,19 +55,19 @@ test('exports exact allowlisted source files and verifies private bundle hashes'
   const f = await fixture('happy');
   const output = join(f.root, 'bundle');
   const result = await exportTestFunctions(output, f.options);
-  assert.equal(result.fileCount, 5);
+  assert.equal(result.fileCount, 6);
   assert.deepEqual((await readdir(output)).sort(), ['functions', 'manifest.json']);
   assert.deepEqual((await readdir(join(output, 'functions'))).sort(), [...includedDirectories].sort());
   assert.deepEqual((await readdir(join(output, 'functions', '_shared', 'v3-tools'))), ['helper.ts']);
   assert.deepEqual((await readdir(join(output, 'functions', 'chat-consultant-v3'))), ['index.ts']);
-  assert.equal((await verifyTestFunctionBundle(output, f.options)).fileCount, 5);
+  assert.equal((await verifyTestFunctionBundle(output, f.options)).fileCount, 6);
   assert.equal((await stat(output)).mode & 0o777, 0o700);
   assert.equal((await stat(join(output, 'functions', '_shared', 'v3-tools'))).mode & 0o777, 0o700);
   assert.equal((await stat(join(output, 'functions', 'admin-users', 'index.ts'))).mode & 0o777, 0o600);
   assert.equal((await stat(join(output, 'manifest.json'))).mode & 0o777, 0o600);
   const manifest = JSON.parse(await readFile(join(output, 'manifest.json'), 'utf8'));
   assert.deepEqual(manifest.directories, includedDirectories);
-  assert.equal(manifest.files.length, 5);
+  assert.equal(manifest.files.length, 6);
   assert.ok(manifest.files.every((item) => /^[a-f0-9]{64}$/.test(item.sha256)));
 });
 
