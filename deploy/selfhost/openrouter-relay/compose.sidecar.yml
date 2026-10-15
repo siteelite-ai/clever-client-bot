@@ -1,0 +1,65 @@
+name: volt220-openrouter-test-tunnel
+
+services:
+  relay-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh-client
+    image: volt220-openrouter-test-tunnel:1
+    container_name: volt220test-relay-client
+    user: "10001:10001"
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: 0.25
+    restart: unless-stopped
+    volumes:
+      - /var/lib/volt220-test-relay-ssh/id_ed25519:/home/tunnel/.ssh/id_ed25519:ro
+      - /var/lib/volt220-test-relay-ssh/known_hosts:/home/tunnel/.ssh/known_hosts:ro
+    networks:
+      isolated_test:
+        aliases:
+          - volt220test-relay-client
+    command:
+      - -N
+      - -T
+      - -i
+      - /home/tunnel/.ssh/id_ed25519
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/home/tunnel/.ssh/known_hosts
+      - -o
+      - UpdateHostKeys=no
+      - -o
+      - ExitOnForwardFailure=yes
+      - -o
+      - ServerAliveInterval=20
+      - -o
+      - ServerAliveCountMax=3
+      - -o
+      - BatchMode=yes
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - AddressFamily=inet
+      - -o
+      - RequestTTY=no
+      - -L
+      - 0.0.0.0:19084:127.0.0.1:19084
+      - volt220relay@213.165.41.225
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+
+networks:
+  isolated_test:
+    external: true
+    name: volt220test_internal

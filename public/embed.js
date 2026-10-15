@@ -3,8 +3,8 @@
  *
  * ВАЖНО: этот файл — тонкий и стабильный загрузчик. Логика виджета живёт в widget.js.
  * После одноразового обновления URL этого загрузчика он получает актуальную версию
- * через HTML-bootstrap. Lovable отдаёт HTML с обязательной ревалидацией, тогда как
- * статические JS/JSON-файлы может эвристически кешировать браузер. Сам widget.js
+ * через HTML-bootstrap. Хостинг должен отдавать HTML с обязательной ревалидацией,
+ * тогда как статические JS/JSON-файлы может кешировать браузер. Сам widget.js
  * подключается по content-hash версии и поэтому безопасно кешируется навсегда.
  *
  * Меняйте этот файл только при крайней необходимости.
@@ -18,7 +18,7 @@
     return all[all.length - 1] || null;
   })();
 
-  // Базовый origin берём из src самого embed.js, чтобы работало и на custom domain.
+  // Базовый origin берём из src самого embed.js, чтобы работало на своём домене.
   var base = 'https://clever-client-bot.lovable.app';
   try {
     if (self && self.src) base = new URL(self.src, location.href).origin + new URL(self.src, location.href).pathname.replace(/\/embed\.js.*$/, '');
@@ -103,7 +103,7 @@
     (document.head || document.documentElement).appendChild(m);
   }
 
-  // Primary source: a sandboxed HTML document. Lovable serves HTML with
+  // Primary source: a sandboxed HTML document. The static host must serve HTML with
   // `Cache-Control: no-cache, must-revalidate, max-age=0`, so an already opened
   // browser profile receives the new content hash without clearing its cache.
   window.addEventListener('message', onBootstrapMessage);

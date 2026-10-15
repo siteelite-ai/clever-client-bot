@@ -6,9 +6,10 @@ import { toast } from 'sonner';
 
 export default function Integration() {
   const [copied, setCopied] = useState(false);
+  const widgetOrigin = window.location.origin;
 
   const embedCode = `<!-- 220volt AI Консультант (версия загрузчика фиксируется, виджет обновляется автоматически) -->
-<script src="https://clever-client-bot.lovable.app/embed.js?v=2026-09-04-loader-2" async></script>`;
+<script src="${widgetOrigin}/embed.js?v=2026-09-04-loader-2" async></script>`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(embedCode);
@@ -99,7 +100,7 @@ export default function Integration() {
                 </a>
               </div>
               <p className="text-xs text-muted-foreground">
-                API токен настраивается в разделе "Настройки" после подключения Lovable Cloud.
+                API-токен настраивается в разделе «Настройки».
               </p>
             </div>
           </div>
@@ -109,8 +110,8 @@ export default function Integration() {
         <div className="admin-card border-l-4 border-l-warning">
           <h3 className="text-lg font-semibold mb-2">🔒 Безопасность</h3>
           <p className="text-sm text-muted-foreground">
-            Виджет работает через защищённый бэкенд. Все API-ключи и база данных скрыты от браузера. 
-            Клиентский код не содержит конфиденциальной информации.
+            Публичный виджет не содержит сервисных ключей. Секретные настройки доступны
+            авторизованным администраторам кабинета — не публикуйте их вне команды.
           </p>
         </div>
       </div>

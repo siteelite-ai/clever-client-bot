@@ -1,0 +1,35 @@
+# Non-secret values to SET (replace, do not append duplicate keys) in the
+# private upstream docker/.env after running the official key-generation scripts.
+# This is NOT a complete .env and must never be used directly with Compose.
+
+SUPABASE_PUBLIC_URL=https://api-volt-next.testdevops.ru
+API_EXTERNAL_URL=https://api-volt-next.testdevops.ru/auth/v1
+SITE_URL=https://chat-volt-next.testdevops.ru
+ADDITIONAL_REDIRECT_URLS=https://chat-volt-next.testdevops.ru
+PROXY_DOMAIN=api-volt-next.testdevops.ru
+
+# Test-only: no public user registration or phone/anonymous access.
+DISABLE_SIGNUP=true
+ENABLE_EMAIL_SIGNUP=true
+ENABLE_PHONE_SIGNUP=false
+ENABLE_ANONYMOUS_USERS=false
+
+# The public chat function uses a publishable API key. This upstream setting
+# is global, so handler-auth admin endpoints must be reviewed separately.
+FUNCTIONS_VERIFY_JWT=false
+SELFHOST_TEST_MODE=true
+KNOWLEDGE_REMOTE_IMPORT_ENABLED=false
+CHAT_V3_ADMISSION_MODE=enforce
+CHAT_V3_ADMISSION_LIMIT_PER_MINUTE=3
+CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT=2
+LOVABLE_AGENT_FAILOVER_ENABLED=false
+LOVABLE_AGENT_FAILOVER_PREVIEW_ENABLED=false
+
+# Bind is overridden in docker-compose.test.yml; keep this consistent for
+# operator clarity and to make accidental base-only deployment less likely.
+API_GW_HTTP_PORT=18081
+KONG_HTTP_PORT=18081
+POOLER_TENANT_ID=volt220test
+
+# Do not configure a vendor AI key in Studio for this test environment.
+OPENAI_API_KEY=

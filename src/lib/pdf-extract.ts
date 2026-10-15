@@ -1,7 +1,9 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// Use the bundled worker matching the installed package version
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+// Ship the exact matching worker with the cabinet. A public CDN must not be
+// required for PDF imports, particularly in the independently hosted release.
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export async function extractTextFromPdf(file: File): Promise<{ title: string; content: string }> {
   const arrayBuffer = await file.arrayBuffer();
