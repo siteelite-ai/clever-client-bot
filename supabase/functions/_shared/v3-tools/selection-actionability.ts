@@ -30,6 +30,7 @@ import {
   customerOwnsAbsentFacetValue,
   isAbsenceOrUnknownFacetValue,
 } from "./facet-value-semantics.ts";
+import { visibleSystemTotalHasProvenance } from "./system-total-capacity.ts";
 
 /**
  * Whether the consultant has already produced enough machine-checkable
@@ -337,6 +338,118 @@ function reconcileComputedTotalReasoning(
     );
   }).join(" ").replace(/\s+/gu, " ").trim();
   return result.length >= 20 ? result : null;
+}
+
+/**
+ * A declared system total does not make the model's bare numerical assertion
+ * an engineering fact. Remove only a sentence containing an unsupported hard
+ * physical target. The qualitative structured choices are resolved below and
+ * remain available even if this prose sentence also mentioned them.
+ * Transparent arithmetic and an exact customer-owned target remain visible.
+ */
+function measuredUnitsFromLiveFacets(
+  facets: DerivedSelectionFacet[],
+): Set<string> {
+  return new Set(facets.flatMap((facet) => {
+    const suffix = String(facet.caption ?? "").match(
+      /[,;(]\s*([\p{L}°²³/]{1,12})\)?\s*$/u,
+    )?.[1] ?? "";
+    const unit = canonicalMeasurementUnit(String(facet.unit || suffix));
+    return unit && isPhysicalMeasurementUnit(unit) ? [unit] : [];
+  }));
+}
+
+const TOTAL_QUANTITY =
+  /(?<![\p{L}\p{N}])((?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}°²³/]{1,12})(?![\p{L}])/gu;
+const HARD_TOTAL_PREFIX =
+  /(?:не\s+менее(?:\s+чем)?|как\s+минимум|минимум|требу\p{L}*|необходим\p{L}*|нуж\p{L}*|долж\p{L}*|потребу\p{L}*|более|свыше)\s*$/iu;
+
+function reasoningNamesHardSystemTotal(
+  reasoning: string,
+  facets: DerivedSelectionFacet[],
+): boolean {
+  const units = measuredUnitsFromLiveFacets(facets);
+  if (units.size === 0) return false;
+  return String(reasoning ?? "").split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
+    .some((clause) => {
+      if (
+        !/(?:суммар\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|показател\p{L}*|результат\p{L}*|объем\p{L}*|поток\p{L}*|мощност\p{L}*)|всей\s+систем\p{L}*|на\s+весь\s+объект)/iu
+          .test(clause) ||
+        /(?:кажд\p{L}*|отдельн\p{L}*|на\s+(?:один|одно|одну)|для\s+одного)/iu
+          .test(clause)
+      ) return false;
+      return [...clause.matchAll(TOTAL_QUANTITY)].some((match) => {
+        if (!units.has(canonicalMeasurementUnit(match[2]))) return false;
+        const before = clause.slice(Math.max(0, (match.index ?? 0) - 100),
+          match.index ?? 0).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+        return HARD_TOTAL_PREFIX.test(before);
+      });
+    });
+}
+
+export function demoteUnsupportedSystemTotalClaims(
+  reasoning: string,
+  customerEvidence: string,
+  facets: DerivedSelectionFacet[],
+): string {
+  const liveMeasuredUnits = measuredUnitsFromLiveFacets(facets);
+  const sentences = String(reasoning ?? "").split(/(?<=[.!?…;])\s+/u)
+    .filter(Boolean);
+  let removed = false;
+  const hasUnsupportedHardTotal = (sentence: string): boolean => {
+    if (
+      /(?:кажд\p{L}*|отдельн\p{L}*|на\s+(?:один|одно|одну)|для\s+одного|per\s+(?:item|unit))/iu
+        .test(sentence) &&
+      !/(?:суммар\p{L}*|общ\p{L}*|всего\s+\d|всей\s+систем\p{L}*)/iu
+        .test(sentence)
+    ) return false;
+    return [...sentence.matchAll(TOTAL_QUANTITY)].some(
+      (match) => {
+        const value = Number(match[1].replace(/[ \u00a0\u202f]/gu, "")
+          .replace(",", "."));
+        const unit = canonicalMeasurementUnit(match[2]);
+        if (!Number.isFinite(value) || !liveMeasuredUnits.has(unit)) {
+          return false;
+        }
+        const before = sentence.slice(Math.max(0, (match.index ?? 0) - 100),
+          match.index ?? 0).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+        const after = sentence.slice((match.index ?? 0) + match[0].length)
+          .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+        const hardMinimum = HARD_TOTAL_PREFIX.test(before) ||
+          /^\s*(?:\(\s*)?(?:минимум|как\s+минимум)/iu.test(after);
+        return hardMinimum && !visibleSystemTotalHasProvenance({
+          customerEvidence,
+          reasoningText: reasoning,
+          value,
+          unit,
+        });
+      },
+    );
+  };
+  const retained = sentences.flatMap((sentence) => {
+    if (!hasUnsupportedHardTotal(sentence)) return [sentence];
+    removed = true;
+    // An independent qualitative requirement can share a sentence with the
+    // unsupported total. Keep only separable conjuncts whose own clause has
+    // no unsupported measurement; never reconstruct a numeric claim.
+    const clauses = sentence.split(
+      /,\s*(?:при\s+этом|а\s+также|кроме\s+того|но|и)\s+|;\s*|\s+(?:и|а\s+также|при\s+этом)\s+/iu,
+    );
+    if (clauses.length < 2) return [];
+    const safeClauses = clauses.filter((clause) =>
+      clause.trim().length >= 12 && !hasUnsupportedHardTotal(clause)
+    );
+    if (safeClauses.length === 0) return [];
+    const rest = safeClauses.join(" и ").replace(/^[,;\s]+/u, "").trim();
+    return [rest.replace(/^\p{Ll}/u, (initial) =>
+      initial.toLocaleUpperCase("ru-RU")
+    )];
+  });
+  if (!removed) return reasoning;
+  retained.push(
+    "Суммарный числовой ориентир пока не подтверждён; отдельные товары можно сравнивать по проверенным характеристикам, но не считать готовой схемой для всей системы.",
+  );
+  return retained.join(" ").trim();
 }
 
 /**
@@ -1958,19 +2071,31 @@ export function resolveDerivedSelectionReasoning(
     customerEvidence,
     originalReasoning,
   );
+  const lexicalSystemTotal = !customerReplacement.oneToOne &&
+    !customerRequestsOneProduct(customerEvidence) &&
+    !/(?:кажд\p{L}*|на\s+(?:один|одно|одну)|для\s+одного|по\s+одному)/iu
+      .test(customerEvidence) &&
+    reasoningNamesHardSystemTotal(originalReasoning, facets);
   const measurementScope = customerReplacement.oneToOne &&
       declaredMeasurementScope === "system_total"
     ? "per_product"
-    : computedSystemTotal
+    : computedSystemTotal || lexicalSystemTotal
     ? "system_total"
     : declaredMeasurementScope === "system_total" ||
         declaredMeasurementScope === "not_applicable"
     ? declaredMeasurementScope
     : "per_product";
-  const scopeConsistentReasoning = computedSystemTotal
+  const reconciledScopeReasoning = computedSystemTotal
     ? reconcileComputedTotalReasoning(originalReasoning, customerEvidence)
     : originalReasoning;
-  if (!scopeConsistentReasoning) return null;
+  if (!reconciledScopeReasoning) return null;
+  const scopeConsistentReasoning = measurementScope === "system_total"
+    ? demoteUnsupportedSystemTotalClaims(
+      reconciledScopeReasoning,
+      customerEvidence,
+      facets,
+    )
+    : reconciledScopeReasoning;
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);

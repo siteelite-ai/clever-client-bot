@@ -16,6 +16,114 @@ export interface VisibleSystemTotalMinimum {
   evidence: string;
 }
 
+const VISIBLE_NUMBER = String.raw`(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?`;
+const VISIBLE_UNIT = String.raw`[\p{L}°²³/]{1,12}`;
+
+function visibleQuantities(text: string): Array<{
+  value: number;
+  unit: string;
+  position: number;
+}> {
+  const pattern = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])(${VISIBLE_NUMBER})\s*(${VISIBLE_UNIT})(?![\p{L}])`,
+    "gu",
+  );
+  return [...String(text ?? "").matchAll(pattern)].flatMap((match) => {
+    const value = Number(match[1].replace(/[ \u00a0\u202f]/gu, "").replace(",", "."));
+    const unit = canonicalMeasurementUnit(match[2]);
+    return Number.isFinite(value) && value > 0 && unit
+      ? [{ value, unit, position: match.index ?? 0 }]
+      : [];
+  });
+}
+
+/**
+ * A model's bare numerical demand is not evidence of a hard requirement.
+ * Accept the exact customer-owned total, or a transparent calculation whose
+ * displayed operands multiply to the displayed result and whose input is
+ * present in the customer's request. This checks arithmetic/provenance, not
+ * the suitability of an engineering assumption; callers must still describe
+ * a model-derived total as conditional and verify the installation plan.
+ */
+export function visibleSystemTotalHasProvenance(input: {
+  customerEvidence: string;
+  reasoningText: string;
+  value: number;
+  unit: string;
+}): boolean {
+  const unit = canonicalMeasurementUnit(input.unit);
+  if (!unit || !Number.isFinite(input.value) || input.value <= 0) return false;
+  const customerQuantities = visibleQuantities(input.customerEvidence);
+  const sameCustomerValue = customerQuantities.some((quantity) => {
+    if (quantity.value !== input.value || quantity.unit !== unit) return false;
+    const clauseStart = Math.max(
+      input.customerEvidence.lastIndexOf(".", quantity.position - 1),
+      input.customerEvidence.lastIndexOf("!", quantity.position - 1),
+      input.customerEvidence.lastIndexOf("?", quantity.position - 1),
+      input.customerEvidence.lastIndexOf(";", quantity.position - 1),
+    ) + 1;
+    const nextBoundary = input.customerEvidence.slice(quantity.position)
+      .search(/[.!?;\n]/u);
+    const clauseEnd = nextBoundary < 0
+      ? input.customerEvidence.length
+      : quantity.position + nextBoundary;
+    const clause = input.customerEvidence.slice(clauseStart, clauseEnd)
+      .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+    const before = input.customerEvidence.slice(
+      Math.max(0, quantity.position - 55),
+      quantity.position,
+    ).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+    const after = clause.slice(Math.max(0, quantity.position - clauseStart))
+      .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+    // Merely repeating a customer number is not ownership of a hard system
+    // minimum: it may describe an existing item, a per-item target, a maximum
+    // or an approximate wish. Require an explicit request for the aggregate.
+    const requestedAggregate =
+      /(?:суммар\p{L}*|общ\p{L}*|для\s+всей\s+систем\p{L}*|на\s+весь\s+объект)/iu
+        .test(clause) &&
+      /(?:не\s+менее|как\s+минимум|минимум|нуж\p{L}*|требу\p{L}*|долж\p{L}*|хоч\p{L}*)/iu
+        .test(clause);
+    return requestedAggregate &&
+      !/(?:не\s+более|не\s+выше|максимум|максимальн\p{L}*|(?:^|\s)до\s*)/iu
+        .test(clause) &&
+      !/(?:около|примерно|порядка|приблиз\p{L}*|ориентир\p{L}*|рекоменд\p{L}*|желательн\p{L}*)/iu
+        .test(clause) &&
+      !/(?:кажд\p{L}*|на\s+(?:один|одно|одну|кажд\p{L}*)|для\s+одного|по\s+одн\p{L}*|per\s+(?:item|unit))/iu
+        .test(clause) &&
+      !/(?:^|\s)по\s*$/iu.test(before) &&
+      !/(?:\bмаксимум|\bпредел)/iu.test(after);
+  });
+  if (sameCustomerValue) return true;
+
+  const term = String.raw`(${VISIBLE_NUMBER})\s*(${VISIBLE_UNIT})?`;
+  const equation = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])${term}\s*[×xх*]\s*${term}\s*[=≈]\s*${term}(?![\p{L}])`,
+    "giu",
+  );
+  for (const match of String(input.reasoningText ?? "").matchAll(equation)) {
+    const numeric = [match[1], match[3], match[5]].map((raw) =>
+      Number(raw.replace(/[ \u00a0\u202f]/gu, "").replace(",", "."))
+    );
+    const [left, right, output] = numeric;
+    if (
+      !numeric.every((value) => Number.isFinite(value) && value > 0) ||
+      output !== input.value ||
+      canonicalMeasurementUnit(match[6] ?? "") !== unit ||
+      Math.abs(left * right - output) > Math.max(0.01, output * 0.01)
+    ) continue;
+    const inputs = [
+      { value: left, unit: canonicalMeasurementUnit(match[2] ?? "") },
+      { value: right, unit: canonicalMeasurementUnit(match[4] ?? "") },
+    ];
+    if (inputs.some((operand) =>
+      operand.unit && customerQuantities.some((customer) =>
+        customer.value === operand.value && customer.unit === operand.unit
+      )
+    )) return true;
+  }
+  return false;
+}
+
 /**
  * Compile only an explicit hard lower bound for the same live output meaning.
  * Advisory targets, ranges, maxima, and unlabelled arithmetic are not proof.
@@ -27,6 +135,7 @@ export function extractVisibleSystemTotalMinimum(input: {
   reasoningText: string;
   outputFacet: SystemOutputFacet;
   unit: string;
+  customerEvidence: string;
 }): VisibleSystemTotalMinimum | null {
   if (input.measurementScope !== "system_total") return null;
   const wantedUnit = canonicalMeasurementUnit(input.unit);
@@ -91,8 +200,16 @@ export function extractVisibleSystemTotalMinimum(input: {
       });
     }
   }
-  if (candidates.length === 0) return null;
-  return candidates.sort((left, right) =>
+  const provenCandidates = candidates.filter((candidate) =>
+    visibleSystemTotalHasProvenance({
+      customerEvidence: input.customerEvidence,
+      reasoningText: input.reasoningText,
+      value: candidate.minimumTotal,
+      unit: candidate.unit,
+    })
+  );
+  if (provenCandidates.length === 0) return null;
+  return provenCandidates.sort((left, right) =>
     right.minimumTotal - left.minimumTotal ||
     Number(right.strictMinimum) - Number(left.strictMinimum)
   )[0];
@@ -245,6 +362,8 @@ export function resolveVisibleSystemTotalRequirement(input: {
   reasoningText: string;
   facets: SystemOutputFacet[];
   minimumUnits?: number;
+  /** Required to distinguish a customer/transparent derivation from a bare model assertion. */
+  customerEvidence: string;
 }): SystemTotalCapacityRequirement | null {
   const matches = input.facets.flatMap((facet) => {
     const unit = facetUnit(facet);
@@ -254,6 +373,7 @@ export function resolveVisibleSystemTotalRequirement(input: {
       reasoningText: input.reasoningText,
       outputFacet: facet,
       unit,
+      customerEvidence: input.customerEvidence,
     });
     return minimum
       ? [{

@@ -7165,6 +7165,7 @@ async function runExpertLoop(
         measurementScope: cardMeasurementScope(),
         reasoningText: derivedSelectionReasoningEvidence,
         facets: lastDiscover?.facets ?? [],
+        customerEvidence: userMessage,
       });
       // A list of alternative cards is not a counted installation plan. Even
       // when an individual output is verified, it cannot prove the total.
@@ -8621,6 +8622,7 @@ async function runExpertLoop(
       reasoningText: derivedSelectionReasoningEvidence,
       facets: derivedStructuredSearchDiscovery?.facets ??
         lastDiscover?.facets ?? [],
+      customerEvidence: userMessage,
     });
     if (!totalRequirement || preferredClassIds.length < 2) {
       return preferredClassIds;
