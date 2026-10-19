@@ -56,8 +56,8 @@ test("literal model fallback requires an exact title code, not a partial prefix"
 
 test("unverified source stops before expert delegation and never claims empty catalog", () => {
   assert.match(failedDiscoveryGuard, /sourceClassDiscovery\.error_code === "category_not_found"/u);
-  assert.match(failedDiscoveryGuard, /Уточните его тип или пришлите точный артикул либо полное название товара/u);
-  assert.match(failedDiscoveryGuard, /Повторите запрос позже или укажите точный артикул либо полное название товара/u);
+  assert.match(failedDiscoveryGuard, /Повторите запрос на подбор аналога, указав тип исходного товара и точный артикул или его полное название/u);
+  assert.match(failedDiscoveryGuard, /Повторите запрос на подбор аналога позже, указав точный артикул или полное название исходного товара/u);
   assert.match(failedDiscoveryGuard, /Это не означает, что аналогов нет/u);
   assert.doesNotMatch(failedDiscoveryGuard, /ссылк/u);
   assert.match(failedDiscoveryGuard, /handled: true,[\s\S]*?products: \[\],[\s\S]*?outcome: categoryUnresolved \? "query_inconsistent" : "upstream_error"/u);
