@@ -1,0 +1,9 @@
+# New-topic admission regression — 19 October 2026
+
+After PR #83 was released as production `chat-consultant-v3` v466, a browser smoke on `220volt.testdevops.ru` exposed a regression: `Новая тема. Есть ли аналог автомату Schneider Electric Acti9 C16?` reached the expert path and ended with an empty catalog answer (request `696cb3bd-c495-49a2-a213-ce2bb1fa714b`). The same request **without** the topic preface passed against production v466 and asked for the number of poles (`d9acc769-b531-4674-81e3-a1c1e92f14d4`).
+
+Cause: the direct-route admission proof treated the dialogue command `Новая тема` as residual product criteria. The hotfix uses the already-shared `stripExplicitNewTaskPreface` operation at the admission boundary for all direct routes. It does not add an Acti9-specific rule, relax independent constraints, alter the original history/log message, or change the widget.
+
+The existing closure-preview v58 independently had a boot failure: even an unauthenticated `OPTIONS` request returned `500 WORKER_ERROR` before route execution. Redeploying only the isolated preview restored `OPTIONS` to 200. Preview v59 with the hotfix then passed the [two-turn regression](reports/closure-preview-v59-acti9-topic-two-turn-20261019.json): first asks for poles with no cards, then shows four 1P C16 alternatives after the customer's answer. The earlier preview 500 is not counted as a language-routing failure or as a passed test.
+
+Release boundary: only `chat-consultant-v3` after PR CI. Production rollback anchor is merged main `59175e6a4fcce2948c15c4921920d793da8563b8` and function v466 (hash `84097942c3b56fadabe7e48780d50096ce945a4499efdfa1b14379df86b8daba`). Revert the hotfix and redeploy that source if this specific admission change regresses another route. Public abuse protection and the full pinned customer matrix remain open as in the v6 release note.

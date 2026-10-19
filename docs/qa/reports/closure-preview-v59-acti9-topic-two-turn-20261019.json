@@ -1,0 +1,186 @@
+{
+  "suite_file": "closure-topic-preface-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "d8618ab95a64cbc2fb3434316d23ec42791f704b73305d784b72814deb70dcdd",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T15:05:27.226Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "closure-acti9-new-topic": 1
+  },
+  "cases": [
+    {
+      "id": "closure-acti9-new-topic",
+      "title": "Acti9 clarification and scoped continuation after a new-topic preface",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_closure-acti9-new-topic_base_1792422327230_1",
+          "turns": [
+            {
+              "message": "Новая тема. Есть ли аналог автомату Schneider Electric Acti9 C16?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 3475,
+              "network_attempts": 1,
+              "log_id": "660c6e52-98ae-4089-b7a1-05b713e734a1",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать совместимый аналог, уточните количество полюсов.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "kolichestvo_polyusov__polyuster_sany",
+                "options_count": 4,
+                "values": [
+                  "2",
+                  "3",
+                  "1",
+                  "4"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "1 полюс, подбери их в каталоге",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 7924,
+              "network_attempts": 1,
+              "log_id": "b669a6b4-de11-4f3a-9338-df3b05271bdf",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek/",
+                  "price": 477,
+                  "stockLine": "Шымкент (6 шт), Алматы (1 шт), Иргели (318 шт)",
+                  "cardText": "- **[Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek/)**\n  Цена: *477* ₸\n  Бренд: GENERICA\n  Наличие: Шымкент (6 шт), Алматы (1 шт), Иргели (318 шт)"
+                },
+                {
+                  "title": "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/",
+                  "price": 562,
+                  "stockLine": "Караганда (12309 шт), Алматы (10964 шт), Астана (6724 шт) и ещё 2 городов",
+                  "cardText": "- **[Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/)**\n  Цена: *562* ₸\n  Бренд: Himel\n  Наличие: Караганда (12309 шт), Алматы (10964 шт), Астана (6724 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-%28iek%29/",
+                  "price": 578,
+                  "stockLine": "Актобе (1012 шт), Астана (1006 шт), Караганда (825 шт) и ещё 2 городов",
+                  "cardText": "- **[Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-%28iek%29/)**\n  Цена: *578* ₸\n  Бренд: GENERICA\n  Наличие: Актобе (1012 шт), Астана (1006 шт), Караганда (825 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/",
+                  "price": 656,
+                  "stockLine": "Алматы Чинт (49008 шт), Караганда (10619 шт), Алматы (3043 шт) и ещё 3 городов",
+                  "cardText": "- **[Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/)**\n  Цена: *656* ₸\n  Бренд: CHINT\n  Наличие: Алматы Чинт (49008 шт), Караганда (10619 шт), Алматы (3043 шт) и ещё 3 городов"
+                }
+              ],
+              "text": "Уточнение принято. Показываю аналоги из той же категории, у которых подтверждены характеристика срабатывания C, номинальный ток 16, количество полюсов 1.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-bf57e271",
+                "mandatory_criteria": [
+                  {
+                    "key": "Характеристика срабатывания",
+                    "op": "eq",
+                    "value": "C",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Номинальный ток",
+                    "op": "eq",
+                    "value": "16",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Количество полюсов",
+                    "op": "eq",
+                    "value": "1",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Подтверждено по всем уточнённым параметрам: 4",
+                  "duration_ms": 4057
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T15:05:38.634Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "660c6e52-98ae-4089-b7a1-05b713e734a1",
+    "b669a6b4-de11-4f3a-9338-df3b05271bdf"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

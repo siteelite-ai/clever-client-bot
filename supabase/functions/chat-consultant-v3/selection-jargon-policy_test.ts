@@ -136,6 +136,20 @@ Deno.test("one direct-route admission rejects unproven compound, PoE and replace
   }
 });
 
+Deno.test("a new-topic preface cannot change direct-route admission or hide extra criteria", () => {
+  for (const route of ["replacement", "compound", "outdoor_poe"] as const) {
+    const [plain, extra, coveredCompound] = route === "replacement"
+      ? ["Есть ли аналог автомату Schneider Electric Acti9 C16?", "Есть ли аналог автомату Schneider Electric Acti9 C16 с наличием в Алматы?", undefined]
+      : route === "compound"
+      ? ["найди кабель ВВГ 2×1,5", "найди кабель ВВГ 2×1,5 для комнаты", { first: 2, second: 1.5 }]
+      : ["подбери кабель", "подбери кабель для камеры на 305 метров", undefined];
+    assertEquals(admitDirectSelectionRoute({ route, userMessage: plain, coveredCompound }), true, route);
+    assertEquals(admitDirectSelectionRoute({ route, userMessage: `Новая тема. ${plain}`, coveredCompound }), true, route);
+    assertEquals(admitDirectSelectionRoute({ route, userMessage: extra, coveredCompound }), false, route);
+    assertEquals(admitDirectSelectionRoute({ route, userMessage: `Новая тема. ${extra}`, coveredCompound }), false, route);
+  }
+});
+
 Deno.test("customer PoE continuation retains the safe direct route but new fit does not", () => {
   const history = [
     {

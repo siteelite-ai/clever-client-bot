@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "source": "Regression: an explicit new-topic boundary cannot become an extra product criterion",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "closure-acti9-new-topic",
+      "title": "Acti9 clarification and scoped continuation after a new-topic preface",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Новая тема. Есть ли аналог автомату Schneider Electric Acti9 C16?",
+          "expect": {
+            "require_any_text": ["полюс"],
+            "require_clarification_choice": "options",
+            "max_products": 0,
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "1 полюс, подбери их в каталоге",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 2,
+            "max_products": 5,
+            "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16А", "16 А"], ["C", "С"]],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    }
+  ]
+}
