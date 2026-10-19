@@ -6553,14 +6553,22 @@ async function runExpertLoop(
     return result;
   };
   const activeSelectionScope = trustedActiveSelectionScope(slots);
+  // A short attribute-only answer may rely on the last completed server
+  // selection. Bind its taxonomy evidence to that exact verified leaf, never
+  // to a client-provided slot or a model-suggested category.
+  const verifiedActiveLeafEvidence = verifiedInitialDiscoveryLeaf &&
+      activeSelectionScope?.leaf === verifiedInitialDiscoveryLeaf
+    ? activeSelectionScope.leaf
+    : "";
   // Category scope comes from the request that produced the latest rendered
   // batch; constraints are compiled separately below so the current attribute
   // can replace, rather than be ANDed with, the previous value of that facet.
   const selectionDiscoveryMessage = ellipticalContinuation?.baseUserMessage ??
     userMessage;
-  // A compound answer may bind uniquely to a completed server-issued leaf.
-  // Only the first mandatory taxonomy lookup uses that leaf; the full request
-  // remains the source for every facet, exclusion and render criterion.
+  // A compound answer or a short attribute-only refinement may bind to a
+  // completed server-issued leaf. Only the first mandatory taxonomy lookup
+  // uses that leaf; the request remains the source for every facet, exclusion
+  // and render criterion.
   const initialDiscoveryMessage = verifiedInitialDiscoveryLeaf ??
     selectionDiscoveryMessage;
   let finalText = "";
@@ -10353,7 +10361,7 @@ async function runExpertLoop(
         // canonical guards modify it. A later recovery may use these strings,
         // but live title/criteria evidence remains mandatory.
         if (tc.name === "discover_category") {
-          const discoveryEvidence = `${userMessage}\n${
+          const discoveryEvidence = `${userMessage}\n${verifiedActiveLeafEvidence}\n${
             initialSelectionDeclaration(
               firstAssistantText || assistantReasoning,
             )
@@ -11424,7 +11432,7 @@ async function runExpertLoop(
           typeof tc.args.noun === "string"
         ) {
           const discoveryEvidence =
-            `${selectionDiscoveryMessage}\n${userMessage}\n${
+            `${selectionDiscoveryMessage}\n${userMessage}\n${verifiedActiveLeafEvidence}\n${
               initialSelectionDeclaration(
                 firstAssistantText || assistantReasoning,
               )
@@ -11481,11 +11489,10 @@ async function runExpertLoop(
               });
             }
           } else if (customerQueryCompiledByServer) {
-            // The server did not invent a taxonomy noun here: both fields are
-            // byte-for-byte the customer's current message. Let the live
-            // taxonomy resolver inspect it, then keep the stricter resolved-
-            // category intent check below. Model-authored nouns never receive
-            // this exception.
+            // This noun is either the customer's current text or the latest
+            // completed server-issued leaf. Let the live taxonomy resolver
+            // inspect it, then keep the stricter resolved-category intent
+            // check below. Model-authored nouns never receive this exception.
             steps.push({
               step: "v3_customer_query_discovery_allowed",
               ms: now(),
@@ -13811,7 +13818,7 @@ async function runExpertLoop(
           intentMode === "select"
         ) {
           const discoveryEvidence =
-            `${selectionDiscoveryMessage}\n${userMessage}\n${
+            `${selectionDiscoveryMessage}\n${userMessage}\n${verifiedActiveLeafEvidence}\n${
               initialSelectionDeclaration(
                 firstAssistantText || assistantReasoning,
               )
@@ -20998,6 +21005,8 @@ Deno.serve(async (req) => {
               const out = await runExpertLoop(
                 additionalSelectionRequest
                   ? `${ellipticalBaseRequest}\n${userMessage}`
+                  : isShortAttributeSelectionFollowup(userMessage)
+                  ? `${scopedSelectionRequest.message} ${sameSectionScope.leaf}`
                   : scopedSelectionRequest.message,
                 effectiveHistory,
                 effectiveSlots,
@@ -21016,6 +21025,12 @@ Deno.serve(async (req) => {
                 null,
                 ellipticalContinuation,
                 priorShownProductUrls,
+                // The customer's short attribute has no category noun. Seed
+                // only the initial taxonomy lookup from the verified scope;
+                // never use browser-carried slots or change full requests.
+                isShortAttributeSelectionFollowup(userMessage)
+                  ? sameSectionScope.leaf
+                  : null,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

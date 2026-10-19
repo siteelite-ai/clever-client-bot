@@ -563,20 +563,87 @@ Deno.test("request prefaces do not carry scope into a different section, entity 
 });
 
 Deno.test("a short adjectival follow-up may refine a verified scope without inventing a new noun", () => {
-  for (const message of ["а есть черные?", "Покажи белые", "двойные"]) {
+  for (
+    const message of [
+      "а есть черные?",
+      "Покажи белые",
+      "двойные",
+      "Нужны двойные",
+      "А мне нужны двойные?",
+      "Хочу двойные",
+      "Хочу купить двойные",
+      "Покажи двойные",
+      "Подбери двойные",
+      "Ну покажите более дорогие",
+    ]
+  ) {
     assertEquals(isShortAttributeSelectionFollowup(message), true, message);
+    assertEquals(
+      isIndependentNominalRequestOutsideActiveScope(message, scope),
+      false,
+      `an adjectival ellipsis must not change the verified product class: ${message}`,
+    );
   }
   for (
     const message of [
       "а есть черные светильники?",
       "покажи кабели",
       "найди люстру",
+      "нужны двойные выключатели",
+      "хочу двойные розетки Legrand",
+      "покажи двойные розетки без Gallant",
+      "Новая тема: нужны двойные",
       "новая тема: розетки",
       "для кухни",
     ]
   ) {
     assertEquals(isShortAttributeSelectionFollowup(message), false, message);
   }
+  assertEquals(
+    isIndependentNominalRequestOutsideActiveScope(
+      "нужны двойные выключатели",
+      scope,
+    ),
+    true,
+    "a new product class still breaks the old server scope",
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "хочу двойные розетки Legrand",
+      scope,
+    ),
+    true,
+    "a named replacement still breaks the old server scope",
+  );
+  const noScope = scopeFromCompletedServerLog(
+    completedLog({
+      response_events: [
+        { type: "diagnostic", phase: "complete" },
+        { type: "done" },
+      ],
+    }),
+    "session_gallant",
+    now,
+  );
+  assertEquals(noScope, null);
+  assertEquals(
+    Boolean(noScope && isShortAttributeSelectionFollowup("нужны двойные")),
+    false,
+    "syntax alone never supplies an unverified product identity",
+  );
+  assertEquals(
+    isIndependentNominalRequestOutsideActiveScope(
+      "нужны накладные",
+      {
+        kind: "named_series_section",
+        entity: "Example",
+        leaf: "Светильники",
+        source_slot_id: "other_verified_slot",
+      },
+    ),
+    false,
+    "the same short-refinement grammar must work beyond sockets",
+  );
 });
 
 Deno.test("short relation phrases continue only the server-verified Gallant leaf", () => {
