@@ -1,15 +1,4 @@
-// Deployment-only wrapper: keep preview behavior byte-for-byte aligned with
-// the candidate v3 implementation without duplicating its source tree. The
-// marker is isolate-local and only lets the candidate honor the preview-only
-// provider failover flag; it does not enable failover by itself.
-(globalThis as typeof globalThis & {
-  __VOLT220_FUNCTION_VARIANT__?: "preview";
-}).__VOLT220_FUNCTION_VARIANT__ = "preview";
-
-// Edge secrets are project-wide; keep preview outside production admission.
-// This server-only isolate marker is never derived from a request field.
-(globalThis as typeof globalThis & {
-  __VOLT220_ADMISSION_SCOPE__?: "preview";
-}).__VOLT220_ADMISSION_SCOPE__ = "preview";
-
-await import("../chat-consultant-v3/index.ts");
+// Keep the bootstrap import first: v3 reads these isolate-local markers while
+// its module is evaluated. Static imports let Lovable bundle the shared module.
+import "./bootstrap.ts";
+import "../chat-consultant-v3/index.ts";
