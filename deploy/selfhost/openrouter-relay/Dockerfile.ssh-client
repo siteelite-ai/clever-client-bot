@@ -1,0 +1,9 @@
+FROM alpine:3.21.3
+
+RUN apk add --no-cache openssh-client \
+    && addgroup -g 10001 tunnel \
+    && adduser -D -u 10001 -G tunnel -h /home/tunnel tunnel \
+    && install -d -m 0700 -o tunnel -g tunnel /home/tunnel/.ssh
+
+USER tunnel
+ENTRYPOINT ["ssh"]

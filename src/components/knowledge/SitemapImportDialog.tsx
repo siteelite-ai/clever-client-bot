@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
-import { Map, Search, Loader2, ChevronRight, ChevronDown, Globe, FolderOpen, FileText, Download } from 'lucide-react';
+import { Map, Search, Loader2, ChevronRight, ChevronDown, Globe, FolderOpen, FileText, Download, AlertTriangle } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -17,6 +18,11 @@ interface TreeNode {
 
 interface SitemapImportDialogProps {
   onImportComplete: () => void;
+}
+
+interface SitemapFetchStatus {
+  truncated: boolean;
+  skippedSitemaps: number;
 }
 
 function buildTree(urls: string[]): TreeNode {
@@ -151,6 +157,7 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [urls, setUrls] = useState<string[]>([]);
+  const [fetchStatus, setFetchStatus] = useState<SitemapFetchStatus | null>(null);
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
@@ -167,6 +174,7 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
 
     setIsLoading(true);
     setUrls([]);
+    setFetchStatus(null);
     setSelectedUrls(new Set());
 
     try {
@@ -181,12 +189,21 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
       if (!data.success) throw new Error(data.error);
 
       const fetchedUrls: string[] = data.urls || [];
+      const status: SitemapFetchStatus = {
+        truncated: data.truncated === true,
+        skippedSitemaps: Number.isSafeInteger(data.skippedSitemaps) && data.skippedSitemaps > 0
+          ? data.skippedSitemaps
+          : 0,
+      };
       setUrls(fetchedUrls);
+      setFetchStatus(status);
 
-      if (fetchedUrls.length === 0) {
+      if (status.truncated || status.skippedSitemaps > 0) {
+        toast.warning(`Список может быть неполным. Найдено страниц: ${fetchedUrls.length}`);
+      } else if (fetchedUrls.length === 0) {
         toast.info('Sitemap не содержит URL-адресов');
       } else {
-        toast.success(`Найдено ${fetchedUrls.length} страниц`);
+        toast.success(`Найдено страниц: ${fetchedUrls.length}`);
       }
     } catch (error) {
       console.error('Error fetching sitemap:', error);
@@ -252,6 +269,7 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
       onImportComplete();
       setIsOpen(false);
       setUrls([]);
+      setFetchStatus(null);
       setSelectedUrls(new Set());
       setSitemapUrl('');
     } else {
@@ -295,6 +313,20 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
             </Button>
           </div>
 
+          {fetchStatus && (fetchStatus.truncated || fetchStatus.skippedSitemaps > 0) && (
+            <Alert className="bg-muted/50">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              <AlertTitle>Список страниц может быть неполным</AlertTitle>
+              <AlertDescription>
+                {fetchStatus.truncated && <span>Достигнут лимит обработки sitemap. </span>}
+                {fetchStatus.skippedSitemaps > 0 && (
+                  <span>Не удалось обработать часть вложенных карт сайта (пропущено: {fetchStatus.skippedSitemaps}). </span>
+                )}
+                Импортировать можно только найденные URL; остальные страницы не включены в список.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {urls.length > 0 && (
             <>
               {/* Stats & search */}
@@ -310,7 +342,7 @@ export function SitemapImportDialog({ onImportComplete }: SitemapImportDialogPro
                 </span>
                 <div className="flex gap-1 ml-auto">
                   <Button variant="ghost" size="sm" onClick={handleSelectAll} disabled={isImporting}>
-                    Выбрать все
+                    {fetchStatus?.truncated || (fetchStatus?.skippedSitemaps ?? 0) > 0 ? 'Выбрать найденные' : 'Выбрать все'}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={handleDeselectAll} disabled={isImporting}>
                     Снять все

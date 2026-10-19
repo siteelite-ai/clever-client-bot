@@ -1,0 +1,127 @@
+# Test-only overlay for the exact upstream Supabase self-hosted/v0.8.2 release.
+# Always pass the official docker/docker-compose.yml FIRST and this file SECOND.
+# Compose >= 2.24.4 is required for !override; older versions must fail closed.
+# No production service, external network, or existing Docker volume is reused.
+name: volt220test
+
+x-bounded-logs: &bounded-logs
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  studio:
+    container_name: volt220test-studio
+    cpus: 0.75
+    mem_limit: 768m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  api-gw:
+    container_name: volt220test-api-gw
+    # The shared host advertises 72 CPUs; Envoy's default worker count
+    # exceeds this test container's PID cap and crashes on thread creation.
+    command: ["--concurrency", "2"]
+    # !override is essential: normal Compose list merging would retain the
+    # upstream 0.0.0.0:8000 binding alongside this one.
+    ports: !override
+      - "127.0.0.1:18081:8000/tcp"
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  auth:
+    container_name: volt220test-auth
+    environment:
+      # Official key generator's --update-env edits the upstream Compose file;
+      # keep that pinned file immutable and enable the keys in this overlay.
+      GOTRUE_JWT_KEYS: ${JWT_KEYS:?private JWT_KEYS required}
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  rest:
+    container_name: volt220test-rest
+    # PostgREST's GHC runtime otherwise starts workers for all 72 host CPUs,
+    # exceeding the isolated container's PID limit.
+    environment:
+      GHCRTS: "-N2"
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  realtime:
+    # Keep the official "realtime-dev" tenant prefix before the dot.
+    container_name: realtime-dev.volt220test-realtime
+    environment:
+      API_JWT_JWKS: ${JWT_JWKS:?private JWT_JWKS required}
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 256
+    logging: *bounded-logs
+
+  storage:
+    container_name: volt220test-storage
+    environment:
+      JWT_JWKS: ${JWT_JWKS:?private JWT_JWKS required}
+    cpus: 0.75
+    mem_limit: 512m
+    pids_limit: 192
+    logging: *bounded-logs
+
+  imgproxy:
+    container_name: volt220test-imgproxy
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  meta:
+    container_name: volt220test-meta
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded-logs
+
+  functions:
+    container_name: volt220test-functions
+    environment:
+      SUPABASE_JWKS: ${JWT_JWKS:?private JWT_JWKS required}
+      SELFHOST_TEST_MODE: ${SELFHOST_TEST_MODE:?test mode required}
+      KNOWLEDGE_REMOTE_IMPORT_ENABLED: ${KNOWLEDGE_REMOTE_IMPORT_ENABLED:?remote-import policy required}
+      CHAT_V3_ADMISSION_MODE: ${CHAT_V3_ADMISSION_MODE:?admission policy required}
+      CHAT_V3_ADMISSION_LIMIT_PER_MINUTE: ${CHAT_V3_ADMISSION_LIMIT_PER_MINUTE:?rate limit required}
+      CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT: ${CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT:?concurrency limit required}
+      LOVABLE_AGENT_FAILOVER_ENABLED: ${LOVABLE_AGENT_FAILOVER_ENABLED:?Lovable failover policy required}
+      LOVABLE_AGENT_FAILOVER_PREVIEW_ENABLED: ${LOVABLE_AGENT_FAILOVER_PREVIEW_ENABLED:?Lovable preview policy required}
+    cpus: 1.5
+    mem_limit: 1536m
+    pids_limit: 256
+    logging: *bounded-logs
+
+  db:
+    container_name: volt220test-db
+    cpus: 2.0
+    mem_limit: 2048m
+    pids_limit: 512
+    logging: *bounded-logs
+
+  supavisor:
+    container_name: volt220test-supavisor
+    # No host binding. Migrations/maintenance use docker compose exec db.
+    ports: !override []
+    cpus: 0.5
+    mem_limit: 384m
+    pids_limit: 192
+    logging: *bounded-logs
+
+networks:
+  default:
+    name: volt220test_internal
+    # Edge functions need outbound access to the test's external APIs.
+    # No external network or links to production containers are attached.
+    internal: false

@@ -13,6 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import type { UserRole } from '@/types';
 import { cn } from '@/lib/utils';
+import { SUPABASE_URL, SUPABASE_PUBLIC_KEY } from '@/lib/supabaseDeployment';
 
 interface ManagedUser {
   id: string;
@@ -43,13 +44,13 @@ export default function UsersManagement() {
   const callAdminApi = async (body: Record<string, unknown>) => {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(
-      `https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/admin-users`,
+      `${SUPABASE_URL}/functions/v1/admin-users`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session?.access_token}`,
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ',
+          'apikey': SUPABASE_PUBLIC_KEY,
         },
         body: JSON.stringify(body),
       }

@@ -179,29 +179,295 @@ function extractValidityDates(content: string): { valid_from: string | null; val
   return { valid_from: null, valid_until: null };
 }
 
+// All user-controlled web imports must use this gate. DNS validation is a
+// defence in depth, not an IP pin: the host firewall must also deny egress to
+// private and metadata networks because a DNS answer can change before fetch.
+const MAX_IMPORT_URL_LENGTH = 4096;
+const IMPORT_PAGE_BYTES = 2 * 1024 * 1024;
+const IMPORT_SITEMAP_BYTES = 3 * 1024 * 1024;
+const IMPORT_REDIRECTS = 4;
+
+function publicIpv4(address: string): boolean {
+  const parts = address.split('.');
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return false;
+  const [a, b, c] = parts.map(Number);
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+  if (a === 100 && b >= 64 && b <= 127) return false; // carrier-grade NAT
+  if (a === 169 && b === 254) return false; // link-local / cloud metadata
+  if (a === 168 && b === 63 && c === 129 && Number(parts[3]) === 16) return false; // Azure platform endpoint
+  if (a === 172 && b >= 16 && b <= 31) return false;
+  if (a === 192 && (b === 168 || (b === 0 && c === 0) || (b === 0 && c === 2) || (b === 88 && c === 99))) return false;
+  if (a === 198 && ((b === 18 || b === 19) || (b === 51 && c === 100))) return false;
+  if (a === 203 && b === 0 && c === 113) return false;
+  return true;
+}
+
+function publicIpv6(address: string): boolean {
+  const value = address.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  // URL canonicalizes embedded IPv4 notation to hex hextets. Reject every
+  // non-global-unicast range, plus transition/documentation ranges that can
+  // embed or tunnel private IPv4 addresses.
+  const first = Number.parseInt(value.split(':')[0], 16);
+  if (!Number.isInteger(first) || first < 0x2000 || first > 0x3fff) return false;
+  if (/^2001:db8(?::|$)/.test(value) || /^2002(?::|$)/.test(value)) return false;
+  if (/^2001:(?::|0(?::|$)|20(?::|$))/.test(value)) return false; // Teredo / ORCHID
+  return true;
+}
+
+function publicIp(address: string): boolean {
+  return address.includes(':') ? publicIpv6(address) : publicIpv4(address);
+}
+
+export function assertSafeImportUrl(input: unknown, base?: string): URL {
+  if (typeof input !== 'string' || input.length === 0 || input.length > MAX_IMPORT_URL_LENGTH) {
+    throw new Error('Недопустимый URL для импорта');
+  }
+  const value = input.trim();
+  if (!value || /[\\\u0000-\u001f\u007f]/.test(value)) throw new Error('Недопустимый URL для импорта');
+  // Preserve the old sitemap convenience of accepting a bare public domain.
+  // A relative URL is only valid as an explicit redirect Location.
+  const bareHostWithPort = /^[a-z\d.-]+:\d{1,5}(?:\/|$)/i.test(value);
+  const hasScheme = !bareHostWithPort && /^[a-z][a-z\d+.-]*:/i.test(value);
+  const candidate = base ? new URL(value, base) : new URL(hasScheme ? value : `https://${value}`);
+  if (!['http:', 'https:'].includes(candidate.protocol) ||
+      (!base && !/^https?:\/\//i.test(hasScheme ? value : `https://${value}`)) ||
+      candidate.username || candidate.password || !candidate.hostname) {
+    throw new Error('Разрешены только публичные HTTP(S) URL без учётных данных');
+  }
+  const hostname = candidate.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[/, '').replace(/\]$/, '');
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') || hostname.endsWith('.localdomain') ||
+      hostname.endsWith('.lan') || hostname.endsWith('.internal') ||
+      hostname === 'home.arpa' || hostname.endsWith('.home.arpa')) {
+    throw new Error('Локальные адреса нельзя импортировать');
+  }
+  if ((hostname.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) && !publicIp(hostname)) {
+    throw new Error('Частные и служебные IP-адреса нельзя импортировать');
+  }
+  candidate.hash = '';
+  return candidate;
+}
+
+type ImportResolver = (hostname: string, type: 'A' | 'AAAA') => Promise<string[]>;
+type ImportFetch = typeof fetch;
+
+async function withinTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  if (ms <= 0) throw new Error('Превышено время загрузки');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error('Превышено время загрузки')), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function assertPublicResolution(url: URL, resolver: ImportResolver, ms: number): Promise<void> {
+  const host = url.hostname.replace(/^\[/, '').replace(/\]$/, '');
+  if (host.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return; // checked above
+  const answers = await withinTimeout(Promise.allSettled([
+    resolver(host, 'A'), resolver(host, 'AAAA'),
+  ]), ms);
+  const addresses = answers.flatMap((answer) => answer.status === 'fulfilled' ? answer.value : []);
+  if (addresses.length === 0 || addresses.some((address) => !publicIp(address))) {
+    throw new Error('Адрес сайта не разрешён для импорта');
+  }
+}
+
+export async function safeFetchImportText(
+  input: unknown,
+  options: {
+    maxBytes: number;
+    deadlineAt?: number;
+    timeoutMs?: number;
+    headers?: Record<string, string>;
+    resolver?: ImportResolver;
+    fetcher?: ImportFetch;
+  },
+): Promise<{ url: string; text: string; bytes: number }> {
+  let current = assertSafeImportUrl(input);
+  const deadlineAt = options.deadlineAt ?? Date.now() + (options.timeoutMs ?? 15_000);
+  const resolver = options.resolver ?? ((hostname, type) => Deno.resolveDns(hostname, type));
+  const fetcher = options.fetcher ?? fetch;
+  if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || options.maxBytes > IMPORT_SITEMAP_BYTES) {
+    throw new Error('Недопустимый лимит загрузки');
+  }
+
+  for (let hop = 0; hop <= IMPORT_REDIRECTS; hop++) {
+    const remaining = deadlineAt - Date.now();
+    await assertPublicResolution(current, resolver, remaining);
+    const controller = new AbortController();
+    const requestMs = Math.min(12_000, deadlineAt - Date.now());
+    if (requestMs <= 0) throw new Error('Превышено время загрузки');
+    const timer = setTimeout(() => controller.abort(), requestMs);
+    let response: Response;
+    try {
+      response = await fetcher(current.toString(), {
+        method: 'GET',
+        redirect: 'manual',
+        credentials: 'omit',
+        headers: options.headers,
+        signal: controller.signal,
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        void response.body?.cancel().catch(() => undefined);
+        if (hop === IMPORT_REDIRECTS) throw new Error('Слишком много перенаправлений');
+        const location = response.headers.get('Location');
+        if (!location) throw new Error('Перенаправление без адреса');
+        const next = assertSafeImportUrl(location, current.toString());
+        if (current.protocol === 'https:' && next.protocol !== 'https:') {
+          throw new Error('Перенаправление с HTTPS на HTTP запрещено');
+        }
+        current = next;
+        continue;
+      }
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const declared = Number(response.headers.get('Content-Length'));
+      if (Number.isFinite(declared) && declared > options.maxBytes) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new Error('Страница превышает допустимый размер');
+      }
+      if (!response.body) return { url: current.toString(), text: '', bytes: 0 };
+      const chunks: Uint8Array[] = [];
+      const reader = response.body.getReader();
+      let bytes = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > options.maxBytes) throw new Error('Страница превышает допустимый размер');
+          chunks.push(value);
+        }
+      } catch (error) {
+        void reader.cancel().catch(() => undefined);
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
+      const content = new Uint8Array(bytes);
+      let position = 0;
+      for (const chunk of chunks) { content.set(chunk, position); position += chunk.byteLength; }
+      return { url: current.toString(), text: new TextDecoder().decode(content), bytes };
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+  throw new Error('Слишком много перенаправлений');
+}
+
+const MAX_SITEMAP_FILES = 11; // root plus at most ten nested files
+const MAX_SITEMAP_DEPTH = 3;
+const MAX_SITEMAP_TOTAL_BYTES = 12 * 1024 * 1024;
+const MAX_SITEMAP_URLS = 10_000;
+
+function sitemapLocs(xml: string, element: 'sitemap' | 'url'): string[] {
+  const expression = new RegExp(`<${element}(?:\\s[^>]*)?>\\s*<loc(?:\\s[^>]*)?>([^<]+)<\\/loc>`, 'gi');
+  return [...xml.matchAll(expression)].map((match) => match[1].trim().replace(/&amp;/gi, '&'));
+}
+
+export async function fetchSitemapUrls(
+  input: unknown,
+  options: { resolver?: ImportResolver; fetcher?: ImportFetch; deadlineAt?: number } = {},
+): Promise<{ urls: string[]; truncated: boolean; skippedSitemaps: number }> {
+  const root = assertSafeImportUrl(input).toString();
+  const deadlineAt = options.deadlineAt ?? Date.now() + 30_000;
+  const queue: Array<{ url: string; depth: number }> = [{ url: root, depth: 0 }];
+  const scheduled = new Set([root]);
+  const urls = new Set<string>();
+  let totalBytes = 0;
+  let truncated = false;
+  let skippedSitemaps = 0;
+
+  while (queue.length > 0) {
+    if (Date.now() >= deadlineAt || totalBytes >= MAX_SITEMAP_TOTAL_BYTES) {
+      truncated = true;
+      break;
+    }
+    const current = queue.shift()!;
+    let xml: string;
+    try {
+      const result = await safeFetchImportText(current.url, {
+        maxBytes: Math.min(IMPORT_SITEMAP_BYTES, MAX_SITEMAP_TOTAL_BYTES - totalBytes),
+        deadlineAt,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)',
+          'Accept': 'application/xml, text/xml, */*',
+        },
+        resolver: options.resolver,
+        fetcher: options.fetcher,
+      });
+      totalBytes += result.bytes;
+      xml = result.text;
+    } catch (error) {
+      if (current.depth === 0) throw error;
+      skippedSitemaps++;
+      console.warn('[Sitemap] Skipped child sitemap:', error instanceof Error ? error.message : error);
+      continue;
+    }
+
+    const nested = sitemapLocs(xml, 'sitemap');
+    if (nested.length > 0) {
+      for (const raw of nested) {
+        try {
+          const next = assertSafeImportUrl(raw).toString();
+          if (scheduled.has(next)) continue;
+          if (scheduled.size >= MAX_SITEMAP_FILES || current.depth >= MAX_SITEMAP_DEPTH) {
+            truncated = true;
+            break;
+          }
+          scheduled.add(next);
+          queue.push({ url: next, depth: current.depth + 1 });
+        } catch {
+          skippedSitemaps++;
+        }
+      }
+    }
+
+    const pages = sitemapLocs(xml, 'url');
+    // Compatibility: some public sitemaps contain bare <loc> elements.
+    const simpleLocFallback = pages.length === 0 && nested.length === 0;
+    const candidates = pages.length > 0 ? pages : simpleLocFallback
+      ? [...xml.matchAll(/<loc(?:\s[^>]*)?>([^<]+)<\/loc>/gi)].map((match) => match[1].trim().replace(/&amp;/gi, '&'))
+      : [];
+    for (const raw of candidates) {
+      if (urls.size >= MAX_SITEMAP_URLS) { truncated = true; break; }
+      try {
+        const page = assertSafeImportUrl(raw);
+        // A sitemap link is only displayed here. Its DNS is checked again
+        // immediately before scrape_url or refresh_url fetches it.
+        if (!simpleLocFallback || !/\.xml(?:$|\?)/i.test(page.pathname + page.search)) urls.add(page.toString());
+      } catch { /* Do not return local or malformed page URLs to the UI. */ }
+    }
+    if (urls.size >= MAX_SITEMAP_URLS) break;
+  }
+
+  return { urls: [...urls], truncated, skippedSitemaps };
+}
+
 // Extract text content from URL
 async function scrapeUrl(url: string): Promise<{ title: string; content: string }> {
-  console.log(`[Scrape] Fetching URL: ${url}`);
-  
   try {
-    const response = await fetch(url, {
+    const result = await safeFetchImportText(url, {
+      maxBytes: IMPORT_PAGE_BYTES,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
       },
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const html = await response.text();
-    console.log(`[Scrape] Received ${html.length} bytes of HTML`);
+    const html = result.text;
+    console.log(`[Scrape] Received ${result.bytes} bytes from ${new URL(result.url).hostname}`);
 
     // Extract title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const title = titleMatch ? titleMatch[1].trim() : url;
+    const title = titleMatch ? titleMatch[1].trim() : result.url;
 
     // Remove scripts, styles, and comments
     let content = html
@@ -240,7 +506,7 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
     
     return { title, content };
   } catch (error) {
-    console.error(`[Scrape] Error fetching ${url}:`, error);
+    console.error('[Scrape] Import failed:', error);
     throw new Error(`Не удалось загрузить страницу: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
   }
 }
@@ -349,13 +615,17 @@ serve(async (req) => {
   try {
     const requestBody = await req.json();
     const { action, url, text, title, pdfBase64, entryId, entryType, offset, batch_size } = requestBody;
+
+    // The first self-hosted test release has no network-level egress filter.
+    // Keep remote imports off until that separate release gate is verified.
+    if (Deno.env.get('SELFHOST_TEST_MODE') === 'true' &&
+        Deno.env.get('KNOWLEDGE_REMOTE_IMPORT_ENABLED') !== 'true' &&
+        ['fetch_sitemap', 'scrape_url', 'refresh_url'].includes(action)) {
+      throw new Error('Импорт внешних URL временно отключён в тестовой среде');
+    }
     
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
-    }
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       throw new Error('Supabase configuration missing');
     }
@@ -365,86 +635,14 @@ serve(async (req) => {
     console.log(`[Knowledge] Action: ${action}`);
 
     if (action === 'fetch_sitemap') {
-      // Fetch and parse sitemap XML
       if (!url) {
         throw new Error('URL is required');
       }
-
-      let sitemapUrl = url.trim();
-      if (!sitemapUrl.startsWith('http')) {
-        sitemapUrl = 'https://' + sitemapUrl;
-      }
-
-      console.log(`[Sitemap] Fetching: ${sitemapUrl}`);
-
-      const response = await fetch(sitemapUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)',
-          'Accept': 'application/xml, text/xml, */*',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ошибка загрузки sitemap: HTTP ${response.status}`);
-      }
-
-      const xml = await response.text();
-      console.log(`[Sitemap] Received ${xml.length} bytes`);
-
-      // Parse URLs from sitemap XML
-      const urls: string[] = [];
-      
-      // Check if it's a sitemap index (contains other sitemaps)
-      const sitemapIndexMatches = xml.matchAll(/<sitemap>\s*<loc>([^<]+)<\/loc>/gi);
-      const subSitemaps: string[] = [];
-      for (const match of sitemapIndexMatches) {
-        subSitemaps.push(match[1].trim());
-      }
-
-      if (subSitemaps.length > 0) {
-        // It's a sitemap index - fetch each sub-sitemap
-        console.log(`[Sitemap] Found sitemap index with ${subSitemaps.length} sub-sitemaps`);
-        for (const subUrl of subSitemaps.slice(0, 10)) { // Limit to 10 sub-sitemaps
-          try {
-            const subResponse = await fetch(subUrl, {
-              headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)' },
-            });
-            if (subResponse.ok) {
-              const subXml = await subResponse.text();
-              const locMatches = subXml.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/gi);
-              for (const m of locMatches) {
-                urls.push(m[1].trim());
-              }
-            }
-          } catch (e) {
-            console.error(`[Sitemap] Error fetching sub-sitemap ${subUrl}:`, e);
-          }
-        }
-      } else {
-        // Regular sitemap
-        const locMatches = xml.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/gi);
-        for (const match of locMatches) {
-          urls.push(match[1].trim());
-        }
-      }
-
-      // Also try simple <loc> tags (some sitemaps don't wrap in <url>)
-      if (urls.length === 0) {
-        const simpleLocs = xml.matchAll(/<loc>([^<]+)<\/loc>/gi);
-        for (const match of simpleLocs) {
-          const u = match[1].trim();
-          if (u.startsWith('http') && !u.endsWith('.xml')) {
-            urls.push(u);
-          }
-        }
-      }
-
-      // Deduplicate
-      const uniqueUrls = [...new Set(urls)];
-      console.log(`[Sitemap] Found ${uniqueUrls.length} unique URLs`);
+      const result = await fetchSitemapUrls(url);
+      console.log(`[Sitemap] Found ${result.urls.length} unique URLs; truncated=${result.truncated}; skipped=${result.skippedSitemaps}`);
 
       return new Response(
-        JSON.stringify({ success: true, urls: uniqueUrls }),
+        JSON.stringify({ success: true, ...result }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -608,7 +806,14 @@ serve(async (req) => {
         throw new Error('PDF content is required');
       }
 
-      const { title: extractedTitle, content } = await extractPdfText(pdfBase64, LOVABLE_API_KEY);
+      // Only this legacy server-side PDF path uses Lovable AI. The cabinet
+      // extracts PDF text in the browser and stores it through add_text.
+      const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+      if (!lovableApiKey) {
+        throw new Error('Серверная обработка PDF недоступна: LOVABLE_API_KEY не настроен. Загрузите PDF через кабинет.');
+      }
+
+      const { title: extractedTitle, content } = await extractPdfText(pdfBase64, lovableApiKey);
       
       if (content.length < 50) {
         throw new Error('PDF содержит слишком мало текста');

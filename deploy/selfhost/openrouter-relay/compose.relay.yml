@@ -1,0 +1,32 @@
+name: volt220-openrouter-test-relay
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: volt220-openrouter-test-relay:1
+    user: "1000:1000"
+    read_only: true
+    init: true
+    ports:
+      - "127.0.0.1:19084:19084"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+    networks:
+      - isolated_relay
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+
+networks:
+  isolated_relay:
+    driver: bridge

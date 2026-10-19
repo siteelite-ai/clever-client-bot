@@ -4,11 +4,19 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
+  }
+
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json', Allow: 'POST, OPTIONS' },
+    });
   }
 
   try {
@@ -17,14 +25,15 @@ serve(async (req) => {
     
     // Verify the caller is an admin
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    const bearerMatch = authHeader?.match(/^Bearer (\S+)$/i);
+    if (!bearerMatch) {
       return new Response(JSON.stringify({ error: 'Не авторизован' }), { 
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       });
     }
 
     const anonClient = createClient(SUPABASE_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
-    const { data: { user: caller } } = await anonClient.auth.getUser(authHeader.replace('Bearer ', ''));
+    const { data: { user: caller } } = await anonClient.auth.getUser(bearerMatch[1]);
     
     if (!caller) {
       return new Response(JSON.stringify({ error: 'Не авторизован' }), { 
@@ -140,7 +149,7 @@ serve(async (req) => {
   } catch (error) {
     console.error('Admin users error:', error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Ошибка сервера' }),
+      JSON.stringify({ error: 'Ошибка сервера' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
