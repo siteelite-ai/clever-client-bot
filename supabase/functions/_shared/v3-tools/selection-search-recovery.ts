@@ -389,6 +389,19 @@ export function buildUnqualifiedCategoryBrowseRecovery(
     !lexicalWords(query).some((word) => sameClassWord(word, classHead)) ||
     !lexicalWords(message).some((word) => sameClassWord(word, classHead))
   ) return null;
+  // A live leaf may contain an application/subtype in addition to its class
+  // head. The customer's broad noun alone cannot authorize that narrower
+  // sales class, even when it is the only leaf returned by discovery.
+  const customerWords = lexicalWords(message);
+  const leafMeaningfulWords = lexicalWords(leaves[0]).filter((word) =>
+    !["для", "на", "в", "с", "со", "по", "и", "или"].includes(word)
+  );
+  if (
+    leafMeaningfulWords.length === 0 ||
+    !leafMeaningfulWords.every((leafWord) =>
+      customerWords.some((word) => sameClassWord(word, leafWord))
+    )
+  ) return null;
 
   if (
     !Number.isInteger(input.initial_results_count) ||

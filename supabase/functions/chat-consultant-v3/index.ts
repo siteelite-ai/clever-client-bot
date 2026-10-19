@@ -7517,6 +7517,9 @@ async function runExpertLoop(
   let derivedStructuredSearchDiscovery: DiscoverCategoryOk | null = null;
   let derivedStructuredSearchFinalizationReady = false;
   let queuedServerGroundedSearch: ORToolCall | null = null;
+  let modelSearchAbsentBrowseCallId: string | null = null;
+  let modelSearchAbsentBrowseAttempt: SelectionSearchRecoveryAttempt | null =
+    null;
   let structuredSearchSource:
     | "derived_reasoning"
     | "customer_facets"
@@ -8625,6 +8628,60 @@ async function runExpertLoop(
     });
   }
 
+  // One eligibility boundary serves both a zero-result query recovery and a
+  // model declaration that omitted search entirely. The latter can happen
+  // after a slow provider retry; waiting for a second model call leaves no
+  // time for the already-grounded catalog lookup.
+  const buildCurrentUnqualifiedCategoryBrowse = (
+    searchArgs: Record<string, unknown>,
+    initialResultsCount: number,
+  ): SelectionSearchRecoveryAttempt | null => {
+    const discovery = lastDiscover;
+    if (!discovery) return null;
+    return buildUnqualifiedCategoryBrowseRecovery({
+      search_args: searchArgs,
+      customer_message: userMessage,
+      leaf_categories: discovery.leaf_categories.map((leaf) =>
+        leaf.pagetitle
+      ),
+      initial_results_count: initialResultsCount,
+      minimum_results: resultCardinality.minimum,
+      explicit_multiple_choice: resultCardinality.explicit &&
+        resultCardinality.minimum > 1,
+      mandatory_criteria_count:
+        (currentSelectionCriteriaPlan()?.mandatory_criteria.length ?? 0) +
+        enforcedSearchCriteria.length +
+        reasoningProjectedSearchCriteria.length +
+        postFilterOnlyReasoningCriteria.length +
+        latestRenderCriteria.length,
+      customer_constraint_count: userBackedSearchCriteria.length +
+        userBackedSearchFacetValues.length,
+      class_constraint_count: customerExactClassificationCriteria.length +
+        customerApplicationAlternatives.length,
+      visible_requirement_count: buildVisibleRequestContract(
+        userMessage,
+        {
+          productClass: activeSelectionTarget ??
+            discovery.category.pagetitle,
+          taxonomyClass: discovery.category.pagetitle,
+          candidateTitles: [...ctx.cache.values()].map((product) =>
+            product.pagetitle
+          ),
+        },
+      ).length,
+      compatibility_required: activeCompatibilityRelations.length > 0 ||
+        hasSelectionMeasurementContext(userMessage),
+      replacement_intent: replacementIntent,
+      exact_or_compound_or_alias_request: Boolean(
+        namedSeriesToken || requiredCatalogAlias || declaredAliasQuery ||
+          explicitCompoundMarking || semanticCompoundEvidenceRequired ||
+          directProductLookup.articles.length > 0 ||
+          directProductLookup.modelCodes.length > 0 ||
+          codeConstraints.length > 0,
+      ),
+    });
+  };
+
   const turnController = new AbortController();
   const turnTimer = setTimeout(() => turnController.abort(), TURN_TIMEOUT_MS);
   let remoteAgentSteps = 0;
@@ -9660,9 +9717,45 @@ async function runExpertLoop(
                 per_page: 50,
               }
               : null;
-          const directSearchArgs = directSearchBase
+          const directBudgetCap = extractBudgetCap(userMessage);
+          const modelSearchAbsentBrowseCandidate = !directSearchBase &&
+              lastDiscover.leaf_categories.length === 1
+            ? buildCurrentUnqualifiedCategoryBrowse({
+              mode: "by_query",
+              query: lastDiscover.leaf_categories[0].pagetitle,
+              category_in: [lastDiscover.leaf_categories[0].pagetitle],
+              ...(directBudgetCap !== null
+                ? { max_price: directBudgetCap }
+                : {}),
+              per_page: 50,
+            }, 0)
+            : null;
+          const browseLeafProof = modelSearchAbsentBrowseCandidate
+            ? guardCategoryScopeByReasoning(
+              modelSearchAbsentBrowseCandidate.args,
+              lastDiscover,
+              userMessage,
+            )
+            : null;
+          const modelSearchAbsentBrowse = browseLeafProof &&
+              browseLeafProof.dropped.length === 0 &&
+              browseLeafProof.kept.includes(
+                lastDiscover.leaf_categories[0].pagetitle,
+              )
+            ? modelSearchAbsentBrowseCandidate
+            : null;
+          if (browseLeafProof?.dropped.length) {
+            steps.push({
+              step: "v3_unqualified_category_browse_leaf_unproven",
+              ms: now(),
+              meta: { dropped: browseLeafProof.dropped },
+            });
+          }
+          const directSearchCandidate = directSearchBase ??
+            modelSearchAbsentBrowse?.args ?? null;
+          const directSearchArgs = directSearchCandidate
             ? guardSearchFilters(
-              directSearchBase,
+              directSearchCandidate,
               lastDiscover.facets ?? [],
               `${userMessage}\n${visibleDeclarationText}`,
               userMessage,
@@ -9676,12 +9769,26 @@ async function runExpertLoop(
               },
             ).args
             : null;
-          const directBudgetCap = extractBudgetCap(userMessage);
           if (directSearchArgs && directBudgetCap !== null) {
             directSearchArgs.max_price = directBudgetCap;
           }
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
+            if (modelSearchAbsentBrowse) {
+              modelSearchAbsentBrowseCallId = derivedStructuredSearchCallId;
+              modelSearchAbsentBrowseAttempt = modelSearchAbsentBrowse;
+              steps.push({
+                step: "v3_unqualified_category_browse_after_model_no_search_queued",
+                ms: now(),
+                meta: {
+                  category: lastDiscover.category.pagetitle,
+                  leaf: lastDiscover.leaf_categories[0].pagetitle,
+                  qualifier_count:
+                    modelSearchAbsentBrowse.literal_qualifier_terms?.length ??
+                      0,
+                },
+              });
+            }
             derivedStructuredSearchRecommendedMarking =
               recommendedCompoundMarking;
             derivedStructuredSearchPairedCompatibility =
@@ -9689,7 +9796,8 @@ async function runExpertLoop(
             derivedStructuredSearchGuidedByVisibleReasoning =
               Object.keys(directSearchOptions).length > 0 ||
               declaration.measurementScope === "system_total" ||
-              Boolean(declaration.retrievalQuery);
+              Boolean(declaration.retrievalQuery) ||
+              Boolean(modelSearchAbsentBrowse);
             derivedStructuredSearchDiscovery = lastDiscover;
             structuredSearchSource = "derived_reasoning";
             resp.toolCalls = [{
@@ -10990,7 +11098,13 @@ async function runExpertLoop(
         // scopes supported by the declared reasoning. When none are supported,
         // search category-wide with the proven facet filters instead of guessing
         // another sibling.
-        if (tc.name === "search_catalog" && lastDiscover) {
+        // The server-compiled browse has already proved the customer's class
+        // wording against the one live leaf. A second model-prose heuristic
+        // must not silently widen that exact source scope to its umbrella.
+        if (
+          tc.name === "search_catalog" && lastDiscover &&
+          tc.id !== modelSearchAbsentBrowseCallId
+        ) {
           const categoryEvidence = [
             history.filter((message) => message.role === "user").slice(-6).map((
               message,
@@ -14248,6 +14362,35 @@ async function runExpertLoop(
           | SelectionSearchRecoveryAttempt
           | null = null;
         let selectiveLiteralTokenRecovery: string | null = null;
+        if (
+          tc.name === "search_catalog" &&
+          tc.id === modelSearchAbsentBrowseCallId &&
+          modelSearchAbsentBrowseAttempt && gateShortCircuit === null
+        ) {
+          const signature = (args: Record<string, unknown>) => JSON.stringify(
+            Object.keys(args).sort().map((key) => [key, args[key]]),
+          );
+          if (
+            signature(runArgs) !==
+              signature(modelSearchAbsentBrowseAttempt.args)
+          ) {
+            gateShortCircuit = {
+              tool: "search_catalog",
+              ok: false,
+              error_code: "bad_input",
+              message:
+                "Verified category-browse scope changed before execution",
+            };
+            steps.push({
+              step: "v3_unqualified_category_browse_scope_rejected",
+              ms: now(),
+              meta: {
+                expected: modelSearchAbsentBrowseAttempt.args,
+                executed: runArgs,
+              },
+            });
+          }
+        }
 
         send({
           type: "tool_event",
@@ -14256,6 +14399,42 @@ async function runExpertLoop(
           summary: `${tc.name}…`,
         });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (
+          tc.name === "search_catalog" &&
+          tc.id === modelSearchAbsentBrowseCallId &&
+          modelSearchAbsentBrowseAttempt &&
+          result.ok && result.tool === "search_catalog"
+        ) {
+          const retrieved = result.results.length;
+          const proven = filterUnqualifiedCategoryBrowseCandidates(
+            result.results,
+            modelSearchAbsentBrowseAttempt,
+          );
+          selectedSearchRecoveryAttempt = modelSearchAbsentBrowseAttempt;
+          result = {
+            ...result,
+            results: proven,
+            total: proven.length,
+            warnings: [
+              ...(result.warnings ?? []),
+              `browse_qualifier_proven:${proven.length}/${retrieved}`,
+            ],
+          };
+          steps.push({
+            step: "v3_unqualified_category_browse_after_model_no_search",
+            ms: now(),
+            meta: {
+              category: lastDiscover?.category.pagetitle ?? "",
+              retrieved,
+              qualifier_proven: proven.length,
+              qualifier_count:
+                modelSearchAbsentBrowseAttempt.literal_qualifier_terms
+                  ?.length ?? 0,
+              source: "verified_leaf",
+            },
+          });
+        }
 
         // The catalog may have a populated verified leaf while the combined
         // full-text/category lookup for a plain multi-choice request is empty.
@@ -14269,48 +14448,7 @@ async function runExpertLoop(
             result.ok && result.tool === "search_catalog" &&
             result.results.length === 0 && lastDiscover &&
             now() < TURN_TIMEOUT_MS - 9_000
-          ? buildUnqualifiedCategoryBrowseRecovery({
-            search_args: runArgs,
-            customer_message: userMessage,
-            leaf_categories: lastDiscover.leaf_categories.map((leaf) =>
-              leaf.pagetitle
-            ),
-            initial_results_count: 0,
-            minimum_results: resultCardinality.minimum,
-            explicit_multiple_choice: resultCardinality.explicit &&
-              resultCardinality.minimum > 1,
-            mandatory_criteria_count:
-              (currentSelectionCriteriaPlan()?.mandatory_criteria.length ?? 0) +
-              enforcedSearchCriteria.length +
-              reasoningProjectedSearchCriteria.length +
-              postFilterOnlyReasoningCriteria.length +
-              latestRenderCriteria.length,
-            customer_constraint_count: userBackedSearchCriteria.length +
-              userBackedSearchFacetValues.length,
-            class_constraint_count: customerExactClassificationCriteria.length +
-              customerApplicationAlternatives.length,
-            visible_requirement_count: buildVisibleRequestContract(
-              userMessage,
-              {
-                productClass: activeSelectionTarget ??
-                  lastDiscover.category.pagetitle,
-                taxonomyClass: lastDiscover.category.pagetitle,
-                candidateTitles: [...ctx.cache.values()].map((product) =>
-                  product.pagetitle
-                ),
-              },
-            ).length,
-            compatibility_required: activeCompatibilityRelations.length > 0 ||
-              hasSelectionMeasurementContext(userMessage),
-            replacement_intent: replacementIntent,
-            exact_or_compound_or_alias_request: Boolean(
-              namedSeriesToken || requiredCatalogAlias || declaredAliasQuery ||
-                explicitCompoundMarking || semanticCompoundEvidenceRequired ||
-                directProductLookup.articles.length > 0 ||
-                directProductLookup.modelCodes.length > 0 ||
-                codeConstraints.length > 0,
-            ),
-          })
+          ? buildCurrentUnqualifiedCategoryBrowse(runArgs, 0)
           : null;
         let unqualifiedCategoryBrowseSucceeded = false;
         if (unqualifiedCategoryBrowse) {
