@@ -2451,6 +2451,84 @@ Deno.test("exposed use requires a structured live protection obligation before s
   );
 });
 
+Deno.test("environmental protection correction uses the required technical-facet contract", () => {
+  const customer = "Нужен прибор для открытого двора";
+  const facets = [{
+    key: "protection",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP20" }, { value: "IP65" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f0v1"),
+    true,
+  );
+  assertEquals(
+    properties.compatible_classifications.items?.enum?.includes("f0v1") ??
+      false,
+    false,
+  );
+  const draft = {
+    reasoning:
+      "Для эксплуатации во дворе каждому прибору нужна подтверждённая защита от воздействия погоды.",
+    measurement_scope: "not_applicable",
+    compatible_classifications: ["f0v1"],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [],
+  };
+  const compatibleOnly = resolveDerivedSelectionReasoning(
+    draft,
+    facets,
+    customer,
+  );
+  assertEquals(Boolean(compatibleOnly), true);
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      customer,
+      facets,
+      compatibleOnly,
+    ),
+    true,
+  );
+  const valueWithoutReasoning = resolveDerivedSelectionReasoning(
+    { ...draft, required_facet_values: ["f0v1"] },
+    facets,
+    customer,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      customer,
+      facets,
+      valueWithoutReasoning,
+    ),
+    true,
+  );
+  const required = resolveDerivedSelectionReasoning(
+    {
+      ...draft,
+      reasoning:
+        "Для эксплуатации во дворе у каждого прибора необходима степень защиты IP65.",
+      compatible_classifications: [],
+      required_facet_values: ["f0v1"],
+    },
+    facets,
+    customer,
+  );
+  assertEquals(required?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(customer, facets, required),
+    false,
+  );
+});
+
 Deno.test("weather exposure rejects weak or unknown IP declarations without forcing IP65", () => {
   const facets = [{
     key: "ip",
