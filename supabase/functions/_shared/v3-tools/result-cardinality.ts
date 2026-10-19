@@ -1,3 +1,5 @@
+import type { CatalogCandidateCoverage } from "./types.ts";
+
 export interface ResultCardinalityContract {
   target: number;
   minimum: number;
@@ -190,7 +192,10 @@ export function resultCardinalitySystemHint(
 export function resultCardinalityShortfallText(
   actual: number,
   contract: ResultCardinalityContract,
-  context: { unverifiedCriteria?: boolean } = {},
+  context: {
+    unverifiedCriteria?: boolean;
+    candidateCoverage?: CatalogCandidateCoverage;
+  } = {},
 ): string | null {
   if (actual <= 0 || contract.target <= 1 || actual >= contract.minimum) {
     return null;
@@ -201,6 +206,21 @@ export function resultCardinalityShortfallText(
         (actual % 100 < 12 || actual % 100 > 14)
     ? "варианта"
     : "вариантов";
+  if (
+    context.candidateCoverage === "partial" ||
+    context.candidateCoverage === "unknown"
+  ) {
+    const shortage = context.unverifiedCriteria
+      ? `По нужному типу пока удалось подтвердить ${actual} ${noun} в проверенной части каталога. Не все обязательные свойства заполнены в карточках; непроверенный параметр указан отдельно перед товарами.`
+      : `Пока удалось подтвердить ${actual} ${noun} в проверенной части каталога.`;
+    return `${shortage} Полноту поиска подтвердить не удалось; это не означает, что других подходящих товаров нет. Могу продолжить проверку каталога или, с вашего согласия, ослабить условия.`;
+  }
+  if (context.candidateCoverage === "complete_query_window") {
+    const shortage = context.unverifiedCriteria
+      ? `По нужному типу в выполненном поиске удалось подтвердить ${actual} ${noun}. Не все обязательные свойства заполнены в карточках; непроверенный параметр указан отдельно перед товарами.`
+      : `В выполненном поиске удалось подтвердить ${actual} ${noun}.`;
+    return `${shortage} Если хотите больше вариантов, скажите, какое условие можно изменить; без вашего согласия я не расширю подбор.`;
+  }
   const shortage = context.unverifiedCriteria
     ? `По нужному типу нашёл только ${actual} ${noun}. Не все обязательные свойства заполнены в карточках; непроверенный параметр указан отдельно перед товарами.`
     : `По заданным условиям удалось подтвердить только ${actual} ${noun}.`;

@@ -7574,7 +7574,26 @@ async function runExpertLoop(
   // Tool errors are observed at the shared dispatcher, including bounded
   // recovery calls. A later empty result cannot erase an earlier timeout.
   let transientCatalogFailureSeen = false;
+  // A catalog search can return a useful candidate page without covering all
+  // candidates in the requested window. Preserve that distinction across
+  // normal and recovery searches before explaining a multi-result shortfall.
+  let candidateCoverage:
+    | "complete_query_window"
+    | "partial"
+    | "unknown"
+    | null = null;
   ctx.observeCatalogToolResult = (result) => {
+    if (result.tool === "search_catalog") {
+      const observed = result.ok
+        ? (result as SearchCatalogOk).candidate_coverage ?? "unknown"
+        : "unknown";
+      candidateCoverage = candidateCoverage === "unknown" ||
+          observed === "unknown"
+        ? "unknown"
+        : candidateCoverage === "partial" || observed === "partial"
+        ? "partial"
+        : "complete_query_window";
+    }
     if (
       isTransientCatalogToolFailure(result) &&
       !transientCatalogFailureSeen
@@ -7681,7 +7700,10 @@ async function runExpertLoop(
     const defaultShortfall = resultCardinalityShortfallText(
       actual,
       resultCardinality,
-      { unverifiedCriteria: pendingUnverifiedRecoveryCriteria.length > 0 },
+      {
+        unverifiedCriteria: pendingUnverifiedRecoveryCriteria.length > 0,
+        candidateCoverage: candidateCoverage ?? "unknown",
+      },
     );
     const shortfall = defaultShortfall;
     if (!shortfall || resultCardinalityShortfallAnnounced) return;
@@ -7701,6 +7723,7 @@ async function runExpertLoop(
         minimum: resultCardinality.minimum,
         actual,
         source,
+        candidate_coverage: candidateCoverage ?? "unknown",
       },
     });
   };
