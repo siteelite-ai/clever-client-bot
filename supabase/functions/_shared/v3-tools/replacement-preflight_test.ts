@@ -20,6 +20,7 @@ import {
   resolveReplacementSourceMessage,
   resolveScopedReplacementSource,
   resolveReplacementSourceModelCodes,
+  resolveVerifiedIssuedLiveReplacementAxis,
   selectExplicitAnchorAxes,
   shouldClarifyCompactReplacementSource,
   shouldApplyReplacementExclusionGuard,
@@ -430,6 +431,69 @@ Deno.test("compact replacement continuation compiles only live product-proved an
       ],
     },
   );
+  const issuedChoice = {
+    facet_key: "poles",
+    value: "1",
+    resolved_category: "Автоматические выключатели",
+  };
+  const liveAxis = resolveVerifiedIssuedLiveReplacementAxis(
+    issuedChoice,
+    "1",
+    "Автоматические выключатели",
+    liveFacets,
+  );
+  assertEquals(liveAxis, {
+    key: "poles",
+    caption: "Количество полюсов",
+    value: "1",
+  });
+  assertEquals(
+    resolveVerifiedIssuedLiveReplacementAxis(
+      { ...issuedChoice, facet_key: "kolichestvo_polyusov__polyuster_sany" },
+      "1",
+      "Автоматические выключатели",
+      [{
+        ...liveFacets[2],
+        key: "kolichestvo_polyusov__polyuster_sany",
+      }],
+    ),
+    {
+      key: "kolichestvo_polyusov__polyuster_sany",
+      caption: "Количество полюсов",
+      value: "1",
+    },
+  );
+  assertEquals(
+    compileLiveCompactReplacementContract(
+      `Есть ли аналог серии ZX C16?\nУточнение клиента: 1\n${liveAxis?.caption}: ${liveAxis?.value}`,
+      liveFacets,
+      products,
+    )?.axes.at(-1),
+    liveAxis,
+  );
+  assertEquals(
+    resolveVerifiedIssuedLiveReplacementAxis(
+      issuedChoice,
+      "1 полюс, покажи",
+      "Автоматические выключатели",
+      liveFacets,
+    ),
+    liveAxis,
+  );
+  for (const [reply, category, choice] of [
+    ["1 метр", "Автоматические выключатели", issuedChoice],
+    ["1", "Светильники", issuedChoice],
+    ["1", "Автоматические выключатели", { ...issuedChoice, facet_key: "package" }],
+    ["1", "Автоматические выключатели", { ...issuedChoice, value: "4" }],
+  ] as const) {
+    assertEquals(
+      resolveVerifiedIssuedLiveReplacementAxis(
+        choice, reply, category, liveFacets,
+      ),
+      null,
+      `${reply} / ${category} / ${choice.facet_key}`,
+    );
+  }
   assertEquals(
     compileLiveCompactReplacementContract(
       "Есть ли аналог серии ZX C16?\nУточнение клиента: однополюсный",

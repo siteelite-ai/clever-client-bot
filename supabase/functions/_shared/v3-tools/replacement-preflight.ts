@@ -77,6 +77,42 @@ export interface LiveCompactReplacementContract {
   axes: Array<{ key: string; caption: string; value: string }>;
 }
 
+/** The issued chip is a customer answer, not a catalog filter. Promote it only
+ * after the same category exposes the same structural key and exact value.
+ * A typed phrase must additionally label its value with that live axis;
+ * a bare numeric chip is already unambiguous within the server-issued slot. */
+export function resolveVerifiedIssuedLiveReplacementAxis(
+  answer: {
+    facet_key: string;
+    value: string;
+    resolved_category: string;
+  },
+  customerReply: string,
+  resolvedCategory: string,
+  facets: Facet[],
+): { key: string; caption: string; value: string } | null {
+  if (
+    !answer || norm(answer.resolved_category) !== norm(resolvedCategory) ||
+    !norm(resolvedCategory)
+  ) return null;
+  const matches = facets.filter((facet) =>
+    facet.key === answer.facet_key && isStructuralCardinalityFacet(facet)
+  );
+  if (matches.length !== 1) return null;
+  const facet = matches[0];
+  const values = [...new Set(facet.values.map(({ value }) => value.trim()))]
+    .filter((value) => value === answer.value);
+  if (values.length !== 1) return null;
+  if (customerReply.trim() !== answer.value) {
+    const labeled = resolveLabeledFacetValueEvidence(customerReply, [facet]);
+    if (
+      labeled.length !== 1 || labeled[0].axis.key !== facet.key ||
+      labeled[0].axis.value !== answer.value
+    ) return null;
+  }
+  return { key: facet.key, caption: facet.caption, value: values[0] };
+}
+
 /**
  * A replacement request may identify the source by a live series/collection
  * and compact technical code without spelling the product class.  A model-

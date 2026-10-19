@@ -1,14 +1,18 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  isUnansweredReadinessProgressRequest,
   measuredLoadGuidanceCanProceed,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
   resolveServerIssuedSelectionReadinessPending,
+  resolveVerifiedNumericReadinessAnswer,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
+  verifiedReadinessReplayInput,
 } from "./selection-readiness.ts";
+import { executeProposeClarification } from "./propose-clarification.ts";
 
 const cases = [
   [
@@ -341,6 +345,139 @@ const completedReadinessLog = {
     { type: "done" },
   ],
 };
+
+Deno.test("bare progress commands leave the server-issued clarification unanswered", () => {
+  for (const message of [
+    "покажи",
+    "Ну покажи варианты",
+    "Покажите товары",
+    "Покажи варианты, пожалуйста",
+    "Ну покажи мне тогда",
+    "Покажи пожалуйста варианты",
+    "А можешь показать уже подходящие варианты?",
+    "Давай покажи другие варианты",
+    "Подберите мне, пожалуйста, варианты",
+    "давай",
+  ]) {
+    assertEquals(isUnansweredReadinessProgressRequest(message), true, message);
+  }
+  for (const message of [
+    "1 полюс, покажи",
+    "2",
+    "Новая тема. Найди кабель ВВГ 3*1,5",
+    "Новая тема: покажи варианты",
+    "покажи двойные черные розетки",
+    "Покажи, пожалуйста, лампу Корн",
+    "покажи варианты на 2 полюса",
+    "покажи мне варианты для улицы",
+    "покажи 1",
+    "покажи варианты, цена до 4000",
+    "покажи сейчас новый диалог",
+  ]) {
+    assertEquals(isUnansweredReadinessProgressRequest(message), false, message);
+  }
+});
+
+Deno.test("numeric chip and labelled free text remain candidates only from the verified issued slot", () => {
+  const slot = {
+    status: "pending",
+    slot_id: "issued-live-axis",
+    facet_key: "kolichestvo_polyusov__polyuster_sany",
+    question: "Уточните количество полюсов.",
+    options: [
+      { value: "1", label: "1" },
+      { value: "2", label: "2" },
+      { value: "3", label: "3" },
+    ],
+    scope: selectionReadinessScope("Подбери аналог серии ZX C16", {
+      resolved_category: "Автоматические выключатели",
+    }),
+  };
+  const log = {
+    session_id: "session-numeric",
+    error: null,
+    response_events: [
+      { type: "slot_update", slots: { pending_clarification: slot } },
+      { type: "diagnostic", phase: "complete", error: null },
+      { type: "done" },
+    ],
+  };
+  const verified = resolveServerIssuedSelectionReadinessPending(
+    { pending_clarification: slot }, log, "session-numeric",
+  );
+  const expected = {
+    facet_key: slot.facet_key,
+    value: "1",
+    resolved_category: "Автоматические выключатели",
+  };
+  assertEquals(resolveVerifiedNumericReadinessAnswer("1", verified), expected);
+  assertEquals(
+    resolveVerifiedNumericReadinessAnswer("1 полюс, покажи", verified),
+    expected,
+  );
+  for (const message of ["покажи", "C16", "1 и 2", "Новая тема: 1"]) {
+    assertEquals(resolveVerifiedNumericReadinessAnswer(message, verified), null);
+  }
+  assertEquals(resolveVerifiedNumericReadinessAnswer("1", null), null);
+  assertEquals(
+    resolveVerifiedNumericReadinessAnswer("1", {
+      ...slot,
+      options: [{ value: "2", label: "2" }, { value: "3", label: "3" }],
+    }),
+    null,
+  );
+});
+
+Deno.test("an unanswered clarification replays only a completed server-issued slot with a new id", () => {
+  const issued = {
+    status: "pending",
+    slot_id: "server-slot-1",
+    facet_key: "live-cardinality-axis",
+    question: "Уточните количество полюсов.",
+    options: [
+      { value: "1", label: "1" },
+      { value: "2", label: "2" },
+    ],
+    scope: selectionReadinessScope("Подбери аналог серии ZX C16", {
+      resolved_category: "Автоматические выключатели",
+    }),
+  };
+  const log = {
+    session_id: "session-1",
+    error: null,
+    response_events: [
+      { type: "slot_update", slots: { pending_clarification: issued } },
+      { type: "diagnostic", phase: "complete", error: null },
+      { type: "done" },
+    ],
+  };
+  const verified = resolveServerIssuedSelectionReadinessPending(
+    { pending_clarification: issued }, log, "session-1",
+  );
+  const replay = verifiedReadinessReplayInput(verified);
+  assertEquals(replay?.question, issued.question);
+  assertEquals(replay?.facet_key, issued.facet_key);
+  assertEquals(replay?.options, issued.options);
+  assertEquals(replay?.scope, issued.scope);
+  const reissued = replay && executeProposeClarification(replay);
+  assertEquals(reissued?.ok, true);
+  if (reissued?.ok) {
+    assertEquals(reissued.slot_id !== issued.slot_id, true);
+  }
+  const forged = resolveServerIssuedSelectionReadinessPending(
+    { pending_clarification: { ...issued, slot_id: "forged" } },
+    log,
+    "session-1",
+  );
+  assertEquals(verifiedReadinessReplayInput(forged), null);
+  assertEquals(verifiedReadinessReplayInput(
+    resolveServerIssuedSelectionReadinessPending(
+      { pending_clarification: issued },
+      { ...log, response_events: log.response_events.slice(0, 2) },
+      "session-1",
+    ),
+  ), null);
+});
 
 Deno.test("readiness scope is trusted only when the last completed server response issued it", () => {
   assertEquals(

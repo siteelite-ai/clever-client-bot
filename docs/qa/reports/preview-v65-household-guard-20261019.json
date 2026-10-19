@@ -1,0 +1,230 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T18:01:45.235Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-household-motion-without-mount": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-household-motion-without-mount",
+      "title": "Бытовой светильник с датчиком без навязанного типа монтажа",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-without-mount_base_1792432905235_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 19042,
+              "network_attempts": 1,
+              "log_id": "799b228e-29a1-4b77-8c4f-93b0203a3b93",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140",
+                  "verified": true,
+                  "sku": "Ем000033649",
+                  "name": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал рассеивателя": "поликарбонат",
+                    "Материал корпуса": "пластик",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "18",
+                    "Страна происхождения": "КИТАЙ",
+                    "Вид светильника": "бытовые светильники накладные",
+                    "Длина, см": "18",
+                    "Тип лампы": "LED",
+                    "Ширина, см": "18",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Срок службы, мес": "48",
+                    "Количество ламп": "1",
+                    "Диммирование": "Нет",
+                    "Диапазон рабочих температур": "-20 +40 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Световой поток, Лм": "1520",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "200-240",
+                    "Срок службы, часы": "35000",
+                    "Вес, кг.": "0.15",
+                    "Способ монтажа": "накладной",
+                    "Степень защиты, IP": "40",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.001",
+                    "ПРА": "светодиодный драйвер",
+                    "Бренд": "Gauss",
+                    "Цвет корпуса": "белый"
+                  },
+                  "offerPrice": 3878,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "description_excerpt": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40 – Служат для освещения крытых помещений где не требуется высокая защищенность от пыли и влаги. Данная модель оборудована микроволновым сенсором (в линейке есть модели оборудованные оптико-акустическим датчиком). Сенсор автоматически включает светильник при появлении движущихся объектов в зоне обнаружения датчика и автоматически отключает осветительный прибор при выходе из зоны обнаружения датчика. "
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "price": 3878,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/)**\n  Цена: *3 878* ₸\n  Бренд: Gauss\n  Наличие: Караганда (3 шт)"
+                }
+              ],
+              "text": "Клиент ищет бытовой светильник с датчиком движения. Это готовое изделие для жилых помещений, где датчик автоматически включает свет при обнаружении движения. Ключевое требование — наличие встроенного датчика движения, что соответствует характеристике «С датчиком движения». Цена до 4000 тенге — ценовое ограничение, не технический параметр. Подбираем светильники с подтверждённым датчиком движения для бытового применения. Для указанного применения сначала проверяю «Вид светильника: бытовые линейные светильники»; «Вид светильника: бытовые светильники накладные»; если товаров из подтверждённого класса нет, отдельно проверю другие рубрики, но только при прямом подтверждении того же применения в карточке.\n\nПока удалось подтвердить 1 вариант в проверенной части каталога. Полноту поиска подтвердить не удалось; это не означает, что других подходящих товаров нет. Могу продолжить проверку каталога или, с вашего согласия, ослабить условия.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-c48f7e7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "С датчиком движения",
+                    "op": "eq",
+                    "value": "да",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые линейные светильники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые светильники накладные",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовой",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "датчиком",
+                    "op": "eq",
+                    "value": "датчиком"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 39, листьев 1",
+                  "duration_ms": 4015
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=2; initial=1; minimum=3; application=1; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "scope=unscoped; total=53; retrieved=50; candidate=4; proven=1; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 1",
+                  "duration_ms": 5145
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T18:02:07.727Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "799b228e-29a1-4b77-8c4f-93b0203a3b93"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": true
+}

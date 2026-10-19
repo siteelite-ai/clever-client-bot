@@ -485,6 +485,7 @@ import {
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
   resolveScopedReplacementSource,
+  resolveVerifiedIssuedLiveReplacementAxis,
   shouldClarifyCompactReplacementSource,
   resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
@@ -556,12 +557,15 @@ import {
   type ProposeClarificationInput,
 } from "../_shared/v3-tools/propose-clarification.ts";
 import {
+  isUnansweredReadinessProgressRequest,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
   resolveServerIssuedSelectionReadinessPending,
+  resolveVerifiedNumericReadinessAnswer,
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessClarification,
+  verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
   buildVisibleRequestContract,
@@ -4083,6 +4087,7 @@ async function selectVerifiedCompactReplacementContinuation(
   send: (event: SseEvent) => void,
   steps: StepLog[],
   t0: number,
+  verifiedAxis: { key: string; caption: string; value: string } | null = null,
 ): Promise<DirectReplacementResult | null> {
   const compactTokens = compactCodeTokensInQuery(userMessage);
   if (compactTokens.length === 0) return null;
@@ -4147,7 +4152,9 @@ async function selectVerifiedCompactReplacementContinuation(
   evidenceCache.clear();
   const compactEvidence = [...compactEvidenceById.values()];
   const contract = compileLiveCompactReplacementContract(
-    userMessage,
+    verifiedAxis
+      ? `${userMessage}\n${verifiedAxis.caption}: ${verifiedAxis.value}`
+      : userMessage,
     discovery.facets,
     compactEvidence,
   );
@@ -20623,6 +20630,12 @@ Deno.serve(async (req) => {
                   "local_verified_readiness_independent_selection"
               ? null
               : rawReadinessNewTask;
+            const verifiedNumericReadinessAnswer = !readinessNewTask
+              ? resolveVerifiedNumericReadinessAnswer(
+                userMessage,
+                verifiedReadinessState.slot,
+              )
+              : null;
             // The browser's history and pending slot are hints, never scope
             // authority. In particular a stale catalog_section slot must not
             // suppress the completed server log's active Gallant section.
@@ -20631,6 +20644,61 @@ Deno.serve(async (req) => {
               verifiedReadinessState.slot,
               Boolean(readinessNewTask),
             );
+            const reissueVerifiedReadinessQuestion = () => {
+              const replay = verifiedReadinessReplayInput(
+                verifiedReadinessState.slot,
+              );
+              const clarification = replay && replay.options.length >= 2
+                ? executeProposeClarification(replay)
+                : null;
+              if (!replay || (clarification && !clarification.ok)) {
+                errorMsg = "verified_readiness_replay_invalid";
+                publicDiagnosticError = "request_unavailable";
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось проверить контекст выбора из-за временной ошибки. Повторите запрос позже.",
+                });
+                return;
+              }
+              send({ type: "delta", content: replay.question });
+              if (clarification?.ok) {
+                emitSideEffects(clarification, send);
+              } else {
+                send({
+                  type: "slot_update",
+                  slots: {
+                    pending_clarification: {
+                      status: "pending",
+                      slot_id: crypto.randomUUID(),
+                      facet_key: replay.facet_key,
+                      question: replay.question,
+                      options: [],
+                      scope: replay.scope,
+                    },
+                  },
+                });
+              }
+              productsCount = 0;
+              steps.push({
+                step: "v3_verified_readiness_unanswered_reissued",
+                ms: Date.now() - t0,
+                meta: {
+                  facet_key: replay.facet_key,
+                  choice_count: replay.options.length,
+                },
+              });
+            };
+            if (
+              verifiedReadinessState.slot && !readinessNewTask &&
+              isUnansweredReadinessProgressRequest(userMessage)
+            ) {
+              // A bare request to proceed cannot fill an outstanding facet.
+              // Replay only the last completed server-issued question, never
+              // a browser-authored slot, and do not search or spend LLM tokens.
+              reissueVerifiedReadinessQuestion();
+              return;
+            }
             const activeScopeLookupNeeded =
               mayBeNominalRefinement(userMessage) ||
               mayBeActivePrepositionalRefinement(userMessage) ||
@@ -20789,6 +20857,7 @@ Deno.serve(async (req) => {
             );
             const matchedPendingClarification = Boolean(
               matchedVerifiedBroadSelection || freeformCandidate ||
+                verifiedNumericReadinessAnswer ||
                 resolvePendingClarificationChoice(boundarySlots, userMessage),
             );
             const referencesRenderedProducts =
@@ -21842,14 +21911,66 @@ Deno.serve(async (req) => {
                   openrouterApiKey: ctx.openrouterKey,
                 });
                 if (preservedDiscovery.ok) {
-                  direct = await selectVerifiedCompactReplacementContinuation(
-                    pendingScopedCatalogContinuation.message,
-                    preservedDiscovery,
-                    ctx,
-                    send,
-                    steps,
-                    t0,
-                  );
+                  const verifiedAxis = verifiedNumericReadinessAnswer
+                    ? resolveVerifiedIssuedLiveReplacementAxis(
+                      verifiedNumericReadinessAnswer,
+                      userMessage,
+                      preservedDiscovery.category.pagetitle,
+                      preservedDiscovery.facets,
+                    )
+                    : null;
+                  if (verifiedNumericReadinessAnswer && !verifiedAxis) {
+                    // The issued choice is not proof that today's live schema
+                    // still has this structural value. Keep the question open
+                    // instead of delegating an ungrounded answer to the model.
+                    reissueVerifiedReadinessQuestion();
+                    direct = {
+                      handled: true,
+                      products: [],
+                      outcome: "query_inconsistent",
+                    };
+                    steps.push({
+                      step: "v3_scoped_numeric_facet_unverified_reissued",
+                      ms: Date.now() - t0,
+                      meta: {
+                        category: preservedDiscovery.category.pagetitle,
+                        facet_key: verifiedNumericReadinessAnswer.facet_key,
+                      },
+                    });
+                  } else {
+                    direct = await selectVerifiedCompactReplacementContinuation(
+                      pendingScopedCatalogContinuation.message,
+                      preservedDiscovery,
+                      ctx,
+                      send,
+                      steps,
+                      t0,
+                      verifiedAxis,
+                    );
+                    if (!direct && verifiedAxis) {
+                      // A bounded catalog lookup can be incomplete even when
+                      // the selected live facet is real. Never delegate this
+                      // uncertainty to an unconstrained model answer.
+                      send({
+                        type: "delta",
+                        content:
+                          "Выбор параметра принят, но по текущему ответу каталога не удалось подтвердить совместимые товары. Это не означает, что их нет. Повторите исходный запрос позже.",
+                      });
+                      direct = {
+                        handled: true,
+                        products: [],
+                        outcome: "upstream_error",
+                      };
+                      steps.push({
+                        step: "v3_scoped_numeric_facet_catalog_unproven",
+                        ms: Date.now() - t0,
+                        meta: {
+                          category: preservedDiscovery.category.pagetitle,
+                          facet_key: verifiedAxis.key,
+                        },
+                      });
+                    }
+                  }
                   steps.push({
                     step: "v3_scoped_catalog_clarification_continued",
                     ms: Date.now() - t0,
@@ -21859,6 +21980,14 @@ Deno.serve(async (req) => {
                     },
                   });
                 } else {
+                  if (verifiedNumericReadinessAnswer) {
+                    reissueVerifiedReadinessQuestion();
+                    direct = {
+                      handled: true,
+                      products: [],
+                      outcome: "query_inconsistent",
+                    };
+                  }
                   steps.push({
                     step: "v3_scoped_catalog_clarification_discovery_failed",
                     ms: Date.now() - t0,
