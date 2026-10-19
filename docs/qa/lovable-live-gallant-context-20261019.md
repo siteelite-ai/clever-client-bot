@@ -30,4 +30,16 @@ The [one-run acceptance report](reports/gallant-topic-context-preview-v39-202610
 
 A server-verified free-text readiness slot now distinguishes a short answer from a different product class using the issued question, not a product dictionary. Dependent phrases (`Нужны с заземлением`), scalar measurements (`Нужны 120 м²`, `16 А`), and concise numbered facts sharing a stem with the question (`Нужны 3 жилы` after a question about the number of cores) may keep the current task. Short multi-fact answers (`3 жилы, 16 А`, `120 м² и высота 4 м`) are parsed as a sequence, so an unrelated second product clause cannot inherit the old scope. `Нужны 3 прожектора` after a question about cores, explicit `Новая тема`, and an explicit change of series retain their new-task precedence. Only a slot from the latest completed server response may activate this rule; the browser's copy is not trusted by itself.
 
-Local checks: 40/40 active-scope and boundary tests, 7/7 Gallant route/widget tests, frontend typecheck and build pass. The selection-readiness test module imports a Deno-hosted dependency and could not be executed with the local Node shim; CI's Deno check and a targeted preview run are still required. The v39 preview report above predates this additional change and must not be presented as its live verification. No production function or published widget has been changed by this local candidate.
+Local checks: 40/40 active-scope and boundary tests, 7/7 Gallant route/widget tests, frontend typecheck and build pass. The selection-readiness test module imports a Deno-hosted dependency and could not be executed with the local Node shim; CI's Deno check and targeted preview results are recorded below. The v39 preview report above predates this additional change and must not be presented as its live verification. No production function or published widget has been changed by this candidate.
+
+## PR #79 follow-up preview, 2026-10-19
+
+Commit `0d650340` passed GitHub Actions `Type-check Edge Functions` run 1012, including the Deno function checks and safeguard tests. It was deployed **only** to `chat-consultant-v3-closure-preview` version 40 (`ezbr_sha256=df29fee75d4760704c996bc6a70a375d4272d5698fb72ea2899174ad194408a0`, `verify_jwt=true`). A function-list read after deployment still showed production `chat-consultant-v3` version 459 with its prior hash `22a252e58aca504ac75290770be7ac57ce989323f1f497bcf6f102728b4a0d63`.
+
+Three single-run, three-turn targeted preview checks passed:
+
+- [BT-924 base](reports/kg-freeform-preview-20261019.json): replacing КГ → mobile connection → `3×2,5` continued to the `usage_purpose` question.
+- [BT-924 natural-language variant](reports/kg-natural-freeform-preview-20261019.json): the same path with `Мне нужны 3 жилы и сечение 1,5 мм²` also continued to `usage_purpose`, rather than starting a new task. The variant input is recorded in [`topic-context-freeform-variants-20261019.json`](../../scripts/qa/topic-context-freeform-variants-20261019.json).
+- [Gallant scope control](reports/gallant-topic-context-preview-v40-20261019.json): assortment → `Розетки` → `Нужны двойные черные розетки` returned one matching Gallant double socket and no new-topic boundary.
+
+These are scoped preview checks, not a full acceptance suite, transport-stability proof, or independent product-page verification. Production and the published Lovable widget remained untouched.

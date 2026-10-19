@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_suite": "notion-legacy-bug-cases-v3.json",
+  "variants": [
+    {
+      "case_id": "bt924-replace-kg-cable",
+      "id": "natural-core-and-section-answer",
+      "messages": [
+        "Чем можно заменить кабель КГ?",
+        "Подвижное подключение",
+        "Мне нужны 3 жилы и сечение 1,5 мм²"
+      ]
+    }
+  ]
+}
