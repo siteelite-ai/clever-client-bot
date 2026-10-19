@@ -15,6 +15,7 @@ import {
   normalizeUnit,
 } from "../_shared/v3-tools/criteria-consistency.ts";
 import { isRecentProductPriceSelectionFollowup } from "../_shared/v3-tools/recent-product-evidence.ts";
+import { stripExplicitNewTaskPreface } from "../_shared/v3-tools/request-preface.ts";
 import {
   extractReplacementLookupKeys,
   extractReplacementSourceDescription,
@@ -179,12 +180,16 @@ export function admitDirectSelectionRoute(input: {
   coversBudgetCap?: boolean;
   coveredCompound?: { first: number; second: number } | null;
 }): boolean {
-  const raw = String(input.userMessage ?? "").toLocaleLowerCase("ru-RU")
+  // A dialogue boundary is not a product condition. Apply the same generic
+  // request normalization to every direct route before proving its residual
+  // obligations; the original utterance remains available to history/logging.
+  const taskMessage = stripExplicitNewTaskPreface(input.userMessage);
+  const raw = String(taskMessage ?? "").toLocaleLowerCase("ru-RU")
     .replace(/ё/gu, "е");
   if (!raw.trim()) return false;
   if (input.route === "replacement") {
-    const source = extractReplacementSourceDescription(input.userMessage);
-    const lookup = extractReplacementLookupKeys(input.userMessage);
+    const source = extractReplacementSourceDescription(taskMessage);
+    const lookup = extractReplacementLookupKeys(taskMessage);
     if (!source || lookup.articles.length + lookup.modelCodes.length === 0) {
       return false;
     }
@@ -209,7 +214,7 @@ export function admitDirectSelectionRoute(input: {
     )];
     if (currencyAmounts.length > 0) {
       if (
-        !input.coversBudgetCap || extractBudgetCap(input.userMessage) === null ||
+        !input.coversBudgetCap || extractBudgetCap(taskMessage) === null ||
         currencyAmounts.length !== 1 || upperBudgetClauses.length !== 1
       ) return false;
       frameText = frameText.replace(upperBudgetClauses[0][0], " ");
