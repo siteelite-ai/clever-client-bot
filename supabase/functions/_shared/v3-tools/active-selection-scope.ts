@@ -38,6 +38,18 @@ function selectionObject(value: string): string {
   ).trim();
 }
 
+/** Keep conversational prefaces local to active-scope checks, not readiness. */
+function scopedSelectionObject(value: string): string {
+  const withoutFiller = value.replace(
+    /^(?:(?:а|ну|тогда|пожалуйста)\s+)*/u,
+    "",
+  );
+  return selectionObject(withoutFiller).replace(
+    /^(?:нуж\p{L}*|купить|мне|нам)(?:\s+|$)/u,
+    "",
+  ).trim();
+}
+
 function matchesSectionWord(word: string, sectionWord: string): boolean {
   return word === sectionWord ||
     (word.length >= 6 && sectionWord.length >= 6 &&
@@ -213,7 +225,7 @@ export function isSameSectionNominalRefinement(
 ): boolean {
   if (!mayBeNominalRefinement(message)) return false;
   const raw = String(message ?? "").trim();
-  const value = selectionObject(normalized(raw));
+  const value = scopedSelectionObject(normalized(raw));
   const words = value.split(" ").filter(Boolean);
   const fullWords = normalized(raw).split(" ").filter(Boolean);
   const leafWords = normalized(scope.leaf).split(" ").filter((word) =>
@@ -287,7 +299,9 @@ export function explicitlyChangesActiveSelectionEntity(
       )
     ) return true;
   }
-  const words = selectionObject(normalized(message)).split(" ").filter(Boolean);
+  const words = scopedSelectionObject(normalized(message)).split(" ").filter(
+    Boolean,
+  );
   const leafWords = normalized(scope.leaf).split(" ").filter((word) =>
     word.length >= 4 && !/^(?:для|или|при|без)$/u.test(word)
   );
@@ -372,7 +386,7 @@ export function mayBeActivePrepositionalRefinement(message: string): boolean {
   }
   const value = normalized(raw);
   if (/^(?:новая тема|новый вопрос)(?:\s|$)/u.test(value)) return false;
-  const words = selectionObject(value).split(" ").filter(Boolean);
+  const words = scopedSelectionObject(value).split(" ").filter(Boolean);
   return words.length >= 2 && words.length <= 12 &&
     words.some((word) => /^(?:для|с|со|без|в|во|на|по|к|ко|при)$/u.test(word));
 }
@@ -391,7 +405,7 @@ export function classifyActivePrepositionalRefinement(
     return "not_applicable";
   }
   const value = normalized(raw);
-  const object = selectionObject(value);
+  const object = scopedSelectionObject(value);
   const words = object.split(" ").filter(Boolean);
   const relation = /^(?:для|с|со|без|в|во|на|по|к|ко|при)$/u;
   const leafWords = normalized(scope.leaf).split(" ").filter((word) =>

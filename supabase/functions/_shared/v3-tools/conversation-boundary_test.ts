@@ -3,10 +3,20 @@ import {
   classifyConversationBoundaryLocally,
   classifyPendingSelectionReadinessNewTaskLocally,
   type ConversationMessage,
+  isReadinessQuestionSupersededByVerifiedSection,
   parseConversationBoundaryDecision,
   shouldStartNewConversation,
   stripCurrentUserEcho,
 } from "./conversation-boundary.ts";
+import {
+  classifyActivePrepositionalRefinement,
+  explicitlyChangesActiveSelectionEntity,
+  isIndependentNominalRequestOutsideActiveScope,
+  isSameSectionNominalRefinement,
+  isShortAttributeSelectionFollowup,
+  isVerifiedReadinessScopeReply,
+} from "./active-selection-scope.ts";
+import { resolveSelectionReadinessRequest } from "./selection-readiness.ts";
 
 function assertEquals(
   actual: unknown,
@@ -227,6 +237,296 @@ const floodlightReadinessSlots = {
   },
 };
 const verified = { serverIssuedScopeVerified: true };
+
+Deno.test("verified same-section choice outranks only a weak readiness new-task precheck", () => {
+  const scope = {
+    kind: "named_series_section" as const,
+    entity: "Gallant",
+    leaf: "Розетки",
+    source_slot_id: "issued-section-slot",
+  };
+  const slots = {
+    pending_clarification: {
+      status: "pending",
+      slot_id: "issued-readiness-slot",
+      scope: {
+        kind: "selection_readiness",
+        token: "Нужен прожектор для двора",
+      },
+    },
+  };
+  const evaluate = (message: string, verifiedScope = true) => {
+    const readiness = classifyPendingSelectionReadinessNewTaskLocally(
+      message,
+      slots,
+      verified,
+    );
+    const explicitChange = verifiedScope && (
+      explicitlyChangesActiveSelectionEntity(message, scope) ||
+      isIndependentNominalRequestOutsideActiveScope(message, scope)
+    );
+    const nominal = verifiedScope &&
+      isSameSectionNominalRefinement(message, scope);
+    const prepositional = verifiedScope &&
+      classifyActivePrepositionalRefinement(message, scope) === "continue";
+    const sameSection = verifiedScope && !explicitChange && (
+      nominal || prepositional ||
+      isShortAttributeSelectionFollowup(message) ||
+      isVerifiedReadinessScopeReply(
+        message,
+        slots.pending_clarification,
+        Boolean(readiness),
+      )
+    );
+    return {
+      readiness: readiness?.reason ?? null,
+      explicitChange,
+      superseded: isReadinessQuestionSupersededByVerifiedSection(
+        message,
+        readiness,
+        true,
+        sameSection,
+        nominal || prepositional,
+        explicitChange,
+      ),
+    };
+  };
+
+  for (
+    const message of [
+      "Нужны двойные черные розетки",
+      "А нужны двойные черные розетки",
+      "А, нужны двойные черные розетки",
+      "Ну нужны двойные черные розетки",
+      "Ну, нужны двойные черные розетки",
+      "Тогда нужны двойные черные розетки",
+      "Тогда, нужны двойные черные розетки",
+      "Пожалуйста нужны двойные черные розетки",
+      "Пожалуйста, нужны двойные черные розетки",
+      "А тогда пожалуйста нужны двойные черные розетки",
+      "А, ну, тогда, пожалуйста, нужны двойные черные розетки",
+      "Хочу купить двойные черные розетки",
+      "Покажите мне двойные черные розетки",
+      "Подберите мне двойные черные розетки",
+    ]
+  ) {
+    const result = evaluate(message);
+    assertEquals(result.explicitChange, false, message);
+    assertEquals(result.superseded, true, message);
+  }
+  assertEquals(evaluate("Нужны двойные черные розетки").readiness, null,
+    "bare Нужны must not rely on the independent-selection precheck");
+  for (
+    const message of [
+      "Новая тема. Нужны двойные черные розетки",
+      "Новая тема, нужны двойные черные розетки",
+      "Нужны двойные черные выключатели",
+      "А нужны двойные черные выключатели",
+      "Покажите мне двойные розетки Legrand",
+      "Ну покажите мне двойные розетки Legrand",
+      "Покажите мне двойные розетки без Gallant",
+      "Найди кабель ВВГ 3*1,5 самый дешевый",
+    ]
+  ) {
+    assertEquals(evaluate(message).superseded, false, message);
+  }
+  assertEquals(
+    evaluate("Хочу купить двойные черные розетки", false).superseded,
+    false,
+    "client history alone must not override the readiness precheck",
+  );
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection("Новая тема: розетки", {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_verified_readiness_explicit_new_topic",
+    }, true, true, true, false),
+    false,
+    "an explicit new topic still wins even if a section matcher changes",
+  );
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      "Новая тема, нужны двойные черные розетки",
+      null,
+      true,
+      true,
+      true,
+      false,
+    ),
+    false,
+  );
+  assertEquals(
+    evaluate("Покажите мне двойные розетки без Gallant").explicitChange,
+    true,
+    "excluding the selected brand must not inherit its scope",
+  );
+  assertEquals(
+    evaluate("Нужны двойные черные выключатели").explicitChange,
+    true,
+    "a different product class remains a new task",
+  );
+  assertEquals(
+    evaluate("А нужны двойные черные выключатели").explicitChange,
+    true,
+  );
+  assertEquals(
+    evaluate("Покажите мне двойные розетки Legrand").explicitChange,
+    true,
+    "a different named series remains a new task",
+  );
+  assertEquals(
+    evaluate("Ну покажите мне двойные розетки Legrand").explicitChange,
+    true,
+  );
+  assertEquals(
+    evaluate("Найди кабель ВВГ 3*1,5 самый дешевый").readiness,
+    "local_verified_readiness_independent_selection",
+    "an unrelated request keeps the readiness escape when no section matches",
+  );
+  assertEquals(evaluate("120 м²").superseded, false,
+    "a short readiness answer must keep the pending question");
+  assertEquals(evaluate("А до 4 м").superseded, false,
+    "an introductory word does not make a short answer a full request");
+  assertEquals(
+    resolveSelectionReadinessRequest("120 м²", slots),
+    {
+      message: "Нужен прожектор для двора\nУточнение клиента: 120 м²",
+      scoped: true,
+    },
+  );
+});
+
+Deno.test("a complete IEK floodlight refinement consumes readiness but a height answer does not", () => {
+  const scope = {
+    kind: "named_series_section" as const,
+    entity: "IEK",
+    leaf: "Прожекторы",
+    source_slot_id: "issued-iek-section",
+  };
+  const slots = {
+    pending_clarification: {
+      status: "pending",
+      slot_id: "issued-area-height",
+      scope: {
+        kind: "selection_readiness",
+        token: "Нужны уличные прожекторы для двора",
+      },
+    },
+  };
+  const complete = "Нужны уличные прожекторы 50Вт";
+  const completeDecision = classifyPendingSelectionReadinessNewTaskLocally(
+    complete,
+    slots,
+    verified,
+  );
+  assertEquals(completeDecision, null);
+  assertEquals(isSameSectionNominalRefinement(complete, scope), true);
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      complete,
+      completeDecision,
+      true,
+      true,
+      true,
+      false,
+    ),
+    true,
+  );
+  assertEquals(
+    resolveSelectionReadinessRequest(complete, slots, {
+      newTaskBoundary: true,
+    }),
+    { message: complete, scoped: false },
+  );
+
+  const shortAnswer = "До 4 м";
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      shortAnswer,
+      null,
+      true,
+      true,
+      false,
+      false,
+    ),
+    false,
+  );
+  assertEquals(
+    resolveSelectionReadinessRequest(shortAnswer, slots),
+    {
+      message:
+        "Нужны уличные прожекторы для двора\nУточнение клиента: До 4 м",
+      scoped: true,
+    },
+  );
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      "Нужно 5кВт",
+      null,
+      true,
+      true,
+      false,
+      false,
+    ),
+    false,
+    "a power value without the selected product noun must keep the readiness question",
+  );
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      "Ну нужно 5кВт",
+      null,
+      true,
+      true,
+      false,
+      false,
+    ),
+    false,
+  );
+  assertEquals(
+    isReadinessQuestionSupersededByVerifiedSection(
+      "Ну, нужно 5кВт",
+      null,
+      true,
+      true,
+      false,
+      false,
+    ),
+    false,
+  );
+  const cableScope = {
+    kind: "named_series_section" as const,
+    entity: "IEK",
+    leaf: "Кабели",
+    source_slot_id: "issued-iek-cables",
+  };
+  const cableSlots = {
+    pending_clarification: {
+      status: "pending",
+      slot_id: "issued-power-question",
+      scope: {
+        kind: "selection_readiness",
+        token: "Подбери кабель IEK для двигателя",
+      },
+    },
+  };
+  assertEquals(
+    isSameSectionNominalRefinement("Нужно 5кВт", cableScope),
+    false,
+    "a power-only answer does not independently name the cable section",
+  );
+  assertEquals(
+    isIndependentNominalRequestOutsideActiveScope("Нужно 5кВт", cableScope),
+    false,
+    "this short value must not be reset as another product class",
+  );
+  assertEquals(
+    resolveSelectionReadinessRequest("Нужно 5кВт", cableSlots),
+    {
+      message: "Подбери кабель IEK для двигателя\nУточнение клиента: Нужно 5кВт",
+      scoped: true,
+    },
+  );
+});
 
 Deno.test("verified readiness scope yields to a complete unrelated selection", () => {
   for (

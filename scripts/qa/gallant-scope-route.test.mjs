@@ -78,6 +78,30 @@ test('active scope lookup is server-owned despite stale client slots and routes 
   assert.ok(directPosition > broadPosition);
 });
 
+test('verified complete same-section request outranks stale readiness and consumes its slot', () => {
+  const activeDecision = between(
+    'const activePrepositionalRefinement =',
+    'const sameSectionScope =',
+  );
+  assert.ok(
+    activeDecision.indexOf('const activeScopeExplicitBoundary =') <
+      activeDecision.indexOf('activePrepositionalRefinement === "ambiguous"'),
+    'explicit entity/class change must be checked before ambiguous relation handling',
+  );
+  assert.match(activeDecision, /activeScopeState\.scope && !activeScopeExplicitBoundary/,
+    'a request excluding the selected entity must not reissue its old scope');
+
+  const boundary = between('const sameSectionScope =', 'const cache: ProductCache =');
+  assert.match(boundary, /isReadinessQuestionSupersededByVerifiedSection\(\s*userMessage,\s*readinessNewTask,\s*Boolean\(verifiedReadinessState\.slot\),\s*Boolean\(sameSectionScope\),\s*sameSectionNominalRefinement \|\|\s*activePrepositionalRefinement === "continue",\s*activeScopeExplicitBoundary/);
+  assert.match(boundary, /const startsNewTask = activeScopeExplicitBoundary \|\|\s*Boolean\(effectiveReadinessNewTask\)/);
+  assert.match(boundary, /newTaskBoundary: Boolean\(\s*readinessNewTask \|\| activeScopeExplicitBoundary \|\|\s*readinessQuestionSuperseded/,
+    'superseded readiness must not prepend the old question to this same-section request');
+  assert.match(boundary, /readinessQuestionSuperseded\s*\? \{ \.\.\.boundarySlots, pending_clarification: undefined \}/,
+    'the old pending question must not reach the current expert route');
+  assert.match(boundary, /scopedSelectionRequest\.scoped \|\| readinessQuestionSuperseded[\s\S]*?send\(\{ type: "slot_update", slots: \{\} \}\)/,
+    'the browser must not carry the consumed readiness question into a later turn');
+});
+
 test('final expert card gate intersects live leaf, active entity, and independent named token', () => {
   const guard = between('const guardFinalRenderIds = (',
     'const finalizeTerminalRenderIds = (');

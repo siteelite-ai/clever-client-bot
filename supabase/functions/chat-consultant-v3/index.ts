@@ -585,6 +585,7 @@ import {
   classifyConversationBoundary,
   classifyPendingSelectionReadinessNewTaskLocally,
   isEllipticalAttributeFollowup,
+  isReadinessQuestionSupersededByVerifiedSection,
   shouldStartNewConversation,
   stripCurrentUserEcho,
 } from "../_shared/v3-tools/conversation-boundary.ts";
@@ -20243,9 +20244,24 @@ Deno.serve(async (req) => {
                 activeScopeState.scope,
               )
               : "not_applicable";
+            const activeScopeEntityChanged = Boolean(
+              activeScopeState.scope && explicitlyChangesActiveSelectionEntity(
+                userMessage,
+                activeScopeState.scope,
+              ),
+            );
+            const activeScopeClassChanged = Boolean(
+              activeScopeState.scope &&
+                isIndependentNominalRequestOutsideActiveScope(
+                  userMessage,
+                  activeScopeState.scope,
+                ),
+            );
+            const activeScopeExplicitBoundary = activeScopeEntityChanged ||
+              activeScopeClassChanged;
             if (
               activePrepositionalRefinement === "ambiguous" &&
-              activeScopeState.scope
+              activeScopeState.scope && !activeScopeExplicitBoundary
             ) {
               // A short dependent phrase can also name a different series.
               // Keep the verified identity for the answer to the clarification,
@@ -20265,31 +20281,33 @@ Deno.serve(async (req) => {
               });
               return;
             }
-            const activeScopeEntityChanged = Boolean(
-              activeScopeState.scope && explicitlyChangesActiveSelectionEntity(
+            const sameSectionNominalRefinement = Boolean(
+              activeScopeState.scope && isSameSectionNominalRefinement(
                 userMessage,
                 activeScopeState.scope,
               ),
             );
-            const activeScopeClassChanged = Boolean(
-              activeScopeState.scope &&
-                isIndependentNominalRequestOutsideActiveScope(
-                  userMessage,
-                  activeScopeState.scope,
-                ),
-            );
-            const activeScopeExplicitBoundary = activeScopeEntityChanged ||
-              activeScopeClassChanged;
             const sameSectionScope = activeScopeState.scope &&
                 !activeScopeExplicitBoundary &&
-                (isSameSectionNominalRefinement(
-                  userMessage,
-                  activeScopeState.scope,
-                ) || isShortAttributeSelectionFollowup(userMessage) ||
+                (sameSectionNominalRefinement ||
+                  isShortAttributeSelectionFollowup(userMessage) ||
                   activePrepositionalRefinement === "continue" ||
                   readinessScopeReply)
               ? activeScopeState.scope
               : null;
+            const readinessQuestionSuperseded =
+              isReadinessQuestionSupersededByVerifiedSection(
+                userMessage,
+                readinessNewTask,
+                Boolean(verifiedReadinessState.slot),
+                Boolean(sameSectionScope),
+                sameSectionNominalRefinement ||
+                  activePrepositionalRefinement === "continue",
+                activeScopeExplicitBoundary,
+              );
+            const effectiveReadinessNewTask = readinessQuestionSuperseded
+              ? null
+              : readinessNewTask;
             const boundary = activeScopeExplicitBoundary
               ? {
                 mode: "new_task" as const,
@@ -20310,8 +20328,8 @@ Deno.serve(async (req) => {
                   ? "server_issued_freeform_catalog_question"
                   : "server_verified_catalog_option",
               }
-              : readinessNewTask
-              ? { ...readinessNewTask, source: "local" as const }
+              : effectiveReadinessNewTask
+              ? { ...effectiveReadinessNewTask, source: "local" as const }
               : sameSectionScope
               ? {
                 mode: "continuation" as const,
@@ -20333,8 +20351,11 @@ Deno.serve(async (req) => {
               userMessage,
               boundarySlots,
               {
+                // Even when the active section wins, never concatenate the
+                // superseded readiness question with this complete request.
                 newTaskBoundary: Boolean(
-                  readinessNewTask || activeScopeExplicitBoundary
+                  readinessNewTask || activeScopeExplicitBoundary ||
+                    readinessQuestionSuperseded
                 ),
               },
             );
@@ -20350,7 +20371,7 @@ Deno.serve(async (req) => {
                 isRecentProductPriceSelectionFollowup(userMessage)
               );
             const startsNewTask = activeScopeExplicitBoundary ||
-              Boolean(readinessNewTask) ||
+              Boolean(effectiveReadinessNewTask) ||
               shouldStartNewConversation(boundary, {
                 matchedPendingClarification,
                 activeScopedClarification: scopedSelectionRequest.scoped,
@@ -20370,6 +20391,8 @@ Deno.serve(async (req) => {
                 ...slots,
                 pending_clarification: verifiedBroadChoiceState.verifiedSlot,
               }
+              : readinessQuestionSuperseded
+              ? { ...boundarySlots, pending_clarification: undefined }
               : boundarySlots;
             // The browser may submit arbitrary slot keys. Always overwrite
             // this internal key with the completed server-log decision.
@@ -20423,6 +20446,8 @@ Deno.serve(async (req) => {
                 verified_selection_readiness_slot: Boolean(
                   verifiedReadinessState.slot,
                 ),
+                readiness_question_superseded_by_verified_section:
+                  readinessQuestionSuperseded,
                 readiness_slot_lookup_failed:
                   verifiedReadinessState.lookupFailed,
                 references_rendered_products: referencesRenderedProducts,
@@ -20437,12 +20462,12 @@ Deno.serve(async (req) => {
               });
             } else if (
               matchedPendingClarification || pendingBroadAssortmentScope ||
-              scopedSelectionRequest.scoped
+              scopedSelectionRequest.scoped || readinessQuestionSuperseded
             ) {
-              // The current request still receives the original slot through
-              // `effectiveSlots`, but the browser must not carry that consumed
-              // choice into an unrelated future turn. A later clarification in this
-              // same response can establish a fresh slot normally.
+              // A matched clarification can use its verified slot in this turn;
+              // a superseded readiness slot was removed before routing. Neither
+              // should be carried by the browser into a later turn. This response
+              // can still establish a fresh clarification normally.
               send({ type: "slot_update", slots: {} });
             }
             const reissuedSelectionScope = verifiedFreeformScope ?? sameSectionScope;

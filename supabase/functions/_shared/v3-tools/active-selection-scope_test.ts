@@ -201,8 +201,21 @@ Deno.test("free-form readiness answer carries scope but a fresh command does not
   };
   assertEquals(isVerifiedReadinessScopeReply("с заземлением", slot, false), true);
   assertEquals(isVerifiedReadinessScopeReply("12 м², высота 4 м", slot, false), true);
+  assertEquals(isVerifiedReadinessScopeReply("Нужно 5кВт", slot, false), true);
   assertEquals(isVerifiedReadinessScopeReply("Найди кабель ВВГ", slot, false), false);
   assertEquals(isVerifiedReadinessScopeReply("Новая тема: кабель", slot, false), false);
+});
+
+Deno.test("a short numeric readiness answer does not become a new product selection", () => {
+  assertEquals(isSameSectionNominalRefinement("Нужно 5кВт", scope), false);
+  assertEquals(
+    isIndependentNominalRequestOutsideActiveScope("Нужно 5кВт", scope),
+    false,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity("Нужно 5кВт", scope),
+    false,
+  );
 });
 
 Deno.test("a same-section refinement inherits Gallant with or without a selection command", () => {
@@ -227,6 +240,102 @@ Deno.test("a same-section refinement inherits Gallant with or without a selectio
   ) {
     assertEquals(isSameSectionNominalRefinement(message, scope), true, message);
   }
+});
+
+Deno.test("generic request prefaces are recognized as same-section refinements", () => {
+  for (
+    const message of [
+      "Нужны двойные чёрные розетки",
+      "А нужны двойные чёрные розетки",
+      "Ну нужны двойные чёрные розетки",
+      "Мне нужны двойные чёрные розетки",
+      "Хочу купить двойные чёрные розетки",
+      "Покажите мне двойные чёрные розетки",
+      "Подберите мне двойные чёрные розетки",
+      "Найдите нам двойные чёрные розетки",
+    ]
+  ) {
+    assertEquals(mayBeNominalRefinement(message), true, message);
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      true,
+      message,
+    );
+    assertEquals(
+      explicitlyChangesActiveSelectionEntity(message, scope),
+      false,
+      message,
+    );
+    assertEquals(
+      isIndependentNominalRequestOutsideActiveScope(message, scope),
+      false,
+      message,
+    );
+  }
+});
+
+Deno.test("request prefaces do not carry scope into a different section, entity or explicit topic", () => {
+  for (
+    const message of [
+      "Нужны прожекторы",
+      "А нужны прожекторы",
+      "Нужен кабель",
+      "Ну нужен кабель",
+      "Нужны двойные выключатели",
+      "Хочу купить двойные выключатели",
+      "Покажите мне двойные выключатели",
+      "Подберите мне двойные выключатели",
+    ]
+  ) {
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      false,
+      message,
+    );
+    assertEquals(
+      isIndependentNominalRequestOutsideActiveScope(message, scope),
+      true,
+      message,
+    );
+  }
+  for (
+    const message of [
+      "Нужны двойные розетки Legrand",
+      "А нужны двойные розетки Legrand",
+      "Хочу купить двойные розетки Legrand",
+      "Покажите мне двойные розетки Legrand",
+      "Подберите мне двойные розетки без Gallant",
+      "Ну нужны двойные розетки без Gallant",
+      "Новая тема: нужны двойные чёрные розетки",
+    ]
+  ) {
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      false,
+      message,
+    );
+  }
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "Нужны двойные розетки Legrand",
+      scope,
+    ),
+    true,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "А нужны двойные розетки Legrand",
+      scope,
+    ),
+    true,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "Подберите мне двойные розетки без Gallant",
+      scope,
+    ),
+    true,
+  );
 });
 
 Deno.test("a short adjectival follow-up may refine a verified scope without inventing a new noun", () => {
@@ -255,6 +364,7 @@ Deno.test("short relation phrases continue only the server-verified Gallant leaf
       "двойные розетки для кухни",
       "Найди двойные розетки для кухни",
       "А подбери двойные розетки для кухни",
+      "Нужны двойные розетки для кухни",
     ]
   ) {
     assertEquals(mayBeActivePrepositionalRefinement(message), true, message);

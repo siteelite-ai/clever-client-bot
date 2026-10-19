@@ -261,6 +261,50 @@ export function classifyPendingSelectionReadinessNewTaskLocally(
     : null;
 }
 
+/**
+ * A complete selection in the separately verified active section does not
+ * answer an older readiness question. The lexical independent-selection
+ * precheck is likewise weaker than that verified section. Short chip/attribute
+ * replies remain answers to the pending question, while explicit topic or
+ * entity/class changes always retain their boundary.
+ */
+export function isReadinessQuestionSupersededByVerifiedSection(
+  userMessage: string,
+  readinessDecision: ConversationBoundaryDecision | null,
+  verifiedReadinessQuestion: boolean,
+  sameSectionScopeVerified: boolean,
+  sameSectionRefinementVerified: boolean,
+  activeScopeExplicitBoundary: boolean,
+): boolean {
+  if (
+    !verifiedReadinessQuestion || !sameSectionScopeVerified ||
+    !sameSectionRefinementVerified ||
+    activeScopeExplicitBoundary || hasExplicitNewTaskPreface(userMessage)
+  ) return false;
+  if (readinessDecision) {
+    return readinessDecision.mode === "new_task" &&
+      readinessDecision.reason ===
+        "local_verified_readiness_independent_selection";
+  }
+  const current = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/gu, " ")
+    .trim();
+  // Match the same normalized word sequence that the active-section parser
+  // sees, including comma-separated introductions such as «Ну, нужны …».
+  const frameText = current.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
+  const frame = frameText.match(INDEPENDENT_SELECTION_FRAME_RE) ??
+    frameText.match(
+      /^(?:(?:а|тогда|пожалуйста|ну)\s+)*нуж(?:ен|на|но|ны)\s+(.+)$/iu,
+    );
+  if (
+    !frame || DEPENDENT_FRAME_BODY_RE.test(frame[1]) ||
+    SCOPED_DEPENDENCY_RE.test(current) ||
+    isAdditionalProductSelectionFollowup(current) ||
+    /(?:[.!?;]\s+\p{L}|,\s+а\s+\p{L})/iu.test(current)
+  ) return false;
+  return true;
+}
+
 /** A structurally incomplete attribute change such as «а есть белые?». */
 export function isEllipticalAttributeFollowup(userMessage: string): boolean {
   const text = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
