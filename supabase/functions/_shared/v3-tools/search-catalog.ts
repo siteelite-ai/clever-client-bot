@@ -1,7 +1,7 @@
 // V3 tool: search_catalog — minimal 220volt /products wrapper.
 // Data-agnostic: baseUrl + apiToken injected from caller.
 
-import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
+import type { CatalogCandidateCoverage, ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
@@ -308,8 +308,24 @@ function extractBrand(p: Record<string, unknown>): string | null {
 }
 
 type SingleSearchResult =
-  | { ok: true; total: number; results: ProductRef[] }
+  | { ok: true; total: number; results: ProductRef[]; candidate_coverage: CatalogCandidateCoverage }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
+
+/** `total` is the upstream raw pagination count. Filtered product rows cannot
+ * establish coverage: restricted/invalid cards may have been removed locally. */
+function rawPageCandidateCoverage(
+  reportedTotal: unknown,
+  rawCount: number,
+  page: number | undefined,
+): CatalogCandidateCoverage {
+  const total = Number(reportedTotal);
+  const validTotal = (typeof reportedTotal === "number" ||
+      (typeof reportedTotal === "string" && reportedTotal.trim().length > 0)) &&
+    Number.isSafeInteger(total) && total >= 0;
+  if (!validTotal || rawCount > total) return "unknown";
+  if (page && page > 1) return "partial";
+  return rawCount === total ? "complete_query_window" : "partial";
+}
 
 /** Один HTTP-вызов /products. Применяет input как есть, плюс опциональный single `category` override. */
 async function singleSearch(
@@ -374,8 +390,13 @@ async function singleSearch(
     }
 
     const json = await res.json() as { data?: { results?: unknown[]; pagination?: { total?: number } } };
-    const rawResults = Array.isArray(json?.data?.results) ? json.data!.results! : [];
-    const total = Number(json?.data?.pagination?.total ?? rawResults.length) || 0;
+    const hasRawResults = Array.isArray(json?.data?.results);
+    const rawResults = hasRawResults ? json.data!.results! : [];
+    const reportedTotal = json?.data?.pagination?.total;
+    const total = Number(reportedTotal ?? rawResults.length) || 0;
+    const candidateCoverage = hasRawResults
+      ? rawPageCandidateCoverage(reportedTotal, rawResults.length, input.page)
+      : "unknown";
 
     const results: ProductRef[] = [];
     for (const raw of rawResults as Array<Record<string, unknown>>) {
@@ -417,7 +438,7 @@ async function singleSearch(
       });
       results.push(ref);
     }
-    return { ok: true, total, results };
+    return { ok: true, total, results, candidate_coverage: candidateCoverage };
   } catch (e) {
     const isAbort = controller.signal.aborted || deps.signal?.aborted ||
       (e as { name?: string })?.name === "AbortError";
@@ -463,6 +484,7 @@ async function recoverUnmaterializedCatalogWindow(
   const pagesToScan = Math.max(1, Math.ceil(Math.min(primary.total, MAX_SORT_FETCH) / SORT_PAGE_SIZE));
   const recoveredById = new Map<string, ProductRef>();
   let recoveryError: Extract<SingleSearchResult, { ok: false }> | undefined;
+  let recoveredCoverage = primary.candidate_coverage;
 
   // Use a stable 50-row page size for the recovery window. Requests are
   // sequential and stop on the first page with usable cards, so a malformed
@@ -483,6 +505,9 @@ async function recoverUnmaterializedCatalogWindow(
       ) break;
       continue;
     }
+    if (page === 1 && candidatePage.candidate_coverage === "complete_query_window") {
+      recoveredCoverage = "complete_query_window";
+    }
     for (const product of candidatePage.results) {
       if (!recoveredById.has(product.id)) recoveredById.set(product.id, product);
     }
@@ -491,7 +516,14 @@ async function recoverUnmaterializedCatalogWindow(
   const recovered = [...recoveredById.values()].slice(0, requestedPerPage);
   if (recovered.length > 0) {
     warnings.push(`catalog_materialization_recovered:${recovered.length}/${primary.total}`);
-    return { ok: true, total: primary.total, results: recovered };
+    return {
+      ok: true,
+      total: primary.total,
+      results: recovered,
+      candidate_coverage: recoveredById.size > requestedPerPage
+        ? "partial"
+        : recoveredCoverage,
+    };
   }
 
   // The bounded recovery window was interrupted, so zero renderable cards is
@@ -499,7 +531,7 @@ async function recoverUnmaterializedCatalogWindow(
   if (recoveryError) return recoveryError;
 
   warnings.push(`catalog_unmaterialized_total:${primary.total}`);
-  return { ok: true, total: 0, results: [] };
+  return { ok: true, total: 0, results: [], candidate_coverage: recoveredCoverage };
 }
 
 /**
@@ -585,9 +617,26 @@ async function singleSearchSorted(
   }
   if (totalApi > 0 && sorted.length === 0) {
     warnings.push(`catalog_unmaterialized_total:${totalApi}`);
-    return { ok: true, total: 0, results: [] };
+    return { ok: true, total: 0, results: [], candidate_coverage: first.candidate_coverage };
   }
-  return { ok: true, total: totalApi, results: sorted.slice(0, requestedPerPage) };
+  // Sorting may examine up to 200 raw rows, but only the returned window is
+  // available to downstream eligibility gates. Do not mistake a complete
+  // price ranking for complete candidate coverage.
+  const candidateCoverage: CatalogCandidateCoverage =
+    input.page && input.page > 1
+      ? "partial"
+      : first.candidate_coverage === "unknown"
+      ? "unknown"
+      : first.candidate_coverage === "complete_query_window" &&
+          totalApi <= requestedPerPage
+      ? "complete_query_window"
+      : "partial";
+  return {
+    ok: true,
+    total: totalApi,
+    results: sorted.slice(0, requestedPerPage),
+    candidate_coverage: candidateCoverage,
+  };
 }
 
 async function singleSearchSortedWithCompoundFallback(
@@ -683,12 +732,27 @@ export async function executeSearchCatalog(
 
   const optionVariants = input.mode === "by_filter" ? expandOptionAlternatives(input) : [input];
   if (optionVariants.length > 1) warnings.push(`option_alternatives_fanout:${optionVariants.length}`);
+  // An oversized OR facet falls back to a single aggregate request. The
+  // upstream endpoint has not reliably implemented that OR, so even a fully
+  // paginated aggregate response cannot prove that every alternative ran.
+  const unresolvedOptionAlternatives = optionVariants.length === 1 &&
+    Object.values(input.options ?? {}).some((values) =>
+      new Set(Array.isArray(values) ? values.map(String).filter(Boolean) : []).size > 1
+    );
 
   // Один запрос: нет ни category fan-out, ни OR-альтернатив фасета.
   if (categories.length <= 1 && optionVariants.length === 1) {
     const r = await searchWithRateLimitRetry(optionVariants[0], deps, cache, categories[0], warnings);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
-    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
+    return {
+      tool: "search_catalog",
+      ok: true,
+      mode: input.mode,
+      total: r.total,
+      results: r.results,
+      candidate_coverage: unresolvedOptionAlternatives ? "unknown" : r.candidate_coverage,
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   // Fan-out: Cartesian product of leaf categories and exact option variants.
@@ -700,7 +764,9 @@ export async function executeSearchCatalog(
     // Exact alternatives are intentionally executed one variant at a time.
     // Bursting a dozen live values at once causes catalog 429 responses and a
     // false empty result. Stop once enough unique cards are collected for the
-    // requested page; all completed variants remain exact evidence.
+    // requested page; all completed variants remain exact evidence. A sorted
+    // request must inspect every variant: a later one may contain the global
+    // cheapest/most expensive product even after the page is already full.
     const collected = new Set<string>();
     const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
     for (const variant of optionVariants) {
@@ -758,12 +824,27 @@ export async function executeSearchCatalog(
   if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
   else if (input.sort_expensive) merged.sort((a, b) => b.price - a.price);
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+  // Every raw branch must be fully exposed to the eligibility gate. A
+  // successful branch does not make a failed sibling, an early OR stop or a
+  // final merged-page truncation into a confirmed product shortfall.
+  const incompleteBranches = settled.length !==
+    optionVariants.length * categoryVariants.length ||
+    settled.some((result) => !result.ok);
+  const candidateCoverage: CatalogCandidateCoverage = incompleteBranches ||
+      merged.length > perPage ||
+      okResults.some((result) => result.candidate_coverage === "partial")
+    ? "partial"
+    : unresolvedOptionAlternatives ||
+      okResults.some((result) => result.candidate_coverage === "unknown")
+    ? "unknown"
+    : "complete_query_window";
   return {
     tool: "search_catalog",
     ok: true,
     mode: input.mode,
     total: totalSum, // суммарный total по веткам (грубая оценка; дедуп — на уровне results)
     results: merged.slice(0, perPage),
+    candidate_coverage: candidateCoverage,
     ...(warnings.length ? { warnings } : {}),
   };
 }

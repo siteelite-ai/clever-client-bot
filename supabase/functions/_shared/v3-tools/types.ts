@@ -80,11 +80,20 @@ export interface ToolError {
   message: string;
 }
 
+/** Completeness of the raw rows exposed to product eligibility checks for
+ * this exact catalog request, not proof about the whole catalog. */
+export type CatalogCandidateCoverage =
+  | "complete_query_window"
+  | "partial"
+  | "unknown";
+
 export interface SearchCatalogOk {
   ok: true;
   mode: string;
   total: number;
   results: ProductRef[];
+  /** Never infer this from post-filtered `results.length` or a rewritten total. */
+  candidate_coverage?: CatalogCandidateCoverage;
   /** Серверные предупреждения (например, anchor_leaf_category_injected:<L₀>). */
   warnings?: string[];
   side_effects?: ToolSideEffect[];

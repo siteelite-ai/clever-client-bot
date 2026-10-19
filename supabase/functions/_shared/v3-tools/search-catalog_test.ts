@@ -73,6 +73,7 @@ Deno.test("restricted catalog products never enter search results or the product
   assertEquals(result.ok, true);
   if (!result.ok) return;
   assertEquals(result.results.map((entry) => entry.id), ["public-explicit", "public-unmarked"]);
+  assertEquals(result.candidate_coverage, "complete_query_window");
   assertEquals([...cache.keys()], ["public-explicit", "public-unmarked"]);
 });
 
@@ -216,6 +217,7 @@ Deno.test("catalog executes repeated live facet values as OR alternatives", asyn
   if (!result.ok) return;
   assertEquals(result.results.map((product) => product.id), ["4000", "5000"]);
   assertEquals(result.results.map((product) => product.leaf_category), ["Fixtures", "Fixtures"]);
+  assertEquals(result.candidate_coverage, "complete_query_window");
   assertEquals(result.warnings, ["option_alternatives_fanout:2"]);
 });
 
@@ -302,7 +304,10 @@ for (const withVerifiedCard of [false, true]) {
 
     if (withVerifiedCard) {
       assertEquals(result.ok, true);
-      if (result.ok) assertEquals(result.results.map((product) => product.id), ["verified"]);
+      if (result.ok) {
+        assertEquals(result.results.map((product) => product.id), ["verified"]);
+        assertEquals(result.candidate_coverage, "partial");
+      }
     } else {
       assertEquals(result.ok, false);
       if (!result.ok) assertEquals(result.error_code, "transport_5xx");
@@ -462,6 +467,7 @@ Deno.test("catalog materializes a bounded later-page window when upstream total 
   if (!result.ok) return;
   assertEquals(result.total, 130);
   assertEquals(result.results.map((product) => product.id), ["usable-later"]);
+  assertEquals(result.candidate_coverage, "partial");
   assertEquals(result.warnings, ["catalog_materialization_recovered:1/130"]);
   assertEquals(calls, [
     { page: 1, perPage: 10 },
@@ -505,6 +511,7 @@ Deno.test("catalog exposes zero when a bounded raw pool cannot materialize any r
   if (!result.ok) return;
   assertEquals(result.total, 0);
   assertEquals(result.results, []);
+  assertEquals(result.candidate_coverage, "partial");
   assertEquals(result.warnings, ["catalog_unmaterialized_total:130"]);
   assertEquals(calls, [
     { page: 1, perPage: 10 },
@@ -512,4 +519,180 @@ Deno.test("catalog exposes zero when a bounded raw pool cannot materialize any r
     { page: 2, perPage: 50 },
     { page: 3, perPage: 50 },
   ]);
+});
+
+Deno.test("candidate coverage uses raw pagination, not locally filtered products", async () => {
+  const raw = Array.from({ length: 10 }, (_, index) => ({
+    id: `item-${index}`,
+    pagetitle: `Светильник ${index}`,
+    price: index === 0 ? 100 : 0,
+    url: `https://220volt.kz/catalog/light/fixtures/item-${index}/`,
+    options: [],
+  }));
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response(JSON.stringify({
+    data: { results: raw, pagination: { total: 53 } },
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "светильник",
+    per_page: 10,
+  }, { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.length, 1);
+  assertEquals(result.total, 53);
+  assertEquals(result.candidate_coverage, "partial");
+});
+
+Deno.test("candidate coverage is unknown when upstream pagination is absent", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "розетка",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: { results: [{
+        id: "socket",
+        pagetitle: "Розетка",
+        price: 500,
+        url: "https://220volt.kz/catalog/electric/sockets/socket/",
+        options: [],
+      }] },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.candidate_coverage, "unknown");
+});
+
+Deno.test("candidate coverage is unknown when upstream results are malformed", async () => {
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "розетка",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: { results: null, pagination: { total: 0 } },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.candidate_coverage, "unknown");
+});
+
+Deno.test("oversized unexpanded OR facets cannot claim complete coverage across leaves", async () => {
+  const options = Array.from({ length: 25 }, (_, index) => String(index + 1));
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category_in: ["Leaf A", "Leaf B"],
+    options: { power: options },
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const leaf = new URL(String(input)).searchParams.get("category") ?? "unknown";
+      return Promise.resolve(new Response(JSON.stringify({
+        data: { results: [{
+          id: leaf,
+          pagetitle: `Fixture ${leaf}`,
+          price: 500,
+          url: `https://220volt.kz/catalog/light/fixtures/item-${leaf.replaceAll(" ", "-")}/`,
+          options: [],
+        }], pagination: { total: 1 } },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.length, 2);
+  assertEquals(result.candidate_coverage, "unknown");
+});
+
+Deno.test("candidate coverage is partial after an early OR stop", async () => {
+  const requested: string[] = [];
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Fixtures",
+    options: { power: ["10", "20"] },
+    per_page: 2,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const value = new URL(String(input)).searchParams.get("options[power][]") ?? "";
+      requested.push(value);
+      const results = [1, 2].map((index) => ({
+        id: `${value}-${index}`,
+        pagetitle: `Fixture ${value}-${index}`,
+        price: 100,
+        url: `https://220volt.kz/catalog/light/fixtures/item-${value}-${index}/`,
+        options: [],
+      }));
+      return Promise.resolve(new Response(JSON.stringify({
+        data: { results, pagination: { total: results.length } },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(requested, ["10"]);
+  assertEquals(result.candidate_coverage, "partial");
+});
+
+Deno.test("sorted candidate coverage is separate from price-order coverage", async () => {
+  const products = [30, 10, 20].map((price) => ({
+    id: String(price),
+    pagetitle: `Fixture ${price}`,
+    price,
+    url: `https://220volt.kz/catalog/light/fixtures/item-${price}/`,
+    options: [],
+  }));
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response(JSON.stringify({
+    data: { results: products, pagination: { total: products.length } },
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  const deps = { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl };
+  const shortWindow = await executeSearchCatalog({
+    mode: "by_query", query: "fixture", sort_cheapest: true, per_page: 2,
+  }, deps, new Map());
+  assertEquals(shortWindow.ok, true);
+  if (!shortWindow.ok) return;
+  assertEquals(shortWindow.results.map((product) => product.price), [10, 20]);
+  assertEquals(shortWindow.candidate_coverage, "partial");
+
+  const fullWindow = await executeSearchCatalog({
+    mode: "by_query", query: "fixture", sort_cheapest: true, per_page: 3,
+  }, deps, new Map());
+  assertEquals(fullWindow.ok, true);
+  if (!fullWindow.ok) return;
+  assertEquals(fullWindow.results.map((product) => product.price), [10, 20, 30]);
+  assertEquals(fullWindow.candidate_coverage, "complete_query_window");
+});
+
+Deno.test("sort-truncated searches keep candidate coverage partial", async () => {
+  const fetchImpl: typeof fetch = (input) => {
+    const page = Number(new URL(String(input)).searchParams.get("page") ?? "1");
+    const products = Array.from({ length: 50 }, (_, index) => {
+      const id = (page - 1) * 50 + index + 1;
+      return {
+        id: String(id),
+        pagetitle: `Fixture ${id}`,
+        price: 1000 - id,
+        url: `https://220volt.kz/catalog/light/fixtures/item-${id}/`,
+        options: [],
+      };
+    });
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results: products, pagination: { total: 201 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+  const result = await executeSearchCatalog({
+    mode: "by_query", query: "fixture", sort_cheapest: true, per_page: 10,
+  }, { baseUrl: "https://catalog.test", apiToken: "test", fetchImpl }, new Map());
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results[0].price, 800);
+  assertEquals(result.candidate_coverage, "partial");
+  assertEquals(result.warnings, ["sort_truncated:201>200"]);
 });
