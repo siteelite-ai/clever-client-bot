@@ -50,7 +50,7 @@ export function normalizeUnit(raw: string): string {
 // dimensions of the object being selected. Keeping this distinction next to
 // unit normalization gives every compatibility path the same category-agnostic
 // guard (instead of teaching individual product branches about currencies).
-const NON_PHYSICAL_QUANTITY_UNIT = /^(?:шт|штук|штука|штуки|раз|раза|сек|секунд|секунда|секунды|мин|минут|минута|минуты|час|часа|часов|дн|день|дня|дней|мес|месяц|месяца|месяцев|год|года|лет|тенге|тг|тнг|kzt|руб|рубль|рубля|рублей|rub|rur|доллар|доллара|долларов|usd|евро|eur|сом|сома|сомов|kgs|сум|сума|сумов|uzs|гривна|гривны|гривен|uah)$/iu;
+const NON_PHYSICAL_QUANTITY_UNIT = /^(?:шт|штук|штука|штуки|единица|единицы|единиц|единицу|раз|раза|сек|секунд|секунда|секунды|мин|минут|минута|минуты|час|часа|часов|дн|день|дня|дней|мес|месяц|месяца|месяцев|год|года|лет|тенге|тг|тнг|kzt|руб|рубль|рубля|рублей|rub|rur|доллар|доллара|долларов|usd|евро|eur|сом|сома|сомов|kgs|сум|сума|сумов|uzs|гривна|гривны|гривен|uah)$/iu;
 
 /** True only for units that can describe a physical/electrical product fit. */
 export function isPhysicalMeasurementUnit(raw: string): boolean {
@@ -65,6 +65,17 @@ export function normalizeMeasurementText(raw: string): string {
   return String(raw ?? "")
     .toLowerCase()
     .replace(/ё/g, "е")
+    // Consume the whole written unit. Otherwise a later number+unit parser
+    // can mistake `120 кв. мм` for `120 кВ` or `120 м^2` for `120 м`.
+    .replace(
+      /(\d+(?:[.,]\d+)?)\s*кв\.?\s*(мм|см|дм|м|mm|cm|dm|m)(?![\p{L}\p{N}])/giu,
+      (_match, value: string, unit: string) => `${value} ${unit}²`,
+    )
+    .replace(
+      /(\d+(?:[.,]\d+)?)\s*(мм|см|дм|м|mm|cm|dm|m)\s*(?:\^|\*\*)\s*([23])(?!\d)/giu,
+      (_match, value: string, unit: string, exponent: string) =>
+        `${value} ${unit}${exponent === "2" ? "²" : "³"}`,
+    )
     .replace(
       /(\d+(?:[.,]\d+)?)\s*(?:квадрат(?:а|ов)?|квадратн(?:ый|ая|ое|ые|ых|ого|ому|ыми)?\s+метр(?:а|ов|е|у|ы)?|кв\.?\s*м(?:етр(?:а|ов|е|у|ы)?)?)(?![a-zа-я])/giu,
       "$1 м²",
