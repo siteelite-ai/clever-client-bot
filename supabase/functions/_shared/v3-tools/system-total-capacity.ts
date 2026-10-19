@@ -1,8 +1,5 @@
 import { canonicalMeasurementUnit } from "./criteria-reasoning.ts";
-import {
-  isPhysicalMeasurementUnit,
-  normalizeMeasurementText,
-} from "./criteria-consistency.ts";
+import { isPhysicalMeasurementUnit } from "./criteria-consistency.ts";
 
 /** The additive output axis must come from the current live category schema. */
 export interface SystemOutputFacet {
@@ -20,30 +17,7 @@ export interface VisibleSystemTotalMinimum {
 }
 
 const VISIBLE_NUMBER = String.raw`(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?`;
-// Consume a whole written unit before normalizing it. A partial match could
-// turn `кв. мм` into kilovolts or `м^2` into linear metres. Unknown full
-// spellings then fail closed instead of borrowing a known prefix.
-const VISIBLE_UNIT = String.raw`(?:кв\.\s*\p{Ll}{1,12}|[\p{L}°][\p{L}°²³/23]{0,11}(?:(?:\^|\*\*)\s*\d+)?)`;
-const VISIBLE_UNIT_END = String.raw`(?![\p{L}\p{N}\^]|\*\*)`;
-
-function canonicalVisibleUnit(raw: string): string {
-  let valid = true;
-  const standardized = String(raw ?? "").replace(
-    /(?:\^|\*\*)\s*(\d+)/gu,
-    (_match, exponent: string) => {
-      if (exponent !== "2" && exponent !== "3") {
-        valid = false;
-        return "";
-      }
-      return exponent === "2" ? "²" : "³";
-    },
-  );
-  // The shared unit normalizer removes unknown punctuation and digits. Never
-  // let an unsupported exponent such as `м^4` silently collapse to `м`.
-  return valid && !/[\^*]/u.test(standardized)
-    ? canonicalMeasurementUnit(standardized)
-    : "";
-}
+const VISIBLE_UNIT = String.raw`[\p{L}°²³/]{1,12}`;
 
 function visibleQuantities(text: string): Array<{
   value: number;
@@ -51,189 +25,25 @@ function visibleQuantities(text: string): Array<{
   position: number;
 }> {
   const pattern = new RegExp(
-    String.raw`(?<![\p{L}\p{N}])(${VISIBLE_NUMBER})\s*(${VISIBLE_UNIT})${VISIBLE_UNIT_END}`,
+    String.raw`(?<![\p{L}\p{N}])(${VISIBLE_NUMBER})\s*(${VISIBLE_UNIT})(?![\p{L}])`,
     "gu",
   );
   return [...String(text ?? "").matchAll(pattern)].flatMap((match) => {
     const value = Number(match[1].replace(/[ \u00a0\u202f]/gu, "").replace(",", "."));
-    const unit = canonicalVisibleUnit(match[2]);
+    const unit = canonicalMeasurementUnit(match[2]);
     return Number.isFinite(value) && value > 0 && unit
       ? [{ value, unit, position: match.index ?? 0 }]
       : [];
   });
 }
 
-type PhysicalDimension =
-  | "length"
-  | "mass"
-  | "time"
-  | "current"
-  | "luminousFlux";
-
-interface PhysicalUnit {
-  /** Factor to the base units m, kg, s, A and lm. */
-  scale: number;
-  powers: Partial<Record<PhysicalDimension, number>>;
-}
-
-const PHYSICAL_DIMENSIONS: PhysicalDimension[] = [
-  "length",
-  "mass",
-  "time",
-  "current",
-  "luminousFlux",
-];
-
-/** A small unit grammar, independent of catalog categories and product names. */
-function physicalUnit(raw: string): PhysicalUnit | null {
-  // Celsius has an offset, so treating it as an ordinary multiplicative unit
-  // (or confusing its normalized `с` with seconds) would be unsound.
-  if (raw.includes("°")) return null;
-  const unit = canonicalVisibleUnit(raw);
-  const slash = unit.indexOf("/");
-  if (slash >= 0) {
-    if (slash === 0 || slash === unit.length - 1 ||
-      unit.indexOf("/", slash + 1) >= 0) return null;
-    const numerator = physicalUnit(unit.slice(0, slash));
-    const denominator = physicalUnit(unit.slice(slash + 1));
-    return numerator && denominator
-      ? {
-        scale: numerator.scale / denominator.scale,
-        powers: Object.fromEntries(PHYSICAL_DIMENSIONS.map((dimension) => [
-          dimension,
-          (numerator.powers[dimension] ?? 0) -
-          (denominator.powers[dimension] ?? 0),
-        ])),
-      }
-      : null;
-  }
-
-  const length = unit.match(/^(м|мм|см|дм|км|m|mm|cm|dm|km)([²³])?$/u);
-  if (length) {
-    const lengthScale: Record<string, number> = {
-      м: 1,
-      мм: 0.001,
-      см: 0.01,
-      дм: 0.1,
-      км: 1000,
-      m: 1,
-      mm: 0.001,
-      cm: 0.01,
-      dm: 0.1,
-      km: 1000,
-    };
-    const exponent = length[2] === "²" ? 2 : length[2] === "³" ? 3 : 1;
-    return {
-      scale: lengthScale[length[1]] ** exponent,
-      powers: { length: exponent },
-    };
-  }
-
-  if (/^люкс(?:а|у|ом|е|ы|ов|ам|ами|ах)?$/u.test(unit)) {
-    return { scale: 1, powers: { luminousFlux: 1, length: -2 } };
-  }
-
-  const named: Record<string, PhysicalUnit> = {
-    кг: { scale: 1, powers: { mass: 1 } },
-    kg: { scale: 1, powers: { mass: 1 } },
-    г: { scale: 0.001, powers: { mass: 1 } },
-    g: { scale: 0.001, powers: { mass: 1 } },
-    т: { scale: 1000, powers: { mass: 1 } },
-    лм: { scale: 1, powers: { luminousFlux: 1 } },
-    лк: { scale: 1, powers: { luminousFlux: 1, length: -2 } },
-    lx: { scale: 1, powers: { luminousFlux: 1, length: -2 } },
-    lux: { scale: 1, powers: { luminousFlux: 1, length: -2 } },
-    с: { scale: 1, powers: { time: 1 } },
-    сек: { scale: 1, powers: { time: 1 } },
-    мин: { scale: 60, powers: { time: 1 } },
-    ч: { scale: 3600, powers: { time: 1 } },
-    вт: { scale: 1, powers: { mass: 1, length: 2, time: -3 } },
-    квт: { scale: 1000, powers: { mass: 1, length: 2, time: -3 } },
-    в: { scale: 1, powers: { mass: 1, length: 2, time: -3, current: -1 } },
-    кв: { scale: 1000, powers: { mass: 1, length: 2, time: -3, current: -1 } },
-    а: { scale: 1, powers: { current: 1 } },
-    ма: { scale: 0.001, powers: { current: 1 } },
-    л: { scale: 0.001, powers: { length: 3 } },
-    мл: { scale: 0.000001, powers: { length: 3 } },
-    // Counts are dimensionless, but their unit must still be explicit.
-    шт: { scale: 1, powers: {} },
-  };
-  return named[unit] ?? null;
-}
-
-function unitsMultiplyTo(
-  left: PhysicalUnit,
-  right: PhysicalUnit,
-  output: PhysicalUnit,
-): boolean {
-  return PHYSICAL_DIMENSIONS.every((dimension) =>
-    (left.powers[dimension] ?? 0) + (right.powers[dimension] ?? 0) ===
-      (output.powers[dimension] ?? 0)
-  );
-}
-
-function customerOwnsEquationOperand(
-  customerEvidence: string,
-  customerQuantities: ReturnType<typeof visibleQuantities>,
-  value: number,
-  unit: PhysicalUnit,
-): number[] {
-  return customerQuantities.flatMap((quantity) => {
-    const customerUnit = physicalUnit(quantity.unit);
-    if (
-      !customerUnit ||
-      !PHYSICAL_DIMENSIONS.every((dimension) =>
-        (customerUnit.powers[dimension] ?? 0) ===
-          (unit.powers[dimension] ?? 0)
-      ) ||
-      Math.abs(quantity.value * customerUnit.scale - value * unit.scale) >
-        Math.max(1e-12, value * unit.scale * 0.000001)
-    ) return [];
-
-    const clauseStart = Math.max(
-      customerEvidence.lastIndexOf(".", quantity.position - 1),
-      customerEvidence.lastIndexOf("!", quantity.position - 1),
-      customerEvidence.lastIndexOf("?", quantity.position - 1),
-      customerEvidence.lastIndexOf(";", quantity.position - 1),
-      customerEvidence.lastIndexOf("\n", quantity.position - 1),
-    ) + 1;
-    const nextBoundary = customerEvidence.slice(quantity.position)
-      .search(/[.!?;\n]/u);
-    const clauseEnd = nextBoundary < 0
-      ? customerEvidence.length
-      : quantity.position + nextBoundary;
-    const clause = customerEvidence.slice(clauseStart, clauseEnd)
-      .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
-    // Historical equipment, loose examples and upper bounds are not customer
-    // requirements for a new aggregate calculation.
-    if (
-      /(?:стар\p{L}*|прежн\p{L}*|предыдущ\p{L}*|существ\p{L}*|установлен\p{L}*|имеющ\p{L}*|раньше|например|к\s+примеру|около|примерно|порядка|ориентир\p{L}*|не\s+более|не\s+выше|максимум|(?:^|\s)до\s*\d)/iu
-        .test(clause)
-    ) return [];
-
-    // A density/rate (including lux = lm/m²) must be the customer's target,
-    // not a norm silently introduced by the model. An object dimension can
-    // be a customer-stated fact, such as the measured area of their yard.
-    const isRate = PHYSICAL_DIMENSIONS.some((dimension) =>
-      (unit.powers[dimension] ?? 0) < 0
-    );
-    if (
-      isRate &&
-      !/(?:нуж\p{L}*|хоч\p{L}*|треб\p{L}*|долж\p{L}*|необходим\p{L}*|не\s+менее|как\s+минимум|минимум|целев\p{L}*)/iu
-        .test(clause)
-    ) return [];
-    return [quantity.position];
-  });
-}
-
 /**
  * A model's bare numerical demand is not evidence of a hard requirement.
  * Accept the exact customer-owned total, or a transparent calculation whose
- * displayed operands multiply to the displayed result in compatible physical
- * dimensions and BOTH inputs are customer-owned. A model's guessed density or
- * norm cannot turn a customer's area into a hard aggregate requirement. This
- * does not validate the suitability of a customer-specified target; callers
- * must still verify the resulting plan.
+ * displayed operands multiply to the displayed result and whose input is
+ * present in the customer's request. This checks arithmetic/provenance, not
+ * the suitability of an engineering assumption; callers must still describe
+ * a model-derived total as conditional and verify the installation plan.
  */
 export function visibleSystemTotalHasProvenance(input: {
   customerEvidence: string;
@@ -241,28 +51,25 @@ export function visibleSystemTotalHasProvenance(input: {
   value: number;
   unit: string;
 }): boolean {
-  const unit = canonicalVisibleUnit(input.unit);
+  const unit = canonicalMeasurementUnit(input.unit);
   if (!unit || !Number.isFinite(input.value) || input.value <= 0) return false;
-  // Normalize `кв. м` before extracting a quantity: otherwise `120 кв. м`
-  // could be mistaken for 120 кВ (kilovolts) in an unrelated model claim.
-  const customerEvidence = normalizeMeasurementText(input.customerEvidence);
-  const customerQuantities = visibleQuantities(customerEvidence);
+  const customerQuantities = visibleQuantities(input.customerEvidence);
   const sameCustomerValue = customerQuantities.some((quantity) => {
     if (quantity.value !== input.value || quantity.unit !== unit) return false;
     const clauseStart = Math.max(
-      customerEvidence.lastIndexOf(".", quantity.position - 1),
-      customerEvidence.lastIndexOf("!", quantity.position - 1),
-      customerEvidence.lastIndexOf("?", quantity.position - 1),
-      customerEvidence.lastIndexOf(";", quantity.position - 1),
+      input.customerEvidence.lastIndexOf(".", quantity.position - 1),
+      input.customerEvidence.lastIndexOf("!", quantity.position - 1),
+      input.customerEvidence.lastIndexOf("?", quantity.position - 1),
+      input.customerEvidence.lastIndexOf(";", quantity.position - 1),
     ) + 1;
-    const nextBoundary = customerEvidence.slice(quantity.position)
+    const nextBoundary = input.customerEvidence.slice(quantity.position)
       .search(/[.!?;\n]/u);
     const clauseEnd = nextBoundary < 0
-      ? customerEvidence.length
+      ? input.customerEvidence.length
       : quantity.position + nextBoundary;
-    const clause = customerEvidence.slice(clauseStart, clauseEnd)
+    const clause = input.customerEvidence.slice(clauseStart, clauseEnd)
       .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
-    const before = customerEvidence.slice(
+    const before = input.customerEvidence.slice(
       Math.max(0, quantity.position - 55),
       quantity.position,
     ).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
@@ -290,47 +97,29 @@ export function visibleSystemTotalHasProvenance(input: {
 
   const term = String.raw`(${VISIBLE_NUMBER})\s*(${VISIBLE_UNIT})?`;
   const equation = new RegExp(
-    String.raw`(?<![\p{L}\p{N}])${term}\s*[×xх*]\s*${term}\s*[=≈]\s*${term}${VISIBLE_UNIT_END}`,
+    String.raw`(?<![\p{L}\p{N}])${term}\s*[×xх*]\s*${term}\s*[=≈]\s*${term}(?![\p{L}])`,
     "giu",
   );
-  for (const match of normalizeMeasurementText(input.reasoningText).matchAll(equation)) {
+  for (const match of String(input.reasoningText ?? "").matchAll(equation)) {
     const numeric = [match[1], match[3], match[5]].map((raw) =>
       Number(raw.replace(/[ \u00a0\u202f]/gu, "").replace(",", "."))
     );
     const [left, right, output] = numeric;
-    const leftUnit = physicalUnit(match[2] ?? "");
-    const rightUnit = physicalUnit(match[4] ?? "");
-    const outputUnit = physicalUnit(match[6] ?? "");
     if (
       !numeric.every((value) => Number.isFinite(value) && value > 0) ||
       output !== input.value ||
-      canonicalVisibleUnit(match[6] ?? "") !== unit ||
-      !leftUnit || !rightUnit || !outputUnit ||
-      !unitsMultiplyTo(leftUnit, rightUnit, outputUnit)
+      canonicalMeasurementUnit(match[6] ?? "") !== unit ||
+      Math.abs(left * right - output) > Math.max(0.01, output * 0.01)
     ) continue;
-    const expected = left * right * leftUnit.scale * rightUnit.scale;
-    const displayed = output * outputUnit.scale;
-    if (
-      !Number.isFinite(expected) || !Number.isFinite(displayed) ||
-      Math.abs(expected - displayed) > Math.max(1e-12, displayed * 0.01)
-    ) continue;
-    const leftPositions = customerOwnsEquationOperand(
-      customerEvidence,
-      customerQuantities,
-      left,
-      leftUnit,
-    );
-    const rightPositions = customerOwnsEquationOperand(
-      customerEvidence,
-      customerQuantities,
-      right,
-      rightUnit,
-    );
-    if (
-      leftPositions.some((leftPosition) =>
-        rightPositions.some((rightPosition) => rightPosition !== leftPosition)
+    const inputs = [
+      { value: left, unit: canonicalMeasurementUnit(match[2] ?? "") },
+      { value: right, unit: canonicalMeasurementUnit(match[4] ?? "") },
+    ];
+    if (inputs.some((operand) =>
+      operand.unit && customerQuantities.some((customer) =>
+        customer.value === operand.value && customer.unit === operand.unit
       )
-    ) return true;
+    )) return true;
   }
   return false;
 }
@@ -349,20 +138,17 @@ export function extractVisibleSystemTotalMinimum(input: {
   customerEvidence: string;
 }): VisibleSystemTotalMinimum | null {
   if (input.measurementScope !== "system_total") return null;
-  const wantedUnit = canonicalVisibleUnit(input.unit);
+  const wantedUnit = canonicalMeasurementUnit(input.unit);
   if (!wantedUnit || !isPhysicalMeasurementUnit(wantedUnit)) return null;
   const meaningTokens = normalizedCaption(input.outputFacet.caption).split(" ")
     .filter((token) => token.length >= 4);
   if (meaningTokens.length === 0) return null;
   const normalizedText = String(input.reasoningText ?? "")
     .replace(/[\u00a0\u202f]/gu, " ");
-  // The period in `кв. м` belongs to the unit, not to a sentence boundary.
-  const clauses = normalizedText.split(/(?<!\d)(?<!кв)[.!?;]+(?!\d)|\n+/iu)
+  const clauses = normalizedText.split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
     .map((clause) => clause.trim()).filter(Boolean);
-  const quantity = new RegExp(
-    String.raw`(?<![\p{L}\p{N}])((?:\d{1,3}(?: \d{3})+|\d+)(?:[.,]\d+)?)\s*(кв\.?\s*(?:мм|см|дм|м)|${VISIBLE_UNIT})${VISIBLE_UNIT_END}`,
-    "giu",
-  );
+  const quantity =
+    /(?<![\p{L}\p{N}])((?:\d{1,3}(?: \d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}°²³/]{1,12})(?![\p{L}])/gu;
   const candidates: VisibleSystemTotalMinimum[] = [];
   for (const clause of clauses) {
     const words = normalizedCaption(clause).split(" ");
@@ -375,10 +161,7 @@ export function extractVisibleSystemTotalMinimum(input: {
       )
     ) continue;
     for (const match of clause.matchAll(quantity)) {
-      const shorthandAreaUnit = match[2].match(/^кв\.?\s*(мм|см|дм|м)$/iu);
-      const unit = shorthandAreaUnit
-        ? canonicalVisibleUnit(`${shorthandAreaUnit[1]}²`)
-        : canonicalVisibleUnit(match[2]);
+      const unit = canonicalMeasurementUnit(match[2]);
       if (unit !== wantedUnit) continue;
       const position = match.index ?? 0;
       const before = clause.slice(Math.max(0, position - 100), position);
@@ -556,7 +339,7 @@ function normalizedCaption(value: string): string {
   return String(value ?? "")
     .toLocaleLowerCase("ru-RU")
     .replace(/ё/gu, "е")
-    .replace(new RegExp(String.raw`[,;(]\s*${VISIBLE_UNIT}\)?\s*$`, "u"), "")
+    .replace(/[,;(]\s*[\p{L}°²³/]{1,12}\)?\s*$/u, "")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
@@ -564,9 +347,9 @@ function normalizedCaption(value: string): string {
 
 function facetUnit(facet: SystemOutputFacet): string {
   const captionUnit = String(facet.caption ?? "").match(
-    new RegExp(String.raw`[,;(]\s*(${VISIBLE_UNIT})\)?\s*$`, "u"),
+    /[,;(]\s*([\p{L}°²³/]{1,12})\)?\s*$/u,
   )?.[1] ?? "";
-  return canonicalVisibleUnit(facet.unit || captionUnit);
+  return canonicalMeasurementUnit(facet.unit || captionUnit);
 }
 
 /**
@@ -614,13 +397,12 @@ function parseExactMeasuredOutput(
   | { value: number; unit: string }
   | { issue: "ambiguous_output" | "unit_mismatch" } {
   const text = String(raw ?? "").replace(/[\u00a0\u202f]/gu, " ").trim();
-  const match = text.match(new RegExp(
-    String.raw`^([+-]?(?:\d{1,3}(?: \d{3})+|\d+)(?:[.,]\d+)?)\s*(${VISIBLE_UNIT})?$`,
-    "u",
-  ));
+  const match = text.match(
+    /^([+-]?(?:\d{1,3}(?: \d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}°²³/]{1,12})?$/u,
+  );
   if (!match) return { issue: "ambiguous_output" };
   const value = Number(match[1].replace(/ /gu, "").replace(",", "."));
-  const explicitUnit = canonicalVisibleUnit(match[2] ?? "");
+  const explicitUnit = canonicalMeasurementUnit(match[2] ?? "");
   const unit = explicitUnit || declaredUnit;
   if (!Number.isFinite(value) || value <= 0 || !unit) {
     return { issue: "ambiguous_output" };
@@ -708,7 +490,7 @@ export function verifySystemTotalCapacityPlan(
   plan: SystemCapacityPlanLine[],
   visiblePlanText = "",
 ): SystemTotalCapacityVerdict {
-  const requiredUnit = canonicalVisibleUnit(requirement.unit);
+  const requiredUnit = canonicalMeasurementUnit(requirement.unit);
   const issues: SystemCapacityIssue[] = [];
   const minimumUnits = requirement.minimumUnits ?? 1;
   if (
