@@ -45,9 +45,10 @@ test("title-only code is distinguished from live facet proof on every direct bra
   assert.match(preflight, /strict\.results\s*\.filter\(isCandidate\)/u);
 
   const broadStart = preflight.indexOf("if (equivalentOnly && selected.length === 0)");
-  const broadEnd = preflight.indexOf("const axesLabel", broadStart);
-  assert.ok(broadStart > -1 && broadEnd > broadStart);
-  const broad = preflight.slice(broadStart, broadEnd);
+  const broadCandidateGate = preflight.indexOf("const broadCandidates = broad.results", broadStart);
+  const responseStart = preflight.indexOf("const elapsed = Date.now() - started", broadCandidateGate);
+  assert.ok(broadStart > -1 && broadCandidateGate > broadStart && responseStart > broadCandidateGate);
+  const broad = preflight.slice(broadStart, responseStart);
   assert.match(broad, /broad\.results\s*\.filter\(isCandidate\)/u);
   assert.doesNotMatch(broad, /filterReplacementCompatibleIds\(/u);
   assert.match(preflight, /result\.results\s*\.filter\(isCandidate\)/u);
