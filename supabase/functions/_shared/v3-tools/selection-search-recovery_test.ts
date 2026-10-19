@@ -309,10 +309,35 @@ Deno.test("unqualified browse proves every remaining qualifier from product fact
   assertEquals(
     filterUnqualifiedCategoryBrowseCandidates([
       product("missing-usb", "Электрический удлинитель"),
-      product("with-usb", "Электрический удлинитель с USB"),
+      product("with-usb", "Электрический удлинитель с USB", "Удлинитель USB"),
+      product(
+        "description-only-usb",
+        "Электрический удлинитель. Подходит для подключения USB-зарядки",
+      ),
       product("without-usb", "Электрический удлинитель без USB", "Удлинитель USB"),
+      {
+        ...product("facet-no", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB: Нет"],
+      },
+      {
+        ...product("facet-false", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["Наличие USB: false"],
+      },
+      {
+        ...product("facet-zero", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB: 0"],
+      },
+      {
+        ...product("facet-absent", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB — отсутствует"],
+      },
+      {
+        ...product("facet-yes", "Электрический удлинитель"),
+        short_traits: ["USB: Да"],
+      },
+      product("usb-version", "Электрический удлинитель с USB 2.0", "Удлинитель USB"),
     ], withUsb).map(({ id }) => id),
-    ["with-usb"],
+    ["with-usb", "facet-yes", "usb-version"],
   );
   const black = buildUnqualifiedCategoryBrowseRecovery({
     ...unqualifiedBrowseInput,
@@ -327,6 +352,37 @@ Deno.test("unqualified browse proves every remaining qualifier from product fact
     ], black).map(({ id }) => id),
     ["black"],
   );
+});
+
+Deno.test("request metawords do not become false product qualifiers", () => {
+  for (const customer_message of [
+    "Предложи несколько подходящих удлинителей",
+    "Покажи все удлинители",
+    "Покажи всё из удлинителей",
+  ]) {
+    const attempt = buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      customer_message,
+      search_args: {
+        mode: "by_query",
+        query: "удлинители",
+        category_in: ["Удлинители"],
+      },
+    });
+    assert(attempt, customer_message);
+    assertEquals(attempt.literal_qualifier_terms, [], customer_message);
+  }
+  const withRealRequirement = buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Покажи все черные удлинители с USB",
+    search_args: {
+      mode: "by_query",
+      query: "удлинители",
+      category_in: ["Удлинители"],
+    },
+  });
+  assert(withRealRequirement);
+  assertEquals(withRealRequirement.literal_qualifier_terms, ["черные", "usb"]);
 });
 
 Deno.test("unqualified browse cannot escape its live leaf or drop a typed constraint", () => {

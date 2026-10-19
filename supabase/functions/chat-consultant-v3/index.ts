@@ -14312,9 +14312,8 @@ async function runExpertLoop(
             ),
           })
           : null;
-        let unqualifiedCategoryBrowseAttempted = false;
+        let unqualifiedCategoryBrowseSucceeded = false;
         if (unqualifiedCategoryBrowse) {
-          unqualifiedCategoryBrowseAttempted = true;
           const browseBudgetMs = Math.min(
             6_000,
             Math.max(1, TURN_TIMEOUT_MS - now() - 3_000),
@@ -14363,6 +14362,7 @@ async function runExpertLoop(
           });
           if (qualifierProven.length > 0 && browsed.ok &&
             browsed.tool === "search_catalog") {
+            unqualifiedCategoryBrowseSucceeded = true;
             for (const key of Object.keys(runArgs)) delete runArgs[key];
             Object.assign(runArgs, unqualifiedCategoryBrowse.args);
             selectedSearchRecoveryAttempt = unqualifiedCategoryBrowse;
@@ -14380,7 +14380,7 @@ async function runExpertLoop(
 
         if (
           tc.name === "search_catalog" &&
-          !unqualifiedCategoryBrowseAttempted &&
+          !unqualifiedCategoryBrowseSucceeded &&
           tc.id === derivedStructuredSearchCallId &&
           derivedStructuredSearchGuidedByVisibleReasoning &&
           runArgs.mode === "by_query" &&

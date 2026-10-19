@@ -74,7 +74,7 @@ export function customerOwnsAbsentFacetValue(
   const normalizedValue = normalizedWords(value).join(" ");
   if (!ABSENCE_VALUES.has(normalizedValue)) return false;
   const captionWords = normalizedWords(facet.caption || facet.key)
-    .filter((word) => word.length >= 4);
+    .filter((word) => word.length >= 3);
   const distinctive = captionWords.filter((word) =>
     !GENERIC_AXIS_STEMS.has(word.slice(0, 4))
   );
@@ -86,25 +86,34 @@ export function customerOwnsAbsentFacetValue(
   );
   if (axisWords.length === 0) return false;
   const matchesAxis = (word: string) =>
-    word.length >= 4 &&
-    axisWords.some((axis) => axis.slice(0, 4) === word.slice(0, 4));
+    axisWords.some((axis) =>
+      axis.length <= 3
+        ? word === axis
+        : word.length >= 4 && axis.slice(0, 4) === word.slice(0, 4)
+    );
   for (const clause of String(customerEvidence ?? "").split(/[,.!?;\n]+/u)) {
     const words = normalizedWords(clause);
     for (let index = 0; index < words.length; index++) {
       const negative = words[index];
+      // Absence of a preference is not a request for a product without the
+      // feature: "нет предпочтений по заземлению" must never bind "нет".
       if (["без", "нет", "отсутствует", "no", "without"].includes(negative)) {
-        if (words.slice(index + 1, index + 4).some(matchesAxis)) return true;
+        if (matchesAxis(words[index + 1] ?? "")) return true;
       }
       if (
         negative === "не" &&
         ["имеет", "имею", "нужен", "нужна", "нужно", "нужны"]
           .includes(words[index + 1] ?? "")
       ) {
-        if (words.slice(index + 2, index + 5).some(matchesAxis)) return true;
+        if (matchesAxis(words[index + 2] ?? "")) return true;
       }
       if (
         matchesAxis(negative) &&
-        ["нет", "отсутствует", "не", "no"].includes(words[index + 1] ?? "")
+        (["нет", "отсутствует", "no"].includes(words[index + 1] ?? "") ||
+          (words[index + 1] === "не" &&
+            ["нужно", "нужен", "нужна", "нужны", "требуется", "требуются",
+              "должно", "должен", "должна", "должны", "имеет", "имеют"]
+              .includes(words[index + 2] ?? "")))
       ) {
         return true;
       }

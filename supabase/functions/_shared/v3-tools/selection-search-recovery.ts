@@ -48,6 +48,8 @@ export interface SelectionSearchRecoveryAttempt {
   unverified_criteria: Criterion[];
   /** Customer wording still requiring literal positive catalog evidence. */
   literal_qualifier_terms?: string[];
+  /** Exact head of the independently verified live leaf, for description proof. */
+  grounded_class_head?: string;
   /** Every recovery pool must be rechecked by these contracts before render. */
   revalidate: Array<
     "selection_target" | "mandatory_criteria" | "compatibility" | "budget"
@@ -218,6 +220,10 @@ function sameClassWord(left: string, right: string): boolean {
 const UNQUALIFIED_BROWSE_REQUEST_WORDS = [
   /^(?:предложи|предложите|покажи|покажите|подбери|подберите|найди|найдите|поищи|поищите|дай|дайте|хочу|нужен|нужна|нужны|ищу)$/u,
   /^(?:несколько|вариант(?:ы|ов|а|у|ами|е|ам)?|выбор(?:а|у|ом|е)?|ассортимент(?:а|у|ом|е)?|каталог(?:а|у|е|ом)?|товар(?:а|ы|ов|у|ом|ами|ах|е)?|пожалуйста|мне)$/u,
+  // Generic intent/determiners describe the request, not a catalog trait.
+  // Real qualifiers (colour, interface, installation, etc.) remain literal
+  // positive-evidence obligations on every recovered card.
+  /^подходящ\p{L}*$|^(?:все|весь|вся|всю|всех|всем|всеми|всего|всей)$/u,
   /^(?:на|из|в|во|по|с|со|для|под|у|и|или)$/u,
 ];
 
@@ -235,6 +241,14 @@ function unqualifiedBrowseQualifiers(
   )];
 }
 
+function qualifierIsClassDescriptor(term: string): boolean {
+  // Descriptive prose may prove only a grammatical class adjective adjacent
+  // to the live product-class head. Feature acronyms/codes such as USB cannot
+  // become positive proof merely because a description mentions their use.
+  return /(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ых|их|ого|его|ому|ему|ую|юю|ыми|ими)$/u
+    .test(term);
+}
+
 /** Literal evidence is a floor, not a model assertion. A missing term or a
  * nearby negative statement such as «без USB» cannot prove a feature. */
 export function filterUnqualifiedCategoryBrowseCandidates<T extends ProductRef>(
@@ -246,26 +260,73 @@ export function filterUnqualifiedCategoryBrowseCandidates<T extends ProductRef>(
   }
   const terms = attempt.literal_qualifier_terms;
   if (!Array.isArray(terms)) return [];
+  const classHead = attempt.grounded_class_head ?? "";
   return products.filter((product) => {
-    const fields = [
-      product.pagetitle,
-      ...(Array.isArray(product.short_traits) ? product.short_traits : []),
-      product.description_excerpt ?? "",
+    const fields: Array<{ value: string; source: "title" | "trait" | "description" }> = [
+      { value: product.pagetitle, source: "title" },
+      ...(Array.isArray(product.short_traits)
+        ? product.short_traits.map((value) => ({
+          value,
+          source: "trait" as const,
+        }))
+        : []),
+      { value: product.description_excerpt ?? "", source: "description" },
     ];
     return terms.every((term) => {
       let positive = false;
       let negative = false;
       for (const field of fields) {
-        const words = lexicalWords(field);
+        const words = lexicalWords(field.value);
         words.forEach((word, index) => {
           if (!sameClassWord(word, term)) return;
           const before = words.slice(Math.max(0, index - 3), index);
+          const next = words[index + 1] ?? "";
           if (
             before.some((token) =>
               token === "без" || token === "не" || token === "отсутствует"
-            )
-          ) negative = true;
-          else positive = true;
+            ) ||
+            // A catalog facet often serializes a missing feature after its
+            // label: «USB: Нет», «USB: false», «USB: 0», «USB отсутствует».
+            // Matching the label alone must never certify positive evidence.
+            ["нет", "false", "0", "no", "none", "отсутствует", "отсутствуют", "не"]
+              .includes(next)
+          ) {
+            negative = true;
+            return;
+          }
+          if (field.source === "title") {
+            positive = true;
+            return;
+          }
+          if (field.source === "trait") {
+            // A structured facet key/value may prove a feature. Free prose
+            // inside a compact trait string cannot silently do so.
+            const divider = field.value.search(/[:：]/u);
+            if (divider < 0) return;
+            const key = field.value.slice(0, divider);
+            const value = field.value.slice(divider + 1);
+            const valueWords = lexicalWords(value);
+            const inKey = lexicalWords(key).some((part) =>
+              sameClassWord(part, term)
+            );
+            const inValue = valueWords.some((part) =>
+              sameClassWord(part, term)
+            );
+            const affirmativeValue = valueWords.length > 0 &&
+              /^(?:да|есть|true|имеется|встроен\p{L}*|[1-9]\d*)$/u
+                .test(valueWords[0]);
+            const listValue = inValue && valueWords.length <= 3 &&
+              !/(?:совместим|подход|применен|назначен)/iu.test(key);
+            if (listValue || (inKey && affirmativeValue)) {
+              positive = true;
+            }
+            return;
+          }
+          if (
+            classHead && qualifierIsClassDescriptor(term) &&
+            (sameClassWord(words[index - 1] ?? "", classHead) ||
+              sameClassWord(words[index + 1] ?? "", classHead))
+          ) positive = true;
         });
       }
       return positive && !negative;
@@ -430,6 +491,7 @@ export function buildUnqualifiedCategoryBrowseRecovery(
     evidence_required_criteria: [],
     unverified_criteria: [],
     literal_qualifier_terms: literalQualifiers,
+    grounded_class_head: classHead,
     revalidate: [...REVALIDATE],
   };
 }
