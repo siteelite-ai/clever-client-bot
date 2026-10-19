@@ -26,6 +26,10 @@ import {
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 import { extractCustomerApplicationContexts } from "./selection-contract.ts";
+import {
+  customerOwnsAbsentFacetValue,
+  isAbsenceOrUnknownFacetValue,
+} from "./facet-value-semantics.ts";
 
 /**
  * Whether the consultant has already produced enough machine-checkable
@@ -463,7 +467,18 @@ function requiredChoiceIsBareScalar(
 function requiredChoiceAvailableToReasoning(
   choice: DerivedRequiredFacetChoice,
   customerOwnedIds: Set<string>,
+  customerEvidence: string,
 ): boolean {
+  // A mixed live facet may list real values alongside `нет`. The model's
+  // `facet: нет` means an unspecified preference unless the customer actually
+  // asked for absence of that exact property.
+  if (isAbsenceOrUnknownFacetValue(choice.value)) {
+    return customerOwnsAbsentFacetValue(
+      { key: choice.facet, caption: choice.facet },
+      choice.value,
+      customerEvidence,
+    );
+  }
   return customerOwnedIds.has(choice.id) ||
     (!requiredChoiceMeasuresPhysicalQuantity(choice) &&
       !requiredChoiceIsBareScalar(choice));
@@ -874,7 +889,11 @@ export function buildDerivedSelectionReasoningToolSchema(
   );
   const requiredFacetIds = allRequiredFacetChoices
     .filter((choice) =>
-      requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds)
+      requiredChoiceAvailableToReasoning(
+        choice,
+        customerOwnedRequiredIds,
+        customerEvidence,
+      )
     )
     .filter((choice) =>
       !copiesPairedObjectChoice(choice, facets, pairedObjectReference)
@@ -1917,6 +1936,16 @@ export function resolveDerivedSelectionReasoning(
     customerOwnedFacets.set(identity, ids);
   }
   for (const choice of requiredById.values()) {
+    // Even a valid opaque ID and visible `facet: нет` cannot turn a missing
+    // customer preference into a product-side absence requirement.
+    if (
+      isAbsenceOrUnknownFacetValue(choice.value) &&
+      !customerOwnsAbsentFacetValue(
+        { key: choice.facet, caption: choice.facet },
+        choice.value,
+        customerEvidence,
+      )
+    ) continue;
     // The measured object is governed by the two-sided product fit. A catalog
     // range about possible objects is a corroborating hint, not another exact
     // product obligation; do not serialize one of its options as mandatory.
@@ -2029,7 +2058,11 @@ export function resolveDerivedSelectionReasoning(
     if (coveredByVisibleRange || directionalCustomerCapacity) continue;
     if (
       !customerOwned && !declaredRequiredIds.has(choice.id) &&
-      !requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds) &&
+      !requiredChoiceAvailableToReasoning(
+        choice,
+        customerOwnedRequiredIds,
+        customerEvidence,
+      ) &&
       !projectedChoiceVisible
     ) continue;
     const identity = captionKey.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")

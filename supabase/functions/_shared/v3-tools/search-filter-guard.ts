@@ -25,6 +25,10 @@ import {
 } from "./compact-facet-code.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import { customerOwnsIdentityValue } from "./identity-provenance.ts";
+import {
+  customerOwnsAbsentFacetValue,
+  isAbsenceOrUnknownFacetValue,
+} from "./facet-value-semantics.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -1311,13 +1315,20 @@ export function projectExplicitReasoningFacetValues(
       declaredReasoning,
     );
     if (
-      labelledValue && !contradictedByUser(labelledValue.value, userEvidence)
+      labelledValue && !contradictedByUser(labelledValue.value, userEvidence) &&
+      (!isAbsenceOrUnknownFacetValue(labelledValue.value) ||
+        customerOwnsAbsentFacetValue(
+          facet,
+          labelledValue.value,
+          userEvidence,
+        ))
     ) {
       const item = { key: facet.key, value: labelledValue.value };
       kept.push(item);
       if (
         explicitlyLabelledFacetValue(facet, userEvidence)?.value ===
-          labelledValue.value
+          labelledValue.value ||
+        customerOwnsAbsentFacetValue(facet, labelledValue.value, userEvidence)
       ) {
         userBacked.push(item);
       }
@@ -1331,6 +1342,10 @@ export function projectExplicitReasoningFacetValues(
 
     const candidates = facet.values.filter((candidate) => {
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (
+        isAbsenceOrUnknownFacetValue(candidate.value) &&
+        !customerOwnsAbsentFacetValue(facet, candidate.value, userEvidence)
+      ) return false;
       if (contradictedByUser(candidate.value, userEvidence)) return false;
       if (
         numericFacetValueConflictsWithUserMeasurement(
@@ -1360,8 +1375,9 @@ export function projectExplicitReasoningFacetValues(
     const item = { key: facet.key, value: candidates[0].value };
     kept.push(item);
     if (
+      customerOwnsAbsentFacetValue(facet, candidates[0].value, userEvidence) ||
       explicitlyAffirmedByUser(candidates[0].value, userEvidence) &&
-      facetMeaningIsEvidenced(facet, userEvidence)
+        facetMeaningIsEvidenced(facet, userEvidence)
     ) userBacked.push(item);
   }
 
@@ -1681,6 +1697,17 @@ export function guardSearchFilters(
         continue;
       }
       if (
+        isAbsenceOrUnknownFacetValue(canonical) &&
+        !customerOwnsAbsentFacetValue(facet, canonical, userEvidence)
+      ) {
+        dropped.push({
+          key,
+          value: canonical,
+          reason: "not_declared_in_reasoning",
+        });
+        continue;
+      }
+      if (
         numericFacetValueConflictsWithUserMeasurement(
           canonical,
           facet,
@@ -1808,6 +1835,7 @@ export function guardSearchFilters(
       );
       if (
         visibleRequirementBacked || customerIdentity || authoritativeIdentity ||
+        customerOwnsAbsentFacetValue(facet, canonical, userEvidence) ||
         (explicitlyAffirmedByUser(canonical, userEvidence) &&
           facetStateQualifierIsUserBacked(facet, userEvidence) &&
           (!pureNumericValue || numericFacetValueIsLocallyEvidenced(
@@ -1834,6 +1862,8 @@ export function guardSearchFilters(
       ) return [];
       return facet.values.flatMap(({ value }) =>
         isAtomicFacetValue(value) &&
+          (!isAbsenceOrUnknownFacetValue(value) ||
+            customerOwnsAbsentFacetValue(facet, value, userEvidence)) &&
           !numericFacetValueConflictsWithUserMeasurement(
             value,
             facet,

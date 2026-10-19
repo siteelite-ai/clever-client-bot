@@ -35,6 +35,67 @@ import {
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
 
+Deno.test("unspecified mixed-facet values in model reasoning never become mandatory", () => {
+  const schemas = [
+    [
+      { key: "length", caption: "Длина кабеля, м", values: ["нет", "1", "3"].map((value) => ({ value })) },
+      { key: "outlets", caption: "Количество розеток", values: ["нет", "2", "4"].map((value) => ({ value })) },
+    ],
+    [
+      { key: "mount", caption: "Способ монтажа", values: ["нет", "накладной", "встраиваемый"].map((value) => ({ value })) },
+      { key: "body", caption: "Материал корпуса", values: ["не указано", "металл", "пластик"].map((value) => ({ value })) },
+    ],
+  ];
+  const customers = [
+    "Предложи несколько вариантов на выбор",
+    "Покажи ассортимент и варианты",
+  ];
+  for (const [index, facets] of schemas.entries()) {
+    const customer = customers[index];
+    const reasoning = facets.map((facet) => `${facet.caption}: ${facet.values[0].value}`)
+      .join("; ") + ". Предложу несколько вариантов на выбор.";
+    const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
+    const properties = schema.function.parameters.properties as Record<string, { items?: { enum?: string[] } }>;
+    assertEquals(properties.required_facet_values.items?.enum?.includes("f0v0") ?? false, false);
+    assertEquals(properties.required_facet_values.items?.enum?.includes("f1v0") ?? false, false);
+    const result = resolveDerivedSelectionReasoning({
+      reasoning,
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0", "f1v0"],
+      explicit_customer_classifications: [],
+    }, facets, customer);
+    assertEquals(result?.requiredFacetValues, []);
+    assertEquals(result?.text.includes("Обязательные параметры"), false);
+  }
+});
+
+Deno.test("a customer-owned absence survives mixed live facet reasoning", () => {
+  const facets = [{
+    key: "grounding",
+    caption: "Наличие заземления",
+    values: [{ value: "да" }, { value: "нет" }, { value: "не указано" }],
+  }];
+  const customer = "Нужен вариант без заземления";
+  const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
+  const properties = schema.function.parameters.properties as Record<string, { items?: { enum?: string[] } }>;
+  assertEquals(properties.required_facet_values.items?.enum?.includes("f0v1"), true);
+  assertEquals(properties.required_facet_values.items?.enum?.includes("f0v2"), false);
+  const result = resolveDerivedSelectionReasoning({
+    reasoning: "Для вашего условия наличие заземления: нет; такой вариант подходит без заземления.",
+    measurement_scope: "not_applicable",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v1"],
+    explicit_customer_classifications: [],
+  }, facets, customer);
+  assertEquals(result?.requiredFacetValues, [{
+    key: "Наличие заземления",
+    value: "нет",
+  }]);
+});
+
 Deno.test("replacement reasoning shows only executable exact requirements after advice is demoted", () => {
   const facets = [
     { key: "poles", caption: "Количество полюсов", values: ["1", "2", "3"].map((value) => ({ value })) },

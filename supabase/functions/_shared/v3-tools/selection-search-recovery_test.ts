@@ -9,6 +9,8 @@ import {
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
   buildSourceProvenCardinalityRecoveryPlan,
+  buildUnqualifiedCategoryBrowseRecovery,
+  filterUnqualifiedCategoryBrowseCandidates,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
@@ -196,6 +198,316 @@ const facets = [
     values: [{ value: "Модельный подтип" }],
   },
 ];
+
+const unqualifiedBrowseInput = {
+  search_args: {
+    mode: "by_query",
+    query: "электрические удлинители",
+    category_in: ["Удлинители"],
+    per_page: 20,
+  },
+  customer_message: "Предложи несколько электрических удлинителей на выбор",
+  leaf_categories: ["Удлинители"],
+  initial_results_count: 0,
+  minimum_results: 3,
+  explicit_multiple_choice: true,
+  mandatory_criteria_count: 0,
+  customer_constraint_count: 0,
+  class_constraint_count: 0,
+  visible_requirement_count: 0,
+  compatibility_required: false,
+  replacement_intent: false,
+  exact_or_compound_or_alias_request: false,
+};
+
+Deno.test("unqualified multi-choice browse retries only the same verified leaf", () => {
+  const attempt = buildUnqualifiedCategoryBrowseRecovery(
+    unqualifiedBrowseInput,
+  );
+  assert(attempt);
+  assertEquals(attempt.kind, "verify_unqualified_browse_in_grounded_category");
+  assertEquals(attempt.args, {
+    mode: "by_filter",
+    category_in: ["Удлинители"],
+    per_page: 50,
+  });
+  assertEquals(attempt.proven_criteria, []);
+  assertEquals(attempt.literal_qualifier_terms, ["электрических"]);
+  assertEquals(attempt.revalidate, [
+    "selection_target",
+    "mandatory_criteria",
+    "compatibility",
+    "budget",
+  ]);
+
+  const second = buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько прожекторов до 4000 тенге",
+    search_args: {
+      mode: "by_query",
+      query: "прожекторы",
+      category_in: ["Прожекторы"],
+      min_price: 1000,
+      max_price: 4000,
+      sort_expensive: true,
+      per_page: 5,
+    },
+    leaf_categories: ["Прожекторы"],
+  });
+  assert(second);
+  assertEquals(second.args, {
+    mode: "by_filter",
+    category_in: ["Прожекторы"],
+    min_price: 1000,
+    max_price: 4000,
+    sort_expensive: true,
+    per_page: 50,
+  });
+  assertEquals(second.literal_qualifier_terms, []);
+});
+
+Deno.test("unqualified browse proves every remaining qualifier from product facts", () => {
+  const attempt = buildUnqualifiedCategoryBrowseRecovery(
+    unqualifiedBrowseInput,
+  );
+  assert(attempt);
+  const product = (
+    id: string,
+    description: string,
+    pagetitle = "Удлинитель сетевой",
+  ): ProductRef => ({
+    id,
+    pagetitle,
+    vendor: null,
+    price: 1000,
+    stock: "in_stock",
+    short_traits: [],
+    description_excerpt: description,
+  });
+  assertEquals(
+    filterUnqualifiedCategoryBrowseCandidates([
+      product("electric", "Электрический удлинитель с заземлением"),
+      product("unproved", "Провод с розетками"),
+      product("negated", "Не электрический удлинитель"),
+    ], attempt).map(({ id }) => id),
+    ["electric"],
+  );
+  assertEquals(
+    filterSelectionRecoveryPool([
+      product("electric", "Электрический удлинитель"),
+      product("unproved", "Провод с розетками"),
+    ], attempt).map(({ id }) => id),
+    ["electric"],
+  );
+
+  const withUsb = buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько электрических удлинителей с USB",
+  });
+  assert(withUsb);
+  assertEquals(withUsb.literal_qualifier_terms, ["электрических", "usb"]);
+  assertEquals(
+    filterUnqualifiedCategoryBrowseCandidates([
+      product("missing-usb", "Электрический удлинитель"),
+      product("with-usb", "Электрический удлинитель с USB", "Удлинитель USB"),
+      product(
+        "description-only-usb",
+        "Электрический удлинитель. Подходит для подключения USB-зарядки",
+      ),
+      product("without-usb", "Электрический удлинитель без USB", "Удлинитель USB"),
+      {
+        ...product("facet-no", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB: Нет"],
+      },
+      {
+        ...product("facet-false", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["Наличие USB: false"],
+      },
+      {
+        ...product("facet-zero", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB: 0"],
+      },
+      {
+        ...product("facet-absent", "Электрический удлинитель", "Удлинитель USB"),
+        short_traits: ["USB — отсутствует"],
+      },
+      {
+        ...product("facet-yes", "Электрический удлинитель"),
+        short_traits: ["USB: Да"],
+      },
+      product("usb-version", "Электрический удлинитель с USB 2.0", "Удлинитель USB"),
+    ], withUsb).map(({ id }) => id),
+    ["with-usb", "facet-yes", "usb-version"],
+  );
+  const black = buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько черных удлинителей",
+  });
+  assert(black);
+  assertEquals(black.literal_qualifier_terms, ["черных"]);
+  assertEquals(
+    filterUnqualifiedCategoryBrowseCandidates([
+      product("black", "Черный удлинитель"),
+      product("white", "Белый удлинитель"),
+    ], black).map(({ id }) => id),
+    ["black"],
+  );
+});
+
+Deno.test("request metawords do not become false product qualifiers", () => {
+  for (const customer_message of [
+    "Предложи несколько подходящих удлинителей",
+    "Покажи все удлинители",
+    "Покажи всё из удлинителей",
+  ]) {
+    const attempt = buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      customer_message,
+      search_args: {
+        mode: "by_query",
+        query: "удлинители",
+        category_in: ["Удлинители"],
+      },
+    });
+    assert(attempt, customer_message);
+    assertEquals(attempt.literal_qualifier_terms, [], customer_message);
+  }
+  const withRealRequirement = buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Покажи все черные удлинители с USB",
+    search_args: {
+      mode: "by_query",
+      query: "удлинители",
+      category_in: ["Удлинители"],
+    },
+  });
+  assert(withRealRequirement);
+  assertEquals(withRealRequirement.literal_qualifier_terms, ["черные", "usb"]);
+});
+
+Deno.test("unqualified browse cannot escape its live leaf or drop a typed constraint", () => {
+  for (const leaf_categories of [[], ["Удлинители", "Кабели"]]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      leaf_categories,
+    }), null);
+  }
+  for (const search_args of [
+    { mode: "by_query", query: "электрические удлинители" },
+    {
+      mode: "by_query",
+      query: "электрические удлинители",
+      category_in: ["Кабели"],
+    },
+    {
+      mode: "by_query",
+      query: "электрические удлинители",
+      category_in: ["Удлинители", "Кабели"],
+    },
+    {
+      ...unqualifiedBrowseInput.search_args,
+      options: { color: ["Черный"] },
+    },
+    { ...unqualifiedBrowseInput.search_args, city: "Караганда" },
+    { ...unqualifiedBrowseInput.search_args, max_price: "4000" },
+  ]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      search_args,
+    }), null);
+  }
+});
+
+Deno.test("unqualified browse excludes hard criteria, one-card and identity requests", () => {
+  for (const field of [
+    "mandatory_criteria_count",
+    "customer_constraint_count",
+    "class_constraint_count",
+    "visible_requirement_count",
+  ] as const) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      [field]: 1,
+    }), null, field);
+  }
+  for (const field of [
+    "compatibility_required",
+    "replacement_intent",
+    "exact_or_compound_or_alias_request",
+  ] as const) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      [field]: true,
+    }), null, field);
+  }
+  for (const changes of [
+    { minimum_results: 1 },
+    { initial_results_count: 1 },
+    { minimum_results: 0 },
+    { explicit_multiple_choice: false },
+  ]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      ...changes,
+    }), null);
+  }
+});
+
+Deno.test("unqualified browse rejects exact, compound, cheapest and ungrounded text", () => {
+  for (const customer_message of [
+    "Предложи удлинитель 5 м",
+    "Предложи несколько удлинителей 16 А",
+    "Предложи аналог удлинителя",
+    "Найди самый дешевый удлинитель",
+    "Предложи несколько самых дешевых удлинителей",
+    "Предложи несколько самых дорогих удлинителей",
+    "Предложи несколько недорогих удлинителей",
+    "Предложи несколько бюджетных удлинителей",
+    "Предложи несколько удлинителей по минимальной цене",
+    "Предложи несколько удлинителей без заземления",
+    "Предложи несколько удлинителей до 4000 тенге",
+    "Предложи несколько светильников",
+  ]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      customer_message,
+    }), null, customer_message);
+  }
+  for (const query of ["", "!!", "кабели", "ВВГ 3*1,5", "<script>"]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      search_args: { ...unqualifiedBrowseInput.search_args, query },
+    }), null, query);
+  }
+  assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько удлиненных кабелей",
+    search_args: {
+      ...unqualifiedBrowseInput.search_args,
+      query: "удлиненные кабели",
+    },
+  }), null);
+  assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько кабельных изделий",
+    leaf_categories: ["Кабели"],
+    search_args: {
+      mode: "by_query",
+      query: "кабельные изделия",
+      category_in: ["Кабели"],
+    },
+  }), null);
+  assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+    ...unqualifiedBrowseInput,
+    customer_message: "Предложи несколько удлинителей до 4000 тенге",
+    search_args: { ...unqualifiedBrowseInput.search_args, max_price: 4000 },
+  })?.args, {
+    mode: "by_filter",
+    category_in: ["Удлинители"],
+    max_price: 4000,
+    per_page: 50,
+  });
+});
 
 Deno.test("model advisory facets relax before customer-owned boolean filters", () => {
   const plan = buildSelectionSearchRecoveryPlan({

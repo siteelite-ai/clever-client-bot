@@ -8,6 +8,8 @@ import {
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
 import type { ProductRef } from "./types.ts";
 import type { ToolError, ToolName } from "./types.ts";
+import { extractBudgetCap } from "./budget-cap.ts";
+import { detectPriceDirection } from "./price-scope-policy.ts";
 import {
   type DiscoveredCategoryScope,
   groundedCategoryRecoveryQueries,
@@ -15,6 +17,7 @@ import {
 } from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
+  | "verify_unqualified_browse_in_grounded_category"
   | "verify_literal_feature_under_broad_application"
   | "relax_model_advisory_facets"
   | "relax_model_advisory_facets_verify_sparse_boolean_as_evidence"
@@ -43,6 +46,10 @@ export interface SelectionSearchRecoveryAttempt {
    * the positively proved product-class criteria above.
    */
   unverified_criteria: Criterion[];
+  /** Customer wording still requiring literal positive catalog evidence. */
+  literal_qualifier_terms?: string[];
+  /** Exact head of the independently verified live leaf, for description proof. */
+  grounded_class_head?: string;
   /** Every recovery pool must be rechecked by these contracts before render. */
   revalidate: Array<
     "selection_target" | "mandatory_criteria" | "compatibility" | "budget"
@@ -60,10 +67,14 @@ export function filterSelectionRecoveryPool<T extends ProductRef>(
   products: T[],
   attempt: SelectionSearchRecoveryAttempt | null,
 ): T[] {
+  const literalSafe = filterUnqualifiedCategoryBrowseCandidates(
+    products,
+    attempt,
+  );
   const required = attempt?.evidence_required_criteria ?? [];
-  if (required.length === 0) return [...products];
-  const safe = new Set(applyCriteriaGate(products, required).passed_ids);
-  return products.filter((product) => safe.has(String(product.id)));
+  if (required.length === 0) return literalSafe;
+  const safe = new Set(applyCriteriaGate(literalSafe, required).passed_ids);
+  return literalSafe.filter((product) => safe.has(String(product.id)));
 }
 
 /**
@@ -163,6 +174,326 @@ export interface SourceProvenCardinalityRecoveryInput {
   leaf_categories: string[];
   source_proven_count: number;
   minimum_results: number;
+}
+
+export interface UnqualifiedCategoryBrowseRecoveryInput {
+  search_args: Record<string, unknown>;
+  customer_message: string;
+  /** Leaf names returned by live discovery, not inferred from model text. */
+  leaf_categories: string[];
+  initial_results_count: number;
+  minimum_results: number;
+  /** Explicit customer request for a choice, not a server default target. */
+  explicit_multiple_choice: boolean;
+  mandatory_criteria_count: number;
+  /** Excludes price bounds: those are preserved in the new HTTP request. */
+  customer_constraint_count: number;
+  class_constraint_count: number;
+  visible_requirement_count: number;
+  compatibility_required: boolean;
+  replacement_intent: boolean;
+  /** Caller knows whether any named identity, SKU, compound or alias applies. */
+  exact_or_compound_or_alias_request: boolean;
+}
+
+function lexicalWords(value: string): string[] {
+  return String(value ?? "").normalize("NFKC")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** Compare nearly whole words, not short stems: «удлиненные» is not the
+ * product class «удлинители», while «удлинителей» is its inflection. */
+function sameClassWord(left: string, right: string): boolean {
+  const a = lexicalWords(left)[0] ?? "";
+  const b = lexicalWords(right)[0] ?? "";
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  if (shorter < 5) return false;
+  let shared = 0;
+  while (shared < shorter && a[shared] === b[shared]) shared++;
+  return shared >= Math.max(4, shorter - 3) &&
+    Math.abs(a.length - b.length) <= 2;
+}
+
+const UNQUALIFIED_BROWSE_REQUEST_WORDS = [
+  /^(?:предложи|предложите|покажи|покажите|подбери|подберите|найди|найдите|поищи|поищите|дай|дайте|хочу|нужен|нужна|нужны|ищу)$/u,
+  /^(?:несколько|вариант(?:ы|ов|а|у|ами|е|ам)?|выбор(?:а|у|ом|е)?|ассортимент(?:а|у|ом|е)?|каталог(?:а|у|е|ом)?|товар(?:а|ы|ов|у|ом|ами|ах|е)?|пожалуйста|мне)$/u,
+  // Generic intent/determiners describe the request, not a catalog trait.
+  // Real qualifiers (colour, interface, installation, etc.) remain literal
+  // positive-evidence obligations on every recovered card.
+  /^подходящ\p{L}*$|^(?:все|весь|вся|всю|всех|всем|всеми|всего|всей)$/u,
+  /^(?:на|из|в|во|по|с|со|для|под|у|и|или)$/u,
+];
+
+function unqualifiedBrowseQualifiers(
+  customerMessageWithoutBudget: string,
+  classHead: string,
+): string[] {
+  return [...new Set(
+    lexicalWords(customerMessageWithoutBudget).filter((word) =>
+      !sameClassWord(word, classHead) &&
+      !UNQUALIFIED_BROWSE_REQUEST_WORDS.some((pattern) =>
+        pattern.test(word)
+      )
+    ),
+  )];
+}
+
+function qualifierIsClassDescriptor(term: string): boolean {
+  // Descriptive prose may prove only a grammatical class adjective adjacent
+  // to the live product-class head. Feature acronyms/codes such as USB cannot
+  // become positive proof merely because a description mentions their use.
+  return /(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ых|их|ого|его|ому|ему|ую|юю|ыми|ими)$/u
+    .test(term);
+}
+
+/** Literal evidence is a floor, not a model assertion. A missing term or a
+ * nearby negative statement such as «без USB» cannot prove a feature. */
+export function filterUnqualifiedCategoryBrowseCandidates<T extends ProductRef>(
+  products: T[],
+  attempt: SelectionSearchRecoveryAttempt | null,
+): T[] {
+  if (attempt?.kind !== "verify_unqualified_browse_in_grounded_category") {
+    return [...products];
+  }
+  const terms = attempt.literal_qualifier_terms;
+  if (!Array.isArray(terms)) return [];
+  const classHead = attempt.grounded_class_head ?? "";
+  return products.filter((product) => {
+    const fields: Array<{ value: string; source: "title" | "trait" | "description" }> = [
+      { value: product.pagetitle, source: "title" },
+      ...(Array.isArray(product.short_traits)
+        ? product.short_traits.map((value) => ({
+          value,
+          source: "trait" as const,
+        }))
+        : []),
+      { value: product.description_excerpt ?? "", source: "description" },
+    ];
+    return terms.every((term) => {
+      let positive = false;
+      let negative = false;
+      for (const field of fields) {
+        const words = lexicalWords(field.value);
+        words.forEach((word, index) => {
+          if (!sameClassWord(word, term)) return;
+          const before = words.slice(Math.max(0, index - 3), index);
+          const next = words[index + 1] ?? "";
+          if (
+            before.some((token) =>
+              token === "без" || token === "не" || token === "отсутствует"
+            ) ||
+            // A catalog facet often serializes a missing feature after its
+            // label: «USB: Нет», «USB: false», «USB: 0», «USB отсутствует».
+            // Matching the label alone must never certify positive evidence.
+            ["нет", "false", "0", "no", "none", "отсутствует", "отсутствуют", "не"]
+              .includes(next)
+          ) {
+            negative = true;
+            return;
+          }
+          if (field.source === "title") {
+            positive = true;
+            return;
+          }
+          if (field.source === "trait") {
+            // A structured facet key/value may prove a feature. Free prose
+            // inside a compact trait string cannot silently do so.
+            const divider = field.value.search(/[:：]/u);
+            if (divider < 0) return;
+            const key = field.value.slice(0, divider);
+            const value = field.value.slice(divider + 1);
+            const valueWords = lexicalWords(value);
+            const inKey = lexicalWords(key).some((part) =>
+              sameClassWord(part, term)
+            );
+            const inValue = valueWords.some((part) =>
+              sameClassWord(part, term)
+            );
+            const affirmativeValue = valueWords.length > 0 &&
+              /^(?:да|есть|true|имеется|встроен\p{L}*|[1-9]\d*)$/u
+                .test(valueWords[0]);
+            const listValue = inValue && valueWords.length <= 3 &&
+              !/(?:совместим|подход|применен|назначен)/iu.test(key);
+            if (listValue || (inKey && affirmativeValue)) {
+              positive = true;
+            }
+            return;
+          }
+          if (
+            classHead && qualifierIsClassDescriptor(term) &&
+            (sameClassWord(words[index - 1] ?? "", classHead) ||
+              sameClassWord(words[index + 1] ?? "", classHead))
+          ) positive = true;
+        });
+      }
+      return positive && !negative;
+    });
+  });
+}
+
+/**
+ * A live category can contain products while its combined full-text/category
+ * lookup returns zero. For a genuinely unconstrained multi-choice request,
+ * retry the SAME verified leaf once as a bounded category-only lookup. This
+ * changes retrieval, not eligibility: every card still traverses the usual
+ * target, mandatory, compatibility and budget gates. No invented category,
+ * synonym or facet enters the request.
+ *
+ * The guard deliberately fails closed for customer requirements beyond price,
+ * exact items, aliases, replacements and cheapest-first requests. The caller
+ * must also supply all frozen-contract counts; this helper cannot infer them
+ * from a short natural-language message.
+ */
+export function buildUnqualifiedCategoryBrowseRecovery(
+  input: UnqualifiedCategoryBrowseRecoveryInput,
+): SelectionSearchRecoveryAttempt | null {
+  const args = input.search_args;
+  if (args.mode !== "by_query") return null;
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  const message = String(input.customer_message ?? "").trim();
+  if (
+    query.length < 3 || query.length > 160 ||
+    message.length < 3 ||
+    !/\p{L}/u.test(query) ||
+    /[\x00-\x1f<>]/u.test(query)
+  ) return null;
+
+  const leaves = [...new Set(
+    (Array.isArray(input.leaf_categories) ? input.leaf_categories : [])
+      .filter((leaf): leaf is string => typeof leaf === "string")
+      .map((leaf) => leaf.trim()).filter(Boolean),
+  )];
+  if (leaves.length !== 1) return null;
+  const scoped = Array.isArray(args.category_in) &&
+      args.category_in.length === 1 &&
+      typeof args.category_in[0] === "string"
+    ? args.category_in[0].trim()
+    : typeof args.category === "string"
+    ? args.category.trim()
+    : "";
+  if (
+    !scoped ||
+    scoped.toLocaleLowerCase("ru-RU") !==
+      leaves[0].toLocaleLowerCase("ru-RU") ||
+    (args.category !== undefined && args.category_in !== undefined)
+  ) return null;
+
+  // A near-whole class-head match rules out shared-prefix collisions between
+  // different nouns. Synonym recovery has its own evidence-gated path.
+  const classHead = lexicalWords(leaves[0]).at(-1) ?? "";
+  if (
+    !classHead ||
+    !lexicalWords(query).some((word) => sameClassWord(word, classHead)) ||
+    !lexicalWords(message).some((word) => sameClassWord(word, classHead))
+  ) return null;
+
+  if (
+    !Number.isInteger(input.initial_results_count) ||
+    input.initial_results_count !== 0 ||
+    !Number.isInteger(input.minimum_results) ||
+    input.minimum_results <= 1 ||
+    !input.explicit_multiple_choice ||
+    input.mandatory_criteria_count !== 0 ||
+    input.customer_constraint_count !== 0 ||
+    input.class_constraint_count !== 0 ||
+    input.visible_requirement_count !== 0 ||
+    input.compatibility_required || input.replacement_intent ||
+    input.exact_or_compound_or_alias_request
+  ) return null;
+
+  if (
+    detectPriceDirection(message) !== null ||
+    /замен\p{L}*|аналог\p{L}*|вместо|артикул\p{L}*|sku/iu.test(message) ||
+    /\d/u.test(query)
+  ) return null;
+
+  // A simple price ceiling may coexist with category browsing, but no other
+  // numeric product qualifier (length, amperage, model code, etc.) may be
+  // thrown away. A budget mentioned in text is safe only when the identical
+  // ceiling is present in the typed catalog request.
+  const budgetMatches = [...message.matchAll(
+    /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+([\d\s]+)\s*(?:₸|тенге|тг|kzt)(?=$|[^\p{L}\p{N}])/giu,
+  )];
+  const cap = extractBudgetCap(message);
+  if ((cap !== null) !== (budgetMatches.length > 0)) return null;
+  let withoutBudgets = message;
+  for (const match of budgetMatches) {
+    const amount = Number(match[1].replace(/\s+/gu, ""));
+    if (
+      !Number.isFinite(amount) || amount <= 0 || amount !== cap ||
+      args.max_price !== amount
+    ) return null;
+    withoutBudgets = withoutBudgets.replace(match[0], "");
+  }
+  if (/\d/u.test(withoutBudgets)) return null;
+  if (
+    /(?:^|[^\p{L}])(?:без|кроме|исключая|не)\s+[\p{L}\p{N}]+/iu
+      .test(withoutBudgets)
+  ) return null;
+  // A category-only lookup is not a substitute for global price ordering or
+  // an implicit price tier. Phrases such as «самых дешёвых», «недорогих» and
+  // «премиум» need their dedicated proof route, even if sort_* is set.
+  if (
+    /деш[её]в\p{L}*|недорог\p{L}*|дорог\p{L}*|бюджетн\p{L}*|эконом\p{L}*|доступн\p{L}*|премиум|премьюм|флагман|низк\p{L}*\s+цен\p{L}*|высок\p{L}*\s+цен\p{L}*/iu
+      .test(withoutBudgets)
+  ) return null;
+  const literalQualifiers = unqualifiedBrowseQualifiers(
+    withoutBudgets,
+    classHead,
+  );
+  if (literalQualifiers.length > 8) return null;
+
+  const allowedArgs = new Set([
+    "mode", "query", "category", "category_in", "per_page",
+    "min_price", "max_price", "sort_cheapest", "sort_expensive",
+  ]);
+  if (Object.keys(args).some((key) => !allowedArgs.has(key))) return null;
+  for (const key of ["min_price", "max_price"] as const) {
+    const value = args[key];
+    if (
+      value !== undefined &&
+      (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    ) return null;
+  }
+  if (
+    typeof args.min_price === "number" &&
+    typeof args.max_price === "number" &&
+    args.min_price > args.max_price
+  ) return null;
+  if (
+    (args.sort_cheapest !== undefined &&
+      typeof args.sort_cheapest !== "boolean") ||
+    (args.sort_expensive !== undefined &&
+      typeof args.sort_expensive !== "boolean") ||
+    (args.sort_cheapest === true && args.sort_expensive === true)
+  ) return null;
+
+  return {
+    kind: "verify_unqualified_browse_in_grounded_category",
+    args: {
+      mode: "by_filter",
+      category_in: leaves,
+      ...(typeof args.min_price === "number"
+        ? { min_price: args.min_price }
+        : {}),
+      ...(typeof args.max_price === "number"
+        ? { max_price: args.max_price }
+        : {}),
+      ...(args.sort_cheapest === true ? { sort_cheapest: true } : {}),
+      ...(args.sort_expensive === true ? { sort_expensive: true } : {}),
+      per_page: 50,
+    },
+    relaxed_inputs: ["full_text_retrieval_only"],
+    proven_criteria: [],
+    evidence_required_criteria: [],
+    unverified_criteria: [],
+    literal_qualifier_terms: literalQualifiers,
+    grounded_class_head: classHead,
+    revalidate: [...REVALIDATE],
+  };
 }
 
 function hasBroadApplicationFamily(criteria: Criterion[]): boolean {
