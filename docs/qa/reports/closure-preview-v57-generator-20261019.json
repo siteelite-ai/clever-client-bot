@@ -1,0 +1,86 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "a3e5d46a84743ea5dbad5c8e2af8f32c99461b5ad0bd14b5e1e6d732bd6e58bd",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T14:39:40.007Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-generator-clean-power": 1
+  },
+  "cases": [
+    {
+      "id": "customer-generator-clean-power",
+      "title": "Генератор 900 Вт, котёл и чистая синусоида",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-generator-clean-power_base_1792420780008_1",
+          "turns": [
+            {
+              "message": "В частном коттедже иногда отключают электроэнергию. Я подключаю бензиновый генератор на 900 Вт, но у него грязная энергия. Для газового котла и циркуляционного насоса нужна чистая энергия. Подбери подходящее решение.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 2571,
+              "network_attempts": 1,
+              "log_id": "41658e72-ed1a-43eb-a66c-8dc034ed5ad6",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для газового котла нужен ИБП с явно указанной чистой синусоидой на выходе: ступенчатая или аппроксимированная форма может нарушать работу электроники, розжига и циркуляционного насоса.\n\nУточните максимальное суммарное потребление котла и насоса в Вт. Мощность ИБП выбирайте с запасом 50% и отдельно проверьте пусковой ток насоса: номинальная мощность в ВА не заменяет активную мощность в Вт.\n\nДля времени автономной работы проверьте ёмкость и напряжение батарей, возможность подключения внешнего аккумулятора и допустимый ток заряда. Перед покупкой сопоставьте эти параметры с паспортом конкретной модели котла.\n\nЕсли питание будет от генератора, совместимость входа конкретного ИБП с его напряжением и частотой пока не подтверждена; это нужно сверить по паспортам обоих устройств.\n\nВ найденных карточках недостаточно оснований для подбора по мощности: укажите максимальное суммарное потребление котла и насоса в Вт. До этого конкретную модель безопасно рекомендовать нельзя.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "ИБП: проверено 7 карточек, доказано 0",
+                  "duration_ms": 889
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T14:39:42.580Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "41658e72-ed1a-43eb-a66c-8dc034ed5ad6"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

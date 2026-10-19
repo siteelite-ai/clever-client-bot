@@ -98,6 +98,28 @@ Deno.test("render: не обещает непроверенные дополни
   if (r.markdown.includes("И ещё")) throw new Error(r.markdown);
 });
 
+Deno.test("render: returned IDs match displayed cards when earlier candidates are skipped", () => {
+  const cache = cacheWith("шт");
+  cache.set("zero", {
+    ...cache.get("1")!, id: "zero", pagetitle: "Цена отсутствует", price: 0,
+  });
+  cache.set("shown", {
+    ...cache.get("1")!, id: "shown", pagetitle: "Показанный товар", price: 123,
+  });
+
+  const r = executeRenderProducts(
+    { product_ids: ["missing", "zero", "shown", "1"] },
+    cache,
+  );
+  if (!r.ok) throw new Error("expected ok");
+  assertEquals(r.rendered_count, 2);
+  assertEquals(r.rendered_ids, ["shown", "1"]);
+  assertEquals(r.blocked_by_zero_price, 1);
+  if (r.markdown.includes("Цена отсутствует")) throw new Error(r.markdown);
+  assertStringIncludes(r.markdown, "Показанный товар");
+  assertStringIncludes(r.markdown, "Кабель");
+});
+
 Deno.test("render: бизнес-склады показываются после обычных складов независимо от остатка", () => {
   const ordered = prioritizeWarehouses([
     { city: "Иргели", qty: 5000 },

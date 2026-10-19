@@ -1,0 +1,158 @@
+{
+  "suite_file": "closure-model-code-smoke.json",
+  "suite_version": 2,
+  "suite_sha256": "521ff2fe92449651f0c4a4a9ffd745ad268680cdb58987bb1ca56e832c3c1951",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T14:54:49.705Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "closure-compact-model-code-analog": 1
+  },
+  "cases": [
+    {
+      "id": "closure-compact-model-code-analog",
+      "title": "Exact model code must anchor analogue search before optional clarification",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_closure-compact-model-code-analog_base_1792421689710_1",
+          "turns": [
+            {
+              "message": "Предложи аналоги светильника Philips DN027B 7W",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 9141,
+              "network_attempts": 1,
+              "log_id": "846712f9-ed43-44f2-bad7-a34719fbac76",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "911401734142/871016334477599 Св-к BN068C LED6/NW L600 SW",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/911401734142871016334477599-sv-k-bn068c-led6nw-l600-sw/",
+                  "price": 3401,
+                  "stockLine": "Караганда (15 шт)",
+                  "cardText": "- **[911401734142/871016334477599 Св-к BN068C LED6/NW L600 SW](https://220volt.kz/catalog/svetotexnika/svetilniki/911401734142871016334477599-sv-k-bn068c-led6nw-l600-sw/)**\n  Цена: *3 401* ₸\n  Бренд: Philips\n  Наличие: Караганда (15 шт)"
+                },
+                {
+                  "title": "Светильник NLP-S1-7W-840-WH-LED 94 454 Navigator",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-nlp-s1-7w-840-wh-led-94-454-navigator/",
+                  "price": 4317,
+                  "stockLine": "Караганда (14 шт)",
+                  "cardText": "- **[Светильник NLP-S1-7W-840-WH-LED 94 454 Navigator](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-nlp-s1-7w-840-wh-led-94-454-navigator/)**\n  Цена: *4 317* ₸\n  Бренд: Navigator\n  Наличие: Караганда (14 шт)"
+                },
+                {
+                  "title": "915005746601/5944831C3 Св-к 59448 MESON 105 7W 40K WH recessed",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/9150057466015944831c3-sv-k-59448-meson-105-7w-40k-wh-recessed/",
+                  "price": 1544,
+                  "stockLine": "Караганда (5293 шт), Алматы (2514 шт), Астана (276 шт)",
+                  "cardText": "- **[915005746601/5944831C3 Св-к 59448 MESON 105 7W 40K WH recessed](https://220volt.kz/catalog/svetotexnika/svetilniki/9150057466015944831c3-sv-k-59448-meson-105-7w-40k-wh-recessed/)**\n  Цена: *1 544* ₸\n  Бренд: Philips\n  Наличие: Караганда (5293 шт), Алматы (2514 шт), Астана (276 шт)"
+                },
+                {
+                  "title": "Светильник NLP-R1-7W-R120-830-WH-LED 71 374 Navigator",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-nlp-r1-7w-r120-830-wh-led-71-374-navigator/",
+                  "price": 4578,
+                  "stockLine": "Астана (9 шт), Караганда (1 шт)",
+                  "cardText": "- **[Светильник NLP-R1-7W-R120-830-WH-LED 71 374 Navigator](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-nlp-r1-7w-r120-830-wh-led-71-374-navigator/)**\n  Цена: *4 578* ₸\n  Бренд: Navigator\n  Наличие: Астана (9 шт), Караганда (1 шт)"
+                }
+              ],
+              "text": "Нашёл аналоги в той же категории с подтверждёнными параметрами (Мощность ламп, Вт: 7, Напряжение, В: 220, Тип лампы: LED). Перед заменой сверьте монтажные размеры и остальные характеристики.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-d7ca2124",
+                "mandatory_criteria": [
+                  {
+                    "key": "Мощность ламп, Вт",
+                    "op": "eq",
+                    "value": "7",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Напряжение, В",
+                    "op": "eq",
+                    "value": "220",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип лампы",
+                    "op": "eq",
+                    "value": "LED",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Компактный код пока не подтверждён полным live-контрактом; доказательных карточек: 4; примеры: 929002070102/871869967897500 Св-к DN027B G2 LED6/NW 7W 220-240V D90 R | 929002014902/871869964547200 Св-к DN027B LED6/NW L100 SQ RU",
+                  "duration_ms": 188
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Replacement preflight: подтверждено 4; обязательные оси: нет",
+                  "duration_ms": 5642
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T14:54:58.854Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "846712f9-ed43-44f2-bad7-a34719fbac76"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

@@ -100,8 +100,24 @@ Deno.test("one direct-route admission rejects unproven compound, PoE and replace
     }),
     true,
   );
+  assertEquals(
+    admitDirectSelectionRoute({
+      route: "replacement",
+      userMessage: "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+    }),
+    true,
+  );
+  assertEquals(
+    admitDirectSelectionRoute({
+      route: "replacement",
+      userMessage: "Есть ли аналог устройству серии ZX900 C16?",
+    }),
+    true,
+  );
   for (
     const request of [
+      "Есть ли аналог автомату Schneider Electric Acti9 C16 для объекта 25 м²?",
+      "Есть ли аналог устройству серии ZX900 C16 с наличием в Алматы?",
       "предложи аналоги на Schneider Acti9 C16 для объекта 25 м²",
       "предложи аналоги на Schneider Acti9 C16 чёрные",
       "предложи аналоги на Schneider Acti9 C16 с наличием в Алматы",

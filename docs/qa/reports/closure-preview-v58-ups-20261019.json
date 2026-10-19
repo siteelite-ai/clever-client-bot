@@ -1,0 +1,87 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T14:47:07.029Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-new-ups-boiler-250w": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-ups-boiler-250w",
+      "title": "ИБП для котла 250 Вт не подменяется АВР/ATS",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-ups-boiler-250w_base_1792421227029_1",
+          "turns": [
+            {
+              "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 5855,
+              "network_attempts": 1,
+              "log_id": "e8702643-f807-43c4-b22c-f836e7487662",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для газового котла нужен ИБП с явно указанной чистой синусоидой на выходе: ступенчатая или аппроксимированная форма может нарушать работу электроники, розжига и циркуляционного насоса.\n\nЕсли 250 Вт — максимальное суммарное потребление котла и насоса, предварительный ориентир по активной выходной мощности ИБП — не менее 400 Вт с 50%-м запасом. Отдельно сверьте пусковой ток циркуляционного насоса: кратковременная допустимая мощность ИБП должна покрывать его пуск. Одного номинала в ВА для этого недостаточно.\n\nДля времени автономной работы проверьте ёмкость и напряжение батарей, возможность подключения внешнего аккумулятора и допустимый ток заряда. Перед покупкой сопоставьте эти параметры с паспортом конкретной модели котла.\n\nВ проверенной выборке не удалось подтвердить ни одну карточку ИБП одновременно по чистой синусоиде на выходе и достаточной активной выходной мощности в Вт. Не подменяю ИБП стабилизатором или АВР; характеристики можно уточнить у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": "unverified",
+                  "summary": "ИБП: проверено 7 карточек, доказано 0",
+                  "duration_ms": 3632
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T14:47:12.886Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "e8702643-f807-43c4-b22c-f836e7487662"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

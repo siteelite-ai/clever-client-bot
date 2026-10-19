@@ -117,6 +117,24 @@ export function resolveRenderAliasClaim(
   return null;
 }
 
+/** A replacement's brand, series and model identify the *source* product.
+ * They cannot also become a title obligation on the target analogue merely
+ * because the consultant described the source identifier as a name. Only
+ * independently evidenced source identities are excluded: a functional
+ * nickname or technical qualifier remains a target proof obligation. */
+export function excludeReplacementSourceIdentityAlias(
+  alias: string | null,
+  sourceIdentities: Iterable<string>,
+): string | null {
+  const claim = String(alias ?? "").trim();
+  if (!claim) return null;
+  const wanted = normalizeVisualCode(claim);
+  for (const identity of sourceIdentities) {
+    if (wanted === normalizeVisualCode(identity)) return null;
+  }
+  return claim;
+}
+
 /** A qualifier is not an alias when it merely repeats the already grounded
  * product class with another inflection (for example plural customer wording
  * versus singular catalog titles). Real colloquial names remain distinct. */

@@ -166,6 +166,8 @@ export interface LookupContactsOk {
 export interface RenderProductsOk {
   ok: true;
   rendered_count: number;
+  /** Cache IDs for the cards actually included in markdown, in display order. */
+  rendered_ids: string[];
   blocked_by_zero_price: number;
   markdown: string;
   side_effects?: ToolSideEffect[];

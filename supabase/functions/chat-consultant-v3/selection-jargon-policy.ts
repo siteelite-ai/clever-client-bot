@@ -223,6 +223,8 @@ export function admitDirectSelectionRoute(input: {
     );
     const frame = normalize(frameText);
     const requestWords = new Set([
+      "есть",
+      "ли",
       "найди",
       "найдите",
       "подбери",

@@ -243,3 +243,26 @@ Deno.test("unproved direct SKU and series model claims are removed, server negat
   assertEquals(combined.text, deterministicWarning);
   assertEquals(combined.claimRemoved, true);
 });
+
+Deno.test("server-authored paragraph boundary survives egress while model price claims remain guarded", () => {
+  const requestMessage = "Покажи несколько вариантов и самый дешёвый";
+  const serverText = "\n\nПодтверждён один вариант. Можно ослабить условия, чтобы расширить выбор.";
+  assertEquals(guardPriceEgressText({
+    text: serverText,
+    origin: "server",
+    requestMessage,
+    requestedExtreme: "cheapest",
+    certificate: null,
+  }), { text: serverText, claimRemoved: false });
+
+  const model = guardPriceEgressText({
+    text: "Это самая дешёвая позиция во всём каталоге. Цена подтверждена: 500 ₸.",
+    origin: "model",
+    requestMessage,
+    requestedExtreme: "cheapest",
+    certificate: null,
+  });
+  assertEquals(model.claimRemoved, true);
+  assertEquals(model.text.includes("самая дешёвая"), false);
+  assertStringIncludes(model.text, "Цена подтверждена");
+});

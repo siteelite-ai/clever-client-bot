@@ -3,6 +3,7 @@ import {
   applyCriteriaGate,
   type Criterion,
   extendSelectionCriteriaPlan,
+  mergeMandatorySelectionCriteria,
   overlayMandatoryFacetOptions,
   projectAdvisoryCriteriaFacetOptions,
   projectCriteriaFacetOptions,
@@ -10,6 +11,7 @@ import {
   resolveTerminalSelectionCriteria,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
+import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
 import {
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
@@ -23,6 +25,7 @@ import {
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reasoningComputesSystemTotalFromSpatialExtent,
+  reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
@@ -31,6 +34,102 @@ import {
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("replacement reasoning shows only executable exact requirements after advice is demoted", () => {
+  const facets = [
+    { key: "poles", caption: "Количество полюсов", values: ["1", "2", "3"].map((value) => ({ value })) },
+    { key: "voltage", caption: "Номинальное напряжение", values: ["230-400", "220-240"].map((value) => ({ value })) },
+    { key: "trip", caption: "Характеристика срабатывания", values: ["B", "C"].map((value) => ({ value })) },
+    { key: "current", caption: "Номинальный ток", values: ["16", "25"].map((value) => ({ value })) },
+  ];
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning: "Характеристика срабатывания: C и номинальный ток: 16 указаны в маркировке C16. Количество полюсов: 1 — лишь типовой вариант, можно выбрать 2. Номинальное напряжение: 230-400 — тоже пример; его нужно сверить с конкретной схемой.",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v0", "f1v0", "f2v1", "f3v0"],
+  }, facets, "Есть ли аналог автомату Schneider Electric Acti9 C16?");
+  if (!declaration) throw new Error("expected a valid live-facet declaration");
+  for (const key of [
+    "Количество полюсов",
+    "Номинальное напряжение",
+    "Характеристика срабатывания",
+    "Номинальный ток",
+  ]) {
+    assertEquals(declaration.requiredFacetValues.some((choice) =>
+      choice.key === key
+    ), true, key);
+  }
+  const proposed = declaration.requiredFacetValues.map(({ key, value }) => ({
+    key, op: "eq" as const, value, level: "A" as const,
+  }));
+  const customerBacked: Criterion[] = [
+    { key: "Характеристика срабатывания", op: "eq", value: "C", level: "A", evidence: "user_explicit" },
+    { key: "Номинальный ток", op: "eq", value: "16", level: "A", evidence: "user_explicit" },
+  ];
+  const importance = alignCriteriaImportanceWithReasoning(
+    proposed,
+    declaration.measurementEvidence,
+    customerBacked,
+  );
+  assertEquals(importance.demoted.includes("Количество полюсов"), true);
+  assertEquals(importance.demoted.includes("Номинальное напряжение"), true);
+  const frozen = mergeMandatorySelectionCriteria([
+    ...customerBacked,
+    ...importance.criteria.map((criterion) => ({
+      ...criterion,
+      evidence: criterion.level === "A" ? "derived_required" as const : "model_assumption" as const,
+    })),
+  ]);
+  assertEquals(frozen.map((criterion) => criterion.key).sort(), [
+    "Номинальный ток",
+    "Характеристика срабатывания",
+  ]);
+  const visible = reconcileDerivedRequiredFacetSummary(declaration, frozen);
+  assertEquals(visible.text.includes("Обязательные параметры: «Характеристика срабатывания: C»"), true);
+  assertEquals(visible.text.includes("«Номинальный ток: 16»"), true);
+  assertEquals(visible.text.includes("«Количество полюсов: 1»"), false);
+  assertEquals(visible.text.includes("«Номинальное напряжение: 230-400»"), false);
+  assertEquals(visible.text.includes("Количество полюсов: 1 — лишь типовой вариант"), true);
+});
+
+Deno.test("explicit replacement pole remains mandatory while unconfirmed voltage does not", () => {
+  const declaration = {
+    text: "Количество полюсов: 1 указано покупателем. Номинальное напряжение: 230-400 — типовой ориентир. Обязательные параметры: «Количество полюсов: 1»; «Номинальное напряжение: 230-400»; «Номинальный ток: 16».",
+    requiredFacetValues: [
+      { key: "Количество полюсов", value: "1" },
+      { key: "Номинальное напряжение", value: "230-400" },
+      { key: "Номинальный ток", value: "16" },
+    ],
+  };
+  const frozen = mergeMandatorySelectionCriteria([
+    { key: "Количество полюсов", op: "eq", value: "1", level: "A", evidence: "user_explicit" },
+    { key: "Номинальное напряжение", op: "eq", value: "230-400", level: "B", evidence: "model_assumption" },
+    { key: "Номинальный ток", op: "eq", value: "16", level: "A", evidence: "user_explicit" },
+  ]);
+  const visible = reconcileDerivedRequiredFacetSummary(declaration, frozen);
+  assertEquals(visible.text.includes("«Количество полюсов: 1»"), true);
+  assertEquals(visible.text.includes("«Номинальный ток: 16»"), true);
+  assertEquals(visible.text.includes("«Номинальное напряжение: 230-400»"), false);
+  assertEquals(visible.text.includes("230-400 — типовой ориентир"), true);
+});
+
+Deno.test("required-summary reconciliation is facet-agnostic and preserves free explanations", () => {
+  const declaration = {
+    text: "Для жилой комнаты можно взять тёплый свет; материал корпуса пока неизвестен. Обязательные параметры: «Цветовая температура: 3000 K»; «Цвет корпуса: белый».\nСледующий шаг — поиск по каталогу.",
+    requiredFacetValues: [
+      { key: "Цветовая температура", value: "3000 K" },
+      { key: "Цвет корпуса", value: "белый" },
+    ],
+  };
+  const visible = reconcileDerivedRequiredFacetSummary(declaration, [
+    { key: "Цветовая температура", op: "eq", value: "3000 K", level: "A", evidence: "derived_required" },
+    { key: "Цвет корпуса", op: "eq", value: "белый", level: "B", evidence: "model_assumption" },
+  ]);
+  assertEquals(visible.text.includes("«Цветовая температура: 3000 K»"), true);
+  assertEquals(visible.text.includes("«Цвет корпуса: белый»"), false);
+  assertEquals(visible.text.includes("\nСледующий шаг"), true);
+  assertEquals(visible.text.includes("материал корпуса пока неизвестен"), true);
+});
 
 Deno.test("exact customer class outranks mixed-use description across product families", () => {
   const cases = [

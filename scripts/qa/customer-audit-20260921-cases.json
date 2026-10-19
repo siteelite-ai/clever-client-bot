@@ -35,10 +35,29 @@
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
           "expect": {
             "conversation_boundary": "new_task",
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "require_actual_count_and_relaxation": true,
+              "text_groups": [
+                ["только 1", "только один", "найден 1", "один вариант", "один подходящий", "один товар", "только 2", "только два", "найдены 2", "два варианта", "два подходящих", "два товара", "меньше трёх", "меньше трех"],
+                ["могу", "можем", "предлагаю", "хотите"],
+                ["расшир", "увелич", "ослаб", "измен", "снять", "убрать"],
+                ["бюджет", "цен", "бытов", "назначен", "услови"]
+              ]
+            },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "all_of": [
+                { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
+            },
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_product_title": ["ВВГ", "кабель"],
             "forbid_selection_criteria_any": ["ЖКХ", "ВВГ", "кабель"],
@@ -49,10 +68,29 @@
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
           "expect": {
             "conversation_boundary": "new_task",
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "require_actual_count_and_relaxation": true,
+              "text_groups": [
+                ["только 1", "только один", "найден 1", "один вариант", "один подходящий", "один товар", "только 2", "только два", "найдены 2", "два варианта", "два подходящих", "два товара", "меньше трёх", "меньше трех"],
+                ["могу", "можем", "предлагаю", "хотите"],
+                ["расшир", "увелич", "ослаб", "измен", "снять", "убрать"],
+                ["бюджет", "цен", "бытов", "назначен", "услови"]
+              ]
+            },
             "max_product_price": 4000,
+            "require_every_product_page": {
+              "all_of": [
+                { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
+                { "any_of": [
+                  { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
+                  { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
+                ] }
+              ]
+            },
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_selection_criteria_any": ["ЖКХ", "ВВГ", "кабель"],
             "max_duration_ms": 30000
@@ -374,7 +412,12 @@
       "turns": [
         {
           "message": "Есть ли аналог автомату Schneider Electric Acti9 C16?",
-          "expect": { "max_products": 0, "require_any_text": ["полюс"], "max_duration_ms": 10000 }
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["полюс"],
+            "forbid_mandatory_selection_criteria_keys": ["полюс", "напряжен"],
+            "max_duration_ms": 10000
+          }
         },
         {
           "message": "1 полюс, подбери их в каталоге",
