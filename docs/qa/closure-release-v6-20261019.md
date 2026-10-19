@@ -22,10 +22,11 @@ Preview function `chat-consultant-v3-closure-preview` was updated in isolation; 
 | Generator/boiler safety | PASS: generator rating is not treated as boiler load | [v57 generator](reports/closure-preview-v57-generator-20261019.json) |
 | Gallant assortment → double sockets | PASS with four same-series cards | [v57 Gallant](reports/closure-preview-v57-gallant-20261019.json) |
 | TTU for 10 mm cable | PASS with four source-verified 12/6 cards | [v57 TTU](reports/closure-preview-v57-ttu-20261019.json) |
+| DN027B full product identity and compact model code | PASS in both one-run checks: four analogue cards, source model excluded | [full identity](reports/closure-preview-v58-dn027b-20261019.json), [compact model](reports/closure-preview-v58-model-code-20261019.json) |
 
 The earlier [v55 Acti9 failure](reports/closure-preview-v55-acti9-20261019.json) is retained as the counterexample: it showed mixed poles before clarification and lost the scope on the follow-up. The v58 result establishes the correction on the later build. These are deliberately one-run focused checks; the full 190-run/279-turn release matrix remains `NOT_RUN`, not silently counted as passed. The [v6 inventory](release-inventory-v6-20261019.json) pins the exact cases and expectations.
 
-Local gate on this candidate: `deno check` production and closure-preview functions, 1,290/1,290 Deno tests, 251/251 Node QA tests, pinned ledger check, and `git diff --check` passed. GitHub CI, PR merge, production deploy, and post-deploy browser smoke are still pending at the time of this note.
+Local gate on this candidate: `deno check` production and closure-preview functions, 1,290/1,290 Deno tests, 251/251 Node QA tests, pinned ledger check, and `git diff --check` passed. GitHub CI on the initial PR commit also passed. PR merge, production deploy, and post-deploy browser smoke are still pending at the time of this note.
 
 ## Security and rollback boundary
 
