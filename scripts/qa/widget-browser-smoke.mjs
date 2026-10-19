@@ -40,6 +40,19 @@ export function validateAssistantProse(messages, forbiddenPattern) {
   return prose;
 }
 
+export async function openWidgetIfNeeded(page, timeoutMs = 10_000) {
+  const input = page.getByRole('textbox', { name: 'Напишите сообщение...' });
+  // Locator.count() can include the input while its parent window is closed.
+  // Visibility, rather than DOM presence, determines whether the launcher is needed.
+  if (!(await input.isVisible())) {
+    const opener = page.getByRole('button', { name: 'Открыть чат' });
+    if (await opener.count() !== 1) throw new Error('Chat opener is missing or ambiguous');
+    await opener.click();
+  }
+  await input.waitFor({ state: 'visible', timeoutMs });
+  return input;
+}
+
 export async function runWidgetBrowserSmoke(tab, {
   query = 'а у тебя есть лампы кукуруза?',
   expectedProductName = /\b(?:CORN|KORN)\b/iu,
@@ -48,14 +61,7 @@ export async function runWidgetBrowserSmoke(tab, {
 } = {}) {
   if (!tab?.playwright) throw new Error('A browser-client tab is required');
   const page = tab.playwright;
-  let input = page.getByRole('textbox', { name: 'Напишите сообщение...' });
-  if (await input.count() === 0) {
-    const opener = page.getByRole('button', { name: 'Открыть чат' });
-    if (await opener.count() === 0) throw new Error('Chat opener is missing');
-    await opener.click();
-    await page.waitForTimeout(250);
-    input = page.getByRole('textbox', { name: 'Напишите сообщение...' });
-  }
+  const input = await openWidgetIfNeeded(page, Math.min(timeoutMs, 10_000));
   const send = page.getByLabel('Отправить');
   if (await send.count() !== 1) throw new Error('Widget send button is ambiguous or missing');
   const newConversation = page.getByRole('button', { name: 'Новый диалог' });
