@@ -666,6 +666,45 @@ export function extendSelectionCriteriaPlan(
   });
 }
 
+/**
+ * Restricts an already-frozen contract to criteria that remain justified by a
+ * later, narrower proof. This is deliberately separate from the monotonic
+ * extension path: the supplied set is only an allowlist of existing
+ * signatures, never a source of new obligations.
+ */
+export function restrictSelectionCriteriaPlan(
+  current: SelectionCriteriaPlan | null,
+  retained: Criterion[],
+): SelectionCriteriaPlan | null {
+  if (!current) return null;
+  const retainedSignatures = new Set(
+    (Array.isArray(retained) ? retained : []).map(mandatoryCriterionSignature),
+  );
+  const mandatory = current.mandatory_criteria
+    .filter((criterion) =>
+      retainedSignatures.has(mandatoryCriterionSignature(criterion))
+    )
+    .map((criterion) => ({
+      ...criterion,
+      value: Array.isArray(criterion.value)
+        ? [...criterion.value] as [number, number]
+        : criterion.value,
+    }));
+  const signatures = new Set(mandatory.map(mandatoryCriterionSignature));
+  const criterionSources = Object.fromEntries(
+    Object.entries(current.criterion_sources)
+      .filter(([signature]) => signatures.has(signature))
+      .map(([signature, sources]) => [signature, Object.freeze([...sources])]),
+  );
+  return Object.freeze({
+    mandatory_criteria: Object.freeze(
+      mandatory.map((criterion) => Object.freeze(criterion)),
+    ),
+    criterion_sources: Object.freeze(criterionSources),
+    hash: selectionCriteriaPlanHash(mandatory),
+  });
+}
+
 export interface RelaxModelDerivedSelectionCriteriaResult {
   plan: SelectionCriteriaPlan | null;
   relaxed: Criterion[];

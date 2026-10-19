@@ -51,6 +51,16 @@ export interface ChatV3AdmissionReleaseResult {
   failure: "rpc_error" | "invalid_rpc_response" | null;
 }
 
+/** Keep overload distinct from an infrastructure failure in the public SSE
+ * protocol. Neither result is a successful conversational answer. */
+export function admissionDiagnosticError(
+  admission: Pick<ChatV3AdmissionResult, "reason">,
+): "rate_limited" | "request_unavailable" {
+  return admission.reason === "limit_exceeded"
+    ? "rate_limited"
+    : "request_unavailable";
+}
+
 type EnvReader = (name: string) => string | undefined;
 type Limit = { value: number | null; invalid: boolean };
 

@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-d993d23cf5f0a526';
+  var WIDGET_VERSION = 'widget-09840a22e7398e26';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -2305,7 +2305,12 @@
         assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
       // Если split уже произошёл — пузыри уже отрисованы прогрессивно, не перерисовываем.
-      if (hasContent) {
+      // A terminal SSE diagnostic can carry a useful, visible explanation
+      // (admission denial, unavailable request, replay conflict, etc.). It is
+      // not an assistant answer and must never become model context or a
+      // restored conversation turn. Keep an already-accepted user question
+      // pending so a follow-up can refer to it without inheriting the error.
+      if (hasContent && !result.diagnosticError) {
         acceptedPendingTurn = null;
         conversationHistory.push({ role: 'assistant', content: cleanContent });
         saveState();

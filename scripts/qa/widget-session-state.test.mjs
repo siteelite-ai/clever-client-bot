@@ -114,6 +114,16 @@ function completeAnswerSse(answer, logId = 'transport-retry-answer') {
     .concat('data: [DONE]', '').join('\n\n');
 }
 
+function terminalErrorSse(error, explanation, logId, includeStart = true) {
+  const events = [
+    ...(includeStart ? [{ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } }] : []),
+    { choices: [{ delta: { content: explanation } }] },
+    { v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0, error } },
+  ];
+  return events.map((event) => `data: ${JSON.stringify(event)}`)
+    .concat('data: [DONE]', '').join('\n\n');
+}
+
 async function waitForWidget(predicate, message, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
@@ -645,7 +655,84 @@ test('request_pending replay continues on the next route instead of replacing th
   assert.match(urls[2], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
   assert.match(visible, /Канонический завершённый ответ\./u);
   assert.doesNotMatch(visible, /Запрос ещё обрабатывается|Ответ получен не полностью|ошибка соединения/iu);
+  assert.ok(readState(dom).history.some((item) => item.role === 'assistant' &&
+    item.content === 'Канонический завершённый ответ.'),
+  'completed replay remains a persisted assistant answer');
   dom.window.close();
+});
+
+test('terminal SSE errors stay visible but never enter history on follow-up or reload', async () => {
+  for (const [error, includeStart] of [
+    ['rate_limited', true],
+    ['request_unavailable', false],
+    ['internal_error', true],
+    ['request_conflict', false],
+  ]) {
+    const explanation = `Временная ошибка: ${error}. Повторите запрос позже.`;
+    const logId = `terminal-${error}`;
+    const payloads = [];
+    const fetchImpl = async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      return new Response(payloads.length === 1
+        ? terminalErrorSse(error, explanation, logId, includeStart)
+        : completeAnswerSse('Следующий запрос выполнен.', `${logId}-next`), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    };
+    const dom = bootWidget({ fetchImpl });
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    const send = dom.window.document.querySelector('#volt-widget-send');
+    input.value = `Проверка ${error}`;
+    send.click();
+    await waitForWidget(() => visibleMessages(dom).includes(explanation) &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    `${error} should be visibly completed`);
+
+    const failedState = readState(dom);
+    assert.match(visibleMessages(dom), new RegExp(explanation, 'u'), `${error} must remain visible`);
+    assert.equal(failedState.history.some((item) => item.role === 'assistant' &&
+      item.content.includes(explanation)), false,
+    `${error} must not be saved as an assistant answer`);
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+
+    let reloadedPayload;
+    const reloaded = bootWidget({
+      state: failedState,
+      fetchImpl: async (_url, init) => {
+        reloadedPayload = JSON.parse(init.body);
+        return new Response(completeAnswerSse('Продолжение после загрузки.', `${logId}-reload`), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+    });
+    reloaded.window.document.querySelector('#volt-widget-input').value = 'Продолжи после перезагрузки';
+    reloaded.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => Boolean(reloadedPayload) &&
+      visibleMessages(reloaded).includes('Продолжение после загрузки.') &&
+      !reloaded.window.document.querySelector('#volt-widget-new-chat').disabled,
+    `${error} reload follow-up should complete`);
+    assert.equal(reloadedPayload.history.some((item) => item.role === 'assistant' &&
+      item.content.includes(explanation)), false,
+    `${error} must not re-enter context from storage`);
+    reloaded.window.close();
+
+    input.value = 'Продолжи в этой вкладке';
+    send.click();
+    await waitForWidget(() => payloads.length === 2 &&
+      visibleMessages(dom).includes('Следующий запрос выполнен.') &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    `${error} follow-up should complete`);
+    assert.equal(payloads[1].history.some((item) => item.role === 'assistant' &&
+      item.content.includes(explanation)), false,
+    `${error} must not be sent to the model`);
+    assert.equal(readState(dom).history.some((item) => item.role === 'assistant' &&
+      item.content.includes(explanation)), false,
+    `${error} must remain excluded after a successful follow-up`);
+    assert.ok(readState(dom).history.some((item) => item.role === 'assistant' &&
+      item.content === 'Следующий запрос выполнен.'),
+    'the subsequent successful answer remains persisted');
+    dom.window.close();
+  }
 });
 
 test('accepted request is replayed after an intro was delivered but products were interrupted', async () => {

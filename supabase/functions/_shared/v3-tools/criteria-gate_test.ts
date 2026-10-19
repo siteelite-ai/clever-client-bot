@@ -28,6 +28,7 @@ import {
   relaxModelDerivedSelectionCriteriaPlan,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
+  restrictSelectionCriteriaPlan,
   titleContradictsExactCountCriterion,
   titleProvesCompactCriterion,
 } from "./criteria-gate.ts";
@@ -868,6 +869,103 @@ Deno.test("selection plan hash is order-independent and changes only when the ha
 
   assertEquals(left.hash, right.hash);
   assertEquals(left.hash === changed.hash, false);
+});
+
+Deno.test("restricting a selection plan cannot add or resurrect removed obligations", () => {
+  const customer: Criterion = {
+    key: "Customer facet",
+    op: "eq",
+    value: "required",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const derived: Criterion = {
+    key: "Unsupported model measurement",
+    op: "min",
+    value: 2000,
+    unit: "lm",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const unrelated: Criterion = {
+    key: "Unrelated facet",
+    op: "eq",
+    value: "never in plan",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const original = extendSelectionCriteriaPlan(
+    null,
+    [customer, derived],
+    "guarded_search",
+  );
+  const restricted = restrictSelectionCriteriaPlan(original, [
+    customer,
+    unrelated,
+  ]);
+
+  assertEquals(restrictSelectionCriteriaPlan(null, [customer]), null);
+  assertEquals(restricted?.mandatory_criteria, [customer]);
+  assertEquals(missingSelectionCriteria(restricted, [customer]), []);
+  const later = extendSelectionCriteriaPlan(
+    restricted,
+    [unrelated],
+    "selection_target",
+  );
+  assertEquals(later.mandatory_criteria, [customer, unrelated]);
+  assertEquals(
+    later.mandatory_criteria.some((criterion) => criterion.key === derived.key),
+    false,
+  );
+  // The ordinary extension API remains monotonic; only the explicit
+  // restriction boundary can shrink a frozen plan.
+  assertEquals(
+    extendSelectionCriteriaPlan(original, [], "render_alignment")
+      .mandatory_criteria,
+    [customer, derived],
+  );
+});
+
+Deno.test("restricted selection plan retains exact provenance and canonical hash", () => {
+  const customer: Criterion = {
+    key: "Live customer facet",
+    op: "range",
+    value: [10, 20],
+    unit: "mm",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const removed: Criterion = {
+    key: "System aggregate",
+    op: "min",
+    value: 3000,
+    unit: "lm",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const original = extendSelectionCriteriaPlan(
+    extendSelectionCriteriaPlan(null, [customer, removed], "guarded_search"),
+    [customer],
+    "render_alignment",
+  );
+  const restricted = restrictSelectionCriteriaPlan(original, [customer]);
+  const expected = extendSelectionCriteriaPlan(
+    null,
+    [customer],
+    "guarded_search",
+  );
+  const retainedSignature = Object.entries(original.criterion_sources)
+    .find(([, sources]) => sources.includes("render_alignment"))?.[0];
+
+  assertEquals(Boolean(retainedSignature), true);
+  assertEquals(restricted?.criterion_sources, {
+    [retainedSignature!]: ["guarded_search", "render_alignment"],
+  });
+  assertEquals(restricted?.hash, expected.hash);
+  assertEquals(restricted?.hash === original.hash, false);
+  assertEquals(original.mandatory_criteria, [customer, removed]);
+  assertEquals(Object.isFrozen(restricted), true);
+  assertEquals(Object.isFrozen(restricted?.mandatory_criteria), true);
 });
 
 Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {

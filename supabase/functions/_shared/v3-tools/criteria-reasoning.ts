@@ -88,6 +88,18 @@ export interface RecommendedMeasuredCriterionProjection {
     | "ambiguous_schema_match";
 }
 
+export interface MeasurementScopeOptions {
+  measurementScope?: string | null;
+  customerText?: string;
+}
+
+export interface PerProductMeasuredCriteriaFilter {
+  criteria: Criterion[];
+  removed: Criterion[];
+}
+
+type MeasurementFacet = Pick<CriteriaFacet, "key" | "caption" | "unit">;
+
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 // Preserve a rate/density unit as one scale (`лм/м²`, `м/с`, `Вт/м`).
@@ -155,6 +167,79 @@ function isDistributedAggregateMeasurement(text: string): boolean {
     /(?:нескольк\p{L}*|распредел\p{L}*|между\s+\p{L}+|по\s+периметр\p{L}*|равномер\p{L}*|групп\p{L}*|в\s+сумме\s+\p{L}+)/iu
       .test(normalized);
   return aggregate && distributed;
+}
+
+/** High-confidence customer-owned aggregate measurement, available before
+ * the model declares a selection scope. This prevents an explicit system
+ * total from first being frozen as an individual card's numeric facet. A
+ * generic "overall" adjective alone is insufficient without distribution;
+ * conversely "sum total" plus a physical quantity is explicit unless the
+ * same request clearly asks for a one-to-one replacement/single product. */
+export function customerAggregateMeasurementScope(
+  text: string,
+): "system_total" | null {
+  const source = String(text ?? "").replace(/ё/g, "е");
+  const distributed =
+    /(?:нескольк\p{L}*|между\s+\p{L}+|распредел\p{L}*|от\s+(?:двух|трех|трёх|нескольк\p{L}*)|всей\s+системы|на\s+всю\s+систему|в\s+сумме\s+от)/iu
+      .test(source);
+  const oneToOneReplacement =
+    /(?:замен\p{L}*|вместо|аналог\p{L}*)[^.!?;\n]{0,120}(?:на\s+)?(?:один|одну|одно|одного|одной)?\s*\p{L}+/iu
+      .test(source);
+  // A named collection/system is not one catalog item merely because its
+  // grammatical head is singular ("нужна система ... с суммарным потоком").
+  const collectiveSystem =
+    /(?<![a-zа-я])(?:систем\p{L}*|групп\p{L}*|комплект\p{L}*|набор\p{L}*|схем\p{L}*)(?![a-zа-я])/iu
+      .test(source);
+  const explicitlyOneItem =
+    /(?:один|одну|одно|одного|одной|единственн\p{L}*)\s+\p{L}+/iu.test(
+      source,
+    ) ||
+    /(?:нужен|нужна|ищу|найд\p{L}*|подбер\p{L}*)\s+\p{L}+(?:\s+\p{L}+){0,3}\s+с\s+(?:суммарн|совокупн|общ\p{L}*)/iu
+      .test(source);
+  if (
+    (oneToOneReplacement || explicitlyOneItem) && !distributed &&
+    !collectiveSystem
+  ) {
+    return null;
+  }
+  const measured = new RegExp(
+    String.raw`(?<![a-zа-я0-9-])(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  for (const clause of source.split(/[.!?;](?!\d)|\n+/u)) {
+    const strongTotal =
+      /(?:суммарн\p{L}*|совокупн\p{L}*|в\s+сумме|на\s+всю\s+систему|для\s+всей\s+системы)/iu
+        .test(clause);
+    const weakOverall = /общ\p{L}*/iu.test(clause);
+    if (!strongTotal && !(weakOverall && distributed)) continue;
+    measured.lastIndex = 0;
+    for (let match; (match = measured.exec(clause)) !== null;) {
+      const unit = canonicalMeasurementUnit(match[2]);
+      const before = clause.slice(Math.max(0, match.index - 110), match.index);
+      const after = clause.slice(
+        measured.lastIndex,
+        Math.min(clause.length, measured.lastIndex + 45),
+      );
+      if (
+        !unit ||
+        /^(?:тг|тенге|kzt|руб|рубль|рубля|usd|eur|шт|штук|раз|ед)$/iu.test(
+          unit,
+        ) ||
+        // Lowercase `в` in `5000 в наличии` is usually a preposition, not
+        // volts. Do not discard true one-letter physical units such as `м`.
+        (unit === "в" && match[2] === match[2].toLowerCase() &&
+          /^\s+\p{L}/u.test(after))
+      ) continue;
+      if (
+        /(?:суммарн\p{L}*|совокупн\p{L}*|в\s+сумме|на\s+всю\s+систему|для\s+всей\s+системы|общ\p{L}*)/iu
+          .test(before) ||
+        /^(?:\s|[,—–:-])*(?:суммарн\p{L}*|в\s+сумме|общ\p{L}*)/iu.test(
+          after,
+        )
+      ) return "system_total";
+    }
+  }
+  return null;
 }
 
 function criteriaIdentityMatches(left: Criterion, right: Criterion): boolean {
@@ -326,12 +411,21 @@ export function compileMeasuredReasoningSearchContract(
   reasoningText: string,
   userBackedCriteria: Criterion[],
   facets: Array<CriteriaFacet & { type: string }>,
+  scope: MeasurementScopeOptions = {},
 ): MeasuredReasoningSearchContract {
   const projected = projectReasoningRangeCriteria(
     criteria,
     reasoningText,
     facets,
+    scope,
   );
+  const scopedUserBacked = filterPerProductMeasuredCriteria(
+    userBackedCriteria,
+    reasoningText,
+    scope.customerText ?? "",
+    scope.measurementScope,
+    facets,
+  ).criteria;
   const stronglyDeclaredMaximum = (criterion: Criterion): boolean => {
     if (criterion.op !== "max" || Array.isArray(criterion.value)) return true;
     const value = String(criterion.value).replace(
@@ -350,7 +444,7 @@ export function compileMeasuredReasoningSearchContract(
     ).test(String(reasoningText ?? ""));
   };
   const customerOwnsSameMaximum = (criterion: Criterion): boolean =>
-    userBackedCriteria.some((candidate) =>
+    scopedUserBacked.some((candidate) =>
       candidate.op === "max" &&
       criteriaIdentityMatches(criterion, candidate) &&
       canonicalMeasurementUnit(candidate.unit ?? "") ===
@@ -407,7 +501,7 @@ export function compileMeasuredReasoningSearchContract(
   const importance = alignCriteriaImportanceWithReasoning(
     projectedCriteria,
     reasoningText,
-    userBackedCriteria,
+    scopedUserBacked,
     [...projectedAdded, ...applicationClassCriteria],
   );
   const mandatory = importance.criteria.filter((criterion) =>
@@ -527,6 +621,563 @@ export function canonicalMeasurementUnit(raw: string): string {
     kw: "квт",
   };
   return aliases[unit] ?? unit;
+}
+
+/** The system-total scope describes a plan, not a scalar requirement for
+ * every card. Preserve a measured SKU condition only when the same number
+ * and unit are explicitly assigned to EACH item in a local clause. A nearby
+ * illustrative alternative such as `по 20–30 Вт каждый` is not an obligation.
+ * This is deliberately independent of product names and catalog categories. */
+function perItemMeasurementProof(
+  values: number[],
+  unit: string,
+  op: Criterion["op"],
+  text: string,
+  customerAuthored: boolean,
+): boolean {
+  if (values.length === 0 || !unit) return false;
+  const normalized = String(text ?? "").toLocaleLowerCase("ru-RU").replace(
+    /ё/g,
+    "е",
+  );
+  const clauses = normalized.split(/[.!?;](?!\d)|,\s+|\s+[—–]\s+|\n+/u)
+    .map((clause) => clause.trim()).filter(Boolean);
+  const quantity = new RegExp(
+    String
+      .raw`(?<![a-zа-я0-9-])(${NUM})(?:\s*[–—-]\s*(${NUM}))?\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  const perItem =
+    /(?:кажд\p{L}*|на\s+(?:один|одну|одно)\s+\p{L}+|для\s+одного\s+\p{L}+|per\s+(?:unit|item|product)|each\b)/iu;
+  const required =
+    /(?:нуж\p{L}*|необходим\p{L}*|долж\p{L}*|треб\p{L}*|обязат\p{L}*|минимум|максимум|не\s+(?:менее|более|ниже|выше|меньше|больше)|(?:не\s+)?превыш\p{L}*|строго|ровно|точно|must\b|required\b|at\s+(?:least|most)|[<>]=?|[≤≥])/iu;
+  const aggregate =
+    /(?:суммарн\p{L}*|совокупн\p{L}*|итогов\p{L}*|общ\p{L}*\s+(?:поток|мощност|потребност|количеств|результат)|всей\s+системы|в\s+сумме|system\s+total|overall\s+total)/iu;
+  const advisory =
+    /(?:можно|например|к\s+примеру|или\s+нескольк\p{L}*|вариант\p{L}*|предпочт\p{L}*|оптимальн\p{L}*|рекоменд\p{L}*|could\b|may\b|for\s+example)/iu;
+  const lastMarker = (source: string, pattern: RegExp): number =>
+    [...source.matchAll(new RegExp(pattern.source, "giu"))].at(-1)?.index ??
+      -1;
+  for (const clause of clauses) {
+    quantity.lastIndex = 0;
+    for (let match; (match = quantity.exec(clause)) !== null;) {
+      if (canonicalMeasurementUnit(match[3]) !== unit) continue;
+      const measuredValues = [match[1], match[2]].filter(Boolean).map((raw) =>
+        Number(raw.replace(",", "."))
+      );
+      if (!values.every((value) => measuredValues.includes(value))) continue;
+      if (
+        measuredValues.length === 2 &&
+        ((op === "min" && values[0] !== Math.min(...measuredValues)) ||
+          (op === "max" && values[0] !== Math.max(...measuredValues)) ||
+          op === "eq")
+      ) continue;
+      // Scope belongs to this occurrence, not the whole sentence. One clause
+      // can say "5000 lm in total and at least 1000 lm from each item".
+      const before = clause.slice(Math.max(0, match.index - 100), match.index);
+      const after = clause.slice(
+        quantity.lastIndex,
+        Math.min(clause.length, quantity.lastIndex + 30),
+      );
+      const perBefore = lastMarker(before, perItem);
+      const aggregateBefore = lastMarker(before, aggregate);
+      // Postpositive "each" must immediately qualify this measurement;
+      // `5000 lm and each item ... 1000 lm` qualifies the NEXT one instead.
+      const perAfter =
+        /^\s*(?:(?:на|для)\s+)?кажд\p{L}*(?!\p{L})|^\s*(?:per\s+(?:unit|item|product)|each)\b/iu
+          .test(after) && !aggregate.test(after);
+      // `по 2000 лм на прожектор` assigns the measurement to one item even
+      // without the word "каждый". The syntax is generic; no product names
+      // are encoded. Model prose still needs a local necessity claim below.
+      const allocatedPerItem = /(?:^|[^\p{L}])по\s*$/iu.test(before) &&
+        /^\s*на\s+\p{L}{2,}(?:\s|$)/iu.test(after);
+      if (
+        !(perBefore >= 0 && perBefore > aggregateBefore) && !perAfter &&
+        !allocatedPerItem
+      ) {
+        continue;
+      }
+      if (aggregate.test(after) && !perAfter && !allocatedPerItem) continue;
+      const local = clause.slice(
+        Math.max(0, match.index - 90),
+        Math.min(clause.length, quantity.lastIndex + 50),
+      );
+      const localBounds = extractReasoningBounds(local).filter((bound) =>
+        bound.value === values[0] &&
+        canonicalMeasurementUnit(bound.unit) === unit
+      );
+      if (
+        (op === "min" || op === "max") &&
+        localBounds.some((bound) => bound.op !== op)
+      ) continue;
+      const requiredBefore = lastMarker(before, required);
+      const advisoryBefore = lastMarker(before, advisory);
+      if (!customerAuthored) {
+        const explicitDirectionalBound = localBounds.some((bound) =>
+          bound.op === op
+        ) && advisoryBefore < 0;
+        if (
+          (requiredBefore < 0 || requiredBefore <= advisoryBefore) &&
+          !required.test(after) && !explicitDirectionalBound
+        ) continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/** A total quoted by the customer or by the consultant cannot become a
+ * per-item minimum merely because a later model sentence repeats the same
+ * number with "each". Explicit customer per-item evidence is checked first. */
+function aggregateMeasurementProof(
+  values: number[],
+  unit: string,
+  text: string,
+): boolean {
+  const aggregate =
+    /(?:суммарн\p{L}*|совокупн\p{L}*|итогов\p{L}*|общ\p{L}*\s+(?:светов\p{L}*\s+)?(?:поток|мощност|потребност|количеств)|в\s+сумме|всей\s+системы|system\s+total|overall\s+total)/iu;
+  const perItem =
+    /(?:кажд\p{L}*|на\s+(?:один|одну|одно)\s+\p{L}+|для\s+одного\s+\p{L}+|per\s+(?:unit|item|product)|each\b)/iu;
+  const quantity = new RegExp(
+    String.raw`(?<![a-zа-я0-9-])(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  const lastMarker = (source: string, pattern: RegExp): number =>
+    [...source.matchAll(new RegExp(pattern.source, "giu"))].at(-1)?.index ??
+      -1;
+  for (
+    const clause of String(text ?? "").split(
+      /[.!?;](?!\d)|,\s*|\s+и\s+|\n+/u,
+    )
+  ) {
+    quantity.lastIndex = 0;
+    for (let match; (match = quantity.exec(clause)) !== null;) {
+      if (
+        !values.includes(Number(match[1].replace(",", "."))) ||
+        canonicalMeasurementUnit(match[2]) !== unit
+      ) continue;
+      const before = clause.slice(0, match.index);
+      const after = clause.slice(quantity.lastIndex);
+      const aggregateBefore = lastMarker(before, aggregate);
+      const perItemBefore = lastMarker(before, perItem);
+      if (
+        aggregateBefore >= 0 && aggregateBefore > perItemBefore ||
+        /^\s*(?:суммарн\p{L}*|совокупн\p{L}*|в\s+сумме|для\s+всей\s+системы)/iu
+          .test(after)
+      ) return true;
+    }
+  }
+  return false;
+}
+
+function measuredCriterionIdentity(
+  criterion: Criterion,
+  reasoningText: string,
+  customerText: string,
+  facets: MeasurementFacet[],
+): { values: number[]; unit: string } | null {
+  const rawValues = Array.isArray(criterion.value)
+    ? criterion.value
+    : [criterion.value];
+  const embeddedUnits = new Set<string>();
+  const values = rawValues.flatMap((value) => {
+    if (typeof value === "number") return [value];
+    const raw = String(value).trim();
+    const scalar = raw.match(
+      new RegExp(String.raw`^(${NUM})\s*(${UNIT})$`, "iu"),
+    );
+    if (scalar) {
+      embeddedUnits.add(canonicalMeasurementUnit(scalar[2]));
+      return [Number(scalar[1].replace(",", "."))];
+    }
+    const range = raw.match(
+      new RegExp(
+        String.raw`^(${NUM})\s*(?:[-–—]|\.\.|до)\s*(${NUM})\s*(${UNIT})$`,
+        "iu",
+      ),
+    );
+    if (range) {
+      embeddedUnits.add(canonicalMeasurementUnit(range[3]));
+      return [
+        Number(range[1].replace(",", ".")),
+        Number(range[2].replace(",", ".")),
+      ];
+    }
+    return [
+      /^\d+(?:[.,]\d+)?$/u.test(raw)
+        ? Number(raw.replace(",", "."))
+        : Number.NaN,
+    ];
+  });
+  if (
+    values.length === 0 || !values.every(Number.isFinite) ||
+    embeddedUnits.size > 1
+  ) return null;
+  let unit = canonicalMeasurementUnit(criterion.unit ?? "");
+  const embeddedUnit = [...embeddedUnits][0] ?? "";
+  if (unit && embeddedUnit && unit !== embeddedUnit) return null;
+  unit ||= embeddedUnit;
+  if (!unit && facets.length > 0) {
+    const wanted = normalizeEvidence(criterion.key);
+    const matchingUnits = new Set(
+      facets.filter((facet) => {
+        const key = normalizeEvidence(facet.key);
+        const caption = normalizeEvidence(facet.caption);
+        return wanted && (wanted === key || wanted === caption ||
+          (wanted.length >= 6 && caption.startsWith(`${wanted} `)));
+      }).map((facet) => canonicalMeasurementUnit(facet.unit ?? ""))
+        .filter(Boolean),
+    );
+    if (matchingUnits.size === 1) unit = [...matchingUnits][0];
+  }
+  if (!unit) {
+    const key = String(criterion.key ?? "");
+    const tail =
+      key.match(/(?:,|\()\s*([a-zа-я°]{1,6}[²³]?\d?)\)?\s*$/iu)?.[1] ??
+        schemaMeasurementUnitTokens(key).at(-1) ?? "";
+    const candidate = canonicalMeasurementUnit(tail);
+    const mentionedUnits = new Set(
+      extractClientQuantities(`${reasoningText}\n${customerText}`)
+        .map((quantity) => canonicalMeasurementUnit(quantity.unit)),
+    );
+    if (candidate && mentionedUnits.has(candidate)) unit = candidate;
+  }
+  // Prices are handled by a separate monetary budget contract; the physical
+  // system-total measurement scope must not silently erase a customer budget.
+  if (!unit || /^(?:₸|тг|тенге|kzt|₽|руб|usd|\$)$/iu.test(unit)) return null;
+  return { values, unit };
+}
+
+function measurementAxisLabels(
+  criterion: Criterion,
+  facets: MeasurementFacet[],
+): string {
+  const criterionKey = normalizeEvidence(criterion.key);
+  return [
+    criterion.key,
+    ...facets.filter((facet) => {
+      const facetKey = normalizeEvidence(facet.key);
+      const caption = normalizeEvidence(facet.caption);
+      return criterionKey === facetKey || criterionKey === caption;
+    }).map((facet) => facet.caption),
+  ].join(" ").toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е");
+}
+
+function measurementAxisStems(text: string): string[] {
+  return (normalizeEvidence(text).match(/[a-zа-я]{5,}/giu) ?? [])
+    .map((token) => token.slice(0, 5))
+    .filter((stem) =>
+      !/^(?:сумма|совок|общий|итого|нужен|товар|едини|кажды|систем|значе|фасет|парам|колич)/u
+        .test(stem)
+    );
+}
+
+function customerMeasurementOperator(
+  before: string,
+  quotedValues: number[],
+): { op: Criterion["op"]; exclusive: boolean } {
+  if (quotedValues.length === 2) return { op: "range", exclusive: false };
+  const local = before.trimEnd();
+  if (
+    /(?:не\s+(?:менее|меньше|ниже)|минимум|как\s+минимум|>=|≥|(?:^|\s)от)\s*$/iu
+      .test(local)
+  ) {
+    return { op: "min", exclusive: false };
+  }
+  if (
+    /(?:не\s+(?:более|больше|выше)|максимум|<=|≤|(?:^|\s)до)\s*$/iu.test(local)
+  ) {
+    return { op: "max", exclusive: false };
+  }
+  if (/(?:более|больше|свыше|выше|>)\s*$/iu.test(local)) {
+    return { op: "min", exclusive: true };
+  }
+  if (/(?:менее|меньше|ниже|<)\s*$/iu.test(local)) {
+    return { op: "max", exclusive: true };
+  }
+  return { op: "eq", exclusive: false };
+}
+
+function voltageMeasurementRole(text: string): string {
+  if (/(?:изоляц|insulat|dielectric)/iu.test(text)) return "insulation";
+  if (/(?:выходн|output)/iu.test(text)) return "output";
+  if (/(?:рабоч|working|operat)/iu.test(text)) return "working";
+  if (/(?:работать|работа\p{L}*\s+на)/iu.test(text)) return "operating";
+  if (
+    /(?:питан|входн|электросет|(?:^|\s)сет[ьи]|supply|input|mains)/iu.test(text)
+  ) {
+    return "supply";
+  }
+  return "";
+}
+
+/** Customer ownership is per measured axis and per operator, not per product
+ * category. A customer-owned 3000 K equality must never authorize a model's
+ * >=3000 K criterion, nor may an object dimension become a SKU dimension. */
+function customerMeasurementEvidence(
+  criterion: Criterion,
+  measurement: { values: number[]; unit: string },
+  customerText: string,
+  facets: MeasurementFacet[],
+): "match" | "conflict" | "absent" {
+  const unit = measurement.unit;
+  const labels = measurementAxisLabels(criterion, facets);
+  const axisStems = measurementAxisStems(labels);
+
+  const source = String(customerText ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е");
+  const quantity = new RegExp(
+    String
+      .raw`(?<![a-zа-я0-9-])(?:(?:от\s*)?(${NUM})\s*(?:[–—-]|\s+до\s+)\s*(${NUM})|(${NUM}))\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  const explicitlyAggregate =
+    /(?:суммарн|совокупн|итогов|в\s+сумме|всей\s+системы|system\s+total|overall\s+total)/iu;
+  let conflict = false;
+  const facetVoltageRole = /^(?:в|кв)$/u.test(unit)
+    ? voltageMeasurementRole(labels)
+    : "";
+  for (const clause of source.split(/[.!?;](?!\d)|,\s*|\s+и\s+|\n+/u)) {
+    quantity.lastIndex = 0;
+    let previousQuantityEnd = 0;
+    for (let match; (match = quantity.exec(clause)) !== null;) {
+      const before = clause.slice(previousQuantityEnd, match.index);
+      const after = clause.slice(quantity.lastIndex);
+      previousQuantityEnd = quantity.lastIndex;
+      if (canonicalMeasurementUnit(match[4]) !== unit) continue;
+      const statedValues = [match[1], match[2], match[3]].filter(Boolean).map((
+        raw,
+      ) => Number(raw.replace(",", ".")));
+      if (!measurement.values.some((value) => statedValues.includes(value))) {
+        continue;
+      }
+      if (
+        explicitlyAggregate.test(before) ||
+        /^\s*(?:суммарн|совокупн|в\s+сумме|для\s+всей\s+системы)/iu
+          .test(after)
+      ) continue;
+      const localContext = `${before} ${after.slice(0, 65)}`;
+      if (/^(?:в|кв)$/u.test(unit)) {
+        const customerRole = voltageMeasurementRole(localContext);
+        // Operating on a supply is compatible with either a generic working
+        // voltage or an input/supply-voltage facet, but an insulation/output
+        // rating is a separate physical role.
+        if (
+          facetVoltageRole && customerRole &&
+          facetVoltageRole !== customerRole &&
+          !(customerRole === "operating" &&
+            /^(?:working|supply)$/u.test(facetVoltageRole))
+        ) {
+          conflict = true;
+          continue;
+        }
+        if (
+          !facetVoltageRole && /^(?:insulation|output)$/u.test(customerRole)
+        ) {
+          conflict = true;
+          continue;
+        }
+      }
+      // For lengths and diameters, the public facet's meaning must be present
+      // in the customer's local phrase. Merely sharing millimetres with the
+      // diameter of a referenced cable cannot certify a tube diameter. The
+      // label may follow the value: `90 мм посадочный диаметр`.
+      if (/^(?:мм|см|м|дюйм)$/u.test(unit)) {
+        const contextStems = new Set(measurementAxisStems(localContext));
+        const fitStems = axisStems.filter((stem) =>
+          /^(?:посад|монта|крепе|стыко|резьб|разье|штеке|габар)/u.test(stem)
+        );
+        const sameAxis = fitStems.length > 0
+          ? fitStems.some((stem) => contextStems.has(stem))
+          : axisStems.length > 0 &&
+            axisStems.every((stem) => contextStems.has(stem));
+        if (
+          !sameAxis ||
+          /(?:высот\p{L}*\s+установ|площад\p{L}*\s+(?:двор|комнат|помещен|участ))/iu
+            .test(localContext)
+        ) {
+          conflict = true;
+          continue;
+        }
+      }
+      // Square/cubic metres normally describe the application site, not a
+      // physical scalar of every catalog card. Explicit per-item proof is
+      // handled separately by perItemMeasurementProof.
+      if (/^(?:м²|м2|м³|м3)$/u.test(unit)) {
+        conflict = true;
+        continue;
+      }
+      if (
+        /(?:можно|например|к\s+примеру|вариант|предпочт|оптимальн|рекоменд)/iu
+          .test(localContext)
+      ) {
+        conflict = true;
+        continue;
+      }
+      const stated = customerMeasurementOperator(before, statedValues);
+      const valuesMatch = measurement.values.length === statedValues.length &&
+        measurement.values.every((value, index) =>
+          value === statedValues[index]
+        );
+      const rangeEndpointMatches = stated.op === "range" &&
+        statedValues.length === 2 && measurement.values.length === 1 &&
+        (criterion.op === "min" &&
+            measurement.values[0] === statedValues[0] ||
+          criterion.op === "max" &&
+            measurement.values[0] === statedValues[1]);
+      const explicitAllocation = /(?:^|[^\p{L}])по\s*$/iu.test(before) &&
+        /^\s*на\s+\p{L}{2,}/iu.test(after);
+      const opMatches = (criterion.op === stated.op ||
+        explicitAllocation && criterion.op === "min" && stated.op === "eq") &&
+        (criterion.op === "eq" || criterion.op === "range" ||
+          Boolean(criterion.exclusive) === stated.exclusive);
+      if (
+        valuesMatch && opMatches ||
+        rangeEndpointMatches && !criterion.exclusive
+      ) return "match";
+      conflict = true;
+    }
+  }
+  return conflict ? "conflict" : "absent";
+}
+
+/** Scope a total to its physical facet, not every numeric property in the
+ * request. The same unit alone is insufficient (`500 м` of cable vs `4 м`
+ * mounting height); the local total must name the criterion's axis or have
+ * no more specific axis than its measured unit. */
+function aggregateMeasurementAxisProof(
+  criterion: Criterion,
+  measurement: { values: number[]; unit: string },
+  text: string,
+  facets: MeasurementFacet[],
+): boolean {
+  const axisStems = measurementAxisStems(
+    measurementAxisLabels(criterion, facets),
+  );
+  const quantity = new RegExp(
+    String
+      .raw`(?<![a-zа-я0-9-])(${NUM})(?:\s*[–—-]\s*(${NUM}))?\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  const aggregate =
+    /(?:суммарн|совокупн|итогов|в\s+сумме|всей\s+системы|общ\p{L}*\s+(?:светов\p{L}*\s+)?(?:поток|мощност|потребност|количеств|длин)|system\s+total|overall\s+total)/iu;
+  for (
+    const clause of String(text ?? "").toLocaleLowerCase("ru-RU")
+      .replace(/ё/g, "е")
+      .split(/[.!?;](?!\d)|,\s*|\s+и\s+|\n+/u)
+  ) {
+    if (!aggregate.test(clause)) continue;
+    quantity.lastIndex = 0;
+    for (let match; (match = quantity.exec(clause)) !== null;) {
+      if (canonicalMeasurementUnit(match[3]) !== measurement.unit) continue;
+      const before = clause.slice(0, match.index);
+      const after = clause.slice(quantity.lastIndex);
+      if (
+        !aggregate.test(before) &&
+        !/^\s*(?:суммарн|совокупн|в\s+сумме)/iu.test(after)
+      ) continue;
+      const localStems = measurementAxisStems(
+        `${before} ${after.slice(0, 25)}`,
+      );
+      if (
+        localStems.length === 0 ||
+        axisStems.some((stem) => localStems.includes(stem))
+      ) return true;
+    }
+  }
+  return false;
+}
+
+/** Remove only measured card filters unsupported by explicit per-item
+ * evidence. Non-measured classification, protection and budget criteria retain
+ * their existing contracts. `per_product` and unknown scopes are unchanged. */
+export function filterPerProductMeasuredCriteria(
+  criteria: Criterion[],
+  reasoningText: string,
+  customerText: string,
+  measurementScope: string | null | undefined,
+  facets: MeasurementFacet[] = [],
+): PerProductMeasuredCriteriaFilter {
+  const next: Criterion[] = [];
+  const removed: Criterion[] = [];
+  for (const criterion of Array.isArray(criteria) ? criteria : []) {
+    if (measurementScope !== "system_total") {
+      next.push({ ...criterion });
+      continue;
+    }
+    const measurement = measuredCriterionIdentity(
+      criterion,
+      reasoningText,
+      customerText,
+      facets,
+    );
+    const customerEvidence = measurement
+      ? customerMeasurementEvidence(
+        criterion,
+        measurement,
+        customerText,
+        facets,
+      )
+      : "absent";
+    const customerPerItem = measurement &&
+      customerEvidence !== "conflict" && perItemMeasurementProof(
+        measurement.values,
+        measurement.unit,
+        criterion.op,
+        customerText,
+        true,
+      );
+    const customerAggregateSameValue = measurement &&
+      aggregateMeasurementProof(
+        measurement.values,
+        measurement.unit,
+        customerText,
+      );
+    const aggregateAxis = measurement &&
+      (aggregateMeasurementAxisProof(
+        criterion,
+        measurement,
+        customerText,
+        facets,
+      ) || aggregateMeasurementAxisProof(
+        criterion,
+        measurement,
+        reasoningText,
+        facets,
+      ));
+    const aggregateSameValue = measurement &&
+      (aggregateMeasurementProof(
+        measurement.values,
+        measurement.unit,
+        customerText,
+      ) || aggregateMeasurementProof(
+        measurement.values,
+        measurement.unit,
+        reasoningText,
+      ));
+    if (
+      !measurement ||
+      customerEvidence !== "conflict" && (
+          customerPerItem ||
+          !customerAggregateSameValue && !aggregateAxis &&
+            customerEvidence === "match" ||
+          !aggregateSameValue && perItemMeasurementProof(
+              measurement.values,
+              measurement.unit,
+              criterion.op,
+              reasoningText,
+              false,
+            )
+        )
+    ) {
+      next.push({ ...criterion });
+    } else {
+      removed.push({ ...criterion });
+    }
+  }
+  return { criteria: next, removed };
 }
 
 /** A measured requirement stated in the consultant's prose is mandatory even
@@ -788,10 +1439,15 @@ export function projectReasoningRangeCriteria(
       values?: Array<{ value: string }>;
     }
   >,
+  scope: MeasurementScopeOptions = {},
 ): ReasoningRangeProjection {
-  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
-    ...criterion,
-  }));
+  const next = filterPerProductMeasuredCriteria(
+    criteria,
+    reasoningText,
+    scope.customerText ?? "",
+    scope.measurementScope,
+    facets,
+  ).criteria;
   const added: Criterion[] = [];
   const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(
     /ё/g,
@@ -1132,6 +1788,15 @@ export function projectReasoningRangeCriteria(
       unit: facet.unit ?? range.unit,
       level: "A",
     };
+    if (
+      filterPerProductMeasuredCriteria(
+        [criterion],
+        reasoningText,
+        scope.customerText ?? "",
+        scope.measurementScope,
+        facets,
+      ).criteria.length === 0
+    ) continue;
     next.push(criterion);
     added.push(criterion);
     projectedClosedRanges.push(range);
@@ -1211,6 +1876,15 @@ export function projectReasoningRangeCriteria(
       level: "A",
       ...(bound.strict ? { exclusive: true } : {}),
     };
+    if (
+      filterPerProductMeasuredCriteria(
+        [criterion],
+        reasoningText,
+        scope.customerText ?? "",
+        scope.measurementScope,
+        facets,
+      ).criteria.length === 0
+    ) continue;
     next.push(criterion);
     added.push(criterion);
   }
