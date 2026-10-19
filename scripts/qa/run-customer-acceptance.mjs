@@ -887,27 +887,53 @@ function includesAny(haystack, needles) {
   return needles.some((needle) => lower.includes(normalize(needle)));
 }
 
-const SHORTFALL_NUMBER = '(\\d{1,2}|ноль|один|одна|одно|одну|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять)';
+const SHORTFALL_WORD_COUNTS = new Map([
+  ['ноль', 0], ['нуля', 0], ['нулю', 0], ['нулем', 0], ['нуле', 0],
+  ['один', 1], ['одного', 1], ['одному', 1], ['одним', 1], ['одном', 1],
+  ['одна', 1], ['одной', 1], ['одну', 1], ['одно', 1],
+  ['два', 2], ['две', 2], ['двух', 2], ['двум', 2], ['двумя', 2],
+  ['три', 3], ['трех', 3], ['трем', 3], ['тремя', 3],
+  ['четыре', 4], ['четырех', 4], ['четырем', 4], ['четырьмя', 4],
+  ['пять', 5], ['пяти', 5], ['пятью', 5],
+  ['шесть', 6], ['шести', 6], ['шестью', 6],
+  ['семь', 7], ['семи', 7], ['семью', 7],
+  ['восемь', 8], ['восьми', 8], ['восемью', 8],
+  ['девять', 9], ['девяти', 9], ['девятью', 9],
+  ['десять', 10], ['десяти', 10], ['десятью', 10],
+]);
+const SHORTFALL_WORD = new RegExp(
+  `(?<![\\p{L}\\p{N}])(?:${[...SHORTFALL_WORD_COUNTS.keys()].join('|')})(?![\\p{L}\\p{N}])`, 'gu',
+);
+const SHORTFALL_NUMBER = '(\\d{1,2})';
 const SHORTFALL_ITEM = '(?:подходящ\\p{L}*\\s+)?(?:вариант\\p{L}*|товар\\p{L}*|позици\\p{L}*|модел\\p{L}*)';
 const SHORTFALL_EXCLUSIVE_COUNT = new RegExp(
   `(?:^|[^\\p{L}\\p{N}])(?:только|всего|лишь)\\s+${SHORTFALL_NUMBER}\\s+${SHORTFALL_ITEM}`, 'gu',
 );
 const SHORTFALL_FOUND_COUNT = new RegExp(
-  `(?:^|[^\\p{L}\\p{N}])(?:наш\\p{L}*|найден\\p{L}*|подтверд\\p{L}*|подобран\\p{L}*|показан\\p{L}*)\\s+${SHORTFALL_NUMBER}\\s+${SHORTFALL_ITEM}`, 'gu',
+  `(?:^|[^\\p{L}\\p{N}])(?:наш\\p{L}*|найден\\p{L}*|подтвер(?:д|жд)\\p{L}*|подобран\\p{L}*|показан\\p{L}*)\\s+${SHORTFALL_NUMBER}\\s+${SHORTFALL_ITEM}`, 'gu',
 );
-const SHORTFALL_WORD_COUNTS = new Map([
-  ['ноль', 0], ['один', 1], ['одна', 1], ['одно', 1], ['одну', 1],
-  ['два', 2], ['две', 2], ['три', 3], ['четыре', 4], ['пять', 5],
-  ['шесть', 6], ['семь', 7], ['восемь', 8], ['девять', 9], ['десять', 10],
-]);
+
+function normalizeShortfallNumerals(value) {
+  return String(value).normalize('NFKC').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
+    .replace(SHORTFALL_WORD, (word) => String(SHORTFALL_WORD_COUNTS.get(word)));
+}
+
+function matchesShortfallGroups(text, groups, actualCount) {
+  const normalized = normalizeShortfallNumerals(text);
+  // The first group is the legacy list of count phrasings. The structured
+  // count check below is stricter: it must name the rendered count, not merely
+  // contain a listed phrase such as "меньше трёх".
+  return groups.length > 1 && shortfallDisclosureFailures(text, actualCount).length === 0 &&
+    matchesEveryGroup(normalized, groups.slice(1).map((group) => group.map(normalizeShortfallNumerals)));
+}
 
 function shortfallDisclosureFailures(text, actualCount) {
-  const normalized = String(text).normalize('NFKC').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  const normalized = normalizeShortfallNumerals(text);
   // Prefer explicit scarcity statements. A separate count of broader catalog
   // candidates is not the number of cards actually shown under strict filters.
   const exclusive = [...normalized.matchAll(SHORTFALL_EXCLUSIVE_COUNT)];
   const claims = exclusive.length > 0 ? exclusive : [...normalized.matchAll(SHORTFALL_FOUND_COUNT)];
-  const claimedCounts = claims.map((match) => SHORTFALL_WORD_COUNTS.get(match[1]) ?? Number(match[1]));
+  const claimedCounts = claims.map((match) => Number(match[1]));
   const failures = [];
   if (claimedCounts.length === 0 || claimedCounts.some((count) => count !== actualCount)) {
     failures.push(`shortfall disclosure must state actual rendered card count ${actualCount}; claimed ${claimedCounts.join(', ') || 'none'}`);
@@ -1812,7 +1838,9 @@ export function evaluate(expect = {}, response, {
       failures.push('invalid products-or-explicit-gap contract');
     } else if (
       linkEvidence.uniqueCount < contract.min_products &&
-      !matchesEveryGroup(response.text, contract.text_groups)
+      !(contract.require_actual_count_and_relaxation === true
+        ? matchesShortfallGroups(response.text, contract.text_groups, linkEvidence.uniqueCount)
+        : matchesEveryGroup(response.text, contract.text_groups))
     ) {
       failures.push(`products ${linkEvidence.uniqueCount} < ${contract.min_products} without an explicit evidence gap`);
     }

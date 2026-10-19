@@ -97,6 +97,122 @@ export function selectionReadinessScope(
   };
 }
 
+/** A bare request to proceed is not an answer to an outstanding facet. The
+ * caller must already have verified the slot against the latest completed
+ * server response. A real specification or a new product request is never
+ * consumed by this narrow conversational rule. */
+export function isUnansweredReadinessProgressRequest(message: string): boolean {
+  const raw = String(message ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").trim();
+  if (!raw || raw.length > 160) return false;
+  const words = raw.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (words.length === 0 || words.length > 12) return false;
+  // These words only address the assistant or the act of proceeding. Any
+  // unknown noun, number, property or category remains a substantive reply.
+  const courtesies = new Set([
+    "а", "ну", "тогда", "пожалуйста", "мне", "нам", "уже", "сейчас",
+    "просто", "же", "вот", "можешь", "можете", "бы",
+  ]);
+  const objects = new Set([
+    "вариант", "варианты", "товар", "товары", "их", "эти", "список",
+    "подходящие", "найденные", "другие", "еще", "все",
+  ]);
+  const actions = new Set([
+    "покажи", "покажите", "показать", "подбери", "подберите",
+    "подобрать", "предложи", "предложите", "предложить",
+  ]);
+  const content = words.filter((word) => !courtesies.has(word));
+  if (content[0] === "давай" || content[0] === "давайте") {
+    content.shift();
+    if (content.length === 0) return true;
+  }
+  return actions.has(content[0]) && content.slice(1).every((word) =>
+    objects.has(word)
+  );
+}
+
+/** Reissue only the exact question, facet and options of a verified pending
+ * slot. The orchestrator gives the replay a fresh slot_id, so a previously
+ * clicked or stale browser control cannot be replayed as a new answer. */
+export function verifiedReadinessReplayInput(
+  verifiedSlot: Record<string, unknown> | null,
+): ProposeClarificationInput | null {
+  if (!verifiedSlot || verifiedSlot.status !== "pending") return null;
+  const { question, facet_key: facetKey, scope } = verifiedSlot;
+  if (
+    typeof question !== "string" || !question.trim() ||
+    typeof facetKey !== "string" || !facetKey.trim() ||
+    !scope || typeof scope !== "object" || Array.isArray(scope)
+  ) return null;
+  const scoped = scope as Record<string, unknown>;
+  if (
+    scoped.kind !== SELECTION_READINESS_SCOPE ||
+    typeof scoped.token !== "string" || !scoped.token.trim()
+  ) return null;
+  const issuedOptions = verifiedSlot.options;
+  if (!Array.isArray(issuedOptions) || issuedOptions.length === 1 ||
+      issuedOptions.length > 5) return null;
+  const options = issuedOptions.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return null;
+    }
+    const { value, label } = entry as Record<string, unknown>;
+    return typeof value === "string" && value.trim() &&
+        typeof label === "string" && label.trim()
+      ? { value, label }
+      : null;
+  });
+  if (options.some((option) => !option)) return null;
+  return {
+    question,
+    facet_key: facetKey,
+    options: options as ProposeClarificationInput["options"],
+    scope: {
+      kind: SELECTION_READINESS_SCOPE,
+      token: scoped.token,
+      ...(typeof scoped.resolved_category === "string"
+        ? { resolved_category: scoped.resolved_category }
+        : {}),
+    },
+  };
+}
+
+/** Candidate only: a short numeric reply cannot become a catalog facet until
+ * the discovered live category confirms this exact issued key and value. The
+ * caller supplies a slot already checked against the previous server log. */
+export function resolveVerifiedNumericReadinessAnswer(
+  message: string,
+  verifiedSlot: Record<string, unknown> | null,
+): {
+  facet_key: string;
+  value: string;
+  resolved_category: string;
+} | null {
+  const input = verifiedReadinessReplayInput(verifiedSlot);
+  const category = input?.scope?.resolved_category;
+  const raw = String(message ?? "").trim();
+  if (
+    !input || !category || !raw || raw.length > 160 ||
+    /^(?:новая\s+тема|новый\s+вопрос)(?:\s|[.!?:-]|$)/iu.test(raw)
+  ) return null;
+  const numeric = input.options.filter((option) => /^\d{1,3}$/u.test(option.value));
+  if (numeric.length < 2) return null;
+  const hits = numeric.filter(({ value, label }) => {
+    if (raw === value || raw === label) return true;
+    return new RegExp(
+      `(?<![\\p{L}\\p{N}])${value}(?![\\p{L}\\p{N}])`,
+      "u",
+    ).test(raw);
+  });
+  return hits.length === 1
+    ? {
+      facet_key: input.facet_key,
+      value: hits[0].value,
+      resolved_category: category,
+    }
+    : null;
+}
+
 /**
  * Rebuild a catalog continuation from a server-issued clarification while
  * preserving the exact live category that justified the question. A terse

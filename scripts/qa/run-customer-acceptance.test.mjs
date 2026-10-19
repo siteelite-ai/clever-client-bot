@@ -1842,6 +1842,40 @@ test('scarce exact matches require an offer to relax conditions, while three mat
   assert.deepEqual(evaluate(gate, response(3, 'Нашёл три подходящих варианта.')), []);
 });
 
+test('shortfall count accepts equivalent digits and Russian word forms without losing evidence checks', () => {
+  const gate = { require_products_or_text_groups: acceptanceSuite.cases
+    .find((item) => item.id === 'customer-new-household-motion-joined-currency')
+    .turns[0].expect.require_products_or_text_groups };
+  const response = (text) => ({
+    text, productsMarkdown: '',
+    links: [{ url: 'https://220volt.kz/catalog/svetotexnika/svetilniki/test/', title: 'Бытовой светильник с датчиком движения' }],
+    serverProductsCount: 1, completed: true, diagnosticError: null,
+  });
+  const productionWording = 'Пока удалось подтвердить 1 вариант в проверенной части каталога. ' +
+    'Полноту поиска подтвердить не удалось; это не означает, что других подходящих товаров нет. ' +
+    'Могу продолжить проверку каталога или, с вашего согласия, ослабить условия.';
+  assert.deepEqual(evaluate(gate, response(productionWording)), []);
+  assert.deepEqual(evaluate(gate, response(
+    'Подтверждена одна подходящая позиция в проверенной части каталога. Могу изменить условия.'
+  )), []);
+  assert.deepEqual(evaluate(gate, response(
+    'Пока подтверждён один вариант в проверенной части каталога. Могу расширить бюджет.'
+  )), []);
+
+  assert(evaluate(gate, response(
+    'Пока удалось подтвердить 2 варианта в проверенной части каталога. Могу ослабить условия.'
+  )).some((failure) => failure.includes('actual rendered card count 1')));
+  assert(evaluate(gate, response(
+    'Пока удалось подтвердить 1 вариант в проверенной части каталога.'
+  )).some((failure) => failure.includes('without an explicit evidence gap')));
+  assert(evaluate(gate, response(
+    'В проверенной части каталога есть подходящий товар. Могу ослабить условия.'
+  )).some((failure) => failure.includes('actual rendered card count 1')));
+  assert(evaluate(gate, response(
+    'В проверенной части каталога есть подходящий товар. Могу ослабить условия.'
+  )).some((failure) => failure.includes('without an explicit evidence gap')));
+});
+
 test('UPS result status must be structured and cannot be catalog_error', () => {
   const expectation = acceptanceSuite.cases.find((item) => item.id === 'customer-new-ups-boiler-250w')
     .turns[0].expect;

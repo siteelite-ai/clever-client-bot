@@ -1,0 +1,51 @@
+{
+  "schema_version": 3,
+  "source": "Release regression for a server-verified live catalog clarification. The historical BT-924 expectation to show a confirmed analogue after bare 'покажи' is preserved in notion-legacy-bug-cases-v3.json; this focused scenario records the safety-correct behavior when pole count remains unanswered. The numeric chip turn is synthetic, not a customer quote.",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "verified-replacement-unanswered-then-chip",
+      "title": "Unanswered replacement facet is reissued, then a verified numeric chip narrows the analogue",
+      "turns": [
+        {
+          "message": "Подбери аналог Schneider Acti9 C16",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["полюс"],
+            "require_clarification_choice": "options",
+            "require_clarification_option_values": ["1", "2", "3", "4"]
+          }
+        },
+        {
+          "message": "покажи",
+          "synthetic": true,
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["полюс"],
+            "require_clarification_choice": "options",
+            "require_clarification_option_values": ["1", "2", "3", "4"],
+            "forbid_text": ["Не нашёл подходящие товары", "параметр покажи"]
+          }
+        },
+        {
+          "message": "1",
+          "synthetic": true,
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16 А", "16А"], ["C", "С"]],
+            "forbid_product_title": ["Acti9", "Acti 9"],
+            "require_every_product_page": {
+              "facets": [
+                { "name": "Количество полюсов", "exact_any": ["1"] },
+                { "name": "Номинальный ток", "exact_any": ["16"] },
+                { "name": "Характеристика срабатывания", "exact_any": ["C", "С"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
