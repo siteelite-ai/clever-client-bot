@@ -75,8 +75,8 @@ export function executeRenderProducts(
   }
 
   const lines: string[] = [];
+  const renderedIds: string[] = [];
   let blockedZero = 0;
-  let rendered = 0;
 
   for (const id of ids) {
     const p = cache.get(String(id));
@@ -93,10 +93,10 @@ export function executeRenderProducts(
     const stockLine = formatStockLine(p.warehouses, stockLabel, p.unit);
     if (stockLine) block += `\n  Наличие: ${stockLine}`;
     lines.push(block);
-    rendered++;
+    renderedIds.push(String(id));
   }
 
-  if (rendered === 0) {
+  if (renderedIds.length === 0) {
     return {
       tool: "render_products",
       ok: false,
@@ -112,7 +112,8 @@ export function executeRenderProducts(
   return {
     tool: "render_products",
     ok: true,
-    rendered_count: rendered,
+    rendered_count: renderedIds.length,
+    rendered_ids: renderedIds,
     blocked_by_zero_price: blockedZero,
     markdown,
   };

@@ -18,11 +18,23 @@ import {
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
+  resolveScopedReplacementSource,
   resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
+  shouldClarifyCompactReplacementSource,
   shouldApplyReplacementExclusionGuard,
 } from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
+import {
+  resolveScopedCatalogSelectionContinuation,
+  resolveServerIssuedSelectionReadinessPending,
+  selectionReadinessScope,
+} from "./selection-readiness.ts";
+import { admitDirectSelectionRoute } from "../../chat-consultant-v3/selection-jargon-policy.ts";
+import {
+  classifyPendingSelectionReadinessNewTaskLocally,
+  shouldStartNewConversation,
+} from "./conversation-boundary.ts";
 
 const anchor: ProductRef = {
   id: "anchor",
@@ -76,6 +88,105 @@ Deno.test("replacement source description follows grammatical request boundaries
     ),
     "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
   );
+});
+
+Deno.test("a verified scoped replacement keeps the original source separate from the answer", () => {
+  const original = "Есть ли аналог автомату Schneider Electric Acti9 C16?";
+  const reply = "1 полюс, подбери их в каталоге";
+  const category = "Автоматические выключатели";
+  const slot = {
+    scope: {
+      kind: "selection_readiness",
+      token: original,
+      resolved_category: category,
+    },
+  };
+  const continuation = {
+    message: `${original}\nУточнение клиента: ${reply}`,
+    category,
+  };
+  assertEquals(
+    resolveScopedReplacementSource(reply, continuation, slot),
+    original,
+  );
+  assertEquals(
+    resolveScopedReplacementSource("2 полюса", continuation, slot),
+    null,
+  );
+  assertEquals(
+    resolveScopedReplacementSource(reply, continuation, {
+      scope: { ...slot.scope, resolved_category: "Светильники" },
+    }),
+    null,
+  );
+  assertEquals(
+    resolveScopedReplacementSource(reply, continuation, {
+      scope: { ...slot.scope, token: "Новый запрос" },
+    }),
+    null,
+  );
+});
+
+Deno.test("only a server-issued replacement clarification carries the source into a terse follow-up", () => {
+  const original = "Есть ли аналог автомату Schneider Electric Acti9 C16?";
+  const reply = "1 полюс, подбери их в каталоге";
+  const sessionId = "same-session";
+  const issued = {
+    status: "pending",
+    slot_id: "server-slot",
+    question: "Уточните количество полюсов",
+    facet_key: "poles",
+    options: [{ value: "1", label: "1" }, { value: "2", label: "2" }],
+    scope: selectionReadinessScope(original, {
+      resolved_category: "Автоматические выключатели",
+    }),
+  };
+  const latestCompletedLog = {
+    session_id: sessionId,
+    error: null,
+    response_events: [
+      { type: "slot_update", slots: { pending_clarification: issued } },
+      { type: "diagnostic", phase: "complete", error: null },
+      { type: "done" },
+    ],
+  };
+  const verified = resolveServerIssuedSelectionReadinessPending(
+    { pending_clarification: issued },
+    latestCompletedLog,
+    sessionId,
+  );
+  const trustedSlots = { pending_clarification: verified };
+  assertEquals(classifyPendingSelectionReadinessNewTaskLocally(
+    reply,
+    trustedSlots,
+    { serverIssuedScopeVerified: true },
+  ), null);
+  assertEquals(shouldStartNewConversation(
+    { mode: "new_task", confidence: 0.99, reason: "model" },
+    { activeScopedClarification: true },
+  ), false);
+  const scoped = resolveScopedCatalogSelectionContinuation(
+    reply,
+    trustedSlots,
+  );
+  assertEquals(
+    resolveScopedReplacementSource(reply, scoped, verified),
+    original,
+  );
+  assertEquals(admitDirectSelectionRoute({
+    route: "replacement",
+    userMessage: original,
+  }), true);
+  const forged = resolveServerIssuedSelectionReadinessPending(
+    { pending_clarification: { ...issued, slot_id: "forged" } },
+    latestCompletedLog,
+    sessionId,
+  );
+  assertEquals(forged, null);
+  assertEquals(resolveScopedCatalogSelectionContinuation(
+    reply,
+    { pending_clarification: forged },
+  ), null);
 });
 
 Deno.test("compact replacement asks one missing structural axis from the live schema", () => {
@@ -163,6 +274,30 @@ Deno.test("compact replacement asks one missing structural axis from the live sc
     ),
     null,
   );
+  const clarification = inferLiveReplacementClarification(
+    "Есть ли аналог устройству серии ZX C16?",
+    liveFacets,
+  );
+  assertEquals(shouldClarifyCompactReplacementSource({
+    grounded_source_class: true,
+    has_exact_article: false,
+    live_clarification: clarification,
+  }), true);
+  assertEquals(shouldClarifyCompactReplacementSource({
+    grounded_source_class: true,
+    has_exact_article: true,
+    live_clarification: clarification,
+  }), false);
+  assertEquals(shouldClarifyCompactReplacementSource({
+    grounded_source_class: false,
+    has_exact_article: false,
+    live_clarification: clarification,
+  }), false);
+  assertEquals(shouldClarifyCompactReplacementSource({
+    grounded_source_class: true,
+    has_exact_article: false,
+    live_clarification: null,
+  }), false);
 });
 
 Deno.test("replacement clarification does not invent an axis without a live compact-code decode", () => {

@@ -20,6 +20,18 @@ export interface LiveReplacementClarification {
   options: Array<{ value: string; label: string; count?: number }>;
 }
 
+/** A compact source description is not a unique SKU when its live category
+ * exposes an unstated structural variant. An exact article remains an exact
+ * source lookup; an ungrounded taxonomy cannot authorize a question. */
+export function shouldClarifyCompactReplacementSource(input: {
+  grounded_source_class: boolean;
+  has_exact_article: boolean;
+  live_clarification: LiveReplacementClarification | null;
+}): boolean {
+  return input.grounded_source_class && !input.has_exact_article &&
+    input.live_clarification !== null;
+}
+
 function replacementFacetValueIsDeclared(
   message: string,
   facet: Facet,
@@ -374,6 +386,37 @@ export function resolveReplacementSourceMessage(
     return isReplacementIntent(fragment.content) ? fragment.content : null;
   }
   return null;
+}
+
+/** Read the original replacement request from a previously server-verified
+ * readiness slot, never from its synthetic `original + clarification` prompt.
+ * The caller must pass only a slot verified against the latest completed
+ * response; equality with the scoped continuation prevents mixed tasks. */
+export function resolveScopedReplacementSource(
+  currentMessage: string,
+  scopedContinuation: { message: string; category: string } | null,
+  verifiedPendingSlot: unknown,
+): string | null {
+  if (!scopedContinuation || !verifiedPendingSlot ||
+    typeof verifiedPendingSlot !== "object" ||
+    Array.isArray(verifiedPendingSlot)) return null;
+  const scope = (verifiedPendingSlot as { scope?: unknown }).scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return null;
+  const record = scope as Record<string, unknown>;
+  if (
+    record.kind !== "selection_readiness" ||
+    typeof record.token !== "string" ||
+    typeof record.resolved_category !== "string" ||
+    record.resolved_category !== scopedContinuation.category
+  ) return null;
+  const original = record.token.trim().slice(0, 500);
+  const current = String(currentMessage ?? "").trim();
+  if (
+    !original || !current || !isReplacementIntent(original) ||
+    scopedContinuation.message !==
+      `${original}\nУточнение клиента: ${current}`
+  ) return null;
+  return original;
 }
 
 /** Compact variant/curve/class codes are often visible in titles even when

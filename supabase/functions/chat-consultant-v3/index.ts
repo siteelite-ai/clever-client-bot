@@ -166,6 +166,7 @@ import {
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
+  reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
@@ -210,6 +211,7 @@ import {
 import {
   aliasDuplicatesIndependentCatalogClass,
   declaredAliasIsStructurallyCustomerOwned,
+  excludeReplacementSourceIdentityAlias,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
   extractUnrepresentedPostNominalCatalogQualifier,
@@ -417,11 +419,14 @@ import {
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import {
-  buildSensitiveBackupPowerAnswer,
-  CLEAN_POWER_SAFETY_ANSWER,
+  buildSensitiveBackupPowerGuidance,
   isCleanPowerSafetyRequest,
   isSensitiveBackupPowerRequest,
 } from "../_shared/v3-tools/clean-power-safety.ts";
+import {
+  buildCleanPowerCatalogAnswer,
+  searchVerifiedCleanPowerCards,
+} from "../_shared/v3-tools/clean-power-catalog-evidence.ts";
 import { buildMeasuredBreakerGuidance } from "../_shared/v3-tools/measured-breaker-guidance.ts";
 import {
   buildGeneralInquiryMessages,
@@ -479,6 +484,8 @@ import {
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
+  resolveScopedReplacementSource,
+  shouldClarifyCompactReplacementSource,
   resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
   shouldApplyReplacementExclusionGuard,
@@ -718,6 +725,7 @@ type SseEvent =
     phase: "start" | "result";
     duration_ms?: number;
     summary?: string;
+    status?: string;
   }
   | {
     type: "products_block";
@@ -4388,6 +4396,46 @@ async function selectVerifiedOrdinaryReplacement(
       sourceClassDiscovery.facets,
     )
     : null;
+  // A named compact source may decode its rating while still representing
+  // several structural variants. Discovery's live, customer-grounded class
+  // and facet alternatives are enough to ask one question; a broad text hit
+  // must not nominate its first product as the source SKU. A literal article
+  // is an exact source identity and stays on the existing anchor route.
+  if (
+    sourceClassDiscovery.ok && liveClarification &&
+    shouldClarifyCompactReplacementSource({
+      grounded_source_class: sourceClassLeaves.length > 0,
+      has_exact_article: lookup.articles.length > 0,
+      live_clarification: liveClarification,
+    })
+  ) {
+    send({ type: "delta", content: liveClarification.question });
+    const clarification = executeProposeClarification({
+      question: liveClarification.question,
+      facet_key: liveClarification.facet_key,
+      options: liveClarification.options,
+      scope: selectionReadinessScope(userMessage, {
+        resolved_category: sourceClassDiscovery.category.pagetitle,
+      }),
+    });
+    emitSideEffects(clarification, send);
+    steps.push({
+      step: "v3_replacement_live_axis_clarification",
+      ms: Date.now() - t0,
+      meta: {
+        source_class: sourceClassDiscovery.category.pagetitle,
+        facet_key: liveClarification.facet_key,
+        caption: liveClarification.caption,
+        options: liveClarification.options.length,
+      },
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: "query_inconsistent",
+      source_candidate_ids: [],
+    };
+  }
   if (sourceClassDiscovery.ok && !liveClarification) {
     const compactContinuation =
       await selectVerifiedCompactReplacementContinuation(
@@ -4493,36 +4541,37 @@ async function selectVerifiedOrdinaryReplacement(
     })[0] ?? null;
   }
 
-  if (!anchor && sourceClassDiscovery.ok) {
-    const clarificationInput = liveClarification;
-    if (clarificationInput) {
-      send({ type: "delta", content: clarificationInput.question });
-      const clarification = executeProposeClarification({
-        question: clarificationInput.question,
-        facet_key: clarificationInput.facet_key,
-        options: clarificationInput.options,
-        scope: selectionReadinessScope(userMessage, {
-          resolved_category: sourceClassDiscovery.category.pagetitle,
-        }),
-      });
-      emitSideEffects(clarification, send);
-      steps.push({
-        step: "v3_replacement_live_axis_clarification",
-        ms: Date.now() - t0,
-        meta: {
-          source_class: sourceClassDiscovery.category.pagetitle,
-          facet_key: clarificationInput.facet_key,
-          caption: clarificationInput.caption,
-          options: clarificationInput.options.length,
-        },
-      });
-      return {
-        handled: true,
-        products: [],
-        outcome: "query_inconsistent",
-        source_candidate_ids: [...sourceCandidateIds],
-      };
-    }
+  // Preserve the earlier no-anchor clarification route for cases where the
+  // live class was not independently grounded or an exact article lookup
+  // failed. The new early check only prevents an arbitrary broad-hit anchor
+  // from hiding an already proven missing structural axis.
+  if (!anchor && sourceClassDiscovery.ok && liveClarification) {
+    send({ type: "delta", content: liveClarification.question });
+    const clarification = executeProposeClarification({
+      question: liveClarification.question,
+      facet_key: liveClarification.facet_key,
+      options: liveClarification.options,
+      scope: selectionReadinessScope(userMessage, {
+        resolved_category: sourceClassDiscovery.category.pagetitle,
+      }),
+    });
+    emitSideEffects(clarification, send);
+    steps.push({
+      step: "v3_replacement_live_axis_clarification",
+      ms: Date.now() - t0,
+      meta: {
+        source_class: sourceClassDiscovery.category.pagetitle,
+        facet_key: liveClarification.facet_key,
+        caption: liveClarification.caption,
+        options: liveClarification.options.length,
+      },
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: "query_inconsistent",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
   }
 
   if (!anchor?.leaf_category) {
@@ -6374,6 +6423,86 @@ async function selectVerifiedOutdoorPoeProducts(
     .filter((product): product is ProductFull => Boolean(product));
 }
 
+/** Safety-critical power selection uses the same catalog boundary as ordinary
+ * searches, but never delegates proof of output waveform or active watts to
+ * the model. An unknown card remains advice-only, not a recommendation. */
+async function selectVerifiedCleanPowerProducts(
+  message: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const found = await searchVerifiedCleanPowerCards(
+    message,
+    (input) => executeSearchCatalog(input, {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+      timeoutMs: 4_500,
+    }, ctx.cache),
+    ctx.cache,
+  );
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: Date.now() - started,
+    summary: `ИБП: проверено ${found.examinedCards} карточек, доказано ${found.products.length}`,
+    status: found.status,
+  });
+  let renderedProducts: ProductFull[] = [];
+  let responseText = found.answer;
+  let renderedBlock: ReturnType<typeof executeRenderProducts> | null = null;
+  if (found.products.length > 0) {
+    renderedBlock = executeRenderProducts({
+      product_ids: found.products.map(({ id }) => id),
+      total_available: found.products.length,
+    }, ctx.cache);
+    if (renderedBlock.ok) {
+      renderedProducts = renderedBlock.rendered_ids
+        .map((id) => found.products.find((product) => product.id === id))
+        .filter((product): product is ProductFull => Boolean(product));
+      if (renderedProducts.length !== found.products.length) {
+        responseText = buildCleanPowerCatalogAnswer(
+          message,
+          "verified",
+          renderedProducts.length,
+          found.partial,
+        );
+      }
+    } else {
+      responseText = `${buildSensitiveBackupPowerGuidance(message)}\n\n` +
+        "Карточки прошли проверку характеристик, но показать их сейчас не удалось. Не буду выдавать неподтверждённую рекомендацию; повторите запрос позже.";
+    }
+  }
+  send({ type: "delta", content: responseText });
+  if (renderedBlock?.ok) {
+    send({
+      type: "products_block",
+      markdown: renderedBlock.markdown,
+      count: renderedBlock.rendered_count,
+      total_available: found.products.length,
+    });
+  }
+  steps.push({
+    step: "v3_safety_catalog_attempt",
+    ms: Date.now() - t0,
+    meta: {
+      status: found.status,
+      search_calls: found.searchCalls,
+      reported_raw_total: found.reportedRawTotal,
+      examined_cards: found.examinedCards,
+      verified_cards: found.products.length,
+      rendered: renderedProducts.length,
+      partial: found.partial,
+      rejection_counts: found.rejectionCounts,
+      duration_ms: Date.now() - started,
+    },
+  });
+  return renderedProducts;
+}
+
 interface ReplayLogRow {
   id: string;
   session_id: string | null;
@@ -7552,15 +7681,16 @@ async function runExpertLoop(
     const defaultShortfall = resultCardinalityShortfallText(
       actual,
       resultCardinality,
+      { unverifiedCriteria: pendingUnverifiedRecoveryCriteria.length > 0 },
     );
-    const noun = actual === 1 ? "вариант" : "варианта";
-    const shortfall = defaultShortfall &&
-        pendingUnverifiedRecoveryCriteria.length > 0
-      ? `По нужному типу удалось найти только ${actual} ${noun}. Не все обязательные свойства заполнены в карточках; непроверенный параметр указан отдельно перед товарами.`
-      : defaultShortfall;
+    const shortfall = defaultShortfall;
     if (!shortfall || resultCardinalityShortfallAnnounced) return;
-    send({ type: "delta", content: `${finalText ? "\n\n" : ""}${shortfall}` });
-    finalText += `${finalText ? "\n\n" : ""}${shortfall}`;
+    // This notice is a separate paragraph. The earlier prose can be streamed
+    // outside finalText/firstAssistantText, so those variables cannot prove
+    // whether a paragraph boundary is needed in the client-visible stream.
+    const paragraph = `\n\n${shortfall}`;
+    send({ type: "delta", content: paragraph, origin: "server" });
+    finalText += paragraph;
     resultCardinalityShortfallAnnounced = true;
     steps.push({
       step: "v3_result_cardinality_shortfall",
@@ -7632,6 +7762,32 @@ async function runExpertLoop(
       findAnchorInCache(ctx.cache, replacementEvidenceMessage),
     )
     : [];
+  // In an analogue request the source identity and the target specification
+  // have different roles. The model may correctly quote the source series as
+  // a name, but that cannot make every other series fail a title-alias gate.
+  // Use the same independently grounded source identity evidence as the
+  // replacement exclusion path; genuine functional nicknames stay mandatory.
+  const rejectedSourceAliasLogged = new Set<string>();
+  const targetCatalogAliasClaim = (claim: string | null): string | null => {
+    if (!replacementIntent) return claim;
+    const accepted = excludeReplacementSourceIdentityAlias(claim, [
+      ...replacementSourceModelCodes,
+      ...replacementExcludedIdentityValues,
+      ...explicitReplacementIdentityValues(
+        lastDiscover?.facets ?? [],
+        replacementEvidenceMessage,
+      ),
+    ]);
+    if (claim && !accepted && !rejectedSourceAliasLogged.has(claim)) {
+      rejectedSourceAliasLogged.add(claim);
+      steps.push({
+        step: "v3_replacement_source_alias_not_target",
+        ms: now(),
+        meta: { alias: claim },
+      });
+    }
+    return accepted;
+  };
   // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
   // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
   // (например, «ввг 3*1,5» → токены "3" и "1.5" отвергали 100% реальных кабелей).
@@ -9021,7 +9177,7 @@ async function runExpertLoop(
           // The consultant's own validated declaration is the visible proof.
           // The live schema may create a fit obligation, but the server must
           // not manufacture the missing second side of its reasoning.
-          const visibleDeclarationText = declaration.text;
+          let visibleDeclarationText = declaration.text;
           const measurementDeclarationEvidence =
             pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
@@ -9289,6 +9445,36 @@ async function runExpertLoop(
               reasoningProjectedSearchCriteria,
               frozenDerivedCriteria,
             );
+          }
+          // The resolver's exact-facet summary is provisional. Recompose only
+          // its server-generated sentence after the mandatory criteria have
+          // been frozen for search and render. B-level advice is excluded by
+          // the same boundary; free engineering explanation stays intact.
+          const validatedVisibleSummary =
+            reconcileDerivedRequiredFacetSummary(
+              { text: visibleDeclarationText,
+                requiredFacetValues: declaration.requiredFacetValues },
+              mergeMandatorySelectionCriteria([
+                ...(currentSelectionCriteriaPlan()?.mandatory_criteria ?? []),
+                ...userBackedSearchCriteria,
+                ...reasoningProjectedSearchCriteria,
+              ]),
+            );
+          if (validatedVisibleSummary.demoted > 0) {
+            visibleDeclarationText = validatedVisibleSummary.text;
+            resp.text = visibleDeclarationText;
+            if (pairedCompatibilityOwned && measuredReference) {
+              pendingDerivedSelectionMeasurementEvidence =
+                visibleDeclarationText;
+            }
+            steps.push({
+              step: "v3_visible_required_facets_reconciled",
+              ms: now(),
+              meta: {
+                kept: validatedVisibleSummary.kept,
+                demoted: validatedVisibleSummary.demoted,
+              },
+            });
           }
           // The forced declaration already owns the complete retrieval
           // decision. Project it directly into the live catalog instead of
@@ -9764,10 +9950,12 @@ async function runExpertLoop(
         // reasoning as a proof obligation. The invented definition is removed
         // below, but the system must still search and title-prove the exact
         // nickname the consultant said it understood.
-        const customerOwnedAlias = extractDeclaredCatalogAlias(
-          userMessage,
-          rawModelResponseText,
-          lastDiscover?.category?.pagetitle ?? "",
+        const customerOwnedAlias = targetCatalogAliasClaim(
+          extractDeclaredCatalogAlias(
+            userMessage,
+            rawModelResponseText,
+            lastDiscover?.category?.pagetitle ?? "",
+          ),
         );
         if (customerOwnedAlias && !declaredAliasQuery) {
           declaredAliasQuery = customerOwnedAlias;
@@ -9958,10 +10146,12 @@ async function runExpertLoop(
         // after being removed from the UI.
         const reasoningTextForContracts = resp.text;
         assistantReasoning += `\n${reasoningTextForContracts}`;
-        declaredAliasQuery ??= extractDeclaredCatalogAlias(
-          userMessage,
-          assistantReasoning,
-          lastDiscover?.category?.pagetitle ?? "",
+        declaredAliasQuery ??= targetCatalogAliasClaim(
+          extractDeclaredCatalogAlias(
+            userMessage,
+            assistantReasoning,
+            lastDiscover?.category?.pagetitle ?? "",
+          ),
         );
         if (isFirstTurn && !hasRender && !isFinalTurn) {
           const safeReasoning = sanitizeIntermediateReasoning(
@@ -12185,10 +12375,14 @@ async function runExpertLoop(
             );
           }
 
-          const aliasClaim = extractDeclaredCatalogAlias(
-            userMessage,
-            `${firstAssistantText}\n${assistantReasoning}`,
-            liveTaxonomyDeclaration,
+          requiredCatalogAlias = targetCatalogAliasClaim(requiredCatalogAlias);
+          declaredAliasQuery = targetCatalogAliasClaim(declaredAliasQuery);
+          const aliasClaim = targetCatalogAliasClaim(
+            extractDeclaredCatalogAlias(
+              userMessage,
+              `${firstAssistantText}\n${assistantReasoning}`,
+              liveTaxonomyDeclaration,
+            ),
           );
           // A failed render must not erase the customer-owned alias before
           // the next model attempt. The persistent obligation also outranks
@@ -16261,12 +16455,14 @@ async function runExpertLoop(
                 representedCustomerEvidence,
                 explicitCustomerEvidence,
               )[0] ?? null;
-              const unresolvedLexicalQualifier = unresolvedCompactCode ??
-                extractUnrepresentedPostNominalCatalogQualifier(
-                  userMessage,
-                  lastDiscover.category.pagetitle,
-                  representedCustomerEvidence,
-                );
+              const unresolvedLexicalQualifier = targetCatalogAliasClaim(
+                unresolvedCompactCode ??
+                  extractUnrepresentedPostNominalCatalogQualifier(
+                    userMessage,
+                    lastDiscover.category.pagetitle,
+                    representedCustomerEvidence,
+                  ),
+              );
               if (unresolvedLexicalQualifier) {
                 declaredAliasQuery ??= unresolvedLexicalQualifier;
                 const deferForReasoning = shouldDeferQueuedLexicalSearch(
@@ -17824,7 +18020,9 @@ async function runExpertLoop(
     // A metalinguistic claim made in the consultant's reasoning outranks every
     // generic facet/search recovery. Resolve that claim first, or keep the turn
     // empty; otherwise the system would knowingly render a broad sibling pool.
-    const terminalAliasRequirement = declaredAliasQuery ?? requiredCatalogAlias;
+    const terminalAliasRequirement =
+      targetCatalogAliasClaim(declaredAliasQuery) ??
+      targetCatalogAliasClaim(requiredCatalogAlias);
     const terminalAliasFacets = terminalDiscover?.facets ?? [];
     const filterTerminalAliasProducts = (products: ProductFull[]) => {
       if (!terminalAliasRequirement) return products;
@@ -20853,14 +21051,26 @@ Deno.serve(async (req) => {
             // Routing and the expert loop must resolve the same dialogue intent.
             // Otherwise a short continuation such as `покажи` enters the ordinary
             // branch before the loop can inherit the already proven replacement.
-            const replacementSourceRequest = resolveReplacementSourceMessage(
-              scopedSelectionRequest.message,
-              effectiveHistory.slice(-8),
-            );
             const pendingScopedCatalogContinuation =
               resolveScopedCatalogSelectionContinuation(
                 userMessage,
                 effectiveSlots,
+              );
+            const scopedReplacementSource = resolveScopedReplacementSource(
+              userMessage,
+              pendingScopedCatalogContinuation,
+              (effectiveSlots as Record<string, unknown>)
+                .pending_clarification,
+            );
+            // The server-issued readiness slot owns the original source.
+            // Never feed its synthetic `original + answer` prose back through
+            // the ordinary source parser (a later colon changes its meaning).
+            const replacementSourceRequest = scopedReplacementSource ??
+              resolveReplacementSourceMessage(
+                scopedSelectionRequest.scoped
+                  ? userMessage
+                  : scopedSelectionRequest.message,
+                effectiveHistory.slice(-8),
               );
             const namedSeriesInquiryToken =
               detectUserIntentMode(userMessage) === "inquire"
@@ -21131,22 +21341,33 @@ Deno.serve(async (req) => {
               });
               productsCount = 0;
             } else if (isCleanPowerSafetyRequest(userMessage)) {
-              steps.push({
-                step: "v3_clean_power_safety_answer",
-                ms: Date.now() - t0,
-              });
-              send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
-              productsCount = 0;
+              const selected = await selectVerifiedCleanPowerProducts(
+                userMessage,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = selected.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selected,
+              );
             } else if (isSensitiveBackupPowerRequest(userMessage)) {
-              steps.push({
-                step: "v3_sensitive_backup_power_answer",
-                ms: Date.now() - t0,
-              });
-              send({
-                type: "delta",
-                content: buildSensitiveBackupPowerAnswer(userMessage),
-              });
-              productsCount = 0;
+              const selected = await selectVerifiedCleanPowerProducts(
+                userMessage,
+                ctx,
+                send,
+                steps,
+                t0,
+              );
+              productsCount = selected.length;
+              await persistRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+                selected,
+              );
             } else if (electricalTripDiagnostic) {
               steps.push({
                 step: "v3_electrical_trip_safety_answer",
@@ -21585,23 +21806,13 @@ Deno.serve(async (req) => {
                 coversBudgetCap:
                   extractBudgetCap(replacementSourceRequest) !== null,
               });
-              if (!replacementDirectAdmitted) {
-                direct = {
-                  handled: false,
-                  products: [],
-                  outcome: "query_inconsistent",
-                };
-                steps.push({
-                  step: "v3_replacement_direct_unproven_delegated",
-                  ms: Date.now() - t0,
-                });
-              }
               if (
-                replacementDirectAdmitted && pendingScopedCatalogContinuation
+                scopedReplacementSource && pendingScopedCatalogContinuation &&
+                replacementDirectAdmitted
               ) {
                 const preservedDiscovery = await executeDiscoverCategory({
                   noun: pendingScopedCatalogContinuation.category,
-                  semantic_query: pendingScopedCatalogContinuation.message,
+                  semantic_query: scopedReplacementSource,
                 }, {
                   baseUrl: CATALOG_BASE_URL,
                   apiToken: ctx.catalogToken,
@@ -21636,13 +21847,27 @@ Deno.serve(async (req) => {
                 }
               }
               if (!direct) {
-                direct = await selectVerifiedOrdinaryReplacement(
-                  replacementSourceRequest,
-                  ctx,
-                  send,
-                  steps,
-                  t0,
-                );
+                if (scopedReplacementSource || !replacementDirectAdmitted) {
+                  direct = {
+                    handled: false,
+                    products: [],
+                    outcome: "query_inconsistent",
+                  };
+                  steps.push({
+                    step: scopedReplacementSource
+                      ? "v3_scoped_replacement_unproven_delegated"
+                      : "v3_replacement_direct_unproven_delegated",
+                    ms: Date.now() - t0,
+                  });
+                } else {
+                  direct = await selectVerifiedOrdinaryReplacement(
+                    replacementSourceRequest,
+                    ctx,
+                    send,
+                    steps,
+                    t0,
+                  );
+                }
               }
               if (!direct.handled && direct.retryable_reason) {
                 steps.push({

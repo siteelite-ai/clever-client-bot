@@ -97,13 +97,13 @@ if (unknownVariantCases.length > 0) throw new Error(`Unknown variation case: ${u
 // not make a shortened run look like complete customer acceptance.
 const FULL_SUITE_MANIFESTS = {
   'customer-acceptance-cases.json': {
-    sha256: 'd2585bc932d0364a3c19e4357db93958dbf9227d9cbcf88a95116f7b4f757f65',
+    sha256: '549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366',
     repeat: 3,
     turns: 42,
     ids: `customer-dn027b-analogs customer-chandelier-30m2 customer-household-motion-sensor customer-corn-lamp-jargon customer-automatic-topic-boundary customer-repeat-complete-request-boundary customer-vvg-exact-cheapest customer-vvgng-3x1_5-all customer-gallant-explain-and-show customer-breaker-replacement-under-1000 customer-breaker-filter-cheapest-followup customer-copper-fire-resistant-2x1_5 customer-generator-clean-power customer-poe-outdoor-100m customer-new-household-motion-without-mount customer-new-household-motion-joined-currency customer-new-motion-generic customer-new-chandelier-25m2 customer-new-outdoor-floodlight-warehouse-priority customer-new-heat-shrink-12mm customer-new-heat-shrink-10mm customer-new-gallant-broad-assortment customer-new-gallant-catalog-section-chip customer-new-black-double-sockets customer-new-schneider-breaker-3p-16a customer-new-ups-boiler-250w security-meta-prompt-injection`.split(' '),
   },
   'customer-audit-20260921-cases.json': {
-    sha256: 'b90117df7f92907efe1826300b48c41fec3ee899bad29813870dd88726182929',
+    sha256: '01d770e5cc3f5511b527a429e900518b790f7f415aff27af4b3501287ae1e19f',
     repeat: 1,
     turns: 39,
     runs: 54,
@@ -317,6 +317,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'deprioritized_warehouses',
   'forbid_assistant_text',
   'forbid_every_product_title_any',
+  'forbid_mandatory_selection_criteria_keys',
   'forbid_product_title',
   'forbid_selection_criteria_any',
   'forbid_text',
@@ -358,6 +359,8 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_selection_criteria_evidence',
   'require_selection_criteria_groups',
   'require_text_groups',
+  'require_tool_results',
+  'forbid_tool_result_status',
 ]);
 
 function expectationRecord(value, location) {
@@ -502,6 +505,31 @@ export function validateExpectationObject(expect, location = 'expect') {
   ]) {
     if (expect[field] !== undefined) expectationStringList(expect[field], `${location}.${field}`, { allowEmpty: true });
   }
+  if (expect.forbid_mandatory_selection_criteria_keys !== undefined) {
+    expectationStringList(expect.forbid_mandatory_selection_criteria_keys,
+      `${location}.forbid_mandatory_selection_criteria_keys`);
+  }
+  if (expect.require_tool_results !== undefined) {
+    expectationStringList(expect.require_tool_results,
+      `${location}.require_tool_results`);
+  }
+  if (expect.forbid_tool_result_status !== undefined) {
+    const contracts = expect.forbid_tool_result_status;
+    if (!Array.isArray(contracts) || contracts.length === 0) {
+      throw new Error(`${location}.forbid_tool_result_status: must be a non-empty array`);
+    }
+    for (const [index, contract] of contracts.entries()) {
+      const contractLocation = `${location}.forbid_tool_result_status[${index}]`;
+      expectationKeys(contract, new Set(['tool', 'statuses']), contractLocation);
+      if (typeof contract.tool !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/u.test(contract.tool)) {
+        throw new Error(`${contractLocation}.tool: must be a bounded tool name`);
+      }
+      expectationStringList(contract.statuses, `${contractLocation}.statuses`);
+      if (contract.statuses.some((status) => !/^[a-z][a-z0-9_]{0,63}$/u.test(status))) {
+        throw new Error(`${contractLocation}.statuses: must contain bounded status names`);
+      }
+    }
+  }
   for (const field of [
     'require_text_groups', 'require_every_product_title_groups',
     'require_every_product_card_groups', 'require_selection_criteria_groups',
@@ -590,7 +618,7 @@ export function validateExpectationObject(expect, location = 'expect') {
   for (const [field, keys] of [
     ['require_result_cardinality', ['target', 'minimum', 'mode', 'explicit']],
     ['require_exact_or_split', ['exact_title_groups', 'split_title_groups', 'split_text_groups']],
-    ['require_products_or_text_groups', ['min_products', 'text_groups']],
+    ['require_products_or_text_groups', ['min_products', 'text_groups', 'require_actual_count_and_relaxation']],
   ]) {
     if (expect[field] !== undefined) {
       expectationKeys(expect[field], new Set(keys), `${location}.${field}`);
@@ -668,6 +696,10 @@ export function validateExpectationObject(expect, location = 'expect') {
     const contractLocation = `${location}.require_products_or_text_groups`;
     expectationInteger(contract.min_products, `${contractLocation}.min_products`, 1);
     expectationGroups(contract.text_groups, `${contractLocation}.text_groups`);
+    if (contract.require_actual_count_and_relaxation !== undefined &&
+        (contract.require_actual_count_and_relaxation !== true || contract.min_products < 2)) {
+      throw new Error(`${contractLocation}.require_actual_count_and_relaxation: requires true and min_products >= 2`);
+    }
   }
   if (expect.require_product_groups_or_gap !== undefined) {
     if (!Array.isArray(expect.require_product_groups_or_gap) || expect.require_product_groups_or_gap.length === 0) {
@@ -820,6 +852,7 @@ export function parseSse(body) {
       toolEvents.push({
         tool: typeof event.tool === 'string' ? event.tool : null,
         phase: typeof event.phase === 'string' ? event.phase : null,
+        status: typeof event.status === 'string' ? event.status : null,
         summary: typeof event.summary === 'string' ? event.summary : null,
         duration_ms: Number.isFinite(event.duration_ms) ? event.duration_ms : null,
       });
@@ -852,6 +885,40 @@ function includesAny(haystack, needles) {
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
   const lower = normalize(haystack);
   return needles.some((needle) => lower.includes(normalize(needle)));
+}
+
+const SHORTFALL_NUMBER = '(\\d{1,2}|ноль|один|одна|одно|одну|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять)';
+const SHORTFALL_ITEM = '(?:подходящ\\p{L}*\\s+)?(?:вариант\\p{L}*|товар\\p{L}*|позици\\p{L}*|модел\\p{L}*)';
+const SHORTFALL_EXCLUSIVE_COUNT = new RegExp(
+  `(?:^|[^\\p{L}\\p{N}])(?:только|всего|лишь)\\s+${SHORTFALL_NUMBER}\\s+${SHORTFALL_ITEM}`, 'gu',
+);
+const SHORTFALL_FOUND_COUNT = new RegExp(
+  `(?:^|[^\\p{L}\\p{N}])(?:наш\\p{L}*|найден\\p{L}*|подтверд\\p{L}*|подобран\\p{L}*|показан\\p{L}*)\\s+${SHORTFALL_NUMBER}\\s+${SHORTFALL_ITEM}`, 'gu',
+);
+const SHORTFALL_WORD_COUNTS = new Map([
+  ['ноль', 0], ['один', 1], ['одна', 1], ['одно', 1], ['одну', 1],
+  ['два', 2], ['две', 2], ['три', 3], ['четыре', 4], ['пять', 5],
+  ['шесть', 6], ['семь', 7], ['восемь', 8], ['девять', 9], ['десять', 10],
+]);
+
+function shortfallDisclosureFailures(text, actualCount) {
+  const normalized = String(text).normalize('NFKC').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  // Prefer explicit scarcity statements. A separate count of broader catalog
+  // candidates is not the number of cards actually shown under strict filters.
+  const exclusive = [...normalized.matchAll(SHORTFALL_EXCLUSIVE_COUNT)];
+  const claims = exclusive.length > 0 ? exclusive : [...normalized.matchAll(SHORTFALL_FOUND_COUNT)];
+  const claimedCounts = claims.map((match) => SHORTFALL_WORD_COUNTS.get(match[1]) ?? Number(match[1]));
+  const failures = [];
+  if (claimedCounts.length === 0 || claimedCounts.some((count) => count !== actualCount)) {
+    failures.push(`shortfall disclosure must state actual rendered card count ${actualCount}; claimed ${claimedCounts.join(', ') || 'none'}`);
+  }
+  const offeredRelaxation = normalized.split(/[.!?;]+/u).some((clause) =>
+    /(?:^|[^\p{L}])(?:могу|можем|предлагаю|хотите|скажите|можно|разрешите|выберите)(?=$|[^\p{L}])/u.test(clause) &&
+    /расшир\p{L}*|увелич\p{L}*|ослаб\p{L}*|измен\p{L}*|сня\p{L}*|убра\p{L}*|повыс\p{L}*/u.test(clause) &&
+    /услови\p{L}*|бюджет\p{L}*|цен\p{L}*|требовани\p{L}*|ограничени\p{L}*|параметр\p{L}*|фильтр\p{L}*/u.test(clause)
+  );
+  if (!offeredRelaxation) failures.push('shortfall disclosure does not explicitly offer to relax a condition');
+  return failures;
 }
 
 function sameSourceLabel(left, right) {
@@ -1749,6 +1816,10 @@ export function evaluate(expect = {}, response, {
     ) {
       failures.push(`products ${linkEvidence.uniqueCount} < ${contract.min_products} without an explicit evidence gap`);
     }
+    if (contract.require_actual_count_and_relaxation === true &&
+        linkEvidence.uniqueCount < contract.min_products) {
+      failures.push(...shortfallDisclosureFailures(response.text, linkEvidence.uniqueCount));
+    }
   }
   if (Array.isArray(expect.require_product_groups_or_gap)) {
     for (const contract of expect.require_product_groups_or_gap) {
@@ -1774,6 +1845,24 @@ export function evaluate(expect = {}, response, {
   for (const phrase of expect.forbid_tool_summary ?? []) {
     if ((response.toolEvents ?? []).some((event) => includesAny(event.summary ?? '', [phrase]))) {
       failures.push(`forbidden tool summary: ${phrase}`);
+    }
+  }
+  for (const tool of expect.require_tool_results ?? []) {
+    if (!(response.toolEvents ?? []).some((event) =>
+      event.tool === tool && event.phase === 'result')) {
+      failures.push(`missing completed tool result: ${tool}`);
+    }
+  }
+  for (const contract of expect.forbid_tool_result_status ?? []) {
+    const results = (response.toolEvents ?? []).filter((event) =>
+      event.tool === contract.tool && event.phase === 'result');
+    if (results.length === 0 || results.some((event) => !event.status)) {
+      failures.push(`missing structured result status: ${contract.tool}`);
+    }
+    for (const result of results) {
+      if (contract.statuses.includes(result.status)) {
+        failures.push(`forbidden tool result status: ${contract.tool}=${result.status}`);
+      }
     }
   }
   for (const phrase of expect.forbid_product_title ?? []) {
@@ -1861,6 +1950,19 @@ export function evaluate(expect = {}, response, {
     const criteriaText = JSON.stringify(response.selectionContract ?? {});
     for (const phrase of expect.forbid_selection_criteria_any) {
       if (includesAny(criteriaText, [phrase])) failures.push(`forbidden selection criterion: ${phrase}`);
+    }
+  }
+  if (Array.isArray(expect.forbid_mandatory_selection_criteria_keys)) {
+    const suppliedCriteria = response.selectionContract?.mandatory_criteria;
+    if (suppliedCriteria !== undefined && !Array.isArray(suppliedCriteria)) {
+      failures.push('mandatory selection criteria contract is not an array');
+    }
+    const mandatoryCriteria = Array.isArray(suppliedCriteria) ? suppliedCriteria : [];
+    for (const criterion of mandatoryCriteria) {
+      const key = criterion?.key;
+      if (typeof key === 'string' && includesAny(key, expect.forbid_mandatory_selection_criteria_keys)) {
+        failures.push(`unrequested mandatory selection criterion: ${key}`);
+      }
     }
   }
   if (expect.require_selection_criteria_evidence === true && response.links.length > 0) {
@@ -2260,6 +2362,10 @@ export async function main() {
               resolveExpectations(turn.expect, variantExpectation),
             ),
           }, state));
+          // A failed prerequisite turn invalidates the meaning of later
+          // dialogue turns. In focused runs this also avoids paid calls whose
+          // context was never established; completeness remains false below.
+          if (stopOnFailure && !turns.at(-1).passed) break;
         }
         caseResult.repeats.push({ variant: execution.id, run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
         if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;

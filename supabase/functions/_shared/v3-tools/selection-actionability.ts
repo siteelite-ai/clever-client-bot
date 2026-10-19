@@ -988,6 +988,53 @@ export interface ResolvedDerivedSelectionReasoning {
   >;
 }
 
+function derivedRequiredFacetSentence(
+  values: Array<{ key: string; value: string }>,
+): string {
+  if (values.length === 0) return "";
+  return `Обязательные параметры: ${
+    values.map(({ key, value }) =>
+      `«${visibleFacetText(key)}: ${visibleFacetText(value)}»`
+    ).join("; ")
+  }.`;
+}
+
+/** The resolver can propose exact facet values before the controller decides
+ * which of them are truly mandatory. Rebuild only the server-generated
+ * customer-facing summary from the same frozen A-level contract used by the
+ * search; keep the model's engineering explanation intact. This compares
+ * structural facet/value identities, never category-specific vocabulary. */
+export function reconcileDerivedRequiredFacetSummary(
+  declaration: Pick<
+    ResolvedDerivedSelectionReasoning,
+    "text" | "requiredFacetValues"
+  >,
+  frozenCriteria: Criterion[],
+): { text: string; kept: number; demoted: number } {
+  const proposed = declaration.requiredFacetValues;
+  const provisional = derivedRequiredFacetSentence(proposed);
+  if (!provisional || !declaration.text.includes(provisional)) {
+    return { text: declaration.text, kept: 0, demoted: 0 };
+  }
+  const approved = proposed.filter(({ key, value }) =>
+    frozenCriteria.some((criterion) =>
+      (criterion.level ?? "A") === "A" &&
+      criterion.op === "eq" &&
+      normalizeLiteralEvidence(criterion.key) ===
+        normalizeLiteralEvidence(key) &&
+      normalizeLiteralEvidence(String(criterion.value)) ===
+        normalizeLiteralEvidence(value)
+    )
+  );
+  const validated = derivedRequiredFacetSentence(approved);
+  return {
+    text: declaration.text.replace(provisional, validated)
+      .replace(/ {2,}/gu, " ").trim(),
+    kept: approved.length,
+    demoted: proposed.length - approved.length,
+  };
+}
+
 interface PairedObjectReference {
   value: number;
   unit: string;
@@ -2094,11 +2141,9 @@ export function resolveDerivedSelectionReasoning(
   if (aggregateScopeEvidence) sentences.push(aggregateScopeEvidence);
   if (requiredFacetChoices.length > 0) {
     sentences.push(
-      `Обязательные параметры: ${
-        requiredFacetChoices.map(({ facet, value }) =>
-          `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
-        ).join("; ")
-      }.`,
+      derivedRequiredFacetSentence(
+        requiredFacetChoices.map(({ facet, value }) => ({ key: facet, value })),
+      ),
     );
   }
   if (groundedExactCompatibleChoices.length > 0) {

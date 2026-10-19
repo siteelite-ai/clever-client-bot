@@ -353,6 +353,7 @@
           "message": "В частном коттедже иногда отключают электроэнергию. Я подключаю бензиновый генератор на 900 Вт, но у него грязная энергия. Для газового котла и циркуляционного насоса нужна чистая энергия. Подбери подходящее решение.",
           "expect": {
             "max_products": 0,
+            "require_tool_results": ["search_catalog"],
             "require_any_text": ["чист", "синус", "инвертор", "двойн"],
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
@@ -414,9 +415,19 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "require_actual_count_and_relaxation": true,
+              "text_groups": [
+                ["только 1", "только один", "найден 1", "один вариант", "один подходящий", "один товар", "только 2", "только два", "найдены 2", "два варианта", "два подходящих", "два товара", "меньше трёх", "меньше трех"],
+                ["могу", "можем", "предлагаю", "хотите"],
+                ["расшир", "увелич", "ослаб", "измен", "снять", "убрать"],
+                ["бюджет", "цен", "бытов", "назначен", "услови"]
+              ]
+            },
             "max_product_price": 4000,
             "require_every_product_page": {
               "all_of": [
@@ -445,9 +456,19 @@
         {
           "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 3,
+            "min_products": 1,
             "max_products": 5,
             "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
+            "require_products_or_text_groups": {
+              "min_products": 3,
+              "require_actual_count_and_relaxation": true,
+              "text_groups": [
+                ["только 1", "только один", "найден 1", "один вариант", "один подходящий", "один товар", "только 2", "только два", "найдены 2", "два варианта", "два подходящих", "два товара", "меньше трёх", "меньше трех"],
+                ["могу", "можем", "предлагаю", "хотите"],
+                ["расшир", "увелич", "ослаб", "измен", "снять", "убрать"],
+                ["бюджет", "цен", "бытов", "назначен", "услови"]
+              ]
+            },
             "max_product_price": 4000,
             "require_every_product_page": {
               "all_of": [
@@ -760,19 +781,20 @@
         {
           "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
           "expect": {
+            "require_tool_results": ["search_catalog"],
+            "forbid_tool_result_status": [{ "tool": "search_catalog", "statuses": ["catalog_error"] }],
             "require_products_or_text_groups": {
               "min_products": 1,
-              "text_groups": [["не нашёл", "не нашел", "не найден", "не могу подобрать", "не могу подтвердить наличие"], ["ИБП", "UPS"], ["каталог", "карточк"]]
+              "text_groups": [["не нашёл", "не нашел", "не найден", "не могу подобрать", "не могу подтвердить наличие", "не удалось подтвердить", "недостаточно оснований", "каталог сейчас не ответил"], ["ИБП", "UPS"], ["каталог", "карточк", "проверенной выборке"]]
             },
             "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
-            "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
+            "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель", "стабилизатор"],
             "require_text_groups": [
               ["ИБП", "UPS", "беспереб"],
               ["синус"],
               ["ВА", "Вт", "ватт"],
               ["запас", "пусков"]
             ],
-            "forbid_assistant_text": ["стабилизатор"],
             "forbid_tool_summary": ["Стабилизаторы"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }

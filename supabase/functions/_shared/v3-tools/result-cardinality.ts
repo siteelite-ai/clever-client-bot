@@ -190,10 +190,19 @@ export function resultCardinalitySystemHint(
 export function resultCardinalityShortfallText(
   actual: number,
   contract: ResultCardinalityContract,
+  context: { unverifiedCriteria?: boolean } = {},
 ): string | null {
   if (actual <= 0 || contract.target <= 1 || actual >= contract.minimum) {
     return null;
   }
-  const noun = actual === 1 ? "вариант" : "варианта";
-  return `По заданным условиям удалось подтвердить только ${actual} ${noun}; остальные найденные карточки не прошли те же обязательные критерии.`;
+  const noun = actual % 10 === 1 && actual % 100 !== 11
+    ? "вариант"
+    : actual % 10 >= 2 && actual % 10 <= 4 &&
+        (actual % 100 < 12 || actual % 100 > 14)
+    ? "варианта"
+    : "вариантов";
+  const shortage = context.unverifiedCriteria
+    ? `По нужному типу нашёл только ${actual} ${noun}. Не все обязательные свойства заполнены в карточках; непроверенный параметр указан отдельно перед товарами.`
+    : `По заданным условиям удалось подтвердить только ${actual} ${noun}.`;
+  return `${shortage} Если хотите больше вариантов, скажите, какое условие можно изменить; без вашего согласия я не расширю подбор.`;
 }

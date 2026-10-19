@@ -3,6 +3,7 @@ import {
   aliasDuplicatesCatalogClass,
   aliasDuplicatesIndependentCatalogClass,
   declaredAliasIsStructurallyCustomerOwned,
+  excludeReplacementSourceIdentityAlias,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
   extractUnrepresentedPostNominalCatalogQualifier,
@@ -11,6 +12,7 @@ import {
   resolveRenderAliasClaim,
   titleContainsDeclaredAlias,
 } from "./declared-alias-contract.ts";
+import { resolveReplacementSourceModelCodes } from "./replacement-preflight.ts";
 
 Deno.test("a consultant-declared colloquial name becomes a catalog alias obligation", () => {
   assertEquals(
@@ -122,6 +124,80 @@ Deno.test("a failed first render cannot lose or replace the customer-owned alias
   assertEquals(resolveRenderAliasClaim(null, null, "1P"), "1P");
   assertEquals(resolveRenderAliasClaim(null, "CORN", null), "CORN");
   assertEquals(resolveRenderAliasClaim(null, " ", null), null);
+});
+
+Deno.test("replacement source identities cannot become mandatory target aliases", () => {
+  for (const [alias, sourceIdentity] of [
+    ["Acti9", "Acti9"],
+    ["DN027B", "DN027B"],
+    ["ECO T75", "ECO T75"],
+    ["NBT-CR2025-BP5", "NBT-CR2025-BP5"],
+    ["Schneider Electric", "Schneider Electric"],
+  ]) {
+    assertEquals(
+      excludeReplacementSourceIdentityAlias(alias, [sourceIdentity]),
+      null,
+      alias,
+    );
+  }
+  // A nickname is a product class/shape, not an independently proven source
+  // identity. Its title proof must continue to hold for genuine jargon.
+  assertEquals(
+    excludeReplacementSourceIdentityAlias("кукуруза", ["ECO T75", "IEK"]),
+    "кукуруза",
+  );
+  assertEquals(
+    excludeReplacementSourceIdentityAlias("GX53", ["ECO T75", "IEK"]),
+    "GX53",
+  );
+  assertEquals(
+    excludeReplacementSourceIdentityAlias("Acti9", ["Easy9"]),
+    "Acti9",
+  );
+  assertEquals(
+    resolveRenderAliasClaim(
+      excludeReplacementSourceIdentityAlias("ECO T75", ["ECO T75"]),
+      excludeReplacementSourceIdentityAlias("кукуруза", ["ECO T75"]),
+      null,
+    ),
+    "кукуруза",
+  );
+});
+
+Deno.test("source-model extraction and target-alias proof compose across product classes", () => {
+  for (const [request, sourceAlias, targetTitle] of [
+    [
+      "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+      "Acti9",
+      "Выключатель автоматический C16 1P 6kA GENERICA",
+    ],
+    [
+      "Найди замену светильнику Philips DN027B 7W",
+      "DN027B",
+      "Светильник LED 7W D90 MODE",
+    ],
+    [
+      "Предложи аналог батарейке NBT-CR2025-BP5",
+      "NBT-CR2025-BP5",
+      "Батарейка CR2025 GENERICA",
+    ],
+  ]) {
+    const sourceCodes = resolveReplacementSourceModelCodes(request);
+    assertEquals(sourceCodes.includes(sourceAlias), true, request);
+    const targetAlias = excludeReplacementSourceIdentityAlias(
+      sourceAlias,
+      sourceCodes,
+    );
+    assertEquals(targetAlias, null, request);
+    const candidates = [{ pagetitle: targetTitle }];
+    assertEquals(
+      targetAlias
+        ? filterProductsByDeclaredAlias(candidates, targetAlias)
+        : candidates,
+      candidates,
+      request,
+    );
+  }
 });
 
 Deno.test("an inflected product class is not treated as a separate alias", () => {

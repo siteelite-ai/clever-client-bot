@@ -79,16 +79,24 @@ test('catalog-minimum acceptance rejects a plausible but non-cheapest exact cabl
     .some((failure) => failure.includes('unverified product page')));
 });
 
-test('household motion scenarios require several exact live-class products', () => {
-  for (const id of [
-    'customer-new-household-motion-without-mount',
-    'customer-new-household-motion-joined-currency',
-  ]) {
-    const scenario = acceptanceSuite.cases.find((item) => item.id === id);
-    assert(scenario, `missing ${id}`);
-    const expected = scenario.turns[0].expect;
-    assert.equal(expected.min_products, 3);
-    assert.equal(expected.require_products_or_text_groups, undefined);
+test('strict household motion scenarios keep source proof and disclose a shortfall below three cards', () => {
+  const scenarios = [
+    ...['customer-new-household-motion-without-mount', 'customer-new-household-motion-joined-currency']
+      .map((id) => [id, acceptanceSuite.cases.find((item) => item.id === id)?.turns[0].expect]),
+    ...[1, 2].map((index) => [
+      `audit-02-topic-boundary-cable-to-motion-light turn ${index + 1}`,
+      septemberSuite.cases.find((item) => item.id === 'audit-02-topic-boundary-cable-to-motion-light')?.turns[index].expect,
+    ]),
+  ];
+  for (const [id, expected] of scenarios) {
+    assert(expected, `missing ${id}`);
+    assert.equal(expected.min_products, 1);
+    assert.equal(expected.max_products, 5);
+    assert.equal(expected.require_products_or_text_groups.min_products, 3);
+    assert.equal(expected.require_products_or_text_groups.require_actual_count_and_relaxation, true);
+    assert.equal(expected.require_products_or_text_groups.text_groups.length, 4);
+    assert.deepEqual(expected.require_result_cardinality,
+      { target: 5, minimum: 3, mode: 'alternatives', explicit: true });
     assert.equal(expected.max_product_price, 4000);
     assert.equal(expected.require_every_product_page.all_of.length, 2);
     assert.deepEqual(expected.require_every_product_page.all_of[0], {
@@ -96,6 +104,8 @@ test('household motion scenarios require several exact live-class products', () 
     });
     assert.equal(expected.require_every_product_page.all_of[1].any_of.length, 2);
   }
+  assert.equal(acceptanceSuite.cases.find((item) => item.id === 'customer-new-motion-generic')
+    ?.turns[0].expect.min_products, 3, 'generic multi-card search must not be weakened');
 });
 
 test('replacement-light and TTU acceptance cannot pass on plausible but wrong products', () => {
@@ -285,6 +295,11 @@ test('empty groups and incomplete alternatives cannot make an active assertion v
     [{ require_exact_or_split: { exact_title_groups: [['CORN']], split_title_groups: [['E27']] } }, /requires both title and text groups/],
     [{ require_exact_or_split: {} }, /requires an exact or split alternative/],
     [{ require_products_or_text_groups: { min_products: 1, text_groups: [] } }, /text_groups: must be a non-empty array/],
+    [{ require_products_or_text_groups: { min_products: 1, text_groups: [['нет']], require_actual_count_and_relaxation: true } }, /min_products >= 2/],
+    [{ require_products_or_text_groups: { min_products: 3, text_groups: [['нет']], require_actual_count_and_relaxation: false } }, /requires true/],
+    [{ forbid_tool_result_status: [] }, /must be a non-empty array/],
+    [{ forbid_tool_result_status: [{ tool: 'search_catalog', statuses: [] }] }, /statuses: must be a non-empty array/],
+    [{ forbid_tool_result_status: [{ tool: 'search_catalog', statuses: ['catalog_error'], partial: true }] }, /unknown expectation key partial/],
   ];
   for (const [expect, error] of invalid) {
     assert.throws(() => validateExpectationObject(expect), error);
@@ -1791,6 +1806,96 @@ test('product-or-explicit-gap and class-or-gap contracts cannot pass vacuously',
   }), []);
 });
 
+test('scarce exact matches require an offer to relax conditions, while three matches need no offer', () => {
+  const expectation = acceptanceSuite.cases.find((item) => item.id === 'customer-new-household-motion-joined-currency')
+    .turns[0].expect;
+  const gate = {
+    min_products: expectation.min_products,
+    max_products: expectation.max_products,
+    require_products_or_text_groups: expectation.require_products_or_text_groups,
+  };
+  const links = [1, 2, 3].map((index) => ({
+    url: `https://220volt.kz/catalog/svetotexnika/svetilniki/test-${index}/`,
+    title: `Светильник с датчиком ${index}`,
+  }));
+  const response = (count, text) => ({
+    text, productsMarkdown: '', links: links.slice(0, count), serverProductsCount: count,
+    completed: true, diagnosticError: null,
+  });
+  assert(evaluate(gate, response(0, 'Могу расширить бюджет.'))
+    .some((failure) => failure.includes('products 0 < 1')));
+  assert(evaluate(gate, response(1, 'Нашёл только 1 подходящий вариант, остальные не соответствуют условиям.'))
+    .some((failure) => failure.includes('without an explicit evidence gap')));
+  assert(evaluate(gate, response(1,
+    'Нашёл только 2 подходящих варианта. Могу увеличить бюджет или изменить условия.'))
+    .some((failure) => failure.includes('actual rendered card count 1')));
+  assert(evaluate(gate, response(1,
+    'Нашёл меньше трёх вариантов. Могу увеличить бюджет или изменить условия.'))
+    .some((failure) => failure.includes('actual rendered card count 1')));
+  assert(evaluate(gate, response(1,
+    'Нашёл только 1 подходящий вариант, остальные не соответствуют условиям.'))
+    .some((failure) => failure.includes('does not explicitly offer')));
+  assert.deepEqual(evaluate(gate, response(1,
+    'Нашёл только 1 подходящий вариант. Могу увеличить бюджет или изменить требование к назначению светильника — что выберете?')), []);
+  assert.deepEqual(evaluate(gate, response(2,
+    'Нашёл только два подходящих варианта. Хотите изменить условия, чтобы увидеть больше?')), []);
+  assert.deepEqual(evaluate(gate, response(3, 'Нашёл три подходящих варианта.')), []);
+});
+
+test('UPS result status must be structured and cannot be catalog_error', () => {
+  const expectation = acceptanceSuite.cases.find((item) => item.id === 'customer-new-ups-boiler-250w')
+    .turns[0].expect;
+  assert.deepEqual(expectation.forbid_tool_result_status,
+    [{ tool: 'search_catalog', statuses: ['catalog_error'] }]);
+  const response = {
+    text: 'Не нашёл подтверждённый ИБП в проверенной выборке каталога.',
+    productsMarkdown: '', links: [], completed: true, diagnosticError: null,
+    toolEvents: [{ tool: 'search_catalog', phase: 'result', status: 'empty', summary: 'Найдено 0' }],
+  };
+  const gate = {
+    require_tool_results: expectation.require_tool_results,
+    forbid_tool_result_status: expectation.forbid_tool_result_status,
+  };
+  assert.deepEqual(evaluate(gate, response), []);
+  assert(evaluate(gate, { ...response, toolEvents: [{ ...response.toolEvents[0], status: 'catalog_error' }] })
+    .includes('forbidden tool result status: search_catalog=catalog_error'));
+  assert(evaluate(gate, { ...response, toolEvents: [{ ...response.toolEvents[0], status: null }] })
+    .includes('missing structured result status: search_catalog'));
+  assert(evaluate(gate, { ...response, toolEvents: [] })
+    .includes('missing structured result status: search_catalog'));
+});
+
+test('an inferred hard filter fails for any unrequested parameter key, but an optional note does not', () => {
+  const first = septemberSuite.cases.find((item) => item.id === 'audit-18-acti9-c16-analogs').turns[0].expect;
+  const second = septemberSuite.cases.find((item) => item.id === 'audit-18-acti9-c16-analogs').turns[1].expect;
+  assert.deepEqual(first.forbid_mandatory_selection_criteria_keys, ['полюс', 'напряжен']);
+  assert.equal(second.forbid_mandatory_selection_criteria_keys, undefined);
+  const response = {
+    text: 'Уточните количество полюсов.', productsMarkdown: '', links: [],
+    completed: true, diagnosticError: null,
+    selectionContract: {
+      mandatory_criteria: [
+        { key: 'Характеристика срабатывания', op: 'eq', value: 'C' },
+        { key: 'Количество полюсов', op: 'eq', value: '1' },
+        { key: 'Номинальное рабочее напряжение', op: 'eq', value: '230–400 В' },
+      ],
+    },
+  };
+  const gate = { forbid_mandatory_selection_criteria_keys: first.forbid_mandatory_selection_criteria_keys };
+  const failures = evaluate(gate, response);
+  assert(failures.some((failure) => failure.includes('Количество полюсов')));
+  assert(failures.some((failure) => failure.includes('Номинальное рабочее напряжение')));
+  assert.deepEqual(evaluate(gate, { ...response, selectionContract: {
+    mandatory_criteria: [{ key: 'Характеристика срабатывания', op: 'eq', value: 'C' }],
+    optional_preferences: [{ key: 'Количество полюсов', value: '1' }],
+  } }), []);
+  assert(evaluate(gate, { ...response, selectionContract: {
+    mandatory_criteria: { key: 'Количество полюсов', value: '1' },
+  } }).includes('mandatory selection criteria contract is not an array'));
+  assert.throws(() => validateExpectationObject({ forbid_mandatory_selection_criteria_keys: [] }),
+    /forbid_mandatory_selection_criteria_keys/u);
+});
+
 test('parseSse keeps pre-product text and parses card prices', () => {
   const body = [
     data({ choices: [{ delta: { content: 'Сначала объяснение.' } }] }),
@@ -1817,11 +1922,11 @@ test('parseSse keeps pre-product text and parses card prices', () => {
 
 test('parseSse preserves safe tool progress for acceptance diagnostics', () => {
   const body = [
-    `data: ${JSON.stringify({ v3_event: { type: 'tool_event', tool: 'search_catalog', phase: 'result', summary: 'Найдено 3', duration_ms: 125 } })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'tool_event', tool: 'search_catalog', phase: 'result', status: 'verified', summary: 'Найдено 3', duration_ms: 125 } })}`,
     'data: [DONE]',
   ].join('\n\n');
   assert.deepEqual(parseSse(body).toolEvents, [
-    { tool: 'search_catalog', phase: 'result', summary: 'Найдено 3', duration_ms: 125 },
+    { tool: 'search_catalog', phase: 'result', status: 'verified', summary: 'Найдено 3', duration_ms: 125 },
   ]);
 });
 
@@ -2392,6 +2497,9 @@ test('evaluate rejects a sibling taxonomy branch hidden from user-facing prose',
   };
   assert(evaluate({ forbid_tool_summary: ['Стабилизаторы'] }, response)
     .includes('forbidden tool summary: Стабилизаторы'));
+  assert.deepEqual(evaluate({ require_tool_results: ['discover_category'] }, response), []);
+  assert(evaluate({ require_tool_results: ['search_catalog'] }, response)
+    .includes('missing completed tool result: search_catalog'));
 });
 
 test('evaluate validates a generic strict numeric pair around the object size', () => {

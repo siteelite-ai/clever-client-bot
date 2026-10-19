@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-v5-20261019.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v6-20261019.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
@@ -15,13 +15,13 @@ const outputFile = path.join(root, 'docs/qa/release-inventory-v5-20261019.json')
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
-    sha256: 'd2585bc932d0364a3c19e4357db93958dbf9227d9cbcf88a95116f7b4f757f65',
+    sha256: '549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366',
     caseCount: 27, sourceTurnCount: 42, runCount: 81, evaluatedTurnCount: 126,
     repeat: 3,
   },
   {
     file: 'customer-audit-20260921-cases.json',
-    sha256: 'b90117df7f92907efe1826300b48c41fec3ee899bad29813870dd88726182929',
+    sha256: '01d770e5cc3f5511b527a429e900518b790f7f415aff27af4b3501287ae1e19f',
     caseCount: 27, sourceTurnCount: 39, runCount: 54, evaluatedTurnCount: 78,
     repeat: 1,
     variations: {
@@ -237,7 +237,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
-    revision_note: 'V5 re-pins the current customer suite after requiring a live catalog household classification for every household motion-sensor light card. The historical V4 inventory remains unchanged; candidate evidence is NOT_RUN.',
+    revision_note: 'V6 re-pins the current customer suites after preserving the verified strict-household class and accepting one source-backed card only when the assistant states the actual rendered count and explicitly offers to relax conditions for a shortfall below three; the Acti9 first turn also rejects unrequested mandatory pole and voltage filters. UPS acceptance requires a structured successful catalog attempt rather than treating catalog_error as an honest empty result. Historical V5 and earlier reports remain unchanged and do not count for this candidate; candidate evidence is NOT_RUN.',
     candidate: {
       commit_sha: null,
       preview_version: null,
