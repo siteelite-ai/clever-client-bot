@@ -4511,6 +4511,7 @@ async function selectVerifiedOrdinaryReplacement(
       }, ctx.cache);
       if (described.ok) addSourceCandidates(described.results);
     }
+    let failedClassLiteralQueryUsed = false;
     for (
       const code of lookup.modelCodes.slice(
         0,
@@ -4553,6 +4554,30 @@ async function selectVerifiedOrdinaryReplacement(
             productContainsSourceModel(product, [code])
           )
           : [];
+      } else if (
+        grounded.length === 0 && !sourceClassDiscovery.ok &&
+        sourceClassDiscovery.error_code === "category_not_found" &&
+        !failedClassLiteralQueryUsed &&
+        normalizeCodeLike(code).length >= 5
+      ) {
+        // A full-title-only by_pagetitle endpoint can miss a literal model.
+        // Keep this fallback bounded and accept only one catalog-wide result
+        // whose title independently proves the exact code. A series-wide hit
+        // is not a source-product anchor.
+        failedClassLiteralQueryUsed = true;
+        const literal = await executeSearchCatalog({
+          mode: "by_query",
+          query: code,
+          per_page: 5,
+        }, {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+        }, ctx.cache);
+        grounded = literal.ok && literal.total === 1
+          ? literal.results.filter((product) =>
+            productContainsExactModelCode(product, code)
+          )
+          : [];
       }
       if (normalizeCodeLike(code).length >= 5) {
         // A broad text lookup may return dozens of same-category products that
@@ -4583,8 +4608,8 @@ async function selectVerifiedOrdinaryReplacement(
     send({
       type: "delta",
       content: categoryUnresolved
-        ? "Не удалось подтвердить тип исходного товара. Уточните его тип или пришлите точный артикул либо ссылку на карточку — тогда подберу аналог."
-        : "Сейчас не удалось проверить исходный товар по каталогу. Повторите запрос позже или пришлите ссылку на его карточку — это не означает, что аналогов нет.",
+        ? "Не удалось подтвердить тип исходного товара. Уточните его тип или пришлите точный артикул либо полное название товара — тогда подберу аналог."
+        : "Сейчас не удалось проверить исходный товар по каталогу. Повторите запрос позже или укажите точный артикул либо полное название товара. Это не означает, что аналогов нет.",
     });
     steps.push({
       step: "v3_replacement_unverified_source_stopped",

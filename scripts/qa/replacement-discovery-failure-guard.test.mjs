@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { productContainsExactModelCode } from "../../supabase/functions/_shared/v3-tools/replacement-preflight.ts";
+
 const source = readFileSync(
   new URL("../../supabase/functions/chat-consultant-v3/index.ts", import.meta.url),
   "utf8",
@@ -38,14 +40,26 @@ test("unknown class avoids broad serial searches and accepts only unique literal
   assert.match(preflight, /const uniqueLiteralModel = found\.ok && found\.total === 1/u);
   assert.match(preflight, /uniqueLiteralModel && productContainsExactModelCode\(product, code\)/u);
   assert.match(preflight, /if \(grounded\.length === 0 && sourceClassDiscovery\.ok\) \{[\s\S]*?mode: "by_query",\s*query: code/u);
+  assert.match(preflight, /let failedClassLiteralQueryUsed = false/u);
+  assert.match(preflight, /grounded\.length === 0 && !sourceClassDiscovery\.ok &&\s*sourceClassDiscovery\.error_code === "category_not_found" &&\s*!failedClassLiteralQueryUsed &&\s*normalizeCodeLike\(code\)\.length >= 5/u);
+  assert.match(preflight, /failedClassLiteralQueryUsed = true;\s*const literal = await executeSearchCatalog/u);
+  assert.match(preflight, /mode: "by_query",\s*query: code,\s*per_page: 5/u);
+  assert.match(preflight, /literal\.ok && literal\.total === 1\s*\? literal\.results\.filter\(\(product\) =>\s*productContainsExactModelCode\(product, code\)/u);
   assert.match(preflight, /for \(const article of lookup\.articles\) \{[\s\S]*?mode: "by_article"/u);
+});
+
+test("literal model fallback requires an exact title code, not a partial prefix", () => {
+  const exact = { pagetitle: "Светильник встраиваемый DN027B G2 LED6/NW" };
+  assert.equal(productContainsExactModelCode(exact, "DN027B"), true);
+  assert.equal(productContainsExactModelCode(exact, "DN027"), false);
 });
 
 test("unverified source stops before expert delegation and never claims empty catalog", () => {
   assert.match(failedDiscoveryGuard, /sourceClassDiscovery\.error_code === "category_not_found"/u);
-  assert.match(failedDiscoveryGuard, /Уточните его тип или пришлите точный артикул либо ссылку/u);
-  assert.match(failedDiscoveryGuard, /Повторите запрос позже или пришлите ссылку/u);
-  assert.match(failedDiscoveryGuard, /это не означает, что аналогов нет/u);
+  assert.match(failedDiscoveryGuard, /Уточните его тип или пришлите точный артикул либо полное название товара/u);
+  assert.match(failedDiscoveryGuard, /Повторите запрос позже или укажите точный артикул либо полное название товара/u);
+  assert.match(failedDiscoveryGuard, /Это не означает, что аналогов нет/u);
+  assert.doesNotMatch(failedDiscoveryGuard, /ссылк/u);
   assert.match(failedDiscoveryGuard, /handled: true,[\s\S]*?products: \[\],[\s\S]*?outcome: categoryUnresolved \? "query_inconsistent" : "upstream_error"/u);
   assert.doesNotMatch(failedDiscoveryGuard, /runExpertLoop\(|confirmed_empty|Ничего не наш/u);
   assert.ok(preflight.indexOf("anchor = [...sourcePool.values()]") < failedDiscoveryGuardStart);
