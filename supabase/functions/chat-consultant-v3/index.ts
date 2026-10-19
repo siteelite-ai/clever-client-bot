@@ -137,6 +137,8 @@ import {
   buildCategoryVerificationSearchInput,
   buildSelectionSearchRecoveryPlan,
   buildSourceProvenCardinalityRecoveryPlan,
+  buildUnqualifiedCategoryBrowseRecovery,
+  filterUnqualifiedCategoryBrowseCandidates,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
@@ -14255,8 +14257,130 @@ async function runExpertLoop(
         });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
+        // The catalog may have a populated verified leaf while the combined
+        // full-text/category lookup for a plain multi-choice request is empty.
+        // Retry retrieval inside that SAME leaf once; the normal source,
+        // target, compatibility, visible-request and budget gates still own
+        // every card. No customer requirement or price bound is relaxed.
+        const unqualifiedCategoryBrowse = tc.name === "search_catalog" &&
+            tc.id === derivedStructuredSearchCallId &&
+            derivedStructuredSearchGuidedByVisibleReasoning &&
+            intentMode === "select" && gateShortCircuit === null &&
+            result.ok && result.tool === "search_catalog" &&
+            result.results.length === 0 && lastDiscover &&
+            now() < TURN_TIMEOUT_MS - 9_000
+          ? buildUnqualifiedCategoryBrowseRecovery({
+            search_args: runArgs,
+            customer_message: userMessage,
+            leaf_categories: lastDiscover.leaf_categories.map((leaf) =>
+              leaf.pagetitle
+            ),
+            initial_results_count: 0,
+            minimum_results: resultCardinality.minimum,
+            explicit_multiple_choice: resultCardinality.explicit &&
+              resultCardinality.minimum > 1,
+            mandatory_criteria_count:
+              (currentSelectionCriteriaPlan()?.mandatory_criteria.length ?? 0) +
+              enforcedSearchCriteria.length +
+              reasoningProjectedSearchCriteria.length +
+              postFilterOnlyReasoningCriteria.length +
+              latestRenderCriteria.length,
+            customer_constraint_count: userBackedSearchCriteria.length +
+              userBackedSearchFacetValues.length,
+            class_constraint_count: customerExactClassificationCriteria.length +
+              customerApplicationAlternatives.length,
+            visible_requirement_count: buildVisibleRequestContract(
+              userMessage,
+              {
+                productClass: activeSelectionTarget ??
+                  lastDiscover.category.pagetitle,
+                taxonomyClass: lastDiscover.category.pagetitle,
+                candidateTitles: [...ctx.cache.values()].map((product) =>
+                  product.pagetitle
+                ),
+              },
+            ).length,
+            compatibility_required: activeCompatibilityRelations.length > 0 ||
+              hasSelectionMeasurementContext(userMessage),
+            replacement_intent: replacementIntent,
+            exact_or_compound_or_alias_request: Boolean(
+              namedSeriesToken || requiredCatalogAlias || declaredAliasQuery ||
+                explicitCompoundMarking || semanticCompoundEvidenceRequired ||
+                directProductLookup.articles.length > 0 ||
+                directProductLookup.modelCodes.length > 0 ||
+                codeConstraints.length > 0,
+            ),
+          })
+          : null;
+        let unqualifiedCategoryBrowseAttempted = false;
+        if (unqualifiedCategoryBrowse) {
+          unqualifiedCategoryBrowseAttempted = true;
+          const browseBudgetMs = Math.min(
+            6_000,
+            Math.max(1, TURN_TIMEOUT_MS - now() - 3_000),
+          );
+          const browsed: ToolResult = await runWithDeadline(
+            (signal) =>
+              observedSearchCatalog(
+                unqualifiedCategoryBrowse.args as unknown as SearchCatalogInput,
+                {
+                  baseUrl: CATALOG_BASE_URL,
+                  apiToken: ctx.catalogToken,
+                  timeoutMs: browseBudgetMs,
+                  signal,
+                },
+                ctx.cache,
+              ),
+            browseBudgetMs,
+          ).catch((): ToolResult => ({
+            tool: "search_catalog",
+            ok: false,
+            error_code: "catalog_timeout",
+            message: "bounded same-category browse timed out",
+          }));
+          const browsedCount = browsed.ok && browsed.tool === "search_catalog"
+            ? browsed.results.length
+            : 0;
+          const qualifierProven = browsed.ok &&
+              browsed.tool === "search_catalog"
+            ? filterUnqualifiedCategoryBrowseCandidates(
+              browsed.results,
+              unqualifiedCategoryBrowse,
+            )
+            : [];
+          steps.push({
+            step: "v3_unqualified_category_browse_recovery",
+            ms: now(),
+            meta: {
+              category: lastDiscover?.category.pagetitle ?? "",
+              retrieved: browsedCount,
+              qualifier_proven: qualifierProven.length,
+              qualifier_count:
+                unqualifiedCategoryBrowse.literal_qualifier_terms?.length ?? 0,
+              source: "verified_leaf",
+              relaxed_inputs: unqualifiedCategoryBrowse.relaxed_inputs,
+            },
+          });
+          if (qualifierProven.length > 0 && browsed.ok &&
+            browsed.tool === "search_catalog") {
+            for (const key of Object.keys(runArgs)) delete runArgs[key];
+            Object.assign(runArgs, unqualifiedCategoryBrowse.args);
+            selectedSearchRecoveryAttempt = unqualifiedCategoryBrowse;
+            result = {
+              ...browsed,
+              results: qualifierProven,
+              total: qualifierProven.length,
+              warnings: [
+                ...(browsed.warnings ?? []),
+                `browse_qualifier_proven:${qualifierProven.length}/${browsedCount}`,
+              ],
+            };
+          }
+        }
+
         if (
           tc.name === "search_catalog" &&
+          !unqualifiedCategoryBrowseAttempted &&
           tc.id === derivedStructuredSearchCallId &&
           derivedStructuredSearchGuidedByVisibleReasoning &&
           runArgs.mode === "by_query" &&

@@ -1078,6 +1078,76 @@ Deno.test("filter guard never infers generic boolean facet values", () => {
   assertEquals(result.inferred, []);
 });
 
+Deno.test("model placeholder absence is not an exact search filter or prose projection", () => {
+  const cases = [
+    {
+      facet: { key: "length", caption: "Длина кабеля, м", values: [{ value: "нет" }, { value: "1" }, { value: "3" }] },
+      reasoning: "Предложу варианты. Длина кабеля, м: нет.",
+    },
+    {
+      facet: { key: "mount", caption: "Способ монтажа", values: [{ value: "отсутствует" }, { value: "накладной" }] },
+      reasoning: "Предложу варианты. Способ монтажа: отсутствует.",
+    },
+  ];
+  for (const { facet, reasoning } of cases) {
+    const absence = facet.values[0].value;
+    assertEquals(
+      projectExplicitReasoningFacetValues([facet], reasoning, "Покажи несколько вариантов на выбор"),
+      { kept: [], user_backed: [] },
+    );
+    const guarded = guardSearchFilters(
+      { mode: "by_filter", options: { [facet.key]: [absence] } },
+      [facet],
+      reasoning,
+      "Покажи несколько вариантов на выбор",
+    );
+    assertEquals(guarded.args, { mode: "by_filter" });
+    assertEquals(guarded.kept, []);
+    assertEquals(guarded.dropped[0]?.reason, "not_declared_in_reasoning");
+  }
+});
+
+Deno.test("explicit negative customer constraint keeps a genuine yes/no facet", () => {
+  const facet = {
+    key: "grounding",
+    caption: "Наличие заземления",
+    values: [{ value: "Да" }, { value: "Нет" }],
+  };
+  const user = "Нужен вариант без заземления";
+  const reasoning = "Для вашего условия наличие заземления: нет.";
+  assertEquals(
+    projectExplicitReasoningFacetValues([facet], reasoning, user),
+    {
+      kept: [{ key: "grounding", value: "Нет" }],
+      user_backed: [{ key: "grounding", value: "Нет" }],
+    },
+  );
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { grounding: ["Нет"] } },
+    [facet],
+    reasoning,
+    user,
+  );
+  assertEquals(guarded.args.options, { grounding: ["Нет"] });
+  assertEquals(guarded.user_backed, [{ key: "grounding", value: "Нет" }]);
+});
+
+Deno.test("a negated modifier is not the same as absence of a compound feature", () => {
+  const facet = {
+    key: "motion_sensor",
+    caption: "Наличие датчика движения",
+    values: [{ value: "Да" }, { value: "Нет" }],
+  };
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { motion_sensor: ["Нет"] } },
+    [facet],
+    "Наличие датчика движения: нет.",
+    "Нужен вариант без движения",
+  );
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.kept, []);
+});
+
 Deno.test("filter guard keeps a model-provided affirmative boolean when its facet meaning is explicit", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { "Негорючесть": ["Да"] } },
