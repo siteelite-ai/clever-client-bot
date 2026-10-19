@@ -4376,6 +4376,7 @@ async function selectVerifiedOrdinaryReplacement(
   // Resolve only a class that is literally grounded in the customer's source
   // description. No model fallback is allowed here: the live taxonomy may
   // confirm the class wording, but it may not invent one from a shared code.
+  const sourceClassDiscoveryStarted = Date.now();
   const sourceClassDiscovery = await executeDiscoverCategory({
     noun: sourceDescription,
     semantic_query: userMessage,
@@ -4384,6 +4385,17 @@ async function selectVerifiedOrdinaryReplacement(
     apiToken: ctx.catalogToken,
     openrouterApiKey: ctx.openrouterKey,
   });
+  const sourceClassDiscoveryMs = Date.now() - sourceClassDiscoveryStarted;
+  if (!sourceClassDiscovery.ok) {
+    steps.push({
+      step: "v3_replacement_source_class_discovery_failed",
+      ms: Date.now() - t0,
+      meta: {
+        error_code: sourceClassDiscovery.error_code,
+        discovery_ms: sourceClassDiscoveryMs,
+      },
+    });
+  }
   const sourceClassLeaves = sourceClassDiscovery.ok &&
       (selectionTargetIsDeclared(
         sourceClassDiscovery.category.pagetitle,
@@ -4485,7 +4497,10 @@ async function selectVerifiedOrdinaryReplacement(
     }
   }
   if (!anchor) {
-    if (sourceDescription) {
+    // A failed class discovery is not evidence that the catalog has no
+    // analogue. Keep only literal identity lookups below; broad source-text
+    // results cannot safely nominate an arbitrary source SKU without a class.
+    if (sourceDescription && sourceClassDiscovery.ok) {
       const described = await executeSearchCatalog({
         mode: "by_query",
         query: sourceDescription,
@@ -4496,7 +4511,12 @@ async function selectVerifiedOrdinaryReplacement(
       }, ctx.cache);
       if (described.ok) addSourceCandidates(described.results);
     }
-    for (const code of lookup.modelCodes.slice(0, 3)) {
+    for (
+      const code of lookup.modelCodes.slice(
+        0,
+        sourceClassDiscovery.ok ? 3 : 2,
+      )
+    ) {
       let found = await executeSearchCatalog({
         mode: "by_pagetitle",
         pagetitle: code,
@@ -4505,12 +4525,18 @@ async function selectVerifiedOrdinaryReplacement(
         baseUrl: CATALOG_BASE_URL,
         apiToken: ctx.catalogToken,
       }, ctx.cache);
+      const uniqueLiteralModel = found.ok && found.total === 1;
       let grounded = found.ok
         ? found.results.filter((product) =>
-          productContainsSourceModel(product, [code])
+          sourceClassDiscovery.ok
+            ? productContainsSourceModel(product, [code])
+            // Without a proven class, only a unique literal model identity
+            // may become the source. A series-wide hit cannot nominate its
+            // first product as the customer's source.
+            : uniqueLiteralModel && productContainsExactModelCode(product, code)
         )
         : [];
-      if (grounded.length === 0) {
+      if (grounded.length === 0 && sourceClassDiscovery.ok) {
         // Some catalog installations treat by_pagetitle as full-title equality.
         // Retry the exact extracted identifier as a text query, but accept only
         // cards whose title independently contains that same model code.
@@ -4546,6 +4572,37 @@ async function selectVerifiedOrdinaryReplacement(
           ).length;
       return score(right) - score(left);
     })[0] ?? null;
+  }
+
+  if (!anchor && !sourceClassDiscovery.ok) {
+    // There is no verified source class or source product. Do not multiply
+    // catalog calls or delegate this unknown state to the expert loop, which
+    // could turn an upstream failure into a false "no products" answer.
+    const categoryUnresolved =
+      sourceClassDiscovery.error_code === "category_not_found";
+    send({
+      type: "delta",
+      content: categoryUnresolved
+        ? "Не удалось подтвердить тип исходного товара. Уточните его тип или пришлите точный артикул либо ссылку на карточку — тогда подберу аналог."
+        : "Сейчас не удалось проверить исходный товар по каталогу. Повторите запрос позже или пришлите ссылку на его карточку — это не означает, что аналогов нет.",
+    });
+    steps.push({
+      step: "v3_replacement_unverified_source_stopped",
+      ms: Date.now() - t0,
+      meta: {
+        error_code: sourceClassDiscovery.error_code,
+        discovery_ms: sourceClassDiscoveryMs,
+        source_anchor_found: false,
+        exact_article_supplied: lookup.articles.length > 0,
+        literal_model_codes_checked: Math.min(lookup.modelCodes.length, 2),
+      },
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: categoryUnresolved ? "query_inconsistent" : "upstream_error",
+      source_candidate_ids: [...sourceCandidateIds],
+    };
   }
 
   // Preserve the earlier no-anchor clarification route for cases where the
