@@ -26,6 +26,7 @@ import {
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reasoningComputesSystemTotalFromSpatialExtent,
+  demoteUnsupportedSystemTotalClaims,
   reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
@@ -2180,6 +2181,136 @@ Deno.test("open alternatives preserve a spatial calculation as a system total wi
     ),
     true,
   );
+});
+
+Deno.test("a bare model-only aggregate is removed from visible reasoning without losing qualitative protection", () => {
+  const customer =
+    "Нужен прибор для двора площадью 120 м² с высоты 4 м. Предложи варианты.";
+  const raw =
+    "Для двора 120 м² с высоты 4 м нужен суммарный поток не менее 24 000 лм. Для открытой среды степень защиты IP65 обязательна.";
+  const facets = [{
+    key: "flux",
+    caption: "Световой поток, лм",
+    unit: "лм",
+    values: [{ value: "1800" }, { value: "24000" }],
+  }, {
+    key: "protection",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }, { value: "IP44" }],
+  }];
+  const safe = demoteUnsupportedSystemTotalClaims(raw, customer, facets);
+  assertEquals(safe.includes("24 000 лм"), false);
+  assertEquals(safe.includes("IP65"), true);
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: raw,
+      measurement_scope: "system_total",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f1v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
+  assertEquals(resolved?.text.includes("24 000 лм"), false);
+  assertEquals(resolved?.measurementEvidence.includes("24 000 лм"), false);
+  assertEquals(resolved?.text.includes("IP65"), true);
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  const sameSentence = demoteUnsupportedSystemTotalClaims(
+    "Для двора нужен суммарный поток не менее 24 000 лм и степень защиты IP65.",
+    customer,
+    facets,
+  );
+  assertEquals(sameSentence.includes("24 000 лм"), false);
+  assertEquals(sameSentence.includes("Степень защиты IP65"), true);
+  const commaClause = demoteUnsupportedSystemTotalClaims(
+    "Для двора нужен суммарный поток не менее 24 000 лм, при этом обязательна защита IP65.",
+    customer,
+    facets,
+  );
+  assertEquals(commaClause.includes("24 000 лм"), false);
+  assertEquals(commaClause.includes("защита IP65"), true);
+  const modelCount = demoteUnsupportedSystemTotalClaims(
+    "Нужно не менее 3 светильников и степень защиты IP65.",
+    customer,
+    facets,
+  );
+  assertEquals(modelCount.includes("3 светильников"), true);
+  assertEquals(modelCount.includes("числовой ориентир пока не подтверждён"), false);
+  const comparative = demoteUnsupportedSystemTotalClaims(
+    "Для всей системы нужно не менее чем 24 000 лм.",
+    customer,
+    facets,
+  );
+  assertEquals(comparative.includes("24 000 лм"), false);
+});
+
+Deno.test("aggregate provenance guard keeps exact customer totals and valid visible arithmetic", () => {
+  const throughput = [{
+    key: "throughput",
+    caption: "Выходная производительность, кг",
+    unit: "кг",
+    values: [{ value: "1800" }, { value: "24000" }],
+  }];
+  const flux = [{
+    key: "flux",
+    caption: "Световой поток, лм",
+    unit: "лм",
+    values: [{ value: "1800" }, { value: "24000" }],
+  }];
+  const customerOwned = demoteUnsupportedSystemTotalClaims(
+    "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    "Нужна суммарная выходная производительность не менее 24 000 кг.",
+    throughput,
+  );
+  assertEquals(customerOwned.includes("24 000 кг"), true);
+  const derived = demoteUnsupportedSystemTotalClaims(
+    "Световой поток нужен не менее 1800 лм: 120 м² × 15 лк = 1800 лм.",
+    "Участок 120 м². Предложи варианты.",
+    flux,
+  );
+  assertEquals(derived.includes("1800 лм"), true);
+  const invalid = demoteUnsupportedSystemTotalClaims(
+    "Световой поток нужен не менее 24 000 лм: 120 м² × 15 лк = 24 000 лм.",
+    "Участок 120 м². Предложи варианты.",
+    flux,
+  );
+  assertEquals(invalid.includes("24 000 лм"), false);
+});
+
+Deno.test("a model cannot bypass aggregate provenance by mislabelling a visible system total as per-product", () => {
+  const facets = [{
+    key: "throughput",
+    caption: "Выходная производительность, кг",
+    unit: "кг",
+    values: [{ value: "1800" }, { value: "24000" }],
+  }];
+  const declaration = {
+    reasoning:
+      "Для всей системы нужна суммарная выходная производительность не менее 24 000 кг. Отдельные товары следует сравнить по характеристикам.",
+    measurement_scope: "per_product",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [],
+  };
+  const open = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужны варианты для объекта 120 м².",
+  );
+  assertEquals(open?.measurementScope, "system_total");
+  assertEquals(open?.text.includes("24 000 кг"), false);
+  const single = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужно одно изделие для объекта 120 м².",
+  );
+  assertEquals(single?.measurementScope, "per_product");
 });
 
 Deno.test("a computed total removes only a separable model-owned per-item scalar from all reasoning channels", () => {

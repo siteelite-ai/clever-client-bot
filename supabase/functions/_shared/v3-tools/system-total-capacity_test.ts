@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   extractVisibleSystemTotalMinimum,
   resolveVisibleSystemTotalRequirement,
+  visibleSystemTotalHasProvenance,
   type SystemCapacityPlanLine,
   type SystemTotalCapacityRequirement,
   verifySystemTotalCapacityPlan as verifyRawSystemTotalCapacityPlan,
@@ -51,6 +52,7 @@ Deno.test("visible hard system minimum wins over a higher advisory range", () =>
     extractVisibleSystemTotalMinimum({
       measurementScope: "system_total",
       reasoningText: reasoning,
+      customerEvidence: "Для двора площадью 120 м² нужны варианты освещения.",
       outputFacet: fluxRequirement.outputFacet,
       unit: "lm",
     }),
@@ -68,6 +70,7 @@ Deno.test("system minimum parser does not promote advice, ranges or wrong axes",
     measurementScope: "system_total",
     outputFacet: fluxRequirement.outputFacet,
     unit: "лм",
+    customerEvidence: "Нужны варианты для участка 120 м².",
   };
   assertEquals(
     extractVisibleSystemTotalMinimum({
@@ -111,6 +114,8 @@ Deno.test("system minimum parser is generic and distinguishes physical roles", (
       measurementScope: "system_total",
       reasoningText:
         "Для установки нужна входная производительность не менее 60 кг. Выходная производительность должна быть более 35 кг суммарно.",
+      customerEvidence:
+        "Для установки нужна суммарная выходная производительность более 35 кг.",
       outputFacet,
       unit: "кг",
     }),
@@ -125,6 +130,8 @@ Deno.test("system minimum parser is generic and distinguishes physical roles", (
     extractVisibleSystemTotalMinimum({
       measurementScope: "system_total",
       reasoningText: "Нужна входная производительность не менее 60 кг.",
+      customerEvidence:
+        "Для установки нужна суммарная выходная производительность более 35 кг.",
       outputFacet,
       unit: "кг",
     }),
@@ -140,6 +147,8 @@ Deno.test("visible total binds only to a unique live output facet", () => {
     resolveVisibleSystemTotalRequirement({
       measurementScope: "system_total",
       reasoningText: reasoning,
+      customerEvidence:
+        "Для объекта нужен световой поток не менее 5000 лм суммарно.",
       facets: [
         { key: "area", caption: "Площадь, м²", unit: "м²" },
         facet,
@@ -159,9 +168,116 @@ Deno.test("visible total binds only to a unique live output facet", () => {
     resolveVisibleSystemTotalRequirement({
       measurementScope: "system_total",
       reasoningText: reasoning,
+      customerEvidence:
+        "Для объекта нужен световой поток не менее 5000 лм суммарно.",
       facets: [facet, { ...facet, key: "other_flux" }],
     }),
     null,
+  );
+});
+
+Deno.test("bare model system totals never become hard requirements, while customer totals and transparent arithmetic do", () => {
+  const facet = { key: "throughput", caption: "Выходная производительность, кг", unit: "кг" };
+  const base = {
+    measurementScope: "system_total",
+    facets: [facet],
+  };
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Нужно обработать участок площадью 120 м². Предложи варианты.",
+      reasoningText: "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    }),
+    null,
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Нужна суммарная выходная производительность не менее 24 000 кг.",
+      reasoningText: "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    })?.minimumTotal,
+    24000,
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Каждому прибору нужна производительность не менее 24 000 кг.",
+      reasoningText: "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    }),
+    null,
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "На каждый прибор производительность до 24 000 кг.",
+      reasoningText: "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    }),
+    null,
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Ориентир по суммарной производительности — около 24 000 кг.",
+      reasoningText: "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+    }),
+    null,
+  );
+  for (const customerEvidence of [
+    "Сейчас стоит прибор с производительностью 24 000 кг, покажи другие варианты.",
+    "Не более 24 000 кг должно быть у всей системы.",
+    "Максимальная суммарная производительность — 24 000 кг.",
+  ]) {
+    assertEquals(
+      resolveVisibleSystemTotalRequirement({
+        ...base,
+        customerEvidence,
+        reasoningText:
+          "Выходная производительность всей системы должна быть не менее 24 000 кг.",
+      }),
+      null,
+    );
+  }
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Нужно обработать участок площадью 120 м². Предложи варианты.",
+      reasoningText:
+        "Выходная производительность должна быть не менее 1800 кг: 120 м² × 15 кг/м² = 1800 кг.",
+    })?.minimumTotal,
+    1800,
+  );
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      ...base,
+      customerEvidence: "Нужно обработать участок площадью 120 м². Предложи варианты.",
+      reasoningText:
+        "Выходная производительность должна быть не менее 24 000 кг: 120 м² × 15 кг/м² = 24 000 кг.",
+    }),
+    null,
+  );
+});
+
+Deno.test("a proven smaller total is not displaced by a larger unsupported model assertion", () => {
+  const customerEvidence = "Участок 120 м². Покажи варианты.";
+  const reasoningText =
+    "Световой поток нужен не менее 1800 лм: 120 м² × 15 лк = 1800 лм. Световой поток должен быть не менее 24 000 лм.";
+  assertEquals(
+    resolveVisibleSystemTotalRequirement({
+      measurementScope: "system_total",
+      reasoningText,
+      customerEvidence,
+      facets: [{ key: "flux", caption: "Световой поток, лм", unit: "лм" }],
+    })?.minimumTotal,
+    1800,
+  );
+  assertEquals(
+    visibleSystemTotalHasProvenance({
+      customerEvidence,
+      reasoningText,
+      value: 24000,
+      unit: "лм",
+    }),
+    false,
   );
 });
 
