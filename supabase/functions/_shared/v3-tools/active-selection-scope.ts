@@ -1,3 +1,5 @@
+import { hasExplicitNewTaskPreface } from "./request-preface.ts";
+
 /**
  * A completed server response, not widget history or client slots, owns the
  * currently selected catalog identity. The scope is a selection constraint,
@@ -520,6 +522,176 @@ export function isVerifiedReadinessScopeReply(
   // may have issued a free-text slot. Preserve that task for a concise answer,
   // but not for a fresh imperative request with its own object.
   return value.split(" ").length <= 16 && selectionObject(value) === value;
+}
+
+/**
+ * A verified, free-text readiness question can receive a short engineering
+ * fact even when the customer starts it with «нужны». This is deliberately
+ * narrower than isVerifiedReadinessScopeReply: a complete request for a
+ * different product must still break the active selection scope. The issued
+ * question, rather than a catalog-specific noun list, supplies the facet
+ * vocabulary for short numeric answers.
+ */
+export function isVerifiedFreeformReadinessAnswer(
+  message: string,
+  verifiedSlot: Record<string, unknown> | null,
+): boolean {
+  const scope = verifiedSlot?.scope;
+  if (
+    !verifiedSlot || verifiedSlot.status !== "pending" ||
+    typeof verifiedSlot.slot_id !== "string" || !verifiedSlot.slot_id ||
+    typeof verifiedSlot.facet_key !== "string" || !verifiedSlot.facet_key ||
+    !scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== "selection_readiness" ||
+    typeof (scope as Record<string, unknown>).token !== "string" ||
+    !(scope as { token: string }).token.trim() ||
+    !Array.isArray(verifiedSlot.options) || verifiedSlot.options.length !== 0 ||
+    typeof verifiedSlot.question !== "string" ||
+    !verifiedSlot.question.trim()
+  ) return false;
+  const raw = String(message ?? "").trim();
+  if (
+    !raw || raw.length > 160 || hasExplicitNewTaskPreface(raw) ||
+    /[.!?;]\s*\p{L}/u.test(raw)
+  ) return false;
+  const value = normalized(raw);
+  const withoutFiller = value.replace(
+    /^(?:(?:а|ну|тогда|пожалуйста)\s+)*/u,
+    "",
+  );
+  if (/^(?:новая тема|новый вопрос)(?:\s|$)/u.test(withoutFiller)) {
+    return false;
+  }
+  // An imperative selection is not a concise answer, even if it includes a
+  // number or repeats a word from the issued question.
+  if (
+    /^(?:найди\p{L}*|подбери\p{L}*|покажи\p{L}*|предложи\p{L}*|посоветуй\p{L}*|ищу|хочу|купить)(?:\s|$)/u
+      .test(withoutFiller)
+  ) return false;
+  const answer = scopedSelectionObject(value);
+  const words = answer.split(" ").filter(Boolean);
+  if (!answer || words.length > 9) return false;
+
+  // A relation phrase lacks an independent product head. It may not answer
+  // the exact facet, but retaining the question is safer than inventing a
+  // new product selection from «Нужны для кухни» or «с заземлением».
+  if (/^(?:для|с|со|без|в|во|на|по|к|ко|при)\s/u.test(answer)) {
+    // Do not let a second clause («для кухни и новые светильники») smuggle a
+    // different product into the old verified section.
+    return words.length <= 3 &&
+      !words.some((word) => /^(?:и|или|а|еще)$/u.test(word));
+  }
+  // Generic paired dimensions (3×1,5 мм², 2*1.5) are a fact, not a named
+  // product. Test the original punctuation before normalization loses × and
+  // decimal separators; never accept a second clause here.
+  const rawFact = raw.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .replace(/^(?:(?:а|ну|тогда|пожалуйста)\s*[,—–-]?\s+)*/u, "")
+    .replace(/^(?:(?:мне|нам)\s+)?нуж\p{L}*\s+/u, "")
+    .trim();
+  if (
+    /^\d+(?:[.,]\d+)?\s*[xх×*]\s*\d+(?:[.,]\d+)?\s*(?:мм²|мм2|мм|см²|см2|см|м²|м2|м)?$/u
+      .test(rawFact)
+  ) return true;
+  const stems = (text: string): Set<string> =>
+    new Set((normalized(text).match(/\p{L}{3,}/gu) ?? []).map((word) =>
+      word.slice(0, word.length >= 5 ? 4 : 3)
+    ));
+  // The first asked axis is the evidence, not the whole original request:
+  // that request can already mention an unknown «число жил», while a question
+  // may mention «кабель» only as context after «для».
+  const questionWords = normalized(verifiedSlot.question).split(" ");
+  // Progressive questions start with a summary such as «Осталось уточнить:
+  // назначение; сечение и число жил. Укажите сечение и число жил…». The last
+  // imperative names the *current* facet; the introductory «уточнить» does
+  // not. Without an imperative, use the first interrogative cue.
+  const imperativeCue = questionWords.reduce((last, word, index) =>
+    /^(?:укажите|укажи|уточните|уточни|назовите|назови)$/u.test(word)
+      ? index
+      : last, -1);
+  const questionCue = imperativeCue >= 0 ? imperativeCue :
+    questionWords.findIndex((word) =>
+      /^(?:сколько|како\p{L}*)$/u.test(word)
+    );
+  const focusWords = questionWords.slice(
+    questionCue >= 0 ? questionCue + 1 : 0,
+  ).slice(0, 6);
+  const contextStart = focusWords.findIndex((word) =>
+    /^(?:для|у|в|во|на|по|от|до|из|без|при)$/u.test(word)
+  );
+  const questionStems = stems(
+    focusWords.slice(0, contextStart < 0 ? undefined : contextStart).join(" "),
+  );
+  const matchesAskedAxis = (word: string): boolean => {
+    const stem = word.slice(0, word.length >= 5 ? 4 : 3);
+    return word.length >= 3 && questionStems.has(stem);
+  };
+  const unit = /^(?:мм²|см²|м²|мм2|см2|м2|квт|вт|мвт|ма|а|кв|в|мм|см|км|м|лм|шт|штук\p{L}*|метр\p{L}*|ампер\p{L}*|вольт\p{L}*|ватт\p{L}*)$/u;
+  const number = /^\d+$/u;
+  const numberWithUnit = /^\d+(?:мм²|см²|м²|мм2|см2|м2|квт|вт|мвт|ма|а|кв|в|мм|см|км|м|лм|шт)$/u;
+  let index = 0;
+  let facts = 0;
+  while (index < words.length) {
+    if (words[index] === "и" && facts > 0 && index + 1 < words.length) {
+      index++;
+      continue;
+    }
+    // Approximation and bound words modify a measurement, not its product
+    // class. They are accepted only when the following fact also parses.
+    if (
+      /^(?:около|примерно|приблизительно|порядка|до|от)$/u
+        .test(words[index]) && index + 1 < words.length
+    ) {
+      index++;
+      continue;
+    }
+    if (
+      words[index] === "не" &&
+      /^(?:более|менее)$/u.test(words[index + 1] ?? "") &&
+      index + 2 < words.length
+    ) {
+      index += 2;
+      continue;
+    }
+    if (numberWithUnit.test(words[index])) {
+      index++;
+      facts++;
+      continue;
+    }
+    // A short label followed by a measured value is still a fact. The label
+    // may be the asked axis or a generic dimension such as «высота»; a new
+    // product noun with its quantity does not satisfy this structure.
+    if (
+      /\p{L}/u.test(words[index]) && number.test(words[index + 1] ?? "") &&
+      (unit.test(words[index + 2] ?? "") ||
+        (number.test(words[index + 2] ?? "") &&
+          unit.test(words[index + 3] ?? ""))) &&
+      (matchesAskedAxis(words[index]) ||
+        /^(?:высот|длин|площад|ширин|глубин|расстоян|мощн|напряж|диаметр)\p{L}*$/u
+          .test(words[index]))
+    ) {
+      index += number.test(words[index + 2] ?? "") ? 4 : 3;
+      facts++;
+      continue;
+    }
+    if (!number.test(words[index])) return false;
+    index++;
+    // Decimal separators were removed only for classification; the original
+    // value is preserved verbatim in the scoped request sent to the model.
+    if (number.test(words[index] ?? "")) index++;
+    if (unit.test(words[index] ?? "")) {
+      index++;
+    } else if (matchesAskedAxis(words[index] ?? "")) {
+      index++;
+    } else if (
+      words[index] === "до" && number.test(words[index + 1] ?? "")
+    ) {
+      // «от 10 до 20 м»: the second bound still must prove its unit.
+    } else if (index < words.length && words[index] !== "и") {
+      return false;
+    }
+    facts++;
+  }
+  return facts > 0;
 }
 
 export function productMatchesActiveSection(

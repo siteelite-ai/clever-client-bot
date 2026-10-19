@@ -262,6 +262,7 @@ import {
   isIndependentNominalRequestOutsideActiveScope,
   isSameSectionNominalRefinement,
   isShortAttributeSelectionFollowup,
+  isVerifiedFreeformReadinessAnswer,
   isVerifiedReadinessScopeReply,
   mayBeActivePrepositionalRefinement,
   mayBeNominalRefinement,
@@ -20185,7 +20186,12 @@ Deno.serve(async (req) => {
                 pending_clarification: undefined,
               }
               : readinessSlots;
-            const readinessNewTask =
+            const verifiedFreeformReadinessAnswer =
+              isVerifiedFreeformReadinessAnswer(
+                userMessage,
+                verifiedReadinessState.slot,
+              );
+            const rawReadinessNewTask =
               classifyPendingSelectionReadinessNewTaskLocally(
                 userMessage,
                 boundarySlots,
@@ -20195,6 +20201,14 @@ Deno.serve(async (req) => {
                   ),
                 },
               );
+            // Lexical independence is weaker than an answer to the exact
+            // question in the latest completed server response. An explicit
+            // topic command is never suppressed by this narrow override.
+            const readinessNewTask = verifiedFreeformReadinessAnswer &&
+                rawReadinessNewTask?.reason ===
+                  "local_verified_readiness_independent_selection"
+              ? null
+              : rawReadinessNewTask;
             // The browser's history and pending slot are hints, never scope
             // authority. In particular a stale catalog_section slot must not
             // suppress the completed server log's active Gallant section.
@@ -20251,7 +20265,7 @@ Deno.serve(async (req) => {
               ),
             );
             const activeScopeClassChanged = Boolean(
-              activeScopeState.scope &&
+              activeScopeState.scope && !verifiedFreeformReadinessAnswer &&
                 isIndependentNominalRequestOutsideActiveScope(
                   userMessage,
                   activeScopeState.scope,
@@ -20292,7 +20306,7 @@ Deno.serve(async (req) => {
                 (sameSectionNominalRefinement ||
                   isShortAttributeSelectionFollowup(userMessage) ||
                   activePrepositionalRefinement === "continue" ||
-                  readinessScopeReply)
+                  readinessScopeReply || verifiedFreeformReadinessAnswer)
               ? activeScopeState.scope
               : null;
             const readinessQuestionSuperseded =
@@ -20446,6 +20460,10 @@ Deno.serve(async (req) => {
                 verified_selection_readiness_slot: Boolean(
                   verifiedReadinessState.slot,
                 ),
+                verified_freeform_readiness_answer:
+                  verifiedFreeformReadinessAnswer,
+                readiness_independent_overridden_by_verified_answer:
+                  Boolean(rawReadinessNewTask && !readinessNewTask),
                 readiness_question_superseded_by_verified_section:
                   readinessQuestionSuperseded,
                 readiness_slot_lookup_failed:

@@ -102,6 +102,40 @@ test('verified complete same-section request outranks stale readiness and consum
     'the browser must not carry the consumed readiness question into a later turn');
 });
 
+test('a verified free-form readiness answer suppresses only a nominal class change', () => {
+  const readinessOverride = between(
+    'const verifiedFreeformReadinessAnswer =',
+    '// The browser\'s history and pending slot are hints',
+  );
+  assert.match(readinessOverride, /const rawReadinessNewTask =\s*classifyPendingSelectionReadinessNewTaskLocally\(/);
+  assert.match(readinessOverride,
+    /const readinessNewTask = verifiedFreeformReadinessAnswer &&\s*rawReadinessNewTask\?\.reason ===\s*"local_verified_readiness_independent_selection"\s*\? null\s*: rawReadinessNewTask/,
+    'only the verified answer may override a lexical independent-selection decision, never an explicit topic boundary');
+  const entityChange = source.match(
+    /const activeScopeEntityChanged = Boolean\(([\s\S]*?)\n\s*\);/,
+  )?.[1];
+  assert.ok(entityChange, 'the entity boundary must be present');
+  const classChange = between(
+    'const activeScopeClassChanged =',
+    'const activeScopeExplicitBoundary =',
+  );
+  assert.match(entityChange, /explicitlyChangesActiveSelectionEntity\(/);
+  assert.doesNotMatch(entityChange, /isVerifiedFreeformReadinessAnswer|verifiedFreeformReadinessAnswer/,
+    'a named entity change remains authoritative even if a pending question exists');
+  assert.match(classChange, /isIndependentNominalRequestOutsideActiveScope\(/);
+  assert.match(classChange, /!\s*(?:isVerifiedFreeformReadinessAnswer\(|verifiedFreeformReadinessAnswer)/,
+    'only a verified free-form answer can suppress a nominal class boundary');
+  assert.match(source, /const activeScopeExplicitBoundary = activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
+    'an explicit entity change must continue to create a new task');
+  const sameSection = between(
+    'const sameSectionScope =',
+    'const readinessQuestionSuperseded =',
+  );
+  assert.match(sameSection, /!activeScopeExplicitBoundary/);
+  assert.match(sameSection, /verifiedFreeformReadinessAnswer/,
+    'a verified short answer must retain the active scope for the next route');
+});
+
 test('final expert card gate intersects live leaf, active entity, and independent named token', () => {
   const guard = between('const guardFinalRenderIds = (',
     'const finalizeTerminalRenderIds = (');
