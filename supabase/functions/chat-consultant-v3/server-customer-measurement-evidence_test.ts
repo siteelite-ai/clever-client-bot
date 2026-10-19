@@ -12,15 +12,22 @@ import { filterPerProductMeasuredCriteria } from "../_shared/v3-tools/criteria-r
 
 // Import the real pure/DB-bound helpers without opening an HTTP socket.
 const originalServe = Deno.serve;
+const originalEnvGet = Deno.env.get;
 Deno.serve = (() => ({
   finished: Promise.resolve(),
   shutdown() {},
 })) as unknown as typeof Deno.serve;
+// CI deliberately grants no environment access to safeguards tests. Importing
+// the handler must not require production credentials just to exercise these
+// exported helpers; restore both process APIs before any test runs.
+Deno.env.get = (() => undefined) as typeof Deno.env.get;
 const {
   composeVerifiedCustomerMeasurementEvidence,
   loadVerifiedCustomerMeasurementEvidence,
-} = await import("./index.ts");
-Deno.serve = originalServe;
+} = await import("./index.ts").finally(() => {
+  Deno.serve = originalServe;
+  Deno.env.get = originalEnvGet;
+});
 
 interface LogRow {
   id: string;
