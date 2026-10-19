@@ -7007,12 +7007,14 @@ async function runExpertLoop(
     criteria: Criterion[],
     reasoningText = derivedSelectionReasoningEvidence ||
       pendingDerivedSelectionMeasurementEvidence || firstAssistantText,
+    certifiedPairedCriteria: readonly Criterion[] = [],
   ) => filterPerProductMeasuredCriteria(
     criteria,
     reasoningText,
     verifiedCustomerMeasurementEvidence,
     cardMeasurementScope(),
     lastDiscover?.facets ?? [],
+    certifiedPairedCriteria,
   );
   const scopeLiveFacetOptions = (
     options: Record<string, unknown> | null | undefined,
@@ -7218,6 +7220,21 @@ async function runExpertLoop(
         ...criterion,
         evidence: "derived_required" as const,
       }));
+    // A relation inferred from arbitrary model output is not evidence that a
+    // per-product physical threshold belongs to the customer. Only the pair
+    // certified against the live two-state facet graph may cross that gate.
+    const certifiedPairedCriteria = compatibilityRelationsToCriteria(
+      certifiedPairedCompatibilityRelations,
+    ).map((criterion) => ({
+      ...criterion,
+      evidence: "derived_required" as const,
+    })).filter((certified) => compatibilityCriteria.some((current) =>
+      current.key === certified.key &&
+      current.op === certified.op &&
+      current.value === certified.value &&
+      current.unit === certified.unit &&
+      current.exclusive === certified.exclusive
+    ));
     const accumulatedCriteria = [
       ...userBackedSearchCriteria,
       ...enforcedSearchCriteria,
@@ -7259,7 +7276,7 @@ async function runExpertLoop(
           evidence: "user_explicit" as const,
         }]
         : []),
-    ])).criteria;
+    ]), undefined, certifiedPairedCriteria).criteria;
     const emittedPlan = emittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(
         compatibilityCriteria.length >= 2 ? null : plan,
@@ -7600,6 +7617,9 @@ async function runExpertLoop(
   let activeCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
+  let certifiedPairedCompatibilityRelations: ReturnType<
+    typeof parseCompatibilityRelations
+  > = [];
   const adoptValidatedPairedRelations = (
     decision: ReturnType<typeof terminalPairedFitDecision>,
     facets: DiscoverCategoryOk["facets"],
@@ -7614,6 +7634,12 @@ async function runExpertLoop(
     );
     activeCompatibilityRelations = [
       ...activeCompatibilityRelations.filter((relation) =>
+        !selectedKeys.has(normalizeForMatch(relation.product_key))
+      ),
+      ...decision.relations,
+    ];
+    certifiedPairedCompatibilityRelations = [
+      ...certifiedPairedCompatibilityRelations.filter((relation) =>
         !selectedKeys.has(normalizeForMatch(relation.product_key))
       ),
       ...decision.relations,
@@ -13298,6 +13324,10 @@ async function runExpertLoop(
             );
           const compatibilityRelations = completedCompatibility.relations;
           activeCompatibilityRelations = compatibilityRelations;
+          // Tool-supplied relations replace the previous compatibility graph.
+          // Any earlier paired certification must be re-established against
+          // the current live facet pair before it may enter the render contract.
+          certifiedPairedCompatibilityRelations = [];
           if (
             alignedCompatibility.alignments.length > 0 ||
             completedCompatibility.added.length > 0
@@ -16905,6 +16935,9 @@ async function runExpertLoop(
         void classifyOptionsSource;
 
         if (tc.name === "discover_category") {
+          // A certified pair belongs to one discovery's live facet graph.
+          // Never carry it into a new or corrective category discovery.
+          certifiedPairedCompatibilityRelations = [];
           if (correctiveDiscovery) {
             // The previous category has just been rejected by the consultant's
             // own reasoning. Never let its whitelist constrain the corrected

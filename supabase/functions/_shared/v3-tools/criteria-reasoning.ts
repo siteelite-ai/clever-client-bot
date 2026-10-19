@@ -1200,6 +1200,44 @@ function aggregateMeasurementAxisProof(
   return false;
 }
 
+/** A certified two-sided fit is different from an invented per-card scalar:
+ * its number is the customer's object dimension and its two product axes are
+ * independently proved by a server-validated live-facet pair. The caller must
+ * supply only that certified pair, never raw model compatibility relations.
+ * Match every field that affects the gate and require both strict sides, so a
+ * loose single relation cannot turn into a general model-authority bypass. */
+function matchesCertifiedPairedCriterion(
+  criterion: Criterion,
+  certifiedPairedCriteria: readonly Criterion[],
+): boolean {
+  if (
+    criterion.evidence !== "derived_required" ||
+    (criterion.level ?? "A") !== "A" ||
+    !["min", "max"].includes(criterion.op) ||
+    criterion.exclusive !== true ||
+    typeof criterion.value !== "number" ||
+    !Number.isFinite(criterion.value)
+  ) return false;
+  const unit = canonicalMeasurementUnit(criterion.unit ?? "");
+  if (!unit || !isPhysicalMeasurementUnit(unit)) return false;
+  const certified = certifiedPairedCriteria.filter((candidate) =>
+    candidate.evidence === "derived_required" &&
+    (candidate.level ?? "A") === "A" &&
+    ["min", "max"].includes(candidate.op) &&
+    candidate.exclusive === true &&
+    typeof candidate.value === "number" &&
+    Number.isFinite(candidate.value) &&
+    candidate.value === criterion.value &&
+    canonicalMeasurementUnit(candidate.unit ?? "") === unit
+  );
+  return certified.some((candidate) =>
+    candidate.key === criterion.key && candidate.op === criterion.op
+  ) && certified.some((opposite) =>
+    opposite.key !== criterion.key &&
+    opposite.op === (criterion.op === "min" ? "max" : "min")
+  );
+}
+
 /** Remove measured card filters unsupported by customer-owned numeric
  * evidence. A per-product scalar invented by model reasoning is not a hard
  * search or render constraint, even when its calculation is plausible.
@@ -1212,10 +1250,20 @@ export function filterPerProductMeasuredCriteria(
   customerText: string,
   measurementScope: string | null | undefined,
   facets: MeasurementFacet[] = [],
+  certifiedPairedCriteria: readonly Criterion[] = [],
 ): PerProductMeasuredCriteriaFilter {
   const next: Criterion[] = [];
   const removed: Criterion[] = [];
   for (const criterion of Array.isArray(criteria) ? criteria : []) {
+    // A system-total request has additional allocation rules. A certified
+    // pair must not bypass that independent scope decision.
+    if (
+      measurementScope !== "system_total" &&
+      matchesCertifiedPairedCriterion(criterion, certifiedPairedCriteria)
+    ) {
+      next.push({ ...criterion });
+      continue;
+    }
     const customerAvailable = String(customerText ?? "").trim().length > 0;
     if (
       measurementScope !== "system_total" &&

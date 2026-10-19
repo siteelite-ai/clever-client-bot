@@ -24,9 +24,19 @@ import {
   checkCriterion,
   type Criterion,
   extendSelectionCriteriaPlan,
+  mergeMandatorySelectionCriteria,
   resolveTerminalSelectionCriteria,
   restrictSelectionCriteriaPlan,
 } from "./criteria-gate.ts";
+import {
+  compatibilityRelationsToCriteria,
+  subsumeCriteriaProvenByCompatibility,
+  subsumePairedStateCriteria,
+} from "./compatibility-contract.ts";
+import {
+  extractSchemaBackedMeasuredReference,
+  terminalPairedFitDecision,
+} from "../../chat-consultant-v3/selection-jargon-policy.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, traits: string[]): ProductRef {
@@ -1696,6 +1706,243 @@ Deno.test("full-word lumen aliases cannot leave a rejected model-only threshold 
       claim.text
     ),
     ["не менее 4000 люменов"],
+  );
+});
+
+Deno.test("only a complete certified paired fit survives the scalar authority gate", () => {
+  const customer = "Подбери трубку ТТУ на кабель диаметром 10 мм.";
+  const reasoning =
+    "Для кабеля 10 мм внутренний диаметр до усадки должен быть строго больше 10 мм, а после усадки строго меньше 10 мм.";
+  const before: Criterion = {
+    key: "Диаметр до усадки, мм",
+    op: "min",
+    value: 10,
+    unit: "мм",
+    exclusive: true,
+    level: "A",
+    evidence: "derived_required",
+  };
+  const after: Criterion = {
+    key: "Диаметр после усадки, мм",
+    op: "max",
+    value: 10,
+    unit: "мм",
+    exclusive: true,
+    level: "A",
+    evidence: "derived_required",
+  };
+  const inventedFlow: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 4000,
+    unit: "лм",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const facets = [
+    {
+      key: "before",
+      caption: before.key,
+      unit: "мм",
+      values: [{ value: "12" }, { value: "14" }],
+    },
+    {
+      key: "after",
+      caption: after.key,
+      unit: "мм",
+      values: [{ value: "6" }, { value: "7" }],
+    },
+    {
+      key: "flow",
+      caption: inventedFlow.key,
+      unit: "лм",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+  ];
+  const withoutCertification = filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+  );
+  assertEquals(withoutCertification.criteria, []);
+  const certified = filterPerProductMeasuredCriteria(
+    [before, after, inventedFlow],
+    `${reasoning} Световой поток должен быть не менее 4000 лм.`,
+    customer,
+    "per_product",
+    facets,
+    [before, after],
+  );
+  assertEquals(certified.criteria, [before, after]);
+  assertEquals(certified.removed, [inventedFlow]);
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [before, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [before],
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [before, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [{ ...before, exclusive: false }, after],
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{ ...before, evidence: "model_assumption" }, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [before, after],
+    ).criteria,
+    [after],
+  );
+  const totalScope = filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "system_total",
+    facets,
+    [before, after],
+  );
+  assertEquals(totalScope.criteria, filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "system_total",
+    facets,
+  ).criteria);
+});
+
+Deno.test("TTU selection contract retains exactly two server-certified strict fit bounds", () => {
+  const customer = "Подбери трубку ТТУ для кабеля диаметром 10 мм.";
+  const reasoning =
+    "До изменения внутренний диаметр должен быть строго больше 10 мм, а после изменения внутренний диаметр должен быть строго меньше 10 мм.";
+  const facets = [
+    {
+      key: "diameter_before",
+      caption: "Внутренний диаметр до изменения, мм",
+      unit: "мм",
+      values: [{ value: "12" }, { value: "16" }],
+    },
+    {
+      key: "diameter_after",
+      caption: "Внутренний диаметр после изменения, мм",
+      unit: "мм",
+      values: [{ value: "6" }, { value: "8" }],
+    },
+  ];
+  const decision = terminalPairedFitDecision(
+    { value: 10, unit: "мм" },
+    customer,
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(decision.selected_pair?.before_facet_key, facets[0].key);
+  assertEquals(decision.selected_pair?.after_facet_key, facets[1].key);
+  const compatibilityCriteria = compatibilityRelationsToCriteria(
+    decision.relations,
+  ).map((criterion) => ({
+    ...criterion,
+    evidence: "derived_required" as const,
+  }));
+  const copiedObjectMeasurements: Criterion[] = facets.map((facet) => ({
+    key: facet.caption,
+    op: "eq",
+    value: 10,
+    unit: "мм",
+    level: "A",
+    evidence: "user_explicit",
+  }));
+  const evidenceCriteria = subsumePairedStateCriteria(
+    subsumeCriteriaProvenByCompatibility(
+      copiedObjectMeasurements,
+      decision.relations,
+    ),
+  );
+  assertEquals(evidenceCriteria, []);
+  const merged = mergeMandatorySelectionCriteria([
+    ...evidenceCriteria,
+    ...compatibilityCriteria,
+  ]);
+  const emitted = filterPerProductMeasuredCriteria(
+    merged,
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+    compatibilityCriteria,
+  ).criteria;
+  assertEquals(emitted, [
+    {
+      key: facets[0].key,
+      op: "min",
+      value: 10,
+      unit: "мм",
+      level: "A",
+      exclusive: true,
+      evidence: "derived_required",
+    },
+    {
+      key: facets[1].key,
+      op: "max",
+      value: 10,
+      unit: "мм",
+      level: "A",
+      exclusive: true,
+      evidence: "derived_required",
+    },
+  ]);
+
+  // The same model-provided pair is not authoritative when the request owns
+  // two different reference sizes. There is no certified relation to pass.
+  const ambiguousCustomer =
+    "Подбери трубку ТТУ для кабеля диаметром 10 мм и для кабеля диаметром 12 мм.";
+  const ambiguousReference = extractSchemaBackedMeasuredReference(
+    ambiguousCustomer,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(ambiguousReference, null);
+  const ambiguous = terminalPairedFitDecision(
+    ambiguousReference,
+    ambiguousCustomer,
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(ambiguous.state, "unproven");
+  const ambiguousCertified = compatibilityRelationsToCriteria(
+    ambiguous.relations,
+  ).map((criterion) => ({
+    ...criterion,
+    evidence: "derived_required" as const,
+  }));
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      mergeMandatorySelectionCriteria(compatibilityCriteria),
+      reasoning,
+      ambiguousCustomer,
+      "per_product",
+      facets,
+      ambiguousCertified,
+    ).criteria,
+    [],
   );
 });
 
