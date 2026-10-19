@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-2862a3ea0eb726d9';
+  var WIDGET_VERSION = 'widget-d993d23cf5f0a526';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -1131,7 +1131,7 @@
 
   // Get elements
   const button = document.getElementById('volt-widget-button');
-  const window = document.getElementById('volt-widget-window');
+  const widgetWindow = document.getElementById('volt-widget-window');
   const newChatBtn = document.getElementById('volt-widget-new-chat');
   const closeBtn = document.getElementById('volt-widget-close');
   const input = document.getElementById('volt-widget-input');
@@ -1256,7 +1256,7 @@
   function toggleWidget() {
     isOpen = !isOpen;
     if (isOpen) expireConversationIfNeeded(false);
-    window.classList.toggle('open', isOpen);
+    widgetWindow.classList.toggle('open', isOpen);
     if (isOpen) {
       focusActiveChoiceOrInput();
     } else {

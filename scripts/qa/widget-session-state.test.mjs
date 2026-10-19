@@ -25,7 +25,7 @@ function savedDialogue(updatedAt) {
   };
 }
 
-function bootWidget({ state, now, confirmResult = true, fetchImpl, source = widgetSource } = {}) {
+function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomUUID, source = widgetSource } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://220volt.testdevops.ru/',
@@ -35,6 +35,12 @@ function bootWidget({ state, now, confirmResult = true, fetchImpl, source = widg
   if (Number.isFinite(now)) dom.window.Date.now = () => now;
   dom.window.TextEncoder = TextEncoder;
   dom.window.TextDecoder = TextDecoder;
+  if (cryptoRandomUUID) {
+    Object.defineProperty(dom.window.crypto, 'randomUUID', {
+      configurable: true,
+      value: cryptoRandomUUID,
+    });
+  }
   dom.window.fetch = fetchImpl ?? (async () => {
     throw new Error('Unexpected fetch in widget session-state test');
   });
@@ -130,6 +136,40 @@ test('an existing in-progress request is accepted before the backend waits for r
   assert.ok(existingBranch >= 0, 'existing replay branch must remain present');
   assert.ok(replayAcceptance > existingBranch, 'existing request must emit protocol acceptance');
   assert.ok(replayAcceptance < replayWait, 'protocol acceptance must precede the potentially long replay wait');
+});
+
+test('widget exposes its API on the browser window and uses browser crypto for message IDs', async () => {
+  const messageId = '123e4567-e89b-42d3-a456-426614174099';
+  let cryptoCalls = 0;
+  let requestBody;
+  const dom = bootWidget({
+    cryptoRandomUUID: () => { cryptoCalls += 1; return messageId; },
+    fetchImpl: async (_url, init) => {
+      requestBody = JSON.parse(init.body);
+      return new Response(completeAnswerSse('Проверка завершена.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const widgetWindow = dom.window.document.querySelector('#volt-widget-window');
+
+  assert.equal(typeof dom.window.Widget220volt?.open, 'function');
+  assert.equal(widgetWindow.Widget220volt, undefined, 'API must not be attached to a DOM element');
+  dom.window.Widget220volt.open();
+  assert.equal(widgetWindow.classList.contains('open'), true);
+  dom.window.Widget220volt.close();
+  assert.equal(widgetWindow.classList.contains('open'), false);
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка идентификатора';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => Boolean(requestBody), 'Widget request was not sent');
+  await waitForWidget(() => visibleMessages(dom).includes('Проверка завершена.'), 'Widget response was not completed');
+
+  assert.equal(requestBody.messageId, messageId);
+  assert.equal(cryptoCalls, 1);
+  dom.window.close();
 });
 
 test('recent stored dialogue is restored visibly instead of becoming hidden model context', () => {
