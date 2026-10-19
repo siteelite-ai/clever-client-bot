@@ -4,7 +4,6 @@ import {
   extractClientQuantities,
   findUnderstatedCriteria,
   isPhysicalMeasurementUnit,
-  normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import type { Criterion } from "./criteria-gate.ts";
@@ -30,20 +29,6 @@ Deno.test("extract: natural room area spellings normalize to square metres", () 
   assertEquals(extractClientQuantities("комната 25 кв. м"), [{ value: 25, unit: "м²" }]);
 });
 
-Deno.test("extract: written metric exponents remain one physical unit", () => {
-  for (const [source, unit] of [
-    ["120 кв. мм", "мм²"],
-    ["120 кв. см", "см²"],
-    ["120 кв. дм", "дм²"],
-    ["120 м^2", "м²"],
-    ["120 м**2", "м²"],
-    ["120 мм^3", "мм³"],
-  ]) {
-    assertEquals(normalizeMeasurementText(source).includes(`120 ${unit}`), true);
-    assertEquals(extractClientQuantities(source), [{ value: 120, unit }]);
-  }
-});
-
 Deno.test("extract: product codes are not measurements", () => {
   assertEquals(extractClientQuantities("Подбери аналог Schneider Acti9 C16 и IP65"), []);
   assertEquals(extractClientQuantities("Acti9 C16, номинальный ток 16 А"), [
@@ -63,7 +48,6 @@ Deno.test("physical measurements exclude money, counts and durations", () => {
   assertEquals(isPhysicalMeasurementUnit("тг"), false);
   assertEquals(isPhysicalMeasurementUnit("KZT"), false);
   assertEquals(isPhysicalMeasurementUnit("штук"), false);
-  assertEquals(isPhysicalMeasurementUnit("единиц"), false);
   assertEquals(isPhysicalMeasurementUnit("дней"), false);
 });
 

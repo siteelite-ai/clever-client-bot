@@ -2,7 +2,6 @@ import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import {
   extractClientQuantities,
   isPhysicalMeasurementUnit,
-  normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import {
@@ -17,7 +16,6 @@ import {
 import {
   canonicalMeasurementUnit,
   customerOwnsDerivedExactFacetValue,
-  extractUnownedMeasuredClaims,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
 } from "./criteria-reasoning.ts";
@@ -354,18 +352,15 @@ function measuredUnitsFromLiveFacets(
 ): Set<string> {
   return new Set(facets.flatMap((facet) => {
     const suffix = String(facet.caption ?? "").match(
-      /[,;(]\s*([\p{L}\p{N}°²³/]{1,12})\)?\s*$/u,
+      /[,;(]\s*([\p{L}°²³/]{1,12})\)?\s*$/u,
     )?.[1] ?? "";
     const unit = canonicalMeasurementUnit(String(facet.unit || suffix));
     return unit && isPhysicalMeasurementUnit(unit) ? [unit] : [];
   }));
 }
 
-// Match the whole unit, including ASCII exponents (м2, мм2). A partial
-// `120 м` from `120 м2` can otherwise bind a customer's area to a model's
-// unrelated length. Natural-language `кв. м` is normalized before matching.
 const TOTAL_QUANTITY =
-  /(?<![\p{L}\p{N}])((?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}\p{N}°²³/]{1,12})(?![\p{L}\p{N}])/gu;
+  /(?<![\p{L}\p{N}])((?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?)\s*([\p{L}°²³/]{1,12})(?![\p{L}])/gu;
 const HARD_TOTAL_PREFIX =
   /(?:не\s+менее(?:\s+чем)?|как\s+минимум|минимум|требу\p{L}*|необходим\p{L}*|нуж\p{L}*|долж\p{L}*|потребу\p{L}*|более|свыше)\s*$/iu;
 
@@ -375,7 +370,7 @@ function reasoningNamesHardSystemTotal(
 ): boolean {
   const units = measuredUnitsFromLiveFacets(facets);
   if (units.size === 0) return false;
-  return normalizeMeasurementText(reasoning).split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
+  return String(reasoning ?? "").split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
     .some((clause) => {
       if (
         !/(?:суммар\p{L}*|общ\p{L}*\s+(?:потребност\p{L}*|показател\p{L}*|результат\p{L}*|объем\p{L}*|поток\p{L}*|мощност\p{L}*)|всей\s+систем\p{L}*|на\s+весь\s+объект)/iu
@@ -398,21 +393,17 @@ export function demoteUnsupportedSystemTotalClaims(
   facets: DerivedSelectionFacet[],
 ): string {
   const liveMeasuredUnits = measuredUnitsFromLiveFacets(facets);
-  // Do not split the unit abbreviation `кв. м` into separate sentences.
-  // Keep the original prose intact; only the matching copy is normalized.
-  const sentences = String(reasoning ?? "")
-    .split(/(?<=[.!?…;])(?<!кв\.)\s+/iu)
+  const sentences = String(reasoning ?? "").split(/(?<=[.!?…;])\s+/u)
     .filter(Boolean);
   let removed = false;
   const hasUnsupportedHardTotal = (sentence: string): boolean => {
-    const normalizedSentence = normalizeMeasurementText(sentence);
     if (
       /(?:кажд\p{L}*|отдельн\p{L}*|на\s+(?:один|одно|одну)|для\s+одного|per\s+(?:item|unit))/iu
-        .test(normalizedSentence) &&
+        .test(sentence) &&
       !/(?:суммар\p{L}*|общ\p{L}*|всего\s+\d|всей\s+систем\p{L}*)/iu
-        .test(normalizedSentence)
+        .test(sentence)
     ) return false;
-    return [...normalizedSentence.matchAll(TOTAL_QUANTITY)].some(
+    return [...sentence.matchAll(TOTAL_QUANTITY)].some(
       (match) => {
         const value = Number(match[1].replace(/[ \u00a0\u202f]/gu, "")
           .replace(",", "."));
@@ -420,9 +411,9 @@ export function demoteUnsupportedSystemTotalClaims(
         if (!Number.isFinite(value) || !liveMeasuredUnits.has(unit)) {
           return false;
         }
-        const before = normalizedSentence.slice(Math.max(0, (match.index ?? 0) - 100),
+        const before = sentence.slice(Math.max(0, (match.index ?? 0) - 100),
           match.index ?? 0).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
-        const after = normalizedSentence.slice((match.index ?? 0) + match[0].length)
+        const after = sentence.slice((match.index ?? 0) + match[0].length)
           .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
         const hardMinimum = HARD_TOTAL_PREFIX.test(before) ||
           /^\s*(?:\(\s*)?(?:минимум|как\s+минимум)/iu.test(after);
@@ -459,131 +450,6 @@ export function demoteUnsupportedSystemTotalClaims(
     "Суммарный числовой ориентир пока не подтверждён; отдельные товары можно сравнивать по проверенным характеристикам, но не считать готовой схемой для всей системы.",
   );
   return retained.join(" ").trim();
-}
-
-/** The same customer-authority decision governs search filters and visible
- * reasoning. Remove a model-only hard card number only when its independent
- * clause can be separated; retry the declaration if that would erase another
- * live requirement or leave no useful reasoning. Never turn a rejected hard
- * threshold into a softer recommendation by editing its number in place. */
-function scrubUnsupportedPerProductMeasuredClaims(
-  reasoning: string,
-  customerEvidence: string,
-  facets: DerivedSelectionFacet[],
-  measurementScope: string,
-  pairedObjectReference: PairedObjectReference | null,
-): string | null {
-  if (!customerEvidence.trim()) return reasoning;
-  const liveMeasuredFacets = facets.map((facet) => ({
-    key: String(facet.key || facet.caption || ""),
-    caption: String(facet.caption || facet.key || ""),
-    unit: facet.unit == null ? null : String(facet.unit),
-    values: (facet.values ?? []).map(({ value }) => ({
-      value: String(value ?? ""),
-    })),
-  }));
-  const pairedFacetNames = new Set(
-    facets.filter((facet) =>
-      pairedObjectReference?.facetKeys.includes(String(facet.key ?? ""))
-    ).flatMap((facet) =>
-      [facet.key, facet.caption].map((value) => normalizeKey(String(value ?? "")))
-    ),
-  );
-  const claims = extractUnownedMeasuredClaims(
-    reasoning,
-    customerEvidence,
-    liveMeasuredFacets,
-    measurementScope,
-  ).filter((claim) => {
-    // The paired-fit protocol proves only strict comparisons against the
-    // measured object itself. It cannot license a different model-supplied
-    // size merely because the claim names the same before/after facet.
-    const verifiedPairedBound = pairedObjectReference &&
-      pairedObjectReference.facetKeys.length === 2 &&
-      pairedFacetNames.has(normalizeKey(claim.criterion.key)) &&
-      Number(claim.criterion.value) === pairedObjectReference.value &&
-      canonicalMeasurementUnit(claim.criterion.unit ?? "") ===
-        canonicalMeasurementUnit(pairedObjectReference.unit) &&
-      claim.criterion.exclusive === true &&
-      (claim.criterion.op === "min" || claim.criterion.op === "max");
-    return !verifiedPairedBound;
-  });
-  if (claims.length === 0) return reasoning;
-
-  const sentenceSeparator = /(?<=[.!?…;])(?<!кв\.)\s+/giu;
-  const clauseSeparator =
-    /,\s*(?:(?:при\s+этом|а\s+также|кроме\s+того|но|и|а)\s+)|;\s*|\s+(?:(?:и|а\s+также|при\s+этом))\s+/giu;
-  const retained: string[] = [];
-  let sentenceStart = 0;
-  const sentenceSpans: Array<{ start: number; end: number }> = [];
-  for (const separator of reasoning.matchAll(sentenceSeparator)) {
-    const end = separator.index ?? 0;
-    sentenceSpans.push({ start: sentenceStart, end });
-    sentenceStart = end + separator[0].length;
-  }
-  sentenceSpans.push({ start: sentenceStart, end: reasoning.length });
-  for (const sentence of sentenceSpans) {
-    const sentenceText = reasoning.slice(sentence.start, sentence.end).trim();
-    if (!sentenceText) continue;
-    // The extractor includes the governing modal verb in `start`. It may sit
-    // before an independent conjunction; the numeric unit at `end` owns the
-    // clause to remove, not every earlier clause touched by that verb.
-    const overlapping = claims.filter(({ end }) =>
-      end > sentence.start && end <= sentence.end
-    );
-    if (overlapping.length === 0) {
-      retained.push(sentenceText);
-      continue;
-    }
-    const clauses: Array<{ start: number; end: number }> = [];
-    let clauseStart = sentence.start;
-    for (const separator of sentenceText.matchAll(clauseSeparator)) {
-      const index = sentence.start + (separator.index ?? 0);
-      clauses.push({ start: clauseStart, end: index });
-      clauseStart = index + separator[0].length;
-    }
-    clauses.push({ start: clauseStart, end: sentence.end });
-    for (const clause of clauses) {
-      const text = reasoning.slice(clause.start, clause.end).trim().replace(
-        /[,;]+$/u,
-        "",
-      );
-      if (!text) continue;
-      const containsRejected = overlapping.some(({ end }) =>
-        end > clause.start && end <= clause.end
-      );
-      if (containsRejected) {
-        const otherFacetVisible = facets.some((facet) => {
-          const facetNames = [facet.key, facet.caption].map((value) =>
-            normalizeKey(String(value ?? ""))
-          );
-          if (
-            overlapping.some((claim) =>
-              facetNames.includes(normalizeKey(claim.criterion.key))
-            )
-          ) return false;
-          return (facet.values ?? []).some(({ value }) => {
-            const visible = visibleFacetText(String(value ?? ""));
-            return visible.length >= 3 &&
-              (` ${normalizeLiteralEvidence(text)} `).includes(
-                ` ${normalizeLiteralEvidence(visible)} `,
-              );
-          });
-        });
-        if (otherFacetVisible) return null;
-        continue;
-      }
-      if (text.length < 6) continue;
-      const capitalized = text.replace(/^\p{Ll}/u, (initial) =>
-        initial.toLocaleUpperCase("ru-RU")
-      );
-      retained.push(
-        /[.!?…]$/u.test(capitalized) ? capitalized : `${capitalized}.`,
-      );
-    }
-  }
-  const safe = retained.join(" ").replace(/\s+/gu, " ").trim();
-  return safe.length >= 20 ? safe : null;
 }
 
 /**
@@ -2223,21 +2089,13 @@ export function resolveDerivedSelectionReasoning(
     ? reconcileComputedTotalReasoning(originalReasoning, customerEvidence)
     : originalReasoning;
   if (!reconciledScopeReasoning) return null;
-  const aggregateSafeReasoning = measurementScope === "system_total"
+  const scopeConsistentReasoning = measurementScope === "system_total"
     ? demoteUnsupportedSystemTotalClaims(
       reconciledScopeReasoning,
       customerEvidence,
       facets,
     )
     : reconciledScopeReasoning;
-  const scopeConsistentReasoning = scrubUnsupportedPerProductMeasuredClaims(
-    aggregateSafeReasoning,
-    customerEvidence,
-    facets,
-    measurementScope,
-    pairedObjectReference,
-  );
-  if (!scopeConsistentReasoning) return null;
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);
@@ -3086,11 +2944,6 @@ export function buildDerivedSelectionReasoningMessages(
   ];
   messages[0].content +=
     " Показанные в JSON значения фасетов — неполная выборка кандидатов, а не весь ассортимент. До поиска не делай выводов о наличии, отсутствии, количестве подходящих товаров или недостаточности данных о товарах по этой выборке; сообщай только проверяемую совместимость и недостающие параметры самого запроса клиента.";
-  // Clarify the earlier numeric-conversion instruction at the source: a
-  // plausible engineering norm is useful reasoning, not customer authority
-  // for a hard catalog filter or a mandatory per-card claim.
-  messages[0].content +=
-    " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани два строгих условия совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
   return messages;
 }
 

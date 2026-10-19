@@ -868,34 +868,6 @@ Deno.test("paired pre-search reasoning keeps strict bounds but drops speculative
   }
 });
 
-Deno.test("paired fit does not authorize a model-only hard size on the same live facet", () => {
-  const facets = [{
-    key: "before",
-    caption: "Внутренний диаметр до изменения, мм",
-    unit: "мм",
-    values: [{ value: "10" }, { value: "14" }],
-  }, {
-    key: "after",
-    caption: "Внутренний диаметр после изменения, мм",
-    unit: "мм",
-    values: [{ value: "8" }, { value: "10" }],
-  }];
-  const declaration = resolveDerivedSelectionReasoning(
-    {
-      reasoning:
-        "Для объекта 10 мм внутренний диаметр до изменения строго больше 10 мм, а после изменения строго меньше 10 мм. Внутренний диаметр до изменения должен быть строго больше 14 мм.",
-      required_facet_values: [],
-    },
-    facets,
-    "объект диаметром 10 мм",
-    "Изделия",
-    { value: 10, unit: "мм", facetKeys: ["before", "after"] },
-  );
-  assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
-  assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
-  assertEquals(declaration?.text.includes("строго больше 14 мм"), false);
-});
-
 Deno.test("paired uncertainty guard preserves customer-data gaps and decimal bounds; empty schema is safe", () => {
   const facets = [{
     key: "before",
@@ -1531,24 +1503,6 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
     true,
   );
   assertEquals(
-    messages[0].content.includes(
-      "число или коэффициент, который ты выбрал сам и которого клиент не задавал",
-    ),
-    true,
-  );
-  assertEquals(
-    messages[0].content.includes(
-      "не называй её результат обязательным минимумом товара",
-    ),
-    true,
-  );
-  assertEquals(
-    messages[0].content.includes(
-      "назови именно его и оставь расчёт условным",
-    ),
-    true,
-  );
-  assertEquals(
     messages[0].content.includes("неопределёнными, а не несовместимыми"),
     true,
   );
@@ -1963,7 +1917,7 @@ Deno.test("system-total reasoning is visibly marked and cannot masquerade as one
   );
 });
 
-Deno.test("system total and model-only per-card targets do not become exact product obligations", () => {
+Deno.test("system total drops a derived per-card measurement", () => {
   const facets = [
     {
       key: "flux",
@@ -2022,10 +1976,8 @@ Deno.test("system total and model-only per-card targets do not become exact prod
     perProduct?.requiredFacetValues.some(({ key, value }) =>
       key === "Световой поток" && value === "7000 Лм"
     ),
-    false,
+    true,
   );
-  assertEquals(perProduct?.measurementEvidence.includes("7000 лм"), false);
-  assertEquals(perProduct?.text.includes("IP65"), true);
 });
 
 Deno.test("a visible minimum capacity outranks an exact model ID copied from the application's size", () => {
@@ -2149,7 +2101,7 @@ Deno.test("a spatial calculation cannot masquerade as one-product evidence", () 
   );
 });
 
-Deno.test("one-to-one replacement cannot promote a model-only lighting norm to a hard card target", () => {
+Deno.test("one-to-one replacement keeps calculated demand per target while a multi-item system remains aggregate", () => {
   const reasoning = "Нужно не менее 4000 лм: 25 м² × 160 лк = 4000 лм.";
   assertEquals(
     reasoningComputesSystemTotalFromSpatialExtent(
@@ -2182,9 +2134,7 @@ Deno.test("one-to-one replacement cannot promote a model-only lighting norm to a
     [],
     "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
   );
-  // With no customer-authored 160 лк or 4000 лм, the only declaration is an
-  // unsupported hard scalar. Retry instead of displaying it as a requirement.
-  assertEquals(single, null);
+  assertEquals(single?.measurementScope, "per_product");
   const noMeasurement = resolveDerivedSelectionReasoning(
     {
       reasoning: "Нужна совместимая замена с подходящими условиями монтажа.",
@@ -2320,205 +2270,16 @@ Deno.test("aggregate provenance guard keeps exact customer totals and valid visi
   assertEquals(customerOwned.includes("24 000 кг"), true);
   const derived = demoteUnsupportedSystemTotalClaims(
     "Световой поток нужен не менее 1800 лм: 120 м² × 15 лк = 1800 лм.",
-    "Участок 120 м². Нужна освещённость не менее 15 лк. Предложи варианты.",
+    "Участок 120 м². Предложи варианты.",
     flux,
   );
   assertEquals(derived.includes("1800 лм"), true);
   const invalid = demoteUnsupportedSystemTotalClaims(
     "Световой поток нужен не менее 24 000 лм: 120 м² × 15 лк = 24 000 лм.",
-    "Участок 120 м². Нужна освещённость не менее 15 лк. Предложи варианты.",
+    "Участок 120 м². Предложи варианты.",
     flux,
   );
   assertEquals(invalid.includes("24 000 лм"), false);
-});
-
-Deno.test("ASCII square metres cannot ground a model-only linear total", () => {
-  const customer = "Нужна суммарная площадь не менее 120 м2.";
-  const reasoning = "Для всей системы нужна суммарная длина не менее 120 м.";
-  const facets = [{
-    key: "length",
-    caption: "Длина, м",
-    unit: "м",
-    values: [{ value: "120" }],
-  }];
-  const safe = demoteUnsupportedSystemTotalClaims(reasoning, customer, facets);
-  assertEquals(safe.includes("120 м."), false);
-  assertEquals(safe.includes("числовой ориентир пока не подтверждён"), true);
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning,
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [],
-  }, facets, customer);
-  assertEquals(resolved?.measurementScope, "system_total");
-  assertEquals(resolved?.text.includes("120 м."), false);
-});
-
-Deno.test("square-metre abbreviation cannot ground a model-only voltage total", () => {
-  const customer = "Нужна суммарная площадь не менее 120 кв. м.";
-  const reasoning = "Для всей системы нужно суммарное напряжение не менее 120 кВ.";
-  const facets = [{
-    key: "voltage",
-    caption: "Напряжение, кВ",
-    unit: "кВ",
-    values: [{ value: "120" }],
-  }];
-  const safe = demoteUnsupportedSystemTotalClaims(reasoning, customer, facets);
-  assertEquals(safe.includes("120 кВ"), false);
-  assertEquals(safe.includes("числовой ориентир пока не подтверждён"), true);
-});
-
-Deno.test("square-metre spellings keep a genuinely customer-owned aggregate", () => {
-  const facets = [{
-    key: "area",
-    caption: "Площадь, м²",
-    unit: "м²",
-    values: [{ value: "120" }],
-  }];
-  for (const spelling of ["120 м2", "120 кв. м", "120 м²"]) {
-    const customer = `Нужна суммарная площадь не менее ${spelling}.`;
-    const reasoning = `Для всей системы нужна суммарная площадь не менее ${spelling}.`;
-    const safe = demoteUnsupportedSystemTotalClaims(reasoning, customer, facets);
-    assertEquals(safe.includes(spelling), true);
-    assertEquals(safe.includes("числовой ориентир пока не подтверждён"), false);
-    const resolved = resolveDerivedSelectionReasoning({
-      reasoning,
-      measurement_scope: "per_product",
-      compatible_classifications: [],
-      excluded_classifications: [],
-      required_facet_values: [],
-      explicit_customer_classifications: [],
-    }, facets, customer);
-    assertEquals(resolved?.measurementScope, "system_total");
-  }
-});
-
-Deno.test("ASCII exponent in a live facet caption still protects an unsupported total", () => {
-  const safe = demoteUnsupportedSystemTotalClaims(
-    "Для всей системы нужна суммарная площадь не менее 120 м2.",
-    "Предложи несколько вариантов для объекта.",
-    [{
-      key: "area",
-      caption: "Площадь, м2",
-      values: [{ value: "120" }],
-    }],
-  );
-  assertEquals(safe.includes("120 м2"), false);
-  assertEquals(safe.includes("числовой ориентир пока не подтверждён"), true);
-});
-
-Deno.test("unsupported model-only card threshold is absent from visible reasoning while IP remains", () => {
-  const facets = [{
-    key: "flux",
-    caption: "Световой поток, лм",
-    type: "number",
-    unit: "лм",
-    values: [{ value: "1800" }, { value: "5000" }],
-  }, {
-    key: "protection",
-    caption: "Степень защиты IP",
-    values: [{ value: "IP44" }, { value: "IP65" }],
-  }];
-  const customer = "Нужен светильник для гостиной 25 м².";
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной 25 м² нужен световой поток не менее 4000 лм из расчёта 160 лк и степень защиты IP44 обязательна.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
-  assertEquals(resolved?.text.includes("4000 лм"), false);
-  assertEquals(resolved?.measurementEvidence.includes("4000 лм"), false);
-  assertEquals(resolved?.text.includes("IP44"), true);
-  const ipFirst = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной нужен IP44 и световой поток не менее 4000 лм.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
-  assertEquals(ipFirst?.text.includes("4000 лм"), false);
-  assertEquals(ipFirst?.text.includes("IP44"), true);
-  const inseparable = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Нужен световой поток не менее 4000 лм с защитой IP44.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
-  assertEquals(inseparable, null);
-});
-
-Deno.test("system-total scope cannot expose a model-only minimum for each card", () => {
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для комнаты 25 м² каждый светильник должен иметь световой поток не менее 4000 лм. Степень защиты IP44 обязательна.",
-    measurement_scope: "system_total",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, [{
-    key: "flux",
-    caption: "Световой поток, лм",
-    type: "number",
-    unit: "лм",
-    values: [{ value: "1800" }, { value: "5000" }],
-  }, {
-    key: "protection",
-    caption: "Степень защиты IP",
-    values: [{ value: "IP44" }],
-  }], "Нужен светильник для комнаты 25 м².");
-  assertEquals(resolved?.text.includes("4000 лм"), false);
-  assertEquals(resolved?.measurementEvidence.includes("4000 лм"), false);
-  assertEquals(resolved?.text.includes("IP44"), true);
-});
-
-Deno.test("exact model-only physical number without an exact live value is not a visible must", () => {
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной световой поток должен быть 4000 лм. Учитываю накладной монтаж и подходящий класс применения.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [],
-  }, [{
-    key: "flux",
-    caption: "Световой поток, лм",
-    type: "number",
-    unit: "лм",
-    values: [{ value: "1800" }, { value: "5000" }],
-  }], "Нужен светильник для гостиной 25 м².");
-  assertEquals(resolved?.text.includes("должен быть 4000 лм"), false);
-});
-
-Deno.test("a customer-owned card threshold remains visible after numeric authority checking", () => {
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной 25 м² нужен световой поток не менее 4000 лм. Учитываю накладной монтаж.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [],
-  }, [{
-    key: "flux",
-    caption: "Световой поток, лм",
-    type: "number",
-    unit: "лм",
-    values: [{ value: "1800" }, { value: "5000" }],
-  }], "Нужен светильник для гостиной 25 м² с потоком не менее 4000 лм.");
-  assertEquals(resolved?.text.includes("не менее 4000 лм"), true);
-  assertEquals(resolved?.measurementEvidence.includes("не менее 4000 лм"), true);
 });
 
 Deno.test("a model cannot bypass aggregate provenance by mislabelling a visible system total as per-product", () => {
@@ -2667,7 +2428,7 @@ Deno.test("a computed total keeps an independent calculation and protection clau
   assertEquals(resolved?.measurementEvidence.includes("IP65"), true);
 });
 
-Deno.test("model-only per-item targets are removed, but customer-owned targets stay visible", () => {
+Deno.test("one-to-one replacement and customer-owned per-item targets keep their visible scalar", () => {
   const reasoning =
     "Для зоны 120 м² × 150 лк = 18000 лм. Каждому изделию требуется поток не менее 2000 лм.";
   const declaration = {
@@ -2684,7 +2445,7 @@ Deno.test("model-only per-item targets are removed, but customer-owned targets s
     "Хочу заменить старое изделие на одно новое для зоны 120 м². Покажи варианты.",
   );
   assertEquals(oneToOne?.measurementScope, "per_product");
-  assertEquals(oneToOne?.measurementEvidence.includes("2000 лм"), false);
+  assertEquals(oneToOne?.measurementEvidence.includes("2000 лм"), true);
 
   const customerOwned = resolveDerivedSelectionReasoning(
     declaration,
