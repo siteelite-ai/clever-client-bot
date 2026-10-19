@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-v4-20261012.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v5-20261019.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
@@ -15,7 +15,7 @@ const outputFile = path.join(root, 'docs/qa/release-inventory-v4-20261012.json')
 export const MATRIX_MANIFESTS = [
   {
     file: 'customer-acceptance-cases.json',
-    sha256: '8dcef28cc2e241ff4330666aeaf25b710cc7f3eda1f9e96c0d2b248c9b18dbcc',
+    sha256: 'd2585bc932d0364a3c19e4357db93958dbf9227d9cbcf88a95116f7b4f757f65',
     caseCount: 27, sourceTurnCount: 42, runCount: 81, evaluatedTurnCount: 126,
     repeat: 3,
   },
@@ -237,7 +237,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
-    revision_note: 'V4 re-pins the current customer suite after correcting the yard-floodlight oracle: 1800 lm is a system total, while each alternative still needs source-backed IP protection and a positive measured light output. The historical V3 inventory remains unchanged; candidate evidence is NOT_RUN.',
+    revision_note: 'V5 re-pins the current customer suite after requiring a live catalog household classification for every household motion-sensor light card. The historical V4 inventory remains unchanged; candidate evidence is NOT_RUN.',
     candidate: {
       commit_sha: null,
       preview_version: null,

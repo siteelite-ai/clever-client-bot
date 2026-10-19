@@ -79,7 +79,7 @@ test('catalog-minimum acceptance rejects a plausible but non-cheapest exact cabl
     .some((failure) => failure.includes('unverified product page')));
 });
 
-test('household motion scenarios require several source-backed alternatives across catalog classes', () => {
+test('household motion scenarios require several exact live-class products', () => {
   for (const id of [
     'customer-new-household-motion-without-mount',
     'customer-new-household-motion-joined-currency',
@@ -91,7 +91,10 @@ test('household motion scenarios require several source-backed alternatives acro
     assert.equal(expected.require_products_or_text_groups, undefined);
     assert.equal(expected.max_product_price, 4000);
     assert.equal(expected.require_every_product_page.all_of.length, 2);
-    assert(expected.require_every_product_page.all_of.every((rule) => rule.any_of.length >= 2));
+    assert.deepEqual(expected.require_every_product_page.all_of[0], {
+      facets: [{ name: 'Вид светильника', require_any: ['бытов'] }],
+    });
+    assert.equal(expected.require_every_product_page.all_of[1].any_of.length, 2);
   }
 });
 

@@ -533,6 +533,47 @@ export function redactInternals(text: string): RedactResult {
   return { text: raw, redacted: false, matched: [] };
 }
 
+export const MALFORMED_REASONING_FALLBACK = "Проверю условия подбора по каталогу.";
+export const APPLICATION_CLASS_FALLBACK_NOTICE =
+  "В показанных карточках не подтверждён точный класс товара из запроса. " +
+  "Это альтернативы с подтверждённым в описании применением, а не точные совпадения по классу.";
+
+export function applicationClassFallbackDisclosure(
+  tier: string,
+  alreadySent: boolean,
+): string {
+  return tier === "application_text_fallback" && !alreadySent
+    ? APPLICATION_CLASS_FALLBACK_NOTICE
+    : "";
+}
+
+const EMPTY_PUNCTUATION_GROUP_RE = /\(\s*(?:[,;|/]\s*){2,}\)/u;
+const BROKEN_SEPARATOR_RUN_RE = /(?:,{3,}|;{3,}|\|{3,})/u;
+const SPLIT_NUMERIC_SIZE_RE =
+  /(?<![\p{L}\p{N}])\d{1,4}\s*\/\s*\d{1,4}\.\s+\d{1,2}\s*(?:мм|см|м)(?!\p{L})/iu;
+
+/** Clean complete model prose before it becomes either visible text or search evidence. */
+export function stripMalformedModelSentences(text: string): { text: string; removed: string[] } {
+  if (
+    !EMPTY_PUNCTUATION_GROUP_RE.test(text) &&
+    !BROKEN_SEPARATOR_RUN_RE.test(text) &&
+    !SPLIT_NUMERIC_SIZE_RE.test(text)
+  ) {
+    return { text, removed: [] };
+  }
+  const removed: string[] = [];
+  const cleaned = text.split(/\n\s*\n/u).map((paragraph) =>
+    paragraph.split(/(?<=[.!?])\s+(?!\d)/u).filter((sentence) => {
+      const broken = EMPTY_PUNCTUATION_GROUP_RE.test(sentence) ||
+        BROKEN_SEPARATOR_RUN_RE.test(sentence) ||
+        SPLIT_NUMERIC_SIZE_RE.test(sentence);
+      if (broken) removed.push(sentence.trim());
+      return !broken;
+    }).join(" ").trim()
+  ).filter(Boolean).join("\n\n");
+  return { text: cleaned, removed };
+}
+
 /**
  * Keeps useful shopping reasoning while preventing internal tool names from
  * turning an intermediate bubble into a generic security fallback. Only tool
@@ -553,11 +594,16 @@ export function sanitizeIntermediateReasoning(text: string): RedactResult & { su
   );
   const guarded = redactInternals(rewritten);
   if (guarded.redacted) return { ...guarded, text: "", suppressed: true };
+  const cleaned = stripMalformedModelSentences(guarded.text);
   return {
     ...guarded,
-    text: guarded.text,
+    text: cleaned.text || (cleaned.removed.length > 0 ? MALFORMED_REASONING_FALLBACK : ""),
     suppressed: false,
-    matched: rewritten === text ? guarded.matched : [...guarded.matched, "customer_term:tool_name"],
+    matched: [
+      ...guarded.matched,
+      ...(rewritten === text ? [] : ["customer_term:tool_name"]),
+      ...(cleaned.removed.length > 0 ? ["malformed_reasoning_sentence"] : []),
+    ],
   };
 }
 

@@ -1,0 +1,793 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "d2585bc932d0364a3c19e4357db93958dbf9227d9cbcf88a95116f7b4f757f65",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-19T12:43:13.193Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-new-household-motion-joined-currency": 1,
+    "customer-new-heat-shrink-10mm": 1,
+    "customer-new-black-double-sockets": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-household-motion-joined-currency",
+      "title": "Бюджет без пробела перед валютой не сужает окно кандидатов",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-household-motion-joined-currency_base_1792413793196_1",
+          "turns": [
+            {
+              "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 25514,
+              "network_attempts": 1,
+              "log_id": "98cd924f-e4b6-44db-9c9c-ded490802a88",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140",
+                  "verified": true,
+                  "sku": "Ем000033649",
+                  "name": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Степень защиты, IP": "40",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Объем, м3": "0.001",
+                    "ПРА": "светодиодный драйвер",
+                    "Бренд": "Gauss",
+                    "Цвет корпуса": "белый",
+                    "Код ТН ВЭД": "9405110013",
+                    "Материал рассеивателя": "поликарбонат",
+                    "Материал корпуса": "пластик",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "18",
+                    "Страна происхождения": "КИТАЙ",
+                    "Вид светильника": "бытовые светильники накладные",
+                    "Длина, см": "18",
+                    "Тип лампы": "LED",
+                    "Ширина, см": "18",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Срок службы, мес": "48",
+                    "Количество ламп": "1",
+                    "Диммирование": "Нет",
+                    "Диапазон рабочих температур": "-20 +40 °C",
+                    "Мощность ламп, Вт": "20",
+                    "Световой поток, Лм": "1520",
+                    "Единица измерения": "шт",
+                    "Напряжение, В": "200-240",
+                    "Срок службы, часы": "35000",
+                    "Вес, кг.": "0.15",
+                    "Способ монтажа": "накладной"
+                  },
+                  "offerPrice": 3878,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "description_excerpt": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40 – Служат для освещения крытых помещений где не требуется высокая защищенность от пыли и влаги. Данная модель оборудована микроволновым сенсором (в линейке есть модели оборудованные оптико-акустическим датчиком). Сенсор автоматически включает светильник при появлении движущихся объектов в зоне обнаружения датчика и автоматически отключает осветительный прибор при выходе из зоны обнаружения датчика. "
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/",
+                  "price": 3878,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Светильник Gauss IP40 D180*33 20W 1520lm 4000K 200-240V HALL круглый с микроволновым сенсором 1/40](https://220volt.kz/catalog/svetotexnika/svetilniki/svetilnik-gauss-ip40-d180*33-20w-1520lm-4000k-200-240v-hall-kruglyij-s-mikrovolnovyim-sensorom-140/)**\n  Цена: *3 878* ₸\n  Бренд: Gauss\n  Наличие: Караганда (3 шт)"
+                }
+              ],
+              "text": "Клиент ищет бытовой светильник с датчиком движения для домашнего использования. Ценовое ограничение 4000 тенге — это бюджетный фильтр, а не технический параметр. Основные требования: наличие датчика движения (обязательный функциональный признак) и бытовое назначение. Для указанного применения сначала проверяю «Вид светильника: бытовые линейные светильники»; «Вид светильника: бытовые светильники накладные»; если товаров из подтверждённого класса нет, отдельно проверю другие рубрики, но только при прямом подтверждении того же применения в карточке.По заданным условиям удалось подтвердить только 1 вариант; остальные найденные карточки не прошли те же обязательные критерии.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-c48f7e7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "С датчиком движения",
+                    "op": "eq",
+                    "value": "да",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые линейные светильники",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовые светильники накладные",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "бытовой",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "literal_modifier",
+                    "label": "датчиком",
+                    "op": "eq",
+                    "value": "датчиком"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Светильники»: 1314 тов., фасетов 39, листьев 1",
+                  "duration_ms": 4646
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=2; initial=1; minimum=3; application=1; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=leaf; total=0; retrieved=0; candidate=0; proven=0; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "scope=unscoped; total=53; retrieved=50; candidate=4; proven=1; pooled=1; error=none",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 1",
+                  "duration_ms": 7464
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 1 < 3"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1792413822050_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13024,
+              "network_attempts": 1,
+              "log_id": "e359da48-e287-4a47-92f2-ae61881f677e",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000013731",
+                  "name": "Термоусадочная трубка ТТУ 12/6 черная 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Объем, м3": "0.0002",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Бренд": "IEK",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "чёрный",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "м",
+                    "Ширина, м": "0.012",
+                    "Вес, кг.": "0.016"
+                  },
+                  "offerPrice": 133,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026499",
+                  "name": "Термоусадочная трубка ТТУ 12/6 белая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Бренд": "IEK",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "белый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "м",
+                    "Ширина, м": "0.012",
+                    "Вес, кг.": "0.016"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026500",
+                  "name": "Термоусадочная трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Бренд": "IEK",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "жёлтый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "м",
+                    "Ширина, м": "0.012",
+                    "Вес, кг.": "0.016"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026502",
+                  "name": "Термоусадочная трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Модель или исполнение": "тонкостенная",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Бренд": "IEK",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "зеленый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Длина, м": "1",
+                    "Продается только в групповой упаковке": "Да",
+                    "Срок службы, лет": "30",
+                    "Единица измерения": "м",
+                    "Ширина, м": "0.012",
+                    "Вес, кг.": "0.016"
+                  },
+                  "offerPrice": 114,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка ТТУ 12/6 черная 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "price": 133,
+                  "stockLine": "Астана (455 м), Актобе (288 м), Караганда (283 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 12/6 черная 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/)**\n  Цена: *133* ₸/м\n  Бренд: IEK\n  Наличие: Астана (455 м), Актобе (288 м), Караганда (283 м) и ещё 2 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 белая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Шымкент (294 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 белая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (294 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Актобе (161 м), Шымкент (65 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 желтая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (161 м), Шымкент (65 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "price": 114,
+                  "stockLine": "Шымкент (58 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 зеленая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/)**\n  Цена: *114* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (58 м)"
+                }
+              ],
+              "text": "Клиент указал диаметр кабеля 10 мм. Термоусаживаемая трубка (ТТУ) должна надеваться на кабель до усадки и плотно обжимать его после нагрева. Для свободного надевания внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки — строго меньше 10 мм для плотной фиксации. В живой схеме есть характеристика «Внутр диаметр до термоусадки,мм» со значением = «10», но равенство не обеспечит свободного надевания. Значения,,,,, содержат диапазоны, включающие 10 мм и большие размеры, что может подойти. Также есть характеристика «Внутр диаметр после термоусадки, мм» со значением = «10», но равенство не обеспечит плотной фиксации. Для кабеля 10 мм нужна трубка с диаметром до усадки › 10 мм и после усадки ‹ 10 мм. Без точных числовых границ в характеристиках невозможно выбрать единственный обязательный типоразмер; требуется проверка обеих границ при поиске.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-f1361473",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 33, листьев 1",
+                  "duration_ms": 1958
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=38; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 415",
+                  "duration_ms": 928
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-black-double-sockets",
+      "title": "Чёрные двойные электрические розетки сохраняют оба признака",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-black-double-sockets_base_1792413838397_1",
+          "turns": [
+            {
+              "message": "Найди двойные черные розетки электрические",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14118,
+              "network_attempts": 1,
+              "log_id": "55af2224-b9c6-4e41-888e-5a31205e47e3",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)",
+                  "verified": true,
+                  "sku": "Ем000028744",
+                  "name": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Бренд": "OneKeyElectro",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008",
+                    "Коллекция": "Florence",
+                    "Напряжение, В": "250",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик; поликарбонат",
+                    "Степень защиты": "IP20",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "КИТАЙ",
+                    "Тип монтажа": "скрытый",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.086",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0006",
+                    "Наличие заземления": "Да"
+                  },
+                  "offerPrice": 2923,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)/",
+                  "description_excerpt": "Двойная розетка OneKeyElectro с заземлением, винтовые контакты - это гармония эстетики и эргономики, которая позволяет удвоить количество розеток в случае ограниченного пространства или при проведении косметического ремонта в помещении. Двойная розетка OneKeyElectro устанавливается в одинарный подрозетник (монтажную коробку), что позволяет увеличить количество точек питания без проведения работ по штроблению стен."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026162",
+                  "name": "Розетка 2-местная открытой установки, серия ПРАЛЕСКА, РА16-260 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Код НКТ": "0200265502893",
+                    "Степень защиты": "IP20",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.073",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0002",
+                    "Наличие заземления": "Нет"
+                  },
+                  "offerPrice": 744,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026163",
+                  "name": "Розетка 2-местная открытой установки с заземляющим контактом, серия ПРАЛЕСКА, РА16-261 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.089",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0003",
+                    "Наличие заземления": "Да"
+                  },
+                  "offerPrice": 932,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij",
+                  "verified": true,
+                  "sku": "Ем000028175",
+                  "name": "Розетка РС 16-343 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008",
+                    "Коллекция": "Уют",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "скрытый",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.09",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0004",
+                    "Наличие заземления": "Нет"
+                  },
+                  "offerPrice": 964,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "description_excerpt": "Серия «Уют» отличается от других очень интересным дизайном. Благодаря цветным декоративным рамкам можно удачно вписать эти розетки и выключатели практически в любой интерьер. Высочайшее качество продукции обеспечивается благодаря тому, что компания «Светоприбор», на заводах которой выпускается данная продукция, осуществляет весь производственный цикл от изготовления оснастки до выпуска готовой продукции. Преимущества серии «Уют»: Большой выбор функциональных возможностей Современный дизайн Эколо"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 2923,
+                  "stockLine": "Караганда (56 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *2 923* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (56 шт)"
+                },
+                {
+                  "title": "Розетка РА 16-260 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "price": 744,
+                  "stockLine": "Караганда (1436 шт), Шымкент (465 шт), Алматы (239 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-260 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/)**\n  Цена: *744* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1436 шт), Шымкент (465 шт), Алматы (239 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РА 16-261 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "price": 932,
+                  "stockLine": "Караганда (1167 шт), Астана (874 шт), Шымкент (712 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-261 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/)**\n  Цена: *932* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1167 шт), Астана (874 шт), Шымкент (712 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РС 16-343 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "price": 964,
+                  "stockLine": "Караганда (1192 шт)",
+                  "cardText": "- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/)**\n  Цена: *964* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1192 шт)"
+                }
+              ],
+              "text": "Клиент ищет двойную электрическую розетку чёрного цвета. «Двойная» означает розетку с двумя разъёмами (количество разъемов = 2). Вид розетки — электрическая. Цвет — чёрный. Это стандартная бытовая розетка для подключения электроприборов к сети 220 В. Обязательные параметры: вид розетки = электрическая, количество разъемов = 2, цвет = чёрный. Обязательные параметры: «Цвет: чёрный»; «Количество разъемов: 2». По классу «Вид розетки» выбираю «электрическая». Явно указанное свойство «электрические» соответствует «Вид розетки: электрическая».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-dbdd3b7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  },
+                  {
+                    "kind": "literal_modifier",
+                    "label": "черные",
+                    "op": "eq",
+                    "value": "черные"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "summary": "категория «Розетки»: 1820 тов., фасетов 46, листьев 1",
+                  "duration_ms": 5482
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "summary": "plan=0; initial=23; minimum=3; application=0; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "summary": "найдено 30",
+                  "duration_ms": 604
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T12:44:17.797Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "98cd924f-e4b6-44db-9c9c-ded490802a88",
+    "e359da48-e287-4a47-92f2-ae61881f677e",
+    "55af2224-b9c6-4e41-888e-5a31205e47e3"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 9,
+    "verified": 9,
+    "unverified": 0
+  },
+  "passed": false
+}

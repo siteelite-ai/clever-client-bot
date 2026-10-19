@@ -165,6 +165,7 @@ import {
   hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
+  preferCustomerGroundedLiveClassification,
   resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
@@ -374,13 +375,16 @@ import {
 } from "../_shared/v3-tools/exact-price-unit.ts";
 import { replayableSseEvents } from "../_shared/v3-tools/sse-replay.ts";
 import {
+  applicationClassFallbackDisclosure,
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
+  MALFORMED_REASONING_FALLBACK,
   META_DECLINE_TEXT,
   redactInternals,
   replaceUngroundedMissingAnchorIntro,
   sanitizeIntermediateReasoning,
   shouldGuardFirstVisibleReasoning,
+  stripMalformedModelSentences,
   stripRejectedClarificationText,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
@@ -3874,6 +3878,9 @@ async function answerVerifiedExactProductInquiry(
       answer = buildDeterministicEvidenceAnswer(evidence, userMessage);
     }
   }
+  // Guard the complete answer before both suitability checks and SSE output.
+  answer = stripMalformedModelSentences(answer).text ||
+    "Проверю характеристики товара по каталогу.";
   send({ type: "delta", content: answer, origin: "model" });
 
   let shownProducts: ProductFull[] = [];
@@ -6603,6 +6610,15 @@ async function runExpertLoop(
   // Only values the reasoning explicitly marks incompatible may eliminate a
   // card, and only when that value is positively proved by live product data.
   let derivedExcludedClassificationCriteria: Criterion[] = [];
+  let customerExactClassificationCriteria: Criterion[] = [];
+  let customerApplicationAlternatives: Criterion[] = [];
+  const preferCustomerClassPool = <T extends ProductRef>(products: T[]): T[] =>
+    preferCustomerGroundedLiveClassification(
+      products,
+      customerExactClassificationCriteria,
+      customerApplicationAlternatives,
+      derivedExcludedClassificationCriteria,
+    ).products;
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
@@ -6691,6 +6707,7 @@ async function runExpertLoop(
   // intentional one-card answer.
   let emittedResultCardinality: ResultCardinalityContract | null = null;
   let systemTotalCaveatSent = false;
+  let applicationClassFallbackNoticeSent = false;
   // The plan is mutated inside the freeze helper. Reading it through a small
   // accessor prevents TypeScript control-flow analysis from treating the
   // outer variable as permanently null.
@@ -6706,6 +6723,18 @@ async function runExpertLoop(
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
       event.markdown.includes(`](${product.url})`)
     );
+    const renderedClassTier = preferCustomerGroundedLiveClassification(
+      renderedProducts,
+      customerExactClassificationCriteria,
+      customerApplicationAlternatives,
+      derivedExcludedClassificationCriteria,
+    ).tier;
+    const classNotice = renderedProducts.length > 0
+      ? applicationClassFallbackDisclosure(
+        renderedClassTier,
+        applicationClassFallbackNoticeSent,
+      )
+      : "";
     const renderedUserCriteria = projectCommonRenderedUserCriteria(
       renderedProducts,
       userMessage,
@@ -6869,6 +6898,16 @@ async function runExpertLoop(
           search_coverage: priceSearchCoverage,
           rendered_candidates: event.count,
         },
+      });
+    }
+    if (classNotice) {
+      rawSend({ type: "delta", content: `\n\n${classNotice}`, origin: "server" });
+      finalText += `${finalText ? "\n\n" : ""}${classNotice}`;
+      applicationClassFallbackNoticeSent = true;
+      steps.push({
+        step: "v3_application_class_fallback_disclosed",
+        ms: now(),
+        meta: { tier: renderedClassTier, cards: renderedProducts.length },
       });
     }
     rawSend({
@@ -8105,6 +8144,26 @@ async function runExpertLoop(
           );
           return structurallySafe.filter((id) => eligible.has(id));
         })();
+    const classPriority = preferCustomerGroundedLiveClassification(
+      classificationSafe
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product)),
+      customerExactClassificationCriteria,
+      customerApplicationAlternatives,
+      derivedExcludedClassificationCriteria,
+    );
+    const preferredClassIds = classPriority.products.map(({ id }) => id);
+    if (preferredClassIds.length < classificationSafe.length) {
+      steps.push({
+        step: "v3_customer_class_proof_priority",
+        ms: now(),
+        meta: {
+          tier: classPriority.tier,
+          before: classificationSafe.length,
+          after: preferredClassIds.length,
+        },
+      });
+    }
     // This is a relative ranking of already-safe alternatives, not a claim
     // that one card (or the list of cards) supplies an installation total.
     // Bind the output axis and lower bound to the reasoning actually shown
@@ -8116,7 +8175,7 @@ async function runExpertLoop(
       derivedSelectionMeasurementScope !== "system_total" ||
       detectPriceDirection(userMessage)?.kind === "superlative"
     ) {
-      return classificationSafe;
+      return preferredClassIds;
     }
     const totalRequirement = resolveVisibleSystemTotalRequirement({
       measurementScope: derivedSelectionMeasurementScope,
@@ -8124,12 +8183,12 @@ async function runExpertLoop(
       facets: derivedStructuredSearchDiscovery?.facets ??
         lastDiscover?.facets ?? [],
     });
-    if (!totalRequirement || classificationSafe.length < 2) {
-      return classificationSafe;
+    if (!totalRequirement || preferredClassIds.length < 2) {
+      return preferredClassIds;
     }
     const ranking = rankSystemTotalCandidates(
       totalRequirement,
-      classificationSafe
+      preferredClassIds
         .map((id) => ctx.cache.get(id))
         .filter((product): product is ProductFull => Boolean(product)),
       {
@@ -8138,9 +8197,9 @@ async function runExpertLoop(
       },
     );
     const rankingChanged = ranking.rankingEligible && (
-      ranking.retained.length !== classificationSafe.length ||
+      ranking.retained.length !== preferredClassIds.length ||
       ranking.retained.some(({ product }, index) =>
-        product.id !== classificationSafe[index]
+        product.id !== preferredClassIds[index]
       )
     );
     if (rankingChanged) {
@@ -8148,7 +8207,7 @@ async function runExpertLoop(
         step: "v3_system_total_relative_output_ranked",
         ms: now(),
         meta: {
-          before: classificationSafe.length,
+          before: preferredClassIds.length,
           retained: ranking.retained.length,
           excluded: ranking.excludedVeryLowOutput.length +
             ranking.excludedUnverifiedOutput.length,
@@ -8691,9 +8750,29 @@ async function runExpertLoop(
               },
             });
           }
-          let declarationCall = structuredReasoning.toolCalls.find((
-            toolCall,
-          ) => toolCall.name === "declare_selection_reasoning");
+          const cleanDeclarationCall = (
+            call: ORToolCall | undefined,
+          ): ORToolCall | undefined => {
+            if (!call) return undefined;
+            const cleaned = stripMalformedModelSentences(
+              String(call.args.reasoning ?? ""),
+            );
+            if (cleaned.removed.length === 0) return call;
+            steps.push({
+              step: "v3_derived_reasoning_malformed_prose_removed",
+              ms: now(),
+              meta: { removed_sentences: cleaned.removed.length },
+            });
+            return {
+              ...call,
+              args: { ...call.args, reasoning: cleaned.text },
+            };
+          };
+          let declarationCall = cleanDeclarationCall(
+            structuredReasoning.toolCalls.find((toolCall) =>
+              toolCall.name === "declare_selection_reasoning"
+            ),
+          );
           const pairedDeclarationDecision = (
             args: Record<string, unknown>,
           ) =>
@@ -8729,8 +8808,47 @@ async function runExpertLoop(
                 : null,
             );
           };
+          const cleanResolvedDeclaration = (
+            candidate: ReturnType<typeof resolveDerivedSelectionReasoning>,
+          ) => {
+            if (!candidate) return null;
+            const visible = stripMalformedModelSentences(candidate.text);
+            const measurement = stripMalformedModelSentences(
+              candidate.measurementEvidence,
+            );
+            const requiredFacetValues = candidate.requiredFacetValues.filter(
+              ({ key, value }) =>
+                stripMalformedModelSentences(`${key}: ${value}`).removed
+                    .length === 0,
+            );
+            if (
+              visible.removed.length || measurement.removed.length ||
+              requiredFacetValues.length !== candidate.requiredFacetValues.length
+            ) {
+              steps.push({
+                step: "v3_derived_reasoning_resolved_prose_cleaned",
+                ms: now(),
+                meta: {
+                  visible_removed: visible.removed.length,
+                  measurement_removed: measurement.removed.length,
+                  values_removed: candidate.requiredFacetValues.length -
+                    requiredFacetValues.length,
+                },
+              });
+            }
+            return {
+              ...candidate,
+              text: visible.text,
+              measurementEvidence: measurement.text,
+              requiredFacetValues,
+              retrievalQuery: candidate.retrievalQuery
+                ? stripMalformedModelSentences(candidate.retrievalQuery).text ||
+                  null
+                : null,
+            };
+          };
           let declaration = declarationCall
-            ? resolvePairedDeclaration(declarationCall.args)
+            ? cleanResolvedDeclaration(resolvePairedDeclaration(declarationCall.args))
             : null;
           const missingRequiredProductMeasurement = () => {
             if (!unresolvedProductMeasurementRequired || !declaration) {
@@ -8798,11 +8916,15 @@ async function runExpertLoop(
                 GENERAL_INQUIRY_MODEL_ROUTING,
               );
               derivedReasoningProviderAttempts += 1;
-              declarationCall = structuredReasoning.toolCalls.find((
-                toolCall,
-              ) => toolCall.name === "declare_selection_reasoning");
+              declarationCall = cleanDeclarationCall(
+                structuredReasoning.toolCalls.find((toolCall) =>
+                  toolCall.name === "declare_selection_reasoning"
+                ),
+              );
               declaration = declarationCall
-                ? resolvePairedDeclaration(declarationCall.args)
+                ? cleanResolvedDeclaration(
+                  resolvePairedDeclaration(declarationCall.args),
+                )
                 : null;
               steps.push({
                 step: "v3_derived_selection_measurement_retry",
@@ -8965,9 +9087,19 @@ async function runExpertLoop(
                     : "model_assumption" as const,
                 };
               });
+          const exactCustomerClasses =
+            compileCustomerClassificationCriteria(declaration);
+          const applicationAlternatives =
+            compileApplicationSuitabilityAlternatives(declaration);
+          customerExactClassificationCriteria = mergeMandatorySelectionCriteria(
+            [...customerExactClassificationCriteria, ...exactCustomerClasses],
+          );
+          customerApplicationAlternatives = mergeMandatorySelectionCriteria(
+            [...customerApplicationAlternatives, ...applicationAlternatives],
+          );
           const customerGroundedClassificationCriteria = [
-            ...compileCustomerClassificationCriteria(declaration),
-            ...compileApplicationSuitabilityAlternatives(declaration),
+            ...exactCustomerClasses,
+            ...applicationAlternatives,
           ];
           derivedExcludedClassificationCriteria =
             mergeMandatorySelectionCriteria([
@@ -9541,6 +9673,25 @@ async function runExpertLoop(
           meta: { fragment_index: step, phase: agentPhase },
         });
         resp = { ...resp, text: "" };
+      }
+      // One complete model message is the shared source for visible prose and
+      // downstream contracts. Clean it before either path reads the text;
+      // never scrub arbitrary SSE deltas, which may split a valid token.
+      const cleanModelText = stripMalformedModelSentences(resp.text);
+      if (cleanModelText.removed.length > 0) {
+        resp = {
+          ...resp,
+          text: cleanModelText.text ||
+            (resp.toolCalls.length > 0 ? MALFORMED_REASONING_FALLBACK : ""),
+        };
+        steps.push({
+          step: "v3_model_prose_malformed_sentences_removed",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            removed_sentences: cleanModelText.removed.length,
+          },
+        });
       }
       const rawModelResponseText = resp.text;
       const rejectedClarificationCall = resp.toolCalls.find((toolCall) => {
@@ -14299,11 +14450,13 @@ async function runExpertLoop(
             result.tool === "search_catalog"
           ? result.results
           : [];
-        const sourceProvenOriginal = sourceProvenSelectionPool(
-          sourceProofProducts,
-          sourceProofCriteria,
-          sourceProofBudget,
-          derivedExcludedClassificationCriteria,
+        const sourceProvenOriginal = preferCustomerClassPool(
+          sourceProvenSelectionPool(
+            sourceProofProducts,
+            sourceProofCriteria,
+            sourceProofBudget,
+            derivedExcludedClassificationCriteria,
+          ),
         );
         const sparseBooleanProofShortfall = tc.name === "search_catalog" &&
           result.ok &&
@@ -14419,17 +14572,21 @@ async function runExpertLoop(
                 ? filterSelectionRecoveryPool(recovered.results, attempt)
                 : [];
             const sourceProvenRecovered = sparseBooleanProofShortfall
-              ? sourceProvenSelectionPool(
-                evidenceSafeResults,
-                sourceProofCriteria,
-                sourceProofBudget,
-                derivedExcludedClassificationCriteria,
+              ? preferCustomerClassPool(
+                sourceProvenSelectionPool(
+                  evidenceSafeResults,
+                  sourceProofCriteria,
+                  sourceProofBudget,
+                  derivedExcludedClassificationCriteria,
+                ),
               )
               : [];
             const sourceProvenCombined = sparseBooleanProofShortfall
-              ? mergeSourceProvenSelectionPools(
-                sourceProvenOriginal,
-                sourceProvenRecovered,
+              ? preferCustomerClassPool(
+                mergeSourceProvenSelectionPools(
+                  sourceProvenOriginal,
+                  sourceProvenRecovered,
+                ),
               )
               : [];
             steps.push({
@@ -14561,11 +14718,13 @@ async function runExpertLoop(
           !semanticCompoundEvidenceRequired
         ) {
           const eligiblePool = (products: ProductRef[]): ProductRef[] => {
-            const proven = sourceProvenSelectionPool(
-              products,
-              sourceProofCriteria,
-              sourceProofBudget,
-              derivedExcludedClassificationCriteria,
+            const proven = preferCustomerClassPool(
+              sourceProvenSelectionPool(
+                products,
+                sourceProofCriteria,
+                sourceProofBudget,
+                derivedExcludedClassificationCriteria,
+              ),
             );
             const targetReport = activeSelectionTarget &&
                 verifiedApplicationSelectionContract && lastDiscover
@@ -14676,9 +14835,11 @@ async function runExpertLoop(
               ? filterSelectionRecoveryPool(recovered.results, attempt)
               : [];
             const sourceProvenRecovered = eligiblePool(candidatePool);
-            eligible = mergeSourceProvenSelectionPools(
-              eligible,
-              sourceProvenRecovered,
+            eligible = preferCustomerClassPool(
+              mergeSourceProvenSelectionPools(
+                eligible,
+                sourceProvenRecovered,
+              ),
             );
             const scopedSearchSucceeded = recovered.ok &&
               recovered.tool === "search_catalog";
