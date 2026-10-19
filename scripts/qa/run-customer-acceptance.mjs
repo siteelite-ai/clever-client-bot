@@ -5,6 +5,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
+import { previewAuthHeaders, previewRedirectPolicy, redactPreviewSecret } from './preview-auth.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -49,6 +50,8 @@ export function resolveEndpoint(argv = process.argv) {
 }
 
 const endpoint = resolveEndpoint();
+const privatePreviewHeaders = previewAuthHeaders(endpoint);
+const privatePreviewRedirect = previewRedirectPolicy(endpoint);
 
 const widget = fs.readFileSync(path.join(root, 'public/widget.js'), 'utf8');
 const apiKey = widget.match(/supabaseKey:\s*'([^']+)'/)?.[1];
@@ -2192,15 +2195,17 @@ export async function fetchAcceptanceTurn(payload, {
       try {
         const response = await fetchImpl(endpoint, {
           method: 'POST',
+          ...privatePreviewRedirect,
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
             apikey: apiKey,
+            ...privatePreviewHeaders,
           },
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
-        const raw = await response.text();
+        const raw = redactPreviewSecret(await response.text(), privatePreviewHeaders);
         if (controller.signal.aborted) throw timeoutError();
         return { response, raw, attempts: attempt };
       } catch (error) {
@@ -2244,7 +2249,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
     const timedOut = error?.code === 'ACCEPTANCE_TURN_TIMEOUT';
     const failure = timedOut
       ? `network deadline exceeded (${ACCEPTANCE_TURN_TIMEOUT_MS}ms)`
-      : `network error: ${String(error?.message ?? error)}`;
+      : `network error: ${redactPreviewSecret(String(error?.message ?? error), privatePreviewHeaders)}`;
     return {
       message,
       synthetic_scenario: synthetic,

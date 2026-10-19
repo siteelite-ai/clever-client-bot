@@ -616,6 +616,11 @@ import {
   resolveChatV3AdmissionScope,
 } from "../_shared/v3-tools/chat-admission.ts";
 import {
+  previewSecretAuthorized,
+  PREVIEW_SECRET_ENV,
+  PREVIEW_SECRET_HEADER,
+} from "../_shared/v3-tools/preview-secret-gate.ts";
+import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
   isProviderErrorFinishReason,
@@ -20097,6 +20102,24 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", {
       status: 405,
       headers: { ...corsHeaders, Allow: "POST, OPTIONS" },
+    });
+  }
+
+  // Both preview entrypoints set the isolate-local admission marker before
+  // importing this shared handler. Never accept the public anon JWT alone for
+  // a preview request. This check precedes body parsing, DB calls and LLM work;
+  // production's request path is unchanged.
+  if (ADMISSION_SCOPE === "preview" && !await previewSecretAuthorized(
+    req.headers.get(PREVIEW_SECRET_HEADER),
+    Deno.env.get(PREVIEW_SECRET_ENV),
+  )) {
+    return new Response(JSON.stringify({ error: "preview_access_denied" }), {
+      status: 403,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
     });
   }
 
