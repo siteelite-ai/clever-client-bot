@@ -19,7 +19,12 @@ import {
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
 } from "./criteria-reasoning.ts";
-import type { Criterion } from "./criteria-gate.ts";
+import {
+  filterProductsByExcludedCriteria,
+  normalizeKey,
+  type Criterion,
+} from "./criteria-gate.ts";
+import type { ProductRef } from "./types.ts";
 import { extractCustomerApplicationContexts } from "./selection-contract.ts";
 
 /**
@@ -1230,6 +1235,115 @@ export function compileApplicationSuitabilityAlternatives(
   }));
 }
 
+export type ApplicationClassPriorityTier =
+  | "exact_live_class"
+  | "application_text_fallback"
+  | "no_eligible_products"
+  | "not_applicable";
+
+/** A title or marketing description cannot promote a card into the primary
+ * class tier. Product short_traits are copied from the catalog's actual
+ * option caption/value pairs; both sides must match the live class criterion
+ * exactly. Missing structured evidence stays in the weaker tier. */
+function hasExactLiveClassValue(
+  product: ProductRef,
+  criterion: Criterion,
+): boolean {
+  const wantedKey = normalizeKey(criterion.key);
+  const wantedValue = normalizeKey(String(criterion.value ?? ""));
+  if (!wantedKey || !wantedValue) return false;
+  return (product.short_traits ?? []).some((line) => {
+    const separator = String(line).indexOf(":");
+    return separator > 0 &&
+      normalizeKey(String(line).slice(0, separator)) === wantedKey &&
+      normalizeKey(String(line).slice(separator + 1)) === wantedValue;
+  });
+}
+
+function provesExactLiveClass(
+  product: ProductRef,
+  criteria: Criterion[],
+): boolean {
+  const byKey = new Map<string, Criterion[]>();
+  for (const criterion of criteria) {
+    const key = normalizeKey(criterion.key);
+    byKey.set(key, [...(byKey.get(key) ?? []), criterion]);
+  }
+  // Sibling values on one facet are alternatives, while independent class
+  // facets must each have their own structured proof.
+  return [...byKey.values()].every((alternatives) =>
+    alternatives.some((criterion) =>
+      hasExactLiveClassValue(product, criterion)
+    )
+  );
+}
+
+/**
+ * Choose one proof tier after the ordinary mandatory card gate has passed.
+ * A customer-grounded live class is stronger than an application word in a
+ * description, even when that weaker route would fill a requested card count.
+ * Only a genuinely empty exact tier may retain the already-eligible prose
+ * alternatives. The caller can disclose that fallback rather than present it
+ * as an exact class match. No catalog category or product vocabulary is used.
+ */
+export function preferCustomerGroundedLiveClassification<
+  T extends ProductRef,
+>(
+  products: T[],
+  exactClassCriteria: Criterion[],
+  applicationAlternatives: Criterion[],
+  explicitExclusions: Criterion[] = [],
+): { products: T[]; tier: ApplicationClassPriorityTier; excludedCount: number } {
+  const eligible = filterProductsByExcludedCriteria(
+    products,
+    explicitExclusions.filter((criterion) =>
+      criterion.evidence === "user_explicit"
+    ),
+  );
+  if (eligible.length === 0) {
+    return {
+      products: [],
+      tier: "no_eligible_products",
+      excludedCount: products.length,
+    };
+  }
+  const applicationKeys = new Set(
+    applicationAlternatives
+      .filter((criterion) =>
+        criterion.evidence === "user_explicit" &&
+        criterion.proof_scope === "application_suitability" &&
+        criterion.op === "eq" &&
+        (criterion.level ?? "A") === "A"
+      )
+      .map((criterion) => normalizeKey(criterion.key)),
+  );
+  const exact = exactClassCriteria.filter((criterion) =>
+    criterion.evidence === "user_explicit" &&
+    criterion.proof_scope !== "application_suitability" &&
+    criterion.op === "eq" &&
+    (criterion.level ?? "A") === "A" &&
+    applicationKeys.has(normalizeKey(criterion.key))
+  );
+  if (exact.length === 0) {
+    return {
+      products: eligible,
+      tier: "not_applicable",
+      excludedCount: products.length - eligible.length,
+    };
+  }
+
+  const exactProducts = eligible.filter((product) =>
+    provesExactLiveClass(product, exact)
+  );
+  return {
+    products: exactProducts.length > 0 ? exactProducts : eligible,
+    tier: exactProducts.length > 0
+      ? "exact_live_class"
+      : "application_text_fallback",
+    excludedCount: products.length - eligible.length,
+  };
+}
+
 function visibleFacetText(value: string): string {
   return String(value ?? "")
     // eslint-disable-next-line no-control-regex -- External facet text must not render ASCII control bytes.
@@ -1912,13 +2026,13 @@ export function resolveDerivedSelectionReasoning(
           useFamily.map(({ facet, value }) =>
             `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
           ).join("; ")
-        }; товар из другой рубрики допустим только если его собственная карточка прямо подтверждает то же применение.`,
+        }; если товаров из подтверждённого класса нет, отдельно проверю другие рубрики, но только при прямом подтверждении того же применения в карточке.`,
       );
     }
     const preferred = familyCompatibleChoices.filter(({ id }) =>
       providerPreferredIds.has(id)
     );
-    if (preferred.length > 0) {
+    if (preferred.length > 0 && useFamily.length === 0) {
       sentences.push(
         `Внутри вашего класса в первую очередь проверяю ${
           preferred.map(({ value }) => `«${visibleFacetText(value)}»`).join(

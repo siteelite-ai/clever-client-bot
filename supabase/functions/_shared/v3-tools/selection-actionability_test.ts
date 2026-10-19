@@ -21,6 +21,7 @@ import {
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
+  preferCustomerGroundedLiveClassification,
   reasoningComputesSystemTotalFromSpatialExtent,
   resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
@@ -30,6 +31,159 @@ import {
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("exact customer class outranks mixed-use description across product families", () => {
+  const cases = [
+    {
+      key: "Вид светильника",
+      exact: "Бытовые светильники накладные",
+      mixed: "Светильники для ЖКХ",
+      title: "Светильник с датчиком движения",
+    },
+    {
+      key: "Класс применения",
+      exact: "Бытовые источники питания",
+      mixed: "Для офисной техники",
+      title: "Источник питания",
+    },
+  ];
+  for (const item of cases) {
+    const exact: Criterion = {
+      key: item.key,
+      op: "eq",
+      value: item.exact,
+      level: "A",
+      evidence: "user_explicit",
+    };
+    const application: Criterion = {
+      key: item.key,
+      op: "eq",
+      value: "бытовой",
+      level: "A",
+      evidence: "user_explicit",
+      proof_scope: "application_suitability",
+    };
+    const product = (
+      id: string,
+      classification: string,
+      description: string,
+    ): ProductRef => ({
+      id,
+      pagetitle: `${item.title} ${id}`,
+      vendor: null,
+      price: 3000,
+      stock: "in_stock",
+      short_traits: [`${item.key}: ${classification}`],
+      description_excerpt: description,
+    });
+    const candidates = [
+      product("mixed", item.mixed, "Для общественного и бытового применения."),
+      product("exact", item.exact, "Для бытового применения."),
+      {
+        ...product("title-only", item.mixed, "Для бытового применения."),
+        pagetitle: `${item.exact} title-only`,
+        short_traits: [],
+      },
+      {
+        ...product("contradictory", item.mixed, "Для бытового применения."),
+        pagetitle: `${item.exact} contradictory`,
+      },
+    ];
+    assertEquals(
+      applyCriteriaGate(candidates, [exact, application]).passed_ids,
+      ["mixed", "exact", "title-only", "contradictory"],
+    );
+    const ranked = preferCustomerGroundedLiveClassification(
+      candidates,
+      [exact],
+      [application],
+    );
+    assertEquals(ranked.products.map(({ id }) => id), ["exact"]);
+    assertEquals(ranked.tier, "exact_live_class");
+    assertEquals(ranked.excludedCount, 0);
+  }
+});
+
+Deno.test("a prose-only application alternative is labelled when exact class is empty", () => {
+  const exact: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "Бытовые приборы",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const mixed: ProductRef = {
+    id: "mixed",
+    pagetitle: "Бытовые приборы — универсальный",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Класс применения: Для учреждений"],
+    description_excerpt: "Для общественного и бытового применения.",
+  };
+  assertEquals(
+    applyCriteriaGate([mixed], [exact, application]).passed_ids,
+    ["mixed"],
+  );
+  const ranked = preferCustomerGroundedLiveClassification(
+    [mixed],
+    [exact],
+    [application],
+  );
+  assertEquals(ranked.products.map(({ id }) => id), ["mixed"]);
+  assertEquals(ranked.tier, "application_text_fallback");
+});
+
+Deno.test("explicit class exclusion vetoes prose fallback before preference", () => {
+  const exact: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "Бытовые приборы",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const application: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "бытовой",
+    level: "A",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const explicitExclusion: Criterion = {
+    key: "Класс применения",
+    op: "eq",
+    value: "Для учреждений",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const mixed: ProductRef = {
+    id: "mixed",
+    pagetitle: "Прибор универсальный",
+    vendor: null,
+    price: 3000,
+    stock: "in_stock",
+    short_traits: ["Класс применения: Для учреждений"],
+    description_excerpt: "Для общественного и бытового применения.",
+  };
+  const ranked = preferCustomerGroundedLiveClassification(
+    [mixed],
+    [exact],
+    [application],
+    [explicitExclusion],
+  );
+  assertEquals(ranked.products, []);
+  assertEquals(ranked.tier, "no_eligible_products");
+  assertEquals(ranked.excludedCount, 1);
+});
 
 Deno.test("a system total may separately declare one per-product range", () => {
   const reasoning =
@@ -1934,7 +2088,7 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   ]);
   assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
   assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
-  assertEquals(resolved?.text.includes("другой рубрики допустим"), true);
+  assertEquals(resolved?.text.includes("если товаров из подтверждённого класса нет"), true);
   assertEquals(resolved?.applicationSuitabilityAlternatives, [{
     key: "Класс применения",
     value: "бытовые",
@@ -2120,10 +2274,9 @@ Deno.test("a model may refine a customer-owned family only to one member of that
   ]);
   assertEquals(refined?.customerGroundedCompatible, refined?.compatible);
   assertEquals(refined?.familyCompatibleFacetKeys, ["класс применения"]);
-  assertEquals(
-    refined?.text.includes("как предпочтение, не исключая другие"),
-    true,
-  );
+  assertEquals(refined?.text.includes("бытовые изделия накладные"), true);
+  assertEquals(refined?.text.includes("бытовые изделия подвесные"), true);
+  assertEquals(refined?.text.includes("промышленные изделия"), false);
 
   const rejectedSibling = resolveDerivedSelectionReasoning(
     {

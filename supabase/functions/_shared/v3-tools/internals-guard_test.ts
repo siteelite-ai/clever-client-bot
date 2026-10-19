@@ -1,13 +1,17 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  APPLICATION_CLASS_FALLBACK_NOTICE,
   INTERNALS_REDACTED_TEXT,
+  MALFORMED_REASONING_FALLBACK,
   MISSING_ANCHOR_SAFE_INTRO,
+  applicationClassFallbackDisclosure,
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
   replaceUngroundedMissingAnchorIntro,
   sanitizeIntermediateReasoning,
   shouldGuardFirstVisibleReasoning,
+  stripMalformedModelSentences,
   stripSerializedToolCallMarkup,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
@@ -376,6 +380,74 @@ Deno.test("intermediate reasoning rewrites a bare discover label", () => {
   assertEquals(result.suppressed, false);
   assertStringIncludes(result.text, "поиск категории вернул");
   assert(!result.text.includes("discover"));
+});
+
+Deno.test("intermediate reasoning drops malformed model sentences but preserves engineering conditions", () => {
+  const result = sanitizeIntermediateReasoning(
+    "Для кабеля 10 мм диаметр до усадки должен быть строго больше 10 мм, а после — строго меньше 10 мм. " +
+      "Есть значения в диапазоне (,,,,, ), но их нельзя проверить. " +
+      "Проверю подтверждённые характеристики товаров. " +
+      "Типичный вариант — трубка с маркировкой 12/6 или 15/7. 5 мм (до/после усадки).",
+  );
+  assertEquals(result.suppressed, false);
+  assertStringIncludes(result.text, "до усадки должен быть строго больше 10 мм");
+  assertStringIncludes(result.text, "после — строго меньше 10 мм");
+  assertStringIncludes(result.text, "Проверю подтверждённые характеристики товаров.");
+  assertEquals(/\(,,,,,\s*\)|15\/7\. 5/u.test(result.text), false);
+  assert(result.matched.includes("malformed_reasoning_sentence"));
+});
+
+Deno.test("intermediate reasoning preserves ordinary decimal and slash sizes", () => {
+  const text = "Проверю 12/6 мм и 15/7.5 мм; сечение кабеля 1,5 мм². Для 10 мм обе границы важны.";
+  const result = sanitizeIntermediateReasoning(text);
+  assertEquals(result.text, text);
+  assertEquals(result.matched.includes("malformed_reasoning_sentence"), false);
+});
+
+Deno.test("malformed separator run cannot enter visible reasoning or search evidence", () => {
+  const text = "Размер до усадки должен быть больше 10 мм. Значения,,,,, содержат диапазоны. Проверю обе границы по каталогу.";
+  const cleaned = stripMalformedModelSentences(text);
+  assertEquals(cleaned.text, "Размер до усадки должен быть больше 10 мм. Проверю обе границы по каталогу.");
+  assertEquals(cleaned.removed, ["Значения,,,,, содержат диапазоны."]);
+  assertEquals(sanitizeIntermediateReasoning(text).text, cleaned.text);
+});
+
+Deno.test("model prose cleaner gives contracts no fallback or invisible malformed size", () => {
+  const source =
+    "Размер до усадки строго больше 10 мм, после — строго меньше 10 мм. " +
+    "Проверю диапазон (,,,,, ). Маркировка 12/6 или 15/7. 5 мм.";
+  const cleaned = stripMalformedModelSentences(source);
+  assertEquals(cleaned.removed.length, 2);
+  assertEquals(
+    cleaned.text,
+    "Размер до усадки строго больше 10 мм, после — строго меньше 10 мм.",
+  );
+  assertEquals(
+    stripMalformedModelSentences("Размер 15/7. 5 мм.").text,
+    "",
+  );
+  assertEquals(
+    stripMalformedModelSentences("Размер 15/7,5 мм и 12/6 мм.").text,
+    "Размер 15/7,5 мм и 12/6 мм.",
+  );
+});
+
+Deno.test("application class fallback disclosure is scoped to the shown cards and emitted once", () => {
+  assertEquals(
+    applicationClassFallbackDisclosure("application_text_fallback", false),
+    APPLICATION_CLASS_FALLBACK_NOTICE,
+  );
+  assertEquals(applicationClassFallbackDisclosure("application_text_fallback", true), "");
+  assertEquals(applicationClassFallbackDisclosure("exact_live_class", false), "");
+  assertEquals(applicationClassFallbackDisclosure("not_applicable", false), "");
+  assertStringIncludes(APPLICATION_CLASS_FALLBACK_NOTICE, "показанных карточках");
+  assertEquals(/в каталоге нет|на сайте нет|не существует/iu.test(APPLICATION_CLASS_FALLBACK_NOTICE), false);
+});
+
+Deno.test("fully malformed intermediate reasoning falls back to a neutral catalog intro", () => {
+  const result = sanitizeIntermediateReasoning("Значения в диапазоне (,,,,, ).");
+  assertEquals(result.text, MALFORMED_REASONING_FALLBACK);
+  assert(result.matched.includes("malformed_reasoning_sentence"));
 });
 
 Deno.test("intermediate reasoning suppresses other internal architecture", () => {

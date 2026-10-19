@@ -420,10 +420,7 @@
             "max_product_price": 4000,
             "require_every_product_page": {
               "all_of": [
-                { "any_of": [
-                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
-                  { "description": { "require_any": ["бытов", "жилых"] } }
-                ] },
+                { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
                 { "any_of": [
                   { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
                   { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
@@ -454,10 +451,7 @@
             "max_product_price": 4000,
             "require_every_product_page": {
               "all_of": [
-                { "any_of": [
-                  { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
-                  { "description": { "require_any": ["бытов", "жилых"] } }
-                ] },
+                { "facets": [{ "name": "Вид светильника", "require_any": ["бытов"] }] },
                 { "any_of": [
                   { "name": { "require_any": ["датчиком движения", "микроволновым сенсором"] } },
                   { "description": { "require_any": ["движущ", "движен", "motion", "PIR", "микроволнов"] } }
