@@ -78,6 +78,64 @@ test('active scope lookup is server-owned despite stale client slots and routes 
   assert.ok(directPosition > broadPosition);
 });
 
+test('verified complete same-section request outranks stale readiness and consumes its slot', () => {
+  const activeDecision = between(
+    'const activePrepositionalRefinement =',
+    'const sameSectionScope =',
+  );
+  assert.ok(
+    activeDecision.indexOf('const activeScopeExplicitBoundary =') <
+      activeDecision.indexOf('activePrepositionalRefinement === "ambiguous"'),
+    'explicit entity/class change must be checked before ambiguous relation handling',
+  );
+  assert.match(activeDecision, /activeScopeState\.scope && !activeScopeExplicitBoundary/,
+    'a request excluding the selected entity must not reissue its old scope');
+
+  const boundary = between('const sameSectionScope =', 'const cache: ProductCache =');
+  assert.match(boundary, /isReadinessQuestionSupersededByVerifiedSection\(\s*userMessage,\s*readinessNewTask,\s*Boolean\(verifiedReadinessState\.slot\),\s*Boolean\(sameSectionScope\),\s*sameSectionNominalRefinement \|\|\s*activePrepositionalRefinement === "continue",\s*activeScopeExplicitBoundary/);
+  assert.match(boundary, /const startsNewTask = activeScopeExplicitBoundary \|\|\s*Boolean\(effectiveReadinessNewTask\)/);
+  assert.match(boundary, /newTaskBoundary: Boolean\(\s*readinessNewTask \|\| activeScopeExplicitBoundary \|\|\s*readinessQuestionSuperseded/,
+    'superseded readiness must not prepend the old question to this same-section request');
+  assert.match(boundary, /readinessQuestionSuperseded\s*\? \{ \.\.\.boundarySlots, pending_clarification: undefined \}/,
+    'the old pending question must not reach the current expert route');
+  assert.match(boundary, /scopedSelectionRequest\.scoped \|\| readinessQuestionSuperseded[\s\S]*?send\(\{ type: "slot_update", slots: \{\} \}\)/,
+    'the browser must not carry the consumed readiness question into a later turn');
+});
+
+test('a verified free-form readiness answer suppresses only a nominal class change', () => {
+  const readinessOverride = between(
+    'const verifiedFreeformReadinessAnswer =',
+    '// The browser\'s history and pending slot are hints',
+  );
+  assert.match(readinessOverride, /const rawReadinessNewTask =\s*classifyPendingSelectionReadinessNewTaskLocally\(/);
+  assert.match(readinessOverride,
+    /const readinessNewTask = verifiedFreeformReadinessAnswer &&\s*rawReadinessNewTask\?\.reason ===\s*"local_verified_readiness_independent_selection"\s*\? null\s*: rawReadinessNewTask/,
+    'only the verified answer may override a lexical independent-selection decision, never an explicit topic boundary');
+  const entityChange = source.match(
+    /const activeScopeEntityChanged = Boolean\(([\s\S]*?)\n\s*\);/,
+  )?.[1];
+  assert.ok(entityChange, 'the entity boundary must be present');
+  const classChange = between(
+    'const activeScopeClassChanged =',
+    'const activeScopeExplicitBoundary =',
+  );
+  assert.match(entityChange, /explicitlyChangesActiveSelectionEntity\(/);
+  assert.doesNotMatch(entityChange, /isVerifiedFreeformReadinessAnswer|verifiedFreeformReadinessAnswer/,
+    'a named entity change remains authoritative even if a pending question exists');
+  assert.match(classChange, /isIndependentNominalRequestOutsideActiveScope\(/);
+  assert.match(classChange, /!\s*(?:isVerifiedFreeformReadinessAnswer\(|verifiedFreeformReadinessAnswer)/,
+    'only a verified free-form answer can suppress a nominal class boundary');
+  assert.match(source, /const activeScopeExplicitBoundary = activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
+    'an explicit entity change must continue to create a new task');
+  const sameSection = between(
+    'const sameSectionScope =',
+    'const readinessQuestionSuperseded =',
+  );
+  assert.match(sameSection, /!activeScopeExplicitBoundary/);
+  assert.match(sameSection, /verifiedFreeformReadinessAnswer/,
+    'a verified short answer must retain the active scope for the next route');
+});
+
 test('final expert card gate intersects live leaf, active entity, and independent named token', () => {
   const guard = between('const guardFinalRenderIds = (',
     'const finalizeTerminalRenderIds = (');

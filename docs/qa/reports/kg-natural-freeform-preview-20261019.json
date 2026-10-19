@@ -1,0 +1,150 @@
+{
+  "suite_file": "notion-legacy-bug-cases-v3.json",
+  "suite_version": 3,
+  "suite_sha256": "3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009",
+  "variations_file": "topic-context-freeform-variants-20261019.json",
+  "variations_sha256": "9cfabf3df7810aec885aa99e1de857f50fbc47d3809af8cac029ab01e7337a46",
+  "started_at": "2026-10-19T11:08:44.190Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "bt924-replace-kg-cable": 1
+  },
+  "cases": [
+    {
+      "id": "bt924-replace-kg-cable",
+      "title": "BT-924: KG cable replacement preserves use case",
+      "repeats": [
+        {
+          "variant": "natural-core-and-section-answer",
+          "run": 1,
+          "session_id": "customer_acceptance_bt924-replace-kg-cable_natural-core-and-section-answer_1792408124194_1",
+          "turns": [
+            {
+              "message": "Чем можно заменить кабель КГ?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1741,
+              "network_attempts": 1,
+              "log_id": "3538bfcd-80bf-4fe9-bad6-d5ce5728bf23",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Замена КГ зависит от условий применения и назначения подключения. Уточните сечение и число жил, а также нужна ли гибкость для подвижного подключения или кабель будет проложен стационарно. Как он используется?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "installation_mode",
+                "options_count": 2,
+                "values": [
+                  "Подвижное подключение",
+                  "Стационарная прокладка"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Подвижное подключение",
+              "synthetic_scenario": true,
+              "status": 200,
+              "duration_ms": 1498,
+              "network_attempts": 1,
+              "log_id": "1fcf7b0f-e903-4149-9730-47743db6191f",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: назначение и подключаемое оборудование; сечение и число жил. Укажите сечение и число жил конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "core_and_section",
+                "options_count": 0
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "installation_mode",
+                "options_count": 2,
+                "values": [
+                  "Подвижное подключение",
+                  "Стационарная прокладка"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Мне нужны 3 жилы и сечение 1,5 мм²",
+              "synthetic_scenario": true,
+              "status": 200,
+              "duration_ms": 858,
+              "network_attempts": 1,
+              "log_id": "649fd57b-2f27-463d-b31a-2ed5c437d2b8",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: назначение и подключаемое оборудование. Укажите назначение и подключаемое оборудование конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "usage_purpose",
+                "options_count": 0
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-19T11:08:48.294Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "3538bfcd-80bf-4fe9-bad6-d5ce5728bf23",
+    "1fcf7b0f-e903-4149-9730-47743db6191f",
+    "649fd57b-2f27-463d-b31a-2ed5c437d2b8"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

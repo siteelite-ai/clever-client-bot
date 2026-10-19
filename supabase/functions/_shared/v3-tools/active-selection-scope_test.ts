@@ -7,6 +7,7 @@ import {
   isIndependentNominalRequestOutsideActiveScope,
   isSameSectionNominalRefinement,
   isShortAttributeSelectionFollowup,
+  isVerifiedFreeformReadinessAnswer,
   isVerifiedReadinessScopeReply,
   mayBeActivePrepositionalRefinement,
   mayBeNominalRefinement,
@@ -201,8 +202,244 @@ Deno.test("free-form readiness answer carries scope but a fresh command does not
   };
   assertEquals(isVerifiedReadinessScopeReply("с заземлением", slot, false), true);
   assertEquals(isVerifiedReadinessScopeReply("12 м², высота 4 м", slot, false), true);
+  assertEquals(isVerifiedReadinessScopeReply("Нужно 5кВт", slot, false), true);
   assertEquals(isVerifiedReadinessScopeReply("Найди кабель ВВГ", slot, false), false);
   assertEquals(isVerifiedReadinessScopeReply("Новая тема: кабель", slot, false), false);
+});
+
+Deno.test("only an answer to the verified free-form question suppresses a nominal class boundary", () => {
+  const freeformSlot = (question: string, facet_key: string) => ({
+    status: "pending",
+    slot_id: `readiness-${facet_key}`,
+    question,
+    facet_key,
+    options: [],
+    scope: { kind: "selection_readiness", token: "проверенный выбор" },
+  });
+  const conductorSlot = freeformSlot("Сколько жил нужно для кабеля?", "conductor_count");
+  for (const message of [
+    "Нужны 3 жилы",
+    "Мне нужны 3 жилы",
+    "3 жилы",
+    "Нужны 3 жилы, 16 А",
+  ]) {
+    assertEquals(
+      isVerifiedFreeformReadinessAnswer(message, conductorSlot),
+      true,
+      message,
+    );
+  }
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 3 прожектора", conductorSlot),
+    false,
+    "a different product class with the same count is a new request",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 3 прожектора и 16 А", conductorSlot),
+    false,
+    "an unrelated product head cannot be hidden in a composite specification",
+  );
+  for (const message of [
+    "Нужны 3 жилы, а ещё прожектор",
+    "Нужны 3 жилы и новый прожектор",
+  ]) {
+    assertEquals(
+      isVerifiedFreeformReadinessAnswer(message, conductorSlot),
+      false,
+      `another product request must not be absorbed as ${message}`,
+    );
+  }
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 3 жилы", {
+      ...conductorSlot,
+      scope: {
+        kind: "selection_readiness",
+        token: "Кабель в землю: сколько жил нужно?",
+      },
+    }),
+    true,
+    "the original request may mention the same attribute later asked in the verified question",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 120 м²", freeformSlot(
+      "Какая площадь освещаемой части двора в м²?",
+      "illuminated_area",
+    )),
+    true,
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 120 м² и высота 4 м", freeformSlot(
+      "Какая площадь освещаемой части двора в м²?",
+      "illuminated_area",
+    )),
+    true,
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("16 А", freeformSlot(
+      "Какой номинальный ток нужен в амперах?",
+      "rated_current",
+    )),
+    true,
+  );
+  const earthingSlot = freeformSlot("Нужно ли заземление?", "earthing");
+  const useLocationSlot = freeformSlot(
+    "Где будет использоваться розетка?",
+    "use_location",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны с заземлением", earthingSlot),
+    true,
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("с заземлением", earthingSlot),
+    true,
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны для кухни", useLocationSlot),
+    true,
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны для новой кухни", useLocationSlot),
+    true,
+    "an adjective modifying the destination is not a second product request",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer(
+      "Нужны для новой линии",
+      freeformSlot("Для какой линии нужен кабель?", "line_purpose"),
+    ),
+    true,
+    "a new installation line remains an answer to the verified purpose question",
+  );
+  for (const [message, slot] of [
+    ["Нужны для кухни и новые светильники", useLocationSlot],
+    ["Нужны с заземлением и новые светильники", earthingSlot],
+    ["Нужны для кухни 3 светильника", useLocationSlot],
+  ] as const) {
+    assertEquals(
+      isVerifiedFreeformReadinessAnswer(message, slot),
+      false,
+      `an independent product request must not hide after ${message}`,
+    );
+  }
+});
+
+Deno.test("free-form answer protection needs a genuine pending question and never overrides explicit new tasks or chips", () => {
+  const slot = {
+    status: "pending",
+    slot_id: "readiness-conductor-count",
+    question: "Сколько жил нужно для кабеля?",
+    facet_key: "conductor_count",
+    options: [],
+    scope: { kind: "selection_readiness", token: "кабель" },
+  };
+  for (const message of [
+    "Новая тема: нужны 3 жилы",
+    "Новый вопрос: 3 жилы",
+    "Найди 3-жильный кабель другого бренда",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), false, message);
+  }
+  assertEquals(isVerifiedFreeformReadinessAnswer("3 жилы", null), false);
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("3 жилы", {
+      ...slot,
+      scope: { kind: "catalog_section", token: "кабель" },
+    }),
+    false,
+    "a different scope kind cannot authorize a readiness answer",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("3 жилы", { ...slot, question: "" }),
+    false,
+    "a fabricated question-less slot cannot authorize a readiness answer",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("3 жилы", {
+      ...slot,
+      options: [{ value: "3 жилы", label: "3 жилы" }],
+    }),
+    false,
+    "issued chips are handled by exact chip matching, not free-form suppression",
+  );
+});
+
+Deno.test("a progressive multi-facet question accepts a partial conductor answer without changing product class", () => {
+  const slot = {
+    status: "pending",
+    slot_id: "readiness-core-and-section",
+    question:
+      "Осталось уточнить: назначение и подключаемое оборудование; сечение и число жил. Укажите сечение и число жил конкретным значением — без этих данных подбор кабеля будет неточным.",
+    facet_key: "core_and_section",
+    options: [],
+    scope: { kind: "selection_readiness", token: "кабель КГ для подключения" },
+  };
+  for (const message of [
+    "Нужны 3 жилы",
+    "Нужны 3 жилы и 1,5 мм²",
+    "Нужны 3 жилы и сечение 1,5 мм²",
+    "Мне нужны 3 жилы и сечение 1,5 мм²",
+    "3х1,5 мм²",
+    "Нужны 3х1,5 мм²",
+    "А, мне нужны 3х1,5 мм²",
+    "Ну, нужны 3х1,5 мм²",
+    "Тогда 3х1,5 мм²",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), true, message);
+  }
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Нужны 3 прожектора", slot),
+    false,
+    "a different product class must not inherit the cable clarification",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("3х1,5 мм² и прожектор", slot),
+    false,
+    "a second product cannot be hidden after a compact cable specification",
+  );
+  assertEquals(
+    isVerifiedFreeformReadinessAnswer("Новая тема: 3х1,5 мм²", slot),
+    false,
+    "an explicit topic boundary remains authoritative despite matching dimensions",
+  );
+});
+
+Deno.test("a verified line-length question accepts quantitative modifiers but not a new product", () => {
+  const slot = {
+    status: "pending",
+    slot_id: "readiness-line-length",
+    question: "Какая длина линии от источника питания до насоса?",
+    facet_key: "line_length",
+    options: [],
+    scope: { kind: "selection_readiness", token: "кабель питания насоса" },
+  };
+  for (const message of [
+    "Нужно около 30 м",
+    "Примерно 30 м",
+    "Нужны до 30 м",
+    "Нужны не более 30 м",
+    "От 10 до 20 м",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), true, message);
+  }
+  for (const message of [
+    "Около 30 прожекторов",
+    "Нужны около 30 м и прожектор",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), false, message);
+  }
+});
+
+Deno.test("a short numeric readiness answer does not become a new product selection", () => {
+  assertEquals(isSameSectionNominalRefinement("Нужно 5кВт", scope), false);
+  assertEquals(
+    isIndependentNominalRequestOutsideActiveScope("Нужно 5кВт", scope),
+    false,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity("Нужно 5кВт", scope),
+    false,
+  );
 });
 
 Deno.test("a same-section refinement inherits Gallant with or without a selection command", () => {
@@ -227,6 +464,102 @@ Deno.test("a same-section refinement inherits Gallant with or without a selectio
   ) {
     assertEquals(isSameSectionNominalRefinement(message, scope), true, message);
   }
+});
+
+Deno.test("generic request prefaces are recognized as same-section refinements", () => {
+  for (
+    const message of [
+      "Нужны двойные чёрные розетки",
+      "А нужны двойные чёрные розетки",
+      "Ну нужны двойные чёрные розетки",
+      "Мне нужны двойные чёрные розетки",
+      "Хочу купить двойные чёрные розетки",
+      "Покажите мне двойные чёрные розетки",
+      "Подберите мне двойные чёрные розетки",
+      "Найдите нам двойные чёрные розетки",
+    ]
+  ) {
+    assertEquals(mayBeNominalRefinement(message), true, message);
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      true,
+      message,
+    );
+    assertEquals(
+      explicitlyChangesActiveSelectionEntity(message, scope),
+      false,
+      message,
+    );
+    assertEquals(
+      isIndependentNominalRequestOutsideActiveScope(message, scope),
+      false,
+      message,
+    );
+  }
+});
+
+Deno.test("request prefaces do not carry scope into a different section, entity or explicit topic", () => {
+  for (
+    const message of [
+      "Нужны прожекторы",
+      "А нужны прожекторы",
+      "Нужен кабель",
+      "Ну нужен кабель",
+      "Нужны двойные выключатели",
+      "Хочу купить двойные выключатели",
+      "Покажите мне двойные выключатели",
+      "Подберите мне двойные выключатели",
+    ]
+  ) {
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      false,
+      message,
+    );
+    assertEquals(
+      isIndependentNominalRequestOutsideActiveScope(message, scope),
+      true,
+      message,
+    );
+  }
+  for (
+    const message of [
+      "Нужны двойные розетки Legrand",
+      "А нужны двойные розетки Legrand",
+      "Хочу купить двойные розетки Legrand",
+      "Покажите мне двойные розетки Legrand",
+      "Подберите мне двойные розетки без Gallant",
+      "Ну нужны двойные розетки без Gallant",
+      "Новая тема: нужны двойные чёрные розетки",
+    ]
+  ) {
+    assertEquals(
+      isSameSectionNominalRefinement(message, scope),
+      false,
+      message,
+    );
+  }
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "Нужны двойные розетки Legrand",
+      scope,
+    ),
+    true,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "А нужны двойные розетки Legrand",
+      scope,
+    ),
+    true,
+  );
+  assertEquals(
+    explicitlyChangesActiveSelectionEntity(
+      "Подберите мне двойные розетки без Gallant",
+      scope,
+    ),
+    true,
+  );
 });
 
 Deno.test("a short adjectival follow-up may refine a verified scope without inventing a new noun", () => {
@@ -255,6 +588,7 @@ Deno.test("short relation phrases continue only the server-verified Gallant leaf
       "двойные розетки для кухни",
       "Найди двойные розетки для кухни",
       "А подбери двойные розетки для кухни",
+      "Нужны двойные розетки для кухни",
     ]
   ) {
     assertEquals(mayBeActivePrepositionalRefinement(message), true, message);
