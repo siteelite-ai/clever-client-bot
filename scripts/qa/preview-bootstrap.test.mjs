@@ -24,3 +24,16 @@ for (const [name, expectedVariant] of [
       'the closure lane must keep the production provider policy');
   });
 }
+
+test('shared v3 rejects untrusted preview POST before parsing or paid work', () => {
+  const handler = read('chat-consultant-v3/index.ts');
+  const serve = handler.lastIndexOf('Deno.serve(async (req) => {');
+  const options = handler.indexOf('if (req.method === "OPTIONS")', serve);
+  const gate = handler.indexOf('if (ADMISSION_SCOPE === "preview" && !await previewSecretAuthorized(', serve);
+  const bodyRead = handler.indexOf('readRequestTextBounded(req)', serve);
+  const dbClient = handler.indexOf('createClient(SUPABASE_URL, SERVICE_ROLE_KEY', serve);
+  assert(serve >= 0 && options > serve && gate > options && bodyRead > gate && dbClient > gate);
+  assert.match(handler, /req\.headers\.get\(PREVIEW_SECRET_HEADER\)/);
+  assert.match(handler, /Deno\.env\.get\(PREVIEW_SECRET_ENV\)/);
+  assert.match(handler.slice(gate, bodyRead), /status: 403/);
+});
