@@ -19,3 +19,9 @@ An additional precedence gap exists when a verified pending readiness question a
 Independent review also identified a separate pre-existing ambiguity: a short free-form answer such as `Нужны 3 жилы` can be mistaken for a new product request when both a verified active section and a readiness question exist. This candidate does not change that broader class detector; it is not counted as fixed by the Gallant correction.
 
 The separate historical pre-acceptance transport error (`proxy: connect_timeout` plus `direct: Failed to fetch`) was **not** reproduced by this test and should not be conflated with this confirmed OpenRouter HTTP 402.
+
+## Isolated preview check
+
+The candidate from commit `3e5a4917` was deployed **only** to `chat-consultant-v3-closure-preview` version 39 (`ezbr_sha256=9075fd26fa784824c2fc9d66135916b323d56d6606ffc85a33c97c1b37da1f79`, `verify_jwt=true`). A subsequent function-list read showed production `chat-consultant-v3` still at version 459 with its earlier hash `22a252e58aca504ac75290770be7ac57ce989323f1f497bcf6f102728b4a0d63`.
+
+The [one-run acceptance report](reports/gallant-topic-context-preview-v39-20261019.json) passed all three turns in 22.5 s: assortment clarification (`6834eeca-9387-4397-a776-95743b2cc95f`), verified `Розетки` selection (`27a1d919-cee1-46e5-b44e-983ef1810e02`), then `Нужны двойные черные розетки` (`4c06214b-11fe-4ffd-a726-363b08e729af`). The last turn returned HTTP 200 without diagnostic error and one matching Gallant `W5072135` black/chrome double socket at 6,343 ₸; its mandatory criteria retained Gallant, black, and two outlets. No new-topic boundary was reported by the acceptance runner. This is a **targeted 1× preview PASS**, not a full acceptance result. The minimal report did not independently verify product-page content, and it does not establish transport stability or fix the separate short numeric/free-form ambiguity above.
