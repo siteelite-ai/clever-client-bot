@@ -10,6 +10,7 @@ import {
   customerOwnsDerivedExactFacetValue,
   demoteUnfrozenRenderCriteria,
   extractReasoningBounds,
+  extractUnownedMeasuredClaims,
   filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
   projectLiteralMeasuredCriteria,
@@ -23,9 +24,19 @@ import {
   checkCriterion,
   type Criterion,
   extendSelectionCriteriaPlan,
+  mergeMandatorySelectionCriteria,
   resolveTerminalSelectionCriteria,
   restrictSelectionCriteriaPlan,
 } from "./criteria-gate.ts";
+import {
+  compatibilityRelationsToCriteria,
+  subsumeCriteriaProvenByCompatibility,
+  subsumePairedStateCriteria,
+} from "./compatibility-contract.ts";
+import {
+  extractSchemaBackedMeasuredReference,
+  terminalPairedFitDecision,
+} from "../../chat-consultant-v3/selection-jargon-policy.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, traits: string[]): ProductRef {
@@ -956,6 +967,41 @@ Deno.test("system-total: customer allocation `по X лм на изделие` k
   assertEquals(scoped.removed, [total]);
 });
 
+Deno.test("system-total cannot make an assumed norm mandatory for every item", () => {
+  const customer = "Для площади 25 м² подберите несколько светильников.";
+  const reasoning =
+    "По расчётной норме 160 лк нужно суммарно 4000 лм. Каждый товар должен давать не менее 4000 лм.";
+  const assumedEach: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 4000,
+    unit: "лм",
+    level: "A",
+    evidence: "derived_required",
+  };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [assumedEach],
+      reasoning,
+      customer,
+      "system_total",
+    ).criteria,
+    [],
+  );
+  const explicitEach =
+    "Нужно несколько приборов для площади 25 м²: два по 3000 лм каждый.";
+  const owned: Criterion = { ...assumedEach, value: 3000 };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [owned],
+      "Каждый прибор даёт минимум 3000 лм.",
+      explicitEach,
+      "system_total",
+    ).criteria,
+    [owned],
+  );
+});
+
 Deno.test("system-total: only the exact local `до` or `от` direction may bind each item", () => {
   const min: Criterion = {
     key: "Световой поток, лм",
@@ -1159,8 +1205,9 @@ Deno.test("system-total: semicolon-separated total, per-item example and assortm
   );
 });
 
-Deno.test("per-product measurement scope keeps ordinary 1800 lm requirements unchanged", () => {
+Deno.test("per-product measurement scope keeps customer-owned 1800 lm requirements unchanged", () => {
   const reasoning = "Для одной позиции нужен световой поток не менее 1800 лм.";
+  const customer = "Нужен светильник со световым потоком не менее 1800 лм.";
   const criterion: Criterion = {
     key: "Световой поток, лм",
     op: "min",
@@ -1172,7 +1219,7 @@ Deno.test("per-product measurement scope keeps ordinary 1800 lm requirements unc
     filterPerProductMeasuredCriteria(
       [criterion],
       reasoning,
-      "",
+      customer,
       "per_product",
     ).criteria,
     [criterion],
@@ -1186,9 +1233,754 @@ Deno.test("per-product measurement scope keeps ordinary 1800 lm requirements unc
       type: "number",
       unit: "лм",
     }],
-    { measurementScope: "per_product" },
+    { measurementScope: "per_product", customerText: customer },
   );
   assertEquals(projected.added, [criterion]);
+});
+
+Deno.test("per-product source authority does not hard-filter on a model-invented measured norm", () => {
+  const customer = "Подберите светильник в гостиную площадью 25 м2.";
+  const reasoning =
+    "Для 25 м² расчётная норма 160 лк даёт не менее 4000 лм у светильника.";
+  const flow: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 4000,
+    unit: "лм",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const category: Criterion = {
+    key: "Вид исполнения",
+    op: "eq",
+    value: "Бытовой",
+    level: "A",
+  };
+  const price: Criterion = {
+    key: "Цена",
+    op: "max",
+    value: 5000,
+    unit: "₸",
+    level: "A",
+  };
+  const count: Criterion = {
+    key: "Количество в упаковке",
+    op: "eq",
+    value: 2,
+    unit: "шт",
+    level: "A",
+  };
+  const facets = [{
+    key: "flow",
+    caption: "Световой поток, лм",
+    type: "number",
+    unit: "лм",
+    values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+  }];
+  const filtered = filterPerProductMeasuredCriteria(
+    [flow, category, price, count],
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+  );
+  assertEquals(filtered.criteria, [category, price, count]);
+  assertEquals(filtered.removed, [flow]);
+  for (const untrustedScope of [null, undefined, "not_applicable"]) {
+    assertEquals(
+      filterPerProductMeasuredCriteria(
+        [flow],
+        reasoning,
+        customer,
+        untrustedScope,
+        facets,
+      ).criteria,
+      [],
+    );
+  }
+  const contract = compileMeasuredReasoningSearchContract(
+    [flow],
+    reasoning,
+    [],
+    facets,
+    { measurementScope: "per_product", customerText: customer },
+  );
+  assertEquals(contract.projected_criteria, []);
+  assertEquals(contract.mandatory_criteria, []);
+  assertEquals(contract.options, {});
+});
+
+Deno.test("per-product direct customer number requires the same axis and operator", () => {
+  const customer = "Нужен светильник со световым потоком не менее 4000 лм.";
+  const reasoning = "Световой поток должен быть не менее 4000 лм.";
+  const flow: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 4000,
+    unit: "лм",
+    level: "A",
+  };
+  const facets = [{
+    key: "flow",
+    caption: "Световой поток, лм",
+    type: "number",
+    unit: "лм",
+    values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+  }];
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [flow],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+    ).criteria,
+    [flow],
+  );
+  const contract = compileMeasuredReasoningSearchContract(
+    [],
+    reasoning,
+    [],
+    facets,
+    { measurementScope: "per_product", customerText: customer },
+  );
+  assertEquals(contract.projected_criteria, [flow]);
+  assertEquals(contract.options, { flow: ["4000", "5000"] });
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [flow],
+      reasoning,
+      "Нужен светильник ровно 4000 лм.",
+      "per_product",
+      facets,
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("per-product exact-facet and existing-item values need customer authority", () => {
+  const exact: Criterion = {
+    key: "Световой поток, лм",
+    op: "eq",
+    value: "4000",
+    level: "A",
+  };
+  const minimum: Criterion = { ...exact, op: "min" };
+  const length: Criterion = {
+    key: "Длина, м",
+    op: "eq",
+    value: 25,
+    unit: "м",
+    level: "A",
+  };
+  const voltage: Criterion = {
+    key: "Напряжение, кВ",
+    op: "eq",
+    value: 25,
+    unit: "кВ",
+    level: "A",
+  };
+  const facets = [
+    { key: "flow", caption: "Световой поток, лм", unit: "лм" },
+    { key: "length", caption: "Длина, м", unit: "м" },
+    { key: "voltage", caption: "Напряжение, кВ", unit: "кВ" },
+  ];
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [exact, length],
+      "Выбираю точное значение 4000 лм и длину 25 м.",
+      "Комната 25 м2.",
+      "per_product",
+      facets,
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [voltage],
+      "Напряжение должно быть 25 кВ.",
+      "Комната 25 кв. м.",
+      "per_product",
+      facets,
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [exact],
+      "Выбираю точное значение 4000 лм.",
+      "Нужен светильник со световым потоком 4000 лм.",
+      "per_product",
+      facets,
+    ).criteria,
+    [exact],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [minimum, exact],
+      "Выбираю световой поток не менее 4000 лм.",
+      "Сейчас стоит светильник 4000 лм. Хочу заменить.",
+      "per_product",
+      facets,
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{ ...minimum, value: "5000" }],
+      "Выбираю световой поток не менее 5000 лм.",
+      "Сейчас стоит светильник 4000 лм. Хочу заменить на новый со световым потоком не менее 5000 лм.",
+      "per_product",
+      facets,
+    ).criteria.length,
+    1,
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{ ...minimum, value: "5000" }],
+      "Для нового светильника нужен поток не менее 5000 лм.",
+      "Хочу заменить старый светильник на новый со световым потоком не менее 5000 лм.",
+      "per_product",
+      facets,
+    ).criteria.length,
+    1,
+  );
+});
+
+Deno.test("visible hard measurement extractor uses the same customer authority without exact live values", () => {
+  const reasoning =
+    "Для гостиной 25 м² световой поток должен быть не менее 4000 лм. Цвет корпуса можно выбрать позже.";
+  const facets = [{
+    key: "flow",
+    caption: "Световой поток, лм",
+    unit: "лм",
+  }];
+  const claims = extractUnownedMeasuredClaims(
+    reasoning,
+    "Нужен светильник для гостиной 25 м2.",
+    facets,
+    "per_product",
+  );
+  assertEquals(claims.length, 1);
+  assertEquals(claims[0].text, "не менее 4000 лм");
+  assertEquals(reasoning.slice(claims[0].start, claims[0].end), claims[0].text);
+  assertEquals(claims[0].criterion.op, "min");
+  assertEquals(claims[0].criterion.value, 4000);
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      "Световой поток должен быть 4000 лм.",
+      "Нужен светильник для гостиной 25 м2.",
+      facets,
+      "per_product",
+    ).map(({ text, criterion }) => ({ text, op: criterion.op })),
+    [{ text: "должен быть 4000 лм", op: "eq" }],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      "Световой поток должен быть не менее 4000 лм.",
+      "Нужен светильник со световым потоком не менее 4000 лм.",
+      facets,
+      "per_product",
+    ),
+    [],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      "Ориентир около 4000 лм, можно уточнить позже.",
+      "Нужен светильник для гостиной 25 м2.",
+      facets,
+      "per_product",
+    ),
+    [],
+  );
+  const totalAndItem =
+    "Суммарный поток должен быть не менее 4000 лм. Каждый прибор должен давать не менее 4000 лм.";
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      totalAndItem,
+      "Для комнаты 25 м2 нужны несколько приборов.",
+      facets,
+      "system_total",
+    ).map(({ text }) => text),
+    ["не менее 4000 лм"],
+  );
+});
+
+Deno.test("source authority keeps customer decimal sections without splitting the comma", () => {
+  const facet = {
+    key: "section",
+    caption: "Сечение кабеля, мм2",
+    unit: "мм²",
+    values: [{ value: "0.5" }],
+  };
+  const criterion: Criterion = {
+    key: facet.caption,
+    op: "eq",
+    value: 0.5,
+    unit: "мм²",
+    level: "A",
+  };
+  const customer = "Нужно сечение кабеля 0,5 мм²";
+  const reasoning = "Требуется сечение кабеля 0,5 мм².";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [criterion],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [criterion],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(reasoning, customer, [facet]),
+    [],
+  );
+});
+
+Deno.test("live capacity relation is not an invented area norm or exact product value", () => {
+  const facet = {
+    key: "max_area",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+  };
+  const minimum: Criterion = {
+    key: facet.caption,
+    op: "min",
+    value: 30,
+    unit: "м²",
+    level: "A",
+  };
+  const customer = "Нужен прибор для комнаты площадью 30 м²";
+  const reasoning =
+    "Максимальная площадь освещения должна быть не менее 30 м², чтобы прибор покрывал помещение.";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [minimum],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [minimum],
+  );
+  assertEquals(extractUnownedMeasuredClaims(reasoning, customer, [facet]), []);
+  const copiedExact = { ...minimum, op: "eq" as const };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [copiedExact],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [],
+  );
+  const unrelatedFacet = {
+    ...facet,
+    key: "pack_area",
+    caption: "Максимальная площадь упаковки, м²",
+  };
+  const unrelatedReasoning =
+    "Максимальная площадь упаковки должна быть не менее 30 м².";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{ ...minimum, key: unrelatedFacet.caption }],
+      unrelatedReasoning,
+      customer,
+      "per_product",
+      [unrelatedFacet],
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("explicit exact live capacity stays customer-owned", () => {
+  const facet = {
+    key: "max_area",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+  };
+  const exact: Criterion = {
+    key: facet.caption,
+    op: "eq",
+    value: 30,
+    unit: "м²",
+    level: "A",
+  };
+  const customer = "Нужна максимальная площадь освещения товара ровно 30 м²";
+  const reasoning = "Максимальная площадь освещения изделия ровно 30 м².";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [exact],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [exact],
+  );
+  assertEquals(extractUnownedMeasuredClaims(reasoning, customer, [facet]), []);
+});
+
+Deno.test("modal measured claim respects a customer floor without authorizing equality filtering", () => {
+  const facets = [{
+    key: "flow",
+    caption: "Световой поток",
+    unit: null,
+    values: [{ value: "5250 Лм" }, { value: "7000 Лм" }],
+  }];
+  const reasoning = "Световой поток должен быть 7000 лм.";
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      reasoning,
+      "Нужен световой поток не менее 7000 лм.",
+      facets,
+    ),
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{
+        key: "Световой поток",
+        op: "eq",
+        value: 7000,
+        unit: "лм",
+        level: "A",
+      }],
+      reasoning,
+      "Нужен световой поток не менее 7000 лм.",
+      "per_product",
+      facets,
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      reasoning,
+      "Сейчас стоит светильник 7000 лм. Хочу заменить.",
+      facets,
+    ).length,
+    1,
+  );
+});
+
+Deno.test("full-word lumen aliases cannot leave a rejected model-only threshold visible", () => {
+  const facet = {
+    key: "flow",
+    caption: "Световой поток",
+    unit: null,
+    values: [{ value: "4000 лм" }, { value: "5000 лм" }],
+  };
+  const criterion: Criterion = {
+    key: facet.caption,
+    op: "min",
+    value: 4000,
+    level: "A",
+  };
+  const reasoning = "Световой поток должен быть не менее 4000 люменов.";
+  const customer = "Нужен светильник для комнаты 25 м².";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [criterion],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [],
+  );
+  const claims = extractUnownedMeasuredClaims(reasoning, customer, [facet]);
+  assertEquals(claims.map((claim) => claim.text), ["не менее 4000 люменов"]);
+  assertEquals(claims[0].criterion.unit, "лм");
+  assertEquals(
+    extractUnownedMeasuredClaims(reasoning, "Нужно не менее 4000 лм.", [facet]),
+    [],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(reasoning, customer).map((claim) =>
+      claim.text
+    ),
+    ["не менее 4000 люменов"],
+  );
+});
+
+Deno.test("only a complete certified paired fit survives the scalar authority gate", () => {
+  const customer = "Подбери трубку ТТУ на кабель диаметром 10 мм.";
+  const reasoning =
+    "Для кабеля 10 мм внутренний диаметр до усадки должен быть строго больше 10 мм, а после усадки строго меньше 10 мм.";
+  const before: Criterion = {
+    key: "Диаметр до усадки, мм",
+    op: "min",
+    value: 10,
+    unit: "мм",
+    exclusive: true,
+    level: "A",
+    evidence: "derived_required",
+  };
+  const after: Criterion = {
+    key: "Диаметр после усадки, мм",
+    op: "max",
+    value: 10,
+    unit: "мм",
+    exclusive: true,
+    level: "A",
+    evidence: "derived_required",
+  };
+  const inventedFlow: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 4000,
+    unit: "лм",
+    level: "A",
+    evidence: "derived_required",
+  };
+  const facets = [
+    {
+      key: "before",
+      caption: before.key,
+      unit: "мм",
+      values: [{ value: "12" }, { value: "14" }],
+    },
+    {
+      key: "after",
+      caption: after.key,
+      unit: "мм",
+      values: [{ value: "6" }, { value: "7" }],
+    },
+    {
+      key: "flow",
+      caption: inventedFlow.key,
+      unit: "лм",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+  ];
+  const withoutCertification = filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+  );
+  assertEquals(withoutCertification.criteria, []);
+  const certified = filterPerProductMeasuredCriteria(
+    [before, after, inventedFlow],
+    `${reasoning} Световой поток должен быть не менее 4000 лм.`,
+    customer,
+    "per_product",
+    facets,
+    [before, after],
+  );
+  assertEquals(certified.criteria, [before, after]);
+  assertEquals(certified.removed, [inventedFlow]);
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [before, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [before],
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [before, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [{ ...before, exclusive: false }, after],
+    ).criteria,
+    [],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{ ...before, evidence: "model_assumption" }, after],
+      reasoning,
+      customer,
+      "per_product",
+      facets,
+      [before, after],
+    ).criteria,
+    [after],
+  );
+  const totalScope = filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "system_total",
+    facets,
+    [before, after],
+  );
+  assertEquals(totalScope.criteria, filterPerProductMeasuredCriteria(
+    [before, after],
+    reasoning,
+    customer,
+    "system_total",
+    facets,
+  ).criteria);
+});
+
+Deno.test("TTU selection contract retains exactly two server-certified strict fit bounds", () => {
+  const customer = "Подбери трубку ТТУ для кабеля диаметром 10 мм.";
+  const reasoning =
+    "До изменения внутренний диаметр должен быть строго больше 10 мм, а после изменения внутренний диаметр должен быть строго меньше 10 мм.";
+  const facets = [
+    {
+      key: "diameter_before",
+      caption: "Внутренний диаметр до изменения, мм",
+      unit: "мм",
+      values: [{ value: "12" }, { value: "16" }],
+    },
+    {
+      key: "diameter_after",
+      caption: "Внутренний диаметр после изменения, мм",
+      unit: "мм",
+      values: [{ value: "6" }, { value: "8" }],
+    },
+  ];
+  const decision = terminalPairedFitDecision(
+    { value: 10, unit: "мм" },
+    customer,
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(decision.selected_pair?.before_facet_key, facets[0].key);
+  assertEquals(decision.selected_pair?.after_facet_key, facets[1].key);
+  const compatibilityCriteria = compatibilityRelationsToCriteria(
+    decision.relations,
+  ).map((criterion) => ({
+    ...criterion,
+    evidence: "derived_required" as const,
+  }));
+  const copiedObjectMeasurements: Criterion[] = facets.map((facet) => ({
+    key: facet.caption,
+    op: "eq",
+    value: 10,
+    unit: "мм",
+    level: "A",
+    evidence: "user_explicit",
+  }));
+  const evidenceCriteria = subsumePairedStateCriteria(
+    subsumeCriteriaProvenByCompatibility(
+      copiedObjectMeasurements,
+      decision.relations,
+    ),
+  );
+  assertEquals(evidenceCriteria, []);
+  const merged = mergeMandatorySelectionCriteria([
+    ...evidenceCriteria,
+    ...compatibilityCriteria,
+  ]);
+  const emitted = filterPerProductMeasuredCriteria(
+    merged,
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+    compatibilityCriteria,
+  ).criteria;
+  assertEquals(emitted, [
+    {
+      key: facets[0].key,
+      op: "min",
+      value: 10,
+      unit: "мм",
+      level: "A",
+      exclusive: true,
+      evidence: "derived_required",
+    },
+    {
+      key: facets[1].key,
+      op: "max",
+      value: 10,
+      unit: "мм",
+      level: "A",
+      exclusive: true,
+      evidence: "derived_required",
+    },
+  ]);
+
+  // The same model-provided pair is not authoritative when the request owns
+  // two different reference sizes. There is no certified relation to pass.
+  const ambiguousCustomer =
+    "Подбери трубку ТТУ для кабеля диаметром 10 мм и для кабеля диаметром 12 мм.";
+  const ambiguousReference = extractSchemaBackedMeasuredReference(
+    ambiguousCustomer,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(ambiguousReference, null);
+  const ambiguous = terminalPairedFitDecision(
+    ambiguousReference,
+    ambiguousCustomer,
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(ambiguous.state, "unproven");
+  const ambiguousCertified = compatibilityRelationsToCriteria(
+    ambiguous.relations,
+  ).map((criterion) => ({
+    ...criterion,
+    evidence: "derived_required" as const,
+  }));
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      mergeMandatorySelectionCriteria(compatibilityCriteria),
+      reasoning,
+      ambiguousCustomer,
+      "per_product",
+      facets,
+      ambiguousCertified,
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("full-word kilowatt and length aliases are exact unit tokens", () => {
+  const power = [{
+    key: "power",
+    caption: "Мощность",
+    unit: "кВт",
+    values: [{ value: "5" }, { value: "7" }],
+  }];
+  const reasoning = "Мощность должна быть не менее 5 киловаттов.";
+  assertEquals(
+    extractUnownedMeasuredClaims(reasoning, "Нужен прибор.", power)
+      .map((claim) => [claim.text, claim.criterion.unit]),
+    [["не менее 5 киловаттов", "квт"]],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      reasoning,
+      "Нужна мощность не менее 5 кВт.",
+      power,
+    ),
+    [],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      "Длина должна быть не менее 10 миллиметров.",
+      "Нужно соединение.",
+    ).map((claim) => claim.criterion.unit),
+    ["мм"],
+  );
+  assertEquals(
+    extractUnownedMeasuredClaims(
+      "Требуется не менее 4000 люменовидных элементов.",
+      "Нужен светильник.",
+    ),
+    [],
+  );
 });
 
 Deno.test("словесная составная единица не конфликтует с производным диапазоном", () => {

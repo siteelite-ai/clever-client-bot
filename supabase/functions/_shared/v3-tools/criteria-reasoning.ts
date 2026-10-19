@@ -23,6 +23,7 @@ import {
 } from "./criteria-gate.ts";
 import {
   extractClientQuantities,
+  isPhysicalMeasurementUnit,
   normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
@@ -98,15 +99,23 @@ export interface PerProductMeasuredCriteriaFilter {
   removed: Criterion[];
 }
 
-type MeasurementFacet = Pick<CriteriaFacet, "key" | "caption" | "unit">;
+type MeasurementFacet = Pick<CriteriaFacet, "key" | "caption" | "unit"> & {
+  type?: string;
+  values?: Array<{ value: string }>;
+};
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
-const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+// Read the whole lexical unit. A short token cap silently drops inflected
+// names such as `люменов` and `киловаттов`, leaving a hard visible claim
+// behind after the matching search criterion was rejected.
+const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,20}[²³]?\d?`;
 // Preserve a rate/density unit as one scale (`лм/м²`, `м/с`, `Вт/м`).
 // Truncating it at the slash makes an input density indistinguishable from
 // the derived product quantity and falsely marks a sound calculation as
-// ambiguous.
-const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
+// ambiguous. The denominator is a short unit symbol, not an arbitrary noun:
+// `по 2000 лм на изделие` assigns 2000 lm per item, not a `лм/изделие` unit.
+const RATE_DENOMINATOR = String.raw`[a-zа-я°]{1,4}[²³]?\d?`;
+const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${RATE_DENOMINATOR})?`;
 
 function schemaMeasurementUnitTokens(value: string): string[] {
   const source = String(value ?? "");
@@ -133,6 +142,19 @@ function schemaMeasurementUnitTokens(value: string): string[] {
     }
     return [token];
   });
+}
+
+/** Some live facet schemas carry the physical unit only in every value.
+ * A homogeneous unitful value set is sufficient evidence of that facet's
+ * axis; a mixed or unitless set is not. */
+function homogeneousLiveValueUnit(facet: MeasurementFacet): string {
+  const values = facet.values ?? [];
+  if (values.length === 0) return "";
+  const scalar = new RegExp(String.raw`^\s*${NUM}\s*(${UNIT})\s*$`, "iu");
+  const units = values.map(({ value }) =>
+    canonicalMeasurementUnit(String(value ?? "").match(scalar)?.[1] ?? "")
+  );
+  return units[0] && units.every((unit) => unit === units[0]) ? units[0] : "";
 }
 
 function normalizeEvidence(value: unknown): string {
@@ -584,12 +606,32 @@ export function canonicalMeasurementUnit(raw: string): string {
     watt: "вт",
     watts: "вт",
     w: "вт",
+    киловатт: "квт",
+    киловатта: "квт",
+    киловаттов: "квт",
+    kilowatt: "квт",
+    kilowatts: "квт",
+    миллиметр: "мм",
+    миллиметра: "мм",
+    миллиметров: "мм",
+    сантиметр: "см",
+    сантиметра: "см",
+    сантиметров: "см",
+    метр: "м",
+    метра: "м",
+    метров: "м",
+    километр: "км",
+    километра: "км",
+    километров: "км",
     люмен: "лм",
     люмена: "лм",
     люменов: "лм",
     lumen: "лм",
     lumens: "лм",
     lm: "лм",
+    люкс: "лк",
+    люкса: "лк",
+    люксов: "лк",
     вольт: "в",
     вольта: "в",
     вольтов: "в",
@@ -826,7 +868,10 @@ function measuredCriterionIdentity(
         const caption = normalizeEvidence(facet.caption);
         return wanted && (wanted === key || wanted === caption ||
           (wanted.length >= 6 && caption.startsWith(`${wanted} `)));
-      }).map((facet) => canonicalMeasurementUnit(facet.unit ?? ""))
+      }).map((facet) =>
+        canonicalMeasurementUnit(facet.unit ?? "") ||
+        homogeneousLiveValueUnit(facet)
+      )
         .filter(Boolean),
     );
     if (matchingUnits.size === 1) unit = [...matchingUnits][0];
@@ -926,11 +971,10 @@ function customerMeasurementEvidence(
   const labels = measurementAxisLabels(criterion, facets);
   const axisStems = measurementAxisStems(labels);
 
-  const source = String(customerText ?? "").toLocaleLowerCase("ru-RU")
-    .replace(/ё/g, "е");
+  const source = normalizeMeasurementText(String(customerText ?? ""));
   const quantity = new RegExp(
     String
-      .raw`(?<![a-zа-я0-9-])(?:(?:от\s*)?(${NUM})\s*(?:[–—-]|\s+до\s+)\s*(${NUM})|(${NUM}))\s*(${UNIT})(?![a-zа-я])`,
+      .raw`(?<![a-zа-я0-9-])(?:(?:от\s*)?(${NUM})\s*(?:[–—-]|\s+до\s+)\s*(${NUM})|(${NUM}))\s*(${UNIT})(?![a-zа-я0-9])`,
     "giu",
   );
   const explicitlyAggregate =
@@ -939,7 +983,9 @@ function customerMeasurementEvidence(
   const facetVoltageRole = /^(?:в|кв)$/u.test(unit)
     ? voltageMeasurementRole(labels)
     : "";
-  for (const clause of source.split(/[.!?;](?!\d)|,\s*|\s+и\s+|\n+/u)) {
+  // A decimal comma is part of the measurement (`0,5 мм²`), not a clause
+  // boundary. Only a comma followed by whitespace separates clauses.
+  for (const clause of source.split(/[.!?;](?!\d)|,\s+|\s+и\s+|\n+/u)) {
     quantity.lastIndex = 0;
     let previousQuantityEnd = 0;
     for (let match; (match = quantity.exec(clause)) !== null;) {
@@ -959,6 +1005,23 @@ function customerMeasurementEvidence(
           .test(after)
       ) continue;
       const localContext = `${before} ${after.slice(0, 65)}`;
+      // A measurement of the existing item is reference data, not a requested
+      // specification for its replacement. A later, separately stated target
+      // quantity is still considered by this loop on its own occurrence.
+      const oldReference = [...before.matchAll(
+        /(?:^|[^\p{L}])(?:стоит|установлен\p{L}*|имеющ\p{L}*|стар\p{L}*|прежн\p{L}*|предыдущ\p{L}*|текущ\p{L}*)(?=$|[^\p{L}])/giu,
+      )].at(-1);
+      const newTarget = [...before.matchAll(
+        /(?:^|[^\p{L}])(?:нов\p{L}*|нуж\p{L}*|ищ\p{L}*|подбер\p{L}*|не\s+(?:менее|более|ниже|выше))(?=$|[^\p{L}])/giu,
+      )].at(-1);
+      if (
+        oldReference &&
+        (!newTarget || (newTarget.index ?? 0) <= (oldReference.index ?? 0)) &&
+        /(?:замен\p{L}*|вместо|аналог\p{L}*)/iu.test(source)
+      ) {
+        conflict = true;
+        continue;
+      }
       if (/^(?:в|кв)$/u.test(unit)) {
         const customerRole = voltageMeasurementRole(localContext);
         // Operating on a supply is compatible with either a generic working
@@ -1028,7 +1091,7 @@ function customerMeasurementEvidence(
           criterion.op === "max" &&
             measurement.values[0] === statedValues[1]);
       const explicitAllocation = /(?:^|[^\p{L}])по\s*$/iu.test(before) &&
-        /^\s*на\s+\p{L}{2,}/iu.test(after);
+        /^\s*(?:на\s+\p{L}{2,}|кажд\p{L}*)/iu.test(after);
       const opMatches = (criterion.op === stated.op ||
         explicitAllocation && criterion.op === "min" && stated.op === "eq") &&
         (criterion.op === "eq" || criterion.op === "range" ||
@@ -1041,6 +1104,53 @@ function customerMeasurementEvidence(
     }
   }
   return conflict ? "conflict" : "absent";
+}
+
+/** A customer may give an application size rather than a product scalar.
+ * Reuse the existing one-to-one live-facet projector to authorize only the
+ * same numeric value on a unique directional capacity facet. No model norm,
+ * category label, or arithmetic result can manufacture this relation. */
+function customerVerifiedCapacityRelation(
+  criterion: Criterion,
+  measurement: { values: number[]; unit: string },
+  customerText: string,
+  reasoningText: string,
+  facets: MeasurementFacet[],
+): boolean {
+  if (
+    !/^(?:м²|м³)$/u.test(measurement.unit) ||
+    !/^(?:eq|min|max)$/u.test(criterion.op) ||
+    measurement.values.length !== 1 || criterion.exclusive ||
+    facets.length === 0
+  ) return false;
+  // An application-to-capacity conversion is distinct from copying an area
+  // into an unrelated scalar facet. Require an explicit local fit relation in
+  // the consultant's explanation, not only equal numbers and units.
+  if (
+    criterion.op !== "eq" &&
+    !/(?:соответств|покрыва|покрыти|охват|обслуж|вмещ|хватит|подход|рассчит|выдерж|обеспеч)/iu
+      .test(reasoningText)
+  ) return false;
+  const liveFacets = facets.filter((facet) =>
+    Array.isArray(facet.values) && facet.values.length > 0
+  ).map((facet) => ({
+    ...facet,
+    type: facet.type ?? "number",
+    unit: facet.unit ?? null,
+  }));
+  if (liveFacets.length === 0) return false;
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    customerText,
+    customerText,
+    liveFacets,
+  ).matched;
+  return projected.some((candidate) =>
+    candidate.op === criterion.op &&
+    canonicalMeasurementUnit(candidate.unit ?? "") === measurement.unit &&
+    Number(candidate.value) === measurement.values[0] &&
+    normalizeEvidence(candidate.key) === normalizeEvidence(criterion.key)
+  );
 }
 
 /** Scope a total to its physical facet, not every numeric property in the
@@ -1090,19 +1200,106 @@ function aggregateMeasurementAxisProof(
   return false;
 }
 
-/** Remove only measured card filters unsupported by explicit per-item
- * evidence. Non-measured classification, protection and budget criteria retain
- * their existing contracts. `per_product` and unknown scopes are unchanged. */
+/** A certified two-sided fit is different from an invented per-card scalar:
+ * its number is the customer's object dimension and its two product axes are
+ * independently proved by a server-validated live-facet pair. The caller must
+ * supply only that certified pair, never raw model compatibility relations.
+ * Match every field that affects the gate and require both strict sides, so a
+ * loose single relation cannot turn into a general model-authority bypass. */
+function matchesCertifiedPairedCriterion(
+  criterion: Criterion,
+  certifiedPairedCriteria: readonly Criterion[],
+): boolean {
+  if (
+    criterion.evidence !== "derived_required" ||
+    (criterion.level ?? "A") !== "A" ||
+    !["min", "max"].includes(criterion.op) ||
+    criterion.exclusive !== true ||
+    typeof criterion.value !== "number" ||
+    !Number.isFinite(criterion.value)
+  ) return false;
+  const unit = canonicalMeasurementUnit(criterion.unit ?? "");
+  if (!unit || !isPhysicalMeasurementUnit(unit)) return false;
+  const certified = certifiedPairedCriteria.filter((candidate) =>
+    candidate.evidence === "derived_required" &&
+    (candidate.level ?? "A") === "A" &&
+    ["min", "max"].includes(candidate.op) &&
+    candidate.exclusive === true &&
+    typeof candidate.value === "number" &&
+    Number.isFinite(candidate.value) &&
+    candidate.value === criterion.value &&
+    canonicalMeasurementUnit(candidate.unit ?? "") === unit
+  );
+  return certified.some((candidate) =>
+    candidate.key === criterion.key && candidate.op === criterion.op
+  ) && certified.some((opposite) =>
+    opposite.key !== criterion.key &&
+    opposite.op === (criterion.op === "min" ? "max" : "min")
+  );
+}
+
+/** Remove measured card filters unsupported by customer-owned numeric
+ * evidence. A per-product scalar invented by model reasoning is not a hard
+ * search or render constraint, even when its calculation is plausible.
+ * Non-measured classification, protection, counts and budgets retain their
+ * existing contracts. The model's scope label cannot bypass this authority
+ * check when the actual customer request is available. */
 export function filterPerProductMeasuredCriteria(
   criteria: Criterion[],
   reasoningText: string,
   customerText: string,
   measurementScope: string | null | undefined,
   facets: MeasurementFacet[] = [],
+  certifiedPairedCriteria: readonly Criterion[] = [],
 ): PerProductMeasuredCriteriaFilter {
   const next: Criterion[] = [];
   const removed: Criterion[] = [];
   for (const criterion of Array.isArray(criteria) ? criteria : []) {
+    // A system-total request has additional allocation rules. A certified
+    // pair must not bypass that independent scope decision.
+    if (
+      measurementScope !== "system_total" &&
+      matchesCertifiedPairedCriterion(criterion, certifiedPairedCriteria)
+    ) {
+      next.push({ ...criterion });
+      continue;
+    }
+    const customerAvailable = String(customerText ?? "").trim().length > 0;
+    if (
+      measurementScope !== "system_total" &&
+      customerAvailable
+    ) {
+      const measurement = measuredCriterionIdentity(
+        criterion,
+        reasoningText,
+        customerText,
+        facets,
+      );
+      // Counts and currency do not describe a physical scalar of one card.
+      // In particular a numeric categorical facet must not be mistaken for a
+      // dimension simply because the catalog labels it `шт`.
+      if (
+        !measurement || !isPhysicalMeasurementUnit(measurement.unit) ||
+        customerMeasurementEvidence(
+            criterion,
+            measurement,
+            customerText,
+            facets,
+          ) === "match" ||
+        customerVerifiedCapacityRelation(
+          criterion,
+          measurement,
+          customerText,
+          reasoningText,
+          facets,
+        )
+      ) {
+        next.push({ ...criterion });
+      } else {
+        removed.push({ ...criterion });
+      }
+      continue;
+    }
     if (measurementScope !== "system_total") {
       next.push({ ...criterion });
       continue;
@@ -1157,8 +1354,7 @@ export function filterPerProductMeasuredCriteria(
         measurement.unit,
         reasoningText,
       ));
-    if (
-      !measurement ||
+    const scopedToThisCard = !measurement ||
       customerEvidence !== "conflict" && (
           customerPerItem ||
           !customerAggregateSameValue && !aggregateAxis &&
@@ -1170,7 +1366,23 @@ export function filterPerProductMeasuredCriteria(
               reasoningText,
               false,
             )
-        )
+        );
+    // A model may explicitly say "each item >= X" after calculating X from
+    // an assumed norm. That does not make the scalar customer-owned. Preserve
+    // the earlier scope decision, then require independent customer authority
+    // for any physical number that remains on an individual card.
+    if (
+      scopedToThisCard &&
+      (!customerAvailable || !measurement ||
+        !isPhysicalMeasurementUnit(measurement.unit) ||
+        customerEvidence === "match" || customerPerItem ||
+        customerVerifiedCapacityRelation(
+          criterion,
+          measurement,
+          customerText,
+          reasoningText,
+          facets,
+        ))
     ) {
       next.push({ ...criterion });
     } else {
@@ -1178,6 +1390,164 @@ export function filterPerProductMeasuredCriteria(
     }
   }
   return { criteria: next, removed };
+}
+
+export interface UnownedMeasuredClaim {
+  /** UTF-16 offsets into the original reasoning text. */
+  start: number;
+  end: number;
+  text: string;
+  criterion: Criterion;
+}
+
+/** Locate hard numeric product claims in visible reasoning that lack customer
+ * authority. This is deliberately a claim extractor, not a text rewriter:
+ * callers decide whether the containing sentence can be safely softened or
+ * whether the declaration needs a retry. The same filter used for search and
+ * render decides provenance; no catalog category or product vocabulary lives
+ * here. A verified pairwise relation is a separate contract and must be
+ * handled by its relation gate before a caller removes its prose. */
+export function extractUnownedMeasuredClaims(
+  reasoningText: string,
+  customerText: string,
+  facets: MeasurementFacet[] = [],
+  measurementScope: string | null | undefined = "per_product",
+): UnownedMeasuredClaim[] {
+  const source = String(reasoningText ?? "");
+  if (!source || !String(customerText ?? "").trim()) return [];
+  const claims: UnownedMeasuredClaim[] = [];
+  const quantities = new RegExp(
+    String
+      .raw`(?<![a-zа-я0-9-])(${NUM})(?:\s*[–—-]\s*(${NUM}))?\s*(${UNIT})(?![a-zа-я0-9])`,
+    "giu",
+  );
+  const hardMarker =
+    /(?:не\s+(?:менее|более|ниже|выше|меньше|больше)|(?:не\s+)?превыш\p{L}*|долж\p{L}*|нуж\p{L}*|необходим\p{L}*|треб\p{L}*|обязат\p{L}*|строго|ровно|точно|минимум|максимум|как\s+минимум|[<>]=?|[≤≥])/giu;
+  let previousQuantityEnd = 0;
+  let previousClauseStart = 0;
+  for (const match of source.matchAll(quantities)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    const value = Number(match[1].replace(",", "."));
+    const second = match[2] === undefined
+      ? null
+      : Number(match[2].replace(",", "."));
+    const unit = canonicalMeasurementUnit(match[3]);
+    if (
+      !Number.isFinite(value) || second !== null && !Number.isFinite(second) ||
+      !unit || !isPhysicalMeasurementUnit(unit)
+    ) continue;
+    const before = source.slice(0, start);
+    const boundary = [...before.matchAll(/\.(?!\d)|[!?;]|\n/gu)].at(-1);
+    const clauseStart = boundary
+      ? (boundary.index ?? 0) + boundary[0].length
+      : 0;
+    if (clauseStart !== previousClauseStart) {
+      previousClauseStart = clauseStart;
+      previousQuantityEnd = clauseStart;
+    }
+    const clausePrefix = source.slice(clauseStart, start);
+    const marker = [...clausePrefix.matchAll(hardMarker)].at(-1);
+    const markerStart = marker ? clauseStart + (marker.index ?? 0) : -1;
+    const beforeHard = markerStart >= previousQuantityEnd &&
+      start - markerStart <= 90;
+    const afterHard = /^\s*(?:обязател\p{L}*|необходим\p{L}*|долж\p{L}*)/iu
+      .test(source.slice(end, Math.min(source.length, end + 24)));
+    previousQuantityEnd = end;
+    if (!beforeHard && !afterHard) continue;
+
+    const matchingFacets = facets.filter((facet) =>
+      canonicalMeasurementUnit(facet.unit ?? "") === unit ||
+      schemaMeasurementUnitTokens(facet.caption)
+        .some((token) => canonicalMeasurementUnit(token) === unit) ||
+      homogeneousLiveValueUnit(facet) === unit
+    );
+    // A long ordinary noun after a number is not automatically a physical
+    // unit. Full-word physical aliases above, or an exact live facet unit,
+    // provide evidence; otherwise keep the prose untouched rather than
+    // mistaking `люменовидных` for `люменов`.
+    const rawUnit = normalizeUnit(match[3]);
+    if (rawUnit.length > 6 && rawUnit === unit && matchingFacets.length === 0) {
+      continue;
+    }
+    const nearbyStems = new Set(measurementAxisStems(
+      `${clausePrefix.slice(-90)} ${source.slice(end, end + 28)}`,
+    ));
+    const scored = matchingFacets.map((facet) => ({
+      facet,
+      score: measurementAxisStems(`${facet.key} ${facet.caption}`)
+        .filter((stem) => nearbyStems.has(stem)).length,
+    }));
+    const bestScore = Math.max(0, ...scored.map(({ score }) => score));
+    const best = scored.filter(({ score }) => score === bestScore);
+    const facet = matchingFacets.length === 1
+      ? matchingFacets[0]
+      : bestScore > 0 && best.length === 1
+      ? best[0].facet
+      : null;
+    const values = second === null
+      ? [value]
+      : [Math.min(value, second), Math.max(value, second)];
+    // A computed total may remain in an engineering explanation even when it
+    // cannot constrain any one catalog card. Only a claim about the selected
+    // item's own scalar belongs to this text-consistency check.
+    const followingBoundary = source.slice(end).search(/\.(?!\d)|[!?;]|\n/u);
+    const clauseEnd = followingBoundary < 0
+      ? source.length
+      : end + followingBoundary;
+    if (
+      measurementScope === "system_total" &&
+      aggregateMeasurementProof(
+        values,
+        unit,
+        source.slice(clauseStart, clauseEnd),
+      )
+    ) continue;
+    const operator = customerMeasurementOperator(clausePrefix, values);
+    const criterion: Criterion = {
+      key: facet?.caption || facet?.key || clausePrefix.slice(-65).trim() ||
+        unit,
+      op: operator.op,
+      value: second === null ? value : [values[0], values[1]],
+      unit,
+      level: "A",
+      ...(operator.exclusive ? { exclusive: true } : {}),
+    };
+    // Ordinary modal wording (`должен быть 4000 лм`) can express a floor,
+    // unlike `ровно 4000 лм`. A direct customer-owned minimum of that same
+    // value and axis therefore authorizes the visible claim, while it does
+    // not silently turn an equality search filter into a minimum.
+    const modalWithoutExactness = operator.op === "eq" && marker &&
+      /^(?:долж|нуж|необходим|треб)/iu.test(marker[0]) &&
+      !/(?:ровно|точно|строго|именно)\s*$/iu.test(clausePrefix);
+    if (
+      modalWithoutExactness &&
+      filterPerProductMeasuredCriteria(
+          [{ ...criterion, op: "min" }],
+          source,
+          customerText,
+          measurementScope,
+          facets,
+        ).criteria.length > 0
+    ) continue;
+    if (
+      filterPerProductMeasuredCriteria(
+        [criterion],
+        source,
+        customerText,
+        measurementScope,
+        facets,
+      ).removed.length === 0
+    ) continue;
+    const claimStart = beforeHard ? markerStart : start;
+    claims.push({
+      start: claimStart,
+      end,
+      text: source.slice(claimStart, end),
+      criterion,
+    });
+  }
+  return claims;
 }
 
 /** A measured requirement stated in the consultant's prose is mandatory even

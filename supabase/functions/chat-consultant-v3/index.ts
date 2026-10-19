@@ -101,6 +101,7 @@ import {
 import {
   alignCriteriaImportanceWithReasoning,
   alignCriteriaWithReasoning,
+  canonicalMeasurementUnit,
   compileMeasuredReasoningSearchContract,
   customerAggregateMeasurementScope,
   customerOwnsDerivedExactFacetValue,
@@ -6014,6 +6015,161 @@ function conversationBoundaryJsonbContainment(sessionId: string): string {
   }]);
 }
 
+interface VerifiedCustomerQueryLog {
+  id: string;
+  session_id: string | null;
+  user_query: string | null;
+  error: string | null;
+  created_at: string;
+  response_events?: unknown;
+}
+
+interface VerifiedCustomerMeasurementEvidence {
+  text: string;
+  sourceCount: number;
+  lookupFailed: boolean;
+}
+
+const MEASUREMENT_EVIDENCE_LOG_LIMIT = 8;
+const MEASUREMENT_EVIDENCE_READ_TIMEOUT_MS = 1_800;
+const MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS = 3_000;
+const MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS = 8_000;
+
+function physicalCustomerUnits(text: string): Set<string> {
+  return new Set(extractClientQuantities(text)
+    .filter((quantity) => isPhysicalMeasurementUnit(quantity.unit))
+    .map((quantity) => canonicalMeasurementUnit(quantity.unit))
+    .filter(Boolean));
+}
+
+/** Newest customer wording wins. An earlier message with a quantity on the
+ * same physical scale cannot re-authorize a superseded numeric threshold.
+ * Dropping its whole message is intentionally conservative: a separate old
+ * axis in that message may be lost, but no stale hard filter survives. */
+export function composeVerifiedCustomerMeasurementEvidence(
+  currentQuery: string,
+  previousQueriesNewestFirst: string[],
+): { text: string; sourceCount: number } {
+  const pieces = [currentQuery];
+  const seenUnits = physicalCustomerUnits(currentQuery);
+  let length = currentQuery.length;
+  let sourceCount = 0;
+  for (const raw of previousQueriesNewestFirst) {
+    const query = String(raw ?? "").trim();
+    if (
+      !query || query.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS ||
+      length + query.length + 1 > MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS
+    ) continue;
+    const units = physicalCustomerUnits(query);
+    if (units.size === 0 || [...units].some((unit) => seenUnits.has(unit))) {
+      continue;
+    }
+    pieces.push(query);
+    sourceCount++;
+    length += query.length + 1;
+    for (const unit of units) seenUnits.add(unit);
+  }
+  return { text: pieces.join("\n"), sourceCount };
+}
+
+/** Logs are the only authority for a prior turn: browser history and slots
+ * are never accepted as customer numeric evidence. A new task has none.
+ * The read is time-bounded, restricted to earlier completed v3 turns and the
+ * current server-issued session, and fails closed to the current query. */
+export async function loadVerifiedCustomerMeasurementEvidence(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  currentQuery: string,
+  skipPriorLookup: boolean,
+  requestStartedAt: number,
+): Promise<VerifiedCustomerMeasurementEvidence> {
+  const currentOnly = {
+    text: currentQuery,
+    sourceCount: 0,
+    lookupFailed: false,
+  };
+  if (skipPriorLookup) return currentOnly;
+  const createdAfter = activeSelectionScopeLookupCreatedAfter(
+    requestStartedAt,
+  );
+  const createdBefore = new Date(requestStartedAt).toISOString();
+  try {
+    const [sessionRead, boundaryRead] = await runWithDeadline(
+      () => Promise.all([
+        supabase.from("chat_request_logs")
+          .select("id,session_id,user_query,error,created_at")
+          .eq("session_id", sessionId)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .order("created_at", { ascending: false })
+          .limit(MEASUREMENT_EVIDENCE_LOG_LIMIT),
+        supabase.from("chat_request_logs")
+          .select("id,session_id,user_query,error,created_at,response_events")
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .filter(
+            "response_events",
+            "cs",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]),
+      MEASUREMENT_EVIDENCE_READ_TIMEOUT_MS,
+    );
+    if (
+      sessionRead.error || boundaryRead.error ||
+      !Array.isArray(sessionRead.data)
+    ) {
+      return { ...currentOnly, lookupFailed: true };
+    }
+    const boundary = boundaryRead.data as VerifiedCustomerQueryLog | null;
+    if (boundary && !(
+      Array.isArray(boundary.response_events) &&
+      boundary.response_events.some((event: unknown) =>
+        Boolean(event && typeof event === "object" &&
+          (event as Record<string, unknown>).type ===
+            "conversation_boundary" &&
+          (event as Record<string, unknown>).mode === "new_task" &&
+          (event as Record<string, unknown>).session_id === sessionId)
+      )
+    )) {
+      return { ...currentOnly, lookupFailed: true };
+    }
+    const rows = [...sessionRead.data, ...(boundary ? [boundary] : [])]
+      .filter((row): row is VerifiedCustomerQueryLog =>
+        Boolean(row && typeof row === "object" &&
+          typeof row.id === "string" &&
+          typeof row.created_at === "string" &&
+          typeof row.user_query === "string" &&
+          row.error !== "in_progress")
+      )
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const seenIds = new Set<string>();
+    const previousQueries: string[] = [];
+    for (const row of rows) {
+      if (seenIds.has(row.id)) continue;
+      seenIds.add(row.id);
+      if (row.session_id !== sessionId && row.id !== boundary?.id) continue;
+      previousQueries.push(row.user_query!);
+    }
+    const composed = composeVerifiedCustomerMeasurementEvidence(
+      currentQuery,
+      previousQueries,
+    );
+    return { ...composed, lookupFailed: false };
+  } catch (error) {
+    console.error("[v3] customer measurement evidence lookup failed", error);
+    return { ...currentOnly, lookupFailed: true };
+  }
+}
+
 async function loadVerifiedBroadAssortmentChoice(
   supabase: SupabaseClient,
   sessionId: string,
@@ -6776,6 +6932,7 @@ async function runExpertLoop(
     relaxationHintsEnabled: boolean;
     criteriaGateEnabled: boolean;
   },
+  verifiedCustomerMeasurementEvidence: string,
   recentProductEvidence: RecentProductEvidence[] = [],
   preExcludedReplacementIds: string[] = [],
   selectionPlan: ReplacementSelectionPlan | null = null,
@@ -6840,7 +6997,7 @@ async function runExpertLoop(
   let derivedSelectionMeasurementScope: string | null = null;
   let pendingDerivedSelectionMeasurementScope: string | null = null;
   const provisionalCustomerMeasurementScope =
-    customerAggregateMeasurementScope(userMessage);
+    customerAggregateMeasurementScope(verifiedCustomerMeasurementEvidence);
   const cardMeasurementScope = () =>
     provisionalCustomerMeasurementScope ??
     pendingDerivedSelectionMeasurementScope ??
@@ -6850,12 +7007,14 @@ async function runExpertLoop(
     criteria: Criterion[],
     reasoningText = derivedSelectionReasoningEvidence ||
       pendingDerivedSelectionMeasurementEvidence || firstAssistantText,
+    certifiedPairedCriteria: readonly Criterion[] = [],
   ) => filterPerProductMeasuredCriteria(
     criteria,
     reasoningText,
-    userMessage,
+    verifiedCustomerMeasurementEvidence,
     cardMeasurementScope(),
     lastDiscover?.facets ?? [],
+    certifiedPairedCriteria,
   );
   const scopeLiveFacetOptions = (
     options: Record<string, unknown> | null | undefined,
@@ -6881,7 +7040,9 @@ async function runExpertLoop(
     return scoped;
   };
   const customerCardMeasurementQuantities = () => {
-    const quantities = extractClientQuantities(userMessage);
+    const quantities = extractClientQuantities(
+      verifiedCustomerMeasurementEvidence,
+    );
     if (cardMeasurementScope() !== "system_total") return quantities;
     return quantities.filter((quantity) =>
       filterPerProductMeasuredCriteria([{
@@ -6891,7 +7052,7 @@ async function runExpertLoop(
         unit: quantity.unit,
         level: "A",
         evidence: "user_explicit",
-      }], "", userMessage, "system_total", lastDiscover?.facets ?? [])
+      }], "", verifiedCustomerMeasurementEvidence, "system_total", lastDiscover?.facets ?? [])
         .criteria.length > 0
     );
   };
@@ -6911,7 +7072,7 @@ async function runExpertLoop(
         unit: requirement.unit,
         level: "A",
         evidence: "user_explicit",
-      }], userMessage).criteria.length > 0;
+      }], verifiedCustomerMeasurementEvidence).criteria.length > 0;
     },
   );
   const semanticallyMappedCustomerPhrases = new Set<string>();
@@ -7059,6 +7220,21 @@ async function runExpertLoop(
         ...criterion,
         evidence: "derived_required" as const,
       }));
+    // A relation inferred from arbitrary model output is not evidence that a
+    // per-product physical threshold belongs to the customer. Only the pair
+    // certified against the live two-state facet graph may cross that gate.
+    const certifiedPairedCriteria = compatibilityRelationsToCriteria(
+      certifiedPairedCompatibilityRelations,
+    ).map((criterion) => ({
+      ...criterion,
+      evidence: "derived_required" as const,
+    })).filter((certified) => compatibilityCriteria.some((current) =>
+      current.key === certified.key &&
+      current.op === certified.op &&
+      current.value === certified.value &&
+      current.unit === certified.unit &&
+      current.exclusive === certified.exclusive
+    ));
     const accumulatedCriteria = [
       ...userBackedSearchCriteria,
       ...enforcedSearchCriteria,
@@ -7100,7 +7276,7 @@ async function runExpertLoop(
           evidence: "user_explicit" as const,
         }]
         : []),
-    ])).criteria;
+    ]), undefined, certifiedPairedCriteria).criteria;
     const emittedPlan = emittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(
         compatibilityCriteria.length >= 2 ? null : plan,
@@ -7165,7 +7341,7 @@ async function runExpertLoop(
         measurementScope: cardMeasurementScope(),
         reasoningText: derivedSelectionReasoningEvidence,
         facets: lastDiscover?.facets ?? [],
-        customerEvidence: userMessage,
+        customerEvidence: verifiedCustomerMeasurementEvidence,
       });
       // A list of alternative cards is not a counted installation plan. Even
       // when an individual output is verified, it cannot prove the total.
@@ -7441,6 +7617,9 @@ async function runExpertLoop(
   let activeCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
+  let certifiedPairedCompatibilityRelations: ReturnType<
+    typeof parseCompatibilityRelations
+  > = [];
   const adoptValidatedPairedRelations = (
     decision: ReturnType<typeof terminalPairedFitDecision>,
     facets: DiscoverCategoryOk["facets"],
@@ -7455,6 +7634,12 @@ async function runExpertLoop(
     );
     activeCompatibilityRelations = [
       ...activeCompatibilityRelations.filter((relation) =>
+        !selectedKeys.has(normalizeForMatch(relation.product_key))
+      ),
+      ...decision.relations,
+    ];
+    certifiedPairedCompatibilityRelations = [
+      ...certifiedPairedCompatibilityRelations.filter((relation) =>
         !selectedKeys.has(normalizeForMatch(relation.product_key))
       ),
       ...decision.relations,
@@ -8622,7 +8807,7 @@ async function runExpertLoop(
       reasoningText: derivedSelectionReasoningEvidence,
       facets: derivedStructuredSearchDiscovery?.facets ??
         lastDiscover?.facets ?? [],
-      customerEvidence: userMessage,
+      customerEvidence: verifiedCustomerMeasurementEvidence,
     });
     if (!totalRequirement || preferredClassIds.length < 2) {
       return preferredClassIds;
@@ -9311,7 +9496,7 @@ async function runExpertLoop(
             return resolveDerivedSelectionReasoning(
               args,
               lastDiscover?.facets ?? [],
-              userMessage,
+              verifiedCustomerMeasurementEvidence,
               activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
               pair.reference && pair.selected_pair
                 ? {
@@ -9386,7 +9571,7 @@ async function runExpertLoop(
               {
                 measurementScope: provisionalCustomerMeasurementScope ??
                   declaration.measurementScope,
-                customerText: userMessage,
+                customerText: verifiedCustomerMeasurementEvidence,
               },
             );
             const recommendedExact = projectSingleRecommendedMeasuredCriterion(
@@ -9732,7 +9917,7 @@ async function runExpertLoop(
               lastDiscover.facets ?? [],
               {
                 measurementScope: effectiveDeclaredMeasurementScope,
-                customerText: userMessage,
+                customerText: verifiedCustomerMeasurementEvidence,
               },
             );
           const recommendedMeasuredProjection =
@@ -9770,7 +9955,7 @@ async function runExpertLoop(
                 ) ||
                 customerOwnsDerivedExactFacetValue(
                   proposedCriterion,
-                  userMessage,
+                  verifiedCustomerMeasurementEvidence,
                   visibleDeclarationText,
                   lastDiscover?.facets ?? [],
                 );
@@ -9830,8 +10015,9 @@ async function runExpertLoop(
           const scopedDerivedMandatory = filterPerProductMeasuredCriteria(
             proposedDerivedMandatoryCriteria,
             `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
-            userMessage,
+            verifiedCustomerMeasurementEvidence,
             effectiveDeclaredMeasurementScope,
+            lastDiscover?.facets ?? [],
           );
           const derivedMandatoryCriteria = scopedDerivedMandatory.criteria;
           // A model may mention protection in a provisional B-level class,
@@ -11723,7 +11909,7 @@ async function runExpertLoop(
               lastDiscover.facets,
               {
                 measurementScope: cardMeasurementScope(),
-                customerText: userMessage,
+                customerText: verifiedCustomerMeasurementEvidence,
               },
             );
             const measuredRetrievalProjection = projectCriteriaFacetOptions(
@@ -13138,6 +13324,10 @@ async function runExpertLoop(
             );
           const compatibilityRelations = completedCompatibility.relations;
           activeCompatibilityRelations = compatibilityRelations;
+          // Tool-supplied relations replace the previous compatibility graph.
+          // Any earlier paired certification must be re-established against
+          // the current live facet pair before it may enter the render contract.
+          certifiedPairedCompatibilityRelations = [];
           if (
             alignedCompatibility.alignments.length > 0 ||
             completedCompatibility.added.length > 0
@@ -13544,7 +13734,7 @@ async function runExpertLoop(
               lastDiscover.facets,
               {
                 measurementScope: cardMeasurementScope(),
-                customerText: userMessage,
+                customerText: verifiedCustomerMeasurementEvidence,
               },
             );
             criteria = scopeCardCriteria(
@@ -13895,7 +14085,7 @@ async function runExpertLoop(
               ? customerCardMeasurementQuantities().map((quantity) =>
                 `${quantity.value} ${quantity.unit}`
               ).join("\n")
-              : userMessage;
+              : verifiedCustomerMeasurementEvidence;
             const understated = findUnderstatedCriteria(
               criteria,
               cardCustomerText,
@@ -15493,7 +15683,7 @@ async function runExpertLoop(
               lastDiscover.facets,
               {
                 measurementScope: cardMeasurementScope(),
-                customerText: userMessage,
+                customerText: verifiedCustomerMeasurementEvidence,
               },
             ).added
             : [];
@@ -16745,6 +16935,9 @@ async function runExpertLoop(
         void classifyOptionsSource;
 
         if (tc.name === "discover_category") {
+          // A certified pair belongs to one discovery's live facet graph.
+          // Never carry it into a new or corrective category discovery.
+          certifiedPairedCompatibilityRelations = [];
           if (correctiveDiscovery) {
             // The previous category has just been rejected by the consultant's
             // own reasoning. Never let its whitelist constrain the corrected
@@ -18322,7 +18515,7 @@ async function runExpertLoop(
         terminalDiscover.facets,
         {
           measurementScope: cardMeasurementScope(),
-          customerText: userMessage,
+          customerText: verifiedCustomerMeasurementEvidence,
         },
       )
       : { criteria: terminalCriteriaBase, added: [] };
@@ -21685,6 +21878,38 @@ Deno.serve(async (req) => {
               : sessionId;
             const effectiveHistory = startsNewTask ? [] : priorHistory;
             const effectiveSlots = startsNewTask ? {} : trustedSlots;
+            // Only an expert selection spends the extra read. The current
+            // customer turn stays the routing input; earlier quantities may
+            // authorise a hard measured criterion only if recovered from the
+            // completed server log for this exact active session.
+            let customerMeasurementEvidencePromise: Promise<string> | null =
+              null;
+            const mayCarryPriorMeasurements = !startsNewTask && (
+              effectiveHistory.some((message) => message.role === "user") ||
+              matchedPendingClarification || Boolean(sameSectionScope)
+            );
+            const verifiedCustomerMeasurementEvidence = (): Promise<string> =>
+              customerMeasurementEvidencePromise ??= (async () => {
+                const evidence = await loadVerifiedCustomerMeasurementEvidence(
+                  supabase,
+                  effectiveSessionId,
+                  logId,
+                  userMessage,
+                  !mayCarryPriorMeasurements,
+                  t0,
+                );
+                steps.push({
+                  step: "v3_customer_measurement_evidence_resolved",
+                  ms: Date.now() - t0,
+                  meta: {
+                    server_prior_turns: evidence.sourceCount,
+                    lookup_failed: evidence.lookupFailed,
+                    new_task: startsNewTask,
+                    prior_context_available: mayCarryPriorMeasurements,
+                  },
+                });
+                return evidence.text;
+              })();
             const electricalTripDiagnostic =
               resolveElectricalProtectionTripDiagnostic(
                 userMessage,
@@ -22170,6 +22395,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
+                  await verifiedCustomerMeasurementEvidence(),
                   recentProductEvidence,
                   [],
                   null,
@@ -22295,6 +22521,7 @@ Deno.serve(async (req) => {
                   relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
                   criteriaGateEnabled: true,
                 },
+                await verifiedCustomerMeasurementEvidence(),
                 recentProductEvidence,
                 [],
                 null,
@@ -22361,6 +22588,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
+                  await verifiedCustomerMeasurementEvidence(),
                   recentProductEvidence,
                   [],
                   null,
@@ -22518,6 +22746,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
+                  await verifiedCustomerMeasurementEvidence(),
                   recentProductEvidence,
                   [],
                   null,
@@ -22838,6 +23067,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
+                  await verifiedCustomerMeasurementEvidence(),
                   recentProductEvidence,
                   direct.source_candidate_ids ?? [],
                   replacementSelectionPlan,
@@ -22874,6 +23104,7 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
+                await verifiedCustomerMeasurementEvidence(),
                 recentProductEvidence,
                 [],
                 null,
