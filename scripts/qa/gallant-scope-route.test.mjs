@@ -65,6 +65,26 @@ test('active scope lookup is server-owned despite stale client slots and routes 
   assert.match(scopedRoute, /effectiveSlots/);
   assert.match(scopedRoute, /v3_active_selection_scope_expert_route/);
   assert.match(
+    scopedRoute,
+    /isShortAttributeSelectionFollowup\(userMessage\)\s*\? `\$\{scopedSelectionRequest\.message\} \$\{sameSectionScope\.leaf\}`\s*: scopedSelectionRequest\.message/,
+    'only a short attribute request gets its missing product noun from the verified section',
+  );
+  assert.match(
+    scopedRoute,
+    /isShortAttributeSelectionFollowup\(userMessage\)\s*\? sameSectionScope\.leaf\s*: null/,
+    'only a short attribute request may seed the first taxonomy lookup from the verified leaf',
+  );
+  assert.match(
+    source,
+    /const verifiedActiveLeafEvidence = verifiedInitialDiscoveryLeaf &&\s*activeSelectionScope\?\.leaf === verifiedInitialDiscoveryLeaf/,
+    'only the matching server-owned scope may ground a short discovery noun',
+  );
+  assert.equal(
+    source.match(/\$\{verifiedActiveLeafEvidence\}/g)?.length,
+    3,
+    'initial capture and both discovery guards must share that verified leaf evidence',
+  );
+  assert.match(
     source,
     /const broadAssortmentRequest = !activeSelectionScope &&\s*isBroadAssortmentRequest\(userMessage\)/,
     'the scoped expert route must not reopen broad-assortment clarification',

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source": "220volt.testdevops.ru browser observation on 2026-10-19: bare 'Нужны' incorrectly started a new topic after Gallant/Rozetki",
+  "source": "220volt.testdevops.ru browser observations on 2026-10-19: short attribute refinements after Gallant/Rozetki must retain the verified section",
   "default_expectations": { "max_duration_ms": 45000 },
   "cases": [
     {
@@ -39,6 +39,46 @@
               ["розет"],
               ["двойн", "2 мест", "2-мест", "2 пост"],
               ["черн", "чёрн"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "gallant-elliptic-need-continues-section",
+      "title": "Gallant → Розетки → нужны двойные",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Покажи ассортимент Gallant на сайте",
+          "expect": {
+            "max_products": 0,
+            "require_clarification_choice": "either",
+            "require_clarification_facet_key": "catalog_section"
+          }
+        },
+        {
+          "message": "Розетки",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"]
+            ]
+          }
+        },
+        {
+          "message": "нужны двойные",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"],
+              ["двойн", "2 мест", "2-мест", "2 пост"]
             ]
           }
         }

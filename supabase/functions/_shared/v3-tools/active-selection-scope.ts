@@ -476,14 +476,25 @@ export function mayBeNominalRefinement(message: string): boolean {
       .test(value);
 }
 
-/** A single adjectival modifier is an anaphoric refinement, not a new noun. */
+/**
+ * A single adjectival modifier is an anaphoric refinement, not a new noun.
+ * Selection verbs do not make its missing product head explicit: only a
+ * completed server-issued active scope may supply that head in the caller.
+ */
 export function isShortAttributeSelectionFollowup(message: string): boolean {
   const raw = String(message ?? "").trim();
   if (!raw || raw.length > 100 || /[.!?;]\s*\p{L}/u.test(raw)) {
     return false;
   }
-  return /^(?:а\s+)?(?:(?:есть|покажи|покажите)\s+)?(?:еще\s+)?(?:более\s+)?[\p{L}-]{3,}(?:ые|ие|ее|ая|ое|ый|ий|ой|ых|их|ую|юю)$/u
-    .test(normalized(raw));
+  const value = normalized(raw).replace(
+    /^(?:(?:а|ну|тогда|пожалуйста)\s+)*/u,
+    "",
+  ).replace(
+    /^(?:(?:(?:мне|нам)\s+)?нуж\p{L}*|хочу(?:\s+купить)?|есть(?:\s+ли)?|покажи\p{L}*|найди\p{L}*|подбери\p{L}*)(?:\s+|$)/u,
+    "",
+  );
+  return /^(?:еще\s+)?(?:более\s+)?[\p{L}-]{3,}(?:ые|ие|ее|ая|ое|ый|ий|ой|ых|их|ую|юю)$/u
+    .test(value);
 }
 
 /**
