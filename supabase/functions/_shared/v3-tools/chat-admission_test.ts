@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  admissionDiagnosticError,
   type ChatV3AdmissionRpc,
   checkChatV3Admission,
   checkChatV3AdmissionWithDeadline,
@@ -27,6 +28,23 @@ function decision(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+Deno.test("admission denial distinguishes overload from unavailable service", () => {
+  assertEquals(
+    admissionDiagnosticError({ reason: "limit_exceeded" }),
+    "rate_limited",
+  );
+  for (const reason of [
+    "rpc_timeout_closed",
+    "configuration_missing",
+    "claim_not_in_progress",
+  ]) {
+    assertEquals(
+      admissionDiagnosticError({ reason }),
+      "request_unavailable",
+    );
+  }
+});
 
 Deno.test("unset/off mode never calls either RPC, even with bad limits", async () => {
   let calls = 0;

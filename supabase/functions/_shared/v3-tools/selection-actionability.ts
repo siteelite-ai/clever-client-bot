@@ -20,9 +20,9 @@ import {
   projectReasoningRangeCriteria,
 } from "./criteria-reasoning.ts";
 import {
+  type Criterion,
   filterProductsByExcludedCriteria,
   normalizeKey,
-  type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 import { extractCustomerApplicationContexts } from "./selection-contract.ts";
@@ -96,10 +96,19 @@ export function reasoningComputesSystemTotalFromSpatialExtent(
   customerEvidence: string,
   reasoningText: string,
 ): boolean {
-  // An area calculation describes demand, not how many catalog items supply
-  // it. Only customer-owned multiplicity may turn it into a distributed sum;
-  // a single replacement must satisfy the demand with the target item.
-  if (!customerRequestsMultipleProducts(customerEvidence)) return false;
+  // The customer's request for alternatives leaves the number of installed
+  // items open. A calculation for the whole area may therefore be distributed
+  // over a combination of items. Conversely, a requested single item or a
+  // one-to-one replacement must itself meet that demand.
+  if (
+    !customerRequestsMultipleProducts(customerEvidence) &&
+    !customerRequestsOpenAlternatives(customerEvidence)
+  ) return false;
+  const replacement = replacementTargetSideEvidence(customerEvidence);
+  if (
+    replacement.oneToOne ||
+    customerRequestsOneProduct(replacement.evidence)
+  ) return false;
   const customerExtents = extractClientQuantities(customerEvidence)
     .map((quantity) => ({ ...quantity, unit: normalizeUnit(quantity.unit) }))
     .filter(({ unit }) => /[²³]/u.test(unit));
@@ -116,8 +125,65 @@ export function reasoningComputesSystemTotalFromSpatialExtent(
     isPhysicalMeasurementUnit(quantity.unit) &&
     !customerExtents.some((extent) => extent.unit === quantity.unit)
   );
+  if (
+    customerOwnsPerItemDerivedTarget(
+      customerEvidence,
+      reasoningQuantities,
+      customerExtents.map(({ unit }) => unit),
+    )
+  ) return false;
   return derivesAnotherDimension &&
     /[×xх*][^.!?\n]{0,120}(?:=|≈)/u.test(String(reasoningText ?? ""));
+}
+
+function normalizeCustomerWording(customerEvidence: string): string {
+  return String(customerEvidence ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+}
+
+function customerRequestsOpenAlternatives(customerEvidence: string): boolean {
+  const source = normalizeCustomerWording(customerEvidence);
+  // Product alternatives are not a request for multiple installed units, but
+  // they leave that choice open. This is intentionally category-neutral.
+  return /(?:^|\s)(?:вариант\p{L}*|альтернатив\p{L}*)(?=\s|[.,!?;:]|$)/iu
+    .test(source);
+}
+
+function customerRequestsOneProduct(customerEvidence: string): boolean {
+  const source = normalizeCustomerWording(customerEvidence);
+  const oneProduct =
+    /(?:^|\s)(?:(?:ровно|только|именно)\s+)?(?:один|одна|одно|одну|одного|1\s*шт\.?)(?=\s|[.,!?;:]|$)/iu;
+  const disjunctiveMultiple =
+    /(?:^|\s)(?:или|либо)\s+(?:двое|два|две|три|четыре|пять|[2-9]\d?\s*шт\.?)(?=\s|[.,!?;:]|$)/iu;
+  // "Один или несколько" leaves the installation cardinality open. Only a
+  // genuinely single-target instruction may turn an area-wide calculation
+  // into a minimum for each individual card.
+  return source.split(/[.!?;\n]+/u).some((clause) =>
+    oneProduct.test(clause) &&
+    !customerRequestsMultipleProducts(clause) &&
+    !disjunctiveMultiple.test(clause)
+  );
+}
+
+function customerOwnsPerItemDerivedTarget(
+  customerEvidence: string,
+  reasoningQuantities: Array<{ value: number; unit: string }>,
+  extentUnits: string[],
+): boolean {
+  return normalizeCustomerWording(customerEvidence)
+    .split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
+    .some((clause) =>
+      /(?:^|\s)(?:кажд\p{L}*|на\s+один|у\s+кажд\p{L}*|по\s+одному)(?=\s|[,:]|$)/iu
+        .test(clause) &&
+      extractClientQuantities(clause).some((customerQuantity) => {
+        const customerUnit = normalizeUnit(customerQuantity.unit);
+        return !extentUnits.includes(customerUnit) &&
+          reasoningQuantities.some((derivedQuantity) =>
+            derivedQuantity.value === customerQuantity.value &&
+            derivedQuantity.unit === customerUnit
+          );
+      })
+    );
 }
 
 function replacementTargetSideEvidence(customerEvidence: string): {
@@ -140,10 +206,137 @@ function replacementTargetSideEvidence(customerEvidence: string): {
 }
 
 function customerRequestsMultipleProducts(customerEvidence: string): boolean {
-  const source = String(customerEvidence ?? "").toLocaleLowerCase("ru-RU")
-    .replace(/ё/gu, "е");
-  return /(?:^|\s)(?:нескольк\p{L}*|(?:двое|два|две|три|четыре|пять|[2-9]\d?)\s+(?:шт\p{L}*|единиц\p{L}*|издел\p{L}*|товар\p{L}*|прибор\p{L}*))(?=\s|$)/iu
-    .test(source);
+  const source = normalizeCustomerWording(customerEvidence);
+  if (
+    /(?:^|\s)(?:двое|два|две|три|четыре|пять|[2-9]\d?)\s+(?:шт\p{L}*|единиц\p{L}*|издел\p{L}*|товар\p{L}*|прибор\p{L}*)(?=\s|$)/iu
+      .test(source)
+  ) return true;
+  for (const match of source.matchAll(/(?:^|\s)нескольк\p{L}*(?=\s|$)/giu)) {
+    const following = source.slice((match.index ?? 0) + match[0].length)
+      .trimStart().split(/\s+/u).slice(0, 3).join(" ");
+    if (
+      !/(?:^|\s)(?:вариант\p{L}*|альтернатив\p{L}*|модел\p{L}*|предложен\p{L}*|пример\p{L}*|кандидат\p{L}*|карточ\p{L}*|позиц\p{L}*)(?=\s|[.,!?;:]|$)/iu
+        .test(following)
+    ) return true;
+  }
+  return false;
+}
+
+/** A model can correctly calculate a total for an open installation and then
+ * contradict that calculation in a second clause by making a derived number
+ * mandatory for every individual item. Remove only a separable, model-owned
+ * per-item clause. An inseparable calculation or a clause with another
+ * requirement is not safe to rewrite, so the declaration must be retried.
+ * This is deliberately about sentence structure and physical units, not a
+ * product class, preferred threshold or catalog category. */
+function reconcileComputedTotalReasoning(
+  reasoning: string,
+  customerEvidence: string,
+): string | null {
+  const extentUnits = extractClientQuantities(customerEvidence)
+    .map(({ unit }) => normalizeUnit(unit))
+    .filter((unit) => /[²³]/u.test(unit));
+  const equationInputs = new Set<string>();
+  const equationOutputs: Array<{ value: number; unit: string }> = [];
+  for (const sentence of reasoning.split(/(?<=[.!?…;])\s+/u)) {
+    const equality = Math.max(
+      sentence.lastIndexOf("="),
+      sentence.lastIndexOf("≈"),
+    );
+    if (equality < 0) continue;
+    for (
+      const { unit } of extractClientQuantities(sentence.slice(0, equality))
+    ) {
+      equationInputs.add(normalizeUnit(unit));
+    }
+    for (
+      const output of extractClientQuantities(sentence.slice(equality + 1))
+    ) {
+      if (!isPhysicalMeasurementUnit(output.unit)) continue;
+      equationOutputs.push({
+        value: output.value,
+        unit: normalizeUnit(output.unit),
+      });
+    }
+  }
+  const parts = reasoning.split(
+    /(?<=[.!?…;])\s+|,\s+(?=(?:(?:а|но|при\s+этом|оптимальн\p{L}*|рекоменду\p{L}*|лучше|следует|можно|нуж\p{L}*|треб\p{L}*|выбра\p{L}*|взя\p{L}*|подобр\p{L}*)(?:\s|$)))/iu,
+  );
+  const retained: string[] = [];
+  for (const part of parts) {
+    const quantities = extractClientQuantities(part)
+      .map((quantity) => ({
+        ...quantity,
+        unit: normalizeUnit(quantity.unit),
+      }))
+      .filter(({ unit }) =>
+        isPhysicalMeasurementUnit(unit) && !extentUnits.includes(unit)
+      );
+    const perItemLanguage =
+      /(?:^|[^\p{L}])(?:кажд\p{L}*|отдельн\p{L}*|по\s+одному|на\s+один\p{L}*|для\s+одного|у\s+одного|each|every|per[-\s]+(?:item|product|unit))(?=$|[^\p{L}])/iu
+        .test(part);
+    const perAreaNorm =
+      /(?:кажд\p{L}*|один\p{L}*)\s+(?:квадратн\p{L}*|кубическ\p{L}*|м[²³]|кв\.?\s*м)/iu
+        .test(part);
+    const productSideQuantities = quantities.filter(({ unit }) =>
+      equationOutputs.some((output) => output.unit === unit) ||
+      !equationInputs.has(unit)
+    );
+    const choosesProduct =
+      /(?:^|[^\p{L}])(?:выбра\p{L}*|выбер\p{L}*|взя\p{L}*|подобр\p{L}*|подойд\p{L}*|рекоменду\p{L}*|оптимальн\p{L}*|нуж\p{L}*|треб\p{L}*)(?=$|[^\p{L}])/iu
+        .test(part);
+    const explicitBinding = perItemLanguage && !perAreaNorm &&
+      quantities.length > 0;
+    const implicitBinding = choosesProduct &&
+      productSideQuantities.length > 0 &&
+      !/(?:^|[^\p{L}])(?:суммарн\p{L}*|общ\p{L}*|всего|совокупн\p{L}*|распредел\p{L}*)(?=$|[^\p{L}])/iu
+        .test(part) &&
+      // An unqualified restatement of the equation's output may still mean
+      // total demand. A different selection value cannot inherit that scope.
+      !productSideQuantities.every((quantity) =>
+        equationOutputs.some((output) =>
+          output.unit === quantity.unit && output.value === quantity.value
+        )
+      );
+    if (!explicitBinding && !implicitBinding) {
+      retained.push(part);
+      continue;
+    }
+    const bindingQuantities = explicitBinding
+      ? quantities
+      : productSideQuantities;
+    const customerOwned = bindingQuantities.filter((quantity) =>
+      customerOwnsPerItemDerivedTarget(
+        customerEvidence,
+        [quantity],
+        extentUnits,
+      )
+    );
+    if (customerOwned.length === bindingQuantities.length) {
+      retained.push(part);
+      continue;
+    }
+    // Never discard a customer's own item target along with a model-only one.
+    if (customerOwned.length > 0) return null;
+    // A dimensional equation, or another independent requirement joined to
+    // the scalar, cannot be surgically changed without inventing new prose.
+    if (
+      /[×xх*][^.!?\n]{0,120}(?:=|≈)/u.test(part) ||
+      /(?:\s+и\s+|,\s+|;(?=\S)|\s+(?:также|плюс|кроме\s+того)\s+|\bIP\s*\d{2}\b)/iu
+        .test(part)
+    ) return null;
+    // This standalone clause only binds model-derived physical quantities to
+    // each item. Its omission leaves the earlier system formula intact.
+  }
+  const result = retained.map((part) => {
+    const sentence = part.trim().replace(/[,;]$/u, "");
+    const punctuated = /[.!?…]$/u.test(sentence) ? sentence : `${sentence}.`;
+    return punctuated.replace(
+      /^\p{Ll}/u,
+      (initial) => initial.toLocaleUpperCase("ru-RU"),
+    );
+  }).join(" ").replace(/\s+/gu, " ").trim();
+  return result.length >= 20 ? result : null;
 }
 
 /**
@@ -204,8 +397,15 @@ const BOOLEAN_FACET_VALUE =
   /^(?:0|1|да|нет|есть|отсутствует|true|false|yes|no)$/iu;
 
 const GENERIC_FACET_AXIS_WORDS = new Set([
-  "цвет", "значение", "параметр", "характеристика", "свойство",
-  "value", "parameter", "property", "characteristic",
+  "цвет",
+  "значение",
+  "параметр",
+  "характеристика",
+  "свойство",
+  "value",
+  "parameter",
+  "property",
+  "characteristic",
 ]);
 
 function requiredFacetAxisTokens(facet: string): string[] {
@@ -235,13 +435,20 @@ function customerNamesRequiredFacetAxisNearValue(
   for (const clause of String(customerEvidence ?? "").split(/[,.!?;\n]+/u)) {
     const tokens = normalizeLiteralEvidence(clause).split(" ").filter(Boolean);
     for (let index = 0; index <= tokens.length - valueTokens.length; index++) {
-      if (!valueTokens.every((token, offset) => tokens[index + offset] === token)) {
+      if (
+        !valueTokens.every((token, offset) => tokens[index + offset] === token)
+      ) {
         continue;
       }
-      const nearby = tokens.slice(Math.max(0, index - 4), index + valueTokens.length + 4);
-      if (axisTokens.some((axis) =>
-        nearby.some((word) => sameFacetAxisWord(axis, word))
-      )) return true;
+      const nearby = tokens.slice(
+        Math.max(0, index - 4),
+        index + valueTokens.length + 4,
+      );
+      if (
+        axisTokens.some((axis) =>
+          nearby.some((word) => sameFacetAxisWord(axis, word))
+        )
+      ) return true;
     }
   }
   return false;
@@ -251,9 +458,18 @@ function customerNamesRequiredFacetAxisNearValue(
  * They remain directional/range criteria, never one mandatory live value. */
 function customerExactNumericEvidence(customerEvidence: string): string {
   return String(customerEvidence ?? "")
-    .replace(/(?:^|[^\p{L}])от\s+(\d+(?:[.,]\d+)?)\s+до\s+(\d+(?:[.,]\d+)?)\s*([a-zа-я°²³]+)?/giu, " ")
-    .replace(/(?<!\d)\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu, " ")
-    .replace(/(?:^|[^\p{L}])(?:не\s+(?:более|менее|выше|ниже)|до|от|минимум|максимум)\s+\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu, " ");
+    .replace(
+      /(?:^|[^\p{L}])от\s+(\d+(?:[.,]\d+)?)\s+до\s+(\d+(?:[.,]\d+)?)\s*([a-zа-я°²³]+)?/giu,
+      " ",
+    )
+    .replace(
+      /(?<!\d)\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu,
+      " ",
+    )
+    .replace(
+      /(?:^|[^\p{L}])(?:не\s+(?:более|менее|выше|ниже)|до|от|минимум|максимум)\s+\d+(?:[.,]\d+)?\s*[a-zа-я°²³]*/giu,
+      " ",
+    );
 }
 
 /** A value which the customer attached to a different noun must not be
@@ -276,9 +492,24 @@ function customerQualifiesValueOutsideFacet(
     .filter((token) => token.length >= 4);
   const axisTokens = requiredFacetAxisTokens(choice.facet);
   const nonQualifierWords = new Set([
-    "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "найди",
-    "подбери", "покажи", "вариант", "варианты", "для", "со", "без",
-    "это", "цвет", "типа", "тип",
+    "нужен",
+    "нужна",
+    "нужно",
+    "нужны",
+    "хочу",
+    "ищу",
+    "найди",
+    "подбери",
+    "покажи",
+    "вариант",
+    "варианты",
+    "для",
+    "со",
+    "без",
+    "это",
+    "цвет",
+    "типа",
+    "тип",
   ]);
   for (const clause of String(customerEvidence ?? "").split(/[,.!?;\n]+/u)) {
     const tokens = normalizeLiteralEvidence(clause).split(" ").filter(Boolean);
@@ -287,10 +518,12 @@ function customerQualifiesValueOutsideFacet(
       const adjacent = [tokens[index + 1], tokens[index - 1]].filter((word) =>
         Boolean(word) && word.length >= 4 && !nonQualifierWords.has(word)
       );
-      if (adjacent.some((word) =>
-        !axisTokens.some((axis) => sameFacetAxisWord(axis, word)) &&
-        !productTokens.some((product) => sameFacetAxisWord(product, word))
-      )) return true;
+      if (
+        adjacent.some((word) =>
+          !axisTokens.some((axis) => sameFacetAxisWord(axis, word)) &&
+          !productTokens.some((product) => sameFacetAxisWord(product, word))
+        )
+      ) return true;
     }
   }
   return false;
@@ -387,7 +620,10 @@ function derivedRequiredFacetChoices(
             : [];
           if (expectedUnits.length === 0) {
             return exactNumericTokens.has(token) &&
-              customerNamesRequiredFacetAxisNearValue(choice, exactNumericEvidence);
+              customerNamesRequiredFacetAxisNearValue(
+                choice,
+                exactNumericEvidence,
+              );
           }
           return customerQuantities.some((quantity) =>
             quantity.value === value && expectedUnits.includes(quantity.unit)
@@ -562,10 +798,15 @@ function isCircumstantialPurposeStem(
   customerEvidence: string,
   facet: string,
 ): boolean {
-  if (!/(?:назначен|применен|использован|помещен|область\s+применен|сфера\s+применен)/iu.test(facet)) {
+  if (
+    !/(?:назначен|применен|использован|помещен|область\s+применен|сфера\s+применен)/iu
+      .test(facet)
+  ) {
     return false;
   }
-  const words = normalizeLiteralEvidence(customerEvidence).split(" ").filter(Boolean);
+  const words = normalizeLiteralEvidence(customerEvidence).split(" ").filter(
+    Boolean,
+  );
   let found = false;
   for (const [index, word] of words.entries()) {
     if (classificationLexicalStem(word) !== stem) continue;
@@ -804,7 +1045,11 @@ function customerGroundedClassificationChoices(
         ),
       }))
       .filter(({ stem, matches }) =>
-        !isCircumstantialPurposeStem(stem, customerEvidence, choices[0].facet) &&
+        !isCircumstantialPurposeStem(
+          stem,
+          customerEvidence,
+          choices[0].facet,
+        ) &&
         matches.length > 0 && matches.length < choices.length &&
         (matches.length === 1 ||
           customerOwnsClassificationFamilyStem(
@@ -1005,6 +1250,76 @@ export interface ResolvedDerivedSelectionReasoning {
   explicitCustomerMappings: Array<
     { phrase: string; key: string; value: string }
   >;
+}
+
+/**
+ * An exposed installation cannot be declared ready merely because the model
+ * mentioned a protection code in prose or chose a general use-class. When a
+ * matching live protection axis exists, its validated structured declaration
+ * must carry a per-product compatibility requirement on that same axis. A
+ * model-only classification is merely advisory downstream; only a required
+ * value or a customer-grounded classification can discharge the obligation.
+ * For weather-exposed use, a parseable IP code must at least establish splash
+ * protection (water digit 4). For explicit dust exposure, the first digit
+ * must be at least 5 (dust-protected); a water rating cannot substitute for
+ * dust protection. These are conservative floors, not certification that a
+ * product is fit for every installation or a universal IP65 rule.
+ */
+export function hasUnresolvedEnvironmentalProtectionObligation(
+  customerEvidence: string,
+  facets: DerivedSelectionFacet[],
+  declaration:
+    | (
+      & Pick<ResolvedDerivedSelectionReasoning, "requiredFacetValues">
+      & Partial<
+        Pick<
+          ResolvedDerivedSelectionReasoning,
+          "customerGroundedCompatible" | "compatible"
+        >
+      >
+    )
+    | null,
+): boolean {
+  const exposure = normalizeCustomerWording(customerEvidence);
+  const exposedUse =
+    /(?:^|[^\p{L}])(?:уличн\p{L}*|улиц\p{L}*|наружн\p{L}*|двор(?:а|е|у|ы|ов|ах|ами)?|дожд(?:ь|я|е|ем|ю)|снег(?:а|е|ом|у)?|влажн\p{L}*|сырост\p{L}*|сыр(?:о\p{L}*|ы\p{L}*|а\p{L}*)|пыл(?:ь|и|ью|ьн\p{L}*)|под\s+открыт\p{L}*\s+неб\p{L}*|открыт\p{L}*\s+(?:площадк\p{L}*|территори\p{L}*|пространств\p{L}*|воздух\p{L}*))(?=$|[^\p{L}])/iu;
+  if (
+    !exposedUse.test(exposure)
+  ) return false;
+  const weatherExposed =
+    /(?:^|[^\p{L}])(?:уличн\p{L}*|улиц\p{L}*|наружн\p{L}*|двор(?:а|е|у|ы|ов|ах|ами)?|дожд(?:ь|я|е|ем|ю)|снег(?:а|е|ом|у)?|влажн\p{L}*|сырост\p{L}*|сыр(?:о\p{L}*|ы\p{L}*|а\p{L}*)|под\s+открыт\p{L}*\s+неб\p{L}*|открыт\p{L}*\s+(?:площадк\p{L}*|территори\p{L}*|пространств\p{L}*|воздух\p{L}*))(?=$|[^\p{L}])/iu
+      .test(exposure);
+  const dustExposed = /(?:^|[^\p{L}])пыл(?:ь|и|ью|ьн\p{L}*)(?=$|[^\p{L}])/iu
+    .test(exposure);
+  const protectionAxis =
+    /(?:^|[^\p{L}])(?:ip|ingress\s+protection|protection\s+(?:rating|class|degree)|степен\p{L}*\s+защит\p{L}*|класс\s+защит\p{L}*|пылевлагозащит\p{L}*|влагозащит\p{L}*|водозащит\p{L}*|водонепроницаем\p{L}*)(?:$|[^\p{L}])/iu;
+  const axisKeys = new Set<string>();
+  for (const facet of facets) {
+    if (!protectionAxis.test(`${facet.caption ?? ""} ${facet.key ?? ""}`)) {
+      continue;
+    }
+    if (facet.caption) axisKeys.add(normalizeKey(facet.caption));
+    if (facet.key) axisKeys.add(normalizeKey(facet.key));
+  }
+  if (axisKeys.size === 0) return false;
+  const declared = [
+    ...(declaration?.requiredFacetValues ?? []),
+    ...(declaration?.customerGroundedCompatible ?? []),
+  ];
+  return !declared.some(({ key, value }) => {
+    if (!axisKeys.has(normalizeKey(key))) return false;
+    const match = /^IP\s*([0-6X])([0-9X])(?=$|[\s(;,-])/iu.exec(
+      String(value ?? "").trim(),
+    );
+    if (!match) return false;
+    // The IP digits measure different hazards. Neither a high water digit
+    // nor an unknown solid-particle digit proves a dusty installation.
+    const dustProtected = !dustExposed ||
+      (match[1] !== "X" && Number(match[1]) >= 5);
+    const weatherProtected = !weatherExposed ||
+      (match[2] !== "X" && Number(match[2]) >= 4);
+    return dustProtected && weatherProtected;
+  });
 }
 
 function derivedRequiredFacetSentence(
@@ -1217,18 +1532,20 @@ function omitUnverifiedPairedRangeClauses(
   if (unknown.length === 0) return reasoning;
   return String(reasoning).replace(/(\d)[.,]\s+(\d)/gu, "$1.$2")
     .split(/(?<=[.!?;])\s+(?=\p{Lu})|(?<=;)\s*/u).filter((clause) => {
-    const normalized = clause;
-    for (const match of normalized.matchAll(
-      /(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/gu,
-    )) {
-      const low = Number(match[1].replace(",", "."));
-      const high = Number(match[2].replace(",", "."));
-      if (unknown.some((range) => range.low === low && range.high === high)) {
-        return false;
+      const normalized = clause;
+      for (
+        const match of normalized.matchAll(
+          /(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/gu,
+        )
+      ) {
+        const low = Number(match[1].replace(",", "."));
+        const high = Number(match[2].replace(",", "."));
+        if (unknown.some((range) => range.low === low && range.high === high)) {
+          return false;
+        }
       }
-    }
-    return true;
-  }).join(" ").replace(/\s+/gu, " ").trim();
+      return true;
+    }).join(" ").replace(/\s+/gu, " ").trim();
 }
 
 function affirmsIncompatiblePairedRange(
@@ -1456,9 +1773,7 @@ function provesExactLiveClass(
   // Sibling values on one facet are alternatives, while independent class
   // facets must each have their own structured proof.
   return [...byKey.values()].every((alternatives) =>
-    alternatives.some((criterion) =>
-      hasExactLiveClassValue(product, criterion)
-    )
+    alternatives.some((criterion) => hasExactLiveClassValue(product, criterion))
   );
 }
 
@@ -1477,7 +1792,11 @@ export function preferCustomerGroundedLiveClassification<
   exactClassCriteria: Criterion[],
   applicationAlternatives: Criterion[],
   explicitExclusions: Criterion[] = [],
-): { products: T[]; tier: ApplicationClassPriorityTier; excludedCount: number } {
+): {
+  products: T[];
+  tier: ApplicationClassPriorityTier;
+  excludedCount: number;
+} {
   const eligible = filterProductsByExcludedCriteria(
     products,
     explicitExclusions.filter((criterion) =>
@@ -1648,12 +1967,16 @@ export function resolveDerivedSelectionReasoning(
         declaredMeasurementScope === "not_applicable"
     ? declaredMeasurementScope
     : "per_product";
+  const scopeConsistentReasoning = computedSystemTotal
+    ? reconcileComputedTotalReasoning(originalReasoning, customerEvidence)
+    : originalReasoning;
+  if (!scopeConsistentReasoning) return null;
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);
   const normalizedRetrievalQuery = normalizeLiteralEvidence(rawRetrievalQuery);
   const normalizedOriginalReasoning = normalizeLiteralEvidence(
-    originalReasoning,
+    scopeConsistentReasoning,
   );
   const retrievalTokens = normalizedRetrievalQuery.split(" ").filter(Boolean);
   const retrievalQuery = normalizedRetrievalQuery &&
@@ -1882,7 +2205,7 @@ export function resolveDerivedSelectionReasoning(
   // checked with the same unit and morphology guards as the later search.
   const visibleProjection = projectExplicitReasoningFacetValues(
     facets as SearchFacet[],
-    originalReasoning,
+    scopeConsistentReasoning,
     customerEvidence,
   );
   const visiblyDeclared = new Set(
@@ -1904,7 +2227,7 @@ export function resolveDerivedSelectionReasoning(
   }));
   const visibleReasoningRanges = projectReasoningRangeCriteria(
     [],
-    originalReasoning,
+    scopeConsistentReasoning,
     liveMeasuredFacets,
   );
   const customerDirectionalCriteria = [
@@ -2018,7 +2341,7 @@ export function resolveDerivedSelectionReasoning(
     if (
       !customerOwned &&
       reasoningOffersSameFacetAlternative(
-        originalReasoning,
+        scopeConsistentReasoning,
         choice,
         [...requiredById.values()],
       )
@@ -2033,7 +2356,7 @@ export function resolveDerivedSelectionReasoning(
       customerOwnsDerivedExactFacetValue(
         { key: machineKey, op: "eq", value: choice.value, level: "A" },
         customerEvidence,
-        originalReasoning,
+        scopeConsistentReasoning,
         liveMeasuredFacets,
       );
     const directionalCustomerCapacity = !customerOwnsExactProductValue &&
@@ -2096,9 +2419,10 @@ export function resolveDerivedSelectionReasoning(
   const normalizedUnselected = unselectedChoices.map(({ value }) =>
     visibleFacetText(value).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
   );
-  const reasoningSentences = originalReasoning.split(/(?<=[.!?…])\s+/u).filter(
-    Boolean,
-  );
+  const reasoningSentences = scopeConsistentReasoning.split(/(?<=[.!?…])\s+/u)
+    .filter(
+      Boolean,
+    );
   const retainedReasoning = reasoningSentences.filter((sentence) => {
     const normalized = sentence.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
     if (normalizedUnselected.some((value) => normalized.includes(value))) {
@@ -2129,7 +2453,7 @@ export function resolveDerivedSelectionReasoning(
   }).join(" ").trim();
   let reasoning = retainedReasoning.length >= 20
     ? retainedReasoning
-    : originalReasoning;
+    : scopeConsistentReasoning;
   if (retainedReasoning.length < 20) {
     for (const choice of unselectedChoices) {
       const escaped = visibleFacetText(choice.value).replace(

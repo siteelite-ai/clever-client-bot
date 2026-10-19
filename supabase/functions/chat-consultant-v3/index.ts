@@ -86,6 +86,7 @@ import {
   relaxModelDerivedSelectionCriteriaPlan,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
+  restrictSelectionCriteriaPlan,
   type SelectionCriteriaPlan,
   type SelectionCriterionProvenance,
   titleContradictsExactCountCriterion,
@@ -93,14 +94,18 @@ import {
 } from "../_shared/v3-tools/criteria-gate.ts";
 import {
   correctCriteria,
+  extractClientQuantities,
   findUnderstatedCriteria,
+  isPhysicalMeasurementUnit,
 } from "../_shared/v3-tools/criteria-consistency.ts";
 import {
   alignCriteriaImportanceWithReasoning,
   alignCriteriaWithReasoning,
   compileMeasuredReasoningSearchContract,
+  customerAggregateMeasurementScope,
   customerOwnsDerivedExactFacetValue,
   demoteUnfrozenRenderCriteria,
+  filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
@@ -165,6 +170,7 @@ import {
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
+  hasUnresolvedEnvironmentalProtectionObligation,
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
@@ -614,6 +620,7 @@ import {
 } from "../_shared/v3-tools/public-failure.ts";
 import {
   type ChatV3AdmissionResult,
+  admissionDiagnosticError,
   checkChatV3AdmissionWithDeadline,
   releaseChatV3Admission,
   resolveChatV3AdmissionScope,
@@ -6832,6 +6839,81 @@ async function runExpertLoop(
   let pendingDerivedSelectionMeasurementEvidence = "";
   let derivedSelectionMeasurementScope: string | null = null;
   let pendingDerivedSelectionMeasurementScope: string | null = null;
+  const provisionalCustomerMeasurementScope =
+    customerAggregateMeasurementScope(userMessage);
+  const cardMeasurementScope = () =>
+    provisionalCustomerMeasurementScope ??
+    pendingDerivedSelectionMeasurementScope ??
+    derivedSelectionMeasurementScope ??
+    null;
+  const scopeCardCriteria = (
+    criteria: Criterion[],
+    reasoningText = derivedSelectionReasoningEvidence ||
+      pendingDerivedSelectionMeasurementEvidence || firstAssistantText,
+  ) => filterPerProductMeasuredCriteria(
+    criteria,
+    reasoningText,
+    userMessage,
+    cardMeasurementScope(),
+    lastDiscover?.facets ?? [],
+  );
+  const scopeLiveFacetOptions = (
+    options: Record<string, unknown> | null | undefined,
+    facets: Facet[],
+    reasoningText: string,
+  ): Record<string, string[]> => {
+    const scoped: Record<string, string[]> = {};
+    for (const [key, rawValues] of Object.entries(options ?? {})) {
+      if (!Array.isArray(rawValues)) continue;
+      const facet = facets.find((candidate) => candidate.key === key);
+      const retained = rawValues.map(String).filter((value) =>
+        scopeCardCriteria([{
+          key: facet?.caption || key,
+          op: "eq",
+          value,
+          unit: facet?.unit ?? undefined,
+          level: "A",
+          evidence: "derived_required",
+        }], reasoningText).criteria.length > 0
+      );
+      if (retained.length > 0) scoped[key] = retained;
+    }
+    return scoped;
+  };
+  const customerCardMeasurementQuantities = () => {
+    const quantities = extractClientQuantities(userMessage);
+    if (cardMeasurementScope() !== "system_total") return quantities;
+    return quantities.filter((quantity) =>
+      filterPerProductMeasuredCriteria([{
+        key: "customer measurement",
+        op: "eq",
+        value: quantity.value,
+        unit: quantity.unit,
+        level: "A",
+        evidence: "user_explicit",
+      }], "", userMessage, "system_total", lastDiscover?.facets ?? [])
+        .criteria.length > 0
+    );
+  };
+  const scopedVisibleRequestContract = (
+    context: VisibleRequestContractContext = {},
+  ) => buildVisibleRequestContract(userMessage, context).filter(
+    (requirement) => {
+      if (
+        cardMeasurementScope() !== "system_total" ||
+        (requirement.kind !== "bounded_measurement" &&
+          requirement.kind !== "linear_measurement")
+      ) return true;
+      return scopeCardCriteria([{
+        key: requirement.label,
+        op: requirement.op ?? "eq",
+        value: requirement.value ?? "",
+        unit: requirement.unit,
+        level: "A",
+        evidence: "user_explicit",
+      }], userMessage).criteria.length > 0;
+    },
+  );
   const semanticallyMappedCustomerPhrases = new Set<string>();
   // A compatible family is retrieval guidance, not an exhaustive allow-list.
   // Only values the reasoning explicitly marks incompatible may eliminate a
@@ -7006,7 +7088,7 @@ async function runExpertLoop(
           namedSeriesToken,
         )
         : null;
-    const emittedCriteria = mergeMandatorySelectionCriteria([
+    const emittedCriteria = scopeCardCriteria(mergeMandatorySelectionCriteria([
       ...verifiedEvidenceCriteria,
       ...compatibilityCriteria,
       ...(namedSeriesEvidence
@@ -7018,7 +7100,7 @@ async function runExpertLoop(
           evidence: "user_explicit" as const,
         }]
         : []),
-    ]);
+    ])).criteria;
     const emittedPlan = emittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(
         compatibilityCriteria.length >= 2 ? null : plan,
@@ -7026,7 +7108,7 @@ async function runExpertLoop(
         "render_alignment",
       )
       : plan ?? extendSelectionCriteriaPlan(null, [], "render_alignment");
-    const visibleRequirements = buildVisibleRequestContract(userMessage, {
+    const visibleRequirements = scopedVisibleRequestContract({
       productClass: activeSelectionTarget ??
         lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
@@ -7076,11 +7158,11 @@ async function runExpertLoop(
       unverifiedRecoveryNoticeSent = true;
     }
     if (
-      derivedSelectionMeasurementScope === "system_total" &&
+      cardMeasurementScope() === "system_total" &&
       !systemTotalCaveatSent
     ) {
       const requirement = resolveVisibleSystemTotalRequirement({
-        measurementScope: derivedSelectionMeasurementScope,
+        measurementScope: cardMeasurementScope(),
         reasoningText: derivedSelectionReasoningEvidence,
         facets: lastDiscover?.facets ?? [],
       });
@@ -7167,7 +7249,9 @@ async function runExpertLoop(
     const defaultEvidence: CriterionEvidence = provenance === "render_alignment"
       ? "catalog_verified"
       : "derived_required";
-    const attributedCriteria = omitDisclosedUnverifiedCriteria(criteria).map((
+    const attributedCriteria = scopeCardCriteria(
+      omitDisclosedUnverifiedCriteria(criteria),
+    ).criteria.map((
       criterion,
     ) => ({
       ...criterion,
@@ -7208,7 +7292,7 @@ async function runExpertLoop(
   };
   const preserveFrozenSelectionCriteria = (
     criteria: Criterion[],
-  ): Criterion[] =>
+  ): Criterion[] => scopeCardCriteria(
     selectionCriteriaPlan
       ? resolveRenderCriteria(
         selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({
@@ -7218,7 +7302,82 @@ async function runExpertLoop(
         [],
         false,
       )
-      : omitDisclosedUnverifiedCriteria(criteria);
+      : omitDisclosedUnverifiedCriteria(criteria),
+  ).criteria;
+  // Discovery can freeze a live numeric facet before the consultant has
+  // declared whether the customer's number belongs to one card or the whole
+  // installation. When that scope becomes known, reconcile every persistent
+  // contract once; otherwise an old aggregate number can survive the later
+  // render filter through the monotonic plan or authoritative facet options.
+  const reconcileSelectionMeasurementScope = (reasoningText: string): void => {
+    if (cardMeasurementScope() !== "system_total") return;
+    const removed: Criterion[] = [];
+    const scoped = (criteria: Criterion[]): Criterion[] => {
+      const result = scopeCardCriteria(criteria, reasoningText);
+      removed.push(...result.removed);
+      return result.criteria;
+    };
+    if (selectionCriteriaPlan) {
+      const retained = scoped([...selectionCriteriaPlan.mandatory_criteria]);
+      selectionCriteriaPlan = restrictSelectionCriteriaPlan(
+        selectionCriteriaPlan,
+        retained,
+      );
+    }
+    userBackedSearchCriteria = scoped(userBackedSearchCriteria);
+    enforcedSearchCriteria = scoped(enforcedSearchCriteria);
+    reasoningProjectedSearchCriteria = scoped(reasoningProjectedSearchCriteria);
+    postFilterOnlyReasoningCriteria = scoped(postFilterOnlyReasoningCriteria);
+    latestRenderCriteria = scoped(latestRenderCriteria);
+    const retainedPending = scoped(pendingUnverifiedRecoveryCriteria);
+    pendingUnverifiedRecoveryCriteria.splice(
+      0,
+      pendingUnverifiedRecoveryCriteria.length,
+      ...retainedPending,
+    );
+    const facetValues = lastDiscover
+      ? projectCriteriaFacetOptions(
+        userBackedSearchCriteria,
+        lastDiscover.facets,
+      ).options
+      : {};
+    userBackedSearchFacetValues.splice(
+      0,
+      userBackedSearchFacetValues.length,
+      ...Object.entries(facetValues).flatMap(([key, values]) =>
+        values.map((value) => ({ key, value }))
+      ),
+    );
+    const retainedModelAssumptions = modelAssumedSearchFacetValues.filter(
+      ({ key, value }) => {
+        const facet = lastDiscover?.facets.find((candidate) =>
+          candidate.key === key
+        );
+        return scoped([{
+          key: facet?.caption || key,
+          op: "eq",
+          value,
+          level: "B",
+          evidence: "model_assumption",
+        }]).length > 0;
+      },
+    );
+    modelAssumedSearchFacetValues.splice(
+      0,
+      modelAssumedSearchFacetValues.length,
+      ...retainedModelAssumptions,
+    );
+    if (removed.length > 0) {
+      steps.push({
+        step: "v3_system_total_frozen_measurements_reconciled",
+        ms: now(),
+        meta: {
+          keys: [...new Set(removed.map((criterion) => criterion.key))],
+          plan_hash: selectionCriteriaPlan?.hash ?? null,
+        },
+      });
+    }
+  };
   const applySelectedRecoveryRelaxation = (
     attempt: SelectionSearchRecoveryAttempt | null,
     source: string,
@@ -7348,7 +7507,7 @@ async function runExpertLoop(
       "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ) => {
-    const visibleRequestContract = buildVisibleRequestContract(userMessage, {
+    const visibleRequestContract = scopedVisibleRequestContract({
       productClass: visibleContext.productClass ?? activeSelectionTarget ??
         lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: visibleContext.taxonomyClass ??
@@ -8452,13 +8611,13 @@ async function runExpertLoop(
     // advisory output ranking. Keep the price contract intact and disclose
     // that no counted system-capacity plan has been verified.
     if (
-      derivedSelectionMeasurementScope !== "system_total" ||
+      cardMeasurementScope() !== "system_total" ||
       detectPriceDirection(userMessage)?.kind === "superlative"
     ) {
       return preferredClassIds;
     }
     const totalRequirement = resolveVisibleSystemTotalRequirement({
-      measurementScope: derivedSelectionMeasurementScope,
+      measurementScope: cardMeasurementScope(),
       reasoningText: derivedSelectionReasoningEvidence,
       facets: derivedStructuredSearchDiscovery?.facets ??
         lastDiscover?.facets ?? [],
@@ -8660,17 +8819,14 @@ async function runExpertLoop(
         userBackedSearchFacetValues.length,
       class_constraint_count: customerExactClassificationCriteria.length +
         customerApplicationAlternatives.length,
-      visible_requirement_count: buildVisibleRequestContract(
-        userMessage,
-        {
+      visible_requirement_count: scopedVisibleRequestContract({
           productClass: activeSelectionTarget ??
             discovery.category.pagetitle,
           taxonomyClass: discovery.category.pagetitle,
           candidateTitles: [...ctx.cache.values()].map((product) =>
             product.pagetitle
           ),
-        },
-      ).length,
+        }).length,
       compatibility_required: activeCompatibilityRelations.length > 0 ||
         hasSelectionMeasurementContext(userMessage),
       replacement_intent: replacementIntent,
@@ -9213,11 +9369,23 @@ async function runExpertLoop(
             if (!unresolvedProductMeasurementRequired || !declaration) {
               return false;
             }
+            // A spatial calculation for an open installation is a total
+            // demand, not an omitted scalar specification for every card.
+            // Do not spend a corrective call trying to invent one.
+            if (
+              (provisionalCustomerMeasurementScope ??
+                declaration.measurementScope) === "system_total"
+            ) return false;
             const compiled = compileMeasuredReasoningSearchContract(
               [],
               declaration.measurementEvidence,
               [],
               lastDiscover?.facets ?? [],
+              {
+                measurementScope: provisionalCustomerMeasurementScope ??
+                  declaration.measurementScope,
+                customerText: userMessage,
+              },
             );
             const recommendedExact = projectSingleRecommendedMeasuredCriterion(
               declaration.measurementEvidence,
@@ -9235,9 +9403,35 @@ async function runExpertLoop(
             const pair = pairedDeclarationDecision(declarationCall.args);
             return Boolean(pair.selected_pair) && pair.state !== "required";
           };
+          const missingEnvironmentalProtection = () =>
+            hasUnresolvedEnvironmentalProtectionObligation(
+              userMessage,
+              lastDiscover?.facets ?? [],
+              declaration,
+            );
+          const stopForUnverifiedProtection = () => {
+            const notice =
+              "Не удалось подтвердить обязательную защиту для указанных условий эксплуатации по характеристикам товаров. Не буду выдавать неподтверждённые варианты как подходящие; уточните требование к защите или повторите запрос.";
+            send({ type: "delta", content: notice });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({
+              step: "v3_environmental_protection_unverified",
+              ms: now(),
+              meta: {
+                category: lastDiscover?.category?.pagetitle ?? "",
+                reason: "derived_declaration_incomplete",
+              },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          };
           if (
             declaration?.text.trim() &&
-            (missingRequiredProductMeasurement() || missingPairedFitProof()) &&
+            (missingRequiredProductMeasurement() || missingPairedFitProof() ||
+              missingEnvironmentalProtection()) &&
             derivedReasoningProviderAttempts < 2
           ) {
             const correctionTimeout = boundedAgentStepTimeout(
@@ -9251,7 +9445,9 @@ async function runExpertLoop(
                 ...message,
               }));
               if (correctionMessages[0]?.role === "system") {
-                const correction = missingPairedFitProof()
+                const correction = missingEnvironmentalProtection()
+                  ? "Предыдущая попытка не подтвердила обязательную защиту для названной клиентом среды эксплуатации. Проверь относящиеся к защите параметры живой схемы, обоснуй необходимый уровень в reasoning и передай точное значение живого фасета в required_facet_values или compatible_classifications. Если данных клиента недостаточно для безопасного порога, явно назови недостающий параметр, не объявляй товары подходящими и не выдумывай уровень защиты. Не заменяй это числовой потребностью всей системы."
+                  : missingPairedFitProof()
                   ? "Предыдущая попытка не доказала обе стороны парного размера из живой схемы. Для измеренного клиентом объекта явно назови один и тот же параметр изделия до установки и после изменения: до установки строго больше размера объекта, после изменения строго меньше. Равенство не подходит; не копируй размер объекта в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу."
                   : "Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.";
                 correctionMessages[0] = {
@@ -9261,19 +9457,26 @@ async function runExpertLoop(
                   }\n\n<correction>${correction}</correction>`,
                 };
               }
-              structuredReasoning = await callOpenRouter(
-                apiKey,
-                correctionMessages,
-                turnController.signal,
-                correctionTimeout,
-                "derived_reasoning",
-                ["declare_selection_reasoning"],
-                "declare_selection_reasoning",
-                0,
-                [reasoningToolSchema],
-                1200,
-                GENERAL_INQUIRY_MODEL_ROUTING,
-              );
+              try {
+                structuredReasoning = await callOpenRouter(
+                  apiKey,
+                  correctionMessages,
+                  turnController.signal,
+                  correctionTimeout,
+                  "derived_reasoning",
+                  ["declare_selection_reasoning"],
+                  "declare_selection_reasoning",
+                  0,
+                  [reasoningToolSchema],
+                  1200,
+                  GENERAL_INQUIRY_MODEL_ROUTING,
+                );
+              } catch (correctionError) {
+                if (missingEnvironmentalProtection()) {
+                  return stopForUnverifiedProtection();
+                }
+                throw correctionError;
+              }
               derivedReasoningProviderAttempts += 1;
               declarationCall = cleanDeclarationCall(
                 structuredReasoning.toolCalls.find((toolCall) =>
@@ -9294,11 +9497,15 @@ async function runExpertLoop(
                   recovered: Boolean(
                     declaration?.text.trim() &&
                       !missingRequiredProductMeasurement() &&
-                      !missingPairedFitProof(),
+                      !missingPairedFitProof() &&
+                      !missingEnvironmentalProtection(),
                   ),
                 },
               });
             }
+          }
+          if (missingEnvironmentalProtection()) {
+            return stopForUnverifiedProtection();
           }
           if (!declaration?.text.trim()) {
             const declarationArgs = declarationCall?.args &&
@@ -9341,11 +9548,14 @@ async function runExpertLoop(
               userMessage,
               declaration.text,
             );
+          const effectiveDeclaredMeasurementScope =
+            provisionalCustomerMeasurementScope ??
+            declaration.measurementScope;
           const derivedScalarProjectionAllowed =
             shouldProjectDerivedScalarMeasurement(
               userMessage,
               declaration.text,
-              declaration.measurementScope,
+              effectiveDeclaredMeasurementScope,
             );
           const measuredReference = extractSchemaBackedMeasuredReference(
             userMessage,
@@ -9363,7 +9573,10 @@ async function runExpertLoop(
           pendingDerivedSelectionMeasurementEvidence =
             measurementDeclarationEvidence;
           pendingDerivedSelectionMeasurementScope =
-            declaration.measurementScope;
+            effectiveDeclaredMeasurementScope;
+          reconcileSelectionMeasurementScope(
+            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+          );
           // The model's structured declaration is immediately rendered back
           // to visible prose and the internal function call is consumed here.
           // Downstream search therefore reads exactly the same classification
@@ -9498,6 +9711,10 @@ async function runExpertLoop(
               measurementDeclarationEvidence,
               [],
               lastDiscover.facets ?? [],
+              {
+                measurementScope: effectiveDeclaredMeasurementScope,
+                customerText: userMessage,
+              },
             );
           const recommendedMeasuredProjection =
             unresolvedProductMeasurementRequired
@@ -9563,7 +9780,10 @@ async function runExpertLoop(
             declaration.measurementEvidence,
             customerGroundedExactFacetCriteria,
           );
-          const derivedExactFacetCriteria = derivedExactImportance.criteria;
+          const derivedExactFacetCriteria = scopeCardCriteria(
+            derivedExactImportance.criteria,
+            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+          ).criteria;
           if (derivedExactImportance.demoted.length > 0) {
             steps.push({
               step: "v3_derived_exact_advice_demoted",
@@ -9575,7 +9795,7 @@ async function runExpertLoop(
           // live facet and rendered back into the visible declaration. Do not
           // send them through prose importance parsing: a live compound value
           // may itself contain punctuation that looks like clause boundaries.
-          const derivedMandatoryCriteria = mergeMandatorySelectionCriteria([
+          const proposedDerivedMandatoryCriteria = mergeMandatorySelectionCriteria([
             ...declaredClassificationCriteria,
             ...derivedExactFacetCriteria.filter((criterion) =>
               (criterion.level ?? "A") === "A"
@@ -9588,20 +9808,62 @@ async function runExpertLoop(
               ? [recommendedMeasuredProjection.criterion]
               : []),
           ]);
+          const scopedDerivedMandatory = filterPerProductMeasuredCriteria(
+            proposedDerivedMandatoryCriteria,
+            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+            userMessage,
+            effectiveDeclaredMeasurementScope,
+          );
+          const derivedMandatoryCriteria = scopedDerivedMandatory.criteria;
+          // A model may mention protection in a provisional B-level class,
+          // while the frozen A-level plan still contains no such guard. The
+          // product claim is only safe once the exact live protection value
+          // survives the same mandatory contract as every rendered card.
+          if (
+            hasUnresolvedEnvironmentalProtectionObligation(
+              userMessage,
+              lastDiscover.facets ?? [],
+              {
+                ...declaration,
+                compatible: [],
+                requiredFacetValues: [
+                  ...userBackedSearchCriteria,
+                  ...derivedMandatoryCriteria,
+                ].map(
+                  ({ key, value }) => ({
+                    key,
+                    value: String(value ?? ""),
+                  }),
+                ),
+              },
+            )
+          ) {
+            return stopForUnverifiedProtection();
+          }
+          if (scopedDerivedMandatory.removed.length > 0) {
+            steps.push({
+              step: "v3_system_total_card_measurements_removed",
+              ms: now(),
+              meta: { keys: scopedDerivedMandatory.removed.map((criterion) => criterion.key) },
+            });
+          }
           const derivedFacetProjection = projectCriteriaFacetOptions(
             derivedMandatoryCriteria,
             lastDiscover.facets ?? [],
           );
           const declaredClassificationProjection = projectCriteriaFacetOptions(
-            declaredClassificationCriteria,
+            scopeCardCriteria(
+              declaredClassificationCriteria,
+              visibleDeclarationText,
+            ).criteria,
             lastDiscover.facets ?? [],
           );
           const advisoryClassificationProjection =
             projectAdvisoryCriteriaFacetOptions(
-              [
+              scopeCardCriteria([
                 ...proposedClassificationCriteria,
                 ...derivedExactFacetCriteria,
-              ],
+              ], visibleDeclarationText).criteria,
               lastDiscover.facets ?? [],
             );
           postFilterOnlyReasoningCriteria = mergeMandatorySelectionCriteria([
@@ -9663,9 +9925,13 @@ async function runExpertLoop(
             declaredClassificationProjection.options,
             derivedFacetProjection.options,
           );
-          const directSearchOptions = overlayMandatoryFacetOptions(
+          const directSearchOptions = scopeLiveFacetOptions(
+            overlayMandatoryFacetOptions(
             mandatoryDirectProjection.options,
             advisoryClassificationProjection.options,
+            ),
+            lastDiscover.facets ?? [],
+            visibleDeclarationText,
           );
           const recommendedCompoundMarking =
             extractExplicitCompoundMarking(userMessage) === null
@@ -9699,7 +9965,7 @@ async function runExpertLoop(
                 options: directSearchOptions,
                 per_page: 50,
               }
-              : declaration.measurementScope === "system_total"
+              : effectiveDeclaredMeasurementScope === "system_total"
               ? {
                 mode: "by_filter",
                 ...directCategoryScope,
@@ -9762,15 +10028,27 @@ async function runExpertLoop(
               `${userMessage}\n${visibleDeclarationText}`,
               userMessage,
               visibleDeclarationText,
-              buildVisibleRequestContract(userMessage),
+              scopedVisibleRequestContract(),
               {
                 allowDerivedNumericFacetInference:
-                  declaration.measurementScope !== "system_total",
+                  effectiveDeclaredMeasurementScope !== "system_total",
                 allowProseOnlyFacetInference: false,
                 authoritativeFacetValues: userBackedSearchFacetValues,
               },
             ).args
             : null;
+          if (directSearchArgs?.options) {
+            const scopedOptions = scopeLiveFacetOptions(
+              directSearchArgs.options as Record<string, unknown>,
+              lastDiscover.facets ?? [],
+              visibleDeclarationText,
+            );
+            if (Object.keys(scopedOptions).length > 0) {
+              directSearchArgs.options = scopedOptions;
+            } else {
+              delete directSearchArgs.options;
+            }
+          }
           if (directSearchArgs && directBudgetCap !== null) {
             directSearchArgs.max_price = directBudgetCap;
           }
@@ -9797,7 +10075,7 @@ async function runExpertLoop(
               pairedCompatibilityOwned;
             derivedStructuredSearchGuidedByVisibleReasoning =
               Object.keys(directSearchOptions).length > 0 ||
-              declaration.measurementScope === "system_total" ||
+              effectiveDeclaredMeasurementScope === "system_total" ||
               Boolean(declaration.retrievalQuery) ||
               Boolean(modelSearchAbsentBrowse);
             derivedStructuredSearchDiscovery = lastDiscover;
@@ -11149,16 +11427,17 @@ async function runExpertLoop(
             `${userEvidence}\n${priorReplacementReasoning}\n${
               initialSelectionDiscoveryNoun ?? ""
             }\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          reconcileSelectionMeasurementScope(declaredReasoning);
           const guarded = guardSearchFilters(
             tc.args as Record<string, unknown>,
             lastDiscover.facets,
             declaredReasoning,
             userEvidence,
             declaredReasoning,
-            buildVisibleRequestContract(userMessage),
+            scopedVisibleRequestContract(),
             {
               allowDerivedNumericFacetInference:
-                derivedSelectionMeasurementScope !== "system_total",
+                cardMeasurementScope() !== "system_total",
               allowProseOnlyFacetInference:
                 tc.id !== derivedStructuredSearchCallId,
               authoritativeFacetValues: userBackedSearchFacetValues,
@@ -11204,16 +11483,45 @@ async function runExpertLoop(
               item.key
             ),
           );
+          const facetValueIsCardScoped = (
+            item: { key: string; value: string },
+          ): boolean =>
+            scopeLiveFacetOptions(
+              { [item.key]: [item.value] },
+              lastDiscover?.facets ?? [],
+              declaredReasoning,
+            )[item.key]?.length > 0;
           const effectiveKept = [...guarded.kept, ...identityCompletion].filter(
-            (item) => !removedIdentityKeys.has(item.key),
+            (item) =>
+              !removedIdentityKeys.has(item.key) &&
+              facetValueIsCardScoped(item),
           );
           const effectiveUserBacked = [
             ...guarded.user_backed,
             ...identityCompletion,
-          ].filter((item) => !removedIdentityKeys.has(item.key));
+          ].filter((item) =>
+            !removedIdentityKeys.has(item.key) &&
+            facetValueIsCardScoped(item)
+          );
           const effectiveInferred = [...guarded.inferred, ...identityCompletion]
-            .filter((item) => !removedIdentityKeys.has(item.key));
-          tc.args = identityGuard.args;
+            .filter((item) =>
+              !removedIdentityKeys.has(item.key) &&
+              facetValueIsCardScoped(item)
+            );
+          const scopedGuardArgs = { ...identityGuard.args };
+          if (scopedGuardArgs.options) {
+            const scopedOptions = scopeLiveFacetOptions(
+              scopedGuardArgs.options as Record<string, unknown>,
+              lastDiscover.facets,
+              declaredReasoning,
+            );
+            if (Object.keys(scopedOptions).length > 0) {
+              scopedGuardArgs.options = scopedOptions;
+            } else {
+              delete scopedGuardArgs.options;
+            }
+          }
+          tc.args = scopedGuardArgs;
           for (const removed of identityGuard.removed) {
             for (const value of removed.values) {
               if (value.trim()) {
@@ -11382,7 +11690,7 @@ async function runExpertLoop(
             !seriesTurnRequiresGrounding &&
             !compatibilityShapedSearch &&
             derivedMeasurementMayConstrainIndividualProducts(
-              derivedSelectionMeasurementScope,
+              cardMeasurementScope(),
             );
           if (ordinaryMeasuredSelection) {
             const measuredContractReasoning = measuredSelectionContractEvidence(
@@ -11394,6 +11702,10 @@ async function runExpertLoop(
               measuredContractReasoning,
               guardedUserBackedCriteria,
               lastDiscover.facets,
+              {
+                measurementScope: cardMeasurementScope(),
+                customerText: userMessage,
+              },
             );
             const measuredRetrievalProjection = projectCriteriaFacetOptions(
               measuredContract.mandatory_criteria.filter((criterion) =>
@@ -11509,16 +11821,23 @@ async function runExpertLoop(
               tc.args.options && typeof tc.args.options === "object"
                 ? tc.args.options as Record<string, string[]>
                 : {};
+            const scopedCurrentOptions = scopeLiveFacetOptions(
+              currentOptions,
+              lastDiscover.facets,
+              declaredReasoning,
+            );
             const mergedPlanOptions = mergeFacetOptionConstraints(
               planProjection.options,
-              currentOptions,
+              scopedCurrentOptions,
             );
             const enforcedOptions =
               mergedPlanOptions.conflicting_keys.length > 0
                 ? planProjection.options
                 : mergedPlanOptions.options;
+            const { options: _unscopedOptions, ...scopedSearchArgs } =
+              tc.args as Record<string, unknown>;
             tc.args = {
-              ...(tc.args as Record<string, unknown>),
+              ...scopedSearchArgs,
               ...(Object.keys(enforcedOptions).length > 0
                 ? { options: enforcedOptions }
                 : {}),
@@ -13193,22 +13512,31 @@ async function runExpertLoop(
               });
             }
           }
-          let protectedReasoningCriteria = reasoningProjectedSearchCriteria.map(
-            (criterion) => ({ ...criterion }),
-          );
+          const scopedRender = scopeCardCriteria(criteria, reasoningEvidence);
+          criteria = scopedRender.criteria;
+          let protectedReasoningCriteria = scopeCardCriteria(
+            reasoningProjectedSearchCriteria,
+            reasoningEvidence,
+          ).criteria;
           if (lastDiscover && !pairedTitleContractProven) {
             const projected = projectReasoningRangeCriteria(
               criteria,
               reasoningEvidence,
               lastDiscover.facets,
+              {
+                measurementScope: cardMeasurementScope(),
+                customerText: userMessage,
+              },
             );
+            criteria = scopeCardCriteria(
+              projected.criteria,
+              reasoningEvidence,
+            ).criteria;
             if (projected.added.length > 0) {
-              criteria = projected.criteria;
               protectedReasoningCriteria = [
                 ...protectedReasoningCriteria,
-                ...projected.added,
+                ...scopeCardCriteria(projected.added, reasoningEvidence).criteria,
               ];
-              (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({
                 step: "v3_reasoning_ranges_projected",
                 ms: now(),
@@ -13216,6 +13544,17 @@ async function runExpertLoop(
               });
             }
           }
+          if (scopedRender.removed.length > 0) {
+            steps.push({
+              step: "v3_system_total_card_measurements_removed",
+              ms: now(),
+              meta: {
+                stage: "render",
+                keys: scopedRender.removed.map((criterion) => criterion.key),
+              },
+            });
+          }
+          (tc.args as Record<string, unknown>).criteria = criteria;
           latestRenderCriteria = preserveFrozenSelectionCriteria(criteria);
           const unresolvedRelativeEquality = compatibilityRequired &&
             compatibilityRelations.some((relation) =>
@@ -13301,9 +13640,13 @@ async function runExpertLoop(
             criteria.length === 0 &&
             !namedSeriesToken &&
             !pairedTitleContractProven &&
-            hasMeasuredSelectionRequirement(
-              `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
-            )
+            (cardMeasurementScope() === "system_total"
+              ? customerCardMeasurementQuantities().some((quantity) =>
+                isPhysicalMeasurementUnit(quantity.unit)
+              )
+              : hasMeasuredSelectionRequirement(
+                `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+              ))
           ) {
             gateShortCircuit ??= {
               tool: "render_products",
@@ -13404,7 +13747,7 @@ async function runExpertLoop(
             // obeys this scope; rendering must not re-promote it from prose.
             const individualMeasurement =
               derivedMeasurementMayConstrainIndividualProducts(
-                derivedSelectionMeasurementScope,
+                cardMeasurementScope(),
               );
             const promoted = individualMeasurement
               ? promoteMeasuredReasoningCriteria(
@@ -13484,6 +13827,11 @@ async function runExpertLoop(
               targetCriteriaPromotion.criteria,
               identityFreeTargetBacking,
             );
+            const scopedAlignedRender = scopeCardCriteria(
+              criteria,
+              measuredReasoning,
+            );
+            criteria = scopedAlignedRender.criteria;
 
             if (
               aligned.alignments.length > 0 ||
@@ -13492,7 +13840,8 @@ async function runExpertLoop(
               targetCriteriaPromotion.promoted.length > 0 ||
               identityFreeTargetBacking.length > 0 ||
               importance.demoted.length > 0 ||
-              frozenRender.demoted.length > 0
+              frozenRender.demoted.length > 0 ||
+              scopedAlignedRender.removed.length > 0
             ) {
               (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({
@@ -13506,6 +13855,8 @@ async function runExpertLoop(
                   fallback_promoted: fallbackMeasured.promoted,
                   demoted_advisory: importance.demoted,
                   demoted_late: frozenRender.demoted,
+                  removed_system_total_measurements:
+                    scopedAlignedRender.removed.map((criterion) => criterion.key),
                 },
               });
             }
@@ -13518,7 +13869,18 @@ async function runExpertLoop(
                 meta: { bounds: aligned.ambiguities },
               });
             }
-            const understated = findUnderstatedCriteria(criteria, userMessage);
+            // An installation total is not a per-card lower bound. Preserve
+            // only customer quantities explicitly assigned to each item when
+            // checking whether a mandatory criterion weakened their number.
+            const cardCustomerText = cardMeasurementScope() === "system_total"
+              ? customerCardMeasurementQuantities().map((quantity) =>
+                `${quantity.value} ${quantity.unit}`
+              ).join("\n")
+              : userMessage;
+            const understated = findUnderstatedCriteria(
+              criteria,
+              cardCustomerText,
+            );
             if (understated.length > 0) {
               criteria = correctCriteria(criteria, understated);
               (tc.args as Record<string, unknown>).criteria = criteria;
@@ -15036,7 +15398,7 @@ async function runExpertLoop(
             result.tool === "search_catalog"
           ? result.results.length
           : 0;
-        const sourceProofCriteria = resolveTerminalSelectionCriteria(
+        const sourceProofCriteria = scopeCardCriteria(resolveTerminalSelectionCriteria(
           [
             ...(currentSelectionCriteriaPlan()?.mandatory_criteria ??
               enforcedSearchCriteria),
@@ -15044,7 +15406,7 @@ async function runExpertLoop(
           latestRenderCriteria,
           userBackedSearchCriteria,
           Boolean(namedSeriesToken),
-        );
+        ), derivedSelectionReasoningEvidence || assistantReasoning).criteria;
         const sourceProofBudget = extractBudgetCap(userMessage);
         const sourceProofProducts = result.ok &&
             result.tool === "search_catalog"
@@ -15110,14 +15472,18 @@ async function runExpertLoop(
               [],
               reasoningEvidence,
               lastDiscover.facets,
+              {
+                measurementScope: cardMeasurementScope(),
+                customerText: userMessage,
+              },
             ).added
             : [];
           const frozenRecoveryPlan = currentSelectionCriteriaPlan();
-          const recoveryReasoningCriteria = frozenRecoveryPlan
+          const recoveryReasoningCriteria = scopeCardCriteria(frozenRecoveryPlan
             ? frozenRecoveryPlan.mandatory_criteria.map((criterion) => ({
               ...criterion,
             }))
-            : rangeCriteria;
+            : rangeCriteria, reasoningEvidence).criteria;
           const fullRecoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: runArgs,
             customer_message: userMessage,
@@ -16514,7 +16880,7 @@ async function runExpertLoop(
                   discoveryPairedDecision,
                   discoveryFacets,
                 );
-              const explicitCriteria: Criterion[] = omitPairedExact(
+              const explicitCriteria: Criterion[] = scopeCardCriteria(omitPairedExact(
                 explicitKept.map(
                   ({ key, value }) => {
                     const facet = lastDiscover?.facets.find((candidate) =>
@@ -16528,8 +16894,8 @@ async function runExpertLoop(
                     };
                   },
                 ),
-              );
-              const explicitUserBackedCriteria: Criterion[] = omitPairedExact(
+              ), userMessage).criteria;
+              const explicitUserBackedCriteria: Criterion[] = scopeCardCriteria(omitPairedExact(
                 explicitUserBacked
                   .map(({ key, value }) => {
                     const facet = lastDiscover?.facets.find((candidate) =>
@@ -16543,12 +16909,16 @@ async function runExpertLoop(
                       evidence: "user_explicit" as const,
                     };
                   }),
-              );
+              ), userMessage).criteria;
               const measuredCriteria = omitPairedExact(
                 projectReasoningRangeCriteria(
                   [],
                   userMessage,
                   lastDiscover.facets,
+                  {
+                    measurementScope: cardMeasurementScope(),
+                    customerText: userMessage,
+                  },
                 ).added.map((criterion) => ({
                   ...criterion,
                   level: "A" as const,
@@ -16567,15 +16937,18 @@ async function runExpertLoop(
                   lastDiscover.facets,
                   explicitUserBackedCriteria,
                 );
-              const directLiteralMeasuredCriteria = omitPairedExact(
+              const directLiteralMeasuredCriteria = scopeCardCriteria(omitPairedExact(
                 directLiteralMeasuredProjection.added
                   .map((criterion) => ({
                     ...criterion,
                     evidence: "user_explicit" as const,
                   })),
-              );
+              ), userMessage).criteria;
               const directMeasuredCriteriaCount = measuredCriteria.length +
-                omitPairedExact(directLiteralMeasuredProjection.matched).length;
+                scopeCardCriteria(
+                  omitPairedExact(directLiteralMeasuredProjection.matched),
+                  userMessage,
+                ).criteria.length;
               const directApplicationCriteriaForReasoning =
                 minimumCompatibilityRelationCount(userMessage) < 2 &&
                   !reasoningNeedsCompatibilityRelations(userMessage)
@@ -16624,16 +16997,16 @@ async function runExpertLoop(
                 lastDiscover.facets,
                 explicitUserBackedCriteria,
               );
-              const literalMeasuredCriteria = omitPairedExact([
+              const literalMeasuredCriteria = scopeCardCriteria(omitPairedExact([
                 ...literalMeasuredProjection.added,
                 ...literalMeasuredProjection.matched,
               ].map((criterion) => ({
                 ...criterion,
                 level: "A" as const,
                 evidence: "user_explicit" as const,
-              })));
+              }))), userMessage).criteria;
               const before = userBackedSearchCriteria.length;
-              userBackedSearchCriteria = mergeUserBackedCriteria(
+              userBackedSearchCriteria = scopeCardCriteria(mergeUserBackedCriteria(
                 userBackedSearchCriteria,
                 [
                   ...explicitUserBackedCriteria,
@@ -16641,7 +17014,7 @@ async function runExpertLoop(
                   ...literalMeasuredCriteria,
                   ...(verifiedApplicationSelection?.criteria ?? []),
                 ],
-              );
+              ), userMessage).criteria;
               enforcedSearchCriteria = freezeSelectionCriteria(
                 [
                   ...explicitCriteria,
@@ -16665,6 +17038,8 @@ async function runExpertLoop(
                 });
               }
               if (
+                (provisionalCustomerMeasurementScope === "system_total" &&
+                  !catalogSearchAttempted) ||
                 shouldRequireDerivedSelectionReasoning({
                   intentMode,
                   // This branch runs while the successful discovery result is
@@ -16685,6 +17060,7 @@ async function runExpertLoop(
               ) {
                 selectionReasoningOnlyRequired = true;
                 unresolvedProductMeasurementRequired =
+                  provisionalCustomerMeasurementScope !== "system_total" &&
                   directMeasuredCriteriaCount === 0 &&
                   hasSelectionMeasurementContext(userMessage) &&
                   !discoveryPairedDecision.selected_pair;
@@ -17910,30 +18286,34 @@ async function runExpertLoop(
         : null) ??
       (selectionDiscoveries.length === 0 ? lastDiscover : null);
     const terminalGroundedTargets = terminalRecoveryScope?.targets ?? [];
-    const terminalCriteriaBase = preserveFrozenSelectionCriteria(
+    const terminalCriteriaBase = scopeCardCriteria(preserveFrozenSelectionCriteria(
       latestRenderCriteria,
-    );
+    ), terminalReasoningEvidence).criteria;
     // Keep the terminal gate on the same measurement scope that governed the
     // structured search. A system-total calculation may mention auxiliary
     // per-product ranges in its explanation, but the finalizer must not revive
     // those numbers as hidden mandatory card filters after retrieval.
     const terminalProjectedRange = terminalDiscover &&
         derivedMeasurementMayConstrainIndividualProducts(
-          derivedSelectionMeasurementScope,
+          cardMeasurementScope(),
         )
       ? projectReasoningRangeCriteria(
         terminalCriteriaBase,
         terminalReasoningEvidence,
         terminalDiscover.facets,
+        {
+          measurementScope: cardMeasurementScope(),
+          customerText: userMessage,
+        },
       )
       : { criteria: terminalCriteriaBase, added: [] };
     let terminalSelectionCriteria = terminalDiscover
-      ? resolveTerminalSelectionCriteria(
+      ? scopeCardCriteria(resolveTerminalSelectionCriteria(
         terminalProjectedRange.criteria,
         latestRenderCriteria,
         userBackedSearchCriteria,
         Boolean(namedSeriesToken),
-      )
+      ), terminalReasoningEvidence).criteria
       : [];
     const terminalPairedReference = extractSchemaBackedMeasuredReference(
       userMessage,
@@ -18043,12 +18423,12 @@ async function runExpertLoop(
       if (!terminalDiscover || !terminalSelectionTarget || !source.trim()) {
         return null;
       }
-      const terminalCriteria = resolveRenderCriteria(
+      const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
         [],
         latestRenderCriteria,
         userBackedSearchCriteria,
         Boolean(namedSeriesToken),
-      );
+      ), terminalReasoningEvidence).criteria;
       const sourceCompactCodes = compactCodeTokensInQuery(source);
       const sourceIsAtomicCompactCode = sourceCompactCodes.length === 1 &&
         sourceCompactCodes[0].raw.toLocaleLowerCase("ru-RU") ===
@@ -19438,17 +19818,21 @@ async function runExpertLoop(
       // model render criteria. Requiring a previously successful render here
       // made this recovery unreachable precisely when the model timed out
       // between a proven search and render_products.
-      const terminalCriteria = resolveRenderCriteria(
+      const scopedReasoningProof = scopeCardCriteria(
         reasoningBackedSearch.criteria,
+        terminalReasoningEvidence,
+      ).criteria;
+      const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+        scopedReasoningProof,
         latestRenderCriteria,
         userBackedSearchCriteria,
         Boolean(namedSeriesToken),
-      );
+      ), terminalReasoningEvidence).criteria;
       const adjusted = gateWithLiteralCompoundEvidence(
         projectPairedTitleEvidence(
           projectCatalogFilterEvidence(
             candidateProducts,
-            reasoningBackedSearch.criteria,
+            scopedReasoningProof,
           ),
           activeCompatibilityRelations,
         ),
@@ -19829,12 +20213,15 @@ async function runExpertLoop(
       // A semantic pool is retrieval evidence only. Reconstruct the same full
       // criteria contract used by the rejected render; otherwise a later broad
       // token retry could silently discard a calculated or user-backed bound.
-      const terminalCriteria = resolveRenderCriteria(
-        semanticBackedSearch.criteria,
+      const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+        scopeCardCriteria(
+          semanticBackedSearch.criteria,
+          terminalReasoningEvidence,
+        ).criteria,
         latestRenderCriteria,
         userBackedSearchCriteria,
         Boolean(namedSeriesToken),
-      );
+      ), terminalReasoningEvidence).criteria;
       const adjusted = gateWithLiteralCompoundEvidence(
         projectPairedTitleEvidence(
           categoryGroundedProducts,
@@ -19962,7 +20349,7 @@ async function runExpertLoop(
           ? terminalPairDecision.reference
           : null,
       };
-      const visibleContract = buildVisibleRequestContract(userMessage, {
+      const visibleContract = scopedVisibleRequestContract({
         ...terminalVisibleContext,
         candidateTitles: [...ctx.cache.values()].map((product) =>
           product.pagetitle
@@ -20373,8 +20760,9 @@ Deno.serve(async (req) => {
   // importing this shared handler. Never accept the public anon JWT alone for
   // a preview request. This check precedes body parsing, DB calls and LLM work;
   // production's request path is unchanged.
+  const suppliedPreviewSecret = req.headers.get(PREVIEW_SECRET_HEADER);
   if (ADMISSION_SCOPE === "preview" && !await previewSecretAuthorized(
-    req.headers.get(PREVIEW_SECRET_HEADER),
+    suppliedPreviewSecret,
     Deno.env.get(PREVIEW_SECRET_ENV),
   )) {
     return new Response(JSON.stringify({ error: "preview_access_denied" }), {
@@ -20813,7 +21201,7 @@ Deno.serve(async (req) => {
         });
         if (!admission.allowed) {
           errorMsg = `admission_${admission.reason}`;
-          publicDiagnosticError = "request_unavailable";
+          publicDiagnosticError = admissionDiagnosticError(admission);
           send({
             type: "delta",
             content: admission.reason === "limit_exceeded"

@@ -22,6 +22,7 @@ import {
   hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
+  hasUnresolvedEnvironmentalProtectionObligation,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reasoningComputesSystemTotalFromSpatialExtent,
@@ -38,12 +39,30 @@ import {
 Deno.test("unspecified mixed-facet values in model reasoning never become mandatory", () => {
   const schemas = [
     [
-      { key: "length", caption: "Длина кабеля, м", values: ["нет", "1", "3"].map((value) => ({ value })) },
-      { key: "outlets", caption: "Количество розеток", values: ["нет", "2", "4"].map((value) => ({ value })) },
+      {
+        key: "length",
+        caption: "Длина кабеля, м",
+        values: ["нет", "1", "3"].map((value) => ({ value })),
+      },
+      {
+        key: "outlets",
+        caption: "Количество розеток",
+        values: ["нет", "2", "4"].map((value) => ({ value })),
+      },
     ],
     [
-      { key: "mount", caption: "Способ монтажа", values: ["нет", "накладной", "встраиваемый"].map((value) => ({ value })) },
-      { key: "body", caption: "Материал корпуса", values: ["не указано", "металл", "пластик"].map((value) => ({ value })) },
+      {
+        key: "mount",
+        caption: "Способ монтажа",
+        values: ["нет", "накладной", "встраиваемый"].map((value) => ({
+          value,
+        })),
+      },
+      {
+        key: "body",
+        caption: "Материал корпуса",
+        values: ["не указано", "металл", "пластик"].map((value) => ({ value })),
+      },
     ],
   ];
   const customers = [
@@ -52,20 +71,35 @@ Deno.test("unspecified mixed-facet values in model reasoning never become mandat
   ];
   for (const [index, facets] of schemas.entries()) {
     const customer = customers[index];
-    const reasoning = facets.map((facet) => `${facet.caption}: ${facet.values[0].value}`)
+    const reasoning = facets.map((facet) =>
+      `${facet.caption}: ${facet.values[0].value}`
+    )
       .join("; ") + ". Предложу несколько вариантов на выбор.";
     const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
-    const properties = schema.function.parameters.properties as Record<string, { items?: { enum?: string[] } }>;
-    assertEquals(properties.required_facet_values.items?.enum?.includes("f0v0") ?? false, false);
-    assertEquals(properties.required_facet_values.items?.enum?.includes("f1v0") ?? false, false);
-    const result = resolveDerivedSelectionReasoning({
-      reasoning,
-      measurement_scope: "not_applicable",
-      compatible_classifications: [],
-      excluded_classifications: [],
-      required_facet_values: ["f0v0", "f1v0"],
-      explicit_customer_classifications: [],
-    }, facets, customer);
+    const properties = schema.function.parameters.properties as Record<
+      string,
+      { items?: { enum?: string[] } }
+    >;
+    assertEquals(
+      properties.required_facet_values.items?.enum?.includes("f0v0") ?? false,
+      false,
+    );
+    assertEquals(
+      properties.required_facet_values.items?.enum?.includes("f1v0") ?? false,
+      false,
+    );
+    const result = resolveDerivedSelectionReasoning(
+      {
+        reasoning,
+        measurement_scope: "not_applicable",
+        compatible_classifications: [],
+        excluded_classifications: [],
+        required_facet_values: ["f0v0", "f1v0"],
+        explicit_customer_classifications: [],
+      },
+      facets,
+      customer,
+    );
     assertEquals(result?.requiredFacetValues, []);
     assertEquals(result?.text.includes("Обязательные параметры"), false);
   }
@@ -79,17 +113,31 @@ Deno.test("a customer-owned absence survives mixed live facet reasoning", () => 
   }];
   const customer = "Нужен вариант без заземления";
   const schema = buildDerivedSelectionReasoningToolSchema(facets, customer);
-  const properties = schema.function.parameters.properties as Record<string, { items?: { enum?: string[] } }>;
-  assertEquals(properties.required_facet_values.items?.enum?.includes("f0v1"), true);
-  assertEquals(properties.required_facet_values.items?.enum?.includes("f0v2"), false);
-  const result = resolveDerivedSelectionReasoning({
-    reasoning: "Для вашего условия наличие заземления: нет; такой вариант подходит без заземления.",
-    measurement_scope: "not_applicable",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f0v1"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
+  const properties = schema.function.parameters.properties as Record<
+    string,
+    { items?: { enum?: string[] } }
+  >;
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f0v1"),
+    true,
+  );
+  assertEquals(
+    properties.required_facet_values.items?.enum?.includes("f0v2"),
+    false,
+  );
+  const result = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для вашего условия наличие заземления: нет; такой вариант подходит без заземления.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v1"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(result?.requiredFacetValues, [{
     key: "Наличие заземления",
     value: "нет",
@@ -98,34 +146,74 @@ Deno.test("a customer-owned absence survives mixed live facet reasoning", () => 
 
 Deno.test("replacement reasoning shows only executable exact requirements after advice is demoted", () => {
   const facets = [
-    { key: "poles", caption: "Количество полюсов", values: ["1", "2", "3"].map((value) => ({ value })) },
-    { key: "voltage", caption: "Номинальное напряжение", values: ["230-400", "220-240"].map((value) => ({ value })) },
-    { key: "trip", caption: "Характеристика срабатывания", values: ["B", "C"].map((value) => ({ value })) },
-    { key: "current", caption: "Номинальный ток", values: ["16", "25"].map((value) => ({ value })) },
+    {
+      key: "poles",
+      caption: "Количество полюсов",
+      values: ["1", "2", "3"].map((value) => ({ value })),
+    },
+    {
+      key: "voltage",
+      caption: "Номинальное напряжение",
+      values: ["230-400", "220-240"].map((value) => ({ value })),
+    },
+    {
+      key: "trip",
+      caption: "Характеристика срабатывания",
+      values: ["B", "C"].map((value) => ({ value })),
+    },
+    {
+      key: "current",
+      caption: "Номинальный ток",
+      values: ["16", "25"].map((value) => ({ value })),
+    },
   ];
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning: "Характеристика срабатывания: C и номинальный ток: 16 указаны в маркировке C16. Количество полюсов: 1 — лишь типовой вариант, можно выбрать 2. Номинальное напряжение: 230-400 — тоже пример; его нужно сверить с конкретной схемой.",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f0v0", "f1v0", "f2v1", "f3v0"],
-  }, facets, "Есть ли аналог автомату Schneider Electric Acti9 C16?");
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Характеристика срабатывания: C и номинальный ток: 16 указаны в маркировке C16. Количество полюсов: 1 — лишь типовой вариант, можно выбрать 2. Номинальное напряжение: 230-400 — тоже пример; его нужно сверить с конкретной схемой.",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0", "f1v0", "f2v1", "f3v0"],
+    },
+    facets,
+    "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+  );
   if (!declaration) throw new Error("expected a valid live-facet declaration");
-  for (const key of [
-    "Количество полюсов",
-    "Номинальное напряжение",
-    "Характеристика срабатывания",
-    "Номинальный ток",
-  ]) {
-    assertEquals(declaration.requiredFacetValues.some((choice) =>
-      choice.key === key
-    ), true, key);
+  for (
+    const key of [
+      "Количество полюсов",
+      "Номинальное напряжение",
+      "Характеристика срабатывания",
+      "Номинальный ток",
+    ]
+  ) {
+    assertEquals(
+      declaration.requiredFacetValues.some((choice) => choice.key === key),
+      true,
+      key,
+    );
   }
   const proposed = declaration.requiredFacetValues.map(({ key, value }) => ({
-    key, op: "eq" as const, value, level: "A" as const,
+    key,
+    op: "eq" as const,
+    value,
+    level: "A" as const,
   }));
   const customerBacked: Criterion[] = [
-    { key: "Характеристика срабатывания", op: "eq", value: "C", level: "A", evidence: "user_explicit" },
-    { key: "Номинальный ток", op: "eq", value: "16", level: "A", evidence: "user_explicit" },
+    {
+      key: "Характеристика срабатывания",
+      op: "eq",
+      value: "C",
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "Номинальный ток",
+      op: "eq",
+      value: "16",
+      level: "A",
+      evidence: "user_explicit",
+    },
   ];
   const importance = alignCriteriaImportanceWithReasoning(
     proposed,
@@ -138,7 +226,9 @@ Deno.test("replacement reasoning shows only executable exact requirements after 
     ...customerBacked,
     ...importance.criteria.map((criterion) => ({
       ...criterion,
-      evidence: criterion.level === "A" ? "derived_required" as const : "model_assumption" as const,
+      evidence: criterion.level === "A"
+        ? "derived_required" as const
+        : "model_assumption" as const,
     })),
   ]);
   assertEquals(frozen.map((criterion) => criterion.key).sort(), [
@@ -146,16 +236,28 @@ Deno.test("replacement reasoning shows only executable exact requirements after 
     "Характеристика срабатывания",
   ]);
   const visible = reconcileDerivedRequiredFacetSummary(declaration, frozen);
-  assertEquals(visible.text.includes("Обязательные параметры: «Характеристика срабатывания: C»"), true);
+  assertEquals(
+    visible.text.includes(
+      "Обязательные параметры: «Характеристика срабатывания: C»",
+    ),
+    true,
+  );
   assertEquals(visible.text.includes("«Номинальный ток: 16»"), true);
   assertEquals(visible.text.includes("«Количество полюсов: 1»"), false);
-  assertEquals(visible.text.includes("«Номинальное напряжение: 230-400»"), false);
-  assertEquals(visible.text.includes("Количество полюсов: 1 — лишь типовой вариант"), true);
+  assertEquals(
+    visible.text.includes("«Номинальное напряжение: 230-400»"),
+    false,
+  );
+  assertEquals(
+    visible.text.includes("Количество полюсов: 1 — лишь типовой вариант"),
+    true,
+  );
 });
 
 Deno.test("explicit replacement pole remains mandatory while unconfirmed voltage does not", () => {
   const declaration = {
-    text: "Количество полюсов: 1 указано покупателем. Номинальное напряжение: 230-400 — типовой ориентир. Обязательные параметры: «Количество полюсов: 1»; «Номинальное напряжение: 230-400»; «Номинальный ток: 16».",
+    text:
+      "Количество полюсов: 1 указано покупателем. Номинальное напряжение: 230-400 — типовой ориентир. Обязательные параметры: «Количество полюсов: 1»; «Номинальное напряжение: 230-400»; «Номинальный ток: 16».",
     requiredFacetValues: [
       { key: "Количество полюсов", value: "1" },
       { key: "Номинальное напряжение", value: "230-400" },
@@ -163,28 +265,62 @@ Deno.test("explicit replacement pole remains mandatory while unconfirmed voltage
     ],
   };
   const frozen = mergeMandatorySelectionCriteria([
-    { key: "Количество полюсов", op: "eq", value: "1", level: "A", evidence: "user_explicit" },
-    { key: "Номинальное напряжение", op: "eq", value: "230-400", level: "B", evidence: "model_assumption" },
-    { key: "Номинальный ток", op: "eq", value: "16", level: "A", evidence: "user_explicit" },
+    {
+      key: "Количество полюсов",
+      op: "eq",
+      value: "1",
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "Номинальное напряжение",
+      op: "eq",
+      value: "230-400",
+      level: "B",
+      evidence: "model_assumption",
+    },
+    {
+      key: "Номинальный ток",
+      op: "eq",
+      value: "16",
+      level: "A",
+      evidence: "user_explicit",
+    },
   ]);
   const visible = reconcileDerivedRequiredFacetSummary(declaration, frozen);
   assertEquals(visible.text.includes("«Количество полюсов: 1»"), true);
   assertEquals(visible.text.includes("«Номинальный ток: 16»"), true);
-  assertEquals(visible.text.includes("«Номинальное напряжение: 230-400»"), false);
+  assertEquals(
+    visible.text.includes("«Номинальное напряжение: 230-400»"),
+    false,
+  );
   assertEquals(visible.text.includes("230-400 — типовой ориентир"), true);
 });
 
 Deno.test("required-summary reconciliation is facet-agnostic and preserves free explanations", () => {
   const declaration = {
-    text: "Для жилой комнаты можно взять тёплый свет; материал корпуса пока неизвестен. Обязательные параметры: «Цветовая температура: 3000 K»; «Цвет корпуса: белый».\nСледующий шаг — поиск по каталогу.",
+    text:
+      "Для жилой комнаты можно взять тёплый свет; материал корпуса пока неизвестен. Обязательные параметры: «Цветовая температура: 3000 K»; «Цвет корпуса: белый».\nСледующий шаг — поиск по каталогу.",
     requiredFacetValues: [
       { key: "Цветовая температура", value: "3000 K" },
       { key: "Цвет корпуса", value: "белый" },
     ],
   };
   const visible = reconcileDerivedRequiredFacetSummary(declaration, [
-    { key: "Цветовая температура", op: "eq", value: "3000 K", level: "A", evidence: "derived_required" },
-    { key: "Цвет корпуса", op: "eq", value: "белый", level: "B", evidence: "model_assumption" },
+    {
+      key: "Цветовая температура",
+      op: "eq",
+      value: "3000 K",
+      level: "A",
+      evidence: "derived_required",
+    },
+    {
+      key: "Цвет корпуса",
+      op: "eq",
+      value: "белый",
+      level: "B",
+      evidence: "model_assumption",
+    },
   ]);
   assertEquals(visible.text.includes("«Цветовая температура: 3000 K»"), true);
   assertEquals(visible.text.includes("«Цвет корпуса: белый»"), false);
@@ -618,9 +754,18 @@ Deno.test("paired object size is not offered as an exact pre-search enum, while 
     string,
     { items: { enum?: string[] } }
   >;
-  assertEquals(properties.required_facet_values.items.enum?.includes("f0v0"), false);
-  assertEquals(properties.required_facet_values.items.enum?.includes("f1v0"), false);
-  assertEquals(properties.required_facet_values.items.enum?.includes("f2v0"), true);
+  assertEquals(
+    properties.required_facet_values.items.enum?.includes("f0v0"),
+    false,
+  );
+  assertEquals(
+    properties.required_facet_values.items.enum?.includes("f1v0"),
+    false,
+  );
+  assertEquals(
+    properties.required_facet_values.items.enum?.includes("f2v0"),
+    true,
+  );
   // Without verified paired context, direct exact product requests retain
   // their normal evidence path.
   const direct = buildDerivedSelectionReasoningMessages(
@@ -629,7 +774,12 @@ Deno.test("paired object size is not offered as an exact pre-search enum, while 
     facets,
   );
   const directSchema = JSON.parse(direct[1].content.split("(JSON):\n")[1]);
-  assertEquals(directSchema.facets[0].values.some(({ value }: { value: string }) => value === "10"), true);
+  assertEquals(
+    directSchema.facets[0].values.some(({ value }: { value: string }) =>
+      value === "10"
+    ),
+    true,
+  );
 });
 
 Deno.test("paired pre-search reasoning keeps strict bounds but drops speculative schema and shortage claims", () => {
@@ -644,49 +794,72 @@ Deno.test("paired pre-search reasoning keeps strict bounds but drops speculative
     unit: "мм",
     values: [{ value: "10" }, { value: "8" }],
   }];
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Клиент указал диаметр объекта 10 мм. До изменения внутренний диаметр изделия должен быть строго больше 10 мм, а после изменения строго меньше 10 мм. В схеме есть значение диаметра до изменения = 10 мм. Для объекта 10 мм требуется диаметр до изменения не менее 12–15 мм. Данных для точного выбора типоразмера недостаточно; необходимо проверить значения товаров.",
-    required_facet_values: ["f0v0", "f1v0"],
-    compatible_classifications: [],
-    excluded_classifications: [],
-  }, facets, "объект диаметром 10 мм", "Изделия", {
-    value: 10,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Клиент указал диаметр объекта 10 мм. До изменения внутренний диаметр изделия должен быть строго больше 10 мм, а после изменения строго меньше 10 мм. В схеме есть значение диаметра до изменения = 10 мм. Для объекта 10 мм требуется диаметр до изменения не менее 12–15 мм. Данных для точного выбора типоразмера недостаточно; необходимо проверить значения товаров.",
+      required_facet_values: ["f0v0", "f1v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "объект диаметром 10 мм",
+    "Изделия",
+    {
+      value: 10,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    },
+  );
   assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
   assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
   assertEquals(declaration?.text.includes("В схеме"), false);
   assertEquals(declaration?.text.includes("12–15"), false);
   assertEquals(declaration?.text.includes("Данных для точного выбора"), false);
   assertEquals(declaration?.requiredFacetValues, []);
-  const inlineSchemaClaim = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм, в схеме есть значение 10 мм.",
-    required_facet_values: [],
-  }, facets, "кабель диаметром 10 мм", "Изделия", {
-    value: 10,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
-  assertEquals(inlineSchemaClaim?.text.includes("строго больше 10 мм"), true);
-  assertEquals(inlineSchemaClaim?.text.includes("строго меньше 10 мм"), true);
-  assertEquals(inlineSchemaClaim?.text.includes("в схеме есть значение"), false);
-  for (const trailingClaim of [
-    ", но в схеме есть значение 10 мм",
-    " и в схеме есть значение 10 мм",
-    ", но данных для точного выбора типоразмера недостаточно",
-  ]) {
-    const result = resolveDerivedSelectionReasoning({
+  const inlineSchemaClaim = resolveDerivedSelectionReasoning(
+    {
       reasoning:
-        `Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм${trailingClaim}.`,
+        "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм, в схеме есть значение 10 мм.",
       required_facet_values: [],
-    }, facets, "кабель диаметром 10 мм", "Изделия", {
+    },
+    facets,
+    "кабель диаметром 10 мм",
+    "Изделия",
+    {
       value: 10,
       unit: "мм",
       facetKeys: ["before", "after"],
-    });
+    },
+  );
+  assertEquals(inlineSchemaClaim?.text.includes("строго больше 10 мм"), true);
+  assertEquals(inlineSchemaClaim?.text.includes("строго меньше 10 мм"), true);
+  assertEquals(
+    inlineSchemaClaim?.text.includes("в схеме есть значение"),
+    false,
+  );
+  for (
+    const trailingClaim of [
+      ", но в схеме есть значение 10 мм",
+      " и в схеме есть значение 10 мм",
+      ", но данных для точного выбора типоразмера недостаточно",
+    ]
+  ) {
+    const result = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм${trailingClaim}.`,
+        required_facet_values: [],
+      },
+      facets,
+      "кабель диаметром 10 мм",
+      "Изделия",
+      {
+        value: 10,
+        unit: "мм",
+        facetKeys: ["before", "after"],
+      },
+    );
     assertEquals(result?.text.includes("строго больше 10 мм"), true);
     assertEquals(result?.text.includes("строго меньше 10 мм"), true);
     assertEquals(result?.text.includes("в схеме есть значение"), false);
@@ -706,15 +879,22 @@ Deno.test("paired uncertainty guard preserves customer-data gaps and decimal bou
     unit: "мм",
     values: [{ value: "10.5" }, { value: "8" }],
   }];
-  const reasoning = "Для объекта диаметром 10.5 мм диаметр до изменения должен быть строго больше 10.5 мм, после изменения строго меньше 10.5 мм. Данных клиента недостаточно для точного выбора безопасного температурного режима.";
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning,
-    required_facet_values: [],
-  }, facets, "объект диаметром 10.5 мм", "Изделия", {
-    value: 10.5,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
+  const reasoning =
+    "Для объекта диаметром 10.5 мм диаметр до изменения должен быть строго больше 10.5 мм, после изменения строго меньше 10.5 мм. Данных клиента недостаточно для точного выбора безопасного температурного режима.";
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      required_facet_values: [],
+    },
+    facets,
+    "объект диаметром 10.5 мм",
+    "Изделия",
+    {
+      value: 10.5,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    },
+  );
   assertEquals(declaration?.text.includes("строго больше 10.5 мм"), true);
   assertEquals(declaration?.text.includes("строго меньше 10.5 мм"), true);
   assertEquals(declaration?.text.includes("Данных клиента недостаточно"), true);
@@ -725,7 +905,10 @@ Deno.test("paired uncertainty guard preserves customer-data gaps and decimal bou
     { value: 10, unit: "мм", facetKeys: ["before", "after"] },
   );
   assertEquals(messages.length, 2);
-  assertEquals(JSON.parse(messages[1].content.split("(JSON):\n")[1]).facets, []);
+  assertEquals(
+    JSON.parse(messages[1].content.split("(JSON):\n")[1]).facets,
+    [],
+  );
 });
 
 Deno.test("optional same-unit tier after a semicolon cannot erase either strict paired bound", () => {
@@ -740,27 +923,39 @@ Deno.test("optional same-unit tier after a semicolon cannot erase either strict 
     unit: "мм",
     values: [{ value: "10" }, { value: "8" }],
   }];
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм; после усадки строго меньше 10 мм, оптимально 12 мм.",
-    required_facet_values: [],
-  }, facets, "кабель диаметром 10 мм", "Изделие", {
-    value: 10,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм; после усадки строго меньше 10 мм, оптимально 12 мм.",
+      required_facet_values: [],
+    },
+    facets,
+    "кабель диаметром 10 мм",
+    "Изделие",
+    {
+      value: 10,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    },
+  );
   assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
   assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
   assertEquals(declaration?.text.includes("оптимально 12 мм"), false);
-  const intertwined = resolveDerivedSelectionReasoning({
-    reasoning:
-      "До изменения диаметр строго больше 10 мм, оптимально 12 мм, после изменения строго меньше 10 мм.",
-    required_facet_values: [],
-  }, facets, "кабель диаметром 10 мм", "Изделие", {
-    value: 10,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
+  const intertwined = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "До изменения диаметр строго больше 10 мм, оптимально 12 мм, после изменения строго меньше 10 мм.",
+      required_facet_values: [],
+    },
+    facets,
+    "кабель диаметром 10 мм",
+    "Изделие",
+    {
+      value: 10,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    },
+  );
   assertEquals(intertwined?.text.includes("строго больше 10 мм"), true);
   assertEquals(intertwined?.text.includes("строго меньше 10 мм"), true);
 });
@@ -777,15 +972,21 @@ Deno.test("a missing customer material remains a safety caveat, not a catalog sh
     unit: "мм",
     values: [{ value: "10" }, { value: "8" }],
   }];
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Внутренний диаметр до изменения строго больше 10 мм, после изменения строго меньше 10 мм. Данных о материале изоляции кабеля недостаточно для точного выбора безопасной температуры изменения.",
-    required_facet_values: [],
-  }, facets, "кабель диаметром 10 мм", "Изделие", {
-    value: 10,
-    unit: "мм",
-    facetKeys: ["before", "after"],
-  });
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Внутренний диаметр до изменения строго больше 10 мм, после изменения строго меньше 10 мм. Данных о материале изоляции кабеля недостаточно для точного выбора безопасной температуры изменения.",
+      required_facet_values: [],
+    },
+    facets,
+    "кабель диаметром 10 мм",
+    "Изделие",
+    {
+      value: 10,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    },
+  );
   assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
   assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
   assertEquals(declaration?.text.includes("Данных о материале изоляции"), true);
@@ -804,15 +1005,21 @@ Deno.test("paired exact-equality cleanup normalizes decimal spellings", () => {
     values: [{ value: "10,5" }, { value: "8" }],
   }];
   for (const assertion of ["равен 10,50 мм", "= 10,50 мм"]) {
-    const declaration = resolveDerivedSelectionReasoning({
-      reasoning:
-        `Для объекта 10,5 мм диаметр до изменения строго больше 10,5 мм, после изменения строго меньше 10,5 мм. Диаметр до изменения ${assertion}.`,
-      required_facet_values: [],
-    }, facets, "объект диаметром 10,5 мм", "Изделие", {
-      value: 10.5,
-      unit: "мм",
-      facetKeys: ["before", "after"],
-    });
+    const declaration = resolveDerivedSelectionReasoning(
+      {
+        reasoning:
+          `Для объекта 10,5 мм диаметр до изменения строго больше 10,5 мм, после изменения строго меньше 10,5 мм. Диаметр до изменения ${assertion}.`,
+        required_facet_values: [],
+      },
+      facets,
+      "объект диаметром 10,5 мм",
+      "Изделие",
+      {
+        value: 10.5,
+        unit: "мм",
+        facetKeys: ["before", "after"],
+      },
+    );
     assertEquals(declaration?.text.includes("строго больше 10,5 мм"), true);
     assertEquals(declaration?.text.includes("строго меньше 10,5 мм"), true);
     assertEquals(declaration?.text.includes(assertion), false);
@@ -1054,10 +1261,12 @@ Deno.test("unitless related catalog ranges never become verified paired-fit clai
     unit: "мм",
     facetKeys: ["diameter_before", "diameter_after"],
   };
-  const strict = "Для кабеля 12 мм внутренний диаметр трубки до усадки строго больше 12 мм, а после усадки строго меньше 12 мм.";
+  const strict =
+    "Для кабеля 12 мм внутренний диаметр трубки до усадки строго больше 12 мм, а после усадки строго меньше 12 мм.";
   const result = resolveDerivedSelectionReasoning(
     {
-      reasoning: `${strict} Диапазон диаметров проводов 12. 8–24 мм указывает на совместимость.`,
+      reasoning:
+        `${strict} Диапазон диаметров проводов 12. 8–24 мм указывает на совместимость.`,
       required_facet_values: ["f2v0"],
       compatible_classifications: ["f2v0"],
       excluded_classifications: [],
@@ -1484,10 +1693,12 @@ Deno.test("a customer light qualifier cannot become a mandatory housing colour",
     true,
   );
 
-  for (const reasoning of [
-    "Для улицы нужен белый свет 4000 K и степень защиты IP65.",
-    "Цвет корпуса должен быть белый, степень защиты IP65.",
-  ]) {
+  for (
+    const reasoning of [
+      "Для улицы нужен белый свет 4000 K и степень защиты IP65.",
+      "Цвет корпуса должен быть белый, степень защиты IP65.",
+    ]
+  ) {
     const resolved = resolveDerivedSelectionReasoning(
       {
         reasoning,
@@ -1516,13 +1727,17 @@ Deno.test("a customer light qualifier cannot become a mandatory housing colour",
     "Нужен прожектор IP65, белый корпус",
     "Прожекторы",
   );
-  assertEquals(explicitBody?.requiredFacetValues.some(({ key, value }) =>
-    key === "Цвет корпуса" && value === "белый"
-  ), true);
+  assertEquals(
+    explicitBody?.requiredFacetValues.some(({ key, value }) =>
+      key === "Цвет корпуса" && value === "белый"
+    ),
+    true,
+  );
 
   const emitted = resolveDerivedSelectionReasoning(
     {
-      reasoning: "Цвет свечения должен быть холодный белый, степень защиты IP65.",
+      reasoning:
+        "Цвет свечения должен быть холодный белый, степень защиты IP65.",
       required_facet_values: ["f1v0", "f2v1"],
       compatible_classifications: [],
       excluded_classifications: [],
@@ -1531,9 +1746,12 @@ Deno.test("a customer light qualifier cannot become a mandatory housing colour",
     customer,
     "Прожекторы",
   );
-  assertEquals(emitted?.requiredFacetValues.some(({ key, value }) =>
-    key === "Цвет свечения" && value === "холодный белый"
-  ), true);
+  assertEquals(
+    emitted?.requiredFacetValues.some(({ key, value }) =>
+      key === "Цвет свечения" && value === "холодный белый"
+    ),
+    true,
+  );
 });
 
 Deno.test("customer range endpoints cannot own an exact live temperature", () => {
@@ -1929,6 +2147,471 @@ Deno.test("one-to-one replacement keeps calculated demand per target while a mul
   assertEquals(noMeasurement?.measurementScope, "not_applicable");
 });
 
+Deno.test("open alternatives preserve a spatial calculation as a system total without prescribing item count", () => {
+  const reasoning =
+    "Для всей зоны 120 м² × 150 лк = 18000 лм суммарного потока; поток можно распределить между приборами.";
+  const request =
+    "Нужен прибор для зоны 120 м². Предложи варианты для установки на участке.";
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(request, reasoning),
+    true,
+  );
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    request,
+  );
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(
+    resolved?.text.includes("суммарная потребность всей системы"),
+    true,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Для зоны 120 м² покажи несколько подходящих вариантов",
+      reasoning,
+    ),
+    true,
+  );
+});
+
+Deno.test("a computed total removes only a separable model-owned per-item scalar from all reasoning channels", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для зоны 120 м² × 150 лк = 18000 лм суммарно. Каждому изделию требуется поток не менее 2000 лм. Для открытой среды степень защиты IP65 обязательна.",
+      measurement_scope: "per_product",
+      retrieval_query: "поток не менее 2000 лм",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f0v0", "f1v0"],
+      explicit_customer_classifications: [],
+    },
+    [
+      {
+        key: "flux",
+        caption: "Световой поток",
+        unit: "лм",
+        values: [{ value: "2000" }],
+      },
+      {
+        key: "protection",
+        caption: "Степень защиты IP",
+        values: [{ value: "IP65" }],
+      },
+    ],
+    "Для зоны 120 м² предложи варианты изделий.",
+  );
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(resolved?.text.includes("120 м² × 150 лк = 18000 лм"), true);
+  assertEquals(resolved?.text.includes("IP65"), true);
+  assertEquals(resolved?.text.includes("2000 лм"), false);
+  assertEquals(resolved?.measurementEvidence.includes("2000 лм"), false);
+  assertEquals(resolved?.retrievalQuery, null);
+  assertEquals(
+    resolved?.requiredFacetValues.some(({ key }) => key === "Световой поток"),
+    false,
+  );
+});
+
+Deno.test("computed area demand does not keep a model's later product-side recommendation", () => {
+  const reasoning =
+    "Для освещения двора частного дома площадью 120 м² рекомендуется обеспечить освещённость 10–20 лк (базовый уровень для придомовой территории). Световой поток = 120 м² × 15 лк (средний ориентир) = 1800 лм. Учитывая высоту установки 4 м и потери света, оптимально выбрать прожектор со световым потоком не менее 2000–2500 лм. Для уличного применения обязательна степень защиты не ниже IP65 (защита от пыли и струй воды). Напряжение питания 220 В (стандартная сеть). Можно использовать один мощный прожектор (30–50 Вт) или несколько менее мощных для равномерного освещения.";
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Нужен прожектор на улицу. Предложи варианты для освещения двора площадью 120 м².",
+  );
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(resolved?.text.includes("1800 лм"), true);
+  assertEquals(resolved?.text.includes("10–20 лк"), true);
+  assertEquals(resolved?.text.includes("IP65"), true);
+  assertEquals(resolved?.text.includes("2000–2500 лм"), false);
+  assertEquals(resolved?.measurementEvidence.includes("2000–2500 лм"), false);
+  const alreadySystemTotal = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "system_total",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Нужен прожектор на улицу. Предложи варианты для освещения двора площадью 120 м².",
+  );
+  assertEquals(alreadySystemTotal?.measurementScope, "system_total");
+  assertEquals(alreadySystemTotal?.text.includes("2000–2500 лм"), false);
+  assertEquals(alreadySystemTotal?.text.includes("IP65"), true);
+});
+
+Deno.test("a computed total fails closed when the per-item scalar cannot be separated from the equation", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для зоны 120 м² × 150 лк = 18000 лм суммарно, и каждому изделию требуется поток не менее 2000 лм.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Для зоны 120 м² предложи варианты изделий.",
+  );
+  assertEquals(resolved, null);
+});
+
+Deno.test("a computed total keeps an independent calculation and protection clause across a coordinator", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для зоны 120 м² × 150 лк = 18000 лм суммарно, а каждому изделию нужен поток не менее 2000 лм; защита IP65 обязательна.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Для зоны 120 м² предложи варианты изделий.",
+  );
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(resolved?.text.includes("120 м² × 150 лк = 18000 лм"), true);
+  assertEquals(resolved?.text.includes("2000 лм"), false);
+  assertEquals(resolved?.text.includes("IP65"), true);
+  assertEquals(resolved?.measurementEvidence.includes("IP65"), true);
+});
+
+Deno.test("one-to-one replacement and customer-owned per-item targets keep their visible scalar", () => {
+  const reasoning =
+    "Для зоны 120 м² × 150 лк = 18000 лм. Каждому изделию требуется поток не менее 2000 лм.";
+  const declaration = {
+    reasoning,
+    measurement_scope: "per_product",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [],
+  };
+  const oneToOne = resolveDerivedSelectionReasoning(
+    declaration,
+    [],
+    "Хочу заменить старое изделие на одно новое для зоны 120 м². Покажи варианты.",
+  );
+  assertEquals(oneToOne?.measurementScope, "per_product");
+  assertEquals(oneToOne?.measurementEvidence.includes("2000 лм"), true);
+
+  const customerOwned = resolveDerivedSelectionReasoning(
+    declaration,
+    [],
+    "Для зоны 120 м² покажи варианты. Каждое изделие должно иметь поток не менее 2000 лм.",
+  );
+  assertEquals(customerOwned?.measurementEvidence.includes("2000 лм"), true);
+});
+
+Deno.test("explicit single target and one-to-one replacement outrank open alternatives", () => {
+  const reasoning = "120 м² × 150 лк = 18000 лм для участка.";
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Нужен один прибор для участка 120 м². Предложи варианты.",
+      reasoning,
+    ),
+    false,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Хочу заменить старое изделие на новое для участка 120 м². Покажи несколько вариантов.",
+      reasoning,
+    ),
+    false,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Хочу заменить одно изделие на три изделия для участка 120 м².",
+      reasoning,
+    ),
+    true,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Для участка 120 м² покажи варианты: можно поставить один мощный прибор или несколько слабых.",
+      reasoning,
+    ),
+    true,
+  );
+});
+
+Deno.test("a customer-owned per-item target cannot be recast as a system total", () => {
+  const reasoning = "120 м² × 150 лк = 18000 лм для участка.";
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Для участка 120 м² предложи варианты. Каждый прибор должен иметь поток 18000 лм.",
+      reasoning,
+    ),
+    false,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Для участка 120 м² предложи варианты. Каждый прибор не менее 2000 лм.",
+      reasoning,
+    ),
+    true,
+  );
+});
+
+Deno.test("exposed use requires a structured live protection obligation before selection", () => {
+  const protectionFacets = [{
+    key: "protection",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP44" }, { value: "IP65" }],
+  }];
+  const baseline = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для эксплуатации вне помещения необходимо подтвердить защиту от воздействия среды.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Нужен прибор для двора",
+  );
+  assertEquals(Boolean(baseline), true);
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для двора",
+      protectionFacets,
+      baseline,
+    ),
+    true,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для двора",
+      protectionFacets,
+      {
+        ...baseline!,
+        compatible: [{ key: "Класс применения", value: "наружный" }],
+      },
+    ),
+    true,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для двора",
+      protectionFacets,
+      {
+        ...baseline!,
+        requiredFacetValues: [{ key: "Степень защиты IP", value: "IP65" }],
+      },
+    ),
+    false,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для двора",
+      protectionFacets,
+      {
+        ...baseline!,
+        compatible: [{ key: "Степень защиты IP", value: "IP65" }],
+      },
+    ),
+    true,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для двора",
+      protectionFacets,
+      {
+        ...baseline!,
+        customerGroundedCompatible: [{
+          key: "Степень защиты IP",
+          value: "IP65",
+        }],
+      },
+    ),
+    false,
+  );
+});
+
+Deno.test("weather exposure rejects weak or unknown IP declarations without forcing IP65", () => {
+  const facets = [{
+    key: "ip",
+    caption: "Степень защиты IP",
+    values: [
+      { value: "IP20" },
+      { value: "IP23" },
+      { value: "IP44" },
+      { value: "IP65" },
+      { value: "IP6X" },
+    ],
+  }];
+  const baseline = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для открытой площадки требуется подтверждённая защита корпуса.",
+      measurement_scope: "not_applicable",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    "Нужен прибор для открытой площадки",
+  )!;
+  for (const value of ["IP20", "IP23", "IP6X", "неизвестно"]) {
+    assertEquals(
+      hasUnresolvedEnvironmentalProtectionObligation(
+        "Нужен прибор для открытой площадки",
+        facets,
+        {
+          ...baseline,
+          requiredFacetValues: [{ key: "Степень защиты IP", value }],
+        },
+      ),
+      true,
+    );
+  }
+  for (const value of ["IP44", "IP65"]) {
+    assertEquals(
+      hasUnresolvedEnvironmentalProtectionObligation(
+        "Нужен прибор для открытой площадки",
+        facets,
+        {
+          ...baseline,
+          requiredFacetValues: [{ key: "Степень защиты IP", value }],
+        },
+      ),
+      false,
+    );
+  }
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для комнаты",
+      facets,
+      {
+        ...baseline,
+        requiredFacetValues: [{ key: "Степень защиты IP", value: "IP20" }],
+      },
+    ),
+    false,
+  );
+});
+
+Deno.test("dust exposure requires the solid-particle digit of the same live IP facet", () => {
+  const facets = [{
+    key: "ip",
+    caption: "Степень защиты IP",
+    values: [
+      { value: "IP20" },
+      { value: "IP44" },
+      { value: "IP54" },
+      { value: "IP65" },
+      { value: "IP6X" },
+    ],
+  }];
+  const declaration = (value: string) => ({
+    requiredFacetValues: [{ key: "Степень защиты IP", value }],
+  });
+  for (const value of ["IP20", "IP44", "IPX5", "неизвестно"]) {
+    assertEquals(
+      hasUnresolvedEnvironmentalProtectionObligation(
+        "Нужен прибор для пыльного цеха",
+        facets,
+        declaration(value),
+      ),
+      true,
+    );
+  }
+  for (const value of ["IP54", "IP65", "IP6X"]) {
+    assertEquals(
+      hasUnresolvedEnvironmentalProtectionObligation(
+        "Нужен прибор для пыльного цеха",
+        facets,
+        declaration(value),
+      ),
+      false,
+    );
+  }
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для пыльной открытой площадки",
+      facets,
+      declaration("IP6X"),
+    ),
+    true,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для пыльной открытой площадки",
+      facets,
+      declaration("IP65"),
+    ),
+    false,
+  );
+});
+
+Deno.test("protection obligation does not invent a facet or block neutral use", () => {
+  const facets = [{ caption: "Класс защиты", values: [{ value: "IP65" }] }];
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для комнаты",
+      facets,
+      null,
+    ),
+    false,
+  );
+  for (
+    const neutral of ["Нужен пылесос", "Нужен снегоуборщик", "Нужен дворник"]
+  ) {
+    assertEquals(
+      hasUnresolvedEnvironmentalProtectionObligation(neutral, facets, null),
+      false,
+    );
+  }
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для открытой площадки",
+      [{ caption: "Цвет корпуса", values: [{ value: "черный" }] }],
+      null,
+    ),
+    false,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для улицы",
+      facets,
+      null,
+    ),
+    true,
+  );
+  assertEquals(
+    hasUnresolvedEnvironmentalProtectionObligation(
+      "Нужен прибор для открытой площадки",
+      facets,
+      null,
+    ),
+    true,
+  );
+});
+
 Deno.test("a retrieval query is accepted only when it is already visible in reasoning", () => {
   const visible = resolveDerivedSelectionReasoning({
     reasoning:
@@ -2176,13 +2859,19 @@ Deno.test("a room circumstance cannot become an exact catalog purpose filter", (
     key: "Назначение",
     value: "зал; гостиная; спальня; кафе; кухня",
   }]);
-  assertEquals(room?.text.includes("не становится обязательным фильтром"), true);
+  assertEquals(
+    room?.text.includes("не становится обязательным фильтром"),
+    true,
+  );
 
   const forRoom = resolveDerivedSelectionReasoning(
-    { ...declared, explicit_customer_classifications: [{
-      customer_phrase: "гостиной",
-      classification_id: "f0v0",
-    }] },
+    {
+      ...declared,
+      explicit_customer_classifications: [{
+        customer_phrase: "гостиной",
+        classification_id: "f0v0",
+      }],
+    },
     facets,
     "Нужен светильник для гостиной площадью 30 м²",
     "Светильники",
@@ -2492,7 +3181,10 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   ]);
   assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
   assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
-  assertEquals(resolved?.text.includes("если товаров из подтверждённого класса нет"), true);
+  assertEquals(
+    resolved?.text.includes("если товаров из подтверждённого класса нет"),
+    true,
+  );
   assertEquals(resolved?.applicationSuitabilityAlternatives, [{
     key: "Класс применения",
     value: "бытовые",

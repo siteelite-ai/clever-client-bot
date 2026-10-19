@@ -6,9 +6,11 @@ import {
   alignCriteriaImportanceWithReasoning,
   alignCriteriaWithReasoning,
   compileMeasuredReasoningSearchContract,
+  customerAggregateMeasurementScope,
   customerOwnsDerivedExactFacetValue,
   demoteUnfrozenRenderCriteria,
   extractReasoningBounds,
+  filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
@@ -16,7 +18,14 @@ import {
   promoteMeasuredReasoningCriteria,
   promoteProjectableMeasuredFallbackCriteria,
 } from "./criteria-reasoning.ts";
-import { checkCriterion, type Criterion } from "./criteria-gate.ts";
+import {
+  applyCriteriaGate,
+  checkCriterion,
+  type Criterion,
+  extendSelectionCriteriaPlan,
+  resolveTerminalSelectionCriteria,
+  restrictSelectionCriteriaPlan,
+} from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, traits: string[]): ProductRef {
@@ -226,6 +235,282 @@ Deno.test("область суммарного расчёта действует
   assertEquals(hasMeasuredSelectionRequirement(reasoning), false);
 });
 
+Deno.test("customer aggregate scope is known before discovery only for explicit physical totals", () => {
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Общий световой поток 5000 лм от нескольких прожекторов.",
+    ),
+    "system_total",
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Суммарный световой поток не менее 5000 лм. Покажи прожекторы.",
+    ),
+    "system_total",
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Нужна система освещения с суммарным световым потоком 5000 лм.",
+    ),
+    "system_total",
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Для участка суммарная длина кабеля 500 м, покажи варианты.",
+    ),
+    "system_total",
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Нужен светильник со световым потоком не менее 1800 лм.",
+    ),
+    null,
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Хочу заменить люстру на светильник с общим световым потоком 5000 лм.",
+    ),
+    null,
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Нужен один светильник с суммарным световым потоком 5000 лм.",
+    ),
+    null,
+  );
+  assertEquals(
+    customerAggregateMeasurementScope(
+      "Суммарный бюджет не более 5000 тенге. Покажи товары.",
+    ),
+    null,
+  );
+});
+
+Deno.test("customer-owned total without area overrides a model per-product scope through search and render", () => {
+  const customer =
+    "Суммарный световой поток не менее 5000 лм от нескольких приборов. Покажи варианты IP65.";
+  const reasoning =
+    "Для всей системы нужен поток не менее 5000 лм. Каждый вариант должен иметь защиту IP65.";
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const protection: Criterion = {
+    key: "Степень защиты",
+    op: "eq",
+    value: "IP65",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  // A model may serialize `per_product`, but an explicit customer total has
+  // stronger authority and must be resolved before any search/plan freeze.
+  const modelScope = "per_product";
+  const scope = customerAggregateMeasurementScope(customer) ?? modelScope;
+  assertEquals(scope, "system_total");
+
+  const early = filterPerProductMeasuredCriteria(
+    [total, protection],
+    reasoning,
+    customer,
+    scope,
+  ).criteria;
+  assertEquals(early, [protection]);
+  const accidentallyFrozen = extendSelectionCriteriaPlan(
+    null,
+    [total, protection],
+    "guarded_search",
+  );
+  const reconciled = restrictSelectionCriteriaPlan(accidentallyFrozen, early);
+  assertEquals(reconciled?.mandatory_criteria, [protection]);
+
+  // The terminal path can merge stale arrays; the same scope must remove the
+  // aggregate before extending the frozen contract or gating cards.
+  const terminal = filterPerProductMeasuredCriteria(
+    resolveTerminalSelectionCriteria([total], [total], [protection]),
+    reasoning,
+    customer,
+    scope,
+  ).criteria;
+  const rendered = extendSelectionCriteriaPlan(
+    reconciled,
+    terminal,
+    "render_alignment",
+  );
+  assertEquals(rendered.mandatory_criteria, [protection]);
+  assertEquals(
+    applyCriteriaGate([
+      product("below-total-a", [
+        "Световой поток: 1200 лм",
+        "Степень защиты: IP65",
+      ]),
+      product("below-total-b", [
+        "Световой поток: 2400 лм",
+        "Степень защиты: IP65",
+      ]),
+      product("wrong-protection", [
+        "Световой поток: 6000 лм",
+        "Степень защиты: IP44",
+      ]),
+    ], [...rendered.mandatory_criteria]).passed_ids,
+    ["below-total-a", "below-total-b"],
+  );
+});
+
+Deno.test("mixed total and explicit per-item minimum constrain only each item's minimum", () => {
+  const customer =
+    "Суммарный световой поток должен быть не менее 5000 лм; каждый прибор должен давать не менее 1000 лм и иметь IP65.";
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const each: Criterion = {
+    ...total,
+    value: 1000,
+  };
+  const protection: Criterion = {
+    key: "Степень защиты",
+    op: "eq",
+    value: "IP65",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const scope = customerAggregateMeasurementScope(customer);
+  assertEquals(scope, "system_total");
+  const criteria = filterPerProductMeasuredCriteria(
+    [total, each, protection],
+    "Общий поток системы 5000 лм. Каждый прибор должен давать не менее 1000 лм.",
+    customer,
+    scope,
+  ).criteria;
+  assertEquals(criteria, [each, protection]);
+  assertEquals(
+    applyCriteriaGate([
+      product("sufficient", [
+        "Световой поток: 1200 лм",
+        "Степень защиты: IP65",
+      ]),
+      product("too-weak", [
+        "Световой поток: 800 лм",
+        "Степень защиты: IP65",
+      ]),
+      product("wrong-protection", [
+        "Световой поток: 5500 лм",
+        "Степень защиты: IP44",
+      ]),
+    ], criteria).passed_ids,
+    ["sufficient"],
+  );
+});
+
+Deno.test("customer aggregate outranks a contradictory model per-item claim for the same value", () => {
+  const customer =
+    "Суммарный световой поток не менее 5000 лм от нескольких приборов; каждый прибор должен давать не менее 1000 лм.";
+  const mistakenReasoning = "Каждый прибор должен давать не менее 5000 лм.";
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const each: Criterion = {
+    ...total,
+    value: 1000,
+  };
+  assertEquals(customerAggregateMeasurementScope(customer), "system_total");
+  const scoped = filterPerProductMeasuredCriteria(
+    [total, each],
+    mistakenReasoning,
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [each]);
+  assertEquals(scoped.removed, [total]);
+});
+
+Deno.test("aggregate numeric value with embedded unit does not survive without a separate unit field", () => {
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "eq",
+    value: "5000 лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const customer = "Суммарный световой поток 5000 лм от нескольких приборов.";
+  assertEquals(customerAggregateMeasurementScope(customer), "system_total");
+  const aggregate = filterPerProductMeasuredCriteria(
+    [total],
+    customer,
+    customer,
+    "system_total",
+  );
+  assertEquals(aggregate.criteria, []);
+  assertEquals(aggregate.removed, [total]);
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [total],
+      "Один прибор со световым потоком 5000 лм.",
+      "Один прибор со световым потоком 5000 лм.",
+      "per_product",
+    ).criteria,
+    [total],
+  );
+});
+
+Deno.test("aggregate range encoded inside a facet value does not become a per-card range", () => {
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "eq",
+    value: "2000–3000 лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const customer = "Суммарный световой поток системы должен быть 2000–3000 лм.";
+  const scoped = filterPerProductMeasuredCriteria(
+    [total],
+    customer,
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, []);
+  assertEquals(scoped.removed, [total]);
+});
+
+Deno.test("live numeric facet unit scopes an aggregate even when the model omits the unit", () => {
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "min",
+    value: 5000,
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const customer = "Суммарный световой поток системы не менее 5000 лм.";
+  const facets = [{
+    key: "flow",
+    caption: "Световой поток",
+    unit: "лм",
+    values: [{ value: "1000" }, { value: "5000" }],
+  }];
+  const scoped = filterPerProductMeasuredCriteria(
+    [total],
+    customer,
+    customer,
+    "system_total",
+    facets,
+  );
+  assertEquals(scoped.criteria, []);
+  assertEquals(scoped.removed, [total]);
+});
+
 Deno.test("измеримый диапазон каждого отдельного товара остаётся обязательным", () => {
   const reasoning = "Каждый прибор должен давать 4000–5000 лм.";
   const projected = projectReasoningRangeCriteria([], reasoning, [
@@ -241,6 +526,669 @@ Deno.test("измеримый диапазон каждого отдельног
     },
   ]);
   assertEquals(hasMeasuredSelectionRequirement(reasoning), true);
+});
+
+Deno.test("system-total: total output and illustrative each-item power cannot become card filters", () => {
+  const reasoning =
+    "Для освещения двора частного дома площадью 120 м² рекомендуется обеспечить освещённость 10–20 лк. " +
+    "Световой поток = 120 м² × 15 лк = 1800 лм. Учитывая потери света, оптимально выбрать прожектор " +
+    "со световым потоком не менее 2000–2500 лм. Для уличного применения обязательна степень защиты " +
+    "не ниже IP65. Можно использовать один мощный прожектор (30–50 Вт) или несколько менее мощных " +
+    "(по 20–30 Вт каждый) для равномерного распределения света по площади. " +
+    "Это суммарная потребность всей системы: её нужно распределить между несколькими товарами, " +
+    "а не требовать от одной карточки.";
+  const modelCriteria: Criterion[] = [
+    { key: "Степень защиты", op: "eq", value: "IP65", level: "A" },
+    {
+      key: "Световой поток, Лм",
+      op: "min",
+      value: 2000,
+      unit: "лм",
+      level: "A",
+    },
+    {
+      key: "Мощность, Вт",
+      op: "range",
+      value: [20, 30],
+      unit: "Вт",
+      level: "A",
+    },
+  ];
+  const scoped = filterPerProductMeasuredCriteria(
+    modelCriteria,
+    reasoning,
+    "Площадь двора 120 м², покажи варианты.",
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [modelCriteria[0]]);
+  assertEquals(scoped.removed, [modelCriteria[1], modelCriteria[2]]);
+
+  const facets = [
+    {
+      key: "flow",
+      caption: "Световой поток, Лм",
+      type: "number",
+      unit: "лм",
+      values: [{ value: "1800" }, { value: "2000" }, { value: "2500" }],
+    },
+    {
+      key: "power",
+      caption: "Мощность, Вт",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "20" }, { value: "30" }],
+    },
+    {
+      key: "protection",
+      caption: "Степень защиты",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "IP65" }],
+    },
+  ];
+  const projected = projectReasoningRangeCriteria([], reasoning, facets, {
+    measurementScope: "system_total",
+  });
+  assertEquals(projected.added, []);
+  const compiled = compileMeasuredReasoningSearchContract(
+    modelCriteria,
+    reasoning,
+    [],
+    facets,
+    { measurementScope: "system_total" },
+  );
+  assertEquals(compiled.mandatory_criteria, [modelCriteria[0]]);
+  assertEquals(compiled.options, { protection: ["IP65"] });
+});
+
+Deno.test("system-total: a customer's per-item voltage survives an unrelated aggregate lumen target", () => {
+  const customer = "Нужно суммарно 5000 лм, каждый светильник на 220 В.";
+  const reasoning =
+    "Общий поток системы должен быть 5000 лм. Каждый светильник должен работать на 220 В.";
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const voltage: Criterion = {
+    key: "Напряжение, В",
+    op: "eq",
+    value: 220,
+    unit: "В",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const scoped = filterPerProductMeasuredCriteria(
+    [total, voltage],
+    reasoning,
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [voltage]);
+  assertEquals(scoped.removed, [total]);
+  const compiled = compileMeasuredReasoningSearchContract(
+    [total, voltage],
+    reasoning,
+    [total, voltage],
+    [
+      {
+        key: "flow",
+        caption: "Световой поток, лм",
+        type: "number",
+        unit: "лм",
+        values: [{ value: "5000" }],
+      },
+      {
+        key: "voltage",
+        caption: "Напряжение, В",
+        type: "number",
+        unit: "В",
+        values: [{ value: "220" }],
+      },
+    ],
+    { measurementScope: "system_total", customerText: customer },
+  );
+  assertEquals(compiled.mandatory_criteria, [voltage]);
+  assertEquals(compiled.options, { voltage: ["220"] });
+});
+
+Deno.test("system-total: customer supply voltage survives an aggregate output without the word each", () => {
+  const customer =
+    "Для группы светильников нужен суммарный световой поток 5000 лм и питание от сети 220 В. Покажи варианты.";
+  const reasoning =
+    "Общий поток системы 5000 лм. Модели должны подключаться к сети 220 В.";
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const voltage: Criterion = {
+    key: "Напряжение, В",
+    op: "eq",
+    value: 220,
+    unit: "В",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  assertEquals(customerAggregateMeasurementScope(customer), "system_total");
+  const scoped = filterPerProductMeasuredCriteria(
+    [total, voltage],
+    reasoning,
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [voltage]);
+  assertEquals(scoped.removed, [total]);
+  assertEquals(
+    applyCriteriaGate([
+      product("compatible", ["Световой поток: 1200 лм", "Напряжение: 220 В"]),
+      product("wrong-supply", ["Световой поток: 6000 лм", "Напряжение: 110 В"]),
+    ], scoped.criteria).passed_ids,
+    ["compatible"],
+  );
+});
+
+Deno.test("system-total: explicit aggregate voltage is not treated as an item supply", () => {
+  const customer =
+    "Для всей системы нужно суммарное напряжение 220 В и суммарная мощность 5000 Вт.";
+  const voltage: Criterion = {
+    key: "Напряжение, В",
+    op: "eq",
+    value: 220,
+    unit: "В",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  assertEquals(customerAggregateMeasurementScope(customer), "system_total");
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [voltage],
+      "Напряжение каждого товара 220 В.",
+      customer,
+      "system_total",
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("system-total: a mains value cannot certify a different voltage role", () => {
+  const customer = "Суммарный поток 5000 лм; питание от сети 220 В.";
+  const generic: Criterion = {
+    key: "Напряжение, В",
+    op: "eq",
+    value: 220,
+    unit: "В",
+    level: "A",
+  };
+  const working: Criterion = {
+    ...generic,
+    key: "Номинальное рабочее напряжение, В",
+  };
+  const insulation: Criterion = {
+    ...generic,
+    key: "Напряжение изоляции, В",
+  };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [generic, working, insulation],
+      "Подключение к сети 220 В.",
+      customer,
+      "system_total",
+    ).criteria,
+    [generic],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [working],
+      "Рабочее напряжение 220 В.",
+      "Суммарный поток 5000 лм; рабочее напряжение 220 В.",
+      "system_total",
+    ).criteria,
+    [working],
+  );
+});
+
+Deno.test("system-total: mating dimension is kept, but a referenced cable diameter is not", () => {
+  const fit: Criterion = {
+    key: "Посадочный диаметр, мм",
+    op: "eq",
+    value: 90,
+    unit: "мм",
+    level: "A",
+    evidence: "user_explicit",
+  };
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+  };
+  const customer =
+    "Для группы приборов нужен суммарный поток 5000 лм, посадочное отверстие 90 мм.";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [total, fit],
+      "Общий поток 5000 лм; монтажное отверстие 90 мм.",
+      customer,
+      "system_total",
+    ).criteria,
+    [fit],
+  );
+  const unrelatedDiameter: Criterion = {
+    key: "Диаметр трубки, мм",
+    op: "eq",
+    value: 12,
+    unit: "мм",
+    level: "A",
+  };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [unrelatedDiameter],
+      "Нужна трубка ровно 12 мм.",
+      "Кабель диаметром 12 мм; суммарная длина изоляции 20 м.",
+      "system_total",
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("system-total: exact independent colour temperature cannot become a lower bound", () => {
+  const customer =
+    "Для группы нужен суммарный поток 5000 лм; цветовая температура 3000 К.";
+  const exact: Criterion = {
+    key: "Цветовая температура, К",
+    op: "eq",
+    value: 3000,
+    unit: "К",
+    level: "A",
+  };
+  const broadened: Criterion = { ...exact, op: "min" };
+  const scoped = filterPerProductMeasuredCriteria(
+    [exact, broadened],
+    "Нужна цветовая температура не менее 3000 К.",
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [exact]);
+  assertEquals(scoped.removed, [broadened]);
+  assertEquals(
+    applyCriteriaGate([
+      product("requested", ["Цветовая температура: 3000 К"]),
+      product("wrong-colour", ["Цветовая температура: 6500 К"]),
+    ], scoped.criteria).passed_ids,
+    ["requested"],
+  );
+});
+
+Deno.test("system-total: an independent customer range retains only its two correct endpoints", () => {
+  const customer =
+    "Для системы суммарно 5000 лм; цветовая температура 3000–4000 К.";
+  const lower: Criterion = {
+    key: "Цветовая температура, К",
+    op: "min",
+    value: 3000,
+    unit: "К",
+    level: "A",
+  };
+  const upper: Criterion = { ...lower, op: "max", value: 4000 };
+  const wrongLower: Criterion = { ...lower, value: 4000 };
+  const wrongUpper: Criterion = { ...upper, value: 3000 };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [lower, upper, wrongLower, wrongUpper],
+      "Требуется диапазон цветовой температуры 3000–4000 К.",
+      customer,
+      "system_total",
+    ).criteria,
+    [lower, upper],
+  );
+});
+
+Deno.test("system-total: postpositive fit and working-on-supply phrases retain independent axes", () => {
+  const fit: Criterion = {
+    key: "Посадочный диаметр, мм",
+    op: "eq",
+    value: 90,
+    unit: "мм",
+    level: "A",
+  };
+  const supply: Criterion = {
+    key: "Напряжение питания, В",
+    op: "eq",
+    value: 220,
+    unit: "В",
+    level: "A",
+  };
+  const customer =
+    "Суммарный поток 5000 лм. 90 мм посадочный диаметр. Светильники должны работать на 220 В.";
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [fit, supply],
+      customer,
+      customer,
+      "system_total",
+    ).criteria,
+    [fit, supply],
+  );
+});
+
+Deno.test("system-total: live facet unit removes a unitless aggregate before contract compilation", () => {
+  const total: Criterion = {
+    key: "Световой поток",
+    op: "min",
+    value: 5000,
+    level: "A",
+  };
+  const customer = "Для системы нужен суммарный световой поток 5000 лм.";
+  const contract = compileMeasuredReasoningSearchContract(
+    [total],
+    customer,
+    [total],
+    [{
+      key: "flow",
+      caption: "Световой поток",
+      type: "number",
+      unit: "лм",
+      values: [{ value: "5000" }],
+    }],
+    { measurementScope: "system_total", customerText: customer },
+  );
+  assertEquals(contract.mandatory_criteria, []);
+  assertEquals(contract.options, {});
+});
+
+Deno.test("system-total: independent customer input-voltage range projects from reasoning", () => {
+  const customer =
+    "Для системы суммарный поток 5000 лм; входное напряжение 220–240 В.";
+  const reasoning =
+    "Суммарный поток 5000 лм. Нужно входное напряжение 220–240 В.";
+  const projected = projectReasoningRangeCriteria(
+    [],
+    reasoning,
+    [{
+      key: "input_voltage",
+      caption: "Входное напряжение, В",
+      type: "number",
+      unit: "В",
+      values: [{ value: "220" }, { value: "230" }, { value: "240" }],
+    }],
+    { measurementScope: "system_total", customerText: customer },
+  );
+  assertEquals(projected.added, [{
+    key: "Входное напряжение, В",
+    op: "range",
+    value: [220, 240],
+    unit: "В",
+    level: "A",
+  }]);
+});
+
+Deno.test("system-total: customer allocation `по X лм на изделие` keeps the per-item bound only", () => {
+  const customer = "Нужно суммарно 5000 лм, по 2000 лм на прожектор.";
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+  };
+  const each: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 2000,
+    unit: "лм",
+    level: "A",
+  };
+  const scoped = filterPerProductMeasuredCriteria(
+    [total, each],
+    customer,
+    customer,
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [each]);
+  assertEquals(scoped.removed, [total]);
+});
+
+Deno.test("system-total: only the exact local `до` or `от` direction may bind each item", () => {
+  const min: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 1000,
+    unit: "лм",
+    level: "A",
+  };
+  const max: Criterion = { ...min, op: "max" };
+  const upTo = "Общий поток минимум 5000 лм и каждый прожектор до 1000 лм.";
+  assertEquals(
+    filterPerProductMeasuredCriteria([min, max], upTo, "", "system_total")
+      .criteria,
+    [max],
+  );
+  const from = "Общий поток максимум 5000 лм и каждый прожектор от 1000 лм.";
+  assertEquals(
+    filterPerProductMeasuredCriteria([min, max], from, "", "system_total")
+      .criteria,
+    [min],
+  );
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [max],
+      "Можно использовать каждый прибор до 1000 лм.",
+      "",
+      "system_total",
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("system-total: a measured numeric criterion without unit field is scoped by its live caption", () => {
+  const criterion: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    level: "A",
+  };
+  const scoped = filterPerProductMeasuredCriteria(
+    [criterion],
+    "Суммарный световой поток должен быть 5000 лм.",
+    "",
+    "system_total",
+  );
+  assertEquals(scoped.criteria, []);
+  assertEquals(scoped.removed, [criterion]);
+});
+
+Deno.test("system-total: a locally required per-item minimum survives an aggregate target", () => {
+  const reasoning =
+    "Вся система должна дать суммарно 5000 лм. Каждый прибор должен давать не менее 1000 лм.";
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+  };
+  const each: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 1000,
+    unit: "лм",
+    level: "A",
+  };
+  const scoped = filterPerProductMeasuredCriteria(
+    [total, each],
+    reasoning,
+    "",
+    "system_total",
+  );
+  assertEquals(scoped.criteria, [each]);
+  const projected = projectReasoningRangeCriteria(
+    [],
+    reasoning,
+    [{
+      key: "flow",
+      caption: "Световой поток, лм",
+      type: "number",
+      unit: "лм",
+    }],
+    { measurementScope: "system_total" },
+  );
+  assertEquals(projected.added, [each]);
+});
+
+Deno.test("system-total: separate scopes in one sentence remain separate per measurement", () => {
+  const reasoning =
+    "Суммарно нужно 5000 лм и каждый прибор должен давать не менее 1000 лм.";
+  const total: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 5000,
+    unit: "лм",
+    level: "A",
+  };
+  const each: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 1000,
+    unit: "лм",
+    level: "A",
+  };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [total, each],
+      reasoning,
+      "",
+      "system_total",
+    ).criteria,
+    [each],
+  );
+  const illustrative = filterPerProductMeasuredCriteria(
+    [{
+      key: "Мощность, Вт",
+      op: "range",
+      value: [20, 30],
+      unit: "Вт",
+      level: "A",
+    }],
+    "Нужно всего 5000 лм и можно поставить несколько изделий по 20–30 Вт каждый.",
+    "",
+    "system_total",
+  );
+  assertEquals(illustrative.criteria, []);
+});
+
+Deno.test("system-total: a per-item required band cannot justify the wrong endpoint direction", () => {
+  const reasoning = "Каждый прибор должен давать 1000–1500 лм.";
+  const criterion = (op: "min" | "max", value: number): Criterion => ({
+    key: "Световой поток, лм",
+    op,
+    value,
+    unit: "лм",
+    level: "A",
+  });
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [
+        criterion("min", 1000),
+        criterion("max", 1500),
+        criterion("min", 1500),
+        criterion("max", 1000),
+      ],
+      reasoning,
+      "",
+      "system_total",
+    ).criteria,
+    [criterion("min", 1000), criterion("max", 1500)],
+  );
+});
+
+Deno.test("system-total: semicolon-separated total, per-item example and assortment band remain nonbinding", () => {
+  const reasoning = "Общий поток ~1800 лм; оптимально не менее 2000–2500 лм; " +
+    "по 20–30 Вт каждый; варианты 20–100 Вт.";
+  const candidate: Criterion[] = [
+    {
+      key: "Световой поток, лм",
+      op: "min",
+      value: 2000,
+      unit: "лм",
+      level: "A",
+    },
+    {
+      key: "Мощность, Вт",
+      op: "range",
+      value: [20, 30],
+      unit: "Вт",
+      level: "A",
+    },
+    {
+      key: "Мощность, Вт",
+      op: "range",
+      value: [20, 100],
+      unit: "Вт",
+      level: "A",
+    },
+  ];
+  assertEquals(
+    filterPerProductMeasuredCriteria(candidate, reasoning, "", "system_total")
+      .criteria,
+    [],
+  );
+  assertEquals(
+    projectReasoningRangeCriteria(
+      [],
+      reasoning,
+      [
+        {
+          key: "flow",
+          caption: "Световой поток, лм",
+          type: "number",
+          unit: "лм",
+        },
+        { key: "power", caption: "Мощность, Вт", type: "number", unit: "Вт" },
+      ],
+      { measurementScope: "system_total" },
+    ).added,
+    [],
+  );
+});
+
+Deno.test("per-product measurement scope keeps ordinary 1800 lm requirements unchanged", () => {
+  const reasoning = "Для одной позиции нужен световой поток не менее 1800 лм.";
+  const criterion: Criterion = {
+    key: "Световой поток, лм",
+    op: "min",
+    value: 1800,
+    unit: "лм",
+    level: "A",
+  };
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [criterion],
+      reasoning,
+      "",
+      "per_product",
+    ).criteria,
+    [criterion],
+  );
+  const projected = projectReasoningRangeCriteria(
+    [],
+    reasoning,
+    [{
+      key: "flow",
+      caption: "Световой поток, лм",
+      type: "number",
+      unit: "лм",
+    }],
+    { measurementScope: "per_product" },
+  );
+  assertEquals(projected.added, [criterion]);
 });
 
 Deno.test("словесная составная единица не конфликтует с производным диапазоном", () => {
@@ -744,10 +1692,12 @@ Deno.test("a customer range endpoint is not an exact measured product value", ()
     unit: "К",
     values: [{ value: "4000" }, { value: "6500" }],
   }];
-  for (const customer of [
-    "Нужен белый свет 4000–6500 K",
-    "Нужен белый свет от 4000 до 6500 K",
-  ]) {
+  for (
+    const customer of [
+      "Нужен белый свет 4000–6500 K",
+      "Нужен белый свет от 4000 до 6500 K",
+    ]
+  ) {
     assertEquals(
       projectLiteralMeasuredCriteria([], customer, customer, facets).added,
       [],
