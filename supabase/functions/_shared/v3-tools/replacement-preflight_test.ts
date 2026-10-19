@@ -15,6 +15,7 @@ import {
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
+  provisionalReplacementCandidateText,
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
@@ -260,7 +261,7 @@ Deno.test("compact replacement asks one missing structural axis from the live sc
       facet_key: "poles",
       caption: "Количество полюсов",
       question:
-        "Чтобы подобрать совместимый аналог, уточните количество полюсов.",
+        "Чтобы подобрать кандидатов для замены, уточните количество полюсов.",
       options: [
         { value: "1", label: "1", count: 9 },
         { value: "2", label: "2", count: 7 },
@@ -299,6 +300,22 @@ Deno.test("compact replacement asks one missing structural axis from the live sc
     has_exact_article: false,
     live_clarification: null,
   }), false);
+});
+
+Deno.test("partial replacement axes remain provisional across product classes", () => {
+  const axes = [
+    { caption: "Номинальный ток", value: "16" },
+    { caption: "Количество полюсов", value: "1" },
+  ];
+  const compact = provisionalReplacementCandidateText(axes, false);
+  const exactSource = provisionalReplacementCandidateText(axes, true);
+  for (const text of [compact, exactSource]) {
+    assertEquals(text.includes("Подтверждено совпадение только по параметрам"), true);
+    assertEquals(text.includes("Полная взаимозаменяемость не подтверждена"), true);
+    assertEquals(text.includes("совместимые аналоги"), false);
+  }
+  assertEquals(compact.includes("нужен точный артикул исходного изделия"), true);
+  assertEquals(exactSource.includes("сверьте остальные критичные"), true);
 });
 
 Deno.test("replacement clarification does not invent an axis without a live compact-code decode", () => {
