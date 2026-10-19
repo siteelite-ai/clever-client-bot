@@ -8657,10 +8657,34 @@ async function runExpertLoop(
           // tokens but empty visible content, which leaves the later machine
           // criteria unsupported. The same model now states its derivation in
           // customer-visible prose before catalog retrieval continues.
+          const presearchPairDecision = terminalPairedFitDecision(
+            extractSchemaBackedMeasuredReference(
+              userMessage,
+              lastDiscover.facets ?? [],
+              lastDiscover.category?.pagetitle ?? "",
+            ),
+            userMessage,
+            "",
+            lastDiscover.facets ?? [],
+            lastDiscover.category?.pagetitle ?? "",
+          );
+          const presearchPairedObjectReference =
+            presearchPairDecision.reference &&
+              presearchPairDecision.selected_pair
+              ? {
+                value: presearchPairDecision.reference.value,
+                unit: presearchPairDecision.reference.unit,
+                facetKeys: [
+                  presearchPairDecision.selected_pair.before_facet_key,
+                  presearchPairDecision.selected_pair.after_facet_key,
+                ],
+              }
+              : null;
           const derivedMessages = buildDerivedSelectionReasoningMessages(
             userMessage,
             lastDiscover.category?.pagetitle ?? "",
             lastDiscover.facets ?? [],
+            presearchPairedObjectReference,
           );
           // The reasoning detour must obey the same governing selection rules
           // as the main agent. Previously it had a second, shorter policy and
@@ -8679,6 +8703,7 @@ async function runExpertLoop(
           const reasoningToolSchema = buildDerivedSelectionReasoningToolSchema(
             lastDiscover.facets ?? [],
             userMessage,
+            presearchPairedObjectReference,
           );
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;

@@ -858,6 +858,7 @@ function customerGroundedExcludedClassificationChoices(
 export function buildDerivedSelectionReasoningToolSchema(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
+  pairedObjectReference: PairedObjectReference | null = null,
 ): {
   type: "function";
   function: {
@@ -874,6 +875,9 @@ export function buildDerivedSelectionReasoningToolSchema(
   const requiredFacetIds = allRequiredFacetChoices
     .filter((choice) =>
       requiredChoiceAvailableToReasoning(choice, customerOwnedRequiredIds)
+    )
+    .filter((choice) =>
+      !copiesPairedObjectChoice(choice, facets, pairedObjectReference)
     )
     .map(({ id }) => id);
   const choiceItems = ids.length > 0
@@ -1015,6 +1019,27 @@ function copiesPairedObjectScalar(
   const referenceUnit = canonicalMeasurementUnit(reference.unit);
   return (!valueUnit || valueUnit === referenceUnit) &&
     (!declaredUnit || declaredUnit === referenceUnit);
+}
+
+/** A measured object is evidence for two strict fit bounds, not an exact
+ * product enum. Keep the original opaque IDs stable while omitting only the
+ * matching choice on either member of a verified live pair. */
+function copiesPairedObjectChoice(
+  choice: DerivedRequiredFacetChoice,
+  facets: DerivedSelectionFacet[],
+  reference: PairedObjectReference | null,
+): boolean {
+  if (
+    !reference || !Number.isFinite(reference.value) ||
+    !canonicalMeasurementUnit(reference.unit) ||
+    !Array.isArray(reference.facetKeys) || reference.facetKeys.length !== 2
+  ) return false;
+  const facetIndex = Number(/^f(\d+)v\d+$/u.exec(choice.id)?.[1]);
+  const facet = facets[facetIndex];
+  return Boolean(
+    facet && reference.facetKeys.includes(String(facet.key ?? "")) &&
+      copiesPairedObjectScalar(choice.value, facet, reference),
+  );
 }
 
 function facetPropertyStems(facet: DerivedSelectionFacet): string[] {
@@ -1191,6 +1216,99 @@ function affirmsIncompatiblePairedRange(
     }
   }
   return false;
+}
+
+/** Before search, a paired-fit derivation may explain directions but cannot
+ * testify about the sampled schema's completeness. Remove separable
+ * unsupported claims while retaining the model's strict object-side bounds;
+ * a bound must not be lost just because optional prose is intertwined. */
+function omitUnverifiedPresearchPairedClaims(
+  reasoning: string,
+  facets: DerivedSelectionFacet[],
+  reference: PairedObjectReference | null,
+): string {
+  if (!reference || !Number.isFinite(reference.value)) return reasoning;
+  const pairedFacets = facets.filter((facet) =>
+    reference.facetKeys.includes(String(facet.key ?? ""))
+  );
+  if (pairedFacets.length !== 2) return reasoning;
+  const axisStems = new Set(pairedFacets.flatMap(facetPropertyStems));
+  const unit = canonicalMeasurementUnit(reference.unit);
+  // A model may append an unsupported observation to otherwise valid strict
+  // bounds using a comma or a natural conjunction. Separate that tail first
+  // so the evidence filter cannot discard the entire paired-fit proof.
+  const segmented = String(reasoning).replace(
+    /(?:,\s*(?:(?:но|а|однако|и)\s+)?|\s+(?:но|а|однако|и)\s+)(?=(?:в|по)\s+(?:живой\s+)?схем\p{L}*|фасет\p{L}*|каталог\p{L}*|данн\p{L}*|недостаточ\p{L}*|вариант\p{L}*|товар\p{L}*)/giu,
+    ". ",
+  );
+  return segmented.split(
+    /(?<!\d)[.!?…]+(?!\d)|\n+|;\s*|,(?!\d)\s*(?=(?:оптимальн\p{L}*|предпочтительн\p{L}*|ориентир\p{L}*|(?:в|по)\s+(?:живой\s+)?схем\p{L}*|фасет\p{L}*|каталог\p{L}*))/iu,
+  )
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => {
+      if (!sentence) return false;
+      // The options shown to the model are a partial search aid, never
+      // inventory evidence. Even a correctly quoted option is premature.
+      if (
+        /(?:^|[^\p{L}])(?:в|по)\s+(?:живой\s+)?схем\p{L}*|фасет\p{L}*|каталог\p{L}*/iu
+          .test(sentence)
+      ) {
+        return false;
+      }
+      // A missing customer-side specification can be a valid safety caveat;
+      // only shortage claims about catalog evidence or a preselected product
+      // size are premature here.
+      if (
+        /(?:данн\p{L}*[^.!?]{0,90}недостаточ\p{L}*|недостаточ\p{L}*[^.!?]{0,90}данн\p{L}*)/iu
+          .test(sentence) &&
+        /(?:товар\p{L}*|каталог\p{L}*|ассортимент\p{L}*|вариант\p{L}*|типоразмер\p{L}*)/iu
+          .test(sentence) &&
+        !/данн\p{L}*\s+(?:клиент\p{L}*|о\s+(?!товар\p{L}*|каталог\p{L}*|ассортимент\p{L}*|вариант\p{L}*|типоразмер\p{L}*)\p{L}+)/iu
+          .test(sentence)
+      ) return false;
+      if (
+        /(?:вариант\p{L}*|товар\p{L}*)[^.!?]{0,60}(?:нет(?:$|\s)|не\s+найден\p{L}*|отсутств\p{L}*)/iu
+          .test(sentence)
+      ) return false;
+      const sentenceStems = new Set(
+        (sentence.match(/[a-zа-я]{3,}/giu) ?? []).map((word) =>
+          word.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").slice(0, 4)
+        ),
+      );
+      const namesPairedAxis = [...axisStems].some((stem) =>
+        sentenceStems.has(stem)
+      );
+      const otherSameUnitValue = extractClientQuantities(sentence).some(
+        ({ value, unit: foundUnit }) =>
+          value !== reference.value &&
+          canonicalMeasurementUnit(foundUnit) === unit,
+      );
+      // A separable optional tier or concrete product-size prescription is
+      // not part of the customer's two strict object-side fit directions.
+      if (
+        otherSameUnitValue &&
+        /(?:оптимальн\p{L}*|предпочтительн\p{L}*|ориентир\p{L}*)/iu
+          .test(sentence) &&
+        !/строго\s+(?:больше|меньше)/iu.test(sentence)
+      ) return false;
+      if (
+        namesPairedAxis && otherSameUnitValue &&
+        /(?:требу\p{L}*|не\s+(?:менее|более)|долж\p{L}*)/iu.test(sentence) &&
+        !/строго\s+(?:больше|меньше)/iu.test(sentence)
+      ) return false;
+      if (namesPairedAxis) {
+        for (
+          const match of sentence.matchAll(
+            /(?:=|равен\p{L}*|составля\p{L}*|со\s+значением)\s*[«"']?\s*(\d+(?:[.,]\d+)?)/giu,
+          )
+        ) {
+          if (Number(match[1].replace(",", ".")) === reference.value) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }).join(". ").trim().replace(/(?<![.!?])$/u, ".");
 }
 
 /**
@@ -1425,17 +1543,25 @@ export function resolveDerivedSelectionReasoning(
   const pairedObjectRanges = pairedObjectReference
     ? pairedObjectRangeChoices(facets, pairedObjectReference)
     : [];
-  const originalReasoning = omitUnverifiedPairedRangeClauses(
+  const verifiedRangeReasoning = omitUnverifiedPairedRangeClauses(
     sourceReasoning,
     pairedObjectRanges,
   );
-  if (originalReasoning.length < 20) return null;
   const incompatiblePairedRanges = pairedObjectRanges.filter((range) =>
     range.unitVerified && !range.includesObject
   );
   if (
-    affirmsIncompatiblePairedRange(originalReasoning, incompatiblePairedRanges)
+    affirmsIncompatiblePairedRange(
+      verifiedRangeReasoning,
+      incompatiblePairedRanges,
+    )
   ) return null;
+  const originalReasoning = omitUnverifiedPresearchPairedClaims(
+    verifiedRangeReasoning,
+    facets,
+    pairedObjectReference,
+  );
+  if (originalReasoning.length < 20) return null;
   const pairedObjectRangeIds = new Set(
     pairedObjectRanges.map(({ id }) => id),
   );
@@ -2255,9 +2381,13 @@ export function buildDerivedSelectionReasoningMessages(
   userMessage: string,
   category: string,
   facets: DerivedSelectionFacet[],
+  pairedObjectReference: PairedObjectReference | null = null,
 ): Array<{ role: "system" | "user"; content: string }> {
   const classificationChoices = derivedClassificationChoices(facets);
-  const requiredFacetChoices = derivedRequiredFacetChoices(facets, userMessage);
+  const requiredFacetChoices = derivedRequiredFacetChoices(facets, userMessage)
+    .filter((choice) =>
+      !copiesPairedObjectChoice(choice, facets, pairedObjectReference)
+    );
   const liveSchema = JSON.stringify({
     category: String(category ?? "").slice(0, 240),
     facets: (Array.isArray(facets) ? facets : []).slice(0, 80).map((
@@ -2272,7 +2402,7 @@ export function buildDerivedSelectionReasoningMessages(
         .map(({ id, value }) => ({ id, value })),
     })),
   }).replace(/</gu, "\\u003c");
-  return [
+  const messages: Array<{ role: "system" | "user"; content: string }> = [
     {
       role: "system",
       content:
@@ -2285,6 +2415,9 @@ export function buildDerivedSelectionReasoningMessages(
       }\n\nЖивая схема категории (JSON):\n${liveSchema}`,
     },
   ];
+  messages[0].content +=
+    " Показанные в JSON значения фасетов — неполная выборка кандидатов, а не весь ассортимент. До поиска не делай выводов о наличии, отсутствии, количестве подходящих товаров или недостаточности данных о товарах по этой выборке; сообщай только проверяемую совместимость и недостающие параметры самого запроса клиента.";
+  return messages;
 }
 
 export interface ClarificationContinuationInput {

@@ -413,6 +413,250 @@ Deno.test("derived reasoning instructions distinguish paired strict fit from an 
   assertEquals(system.includes("строго больше"), true);
   assertEquals(system.includes("строго меньше"), true);
   assertEquals(system.includes("точное значение фасета"), true);
+  assertEquals(system.includes("неполная выборка кандидатов"), true);
+});
+
+Deno.test("paired object size is not offered as an exact pre-search enum, while unrelated exact facets remain", () => {
+  const facets = [{
+    key: "size_before",
+    caption: "Диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }, {
+    key: "size_after",
+    caption: "Диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "8" }],
+  }, {
+    key: "nominal_voltage",
+    caption: "Номинальное напряжение, В",
+    unit: "В",
+    values: [{ value: "220" }, { value: "110" }],
+  }];
+  const reference = {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["size_before", "size_after"],
+  };
+  const customer = "Нужен товар для кабеля диаметром 10 мм, напряжение 220 В";
+  const messages = buildDerivedSelectionReasoningMessages(
+    customer,
+    "Товары",
+    facets,
+    reference,
+  );
+  const schema = JSON.parse(messages[1].content.split("(JSON):\n")[1]);
+  assertEquals(schema.facets[0].values, []);
+  assertEquals(schema.facets[1].values, []);
+  assertEquals(schema.facets[2].values, [{ id: "f2v0", value: "220" }]);
+  const tool = buildDerivedSelectionReasoningToolSchema(
+    facets,
+    customer,
+    reference,
+  );
+  const properties = tool.function.parameters.properties as Record<
+    string,
+    { items: { enum?: string[] } }
+  >;
+  assertEquals(properties.required_facet_values.items.enum?.includes("f0v0"), false);
+  assertEquals(properties.required_facet_values.items.enum?.includes("f1v0"), false);
+  assertEquals(properties.required_facet_values.items.enum?.includes("f2v0"), true);
+  // Without verified paired context, direct exact product requests retain
+  // their normal evidence path.
+  const direct = buildDerivedSelectionReasoningMessages(
+    "Нужен товар с диаметром до изменения 10 мм",
+    "Товары",
+    facets,
+  );
+  const directSchema = JSON.parse(direct[1].content.split("(JSON):\n")[1]);
+  assertEquals(directSchema.facets[0].values.some(({ value }: { value: string }) => value === "10"), true);
+});
+
+Deno.test("paired pre-search reasoning keeps strict bounds but drops speculative schema and shortage claims", () => {
+  const facets = [{
+    key: "before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }, {
+    key: "after",
+    caption: "Внутренний диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "8" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Клиент указал диаметр объекта 10 мм. До изменения внутренний диаметр изделия должен быть строго больше 10 мм, а после изменения строго меньше 10 мм. В схеме есть значение диаметра до изменения = 10 мм. Для объекта 10 мм требуется диаметр до изменения не менее 12–15 мм. Данных для точного выбора типоразмера недостаточно; необходимо проверить значения товаров.",
+    required_facet_values: ["f0v0", "f1v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, facets, "объект диаметром 10 мм", "Изделия", {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
+  assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
+  assertEquals(declaration?.text.includes("В схеме"), false);
+  assertEquals(declaration?.text.includes("12–15"), false);
+  assertEquals(declaration?.text.includes("Данных для точного выбора"), false);
+  assertEquals(declaration?.requiredFacetValues, []);
+  const inlineSchemaClaim = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм, в схеме есть значение 10 мм.",
+    required_facet_values: [],
+  }, facets, "кабель диаметром 10 мм", "Изделия", {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(inlineSchemaClaim?.text.includes("строго больше 10 мм"), true);
+  assertEquals(inlineSchemaClaim?.text.includes("строго меньше 10 мм"), true);
+  assertEquals(inlineSchemaClaim?.text.includes("в схеме есть значение"), false);
+  for (const trailingClaim of [
+    ", но в схеме есть значение 10 мм",
+    " и в схеме есть значение 10 мм",
+    ", но данных для точного выбора типоразмера недостаточно",
+  ]) {
+    const result = resolveDerivedSelectionReasoning({
+      reasoning:
+        `Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм, после усадки строго меньше 10 мм${trailingClaim}.`,
+      required_facet_values: [],
+    }, facets, "кабель диаметром 10 мм", "Изделия", {
+      value: 10,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    });
+    assertEquals(result?.text.includes("строго больше 10 мм"), true);
+    assertEquals(result?.text.includes("строго меньше 10 мм"), true);
+    assertEquals(result?.text.includes("в схеме есть значение"), false);
+    assertEquals(result?.text.includes("данных для точного выбора"), false);
+  }
+});
+
+Deno.test("paired uncertainty guard preserves customer-data gaps and decimal bounds; empty schema is safe", () => {
+  const facets = [{
+    key: "before",
+    caption: "Диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10.5" }, { value: "12" }],
+  }, {
+    key: "after",
+    caption: "Диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10.5" }, { value: "8" }],
+  }];
+  const reasoning = "Для объекта диаметром 10.5 мм диаметр до изменения должен быть строго больше 10.5 мм, после изменения строго меньше 10.5 мм. Данных клиента недостаточно для точного выбора безопасного температурного режима.";
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning,
+    required_facet_values: [],
+  }, facets, "объект диаметром 10.5 мм", "Изделия", {
+    value: 10.5,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(declaration?.text.includes("строго больше 10.5 мм"), true);
+  assertEquals(declaration?.text.includes("строго меньше 10.5 мм"), true);
+  assertEquals(declaration?.text.includes("Данных клиента недостаточно"), true);
+  const messages = buildDerivedSelectionReasoningMessages(
+    "объект 10 мм",
+    "",
+    [],
+    { value: 10, unit: "мм", facetKeys: ["before", "after"] },
+  );
+  assertEquals(messages.length, 2);
+  assertEquals(JSON.parse(messages[1].content.split("(JSON):\n")[1]).facets, []);
+});
+
+Deno.test("optional same-unit tier after a semicolon cannot erase either strict paired bound", () => {
+  const facets = [{
+    key: "before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }, {
+    key: "after",
+    caption: "Внутренний диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "8" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Для кабеля 10 мм внутренний диаметр до усадки строго больше 10 мм; после усадки строго меньше 10 мм, оптимально 12 мм.",
+    required_facet_values: [],
+  }, facets, "кабель диаметром 10 мм", "Изделие", {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
+  assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
+  assertEquals(declaration?.text.includes("оптимально 12 мм"), false);
+  const intertwined = resolveDerivedSelectionReasoning({
+    reasoning:
+      "До изменения диаметр строго больше 10 мм, оптимально 12 мм, после изменения строго меньше 10 мм.",
+    required_facet_values: [],
+  }, facets, "кабель диаметром 10 мм", "Изделие", {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(intertwined?.text.includes("строго больше 10 мм"), true);
+  assertEquals(intertwined?.text.includes("строго меньше 10 мм"), true);
+});
+
+Deno.test("a missing customer material remains a safety caveat, not a catalog shortage", () => {
+  const facets = [{
+    key: "before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }, {
+    key: "after",
+    caption: "Внутренний диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "8" }],
+  }];
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning:
+      "Внутренний диаметр до изменения строго больше 10 мм, после изменения строго меньше 10 мм. Данных о материале изоляции кабеля недостаточно для точного выбора безопасной температуры изменения.",
+    required_facet_values: [],
+  }, facets, "кабель диаметром 10 мм", "Изделие", {
+    value: 10,
+    unit: "мм",
+    facetKeys: ["before", "after"],
+  });
+  assertEquals(declaration?.text.includes("строго больше 10 мм"), true);
+  assertEquals(declaration?.text.includes("строго меньше 10 мм"), true);
+  assertEquals(declaration?.text.includes("Данных о материале изоляции"), true);
+});
+
+Deno.test("paired exact-equality cleanup normalizes decimal spellings", () => {
+  const facets = [{
+    key: "before",
+    caption: "Диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10,5" }, { value: "12" }],
+  }, {
+    key: "after",
+    caption: "Диаметр после изменения, мм",
+    unit: "мм",
+    values: [{ value: "10,5" }, { value: "8" }],
+  }];
+  for (const assertion of ["равен 10,50 мм", "= 10,50 мм"]) {
+    const declaration = resolveDerivedSelectionReasoning({
+      reasoning:
+        `Для объекта 10,5 мм диаметр до изменения строго больше 10,5 мм, после изменения строго меньше 10,5 мм. Диаметр до изменения ${assertion}.`,
+      required_facet_values: [],
+    }, facets, "объект диаметром 10,5 мм", "Изделие", {
+      value: 10.5,
+      unit: "мм",
+      facetKeys: ["before", "after"],
+    });
+    assertEquals(declaration?.text.includes("строго больше 10,5 мм"), true);
+    assertEquals(declaration?.text.includes("строго меньше 10,5 мм"), true);
+    assertEquals(declaration?.text.includes(assertion), false);
+  }
 });
 
 Deno.test("derived declaration cannot turn a paired object reference into an exact live value", () => {
