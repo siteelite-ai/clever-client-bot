@@ -220,6 +220,77 @@ const unqualifiedBrowseInput = {
   exact_or_compound_or_alias_request: false,
 };
 
+Deno.test("a model with no search may browse only its verified leaf for plain multi-choice", () => {
+  // The runtime seeds this input from discover_category when the model emits
+  // no search call; it is not a retry of a failed by_query response.
+  const noSearchSeed = {
+    ...unqualifiedBrowseInput,
+    search_args: {
+      mode: "by_query",
+      query: "Удлинители",
+      category_in: ["Удлинители"],
+      per_page: 50,
+    },
+  };
+  const attempt = buildUnqualifiedCategoryBrowseRecovery(noSearchSeed);
+  assert(attempt);
+  assertEquals(attempt.args, {
+    mode: "by_filter",
+    category_in: ["Удлинители"],
+    per_page: 50,
+  });
+
+  for (const customer_message of [
+    "Найди удлинитель 5 м",
+    "Предложи несколько удлинителей 16 А",
+    "Найди самый дешевый удлинитель",
+    "Предложи несколько удлинителей до 4000 тенге",
+  ]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...noSearchSeed,
+      customer_message,
+    }), null, customer_message);
+  }
+  assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+    ...noSearchSeed,
+    customer_message: "Предложи несколько удлинителей",
+    exact_or_compound_or_alias_request: true,
+  }), null);
+
+  const qualifiedAttempt = buildUnqualifiedCategoryBrowseRecovery({
+    ...noSearchSeed,
+    customer_message: "Предложи несколько удлинителей с USB",
+  });
+  assert(qualifiedAttempt);
+  assertEquals(qualifiedAttempt.literal_qualifier_terms, ["usb"]);
+  assertEquals(filterUnqualifiedCategoryBrowseCandidates([{
+    id: "not-proven",
+    pagetitle: "Удлинитель сетевой",
+    vendor: null,
+    price: 1000,
+    stock: "in_stock",
+    short_traits: ["USB: Нет"],
+    description_excerpt: "Для подключения устройств",
+  }], qualifiedAttempt), []);
+
+  const subtypeLeaf = {
+    ...noSearchSeed,
+    search_args: {
+      mode: "by_query",
+      query: "Светильники уличные накладные",
+      category_in: ["Светильники уличные накладные"],
+      per_page: 50,
+    },
+    leaf_categories: ["Светильники уличные накладные"],
+    customer_message: "Предложи несколько накладных светильников",
+  };
+  assertEquals(buildUnqualifiedCategoryBrowseRecovery(subtypeLeaf), null);
+  assert(buildUnqualifiedCategoryBrowseRecovery({
+    ...subtypeLeaf,
+    customer_message: "Предложи несколько уличных накладных светильников",
+  }));
+});
+
 Deno.test("unqualified multi-choice browse retries only the same verified leaf", () => {
   const attempt = buildUnqualifiedCategoryBrowseRecovery(
     unqualifiedBrowseInput,
