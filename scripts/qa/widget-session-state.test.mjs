@@ -3124,10 +3124,11 @@ test('freeform action expires while idle and is removed on new topic', async () 
   topicDom.window.close();
 });
 
-test('explicit retry after proxy connect timeout and direct fetch failure reuses the claimed turn', async () => {
+test('automatic retry after proxy connect timeout and direct fetch failure reuses the claimed turn', async () => {
   const query = 'Нужен уличный прожектор для двора';
   const calls = [];
   const backendClaims = new Set();
+  let sawReconnectStatus = false;
   const dom = bootWidget({
     source: withTransportTimeouts({ connect: 15, accept: 60, idle: 60, total: 180 }),
     fetchImpl: (url, init) => {
@@ -3141,6 +3142,7 @@ test('explicit retry after proxy connect timeout and direct fetch failure reuses
         });
       }
       if (calls.length === 2) throw new TypeError('Failed to fetch');
+      sawReconnectStatus = /Подключаюсь повторно/u.test(visibleMessages(dom));
       backendClaims.add(body.messageId);
       return Promise.resolve(new Response(completeAnswerSse('Найдены варианты для двора.'), {
         headers: { 'Content-Type': 'text/event-stream' },
@@ -3151,29 +3153,27 @@ test('explicit retry after proxy connect timeout and direct fetch failure reuses
   const send = dom.window.document.querySelector('#volt-widget-send');
   input.value = query;
   send.click();
-  await waitForWidget(() => calls.length === 2 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
-    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
-  'the first two routes should fail before protocol acceptance');
-  assert.equal(readState(dom).history.some((item) => item.content === query), false);
-  const originalId = calls[0].body.messageId;
-  assert.equal(calls[1].body.messageId, originalId, 'route failover must retain the original ID');
-
-  input.value = query;
-  send.click();
   await waitForWidget(() => calls.length === 3 && visibleMessages(dom).includes('Найдены варианты для двора.') &&
     !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
-  'the explicit retry should complete');
+  'one automatic retry should finish the original turn');
+  const originalId = calls[0].body.messageId;
+  assert.equal(calls[1].body.messageId, originalId, 'route failover must retain the original ID');
+  assert.equal(sawReconnectStatus, true, 'retry should explain the reconnect while loading');
   assert.equal(calls[2].body.messageId, originalId);
+  assert.equal(calls[1].rawBody, calls[0].rawBody);
   assert.equal(calls[2].rawBody, calls[0].rawBody, 'retry must use the original frozen request body');
   assert.equal(backendClaims.size, 1, 'one ID can claim only one paid backend pipeline');
   assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
     .filter((bubble) => bubble.textContent === query).length, 1,
   'retry should reuse the visible user bubble');
+  assert.equal([...dom.window.document.querySelectorAll('.volt-message.assistant')]
+    .filter((bubble) => bubble.textContent.includes('Найдены варианты для двора.')).length, 1);
   assert.doesNotMatch(visibleMessages(dom), /ошибка соединения/iu);
+  assert.doesNotMatch(visibleMessages(dom), /Подключаюсь повторно/u);
   dom.window.close();
 });
 
-test('retrying the same quick reply keeps its ID and frozen choice context', async () => {
+test('automatic retry of the same quick reply keeps its ID and frozen choice context', async () => {
   const replies = [
     { value: 'Однофазное', label: 'Однофазное' },
     { value: 'Трёхфазное', label: 'Трёхфазное' },
@@ -3201,20 +3201,165 @@ test('retrying the same quick reply keeps its ID and frozen choice context', asy
     !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
   'clarification should complete');
   dom.window.document.querySelectorAll('.volt-quick-reply')[0].click();
-  await waitForWidget(() => calls.length === 3 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
-    dom.window.document.querySelectorAll('.volt-quick-reply').length === 2 &&
-    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
-  'failed choice should restore the same buttons');
-  const originalChoiceId = calls[1].body.messageId;
-  dom.window.document.querySelectorAll('.volt-quick-reply')[0].click();
   await waitForWidget(() => calls.length === 4 && visibleMessages(dom).includes('Подбираю однофазный вариант.') &&
     !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
-  'repeated choice should complete');
+  'failed chip routes should recover automatically');
+  const originalChoiceId = calls[1].body.messageId;
+  assert.equal(calls[2].rawBody, calls[1].rawBody);
   assert.equal(calls[3].body.messageId, originalChoiceId);
   assert.equal(calls[3].rawBody, calls[1].rawBody);
   assert.equal(calls[3].body.dialogSlots.pending_clarification.facet_key, 'power_phase');
   assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
     .filter((bubble) => bubble.textContent === replies[0].value).length, 1);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('one automatic retry ends with one error and keeps the frozen turn for a later explicit retry', async () => {
+  const query = 'Найди кабель ВВГ 3*1,5';
+  const calls = [];
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      calls.push({ rawBody: init.body, body: JSON.parse(init.body) });
+      if (calls.length <= 4) throw new TypeError('Failed to fetch');
+      return new Response(completeAnswerSse('Кабель найден.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  const send = dom.window.document.querySelector('#volt-widget-send');
+  input.value = query;
+  send.click();
+  await waitForWidget(() => calls.length === 4 && /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'both routes should fail on both allowed passes');
+  assert.equal(visibleMessages(dom).split('Извините, произошла ошибка соединения.').length - 1, 1);
+  assert.deepEqual(calls.map((call) => call.rawBody), Array(4).fill(calls[0].rawBody));
+  assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
+    .filter((bubble) => bubble.textContent === query).length, 1);
+  assert.doesNotMatch(visibleMessages(dom), /Подключаюсь повторно/u);
+
+  input.value = query;
+  send.click();
+  await waitForWidget(() => calls.length === 5 && visibleMessages(dom).includes('Кабель найден.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'a later explicit retry should reuse the same accepted-or-unaccepted claim');
+  assert.equal(calls[4].rawBody, calls[0].rawBody);
+  assert.equal([...dom.window.document.querySelectorAll('.volt-message.user')]
+    .filter((bubble) => bubble.textContent === query).length, 1);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('HTTP 400, 429 and 503 are not silently retried as network failures', async () => {
+  for (const status of [400, 429, 503]) {
+    const calls = [];
+    const dom = bootWidget({
+      fetchImpl: async (_url, init) => {
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return new Response(JSON.stringify({ error: 'http_error' }), {
+            status, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Проверь розетку';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => calls.length === 2 &&
+      !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+    `HTTP ${status} should settle without an automatic retry`);
+    assert.equal(calls.length, 2);
+    assert.match(visibleMessages(dom), /ошибка соединения/iu);
+    dom.window.close();
+  }
+});
+
+test('an unobserved backend claim is recovered via the same ID and pending replay', async () => {
+  const calls = [];
+  const pending = [
+    { v3_event: { type: 'diagnostic', log_id: 'delayed-ack-claim', phase: 'start' } },
+    { v3_event: { type: 'diagnostic', log_id: 'delayed-ack-claim', phase: 'complete', error: 'request_pending', products_count: 0 } },
+  ].map((event) => `data: ${JSON.stringify(event)}`)
+    .concat('data: [DONE]', '').join('\n\n');
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 15, accept: 60, idle: 60, total: 180 }),
+    fetchImpl: (_url, init) => {
+      calls.push({ rawBody: init.body, body: JSON.parse(init.body) });
+      if (calls.length === 1) return new Promise((_resolve, reject) => {
+        // The backend may have claimed the ID before the lost ACK.
+        init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+      if (calls.length === 2) throw new TypeError('Failed to fetch');
+      if (calls.length === 3) return Promise.resolve(new Response(pending, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+      return Promise.resolve(new Response(completeAnswerSse('Получен сохранённый ответ.', 'delayed-ack-claim'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Подбери автомат';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => calls.length === 4 && visibleMessages(dom).includes('Получен сохранённый ответ.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'pending claimed turn should finish via replay-only recovery');
+  assert.deepEqual(calls.slice(0, 3).map((call) => call.rawBody), Array(3).fill(calls[0].rawBody));
+  assert.equal(calls[3].body.messageId, calls[0].body.messageId);
+  assert.equal(calls[3].body.sessionId, calls[0].body.sessionId);
+  assert.equal(calls[3].body.resumeOnly, true);
+  assert.equal(calls.filter((call) => !call.body.resumeOnly).length, 3);
+  assert.equal(visibleMessages(dom).split('Получен сохранённый ответ.').length - 1, 1);
+  dom.window.close();
+});
+
+test('automatic retry never restarts the wall-clock turn deadline', async () => {
+  const calls = [];
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 25, accept: 20, idle: 50, total: 35 }),
+    fetchImpl: (_url, init) => {
+      calls.push(Date.now());
+      if (calls.length <= 2) throw new TypeError('Failed to fetch');
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+    },
+  });
+  const started = Date.now();
+  dom.window.document.querySelector('#volt-widget-input').value = 'Проверка дедлайна';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'bounded retry should end with one final error', 500);
+  assert.equal(calls.length, 4, 'only the original pair and one retry pair may run');
+  assert.ok(Date.now() - started < 115,
+    'retry must share the original 35ms deadline plus at most the existing 25+20ms failover reserve');
+  dom.window.close();
+});
+
+test('a slow first-pass failure is not mistaken for a fast reconnect opportunity', async () => {
+  const source = withTransportTimeouts({ connect: 25, accept: 60, idle: 60, total: 180 })
+    .replace('var TRANSIENT_RETRY_MAX_FIRST_PASS_MS = 20000;',
+      'var TRANSIENT_RETRY_MAX_FIRST_PASS_MS = 20;');
+  let calls = 0;
+  const dom = bootWidget({
+    source,
+    fetchImpl: (_url, init) => {
+      calls += 1;
+      if (calls === 1) return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      });
+      throw new TypeError('Failed to fetch');
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Проверь автомат';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => /ошибка соединения/iu.test(visibleMessages(dom)) &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'slow first pass should surface one final error');
+  assert.equal(calls, 2);
   dom.window.close();
 });
 
@@ -3356,6 +3501,8 @@ test('an accepted partial stream cannot become an unacknowledged retry candidate
   await waitForWidget(() => payloads.length === 3 &&
     !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
   'accepted partial response should finish replay attempts');
+  assert.ok(payloads.slice(1).every((payload) => payload.resumeOnly),
+    'once accepted, every reconnect must be replay-only');
   assert.match(visibleMessages(dom), /Проверяю ассортимент/u);
   input.value = 'Покажи розетки';
   input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));

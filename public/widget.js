@@ -38,6 +38,10 @@
   var STREAM_ACCEPT_TIMEOUT_MS = 15000;
   var STREAM_IDLE_TIMEOUT_MS = 30000;
   var STREAM_TOTAL_TIMEOUT_MS = 155000;
+  // Retry one *early transport-only* two-route failure inside the original
+  // turn deadline. HTTP errors and anything the application acknowledged are
+  // not connection failures and must not trigger another normal request.
+  var TRANSIENT_RETRY_MAX_FIRST_PASS_MS = 20000;
   // A proxy that cannot establish a connection should not add its full
   // connect timeout to every subsequent question in this open widget. This
   // in-memory preference expires automatically and never removes either route.
@@ -1582,19 +1586,29 @@
     totalTimer = setTimeout(function() { abortTransport('request_deadline'); }, remainingAtStart);
 
     try {
-    var response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + CONFIG.supabaseKey,
-        'apikey': CONFIG.supabaseKey
-      },
-      // Payloads are frozen once per user turn. A conversation boundary may
-      // rotate global state while streaming, but every route/replay must keep
-      // the same byte-bounded history, slots, session and idempotency key.
-      body: resumeOnly ? requestPayloads.resumeBody : requestPayloads.normalBody,
-      signal: controller.signal
-    });
+    var response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + CONFIG.supabaseKey,
+          'apikey': CONFIG.supabaseKey
+        },
+        // Payloads are frozen once per user turn. A conversation boundary may
+        // rotate global state while streaming, but every route/replay must keep
+        // the same byte-bounded history, slots, session and idempotency key.
+        body: resumeOnly ? requestPayloads.resumeBody : requestPayloads.normalBody,
+        signal: controller.signal
+      });
+    } catch (fetchError) {
+      if (!controller.signal.aborted && fetchError && fetchError.name === 'TypeError') {
+        var networkError = new Error(label + ': ' + String(fetchError.message || fetchError));
+        networkError.code = 'network_error';
+        throw networkError;
+      }
+      throw fetchError;
+    }
 
     // Headers/initial SSE bytes arrived: the connection budget no longer
     // applies. From this point only a genuinely idle transport may time out.
@@ -1791,6 +1805,10 @@
       }
     } catch (readError) {
       streamReadError = describeTransportError(readError);
+      if (!controller.signal.aborted && readError && readError.name === 'TypeError' &&
+          streamReadError && !streamReadError.code) {
+        streamReadError.code = 'network_error';
+      }
     }
     // Final flush
     try {
@@ -1985,7 +2003,8 @@
     var streamEndpoints = Date.now() < proxyDirectFirstUntil
       ? [directEndpoint, proxyEndpoint]
       : [proxyEndpoint, directEndpoint];
-    var requestDeadlineAt = Date.now() + STREAM_TOTAL_TIMEOUT_MS;
+    var requestStartedAt = Date.now();
+    var requestDeadlineAt = requestStartedAt + STREAM_TOTAL_TIMEOUT_MS;
     var maxFailoverDeadlineAt = requestDeadlineAt + STREAM_CONNECT_TIMEOUT_MS + STREAM_ACCEPT_TIMEOUT_MS;
 
     // Create assistant message element for streaming (intro-пузырь)
@@ -2041,13 +2060,31 @@
 
     // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
-      for (var i = 0; i < streamEndpoints.length; i++) {
+      for (var attemptIndex = 0; attemptIndex < streamEndpoints.length * 2; attemptIndex++) {
+        if (attemptIndex === streamEndpoints.length) {
+          if (result || firstTokenArrived || protocolAccepted ||
+              routeFailures.length !== streamEndpoints.length ||
+              Date.now() - requestStartedAt > TRANSIENT_RETRY_MAX_FIRST_PASS_MS ||
+              Date.now() + Math.min(STREAM_CONNECT_TIMEOUT_MS, 1000) >= requestDeadlineAt ||
+              !routeFailures.every(function(failure) {
+                return failure.status === null &&
+                  (failure.code === 'connect_timeout' || failure.code === 'protocol_accept_timeout' ||
+                    failure.code === 'network_error');
+              })) break;
+          // No application ACK was seen on either route. The backend may still
+          // have claimed the turn, so reuse its frozen idempotency key/body.
+          // Keep one user bubble and one eventual assistant bubble.
+          typingIndicator.textContent = 'Соединение прервалось. Подключаюсь повторно…';
+          typingIndicator.setAttribute('role', 'status');
+          typingIndicator.setAttribute('aria-live', 'polite');
+        }
+        var i = attemptIndex % streamEndpoints.length;
         if (i > 0 && lastError &&
             (lastError.code === 'connect_timeout' || lastError.code === 'protocol_accept_timeout')) {
           // Either preferred route can consume its connection/acceptance
           // budget before failing. Give the fallback its normal completion
-          // window, but cap the whole two-route turn at 155 + 15 + 15 seconds.
-          // Accepted partial streams and HTTP errors do not extend the budget.
+          // window, but cap the whole turn at 155 + 15 + 15 seconds.
+          // An automatic retry never restarts that wall-clock budget.
           requestDeadlineAt = Math.min(maxFailoverDeadlineAt,
             Math.max(requestDeadlineAt, Date.now() + STREAM_TOTAL_TIMEOUT_MS));
         }
@@ -2320,7 +2357,7 @@
         failureMessage = addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
       }
       addAttemptLabel(failureMessage, requestMessageId);
-      var transientPreAcceptanceFailure = routeFailures.length === streamEndpoints.length &&
+      var transientPreAcceptanceFailure = routeFailures.length >= streamEndpoints.length &&
         routeFailures.every(function(failure) {
           return failure.status === null || failure.status === 429 || failure.status >= 500;
         });
