@@ -6,7 +6,10 @@ import {
   admitDirectSelectionRoute,
   directProductProvesLiteralWords,
 } from "../../supabase/functions/chat-consultant-v3/selection-jargon-policy.ts";
-import { extractReplacementSourceDescription } from "../../supabase/functions/_shared/v3-tools/replacement-preflight.ts";
+import {
+  extractReplacementSourceDescription,
+  provisionalReplacementCandidateText,
+} from "../../supabase/functions/_shared/v3-tools/replacement-preflight.ts";
 
 const request =
   "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500";
@@ -43,7 +46,23 @@ test("source title and article are lookup identity, not analogue literals", () =
   assert.match(preflight, /productProvesDirectReplacementAxes\s*\(/u);
   assert.doesNotMatch(preflight, /productTitleSupportsMandatoryAxes\s*\(/u);
   assert.match(preflight, /productContainsSourceModel\s*\(/u);
-  assert.match(preflight, /Перед заменой сверьте монтажные размеры/u);
+  assert.match(preflight, /sourceIdentityVerified = found\.total === 1 &&\s*exactArticleMatches\.length === 1 &&\s*exactArticleMatches\[0\]\.id === anchor\.id/u);
+  const disclosure = preflight.indexOf("content: provisionalReplacementCandidateText(axes, sourceIdentityVerified)");
+  const cards = preflight.indexOf('type: "products_block"', disclosure);
+  assert.ok(disclosure > -1 && cards > disclosure,
+    "provisional evidence disclosure must precede product cards");
+  assert.match(preflight, /replacement_evidence:\s*"provisional"/u);
+
+  const axes = [{ caption: "Мощность", value: "7 Вт" }];
+  for (const sourceIdentityVerified of [false, true]) {
+    const text = provisionalReplacementCandidateText(axes, sourceIdentityVerified);
+    assert.match(text, /кандидатов для замены/u);
+    assert.match(text, /Мощность: 7 Вт/u);
+    assert.match(text, /взаимозаменяемость не подтверждена/u);
+    assert.match(text, /паспортн\p{L}* и монтажн\p{L}* характеристик\p{L}*/u);
+    assert.doesNotMatch(text, /совместимые аналоги|подтверждённые аналоги/iu);
+    if (!sourceIdentityVerified) assert.match(text, /точный артикул исходного изделия/u);
+  }
 });
 
 test("independent fit constraints still leave the direct replacement route", () => {

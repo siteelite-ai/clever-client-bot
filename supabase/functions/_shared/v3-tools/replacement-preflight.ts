@@ -77,6 +77,26 @@ export interface LiveCompactReplacementContract {
   axes: Array<{ key: string; caption: string; value: string }>;
 }
 
+/**
+ * Matching a subset of catalogue facets proves candidates, not interchangeability.
+ * Both the compact-code continuation and the exact-source preflight use this
+ * disclosure until a complete source-to-candidate compatibility proof exists.
+ */
+export function provisionalReplacementCandidateText(
+  axes: ReadonlyArray<{ caption: string; value: string }>,
+  sourceIdentityVerified: boolean,
+): string {
+  const matched = axes.map(({ caption, value }) => `${caption}: ${value}`)
+    .join(", ");
+  const evidence = matched
+    ? `Подтверждено совпадение только по параметрам (${matched}).`
+    : "Подтверждены только отдельные параметры каталога.";
+  const remaining = sourceIdentityVerified
+    ? "Перед заменой сверьте остальные критичные паспортные и монтажные характеристики исходного и выбранного изделия."
+    : "Для проверки нужен точный артикул исходного изделия и сверка остальных критичных паспортных и монтажных характеристик.";
+  return `Показываю кандидатов для замены из той же категории. ${evidence} Полная взаимозаменяемость не подтверждена. ${remaining}`;
+}
+
 /** The issued chip is a customer answer, not a catalog filter. Promote it only
  * after the same category exposes the same structural key and exact value.
  * A typed phrase must additionally label its value with that live axis;
@@ -260,7 +280,7 @@ export function inferLiveReplacementClarification(
   return {
     facet_key: selected.facet.key,
     caption,
-    question: `Чтобы подобрать совместимый аналог, уточните ${
+    question: `Чтобы подобрать кандидатов для замены, уточните ${
       caption.toLocaleLowerCase("ru-RU")
     }.`,
     options: selected.values.map(({ value, products_count }) => ({

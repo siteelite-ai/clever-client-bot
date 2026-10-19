@@ -483,6 +483,7 @@ import {
   productContainsExactModelCode,
   productContainsSourceModel,
   productTitleSupportsPortableRequirements,
+  provisionalReplacementCandidateText,
   replacementClassIsGroundedByLiveIdentity,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
@@ -4259,7 +4260,7 @@ async function selectVerifiedCompactReplacementContinuation(
         contract.axes.map(({ caption, value }) => `${caption}: ${value}`).join(
           ", ",
         )
-      }) аналоги других серий сейчас не найдены. Могу ослабить один из параметров, если вы укажете какой.`,
+      }) кандидаты для замены из других серий сейчас не найдены. Могу ослабить один из параметров, если вы укажете какой.`,
     });
     steps.push({
       step: "v3_compact_replacement_continuation_empty",
@@ -4313,12 +4314,7 @@ async function selectVerifiedCompactReplacementContinuation(
   );
   send({
     type: "delta",
-    content:
-      `Уточнение принято. Показываю аналоги из той же категории, у которых подтверждены ${
-        contract.axes.map(({ caption, value }) =>
-          `${caption.toLocaleLowerCase("ru-RU")} ${value}`
-        ).join(", ")
-      }.`,
+    content: `Уточнение принято. ${provisionalReplacementCandidateText(contract.axes, false)}`,
   });
   send({
     type: "products_block",
@@ -4350,6 +4346,7 @@ async function selectVerifiedCompactReplacementContinuation(
       literal_evidence: compactEvidence.length,
       filtered_total: filtered.total,
       exact_live_facet_proof: true,
+      replacement_evidence: "provisional",
       budget_cap: budgetCap,
       rendered: rendered.rendered_count,
       duration_ms: elapsed,
@@ -4379,6 +4376,7 @@ async function selectVerifiedOrdinaryReplacement(
   const sourceDescription = extractReplacementSourceDescription(userMessage);
   const sourceCandidateIds = new Set<string>();
   let anchor: ProductRef | null = null;
+  let sourceIdentityVerified = false;
 
   // Resolve only a class that is literally grounded in the customer's source
   // description. No model fallback is allowed here: the live taxonomy may
@@ -4499,6 +4497,12 @@ async function selectVerifiedOrdinaryReplacement(
         productBelongsToReplacementSourceScope(product, sourceClassLeaves)
       ) ?? null;
       if (anchor) {
+        const exactArticleMatches = found.results.filter((product) =>
+          String(product.article ?? "").replace(/\D/gu, "") === article
+        );
+        sourceIdentityVerified = found.total === 1 &&
+          exactArticleMatches.length === 1 &&
+          exactArticleMatches[0].id === anchor.id;
         break;
       }
     }
@@ -4947,9 +4951,6 @@ async function selectVerifiedOrdinaryReplacement(
   // price and source-family exclusion above. Geometry not proven by those axes
   // remains explicitly caveated in the response below.
 
-  const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(
-    ", ",
-  );
   const elapsed = Date.now() - started;
   send({
     type: "tool_event",
@@ -4999,8 +5000,7 @@ async function selectVerifiedOrdinaryReplacement(
 
   send({
     type: "delta",
-    content:
-      `Нашёл аналоги в той же категории с подтверждёнными параметрами (${axesLabel}). Перед заменой сверьте монтажные размеры и остальные характеристики.`,
+    content: provisionalReplacementCandidateText(axes, sourceIdentityVerified),
   });
   const ids = selected.map((product) => product.id);
   const rendered = executeRenderProducts({
@@ -5081,6 +5081,8 @@ async function selectVerifiedOrdinaryReplacement(
       mandatory_axes: mandatoryAxes,
       strict_total: strict.ok ? strict.total : 0,
       exact_live_facet_proof: true,
+      replacement_evidence: "provisional",
+      source_identity_verified: sourceIdentityVerified,
       equivalent_only: equivalentOnly,
       required_visible_codes: requiredVisibleCodes,
       budget_cap: budgetCap,
@@ -17537,7 +17539,7 @@ async function runExpertLoop(
               .map((axis) => `${axis.caption}: ${axis.values.join("/")}`)
               .join(", ");
             const caption =
-              `Точного совпадения по всем параметрам исходной модели в каталоге не подтвердилось. Показываю ближайшие аналоги, найденные отдельно по критериям (${axes}); перед заменой сверьте монтажные размеры и остальные характеристики.`;
+              `Точного совпадения по всем параметрам исходной модели в каталоге не подтвердилось. Показываю кандидатов для замены, найденных отдельно по критериям (${axes}); полная взаимозаменяемость не подтверждена. Перед заменой сверьте остальные критичные паспортные и монтажные характеристики.`;
             send({
               type: "assistant_turn_break",
               reason: "text_before_render",
