@@ -52,11 +52,14 @@ test("source title and article are lookup identity, not analogue literals", () =
   // Disclosure now belongs to the common SSE proof boundary, not this one
   // preflight branch: direct/model/fallback cards must share the same caption.
   const egress = source.slice(source.indexOf("const send = (ev: SseEvent)"));
-  const proof = egress.indexOf("const caption = replacementProofCaption(replacementLastProof)");
+  const proof = egress.indexOf("const caption = confirmedDirectAnalogProof");
   const proofSent = egress.indexOf("responseEvents.push(disclosure)", proof);
   const publicBlock = egress.indexOf("responseEvents.push(out)", proofSent);
   assert.ok(proof > -1 && proofSent > proof && publicBlock > proofSent,
     "server-owned replacement proof must precede product cards on every render path");
+  assert.match(egress.slice(proof, proofSent),
+    /: replacementProofCaption\(replacementLastProof\)/u,
+    "non-certified cards still get the former provisional proof caption");
   assert.match(preflight, /replacement_evidence:\s*"provisional"/u);
 
   const axes = [{ caption: "Мощность", value: "7 Вт" }];

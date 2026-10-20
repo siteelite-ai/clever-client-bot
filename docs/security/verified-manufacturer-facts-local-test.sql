@@ -1,5 +1,5 @@
--- Run only after BOTH ordered candidate migrations (base then typed-field
--- extension) in a disposable PostgreSQL 16
+-- Run only after all three ordered candidate migrations (base, fixture form,
+-- then direct manufacturer axes) in a disposable PostgreSQL 16
 -- database with anon, authenticated and BYPASSRLS service_role already created.
 -- Fixtures are rolled back. Never run this script against a shared live project.
 -- Example: psql "$DISPOSABLE_DATABASE_URL" -v ON_ERROR_STOP=1 \
@@ -13,6 +13,7 @@ DECLARE
   v_first uuid;
   v_second uuid;
   v_form uuid;
+  v_axes uuid;
   v_checked_at timestamptz := clock_timestamp();
   v_rejected boolean;
   v_message text;
@@ -113,6 +114,28 @@ BEGIN
     RAISE EXCEPTION 'unapproved fixture-form vocabulary was accepted';
   END IF;
 
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts SET mounting_method = 'surface'
+    WHERE id = v_pending;
+  EXCEPTION WHEN check_violation THEN v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'unapproved mounting method vocabulary was accepted';
+  END IF;
+
+  FOREACH v_message IN ARRAY ARRAY['0', '-1', '1000001'] LOOP
+    v_rejected := false;
+    BEGIN
+      UPDATE public.verified_product_facts
+      SET luminous_flux_lm = v_message::numeric WHERE id = v_pending;
+    EXCEPTION WHEN check_violation THEN v_rejected := true;
+    END;
+    IF NOT v_rejected THEN
+      RAISE EXCEPTION 'out-of-bounds luminous flux was accepted: %', v_message;
+    END IF;
+  END LOOP;
+
   FOREACH v_invalid_leaf IN ARRAY ARRAY['', ' Светильники', repeat('X', 241)] LOOP
     v_rejected := false;
     BEGIN
@@ -173,8 +196,9 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM public.verified_product_facts
     WHERE id = v_first AND catalog_leaf_category = 'Светильники'
+      AND mounting_method IS NULL AND luminous_flux_lm IS NULL
   ) THEN
-    RAISE EXCEPTION 'typed catalog leaf category was not persisted';
+    RAISE EXCEPTION 'typed leaf was not persisted or legacy axes were inferred';
   END IF;
 
   v_rejected := false;
@@ -242,6 +266,58 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'approved fixture form could be rewritten';
+  END IF;
+
+  -- New axes can each be approved evidence, but never imply a cut-out,
+  -- electrical characteristic, catalogue category or approval by themselves.
+  INSERT INTO public.verified_product_facts (
+    product_id, article, catalog_url, source_url, document_version,
+    verified_at, valid_until, approval_status, approved_at, approved_by,
+    mounting_method, luminous_flux_lm
+  ) VALUES (
+    'ci-direct-axes', 'CI-DIRECT-AXES',
+    'https://220volt.kz/catalog/svetotexnika/svetilniki/ci-direct-axes/',
+    'https://manufacturer.example/photometry', 'CI test rev 1',
+    v_checked_at - interval '1 day', v_checked_at + interval '30 days',
+    'approved', v_checked_at, 'CI reviewer', 'recessed', 600
+  ) RETURNING id INTO v_axes;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE id = v_axes AND mounting_method = 'recessed'
+      AND luminous_flux_lm = 600 AND cutout_min_mm IS NULL
+      AND fixture_form IS NULL AND color_temperature_k IS NULL
+  ) THEN
+    RAISE EXCEPTION 'direct axes were not persisted as independent evidence';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts SET mounting_method = NULL
+    WHERE id = v_axes;
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    IF v_message NOT LIKE 'approved manufacturer facts are immutable%' THEN
+      RAISE;
+    END IF;
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'approved mounting method could be rewritten';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts SET luminous_flux_lm = 700
+    WHERE id = v_axes;
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    IF v_message NOT LIKE 'approved manufacturer facts are immutable%' THEN
+      RAISE;
+    END IF;
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'approved luminous flux could be rewritten';
   END IF;
 
   v_rejected := false;
@@ -332,7 +408,7 @@ $test$;
 SET LOCAL ROLE service_role;
 DO $test$
 BEGIN
-  IF (SELECT count(*) FROM public.verified_product_facts) <> 4 THEN
+  IF (SELECT count(*) FROM public.verified_product_facts) <> 5 THEN
     RAISE EXCEPTION 'service_role cannot read the expected evidence fixtures';
   END IF;
   IF NOT EXISTS (
@@ -340,6 +416,13 @@ BEGIN
     WHERE product_id = 'ci-form-only' AND fixture_form = 'downlight'
   ) THEN
     RAISE EXCEPTION 'service_role cannot read the approved fixture form';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE product_id = 'ci-direct-axes' AND mounting_method = 'recessed'
+      AND luminous_flux_lm = 600 AND approval_status = 'approved'
+  ) THEN
+    RAISE EXCEPTION 'service_role cannot read approved direct axes';
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM public.verified_product_facts

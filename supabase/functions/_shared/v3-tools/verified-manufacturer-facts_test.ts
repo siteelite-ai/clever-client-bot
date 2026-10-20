@@ -94,6 +94,8 @@ Deno.test("approved HTML facts stay internal and preserve only typed technical e
     type: "external constant current",
   });
   assertEquals(result.technical.supply_v, { min: 220, max: 240 });
+  assertEquals(result.technical.mounting_method, null);
+  assertEquals(result.technical.luminous_flux_lm, null);
   assertEquals("price" in result, false);
   assertEquals("stock" in result, false);
   assertEquals("verified_manufacturer_facts" in live, false);
@@ -177,6 +179,112 @@ Deno.test("an approved fixture form is typed, optional for old rows, and bound t
     }),
     null,
   );
+});
+
+Deno.test("approved installation and flux axes are typed, nullable for legacy rows and never inferred", () => {
+  const verified = check({
+    mounting_method: "recessed",
+    luminous_flux_lm: 600,
+  });
+  assert(verified);
+  assertEquals(verified.technical.mounting_method, "recessed");
+  assertEquals(verified.technical.luminous_flux_lm, 600);
+  assertEquals(check()?.technical.mounting_method, null);
+  assertEquals(check()?.technical.luminous_flux_lm, null);
+  assertEquals(
+    check({ mounting_method: null, luminous_flux_lm: null })?.technical
+      .mounting_method,
+    null,
+  );
+  for (const mounting_method of ["surface", "накладной", "", 1, false]) {
+    assertEquals(check({ mounting_method }), null, String(mounting_method));
+  }
+  for (const luminous_flux_lm of [0, -1, 1_000_001, "600", NaN, Infinity]) {
+    assertEquals(check({ luminous_flux_lm }), null, String(luminous_flux_lm));
+  }
+  // Source approval remains bound to the exact live identity and validity.
+  assertEquals(check({ mounting_method: "recessed", article: "OTHER" }), null);
+  assertEquals(
+    check({ luminous_flux_lm: 600, approval_status: "pending" }),
+    null,
+  );
+  const noPreviousEvidence = {
+    fixture_form: null,
+    cutout_shape: null,
+    cutout_kind: null,
+    cutout_min_mm: null,
+    cutout_max_mm: null,
+    outer_diameter_mm: null,
+    color_temperature_k: null,
+    integrated_led: null,
+    socket_kind: null,
+    socket_code: null,
+    driver_included: null,
+    driver_type: null,
+    supply_min_v: null,
+    supply_max_v: null,
+  };
+  assert(check({ ...noPreviousEvidence, mounting_method: "recessed" }));
+  assert(check({ ...noPreviousEvidence, luminous_flux_lm: 600 }));
+  assertEquals(check(noPreviousEvidence), null);
+});
+
+Deno.test("explicit catalogue mounting and lumens corroborate or veto approved manufacturer facts", () => {
+  const axes = { mounting_method: "recessed", luminous_flux_lm: 600 };
+  assert(check(axes, {
+    short_traits: ["Способ монтажа: встраиваемый", "Световой поток: 600 лм"],
+  }));
+  assert(check(axes, {
+    facet_captions: {
+      installation: "Тип установки",
+      lumens: "Световой поток, лм",
+    },
+    facet_values: {
+      installation: ["врезной"],
+      lumens: ["500–700"],
+    },
+  }));
+  assertEquals(
+    check(axes, {
+      description_excerpt:
+        "Способ монтажа: recessed. Световой поток светильника: 1 200 лм.",
+    }),
+    null,
+  );
+  for (
+    const short_traits of [
+      ["Способ монтажа: накладной"],
+      ["Тип монтажа: подвесной"],
+      ["Световой поток: 400 лм"],
+      ["Световой поток, лм: 1 200"],
+    ]
+  ) assertEquals(check(axes, { short_traits }), null, short_traits.join("; "));
+  assertEquals(
+    check(axes, {
+      facet_captions: { installation: "Способ монтажа" },
+      facet_values: { installation: ["встраиваемый", "настенный"] },
+    }),
+    null,
+  );
+  assertEquals(
+    check(axes, {
+      description_excerpt: "Световой поток: 400 лм. Тип установки: накладной.",
+    }),
+    null,
+  );
+  // A title, generic lumen efficacy or an unrecognised value is not the
+  // explicit live claim needed to overturn approved manufacturer evidence.
+  assert(check(axes, {
+    pagetitle: "Накладной 400 лм MODEL-400",
+    short_traits: [
+      "Световая отдача: 400 лм/Вт",
+      "Способ монтажа: универсальный",
+      "Световой поток: неизвестно",
+    ],
+  }));
+  assert(check(axes, {
+    short_traits: ["Способ монтажа: встраиваемый/накладной"],
+  }));
 });
 
 Deno.test("fixture form alone is a valid approved claim but does not silently assert other characteristics", () => {

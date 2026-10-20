@@ -524,6 +524,10 @@ import {
 import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
 import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
 import {
+  buildDirectAnalogProof,
+  type DirectAnalogProof,
+} from "../_shared/v3-tools/direct-analog-proof.ts";
+import {
   parseReplacementCutoutReply,
   resolveServerIssuedReplacementCutoutPending,
   type VerifiedReplacementCutoutPending,
@@ -724,6 +728,7 @@ import {
   PREVIEW_SECRET_HEADER,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
 import {
+  directAnalogProofEnabled,
   verifiedManufacturerFactsEnabled,
 } from "../_shared/v3-tools/verified-manufacturer-flags.ts";
 import {
@@ -756,6 +761,7 @@ const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
 const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
   ADMISSION_SCOPE,
 );
+const DIRECT_ANALOG_PROOF_ENABLED = directAnalogProofEnabled(ADMISSION_SCOPE);
 /** The extra paid retry is independent of verified-facts rollout. Both lanes
  * are server-only opt-ins; production keeps the old single-call behavior. */
 export function productMeasurementHttpRetryEnabled(
@@ -912,6 +918,8 @@ type SseEvent =
         }
       >;
       result_cardinality?: ResultCardinalityContract;
+      /** Server-owned proof, revalidated against the exact cards at egress. */
+      direct_analog_proof?: DirectAnalogProof;
     };
   }
   | { type: "contacts"; html: string }
@@ -4310,6 +4318,8 @@ interface DirectReplacementResult {
 
 const VERIFIED_MANUFACTURER_FACT_COLUMNS =
   "product_id,article,catalog_url,catalog_leaf_category,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
+const DIRECT_ANALOG_FACT_COLUMNS =
+  `${VERIFIED_MANUFACTURER_FACT_COLUMNS},mounting_method,luminous_flux_lm`;
 
 async function loadApprovedManufacturerFacts(
   ctx: ToolContext,
@@ -4324,7 +4334,11 @@ async function loadApprovedManufacturerFacts(
   // public reads and runtime writes; a row is still revalidated against the
   // live product's id, article and URL before any technical fact is used.
   const query = ctx.supabase.from("verified_product_facts")
-    .select(VERIFIED_MANUFACTURER_FACT_COLUMNS)
+    // Preserve the existing verified-facts route until the new nullable
+    // columns have been migrated and the separate direct-proof flag is on.
+    .select(DIRECT_ANALOG_PROOF_ENABLED
+      ? DIRECT_ANALOG_FACT_COLUMNS
+      : VERIFIED_MANUFACTURER_FACT_COLUMNS)
     .in("product_id", [...productIds])
     .eq("approval_status", "approved")
     .is("revoked_at", null)
@@ -4818,6 +4832,19 @@ async function selectGuardedStructuralReplacement(
     });
     return { handled: true, products: [], outcome: "upstream_error" };
   }
+  // New direct-analog claims are a separate, default-OFF proof lane. The
+  // existing shortlist and its cautious copy remain unchanged without three
+  // complete manufacturer-backed matches.
+  const directAnalogProof = DIRECT_ANALOG_PROOF_ENABLED
+    ? buildDirectAnalogProof({
+      source,
+      candidates: selected.map(({ full }) => full),
+      customerCutoutMm,
+    })
+    : null;
+  if (directAnalogProof) {
+    Object.assign(selectionContract, { direct_analog_proof: directAnalogProof });
+  }
   const softName: Record<string, string> = {
     generic_diameter: "общий диаметр",
     power: "мощность",
@@ -4842,11 +4869,13 @@ async function selectGuardedStructuralReplacement(
     requested,
     { candidateCoverage: "partial" },
   );
-  send({
-    type: "delta",
-    origin: "server",
-    content: `Это предварительные кандидаты, не подтверждённые взаимозаменяемые аналоги. Проверена только ограниченная часть каталога.\n\n${perCard.join("\n\n")}${shortfall ? `\n\n${shortfall}` : ""}`,
-  });
+  if (!directAnalogProof) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: `Это предварительные кандидаты, не подтверждённые взаимозаменяемые аналоги. Проверена только ограниченная часть каталога.\n\n${perCard.join("\n\n")}${shortfall ? `\n\n${shortfall}` : ""}`,
+    });
+  }
   send({
     type: "products_block",
     markdown: rendered.markdown,
@@ -23602,6 +23631,7 @@ Deno.serve(async (req) => {
           out = { type: "delta", content, ...(origin === "server" ? { origin } : {}) };
           finalTextAccum += content;
         } else if (ev.type === "products_block") {
+          let confirmedDirectAnalogProof: DirectAnalogProof | null = null;
           if (replacementEgressRequest && ev.count > 0) {
             flushReplacementTurnBreak();
           }
@@ -23619,6 +23649,31 @@ Deno.serve(async (req) => {
               liveProducts,
               renderedIds,
             );
+            // The selector's certificate is not an egress authorization. Bind
+            // it again to the exact rendered order and current trusted cache;
+            // any missing, changed or expired fact falls back to provisional
+            // wording and no public direct-analog proof.
+            const stagedDirectProof = ev.selection_contract?.direct_analog_proof;
+            const sourceFull = source
+              ? liveProducts.find((product) =>
+                product.id === source.id && product.url ===
+                  stagedDirectProof?.source_product_url
+              )
+              : undefined;
+            if (
+              DIRECT_ANALOG_PROOF_ENABLED && stagedDirectProof && sourceFull &&
+              renderedProducts.length === ev.count
+            ) {
+              const rebuilt = buildDirectAnalogProof({
+                source: sourceFull,
+                candidates: renderedProducts,
+                customerCutoutMm: stagedDirectProof.target_cutout_mm,
+              });
+              if (
+                rebuilt && JSON.stringify(rebuilt) ===
+                  JSON.stringify(stagedDirectProof)
+              ) confirmedDirectAnalogProof = rebuilt;
+            }
             // No route can currently attest that its selected search axes are
             // the *complete* set of critical source specifications. Therefore
             // even exact source lookups disclose candidate status; the proof
@@ -23640,7 +23695,9 @@ Deno.serve(async (req) => {
                 source,
               ),
             });
-            const caption = replacementProofCaption(replacementLastProof);
+            const caption = confirmedDirectAnalogProof
+              ? `Подборка прямых аналогов по восьми проверенным параметрам: ${confirmedDirectAnalogProof.candidates.length} шт. Данные производителей утверждены и загружены для этого запроса; монтажное отверстие Ø${confirmedDirectAnalogProof.target_cutout_mm} мм и положительный остаток подтверждены. Полная взаимозаменяемость вне этих параметров не обещается: перед покупкой сверьте габариты, глубину и условия установки по паспортам.`
+              : replacementProofCaption(replacementLastProof);
             const disclosure: SseEvent = {
               type: "delta",
               content: `\n\n${caption}`,
@@ -23664,6 +23721,7 @@ Deno.serve(async (req) => {
                 ),
                 price_comparison_proven:
                   replacementLastProof.cheaper_than_source_proven,
+                direct_analog_proven: confirmedDirectAnalogProof !== null,
               },
             });
           }
@@ -23710,6 +23768,7 @@ Deno.serve(async (req) => {
             ...publicBlock,
             selection_contract: {
               ...selectionContract,
+              direct_analog_proof: confirmedDirectAnalogProof ?? undefined,
               result_cardinality: selectionContract.result_cardinality ?? {
                 ...requestResultCardinality,
               },

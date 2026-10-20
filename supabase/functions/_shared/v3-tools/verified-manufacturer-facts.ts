@@ -28,6 +28,10 @@ export interface VerifiedManufacturerFacts {
   technical: {
     /** Explicit form in the approved manufacturer document, never a synonym inferred from catalogue grouping. */
     fixture_form?: "downlight" | null;
+    /** Explicit installation method in approved manufacturer evidence. */
+    mounting_method?: "recessed" | null;
+    /** Manufacturer-rated luminous flux in lumens, not a title/model token. */
+    luminous_flux_lm?: number | null;
     cutout: {
       shape: "round";
       kind: "exact" | "range";
@@ -289,6 +293,8 @@ function liveCatalogDimensions(
 
 type TechnicalClaimRole =
   | "fixture_form"
+  | "mounting_method"
+  | "luminous_flux"
   | "color_temperature"
   | "integrated_led"
   | "lamp_technology"
@@ -307,6 +313,18 @@ function technicalClaimRole(rawCaption: string): TechnicalClaimRole | null {
   const caption = normalizedLabel(rawCaption);
   if (/^(?:вид|тип|класс) светильника$/u.test(caption)) {
     return "fixture_form";
+  }
+  if (
+    /^(?:(?:способ|тип) монтажа|(?:тип|способ) установки|mounting (?:method|type))$/u
+      .test(caption)
+  ) {
+    return "mounting_method";
+  }
+  if (
+    /^(?:световой поток(?: светильника)?|luminous flux)(?:,\s*(?:лм|lm))?$/u
+      .test(caption)
+  ) {
+    return "luminous_flux";
   }
   if (
     /^(?:цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?)$/u
@@ -343,7 +361,7 @@ function technicalClaimRole(rawCaption: string): TechnicalClaimRole | null {
 }
 
 const TECHNICAL_DESCRIPTION_LABEL =
-  /(?:^|[^\p{L}\p{N}])((?:(?:вид|тип|класс) светильника|цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?|встроенн(?:ый|ые) (?:светодиод(?:ы|ный источник света)|led(?:-модуль)?)|наличие встроенных светодиодов|integrated led|тип лампы|технология освещения|тип цоколя|цоколь|тип патрона|драйвер в комплекте|пра в комплекте|тип драйвера|драйвер|пра|(?:рабочее|питающее) напряжение|напряжение питания|напряжение)(?:,\s*(?:в|v))?)\s*[:=–—]\s*([^.;\n]{1,100})/giu;
+  /(?:^|[^\p{L}\p{N}])((?:(?:вид|тип|класс) светильника|(?:способ|тип) монтажа|(?:тип|способ) установки|mounting (?:method|type)|световой поток(?: светильника)?(?:,\s*(?:лм|lm))?|luminous flux(?:,\s*lm)?|цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?|встроенн(?:ый|ые) (?:светодиод(?:ы|ный источник света)|led(?:-модуль)?)|наличие встроенных светодиодов|integrated led|тип лампы|технология освещения|тип цоколя|цоколь|тип патрона|драйвер в комплекте|пра в комплекте|тип драйвера|драйвер|пра|(?:рабочее|питающее) напряжение|напряжение питания|напряжение)(?:,\s*(?:в|v))?)\s*[:=–—]\s*([^.;\n]{1,100})/giu;
 
 /** Only mutually exclusive explicit catalogue classes can veto a downlight.
  * A broader class such as "точечные светильники" stays unknown, never proof.
@@ -445,6 +463,32 @@ function kelvinInterval(raw: string): Interval | null {
   return min >= 1_000 && max >= min && max <= 20_000 ? { min, max } : null;
 }
 
+function luminousFluxInterval(raw: string): Interval | null {
+  // The catalogue may display grouped thousands ("1 200 лм"). Reject other
+  // prose rather than interpreting a model number as a photometric claim.
+  const compact = raw.replace(/(\d) (?=\d{3}(?:\D|$))/gu, "$1");
+  const match = compact.match(
+    /^(\d{1,7}(?:[.,]\d{1,2})?)(?:\s*[-–—]\s*(\d{1,7}(?:[.,]\d{1,2})?))?\s*(?:лм|lm)?$/u,
+  );
+  if (!match) return null;
+  const min = Number(match[1].replace(",", "."));
+  const max = Number((match[2] ?? match[1]).replace(",", "."));
+  return positive(min, 1_000_000) && positive(max, 1_000_000) && min <= max
+    ? { min, max }
+    : null;
+}
+
+function mountingMethod(raw: string): "recessed" | "other" | null {
+  const modes = raw.split(/\s*(?:\/|,|\s+и\s+)\s*/u);
+  const recessed =
+    /^(?:встраиваем(?:ый|ая|ое|ые)|врезн(?:ой|ая|ое|ые)|recessed(?: mounted)?)$/u;
+  const other =
+    /^(?:накладн(?:ой|ая|ое|ые)|подвесн(?:ой|ая|ое|ые)|настенн(?:ый|ая|ое|ые)|surface(?: mounted)?|pendant(?: mounted)?|wall(?: mounted)?)$/u;
+  if (modes.every((mode) => recessed.test(mode))) return "recessed";
+  if (modes.every((mode) => other.test(mode))) return "other";
+  return null;
+}
+
 function catalogSocket(
   raw: string,
 ): { kind: "none" } | { kind: "base"; code: string } | null {
@@ -528,6 +572,16 @@ function technicalClaimContradicts(row: Row, claim: TechnicalClaim): boolean {
   const { role, caption, value } = claim;
   if (role === "fixture_form" && row.fixture_form === "downlight") {
     return explicitlyDifferentFixtureClass(value);
+  }
+  if (role === "mounting_method" && row.mounting_method === "recessed") {
+    return mountingMethod(value) === "other";
+  }
+  if (role === "luminous_flux" && row.luminous_flux_lm != null) {
+    const observed = luminousFluxInterval(value);
+    return observed !== null && (
+      (row.luminous_flux_lm as number) < observed.min ||
+      (row.luminous_flux_lm as number) > observed.max
+    );
   }
   if (role === "color_temperature" && row.color_temperature_k !== null) {
     const observed = kelvinInterval(value);
@@ -639,6 +693,10 @@ export function validateVerifiedManufacturerFacts(
   if (
     !(row.fixture_form === undefined || row.fixture_form === null ||
       row.fixture_form === "downlight") ||
+    !(row.mounting_method === undefined || row.mounting_method === null ||
+      row.mounting_method === "recessed") ||
+    !(row.luminous_flux_lm === undefined ||
+      nullablePositive(row.luminous_flux_lm, 1_000_000)) ||
     !nullablePositive(row.outer_diameter_mm, 10_000) ||
     (row.color_temperature_k !== null &&
       (!Number.isInteger(row.color_temperature_k) ||
@@ -699,7 +757,8 @@ export function validateVerifiedManufacturerFacts(
   ) return null;
   // An all-null evidence row cannot support a claim, even if approved.
   if (
-    row.fixture_form !== "downlight" && !cutoutPresent &&
+    row.fixture_form !== "downlight" && row.mounting_method !== "recessed" &&
+    row.luminous_flux_lm == null && !cutoutPresent &&
     row.outer_diameter_mm === null &&
     row.color_temperature_k === null && row.integrated_led === null &&
     row.socket_kind === null && row.driver_included === null &&
@@ -725,6 +784,9 @@ export function validateVerifiedManufacturerFacts(
     },
     technical: {
       fixture_form: row.fixture_form === "downlight" ? "downlight" : null,
+      mounting_method: row.mounting_method === "recessed" ? "recessed" : null,
+      luminous_flux_lm: (row.luminous_flux_lm as number | null | undefined) ??
+        null,
       cutout: cutoutPresent
         ? {
           shape: "round",

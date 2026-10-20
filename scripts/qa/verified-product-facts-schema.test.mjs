@@ -10,6 +10,10 @@ const fixtureFormMigration = readFileSync(new URL(
   '../../supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql',
   import.meta.url,
 ), 'utf8');
+const directAxesMigration = readFileSync(new URL(
+  '../../supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql',
+  import.meta.url,
+), 'utf8');
 
 test('verified facts row has the server validator contract, with no seeded SKU', () => {
   const columns = new Map([...migration.matchAll(/^  ([a-z_]+) (uuid|text|integer|timestamptz|numeric\(7, 2\)|boolean)(?=\s|,|$)/gm)]
@@ -29,9 +33,31 @@ test('verified facts row has the server validator contract, with no seeded SKU',
   })) assert.equal(columns.get(name), type, name);
   assert.equal(columns.has('fixture_form'), false, 'the already-applied base migration must remain unchanged');
   assert.equal(columns.has('catalog_leaf_category'), false, 'the already-applied base migration must remain unchanged');
+  assert.equal(columns.has('mounting_method'), false, 'the already-applied base migration must remain unchanged');
+  assert.equal(columns.has('luminous_flux_lm'), false, 'the already-applied base migration must remain unchanged');
   assert.match(migration, /^  document_page integer,$/m);
   assert.ok(migration.includes("source_url !~* '[.]pdf("));
   assert.doesNotMatch(migration, /^INSERT INTO public\.verified_product_facts\b/im);
+});
+
+test('direct manufacturer axes are nullable, bounded and do not weaken approvals or access', () => {
+  assert.match(directAxesMigration, /(?:^|\n)BEGIN;[\s\S]*\nCOMMIT;\s*$/);
+  assert.match(directAxesMigration, /ALTER TABLE public\.verified_product_facts\s+ADD COLUMN mounting_method text,\s+ADD COLUMN luminous_flux_lm numeric\(10, 2\);/);
+  assert.match(directAxesMigration, /mounting_method IS NULL OR mounting_method = 'recessed'/);
+  assert.match(directAxesMigration, /luminous_flux_lm > 0 AND luminous_flux_lm <= 1000000/);
+  assert.doesNotMatch(directAxesMigration, /\b(?:INSERT|UPDATE|DELETE|GRANT|REVOKE|CREATE POLICY)\b/i);
+  const approvedClaimBody = (sql) => sql.match(/CONSTRAINT verified_product_facts_approved_claim_check CHECK \(([\s\S]*?)\n  \)/)?.[1];
+  const previous = approvedClaimBody(fixtureFormMigration);
+  const expanded = approvedClaimBody(directAxesMigration);
+  assert.ok(previous && expanded);
+  assert.match(expanded, /mounting_method IS NOT NULL OR/);
+  assert.match(expanded, /luminous_flux_lm IS NOT NULL OR/);
+  const normalize = (body) => body.replace(/\s+/g, ' ').trim();
+  assert.equal(
+    normalize(expanded.replace('mounting_method IS NOT NULL OR', '').replace('luminous_flux_lm IS NOT NULL OR', '')),
+    normalize(previous),
+    'new approved axes must preserve every earlier approved-claim condition',
+  );
 });
 
 test('approval, geometry and access are constrained in the database', () => {
