@@ -726,6 +726,56 @@ Deno.test("heat-shrink tube on cable uses 20% clearance at terminal title gate",
   ).clearance ?? null, null);
 });
 
+Deno.test("coordinated property before and after shrink proves the live 20% bound", () => {
+  const facets: CompatibilityFacet[] = [
+    { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },
+    { key: "after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] },
+  ];
+  const request = "подбери термоусадочную трубку для кабеля диаметром 12 мм";
+  const reasoning =
+    "Для кабеля диаметром 12 мм требуется термоусадочная трубка с внутренним диаметром до усадки не менее 14.4 мм (12 мм * 1.2) и внутренним диаметром после усадки строго меньше 12 мм.";
+  const decision = terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    request,
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(
+    enforceTerminalPairedFit(
+      [item("too-small", "Трубка 14/7"), item("fitting", "Трубка 16/8")],
+      decision,
+      reasoning,
+    ).map(({ id }) => id),
+    ["fitting"],
+  );
+  for (const unsupported of [
+    "Для кабеля диаметром 12 мм требуется термоусадочная трубка с внутренним диаметром до усадки не менее 14.4 мм и длиной после усадки строго меньше 12 мм.",
+    "Для кабеля диаметром 12 мм требуется термоусадочная трубка с внутренним диаметром до усадки не менее 14.4 мм и внутренним диаметром после усадки не должен быть меньше 12 мм.",
+  ]) {
+    assertEquals(
+      terminalPairedFitDecision(
+        { value: 12, unit: "мм" }, request, unsupported, facets,
+        "Трубки термоусаживаемые",
+      ).state,
+      "unproven",
+      unsupported,
+    );
+  }
+  assertEquals(
+    terminalPairedFitDecision(
+      { value: 10, unit: "мм" }, "кабель длиной 10 мм",
+      "Длина до изменения строго больше 10 мм и длина после изменения строго меньше 10 мм.",
+      [
+        { key: "before", caption: "Длина до изменения, мм", unit: "мм", values: [] },
+        { key: "after", caption: "Длина после изменения, мм", unit: "мм", values: [] },
+      ],
+    ).state,
+    "required",
+  );
+});
+
 Deno.test("heat-shrink clearance also protects terminal live-facet values", () => {
   const facets: CompatibilityFacet[] = [
     { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },

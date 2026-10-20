@@ -738,8 +738,13 @@ function modelProvesBothSelectedSides(
   );
   for (const sentence of sentences) {
     let precedingExplicitProperty: string | null = null;
+    // A coordinated clause may repeat the measured property before its
+    // state: "... до усадки ..., и внутренним диаметром после усадки ...".
+    // Split only when the state is nearby, then keep the existing per-clause
+    // property, direction and negation checks. This cannot borrow a diameter
+    // claim across an unrelated length or a separate sentence.
     const clauses = sentence.split(
-      /,(?!\d)|(?<!\d),|\s+(?:а|и)\s+(?=(?:до|после|исходн|конечн))/iu,
+      /,(?!\d)|(?<!\d),|\s+(?:а|и)\s+(?=(?:[\p{L}-]+\s+){0,4}(?:до|после|исходн\p{L}*|конечн\p{L}*)(?!\p{L}))/iu,
     );
     for (const clause of clauses) {
       const words = normalize(clause).split(" ").filter(Boolean);
