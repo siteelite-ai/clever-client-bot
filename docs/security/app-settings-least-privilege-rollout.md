@@ -88,3 +88,20 @@ Rotation at the API issuer, update of the authorized production setting, and
 proof that the old credential no longer works are separate release gates. Do
 not treat the ACL repair as remediation of this exposure; do not overwrite the
 working setting before a replacement credential is verified.
+
+### Catalog credential rotation prerequisite
+
+The catalog API specification documents product/category reads but no key
+issuance or revocation operation. The API owner must issue a replacement and
+confirm the old key's revocation. The bot cannot safely manufacture this key.
+The V1/V3 and `search-products` routes read the database setting on each
+request/turn and fall back to the `VOLT220_API_TOKEN` Edge secret; V2 reads the
+database setting without that fallback. There is no cross-request credential
+cache; one-hour category/facet caches are unrelated. Therefore update **both**
+the protected database setting and the Edge fallback while old and new keys
+overlap, perform bounded smoke checks on the active routes, allow in-flight
+requests and secret propagation to settle, then have the issuer revoke the old
+key and attest to that revocation. The longest `search-products` request
+deadline in code is 90 seconds, so use a larger drain window rather than
+assuming an immediate cutover. If the issuer cannot overlap two valid keys,
+zero-downtime rotation is not guaranteed; agree a maintenance window first.
