@@ -1,0 +1,867 @@
+{
+  "suite_file": "notion-legacy-bug-cases-v4.json",
+  "suite_version": 4,
+  "suite_sha256": "882926735a6426bbfc3b560c2dddd82b8eb90a0803cec9bd1d597e1d558846ee",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T04:56:38.960Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "bt924-gx53-analogs": 1,
+    "bt924-acti9-followup-show": 1,
+    "bt746-black-double-socket": 1
+  },
+  "cases": [
+    {
+      "id": "bt924-gx53-analogs",
+      "title": "BT-924: GX53 tablet lamp analogs preserve lamp class and socket",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_bt924-gx53-analogs_base_1792472198960_1",
+          "turns": [
+            {
+              "message": "Подбери аналоги для лампы ECO T75 таблетка GX53",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6073,
+              "network_attempts": 1,
+              "log_id": "f02d8e8e-2830-4dd3-8883-d684e28bbd8c",
+              "diagnostic_error": null,
+              "products_count": 3,
+              "unique_products_count": 3,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-4k-94-248-navigator",
+                  "verified": true,
+                  "sku": "Ем000002667",
+                  "name": "Лампа NLL-GX53-6-230-4K 94 248 Navigator",
+                  "facets": {
+                    "Категория": "Лампы",
+                    "Тип напряжения": "АС",
+                    "Средний номинальный срок службы ч": "30000",
+                    "Тип цоколя": "GX53",
+                    "Страна происхождения": "КИТАЙ",
+                    "Напряжение, В": "220-240",
+                    "Цвет свечения": "нейтральный холодно-белый",
+                    "Диммирование": "Нет",
+                    "Световой поток, Лм": "480",
+                    "Вид лампы (принцип работы)": "светодиодная",
+                    "Единица измерения": "шт",
+                    "Тип лампы(обозначение)": "LED",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Вес, кг.": "0.05",
+                    "Мощность, Вт": "6",
+                    "Цветовая температура, К": "4000",
+                    "Объем, м3": "0.00008",
+                    "Форма колбы": "таблетка",
+                    "Бренд": "Navigator",
+                    "Гарантия, год": "2",
+                    "Код ТН ВЭД": "8539520009",
+                    "Длина, мм": "28",
+                    "Диаметр, мм": "74",
+                    "Класс энергоэффективности": "A"
+                  },
+                  "offerPrice": 445,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-4k-94-248-navigator/",
+                  "description_excerpt": "Cветодиодные энергосберегающие лампы общего освещения Navigator серии NLL-GX53 предназначены для использования в любых типах светильников с патроном GX53. ·Высокая эффективность 85 лм/Вт. ·Надежные светодиоды Epistar (Тайвань). ·Радиатор из композитного материала на основе теплорассеивающего пластика и алюминия способствует увеличению срока службы лампы."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-6,5k-61-247-navigator",
+                  "verified": true,
+                  "sku": "Ем000014155",
+                  "name": "Лампа NLL-GX53-6-230-6,5K 61 247 Navigator",
+                  "facets": {
+                    "Категория": "Лампы",
+                    "Тип напряжения": "АС",
+                    "Средний номинальный срок службы ч": "30000",
+                    "Тип цоколя": "GX53",
+                    "Страна происхождения": "КИТАЙ",
+                    "Напряжение, В": "220-240",
+                    "Цвет свечения": "холодный дневной",
+                    "Диммирование": "Нет",
+                    "Световой поток, Лм": "510",
+                    "Вид лампы (принцип работы)": "светодиодная",
+                    "Единица измерения": "шт",
+                    "Тип лампы(обозначение)": "LED",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Вес, кг.": "0.05",
+                    "Мощность, Вт": "6",
+                    "Цветовая температура, К": "6500",
+                    "Объем, м3": "0.00008",
+                    "Форма колбы": "таблетка",
+                    "Бренд": "Navigator",
+                    "Гарантия, год": "2",
+                    "Код ТН ВЭД": "8539520009",
+                    "Длина, мм": "28",
+                    "Диаметр, мм": "74",
+                    "Класс энергоэффективности": "A"
+                  },
+                  "offerPrice": 500,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-6,5k-61-247-navigator/",
+                  "description_excerpt": "Cветодиодные энергосберегающие лампы общего освещения Navigator серии NLL-GX53 предназначены для использования в любых типах светильников с патроном GX53. ·Высокая эффективность 85 лм/Вт. ·Надежные светодиоды Epistar (Тайвань). ·Радиатор из композитного материала на основе теплорассеивающего пластика и алюминия способствует увеличению срока службы лампы."
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-2,7k-94-249-navigator",
+                  "verified": true,
+                  "sku": "Ем000006715",
+                  "name": "Лампа NLL-GX53-6-230-2,7K 94 249 Navigator",
+                  "facets": {
+                    "Категория": "Лампы",
+                    "Тип напряжения": "АС",
+                    "Средний номинальный срок службы ч": "30000",
+                    "Тип цоколя": "GX53",
+                    "Страна происхождения": "КИТАЙ",
+                    "Напряжение, В": "220-240",
+                    "Цвет свечения": "теплый белый",
+                    "Диммирование": "Нет",
+                    "Световой поток, Лм": "450",
+                    "Вид лампы (принцип работы)": "светодиодная",
+                    "Единица измерения": "шт",
+                    "Тип лампы(обозначение)": "LED",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Вес, кг.": "0.05",
+                    "Мощность, Вт": "6",
+                    "Цветовая температура, К": "2700",
+                    "Объем, м3": "0.00008",
+                    "Форма колбы": "таблетка",
+                    "Бренд": "Navigator",
+                    "Гарантия, год": "2",
+                    "Код ТН ВЭД": "8539520009",
+                    "Длина, мм": "28",
+                    "Диаметр, мм": "74",
+                    "Класс энергоэффективности": "A"
+                  },
+                  "offerPrice": 565,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-2,7k-94-249-navigator/",
+                  "description_excerpt": "Cветодиодные энергосберегающие лампы общего освещения Navigator серии NLL-GX53 предназначены для использования в любых типах светильников с патроном GX53. ·Высокая эффективность 85 лм/Вт. ·Надежные светодиоды Epistar (Тайвань). ·Радиатор из композитного материала на основе теплорассеивающего пластика и алюминия способствует увеличению срока службы лампы."
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Лампа NLL-GX53-6-230-4K 94 248 Navigator",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-4k-94-248-navigator/",
+                  "price": 445,
+                  "stockLine": "Караганда (1293 шт), Астана (40 шт)",
+                  "cardText": "- **[Лампа NLL-GX53-6-230-4K 94 248 Navigator](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-4k-94-248-navigator/)**\n  Цена: *445* ₸\n  Бренд: Navigator\n  Наличие: Караганда (1293 шт), Астана (40 шт)"
+                },
+                {
+                  "title": "Лампа NLL-GX53-6-230-6,5K 61 247 Navigator",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-6,5k-61-247-navigator/",
+                  "price": 500,
+                  "stockLine": "Караганда (436 шт), Астана (199 шт)",
+                  "cardText": "- **[Лампа NLL-GX53-6-230-6,5K 61 247 Navigator](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-6,5k-61-247-navigator/)**\n  Цена: *500* ₸\n  Бренд: Navigator\n  Наличие: Караганда (436 шт), Астана (199 шт)"
+                },
+                {
+                  "title": "Лампа NLL-GX53-6-230-2,7K 94 249 Navigator",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-2,7k-94-249-navigator/",
+                  "price": 565,
+                  "stockLine": "Караганда (45 шт), Астана (19 шт)",
+                  "cardText": "- **[Лампа NLL-GX53-6-230-2,7K 94 249 Navigator](https://220volt.kz/catalog/svetotexnika/lampyi/lampa-nll-gx53-6-230-2,7k-94-249-navigator/)**\n  Цена: *565* ₸\n  Бренд: Navigator\n  Наличие: Караганда (45 шт), Астана (19 шт)"
+                }
+              ],
+              "text": "Вы назвали серию, а не точный артикул исходной лампы. Поэтому это варианты для сравнения без названного кода модели в заголовке, а не подтверждённые взаимозаменяемые аналоги; принадлежность вариантов к другой серии каталогом не доказана. В двух или более проверенных карточках с названным кодом модели наблюдаются 6–15 Вт и диаметр 74 мм; это не полная спецификация серии. У показанных вариантов проверены категория «Лампы», цоколь GX53, форма «таблетка», светодиодный тип, питание AC и рабочее напряжение, охватывающее 220–230 В; №1: 6 Вт, диаметр 74 мм; №2: 6 Вт, диаметр 74 мм; №3: 6 Вт, диаметр 74 мм. Перед покупкой сверьте напряжение исходной лампы, её мощность, диаметр, высоту и посадку, а также максимально допустимую мощность светильника.\n\nПоказываю кандидатов для замены. В карточках всех показанных товаров подтверждены параметры подбора: Тип цоколя: GX53, Форма колбы: таблетка. Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-a34b4c06",
+                "mandatory_criteria": [
+                  {
+                    "key": "tip_cokolya__cokoly_tүrі",
+                    "op": "eq",
+                    "value": "GX53",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "forma_kolby__kolbanyң_pіshіnі",
+                    "op": "eq",
+                    "value": "таблетка",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "bt924-acti9-followup-show",
+      "title": "BT-924: bare show retains Acti9 context but waits for missing pole count",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_bt924-acti9-followup-show_base_1792472208335_1",
+          "turns": [
+            {
+              "message": "Подбери аналог Schneider Acti9 C16",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 10109,
+              "network_attempts": 1,
+              "log_id": "9996b7f0-8221-4f7f-828e-995201cf58d0",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать кандидатов для замены, уточните количество полюсов.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "kolichestvo_polyusov__polyuster_sany",
+                "options_count": 4,
+                "values": [
+                  "2",
+                  "3",
+                  "1",
+                  "4"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "покажи",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 830,
+              "network_attempts": 1,
+              "log_id": "dc0b1af7-e12c-4644-a6a6-4831641048b6",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать кандидатов для замены, уточните количество полюсов.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "kolichestvo_polyusov__polyuster_sany",
+                "options_count": 4,
+                "values": [
+                  "2",
+                  "3",
+                  "1",
+                  "4"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "1",
+              "synthetic_scenario": true,
+              "status": 200,
+              "duration_ms": 6473,
+              "network_attempts": 1,
+              "log_id": "0f626ac4-ac45-4bd9-a8c5-9fad65c71d63",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek",
+                  "verified": true,
+                  "sku": "Ем000015711",
+                  "name": "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С GENERICA ИЭК",
+                  "facets": {
+                    "Категория": "Автоматические выключатели",
+                    "Степень защиты": "IP20",
+                    "Механическая износостойкость, циклов": "20000",
+                    "Гарантийный срок, м": "60",
+                    "Диапазон рабочих температур, °C": "-40…50",
+                    "Серия": "ВА47-29",
+                    "Единица измерения": "шт",
+                    "Высота, мм": "81.5",
+                    "Вес, кг.": "0.087",
+                    "Объем, м3": "0.000142",
+                    "Тип напряжения": "переменный; постоянный (АС/DC)",
+                    "Бренд": "GENERICA",
+                    "Ширина, мм": "17.8",
+                    "Код ТН ВЭД": "8536201007",
+                    "Глубина, мм": "78",
+                    "Тип монтажа": "на DIN-рейку",
+                    "Количество полюсов": "1",
+                    "Номинальный ток": "16",
+                    "Частота, Гц": "50",
+                    "Номинальное рабочее напряжение": "230",
+                    "Количество в групповой упаковке": "12",
+                    "Макс. сечение подключаемого кабеля, мм2": "25",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "КИТАЙ",
+                    "Характеристика срабатывания": "C",
+                    "Номинальная откл способность, кА": "4.5"
+                  },
+                  "offerPrice": 477,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek/",
+                  "description_excerpt": "Автоматические выключатели ВА47-29 GENERICA предназначены для защиты распределительных и групповых цепей, имеющих различную нагрузку:– электроприборы, освещение – выключатели с характеристикой В,– двигатели с небольшими пусковыми токами (компрессор, вентилятор) – выключатели с характеристикой C, – двигатели с большими пусковыми токами (подъемные механизмы, насосы) – выключатели с характеристикой D. Автоматические выключатели ВА47-29 рекомендуются к применению в вводно-распределительных устройств"
+                },
+                {
+                  "identity": "220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16",
+                  "verified": true,
+                  "sku": "Ем000035523",
+                  "name": "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/",
+                  "facets": {
+                    "Категория": "Автоматические выключатели",
+                    "Степень защиты": "IP20",
+                    "Механическая износостойкость, циклов": "25000",
+                    "Гарантийный срок, м": "36",
+                    "Диапазон рабочих температур, °C": "-20…60",
+                    "Серия": "HDB3w",
+                    "Единица измерения": "шт",
+                    "Высота, мм": "80",
+                    "Вес, кг.": "0.091",
+                    "Номинальное напряжение изоляции, В": "250",
+                    "Объем, м3": "0.00013",
+                    "Бренд": "Himel",
+                    "Ширина, мм": "17.7",
+                    "Код ТН ВЭД": "8536201007",
+                    "Глубина, мм": "78.5",
+                    "Количество полюсов": "1",
+                    "Номинальный ток": "16",
+                    "Номинальное рабочее напряжение": "240",
+                    "Макс. сечение подключаемого кабеля, мм2": "25",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "КИТАЙ",
+                    "Характеристика срабатывания": "C",
+                    "Номинальная откл способность, кА": "4.5"
+                  },
+                  "offerPrice": 562,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/",
+                  "description_excerpt": "Автоматические выключатели Himel серии HDB3w предназначены для защиты электрических цепей от перегрузок и коротких замыканий в жилых, коммерческих и промышленных установках. Устройства серии HDB3w устанавливаются на DIN-рейку и обеспечивают надёжную работу в низковольтных распределительных щитах. Серия отличается компактным дизайном, удобством монтажа. Область применения: квартирные и этажные щиты, щиты освещения, распределительные панели, шкафы управления."
+                },
+                {
+                  "identity": "220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-(iek)",
+                  "verified": true,
+                  "sku": "Ем000033671",
+                  "name": "Автоматический выключатель ВА47-29М 1P 16А 4,5кА C GENERICA (ИЭК)",
+                  "facets": {
+                    "Категория": "Автоматические выключатели",
+                    "Степень защиты": "IP20",
+                    "Механическая износостойкость, циклов": "10000",
+                    "Гарантийный срок, м": "60",
+                    "Диапазон рабочих температур, °C": "-40…50",
+                    "Серия": "ВА47-29",
+                    "Единица измерения": "шт",
+                    "Высота, мм": "86",
+                    "Вес, кг.": "0.091",
+                    "Наличие электронного расцепителя": "нет",
+                    "Объем, м3": "0.000154",
+                    "Тип напряжения": "переменный (АС)",
+                    "Бренд": "GENERICA",
+                    "Ширина, мм": "18",
+                    "Код ТН ВЭД": "8536201007",
+                    "Глубина, мм": "70",
+                    "Тип монтажа": "на DIN-рейку",
+                    "Тип подключения": "винтовое соединение",
+                    "Количество полюсов": "1",
+                    "Номинальный ток": "16",
+                    "Частота, Гц": "50",
+                    "Номинальное рабочее напряжение": "230",
+                    "Количество в групповой упаковке": "12",
+                    "Макс. сечение подключаемого кабеля, мм2": "25",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Страна происхождения": "КИТАЙ",
+                    "Характеристика срабатывания": "C",
+                    "Номинальная откл способность, кА": "4.5"
+                  },
+                  "offerPrice": 578,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-(iek)/",
+                  "description_excerpt": "Автоматические выключатели ВА47-29M GENERICA предназначены для защиты распределительных и групповых цепей, имеющих различную нагрузку:– электроприборы, освещение – выключатели с характеристикой В,– двигатели с небольшими пусковыми токами (компрессор, вентилятор) – выключатели с характеристикой C,– двигатели с большими пусковыми токами (подъемные механизмы, насосы) – выключатели с характеристикой D.Автоматические выключатели ВА47-29M рекомендуются к применению в вводно-распределительных устройств"
+                },
+                {
+                  "identity": "220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-(chint)-296710",
+                  "verified": true,
+                  "sku": "Ем000028257",
+                  "name": "Автоматический выключатель NXB-63S 1P 16А 4.5kA характеристика C (CHINT) 296710",
+                  "facets": {
+                    "Категория": "Автоматические выключатели",
+                    "Степень защиты": "IP20",
+                    "Механическая износостойкость, циклов": "20000",
+                    "Гарантийный срок, м": "60",
+                    "Диапазон рабочих температур, °C": "-35...70",
+                    "Серия": "NXB-63S",
+                    "Единица измерения": "шт",
+                    "Вес, кг.": "0.083",
+                    "Номинальное напряжение изоляции, В": "300",
+                    "Объем, м3": "0.00015",
+                    "Бренд": "CHINT",
+                    "Код ТН ВЭД": "8536201007",
+                    "Количество полюсов": "1",
+                    "Номинальный ток": "16",
+                    "Номинальное рабочее напряжение": "230",
+                    "Количество в групповой упаковке": "1",
+                    "Макс. сечение подключаемого кабеля, мм2": "16",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Код НКТ": "0200185676087",
+                    "Страна происхождения": "КИТАЙ",
+                    "Характеристика срабатывания": "C",
+                    "Номинальная откл способность, кА": "4.5"
+                  },
+                  "offerPrice": 656,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-(chint)-296710/",
+                  "description_excerpt": "Автоматический выключатель NXB-63S 1P 16 А 4,5 кА, характеристика C (CHINT), арт. 296710 Подробное описание, назначение и область применения CHINT NXB-63S 1P 16 А — однополюсный модульный автоматический выключатель для защиты однофазных электрических цепей от перегрузки и короткого замыкания. Аппарат рассчитан на номинальный ток 16 А, имеет характеристику срабатывания C и отключающую способность 4,5 кА. Он применяется в конечных распределительных цепях жилых, общественных и коммерческих зданий. "
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek/",
+                  "price": 477,
+                  "stockLine": "Шымкент (6 шт), Алматы (1 шт), Иргели (318 шт)",
+                  "cardText": "- **[Автомат 1Р ВА 47-29 16 А 4,5кА х-ка С GENERICA ИЭК](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29-16-a-4,5ka-x-ka-s-generica-iek/)**\n  Цена: *477* ₸\n  Бренд: GENERICA\n  Наличие: Шымкент (6 шт), Алматы (1 шт), Иргели (318 шт)"
+                },
+                {
+                  "title": "Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/",
+                  "price": 562,
+                  "stockLine": "Караганда (12309 шт), Алматы (10964 шт), Астана (6724 шт) и ещё 2 городов",
+                  "cardText": "- **[Автоматический выключатель 1Р 16А характеристика C HDB3w 4,5кА /HDB3WL1C16/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-1r-16a-xarakteristika-c-hdb3w-4,5ka-hdb3wl1c16/)**\n  Цена: *562* ₸\n  Бренд: Himel\n  Наличие: Караганда (12309 шт), Алматы (10964 шт), Астана (6724 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-%28iek%29/",
+                  "price": 578,
+                  "stockLine": "Актобе (1012 шт), Астана (1006 шт), Караганда (825 шт) и ещё 2 городов",
+                  "cardText": "- **[Автомат 1Р ВА 47-29М 16А 4,5кА х-ка С GENERICA (ИЭК)](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomat-1r-va-47-29m-16a-4,5ka-x-ka-s-generica-%28iek%29/)**\n  Цена: *578* ₸\n  Бренд: GENERICA\n  Наличие: Актобе (1012 шт), Астана (1006 шт), Караганда (825 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/",
+                  "price": 656,
+                  "stockLine": "Алматы Чинт (49008 шт), Караганда (10422 шт), Алматы (3043 шт) и ещё 3 городов",
+                  "cardText": "- **[Автоматический выключатель NXB-63S 1P 16А 4.5kA х-ка C (CHINT) 296710](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomaticheskie-vyiklyuchateli/avtomaticheskij-vyiklyuchatel-nxb-63s-1p-16a-4.5ka-x-ka-c-%28chint%29-296710/)**\n  Цена: *656* ₸\n  Бренд: CHINT\n  Наличие: Алматы Чинт (49008 шт), Караганда (10422 шт), Алматы (3043 шт) и ещё 3 городов"
+                }
+              ],
+              "text": "\n\nПоказываю кандидатов для замены. В карточках всех показанных товаров подтверждены параметры подбора: Характеристика срабатывания: C, Номинальный ток: 16, Количество полюсов: 1. Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-bf57e271",
+                "mandatory_criteria": [
+                  {
+                    "key": "Характеристика срабатывания",
+                    "op": "eq",
+                    "value": "C",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Номинальный ток",
+                    "op": "eq",
+                    "value": "16",
+                    "evidence": "user_explicit"
+                  },
+                  {
+                    "key": "Количество полюсов",
+                    "op": "eq",
+                    "value": "1",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "kolichestvo_polyusov__polyuster_sany",
+                "options_count": 4,
+                "values": [
+                  "2",
+                  "3",
+                  "1",
+                  "4"
+                ]
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Подтверждено по всем уточнённым параметрам: 4",
+                  "duration_ms": 4194
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "bt746-black-double-socket",
+      "title": "BT-746: black double socket",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_bt746-black-double-socket_base_1792472228724_1",
+          "turns": [
+            {
+              "message": "подбери черную двойную розетку",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16923,
+              "network_attempts": 1,
+              "log_id": "999507bf-4b41-4a9c-a73d-bbaf4a1deef6",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)",
+                  "verified": true,
+                  "sku": "Ем000028744",
+                  "name": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Florence",
+                    "Напряжение, В": "250",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик; поликарбонат",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "КИТАЙ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.086",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0006",
+                    "Наличие заземления": "Да",
+                    "Бренд": "OneKeyElectro",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 2923,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-(seriya-florence)/",
+                  "description_excerpt": "Двойная розетка OneKeyElectro с заземлением, винтовые контакты - это гармония эстетики и эргономики, которая позволяет удвоить количество розеток в случае ограниченного пространства или при проведении косметического ремонта в помещении. Двойная розетка OneKeyElectro устанавливается в одинарный подрозетник (монтажную коробку), что позволяет увеличить количество точек питания без проведения работ по штроблению стен."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026162",
+                  "name": "Розетка 2-местная открытой установки, серия ПРАЛЕСКА, РА16-260 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Код НКТ": "0200265502893",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.073",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0002",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 744,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij",
+                  "verified": true,
+                  "sku": "Ем000026163",
+                  "name": "Розетка 2-местная открытой установки с заземляющим контактом, серия ПРАЛЕСКА, РА16-261 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Пралеска",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "накладной",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.089",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0003",
+                    "Наличие заземления": "Да",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 932,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "description_excerpt": "Компания Светоприбор является одним из ведущих производителей электроустановочного оборудования. Фирма выпускает большой ассортимент наименований, включая различные светодиодные изделия, выключатели и розетки. Благодаря собственному научному центру и лаборатории для проведения тестирования продукции, производитель сумел достичь высоких результатов в плане надежности и долговечности электроустановочного оборудования."
+                },
+                {
+                  "identity": "220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij",
+                  "verified": true,
+                  "sku": "Ем000028175",
+                  "name": "Розетка РС 16-343 черный",
+                  "facets": {
+                    "Категория": "Розетки",
+                    "Коллекция": "Уют",
+                    "Напряжение, В": "220",
+                    "Цвет": "чёрный",
+                    "Материал": "пластик",
+                    "Степень защиты": "IP20",
+                    "Страна происхождения": "БЕЛАРУСЬ",
+                    "Тип монтажа": "скрытый",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Крепление": "на винтах",
+                    "Тип комплектации": "в сборе",
+                    "Количество разъемов": "2",
+                    "Единица измерения": "шт",
+                    "Вид розетки": "электрическая",
+                    "Вес, кг.": "0.09",
+                    "Макс. ток нагрузки, А": "16",
+                    "Влагозащита": "Нет",
+                    "Объем, м3": "0.0004",
+                    "Наличие заземления": "Нет",
+                    "Бренд": "Bylectrica",
+                    "Защитные шторки/крышка": "Нет",
+                    "Код ТН ВЭД": "8536699008"
+                  },
+                  "offerPrice": 964,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "description_excerpt": "Серия «Уют» отличается от других очень интересным дизайном. Благодаря цветным декоративным рамкам можно удачно вписать эти розетки и выключатели практически в любой интерьер. Высочайшее качество продукции обеспечивается благодаря тому, что компания «Светоприбор», на заводах которой выпускается данная продукция, осуществляет весь производственный цикл от изготовления оснастки до выпуска готовой продукции. Преимущества серии «Уют»: Большой выбор функциональных возможностей Современный дизайн Эколо"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 2923,
+                  "stockLine": "Караганда (56 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *2 923* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (56 шт)"
+                },
+                {
+                  "title": "Розетка РА 16-260 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/",
+                  "price": 744,
+                  "stockLine": "Караганда (1380 шт), Шымкент (465 шт), Алматы (239 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-260 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-260-chernyij/)**\n  Цена: *744* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1380 шт), Шымкент (465 шт), Алматы (239 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РА 16-261 черный Пралеска",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/",
+                  "price": 932,
+                  "stockLine": "Караганда (1167 шт), Астана (808 шт), Шымкент (712 шт) и ещё 2 городов",
+                  "cardText": "- **[Розетка РА 16-261 черный Пралеска](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-ra-16-261-chernyij/)**\n  Цена: *932* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1167 шт), Астана (808 шт), Шымкент (712 шт) и ещё 2 городов"
+                },
+                {
+                  "title": "Розетка РС 16-343 черный",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/",
+                  "price": 964,
+                  "stockLine": "Караганда (1180 шт)",
+                  "cardText": "- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-rs-16-343-chernyij/)**\n  Цена: *964* ₸\n  Бренд: Bylectrica\n  Наличие: Караганда (1180 шт)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Розетки». По обязательным условиям проверяю «Количество разъемов: 2»; «Цвет: чёрный»; «Вид розетки: электрическая».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-dbdd3b7c",
+                "mandatory_criteria": [
+                  {
+                    "key": "Количество разъемов",
+                    "op": "eq",
+                    "value": "2",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид розетки",
+                    "op": "eq",
+                    "value": "электрическая",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "count",
+                    "label": "двойная розетка",
+                    "op": "eq",
+                    "value": 2
+                  },
+                  {
+                    "kind": "literal_modifier",
+                    "label": "черную",
+                    "op": "eq",
+                    "value": "черную"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Розетки»: 1820 тов., фасетов 46, листьев 1",
+                  "duration_ms": 5329
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=23; minimum=3; application=0; customer_eq=3",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 30",
+                  "duration_ms": 683
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "product titles violate required groups: Розетка РА 16-260 черный Пралеска | Розетка РА 16-261 черный Пралеска | Розетка РС 16-343 черный"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-20T04:57:30.384Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 5,
+    "recorded_turns": 5
+  },
+  "log_ids": [
+    "f02d8e8e-2830-4dd3-8883-d684e28bbd8c",
+    "9996b7f0-8221-4f7f-828e-995201cf58d0",
+    "dc0b1af7-e12c-4644-a6a6-4831641048b6",
+    "0f626ac4-ac45-4bd9-a8c5-9fad65c71d63",
+    "999507bf-4b41-4a9c-a73d-bbaf4a1deef6"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 11,
+    "verified": 11,
+    "unverified": 0
+  },
+  "passed": false
+}

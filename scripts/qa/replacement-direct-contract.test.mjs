@@ -26,7 +26,7 @@ const compactPreflight = source.slice(compactBegin, begin);
 test("ordinary direct analogue cards publish only live transferable axes and an explicit price cap", () => {
   assert.match(preflight, /selectExplicitAnchorAxes\(\s*anchor,\s*discovery\.facets,\s*userMessage/u);
   assert.match(preflight, /selectUserOwnedReplacementAxes\(\s*anchor,\s*discovery\.facets,\s*independentRequestFrame/u);
-  assert.match(preflight, /options:\s*Object\.fromEntries\(axes\.map\(\(axis\)\s*=>\s*\[axis\.key,\s*\[axis\.value\]\]\)\)/u);
+  assert.match(preflight, /options:\s*structuralProfile\?\.searchOptions\s*\?\?\s*Object\.fromEntries\(axes\.map\(\(axis\)\s*=>\s*\[axis\.key,\s*\[axis\.value\]\]\)\)/u);
   assert.match(preflight, /max_price:\s*budgetCap/u);
   assert.match(preflight, /product\.price <= budgetCap/u);
 
@@ -36,6 +36,10 @@ test("ordinary direct analogue cards publish only live transferable axes and an 
   assert.match(contract, /if \(budgetCap !== null\) \{[\s\S]*?key:\s*"Цена",[\s\S]*?op:\s*"max",[\s\S]*?value:\s*budgetCap,[\s\S]*?evidence:\s*"user_explicit"/u);
   assert.match(contract, /selection_contract:\s*\{[\s\S]*?hash:\s*selectionPlan\.hash,[\s\S]*?mandatory_criteria:\s*selectionPlan\.mandatory_criteria/u);
   assert.doesNotMatch(contract, /key:\s*(?:sourceModel|sourceModels|anchor\.pagetitle|sourceDescription)/u);
+  assert.match(contract, /structuralProfile\.obligations\.map\(\(obligation\)\s*=>/u);
+  assert.match(preflight, /evaluateStructuralReplacementCandidate\(\s*structuralProfile,\s*ctx\.cache\.get\(product\.id\)/u);
+  assert.match(preflight, /if \(selected\.length === 0 && structuralProfile && strict\.ok\)/u);
+  assert.match(preflight, /if \(selected\.length === 0 && !structuralProfile\)/u);
 });
 
 test("title-only code is distinguished from live facet proof on every direct branch", () => {

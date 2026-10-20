@@ -1005,6 +1005,57 @@ export function extractReplacementSourceDescription(message: string): string {
 }
 
 /**
+ * A command followed by one independently verified complete catalog title is
+ * a source-only replacement request. Specifications inside that title describe
+ * the source, not customer-mandated exact values on its analogues. This grammar
+ * deliberately rejects budgets, comparative qualifiers and trailing clauses;
+ * those continue through the user-owned requirement route.
+ */
+export function isUnqualifiedVerifiedReplacementSource(
+  message: string,
+  verifiedSourceTitle: string,
+  verifiedArticle?: string | null,
+  verifiedLeafCategory?: string | null,
+): boolean {
+  const normalized = (value: string) => String(value ?? "").normalize("NFKC")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ").trim();
+  const request = normalized(message);
+  const source = normalized(extractReplacementSourceDescription(message));
+  const title = normalized(verifiedSourceTitle);
+  if (!request || !source || !request.endsWith(source)) {
+    return false;
+  }
+  const command = request.slice(0, -source.length).trim();
+  if (!/^(?:предлож\p{L}*|подбер\p{L}*|найд\p{L}*|покаж\p{L}*)\s+(?:мне\s+|пожалуйста\s+)*(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*)\s+(?:на|для|к|ко)$/iu
+    .test(command)) return false;
+  if (source === title) return true;
+
+  // Some source pages abbreviate the item class and put the article before
+  // the model, whereas customers quote the full class and put it last. A
+  // unique exact article lookup establishes identity. Only a first-word
+  // category expansion may differ; any other extra token could be an
+  // independent customer requirement and therefore blocks this route.
+  const article = String(verifiedArticle ?? "").replace(/\D/gu, "");
+  if (article.length < 8) return false;
+  const suffix = source.match(/(\d{8,})(?:\s*\/\s*(\d{8,}))?$/u);
+  if (!suffix || (suffix[1] !== article && suffix[2] !== article)) return false;
+  const tokens = (value: string) => value.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const sourceTokens = tokens(source);
+  const titleTokens = new Set(tokens(title));
+  const unmatched = sourceTokens.flatMap((token, index) =>
+    titleTokens.has(token) ? [] : [{ token, index }]
+  );
+  if (unmatched.length === 0) return sourceTokens.length > 0;
+  if (unmatched.length !== 1 || unmatched[0].index !== 0) return false;
+  const categoryWords = tokens(normalized(verifiedLeafCategory ?? ""));
+  const first = unmatched[0].token;
+  return first.length >= 4 && categoryWords.some((word) =>
+    word.startsWith(first.slice(0, 4))
+  );
+}
+
+/**
  * A customer-declared source class is compiled to live taxonomy leaves before
  * anchor selection. When that scope exists, an alphanumeric compatibility
  * token cannot move the source to a sibling class. Empty scope means that the

@@ -1,0 +1,238 @@
+{
+  "suite_file": "notion-legacy-bug-cases-v4.json",
+  "suite_version": 4,
+  "suite_sha256": "882926735a6426bbfc3b560c2dddd82b8eb90a0803cec9bd1d597e1d558846ee",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T05:01:25.968Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "bt924-dn027b-analogs": 1
+  },
+  "cases": [
+    {
+      "id": "bt924-dn027b-analogs",
+      "title": "BT-924: DN027B analogs match the recessed LED downlight, not only its name",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_bt924-dn027b-analogs_base_1792472485969_1",
+          "turns": [
+            {
+              "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 18287,
+              "network_attempts": 1,
+              "log_id": "4391a073-8a73-4e6a-8b3f-4c3719747ed0",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse",
+                  "verified": true,
+                  "sku": "Ем000018300",
+                  "name": "915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse",
+                  "facets": {
+                    "Категория": "Светильники",
+                    "Цвет свечения": "нейтральный",
+                    "Гарантийный срок, мес": "24",
+                    "Диаметр, см": "8",
+                    "Вид светильника": "даунлайт",
+                    "Страна происхождения": "КИТАЙ",
+                    "Длина, см": "8",
+                    "Ширина, см": "8",
+                    "Тип лампы": "LED",
+                    "Тип цоколя": "нет",
+                    "Наличие блока аварийного питания": "Нет",
+                    "Количество ламп": "нет",
+                    "Диммирование": "Нет",
+                    "Срок службы, мес": "60",
+                    "Мощность ламп, Вт": "6",
+                    "Световой поток, Лм": "400",
+                    "Диапазон рабочих температур": "-10 +50 °C",
+                    "Напряжение, В": "220",
+                    "Единица измерения": "шт",
+                    "Способ монтажа": "встраиваемый",
+                    "Вес, кг.": "0.335",
+                    "Степень защиты, IP": "20",
+                    "Продается только в групповой упаковке": "Нет",
+                    "ПРА": "в комплекте",
+                    "Объем, м3": "0.000355",
+                    "Цвет корпуса": "белый",
+                    "Бренд": "Philips",
+                    "Материал рассеивателя": "пластик полимерный",
+                    "Код ТН ВЭД": "9405110014",
+                    "Материал корпуса": "пластик"
+                  },
+                  "offerPrice": 1334,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/",
+                  "description_excerpt": "Освещая пространство с помощью светильника Philips Meson вы наслаждитесь мягким, равномерным светом от высококачественного светодиодного источника света. Светильник прост в установке. Идеальное решение для монтажников и клиентов, которые ожидают качественного освещения и надежной работы. Высота/глубина 46 мм; Внешний диаметр 95 мм; Монтажный диаметр 80 мм."
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/",
+                  "price": 1334,
+                  "stockLine": "Караганда (6799 шт), Актобе (301 шт), Астана (237 шт) и ещё 2 городов",
+                  "cardText": "- **[915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse](https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/)**\n  Цена: *1 334* ₸\n  Бренд: Philips\n  Наличие: Караганда (6799 шт), Актобе (301 шт), Астана (237 шт) и ещё 2 городов"
+                }
+              ],
+              "text": "\n\nПоказываю кандидатов для замены. В карточках всех показанных товаров подтверждены параметры подбора: Цвет свечения: нейтральный, ПРА: в комплекте, Способ монтажа: встраиваемый. По данным карточек совпадают отдельные параметры: Бренд: Philips, Цвет корпуса: белый, Цвет свечения: нейтральный. Полная взаимозаменяемость по данным каталога не подтверждена. Ниже значение параметра у конкретных кандидатов (№1 «915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse»: «Диаметр, см», «Длина, см»); не считайте их равноценной заменой без проверки. Перед покупкой сверьте остальные критичные паспортные и монтажные характеристики. Цены показанных товаров ниже актуальной цены исходной карточки при той же единице продажи.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-43bbbb26",
+                "mandatory_criteria": [
+                  {
+                    "key": "Цвет свечения",
+                    "op": "eq",
+                    "value": "нейтральный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Диаметр, см",
+                    "op": "range",
+                    "value": [
+                      8,
+                      10
+                    ],
+                    "unit": "см",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Мощность ламп, Вт",
+                    "op": "range",
+                    "value": [
+                      6,
+                      8
+                    ],
+                    "unit": "вт",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Напряжение, В",
+                    "op": "range",
+                    "value": [
+                      220,
+                      220
+                    ],
+                    "unit": "В",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "ПРА",
+                    "op": "eq",
+                    "value": "в комплекте",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Способ монтажа",
+                    "op": "eq",
+                    "value": "встраиваемый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Степень защиты, IP",
+                    "op": "min",
+                    "value": 20,
+                    "unit": "IP",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "range",
+                    "value": [
+                      400,
+                      800
+                    ],
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип цоколя",
+                    "op": "eq",
+                    "value": "нет",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип лампы",
+                    "op": "eq",
+                    "value": "LED",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "даунлайт",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Replacement preflight: подтверждено 1; обязательные оси: Цвет свечения=нейтральный, Диаметр, см=8,10, Мощность ламп, Вт=6,8, Напряжение, В=220,220, ПРА=в комплекте, Способ монтажа=встраиваемый, Степень защиты, IP=20, Световой поток, Лм=400,800, Тип цоколя=нет, Тип лампы=LED, Вид светильника=даунлайт",
+                  "duration_ms": 15283
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T05:01:49.313Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "4391a073-8a73-4e6a-8b3f-4c3719747ed0"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": true
+}

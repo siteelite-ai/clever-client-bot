@@ -482,6 +482,10 @@ import {
   productProvesDirectReplacementAxes,
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
+  evaluateStructuralReplacementCandidate,
+  resolveStructuralReplacementProfile,
+} from "../_shared/v3-tools/replacement-structural-proof.ts";
+import {
   evaluateLedLampCandidate,
   evaluateLedLampFamilyBrowseCandidate,
   evaluateLedLampNamedSourceFamilyMember,
@@ -504,6 +508,7 @@ import {
   extractReplacementLookupKeys,
   extractReplacementSourceDescription,
   inferLiveReplacementClarification,
+  isUnqualifiedVerifiedReplacementSource,
   isReplacementProofRequest,
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
@@ -5344,8 +5349,57 @@ async function selectVerifiedOrdinaryReplacement(
     }
   }
 
+  // A fully verified source-only title is product identity, not a collection
+  // of exact requirements copied from the old item. For categories with a
+  // live structural profile, verify source and candidate fit separately from
+  // customer-owned axes. Requests with any independent qualifier stay on the
+  // pre-existing axis route.
+  const sourceOnlyVerified = sourceIdentityVerified &&
+    isUnqualifiedVerifiedReplacementSource(
+      userMessage,
+      anchor.pagetitle,
+      anchor.article,
+      anchor.leaf_category,
+    );
+  const structuralSource = sourceOnlyVerified ? ctx.cache.get(anchor.id) : undefined;
+  if (sourceOnlyVerified && !structuralSource) {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Исходный товар найден, но сейчас не удалось подтвердить его характеристики по каталогу. Повторите запрос позже; неподтверждённые аналоги показывать не буду.",
+    });
+    steps.push({
+      step: "v3_replacement_structural_source_missing",
+      ms: Date.now() - t0,
+      meta: { anchor_id: anchor.id },
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const structuralResolution = sourceOnlyVerified
+    ? resolveStructuralReplacementProfile(structuralSource, discovery.facets)
+    : { status: "not_applicable" as const };
+  if (structuralResolution.status === "unverifiable") {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Исходный товар найден, но каталог не позволяет надёжно сверить его тип, монтаж и размеры с заменой. Уточните критичные параметры установки или обратитесь к менеджеру; сомнительные аналоги показывать не буду.",
+    });
+    steps.push({
+      step: "v3_replacement_structural_source_unverifiable",
+      ms: Date.now() - t0,
+      meta: { anchor_id: anchor.id, reason: structuralResolution.reason },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+  const structuralProfile = structuralResolution.status === "ready"
+    ? structuralResolution.profile
+    : null;
+
   const axisLimit = equivalentOnly ? 6 : 3;
-  const allExplicitAxes = independentRequestFrame !== null
+  const allExplicitAxes = structuralProfile ? []
+    : independentRequestFrame !== null
     ? selectUserOwnedReplacementAxes(
       anchor,
       discovery.facets,
@@ -5392,7 +5446,7 @@ async function selectVerifiedOrdinaryReplacement(
     };
   }
   const axes = allExplicitAxes;
-  if (axes.length < 2) {
+  if (axes.length < 2 && !structuralProfile) {
     if (independentRequestFrame !== null) {
       send({
         type: "delta",
@@ -5484,11 +5538,16 @@ async function selectVerifiedOrdinaryReplacement(
       );
       return titleCodes.has(code);
     })) return false;
-    const proven = productProvesDirectReplacementAxes(
-      ctx.cache.get(product.id),
-      axes,
-      budgetCap,
-    );
+    const proven = structuralProfile
+      ? evaluateStructuralReplacementCandidate(
+        structuralProfile,
+        ctx.cache.get(product.id),
+      ).ok
+      : productProvesDirectReplacementAxes(
+        ctx.cache.get(product.id),
+        axes,
+        budgetCap,
+      );
     if (!proven) unverifiedFacetCandidateIds.add(product.id);
     return proven;
   };
@@ -5505,10 +5564,12 @@ async function selectVerifiedOrdinaryReplacement(
     {
       mode: "by_filter",
       ...baseSearch,
+      ...(structuralProfile ? { per_page: 50 } : {}),
       ...(budgetCap !== null
         ? { max_price: budgetCap, sort_cheapest: true }
         : {}),
-      options: Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
+      options: structuralProfile?.searchOptions ??
+        Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
     },
     { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
     ctx.cache,
@@ -5522,7 +5583,30 @@ async function selectVerifiedOrdinaryReplacement(
   let splitSearchTotals: Array<number | null> = [];
   let broadSearchTotal: number | null | undefined;
 
-  if (selected.length === 0) {
+  // A source-only analogue is searched by structural class, then every live
+  // candidate is proved locally. The catalog may have more than one page of
+  // this class; inspect a bounded continuation before declaring uncertainty.
+  let structuralPagesScanned = strict.ok ? 1 : 0;
+  if (selected.length === 0 && structuralProfile && strict.ok) {
+    const lastPage = Math.min(5, Math.ceil(strict.total / 50));
+    for (let page = 2; page <= lastPage && selected.length === 0; page += 1) {
+      const continuation = await executeSearchCatalog({
+        mode: "by_filter",
+        ...baseSearch,
+        per_page: 50,
+        page,
+        options: structuralProfile.searchOptions,
+      }, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: ctx.catalogToken,
+      }, ctx.cache);
+      if (!continuation.ok) break;
+      structuralPagesScanned += 1;
+      selected = continuation.results.filter(isCandidate).slice(0, 4);
+    }
+  }
+
+  if (selected.length === 0 && !structuralProfile) {
     const splitSearches = await Promise.all(axes.map(async (axis) => ({
       axis,
       result: await executeSearchCatalog(
@@ -5616,12 +5700,42 @@ async function selectVerifiedOrdinaryReplacement(
     duration_ms: elapsed,
     summary:
       `Replacement preflight: подтверждено ${selected.length}; обязательные оси: ${
-        mandatoryAxes.map((axis) => `${axis.caption}=${axis.values.join("/")}`)
+        (structuralProfile
+          ? structuralProfile.obligations.map((obligation) =>
+            `${obligation.caption}=${String(obligation.value)}`
+          )
+          : mandatoryAxes.map((axis) =>
+            `${axis.caption}=${axis.values.join("/")}`
+          ))
           .join(", ") || "нет"
       }`,
   });
 
   if (selected.length === 0) {
+    if (structuralProfile) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: strict.ok
+          ? "Не смог подтвердить подходящие замены по типу, монтажу и характеристикам в проверенной части каталога. Это не означает, что аналогов нет. Уточните допустимые отличия по размерам и яркости или попросите менеджера проверить посадочное отверстие; неподтверждённые товары не показываю."
+          : "Сейчас не удалось проверить аналоги по каталогу. Повторите запрос позже; неподтверждённые товары не показываю.",
+      });
+      steps.push({
+        step: "v3_replacement_structural_no_verified_candidates",
+        ms: Date.now() - t0,
+        meta: {
+          anchor_id: anchor.id,
+          strict_total: strict.ok ? strict.total : null,
+          pages_scanned: structuralPagesScanned,
+          unverified_candidates: unverifiedFacetCandidateIds.size,
+        },
+      });
+      return {
+        handled: true,
+        products: [],
+        outcome: strict.ok ? "query_inconsistent" : "upstream_error",
+      };
+    }
     const emptyOutcome = directReplacementEmptyOutcome({
       strictTotal: strict.ok ? strict.total : null,
       splitTotals: splitSearchTotals,
@@ -5668,21 +5782,32 @@ async function selectVerifiedOrdinaryReplacement(
     });
     return { handled: true, products: [], outcome: "upstream_error" };
   }
-  const selectionCriteria: Criterion[] = axes.map((axis) => {
-    const facet = discovery.facets.find(({ key }) => key === axis.key);
-    return {
-      key: axis.caption,
-      op: "eq",
-      value: axis.value,
-      ...(facet?.unit ? { unit: facet.unit } : {}),
+  const selectionCriteria: Criterion[] = structuralProfile
+    ? structuralProfile.obligations.map((obligation) => ({
+      key: obligation.caption,
+      op: obligation.op,
+      value: obligation.value,
+      ...(obligation.unit ? { unit: obligation.unit } : {}),
       level: "A",
-      // The source model is only an identity. These transferable axes are
-      // separately grounded in the live source card and catalog facets.
-      evidence: independentRequestFrame !== null
-        ? "user_explicit"
-        : "derived_required",
-    };
-  });
+      // These are necessary source-fit constraints from independently
+      // verified live facets, not exact literals borrowed from the old title.
+      evidence: "derived_required",
+    }))
+    : axes.map((axis) => {
+      const facet = discovery.facets.find(({ key }) => key === axis.key);
+      return {
+        key: axis.caption,
+        op: "eq",
+        value: axis.value,
+        ...(facet?.unit ? { unit: facet.unit } : {}),
+        level: "A",
+        // The source model is only an identity. These transferable axes are
+        // separately grounded in the live source card and catalog facets.
+        evidence: independentRequestFrame !== null
+          ? "user_explicit"
+          : "derived_required",
+      };
+    });
   if (budgetCap !== null) {
     selectionCriteria.push({
       key: "Цена",
