@@ -109,6 +109,25 @@ Deno.test("equal cut-out with different outer bezel remains provisional, never v
   );
 });
 
+Deno.test("verified opening cannot be covered by an equal or smaller outer bezel", () => {
+  for (const diameter of [80, 90]) {
+    const result = evaluateReplacementCandidateFit(
+      product("source"),
+      product(`bezel-${diameter}`, {}, {
+        description_excerpt:
+          `Монтажное отверстие: 90 мм. Наружный диаметр: ${diameter} мм.`,
+      }),
+    );
+    assertEquals(result.status, "hard_mismatch");
+    assertEquals(result.checks.mounting_cutout_mm.status, "match");
+    assertEquals(result.checks.outer_diameter_mm.status, "mismatch");
+    assertEquals(
+      result.checks.outer_diameter_mm.reason,
+      "outer_bezel_does_not_cover_mounting_cutout",
+    );
+  }
+});
+
 Deno.test("confirmed mounting and disjoint electrical supply are hard mismatches", () => {
   const surface = evaluateReplacementCandidateFit(
     product("source"),
@@ -300,6 +319,43 @@ Deno.test("explicit 12V title or supply-content contradicts a 220–240V option 
   );
   assertEquals(separateDriverOutput.checks.voltage_v.status, "match");
   assertEquals(separateDriverOutput.status, "provisional_candidate");
+});
+
+Deno.test("a partial supply claim conflicts with a wider catalogue voltage option", () => {
+  const result = evaluateReplacementCandidateFit(
+    product("source"),
+    product("partial-supply", {}, {
+      description_excerpt:
+        "Напряжение питания: 220–230 В. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+    }),
+  );
+  assertEquals(result.status, "insufficient_evidence");
+  assertEquals(result.checks.voltage_v.status, "unknown");
+  assertEquals(
+    result.checks.voltage_v.reason,
+    "candidate_voltage_evidence_conflicts",
+  );
+  assertEquals(result.checks.voltage_v.candidate.some(({ origin }) =>
+    origin === "catalog_content"
+  ), true);
+  const titleRange = evaluateReplacementCandidateFit(
+    product("source"),
+    product("partial-title-range", {}, {
+      pagetitle: "Встраиваемый LED 220-230V",
+    }),
+  );
+  assertEquals(titleRange.status, "insufficient_evidence");
+  assertEquals(
+    titleRange.checks.voltage_v.reason,
+    "candidate_voltage_evidence_conflicts",
+  );
+  const nominalTitle = evaluateReplacementCandidateFit(
+    product("source"),
+    product("nominal-title", {}, {
+      pagetitle: "Встраиваемый LED 220V",
+    }),
+  );
+  assertEquals(nominalTitle.status, "provisional_candidate");
 });
 
 Deno.test("explicit IP20 title or content contradicts an IP65 option", () => {

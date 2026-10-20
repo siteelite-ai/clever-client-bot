@@ -569,11 +569,30 @@ function cutoutCheck(
 function outerCheck(
   source: ProductFull,
   candidate: ProductFull,
+  verifiedCutout: ReplacementFitCheck,
 ): ReplacementFitCheck {
   const original = extractReplacementDimensions(source).outer_diameter_mm;
-  const proposed = extractReplacementDimensions(candidate).outer_diameter_mm;
+  const candidateDimensions = extractReplacementDimensions(candidate);
+  const proposed = candidateDimensions.outer_diameter_mm;
   const sourceEvidence = dimensionsEvidence(original);
   const candidateEvidence = dimensionsEvidence(proposed);
+  // A bezel that is no larger than the verified opening cannot cover it. This
+  // is a physical mismatch, not merely a cosmetic difference in outer size.
+  if (
+    verifiedCutout.status === "match" && proposed.mm !== null &&
+    candidateDimensions.mounting_cutout_mm.mm !== null &&
+    proposed.mm <= candidateDimensions.mounting_cutout_mm.mm
+  ) {
+    return check(
+      "mismatch",
+      "outer_bezel_does_not_cover_mounting_cutout",
+      sourceEvidence,
+      [
+        ...candidateEvidence,
+        ...dimensionsEvidence(candidateDimensions.mounting_cutout_mm),
+      ],
+    );
+  }
   if (original.mm === null || proposed.mm === null) {
     return check(
       "unknown",
@@ -675,7 +694,14 @@ function voltageTextConflicts(
 ): ReplacementFitEvidence[] {
   if (!option) return [];
   return voltageTextClaims(product)
-    .filter(({ value }) => value.max < option.min || value.min > option.max)
+    .filter(({ value, evidence }) =>
+      value.max < option.min || value.min > option.max ||
+      // A labelled supply range in the description must support the whole
+      // catalogue option. Partial overlap does not prove that its upper/lower
+      // bound is safe. A single nominal value in a title is not such a range.
+      ((evidence.origin === "catalog_content" || value.min !== value.max) &&
+        (value.min > option.min || value.max < option.max))
+    )
     .map(({ evidence }) => evidence);
 }
 
@@ -942,13 +968,14 @@ export function evaluateReplacementCandidateFit(
       ) ?? [],
     ],
   );
+  const mountingCutout = cutoutCheck(source, candidate, context);
   const checks: ReplacementCandidateFit["checks"] = {
     source_identity: identity,
     leaf_category: leaf,
     stock_and_price: availability,
     mounting_kind: mountCheck(source, candidate),
-    mounting_cutout_mm: cutoutCheck(source, candidate, context),
-    outer_diameter_mm: outerCheck(source, candidate),
+    mounting_cutout_mm: mountingCutout,
+    outer_diameter_mm: outerCheck(source, candidate, mountingCutout),
     lamp_interface: lampInterfaceCheck(source, candidate),
     voltage_v: voltageCheck(source, candidate),
     ip_grade: ipCheck(source, candidate),
@@ -962,6 +989,7 @@ export function evaluateReplacementCandidateFit(
     "stock_and_price",
     "mounting_kind",
     "mounting_cutout_mm",
+    "outer_diameter_mm",
     "lamp_interface",
     "voltage_v",
     "ip_grade",
