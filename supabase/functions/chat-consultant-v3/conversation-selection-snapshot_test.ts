@@ -3,6 +3,9 @@ import {
   type CompletedSelectionLogRow,
   type ServerSelectionSnapshot,
 } from "./conversation-selection-snapshot.ts";
+import { buildServerDestinationFitProof } from
+  "../_shared/v3-tools/selection-contract.ts";
+import type { ProductFull } from "../_shared/v3-tools/types.ts";
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -62,7 +65,30 @@ function productBlock(
   numbers: number[],
   contract: unknown = CONTRACT,
   category?: string,
+  includeDestinationProof = true,
 ) {
+  const details = contract as { hash?: string };
+  const displayedProducts: ProductFull[] = numbers.map((number) => ({
+    id: String(number),
+    url: productUrl(number, category),
+    pagetitle: `Люстра для гостиной ${number}`,
+    leaf_category: "Люстры",
+    vendor: null,
+    price: 1_000,
+    stock: "in_stock",
+    short_traits: [
+      "Назначение: Гостиная",
+      "Максимальная площадь освещения: 35 м²",
+    ],
+  }));
+  const destinationProof = !category && includeDestinationProof
+    ? buildServerDestinationFitProof({
+      customerRequest: ORIGINAL,
+      selectionHash: details.hash ?? "",
+      renderedUrls: displayedProducts.map((product) => product.url),
+      displayedProducts,
+    })
+    : null;
   return {
     type: "products_block",
     count: numbers.length,
@@ -72,6 +98,9 @@ function productBlock(
       })**\n  Цена: *1 000* ₸`
     ).join("\n\n"),
     selection_contract: contract,
+    ...(destinationProof
+      ? { server_destination_fit_proof: destinationProof }
+      : {}),
   };
 }
 
@@ -129,6 +158,17 @@ Deno.test("four-turn selection keeps the first verified contract and excludes sh
     [1, 2, 3].map((number) => productUrl(number)),
     "only server-rendered URLs become exclusions",
   );
+  assert(
+    first.selection.destination_fit_proof,
+    "only displayed source-backed cards produce measured-room proof",
+  );
+  equal(
+    first.selection.destination_fit_proof.rendered_cards.map((card) =>
+      card.url
+    ),
+    first.selection.shown_product_urls,
+    "proof binds the exact initial rendered set",
+  );
 
   const second = advance(
     completedRow(2, "Они точно подходят для освещения 30 квадратных метров?"),
@@ -175,6 +215,25 @@ Deno.test("four-turn selection keeps the first verified contract and excludes sh
     fourth.selection.shown_product_urls,
     [1, 2, 3, 4, 5].map((number) => productUrl(number)),
     "new rendered cards extend generic exclusion state",
+  );
+  equal(
+    fourth.selection.destination_fit_proof?.rendered_cards.map((card) =>
+      card.url
+    ),
+    fourth.selection.shown_product_urls,
+    "fourth turn independently proves and binds the additional cards",
+  );
+
+  const repeated = advance(
+    completedRow(4, "А есть другие варианты?", [productBlock([2])]),
+    third,
+    true,
+    "additional",
+  );
+  equal(
+    repeated.selection,
+    null,
+    "an already displayed product cannot count as a fresh alternative",
   );
 });
 
@@ -243,6 +302,21 @@ Deno.test("cross-topic, unfinished, or client-shaped state fails closed", () => 
   };
   const reset = advance(secondRow, clientShaped, true, "additional");
   equal(reset.selection, null, "uncontrolled URLs cannot be inherited");
+  const forgedDestination = {
+    ...first,
+    selection: {
+      ...first.selection,
+      destination_fit_proof: {
+        ...first.selection?.destination_fit_proof,
+        minimum_area_m2: 12,
+      },
+    },
+  };
+  equal(
+    advance(secondRow, forgedDestination, true, "additional").selection,
+    null,
+    "client-shaped claims cannot lower the measured area",
+  );
 });
 
 Deno.test("expiry, new task, and changed contract clear inherited selection", () => {
@@ -286,6 +360,11 @@ Deno.test("expiry, new task, and changed contract clear inherited selection", ()
     newTask.selection.mandatory_criteria,
     CABLE_CONTRACT.mandatory_criteria,
     "new cable domain cannot carry the chandelier measurement",
+  );
+  equal(
+    newTask.selection.destination_fit_proof,
+    undefined,
+    "cable topic cannot inherit living-room destination proof",
   );
   equal(
     newTask.selection.selection_hash,
@@ -346,7 +425,7 @@ Deno.test("browser history and slots have no path into the snapshot builder", ()
   );
 });
 
-Deno.test("malformed card proof does not produce an inherited search contract", () => {
+Deno.test("malformed or missing card proof cannot produce a measured replacement contract", () => {
   const malformed = advance(
     completedRow(1, ORIGINAL, [{
       ...productBlock([1]),
@@ -360,7 +439,21 @@ Deno.test("malformed card proof does not produce an inherited search contract", 
     null,
     "count mismatch cannot certify a rendered product batch",
   );
-  const emptyCriteria = advance(
+  const wrongRenderedSet = advance(
+    completedRow(1, ORIGINAL, [{
+      ...productBlock([1, 2]),
+      server_destination_fit_proof: productBlock([1])
+        .server_destination_fit_proof,
+    }]),
+    {},
+    false,
+  );
+  equal(
+    wrongRenderedSet.selection,
+    null,
+    "proof for one displayed card cannot certify a two-card block",
+  );
+  const emptyCriteriaWithProof = advance(
     completedRow(1, ORIGINAL, [productBlock([1], {
       hash: "selection-d3bddbef",
       mandatory_criteria: [],
@@ -368,10 +461,39 @@ Deno.test("malformed card proof does not produce an inherited search contract", 
     {},
     false,
   );
+  assert(
+    emptyCriteriaWithProof.selection?.destination_fit_proof,
+    "empty facet criteria are permitted only with a full destination proof",
+  );
+  const emptyCriteria = advance(
+    completedRow(1, ORIGINAL, [productBlock([1], {
+      hash: "selection-d3bddbef",
+      mandatory_criteria: [],
+    }, undefined, false)]),
+    {},
+    false,
+  );
   equal(
     emptyCriteria.selection,
     null,
-    "no mandatory product criterion means no durable measured contract",
+    "empty criterion without server card proof fails closed",
+  );
+  const first = emptyCriteriaWithProof;
+  const fourthUnproven = advance(
+    completedRow(4, "А есть другие варианты?", [productBlock(
+      [4],
+      { hash: "selection-d3bddbef", mandatory_criteria: [] },
+      undefined,
+      false,
+    )]),
+    first,
+    true,
+    "additional",
+  );
+  equal(
+    fourthUnproven.selection,
+    null,
+    "a new displayed block without proof cannot silently retain old state",
   );
 });
 
