@@ -319,6 +319,35 @@ Deno.test("deadline aborts in-flight catalog work without admitting a late short
   }
 });
 
+Deno.test("request deadline aborts the shared shortlist and fallback budget", async () => {
+  const request = new AbortController();
+  let upstreamCalls = 0;
+  const budget = createReplacementCatalogBudget({
+    deadlineMs: 9_000,
+    signal: request.signal,
+    fetchImpl: (_input, init) => {
+      upstreamCalls++;
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(new DOMException("Aborted", "AbortError"));
+        init?.signal?.addEventListener("abort", abort, { once: true });
+        if (init?.signal?.aborted) abort();
+      });
+    },
+  });
+  try {
+    const pending = budget.shortlistFetch("https://catalog.test/slow");
+    request.abort();
+    await assertRejects(() => pending, DOMException, "Aborted");
+    assertEquals(budget.stats().aborted, true);
+    await assertRejects(() =>
+      budget.fallbackFetch("https://catalog.test/after-abort")
+    );
+    assertEquals(upstreamCalls, 1);
+  } finally {
+    budget.close();
+  }
+});
+
 Deno.test("non-cooperative search and hydrate both settle at the shared deadline", async () => {
   for (const hung of ["search", "hydrate"] as const) {
     const cache: ProductCache = new Map();

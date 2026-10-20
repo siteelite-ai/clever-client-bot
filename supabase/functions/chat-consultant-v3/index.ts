@@ -976,6 +976,8 @@ async function loadSettings(
 interface ToolContext {
   cache: ProductCache;
   supabase: SupabaseClient;
+  /** Shared request deadline; optional for isolated tool tests. */
+  turnSignal?: AbortSignal;
   catalogToken: string;
   openrouterKey: string;
   lovableApiKey: string | null;
@@ -4364,6 +4366,9 @@ async function selectGuardedStructuralReplacement(
     : null;
   if (manufacturerFacts && ctx.cache.get(source.id) === source) {
     const sourceController = new AbortController();
+    const sourceSignal = ctx.turnSignal
+      ? AbortSignal.any([sourceController.signal, ctx.turnSignal])
+      : sourceController.signal;
     let sourceTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       // The database request should observe AbortSignal, but the handler must
@@ -4373,7 +4378,7 @@ async function selectGuardedStructuralReplacement(
         manufacturerFacts.hydrate(
           ctx.cache,
           [source.id],
-          sourceController.signal,
+          sourceSignal,
         ),
         new Promise<void>((resolve) => {
           sourceTimer = setTimeout(() => {
@@ -4530,6 +4535,7 @@ async function selectGuardedStructuralReplacement(
   const guardedBudget = manufacturerFacts
     ? createReplacementCatalogBudget({
       deadlineMs: Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+      signal: ctx.turnSignal,
     })
     : null;
   let shortlist: VerifiedCutoutShortlistResult | null = null;
@@ -24615,6 +24621,7 @@ Deno.serve(async (req) => {
             const ctx: ToolContext = {
               cache,
               supabase,
+              turnSignal,
               catalogToken: settings.volt220_api_token!,
               openrouterKey: settings.openrouter_api_key!,
               lovableApiKey: LOVABLE_API_KEY,
