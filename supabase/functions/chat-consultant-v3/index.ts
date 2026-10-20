@@ -196,6 +196,10 @@ import {
   type EnvironmentalProtectionRange,
 } from "../_shared/v3-tools/environmental-protection-range.ts";
 import {
+  chooseDerivedReasoningRepair,
+  INVALID_DERIVED_DECLARATION_CORRECTION,
+} from "../_shared/v3-tools/derived-reasoning-repair.ts";
+import {
   advanceSelectionTarget,
   bootstrapSelectionTargetFromDiscovery,
   buildSelectionRenderCaption,
@@ -10574,15 +10578,54 @@ async function runExpertLoop(
               shownProductIds: [...shownIds],
             };
           };
+          const stopForInvalidDerivedDeclaration = () => {
+            const declarationArgs = declarationCall?.args &&
+                typeof declarationCall.args === "object"
+              ? declarationCall.args as Record<string, unknown>
+              : {};
+            const arraySizes = Object.fromEntries(
+              Object.entries(declarationArgs)
+                .filter(([, value]) => Array.isArray(value))
+                .map(([key, value]) => [key, (value as unknown[]).length]),
+            );
+            steps.push({
+              step: "v3_derived_selection_reasoning_contract_rejected",
+              ms: now(),
+              meta: {
+                finish: structuredReasoning.finishReason,
+                response_text_chars: structuredReasoning.text.length,
+                tool_call_names: structuredReasoning.toolCalls.map((call) =>
+                  call.name
+                ),
+                declaration_found: Boolean(declarationCall),
+                declaration_keys: Object.keys(declarationArgs).sort(),
+                declaration_reasoning_chars:
+                  typeof declarationArgs.reasoning === "string"
+                    ? declarationArgs.reasoning.length
+                    : 0,
+                array_sizes: arraySizes,
+              },
+            });
+            const notice =
+              "Не удалось надёжно проверить условия подбора по характеристикам товаров. Не буду показывать неподтверждённые варианты; повторите запрос или уточните условия подбора.";
+            send({ type: "delta", content: notice });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          };
           const needsEnvironmentalProtectionRetry =
             missingEnvironmentalProtection();
-          if (
-            ((declaration?.text.trim() &&
-              missingRequiredProductMeasurement()) ||
-              missingPairedFitProof() ||
-              needsEnvironmentalProtectionRetry) &&
-            derivedReasoningProviderAttempts < 2
-          ) {
+          const repairReason = chooseDerivedReasoningRepair({
+            resolvedText: declaration?.text,
+            environmentalProtectionMissing: needsEnvironmentalProtectionRetry,
+            pairedFitMissing: missingPairedFitProof(),
+            productMeasurementMissing: missingRequiredProductMeasurement(),
+            providerAttempts: derivedReasoningProviderAttempts,
+          });
+          if (repairReason) {
             const correctionTimeout = boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS,
               now(),
@@ -10594,12 +10637,15 @@ async function runExpertLoop(
                 ...message,
               }));
               if (correctionMessages[0]?.role === "system") {
-                const correction = needsEnvironmentalProtectionRetry
+                const correction = repairReason === "invalid_declaration"
+                  ? INVALID_DERIVED_DECLARATION_CORRECTION
+                  : repairReason === "environmental_protection"
                   ? "Предыдущая попытка не зафиксировала проверяемое обязательное условие защиты каждого товара для названной клиентом среды эксплуатации. Проверь технический фасет защиты в живой схеме. Если безопасный уровень обоснован, прямо назови в reasoning смысл фасета и его точное живое значение, затем передай ID этого значения именно в required_facet_values: compatible_classifications не подтверждает технический параметр каждого товара. Сохрани остальные обоснованные условия исходного запроса. Если данных клиента недостаточно для безопасного порога, явно назови недостающий параметр, не объявляй товары подходящими и не выдумывай уровень защиты. Не заменяй требование защиты числовой потребностью всей системы."
-                  : missingPairedFitProof()
+                  : repairReason === "paired_fit"
                   ? "Предыдущая попытка не доказала обе стороны парного размера из живой схемы. Для измеренного клиентом объекта явно назови один и тот же параметр изделия до установки и после изменения: до установки строго больше размера объекта, после изменения строго меньше. Равенство не подходит; не копируй размер объекта в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу."
                   : "Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.";
-                const previousReasoning = needsEnvironmentalProtectionRetry
+                const previousReasoning = repairReason ===
+                    "environmental_protection"
                   ? String(declaration?.measurementEvidence ?? "").trim()
                     .slice(0, 1000)
                   : "";
@@ -10635,8 +10681,31 @@ async function runExpertLoop(
                   GENERAL_INQUIRY_MODEL_ROUTING,
                 );
               } catch (correctionError) {
+                const correctionFailure = classifyPublicFailure(correctionError);
+                // A cancelled turn is not a failed declaration. Let the outer
+                // request lifecycle handle cancellation and its own deadline.
+                if (
+                  turnController.signal.aborted ||
+                  correctionFailure.kind === "request_aborted"
+                ) throw correctionError;
                 if (missingEnvironmentalProtection()) {
                   return stopForUnverifiedProtection();
+                }
+                if (repairReason === "invalid_declaration") {
+                  steps.push({
+                    step: "v3_derived_selection_reasoning_contract_retry_failed",
+                    ms: now(),
+                    meta: {
+                      repair_reason: repairReason,
+                      error_category: correctionFailure.kind,
+                      upstream_status: correctionError instanceof
+                          UpstreamHttpError
+                        ? correctionError.status
+                        : null,
+                      timeout_ms: correctionTimeout,
+                    },
+                  });
+                  return stopForInvalidDerivedDeclaration();
                 }
                 throw correctionError;
               }
@@ -10652,9 +10721,12 @@ async function runExpertLoop(
                 )
                 : null;
               steps.push({
-                step: "v3_derived_selection_measurement_retry",
+                step: repairReason === "invalid_declaration"
+                  ? "v3_derived_selection_reasoning_contract_retry"
+                  : "v3_derived_selection_measurement_retry",
                 ms: now(),
                 meta: {
+                  repair_reason: repairReason,
                   retry_model: GENERAL_INQUIRY_MODEL,
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
@@ -10674,35 +10746,7 @@ async function runExpertLoop(
             return stopForUnverifiedPairedFit();
           }
           if (!declaration?.text.trim()) {
-            const declarationArgs = declarationCall?.args &&
-                typeof declarationCall.args === "object"
-              ? declarationCall.args as Record<string, unknown>
-              : {};
-            const arraySizes = Object.fromEntries(
-              Object.entries(declarationArgs)
-                .filter(([, value]) => Array.isArray(value))
-                .map(([key, value]) => [key, (value as unknown[]).length]),
-            );
-            steps.push({
-              step: "v3_derived_selection_reasoning_contract_rejected",
-              ms: now(),
-              meta: {
-                finish: structuredReasoning.finishReason,
-                response_text_chars: structuredReasoning.text.length,
-                tool_call_names: structuredReasoning.toolCalls.map((call) =>
-                  call.name
-                ),
-                declaration_found: Boolean(declarationCall),
-                declaration_keys: Object.keys(declarationArgs).sort(),
-                declaration_reasoning_chars:
-                  typeof declarationArgs.reasoning ===
-                      "string"
-                    ? declarationArgs.reasoning.length
-                    : 0,
-                array_sizes: arraySizes,
-              },
-            });
-            throw new Error("derived_selection_reasoning_contract_invalid");
+            return stopForInvalidDerivedDeclaration();
           }
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {

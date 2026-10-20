@@ -1,0 +1,45 @@
+{
+  "schema_version": 5,
+  "source": "Production browser regression 2026-10-20: request 4733e956-084e-45a5-ae4d-d59f2d915212 failed after two server-issued clarification chips. This focused suite tests the complete three-turn path without modifying the pinned V8 release inventory.",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "yard-floodlight-two-chip-completion",
+      "title": "Уличный прожектор: высота и площадь через кнопки → подходящие варианты",
+      "turns": [
+        {
+          "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+          "expect": {
+            "max_products": 0,
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "mounting_height",
+            "require_clarification_range_unit": "м"
+          }
+        },
+        {
+          "synthetic": true,
+          "message": "До 4 м",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_previous_quick_reply": { "facet_key": "mounting_height", "value": "До 4 м" },
+            "max_products": 0,
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "illuminated_area",
+            "require_clarification_range_unit": "м²"
+          }
+        },
+        {
+          "synthetic": true,
+          "message": "До 50 м²",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_previous_quick_reply": { "facet_key": "illuminated_area", "value": "До 50 м²" },
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": ["прожектор"]
+          }
+        }
+      ]
+    }
+  ]
+}
