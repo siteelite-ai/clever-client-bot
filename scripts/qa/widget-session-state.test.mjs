@@ -3739,3 +3739,59 @@ test('a protocol-accepted event without text is not misclassified as an unaccept
   assert.notEqual(payloads[2].messageId, payloads[0].messageId);
   dom.window.close();
 });
+
+test('default-off client keeps one legacy paid request and never opts into unfinished state-v1', async () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  // An unknown persisted field cannot silently activate a protocol that the
+  // server has not safely enabled. This also protects rollback to old widget.
+  state.conversationState = { bearer: 'a'.repeat(64), version: 7 };
+  const calls = [];
+  const dom = bootWidget({
+    state,
+    now,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return new Response(completeAnswerSse('Ответ прежнего протокола.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Продолжи прежний диалог';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes('Ответ прежнего протокола.') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'legacy turn should complete');
+
+  assert.equal(calls.length, 1, 'default-off client must not add a handshake call');
+  assert.match(calls[0].url, /\/functions\/v1\/chat-consultant-v3$/u);
+  assert.equal(calls[0].body.message, 'Продолжи прежний диалог');
+  assert.equal(calls[0].body.conversationProtocol, undefined);
+  assert.equal(calls[0].body.conversationAction, undefined);
+  assert.equal(calls[0].body.conversation, undefined);
+  assert.doesNotMatch(JSON.stringify(calls), /a{64}/u, 'bearer must not leak into legacy request');
+  assert.doesNotMatch(visibleMessages(dom), /a{64}/u, 'bearer must not enter visible diagnostics');
+  assert.equal(readState(dom).conversationState, undefined, 'unknown state is stripped on save');
+  dom.window.close();
+});
+
+test('default-off New dialog remains synchronous and never calls the state endpoint', () => {
+  const now = Date.now();
+  let fetchCalls = 0;
+  const dom = bootWidget({
+    state: savedDialogue(now - 1_000),
+    now,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('New dialog must not fetch while state-v1 is disabled');
+    },
+  });
+  const previousSession = readState(dom).sessionId;
+
+  assert.equal(dom.window.Widget220volt.newConversation(), true);
+  assert.equal(fetchCalls, 0);
+  assert.notEqual(readState(dom).sessionId, previousSession);
+  assert.equal(readState(dom).history.some((message) => message.role === 'user'), false);
+  dom.window.close();
+});
