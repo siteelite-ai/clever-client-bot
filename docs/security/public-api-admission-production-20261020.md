@@ -71,8 +71,12 @@ Observe real traffic for at least one representative day, including both
 direct Supabase and proxy entrypoints and all public function slugs. Check
 rate/in-flight peaks, `would_reject`, reservation release/expiry, RPC failures
 and latency, 429/5xx, catalog fanout per accepted turn and OpenRouter spend.
-The old v1/v2 routes and the separately deployed public beta-search route
-must not be assumed unused from v3 chat logs. The current global cap is only
+The old v1/v2 routes must not be assumed unused from v3 chat logs. A later
+read-only inspection of the exact deployed `chat-consultant-beta-search` v80
+bundle (`c109f6284c2f75f50ba010d4ff2de915e6a93460d74576deabb2e2eb65e944a6`)
+confirmed a retired handler without model/catalog calls; live OPTIONS and GET
+returned 204 and 410. This closes the beta paid-surface concern, but does not
+establish whether legacy clients still call that retired URL. The current global cap is only
 an aggregate spend guard: an attacker may exhaust it and deny legitimate
 users, so do not call it per-user abuse protection. Turn on `enforce` only
 after those gates and a direct/proxy boundary smoke; choose thresholds from
