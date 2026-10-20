@@ -80,5 +80,13 @@ schedule immediate re-hardening. A failed verification should `ROLLBACK` its
 transaction rather than leave a partly changed ACL.
 
 This changes database privileges only; it does not rotate or revoke any
-application credential. A historical catalog token exposed in Git is a
-separate credential-review issue; its rotation/revocation is unverified.
+application credential. A read-only audit on 2026-10-20 confirmed that the
+public repository's `main` still contains a literal catalog credential in
+`supabase/migrations/20260218095324_84ac0b34-ffba-422e-b49c-86b53946b35f.sql`
+(introduced in commit `5f365e73`). The value must not be copied into reports,
+test output or new commands. Deleting the current file would not revoke a
+credential already present in Git history. Whether the exposed value still
+matches the production credential is **not established**; rotation at the API
+issuer, update of the authorized production setting, and invalidation of the
+old credential remain separate release gates. Do not treat the ACL repair as
+remediation of this exposure.
