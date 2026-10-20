@@ -1235,6 +1235,38 @@ function criterionAtomicTechnicalCode(criterion: Criterion): string | null {
   return code && criterion.unit && /^\d/u.test(code) ? null : code;
 }
 
+function hasExplicitIpToken(label: string): boolean {
+  return /(?:^|[^\p{L}\d])IP(?=$|[^\p{L}\d])/iu.test(label);
+}
+
+/** A two-digit scalar is an IP code only when the owning facet explicitly
+ * names IP. Do not reinterpret bare numeric values on poles, wattage, counts,
+ * or a generic protection axis as ingress-protection ratings. */
+function criterionBareIpCode(criterion: Criterion): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !hasExplicitIpToken(criterion.key)
+  ) return null;
+  const value = criterion.value.trim();
+  return /^[0-6][0-9]$/u.test(value) ? value : null;
+}
+
+/** Catalogs may render the same IP facet as `44` or `IP44`. Both forms are
+ * exact; composites and unrelated numeric evidence are not. A bare value
+ * needs the trait label's explicit IP token, while a prefixed value carries
+ * its own code type. The caller has already matched the named trait. */
+function namedFacetMatchesBareIpCode(
+  trait: { label: string; value: string },
+  digits: string,
+): boolean {
+  const actual = trait.value.trim();
+  if (actual === digits) {
+    return hasExplicitIpToken(trait.label);
+  }
+  const prefixed = /^IP\s*([0-6][0-9])$/iu.exec(actual);
+  return prefixed?.[1] === digits;
+}
+
 function atomicCodeTokens(value: string): RegExpMatchArray[] {
   return [...String(value ?? "").toLowerCase().matchAll(
     /(?<![\p{L}\p{N}])(?:[\p{L}]{1,6}\s*\d{1,6}[\p{L}]{0,4}|\d{1,6}\s*[\p{L}]{1,6}\d{0,4})(?![\p{L}\p{N}])/gu,
@@ -1471,7 +1503,13 @@ export function checkCriterion(
   }
   const expected = expectedLabel(c);
   const trait = findTrait(product, c.key);
+  const bareIpCode = criterionBareIpCode(c);
   if (!trait) {
+    // A two-digit IP enum without its named facet is not proved by a random
+    // model number, wattage, or IP-like token in the title.
+    if (bareIpCode) {
+      return { key: c.key, verdict: "unknown", expected, actual: null };
+    }
     // Часть доказательных признаков живёт только в названии/описании товара,
     // а не в отдельном фасете. Строковое требование можно подтвердить по всему
     // каталожному evidence, но отсутствие слова остаётся unknown, а не fail.
@@ -1526,6 +1564,17 @@ export function checkCriterion(
 
   if (contradictsAffirmativeSensorEvidence(product, c)) {
     return { key: c.key, verdict: "fail", expected, actual };
+  }
+
+  if (bareIpCode) {
+    return {
+      key: c.key,
+      verdict: namedFacetMatchesBareIpCode(trait, bareIpCode)
+        ? "pass"
+        : "fail",
+      expected,
+      actual,
+    };
   }
 
   // Exact technical codes must be checked before numeric parsing: a stray
