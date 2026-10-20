@@ -188,3 +188,90 @@ Deno.test("missing-anchor render axes require literal customer proof", () => {
   ], "Нужен аналог AX-900: 10 кВА, релейный", true);
   assertEquals(explicit.map((axis) => axis.key), ["power", "stabilization"]);
 });
+
+const crowdedReplacementFacets = [
+  { key: "kolichestvo_polyusov__polyuster_sany", caption: "Количество полюсов", unit: null, values: [{ value: "1" }, { value: "2" }, { value: "3" }] },
+  { key: "kolichestvo_pozicij", caption: "Количество позиций", unit: null, values: [{ value: "1" }, { value: "2" }] },
+  { key: "nominalynyy_tok__nominaldy_toқ", caption: "Номинальный ток", unit: null, values: [{ value: "10" }, { value: "16" }, { value: "25" }] },
+  { key: "puskovoj_tok", caption: "Пусковой ток", unit: null, values: [{ value: "10" }, { value: "16" }] },
+  { key: "harakteristika_srabatyvaniya", caption: "Характеристика срабатывания", unit: null, values: [{ value: "B" }, { value: "C" }, { value: "D" }] },
+  { key: "kollekciya", caption: "Коллекция (серия)", unit: null, values: [{ value: "Acti9" }] },
+];
+
+Deno.test("customer codes plus declared live axes shape retrieval before the final replacement gate", () => {
+  const source = "Подбери более дешевые аналоги автомата Schneider Electric Acti9 1P 16A C";
+  const contract = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    "Для подбора аналога автоматического выключателя Schneider Electric Acti9 1P 16A C необходим автоматический выключатель с номинальным током 16А, характеристикой срабатывания C и количеством полюсов 1.",
+    source,
+    source,
+  );
+  assertEquals(contract.options, {
+    kolichestvo_polyusov__polyuster_sany: ["1"],
+    nominalynyy_tok__nominaldy_toқ: ["16"],
+    harakteristika_srabatyvaniya: ["C"],
+  });
+  assertEquals(new Set(contract.criteria.map(({ key }) => key)), new Set([
+    "Количество полюсов", "Номинальный ток", "Характеристика срабатывания",
+  ]));
+  assertEquals(new Set(contract.title_axes.map(({ key }) => key)), new Set([
+    "kolichestvo_polyusov__polyuster_sany",
+    "nominalynyy_tok__nominaldy_toқ",
+    "harakteristika_srabatyvaniya",
+  ]));
+});
+
+Deno.test("replacement bridge cannot invent numbers from model prose or SKU pieces", () => {
+  const reasoning = "Номинальный ток 16А, количество полюсов 1, характеристика срабатывания C.";
+  const modelOnly = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    reasoning,
+    "Подбери аналог Acti9 C",
+    "Подбери аналог Acti9 C",
+  );
+  assertEquals(modelOnly.options.nominalynyy_tok__nominaldy_toқ, undefined);
+  assertEquals(modelOnly.options.kolichestvo_polyusov__polyuster_sany, undefined);
+
+  const skuPiece = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    reasoning,
+    "Подбери аналог Acti9 AB-1P-16A-X C",
+    "Подбери аналог Acti9 AB-1P-16A-X C",
+  );
+  assertEquals(skuPiece.options.nominalynyy_tok__nominaldy_toқ, undefined);
+  assertEquals(skuPiece.options.kolichestvo_polyusov__polyuster_sany, undefined);
+});
+
+Deno.test("replacement bridge requires matching declared caption and rejects sibling ambiguity", () => {
+  const source = "Подбери аналог Acti9 1P 16A C";
+  const undeclared = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    "Ищу автомат с подходящими параметрами.",
+    source,
+    source,
+  );
+  assertEquals(undeclared.options.nominalynyy_tok__nominaldy_toқ, undefined);
+  assertEquals(undeclared.options.kolichestvo_polyusov__polyuster_sany, undefined);
+
+  const ambiguous = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    "Номинальный ток 16А, пусковой ток 16А, количество полюсов 1 и количество позиций 1.",
+    source,
+    source,
+  );
+  assertEquals(ambiguous.options.nominalynyy_tok__nominaldy_toқ, undefined);
+  assertEquals(ambiguous.options.puskovoj_tok, undefined);
+  assertEquals(ambiguous.options.kolichestvo_polyusov__polyuster_sany, undefined);
+  assertEquals(ambiguous.options.kolichestvo_pozicij, undefined);
+});
+
+Deno.test("replacement bridge does not map a customer A-unit code to model V", () => {
+  const source = "Подбери аналог Acti9 16A";
+  const contract = compileReplacementReasoningContract(
+    crowdedReplacementFacets,
+    "Номинальный ток 16 V.",
+    source,
+    source,
+  );
+  assertEquals(contract.options.nominalynyy_tok__nominaldy_toқ, undefined);
+});

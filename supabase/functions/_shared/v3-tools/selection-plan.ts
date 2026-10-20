@@ -5,6 +5,7 @@ import {
 import type { CatalogSearchState } from "./catalog-search-outcome.ts";
 import { projectCriteriaFacetOptions, type CriteriaFacet, type Criterion } from "./criteria-gate.ts";
 import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
+import { projectDeclaredCustomerCodesToLiveFacets } from "./replacement-declared-code-bridge.ts";
 import {
   dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
@@ -301,13 +302,26 @@ export function compileReplacementReasoningContract(
     reasoningText,
     userBacked,
   );
+  const declaredCodes = projectDeclaredCustomerCodesToLiveFacets(
+    facets,
+    reasoningText,
+    sourceMessage,
+  ).filter(({ key, value }) =>
+    !options[key]?.length || options[key].every((candidate) =>
+      candidate === value
+    )
+  );
   const userBackedKeys = new Set(guarded.user_backed.map(({ key }) => key));
   const literalBackedKeys = literalBackedReplacementOptionKeys(
     options,
     facets,
     sourceMessage,
   );
-  const provenKeys = new Set([...userBackedKeys, ...literalBackedKeys]);
+  const provenKeys = new Set([
+    ...userBackedKeys,
+    ...literalBackedKeys,
+    ...declaredCodes.map(({ key }) => key),
+  ]);
   const mandatory = importance.criteria.filter((criterion) => {
     if ((criterion.level ?? "A") !== "A") return false;
     const facet = facets.find((candidate) => {
@@ -322,11 +336,27 @@ export function compileReplacementReasoningContract(
     facets,
     sourceMessage,
   ).criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+  const declaredCodeCriteria: Criterion[] = declaredCodes.flatMap(({ key, value }) => {
+    const facet = facets.find((candidate) => candidate.key === key)!;
+    const label = facet.caption || key;
+    if (mandatory.some((criterion) =>
+      normalizeWords(criterion.key) === normalizeWords(label) &&
+      criterion.op === "eq" && String(criterion.value) === value
+    )) return [];
+    return [{
+      key: label,
+      op: "eq",
+      value,
+      unit: facet.unit ?? undefined,
+      level: "A",
+      evidence: "user_explicit",
+    }];
+  });
   // The same proof-qualified contract must shape retrieval, rendering and
   // title verification. This prevents a literal customer requirement from
   // being enforced only after broad retrieval has already discarded it.
   const projected = projectCriteriaFacetOptions(
-    [...mandatory, ...frozenIdentityFree],
+    [...mandatory, ...declaredCodeCriteria, ...frozenIdentityFree],
     facets,
   );
   const literalTitleOptions = pickOptions(options, provenKeys);
