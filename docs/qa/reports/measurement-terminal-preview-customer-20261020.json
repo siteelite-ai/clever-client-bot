@@ -1,0 +1,692 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T09:28:25.153Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-new-chandelier-25m2": 1,
+    "customer-new-heat-shrink-12mm": 1,
+    "customer-new-ups-boiler-250w": 1
+  },
+  "cases": [
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-chandelier-25m2_base_1792488505159_1",
+          "turns": [
+            {
+              "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 7519,
+              "network_attempts": 1,
+              "log_id": "b62870ca-6ba0-47ca-9128-b9e942a9896a",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-upravlyaemaya-svetodiodnaya-s-ventilyatorom-fan-simple-65w18w-r-app-480*125-blackwhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002750",
+                  "name": "Люстра управляемая светодиодная с вентилятором FAN SIMPLE 65W+18W R-APP-480*125-BLACK/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Диаметр люстры, см": "48",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Да",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "3.1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "1",
+                    "Объем, м3": "0.039",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "акрил",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "25",
+                    "Назначение": "зал; гостиная; спальня; кафе; кухня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ"
+                  },
+                  "offerPrice": 20827,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-upravlyaemaya-svetodiodnaya-s-ventilyatorom-fan-simple-65w18w-r-app-480*125-blackwhite-220-ip20/",
+                  "description_excerpt": "Люстра управляемая светодиодная с вентилятором FAN SIMPLE 65W+18W R-APP 480*125 BLACK/WHITE, 220В, IP20, бренд Estares Артикул: FAN SIMPLE 65W+18W R-APP-480*125-BLACK/WHITE-220-IP20 Люстра управляемая Estares FAN SIMPLE сочетает светодиодное освещение с тихим вентилятором, обеспечивая комфортное освещение и вентиляцию в жилых и коммерческих помещениях. Управление светом и скоростью вентилятора осуществляется через мобильное приложение (APP) или пульт. Модель поддерживает несколько скоростей вент"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002740",
+                  "name": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "7.2",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "8",
+                    "Объем, м3": "0.18",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "акрил",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "паук",
+                    "Страна происхождения": "КИТАЙ"
+                  },
+                  "offerPrice": 23666,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — Модель MATEO от бренда Estares сочетает современный дизайн и интеллектуальные технологии для дома. Люстра управляется напрямую от выключателя, обеспечивая простое и удобное включение и выключение света. Объемная светящаяся конструкция равномерно освещает помещение, а мощность 100 Вт позволяет освещать комнаты до 35 м². Надежные материалы — алюминий, ударопрочный акрил и оптический силикон — гарантируют долгий ср"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002741",
+                  "name": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Нет",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "5.5",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "6",
+                    "Объем, м3": "0.14",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "акрил",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "снежинка",
+                    "Страна происхождения": "КИТАЙ"
+                  },
+                  "offerPrice": 18167,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 Estares Артикул: 8R-ON/OFF-915*250 Люстра MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20 предназначена для создания комфортного и современного освещения в жилых и коммерческих помещениях. Она обеспечивает равномерное заливное освещение без резких теней, эффективно освещает пространство до 25–28 м² и легко вписывается в интерьер благодаря минималистичному дизайну и компактной высоте. Назначение и область применения"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002744",
+                  "name": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Диаметр люстры, см": "60",
+                    "Регулировка направления абажура": "Да",
+                    "Наличие пульта": "Да",
+                    "Регулировка высоты": "Да",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "2.8",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "3",
+                    "Объем, м3": "0.05",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Код ТН ВЭД": "9405110013",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "25",
+                    "Назначение": "зал; гостиная; спальня; кафе; кухня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ"
+                  },
+                  "offerPrice": 18324,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая Maysun AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20 – Интеллектуальная люстра, минимализм и высокие технологии в одном устройстве. Это баланс между эстетикой и функциональностью. Тонкий черный профиль в сочетании с кристально чистым акрилом создает эффект легкого, парящего в воздухе кольца, которое гармонично вписывается в интерьеры в стиле лофт, хай-тек, неоклассика. Благодаря управлению через смартфон или пульт, вы можете мгновенно превратить комнату и"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002745",
+                  "name": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Диаметр люстры, см": "51",
+                    "Регулировка направления абажура": "Нет",
+                    "Наличие пульта": "Да",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Степень защиты, IP": "20",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "2.7",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "3",
+                    "Объем, м3": "0.042",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "прозрачный рифленый силикон",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "28",
+                    "Назначение": "зал; гостиная; спальня; прихожая",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ"
+                  },
+                  "offerPrice": 19550,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20 — интеллектуальная люстра, сочетание мягких форм и высокой мощности для современного дома. Модель выполнена в виде объёмного светящегося диска, который наполняет помещение ровным светом без резких теней. Мощность 80 Вт позволяет эффективно освещать комнаты до 28 м², заменяя несколько обычных светильников. Управление через пульт или смартфон позволяет мгновенно менять яркость и цветовую температуру света — от бодрящего "
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Люстра управляемая светодиодная с вентилятором FAN SIMPLE 65W+18W R-APP-480*125-BLACK/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-upravlyaemaya-svetodiodnaya-s-ventilyatorom-fan-simple-65w18w-r-app-480*125-blackwhite-220-ip20/",
+                  "price": 20827,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Люстра управляемая светодиодная с вентилятором FAN SIMPLE 65W+18W R-APP-480*125-BLACK/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-upravlyaemaya-svetodiodnaya-s-ventilyatorom-fan-simple-65w18w-r-app-480*125-blackwhite-220-ip20/)**\n  Цена: *20 827* ₸\n  Бренд: Estares\n  Наличие: Караганда (2 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "price": 23666,
+                  "stockLine": "Караганда (8 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/)**\n  Цена: *23 666* ₸\n  Бренд: Estares\n  Наличие: Караганда (8 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/",
+                  "price": 18167,
+                  "stockLine": "Караганда (1 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 75W 6R-ON/OFF-915*250-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-75w-6r-onoff-915*250-whitewhite-220-ip20/)**\n  Цена: *18 167* ₸\n  Бренд: Estares\n  Наличие: Караганда (1 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/",
+                  "price": 18324,
+                  "stockLine": "Караганда (5 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая AKRILIKA slim 70W 3R-APP-600*1100-BLACK/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-akrilika-slim-70w-3r-app-600*1100-blackclear-220-ip20/)**\n  Цена: *18 324* ₸\n  Бренд: Estares\n  Наличие: Караганда (5 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/",
+                  "price": 19550,
+                  "stockLine": "Караганда (3 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая EVITA 80W 3R-APP-510*130-WHITE/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-evita-80w-3r-app-510*130-whitewhite-220-ip20/)**\n  Цена: *19 550* ₸\n  Бренд: Estares\n  Наличие: Караганда (3 шт)"
+                }
+              ],
+              "text": "Для расширения поиска проверил названный вами исходный класс «Люстры»; это не обзор всех видов светодиодного освещения. У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «гостиной», максимальная площадь освещения не менее 25 м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-f639b265",
+                "mandatory_criteria": [
+                  {
+                    "key": "Максимальная площадь освещения, м2",
+                    "op": "min",
+                    "value": 25,
+                    "unit": "м²",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "visible_requirements": [
+                  {
+                    "kind": "application",
+                    "label": "Назначение",
+                    "value": "гостиной"
+                  },
+                  {
+                    "kind": "technology",
+                    "label": "Светодиодное исполнение"
+                  },
+                  {
+                    "kind": "availability",
+                    "label": "Положительный складской остаток"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю целевой тип и подтверждённую применимость товаров…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Проверено подходящих карточек: 5; целевой поиск: ok; исходный класс: ok",
+                  "duration_ms": 3542
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-12mm_base_1792488515430_1",
+          "turns": [
+            {
+              "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16227,
+              "network_attempts": 1,
+              "log_id": "3cfa3f6a-debe-4e30-a21a-f7663a25fe50",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator",
+                  "verified": true,
+                  "sku": "Ем000010607",
+                  "name": "Трубка термоусадочная NST-14/7-10-21 71 122 Navigator",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Длина, м": "0.1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "уп.",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.041",
+                    "Ширина, м": "0.014",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.000153",
+                    "Внутр диаметр до термоусадки,мм": "14",
+                    "Бренд": "Navigator",
+                    "Внутр диаметр после термоусадки, мм": "7",
+                    "Код ТН ВЭД": "3917320001",
+                    "Номинальное поперечное сечение, мм2": "13",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0.55±0.1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "разноцветный",
+                    "Диапазон диаметров проводов": "7.3-13",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиолефин",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...105 °C"
+                  },
+                  "offerPrice": 530,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/",
+                  "description_excerpt": "Термоусадочные трубки Navigator серии NST предназначены для электрической изоляции, антикоррозионной защиты, защиты от механических повреждений и маркировки проводов и кабелей. Изготовлены из модифицированного полиэтилена, не поддерживающего горение и устойчивого к воздействию ультрафиолетового излучения. Преимущества: • Рабочее напряжение до 1кВ • Коэффициент усадки 2:1 • Прочность на растяжение не менее 10 МПа • Минимальное уплотнение перед разрывом 200% • Электрическая прочность не менее 20 к"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator",
+                  "verified": true,
+                  "sku": "Ем000010608",
+                  "name": "Трубка термоусадочная NST-16/8-10-21 71 123 Navigator",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Длина, м": "0.1",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "уп.",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.047",
+                    "Ширина, м": "0.016",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.000192",
+                    "Внутр диаметр до термоусадки,мм": "16",
+                    "Бренд": "Navigator",
+                    "Внутр диаметр после термоусадки, мм": "8",
+                    "Код ТН ВЭД": "3917320001",
+                    "Номинальное поперечное сечение, мм2": "15",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0.55±0.1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "разноцветный",
+                    "Диапазон диаметров проводов": "8.3-15",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиолефин",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...105 °C"
+                  },
+                  "offerPrice": 606,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "description_excerpt": "Термоусадочные трубки Navigator серии NST предназначены для электрической изоляции, антикоррозионной защиты, защиты от механических повреждений и маркировки проводов и кабелей. Изготовлены из модифицированного полиэтилена, не поддерживающего горение и устойчивого к воздействию ультрафиолетового излучения. Преимущества: • Рабочее напряжение до 1кВ • Коэффициент усадки 2:1 • Прочность на растяжение не менее 10 МПа • Минимальное уплотнение перед разрывом 200% • Электрическая прочность не менее 20 к"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000665",
+                  "name": "Термоусадочная трубка ТТУ 20/10 желтая 100 м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Длина, м": "100",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.0447",
+                    "Ширина, м": "0.02",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "жёлтый",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "1"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-(m)/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000666",
+                  "name": "Трубка ТТУ 20/10 зеленая100м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Длина, м": "100",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.0447",
+                    "Ширина, м": "0.45",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Цвет": "зеленый",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Рабочее напряжение, В": "660",
+                    "Гарантийный срок, лет": "5",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Рабочая температура": "-55...125 °C",
+                    "Количество в групповой упаковке": "1"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-(m)/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка термо NST-14/7-10-21 71 122 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/",
+                  "price": 530,
+                  "stockLine": "Астана (74 уп.), Караганда (32 уп.)",
+                  "cardText": "- **[Трубка термо NST-14/7-10-21 71 122 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-147-10-21-71-122-navigator/)**\n  Цена: *530* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (74 уп.), Караганда (32 уп.)"
+                },
+                {
+                  "title": "Трубка термо NST-16/8-10-21 71 123 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "price": 606,
+                  "stockLine": "Астана (76 уп.), Караганда (22 уп.), Шымкент (10 уп.)",
+                  "cardText": "- **[Трубка термо NST-16/8-10-21 71 123 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/)**\n  Цена: *606* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (76 уп.), Караганда (22 уп.), Шымкент (10 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Актобе (288 м), Астана (280 м), Шымкент (109 м) и ещё 1 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (288 м), Астана (280 м), Шымкент (109 м) и ещё 1 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 зеленая100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Шымкент (209 м), Астана (166 м), Актобе (139 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 зеленая100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (209 м), Астана (166 м), Актобе (139 м) и ещё 2 городов"
+                }
+              ],
+              "text": "Ищу товары в разделе «Трубки термоусаживаемые». Сверяю заявленные условия с характеристиками каталога. Для размера 12 мм проверяю оба условия совместимости: «Внутр диаметр до термоусадки,мм > 12 мм» и «Внутр диаметр после термоусадки, мм < 12 мм».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-aa16db17",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 33, листьев 1",
+                  "duration_ms": 1987
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=38; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 415",
+                  "duration_ms": 740
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-ups-boiler-250w",
+      "title": "ИБП для котла 250 Вт не подменяется АВР/ATS",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-ups-boiler-250w_base_1792488534468_1",
+          "turns": [
+            {
+              "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 4835,
+              "network_attempts": 1,
+              "log_id": "185fbeb6-35ed-49df-b886-6309e052fca3",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для газового котла нужен ИБП с явно указанной чистой синусоидой на выходе: ступенчатая или аппроксимированная форма может нарушать работу электроники, розжига и циркуляционного насоса.\n\nЕсли 250 Вт — максимальное суммарное потребление котла и насоса, предварительный ориентир по активной выходной мощности ИБП — не менее 400 Вт с 50%-м запасом. Отдельно сверьте пусковой ток циркуляционного насоса: кратковременная допустимая мощность ИБП должна покрывать его пуск. Одного номинала в ВА для этого недостаточно.\n\nДля времени автономной работы проверьте ёмкость и напряжение батарей, возможность подключения внешнего аккумулятора и допустимый ток заряда. Перед покупкой сопоставьте эти параметры с паспортом конкретной модели котла.\n\nВ проверенной выборке не удалось подтвердить ни одну карточку ИБП одновременно по чистой синусоиде на выходе и достаточной активной выходной мощности в Вт. Не подменяю ИБП стабилизатором или АВР; характеристики можно уточнить у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": "unverified",
+                  "summary": "ИБП: проверено 7 карточек, доказано 0",
+                  "duration_ms": 3963
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T09:28:59.306Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "b62870ca-6ba0-47ca-9128-b9e942a9896a",
+    "3cfa3f6a-debe-4e30-a21a-f7663a25fe50",
+    "185fbeb6-35ed-49df-b886-6309e052fca3"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 9,
+    "verified": 9,
+    "unverified": 0
+  },
+  "passed": true
+}

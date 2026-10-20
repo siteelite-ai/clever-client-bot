@@ -1,0 +1,213 @@
+{
+  "suite_file": "customer-audit-20260921-cases.json",
+  "suite_version": 3,
+  "suite_sha256": "01d770e5cc3f5511b527a429e900518b790f7f415aff27af4b3501287ae1e19f",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T09:28:59.584Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "audit-04-yard-floodlight-35m2": 1
+  },
+  "cases": [
+    {
+      "id": "audit-04-yard-floodlight-35m2",
+      "title": "Прожектор для двора после уточнения 35 м² и 1,5 м",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_audit-04-yard-floodlight-35m2_base_1792488539584_1",
+          "turns": [
+            {
+              "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1038,
+              "network_attempts": 1,
+              "log_id": "9a08cfc9-b721-4227-a85d-ef6721a04714",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "mounting_height",
+                "options_count": 3,
+                "values": [
+                  "До 4 м",
+                  "4–8 м",
+                  "Выше 8 м"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "35м2 и высота примерно 1,5м",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14635,
+              "network_attempts": 1,
+              "log_id": "eb3317c4-bd72-4423-9d67-d9151e67aca1",
+              "diagnostic_error": null,
+              "products_count": 5,
+              "unique_products_count": 5,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 2390,
+                  "stockLine": "Караганда (206 шт), Шымкент (87 шт), Актобе (75 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-30 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-30-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *2 390* ₸\n  Бренд: IEK\n  Наличие: Караганда (206 шт), Шымкент (87 шт), Актобе (75 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0007-70",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0007-70/",
+                  "price": 3317,
+                  "stockLine": "Алматы (3 шт), Караганда (1 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0007-70](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0007-70/)**\n  Цена: *3 317* ₸\n  Бренд: Glanzen\n  Наличие: Алматы (3 шт), Караганда (1 шт)"
+                },
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0001-10-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0001-10-sl/",
+                  "price": 1241,
+                  "stockLine": "Караганда (42 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0001-10-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0001-10-sl/)**\n  Цена: *1 241* ₸\n  Бренд: Glanzen\n  Наличие: Караганда (42 шт)"
+                },
+                {
+                  "title": "Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-50-svetodiodnyij-chernyij-ip65-6500-k-iek/",
+                  "price": 3805,
+                  "stockLine": "Караганда (469 шт), Актобе (78 шт), Шымкент (44 шт) и ещё 3 городов",
+                  "cardText": "- **[Прожектор СДО 06-50 светодиодный черный IP65 6500 K ИЭК](https://220volt.kz/catalog/svetotexnika/prozhektoryi/prozhektor-sdo-06-50-svetodiodnyij-chernyij-ip65-6500-k-iek/)**\n  Цена: *3 805* ₸\n  Бренд: IEK\n  Наличие: Караганда (469 шт), Актобе (78 шт), Шымкент (44 шт) и ещё 3 городов"
+                },
+                {
+                  "title": "Светодиодный прожектор GLANZEN FAD-0003-30-SL",
+                  "url": "https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/",
+                  "price": 1478,
+                  "stockLine": "Астана (24 шт)",
+                  "cardText": "- **[Светодиодный прожектор GLANZEN FAD-0003-30-SL](https://220volt.kz/catalog/svetotexnika/prozhektoryi/svetodiodnyij-prozhektor-glanzen-fad-0003-30-sl/)**\n  Цена: *1 478* ₸\n  Бренд: Glanzen\n  Наличие: Астана (24 шт)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Прожекторы». По обязательным условиям проверяю «Степень защиты: одно из значений IP65, IP54 или IP44». Суммарную потребность всей системы не приписываю каждому отдельному товару.Показанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-070bce26",
+                "mandatory_criteria": [
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP65",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP54",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Степень защиты",
+                    "op": "eq",
+                    "value": "IP44",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Прожекторы»: 115 тов., фасетов 29, листьев 1",
+                  "duration_ms": 1279
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=35; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 114",
+                  "duration_ms": 748
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T09:29:15.275Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "9a08cfc9-b721-4227-a85d-ef6721a04714",
+    "eb3317c4-bd72-4423-9d67-d9151e67aca1"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}
