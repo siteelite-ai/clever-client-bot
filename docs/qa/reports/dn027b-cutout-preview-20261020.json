@@ -1,0 +1,125 @@
+{
+  "suite_file": "replacement-cutout-preview-diagnostic-20261020.json",
+  "suite_version": 3,
+  "suite_sha256": "f15ae3a4ee501d499765b3d26402f1b3665d6683a9a23329f005a0d5d7701599",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T13:36:22.549Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "dn027b-cutout-90-preview": 1
+  },
+  "cases": [
+    {
+      "id": "dn027b-cutout-90-preview",
+      "title": "DN027B: серверный запрос размера и не менее трёх аналогов при Ø90 мм",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_dn027b-cutout-90-preview_base_1792503382553_1",
+          "turns": [
+            {
+              "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 11316,
+              "network_attempts": 1,
+              "log_id": "a4842d6b-337a-4cca-bf07-64c45057fd80",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Какой диаметр монтажного отверстия в потолке? Напишите одно число в миллиметрах, например 90 мм. Код размера в названии товара не подтверждает размер выреза.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "mounting_cutout_mm",
+                "options_count": 0
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Компактный код пока не подтверждён полным live-контрактом; доказательных карточек: 8; примеры: 929002070102/871869967897500 Св-к DN027B G2 LED6/NW 7W 220-240V D90 R | 929002014902/871869964547200 Св-к DN027B LED6/NW L100 SQ RU",
+                  "duration_ms": 3302
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "90 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 8602,
+              "network_attempts": 1,
+              "log_id": "d41fb923-e2bf-4466-8e48-ba1c92db8587",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "В просмотренном окне каталога не подтвердилось ни одного кандидата с тем же типом и характеристиками и доказанным совпадением монтажного отверстия. Товар с другим размером выреза или без указанного размера не показываю. Это не значит, что подходящих товаров нет; можно продолжить проверку или уточнить размер у менеджера.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "products 0 < 3"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-20T13:36:42.482Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "a4842d6b-337a-4cca-bf07-64c45057fd80",
+    "d41fb923-e2bf-4466-8e48-ba1c92db8587"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

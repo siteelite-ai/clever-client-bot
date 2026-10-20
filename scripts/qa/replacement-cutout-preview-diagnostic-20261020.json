@@ -1,0 +1,32 @@
+{
+  "schema_version": 3,
+  "source": "Точечная двухходовая диагностика закрытого preview, 2026-10-20. Не заменяет обязательный клиентский оракул customer-dn027b-analogs: минимум 3 проверенных аналога.",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "dn027b-cutout-90-preview",
+      "title": "DN027B: серверный запрос размера и не менее трёх аналогов при Ø90 мм",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+          "expect": {
+            "require_clarification_choice": "freeform",
+            "require_clarification_facet_key": "mounting_cutout_mm",
+            "max_products": 0
+          }
+        },
+        {
+          "message": "90 мм",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_previous_freeform_slot": "mounting_cutout_mm",
+            "min_products": 3,
+            "max_products": 5,
+            "forbid_product_title": ["DN027B"]
+          }
+        }
+      ]
+    }
+  ]
+}
