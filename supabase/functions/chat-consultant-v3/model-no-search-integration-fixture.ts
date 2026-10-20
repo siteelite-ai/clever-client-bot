@@ -21,6 +21,12 @@ export function enableVerifiedFactsInOfflineFixture(): void {
   values.VOLT220_VERIFIED_FACTS_PRODUCTION_ENABLED = "true";
 }
 
+/** Opt in before importing the handler; production's default remains OFF. */
+export function enableDirectAnalogProofInOfflineFixture(): void {
+  enableVerifiedFactsInOfflineFixture();
+  values.VOLT220_DIRECT_ANALOG_PROOF_PRODUCTION_ENABLED = "true";
+}
+
 Deno.env.get = (name: string) => values[name];
 (Deno as unknown as { serve: typeof Deno.serve }).serve = ((
   callback: (

@@ -522,6 +522,7 @@ import {
   type VerifiedCutoutShortlistResult,
 } from "../_shared/v3-tools/replacement-verified-shortlist.ts";
 import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
+import { validateVerifiedManufacturerFacts } from "../_shared/v3-tools/verified-manufacturer-facts.ts";
 import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
 import {
   buildDirectAnalogProof,
@@ -4352,6 +4353,117 @@ async function loadApprovedManufacturerFacts(
   return data;
 }
 
+/**
+ * The search hydrator memoizes approved rows for one turn. A row can be
+ * revoked or edited after that hydration and before the cards are emitted.
+ * Re-read only the facts on which this exact rendered set relies, once, with
+ * service-role authority. Never replace the selection's facts with newly
+ * fetched values: a changed fact requires a new selection, not a late upgrade.
+ */
+async function revalidateReplacementFactsBeforeCards(
+  ctx: ToolContext,
+  products: readonly ProductFull[],
+  requireEveryProduct: boolean,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const reliedOn = products.filter((product) =>
+    product.verified_manufacturer_facts !== undefined
+  );
+  if (!requireEveryProduct && reliedOn.length === 0) return { ok: true };
+  if (
+    // The direct certificate caps at five cards; provisional "show all"
+    // requests can legitimately render up to ten under the shared cap.
+    products.length < 2 || products.length > 11 ||
+    new Set(products.map(({ id }) => id)).size !== products.length ||
+    (requireEveryProduct && reliedOn.length !== products.length) ||
+    reliedOn.some(({ id }) => !id || id.length > 160) ||
+    ctx.turnSignal?.aborted
+  ) return { ok: false, reason: "invalid_selection" };
+
+  const selectedState = products.map((product) => ({
+    product,
+    // Include mutable live offer values as well as the approved facts and
+    // catalogue traits used by the selector and the egress proof builder.
+    snapshot: JSON.stringify({
+      evidence: structuralSourceEvidenceSnapshot(product),
+      price: product.price,
+      stock: product.stock,
+      warehouse_evidence: product.warehouse_evidence,
+      warehouses: product.warehouses,
+      unit: product.unit,
+    }),
+  }));
+  const controller = new AbortController();
+  const signal = ctx.turnSignal
+    ? AbortSignal.any([ctx.turnSignal, controller.signal])
+    : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rows = await Promise.race([
+      loadApprovedManufacturerFacts(
+        ctx,
+        reliedOn.map(({ id }) => id),
+        signal,
+      ),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("verified_fact_egress_timeout"));
+        }, 2_000);
+      }),
+    ]);
+    if (signal.aborted) return { ok: false, reason: "aborted" };
+    const expected = new Map(reliedOn.map((product) => [product.id, product]));
+    const rowById = new Map<string, unknown>();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return { ok: false, reason: "malformed_row" };
+      }
+      const id = (row as Record<string, unknown>).product_id;
+      if (typeof id !== "string" || !expected.has(id) || rowById.has(id)) {
+        return { ok: false, reason: "unexpected_or_duplicate_row" };
+      }
+      rowById.set(id, row);
+    }
+    if (rowById.size !== expected.size) {
+      return { ok: false, reason: "missing_or_revoked_row" };
+    }
+    const now = new Date();
+    for (const { product, snapshot } of selectedState) {
+      // Paginated searches may replace a cache object with an equivalent
+      // ProductFull. Compare its complete relied-on projection, not JS object
+      // identity, before binding the fresh row to what egress will render.
+      const currentCard = ctx.cache.get(product.id);
+      if (
+        !currentCard ||
+        JSON.stringify({
+          evidence: structuralSourceEvidenceSnapshot(currentCard),
+          price: currentCard.price,
+          stock: currentCard.stock,
+          warehouse_evidence: currentCard.warehouse_evidence,
+          warehouses: currentCard.warehouses,
+          unit: currentCard.unit,
+        }) !== snapshot
+      ) return { ok: false, reason: "live_card_changed" };
+      if (!expected.has(product.id)) continue;
+      const current = validateVerifiedManufacturerFacts(
+        rowById.get(product.id), currentCard, now,
+      );
+      if (
+        !current || JSON.stringify(current) !==
+          JSON.stringify(product.verified_manufacturer_facts)
+      ) return { ok: false, reason: "approved_fact_changed" };
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      reason: signal.aborted ? "timeout_or_aborted" : "read_unavailable",
+    };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function loadApprovedCutoutHints(
   ctx: ToolContext,
   cutoutMm: number,
@@ -4869,6 +4981,60 @@ async function selectGuardedStructuralReplacement(
     requested,
     { candidateCoverage: "partial" },
   );
+  const proofProducts = [source, ...selected.map(({ full }) => full)];
+  if (
+    VERIFIED_MANUFACTURER_FACTS_ENABLED &&
+    (directAnalogProof !== null || proofProducts.some((product) =>
+      product.verified_manufacturer_facts !== undefined
+    ))
+  ) {
+    // This is the last asynchronous step before candidate text or cards. The
+    // search hydrator's per-turn memo cannot authorize public output: approval
+    // can be revoked or edited after the shortlist was assembled. Both the
+    // direct certificate and provisional cut-out claims use this same gate.
+    const freshness = await revalidateReplacementFactsBeforeCards(
+      ctx,
+      proofProducts,
+      directAnalogProof !== null,
+    );
+    const rebuilt = directAnalogProof && freshness.ok
+      ? buildDirectAnalogProof({
+        source,
+        candidates: selected.map(({ full }) => full),
+        customerCutoutMm,
+      })
+      : null;
+    if (
+      !freshness.ok ||
+      (directAnalogProof !== null && JSON.stringify(rebuilt) !==
+        JSON.stringify(directAnalogProof))
+    ) {
+      steps.push({
+        step: "v3_replacement_final_fact_gate_rejected",
+        ms: Date.now() - t0,
+        meta: {
+          reason: freshness.ok ? "proof_changed" : freshness.reason,
+          direct_proof_staged: directAnalogProof !== null,
+          selected: selected.length,
+        },
+      });
+      send({
+        type: "delta",
+        origin: "server",
+        content:
+          "Не удалось повторно подтвердить данные производителей перед показом вариантов. Непроверенные карточки не показываю; повторите запрос позже.",
+      });
+      return { handled: true, products: [], outcome: "upstream_error" };
+    }
+    steps.push({
+      step: "v3_replacement_final_fact_gate_passed",
+      ms: Date.now() - t0,
+      meta: {
+        direct_proof_staged: directAnalogProof !== null,
+        selected: selected.length,
+      },
+    });
+  }
   if (!directAnalogProof) {
     send({
       type: "delta",

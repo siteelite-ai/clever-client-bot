@@ -107,6 +107,7 @@ Deno.test({
     const outbound: string[] = [];
     let steps: Array<{ step?: string; meta?: Record<string, unknown> }> = [];
     let failCandidateHydration = false;
+    let revokeAtFinalRead = false;
     try {
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = originalSetInterval(callback, delay, ...args);
@@ -148,6 +149,11 @@ Deno.test({
           }
           if (url.pathname === "/rest/v1/verified_product_facts") {
             const ids = url.searchParams.get("product_id") ?? "";
+            if (revokeAtFinalRead && ids.includes("1") && ids.includes("2")) {
+              // The candidate was valid during shortlist hydration but the
+              // final approved-only read no longer returns its revoked row.
+              return json([approvedRow(1)]);
+            }
             if (failCandidateHydration && ids.includes("2")) {
               return json({ message: "fixture DB unavailable" }, 500);
             }
@@ -292,6 +298,36 @@ Deno.test({
         ),
         JSON.stringify(steps),
       );
+
+      revokeAtFinalRead = true;
+      const revokedResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: `предложи аналоги на ${sourceTitle}`,
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(revokedResponse.status, 200);
+      const revokedStream = await revokedResponse.text();
+      assertEquals(events(revokedStream).filter(({ v3_event }) =>
+        (v3_event as { type?: string } | undefined)?.type === "products_block"
+      ).length, 0);
+      assert(revokedStream.includes(
+        "Не удалось повторно подтвердить данные производителей",
+      ));
+      assert(steps.some(({ step, meta }) =>
+        step === "v3_replacement_final_fact_gate_rejected" &&
+        meta?.direct_proof_staged === false
+      ));
+      revokeAtFinalRead = false;
 
       failCandidateHydration = true;
       const failedResponse = await offlineHandler()(
