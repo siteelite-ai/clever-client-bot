@@ -403,9 +403,19 @@ Deno.test("egress safety covers a brand-only analog and comparative follow-up wi
   ), false);
   for (const broad of [
     "Подбери похожий светильник для гостиной 25 м²",
+    "Подбери похожий светильник Philips для гостиной",
+    "Подбери похожий светильник Philips для гостиной?",
+    "Найди альтернативы светильника Philips",
+    "Подбери аналог светильника Philips для гостиной",
     "Нужна похожая люстра в гостиную",
     "Замена люстры в гостиной 25 м²",
   ]) assertEquals(isReplacementProofRequest(broad), false, broad);
+  assertEquals(isReplacementProofRequest(
+    "Подбери похожий светильник Philips DN027B для гостиной",
+  ), true);
+  assertEquals(isReplacementProofRequest(
+    "Подбери аналог розетки серии Gallant",
+  ), true);
   assertEquals(resolveReplacementProofContext(
     "А есть подешевле?",
     [{ role: "user", content: "Подбери аналог розетки Gallant" }],
@@ -415,6 +425,11 @@ Deno.test("egress safety covers a brand-only analog and comparative follow-up wi
     "А есть подешевле?",
     [{ role: "user", content: "Подбери аналог розетки Gallant" }],
     { comparativeFollowup: true, newTask: true },
+  ), null);
+  assertEquals(resolveReplacementProofContext(
+    "А есть подешевле?",
+    [{ role: "user", content: "Подбери похожий светильник Philips для гостиной" }],
+    { comparativeFollowup: true },
   ), null);
 });
 

@@ -380,8 +380,17 @@ export function isReplacementProofRequest(message: string): boolean {
   if (keys.articles.length > 0 || keys.modelCodes.length > 0) return true;
   const quotedSource = /[«"][^»"]{3,}[»"]/u.test(message);
   if (quotedSource) return true;
-  // A named brand/series is an identifiable source for output safety, while
-  // an unnamed class, use-case or room measurement is an ordinary selection.
+  // Similarity/"alternatives" can describe a desired class or application;
+  // a brand alone is not a source SKU in that exploratory grammar. By contrast,
+  // an explicit analogue/replacement of a named line is a source-directed ask.
+  const explicitSubstitution =
+    /(?:^| )(?:аналог\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u.test(clean);
+  if (!explicitSubstitution) return false;
+  // A trailing application after the name ("... Philips для гостиной")
+  // signals a new-selection brief, not an identifiable source product.
+  if (/(?:^|\s)для\s+\p{L}/iu.test(source)) return false;
+  // A named line is an identifiable source for output safety, while an
+  // unnamed class or room measurement is an ordinary selection.
   const words = source.match(/\p{L}[\p{L}\p{N}-]*/gu) ?? [];
   return words.some((word, index) =>
     /^[A-Z][a-z]{2,}$/u.test(word) ||
