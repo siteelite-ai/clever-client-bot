@@ -160,6 +160,17 @@ Deno.test("extractReasoningBounds: направления и строгость"
   assertEquals(extractReasoningBounds("нужно 12 штук"), []);
 });
 
+Deno.test("escaped comparison glyphs keep strict bounds, but angle quotes do not", () => {
+  assertEquals(
+    extractReasoningBounds("До установки диаметр › 10 мм, после усадки диаметр ‹ 10 мм."),
+    [
+      { op: "min", value: 10, unit: "мм", strict: true },
+      { op: "max", value: 10, unit: "мм", strict: true },
+    ],
+  );
+  assertEquals(extractReasoningBounds("Размер ‹10 мм› указан в карточке."), []);
+});
+
 Deno.test("измеримое рассуждение требует машинного критерия, голая маркировка — нет", () => {
   assertEquals(
     hasMeasuredSelectionRequirement("нужен поток 3750–5000 лм для комнаты"),

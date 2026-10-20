@@ -8,13 +8,15 @@ import {
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
+import { resolveDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
+import { terminalPairedFitDecision } from "./selection-jargon-policy.ts";
 import "./index.ts";
 
 const catalogLeaf = "Трубки термоусаживаемые";
 const before = "Внутренний диаметр до усадки, мм";
 const after = "Внутренний диаметр после усадки, мм";
 const pairedReasoning =
-  "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а внутренний диаметр после усадки должен быть строго меньше 10 мм.";
+  "Клиент запросил подбор, сначала проверю фасеты. Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а внутренний диаметр после усадки должен быть строго меньше 10 мм.";
 const products = [
   { id: 101, pagetitle: "Трубка ТТУ 12/6 мм", before: "12 мм", after: "6 мм" },
   { id: 102, pagetitle: "Трубка ТТУ 14/7 мм", before: "14 мм", after: "7 мм" },
@@ -45,9 +47,60 @@ function eventsFromSse(text: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
 }
 
+Deno.test("symbolic paired proof survives declaration sanitization unchanged in meaning", () => {
+  const customer = "подбери трубку ТТУ на кабель диаметром 10 мм";
+  const facets = [
+    {
+      key: "diameter_before",
+      caption: before,
+      unit: "мм",
+      values: [{ value: "12 мм" }, { value: "14 мм" }],
+    },
+    {
+      key: "diameter_after",
+      caption: after,
+      unit: "мм",
+      values: [{ value: "6 мм" }, { value: "7 мм" }],
+    },
+  ];
+  const raw =
+    "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки > 10 мм. Внутренний диаметр после усадки < 10 мм.";
+  const pair = { value: 10, unit: "мм" };
+  assertEquals(
+    terminalPairedFitDecision(pair, customer, raw, facets, catalogLeaf).state,
+    "required",
+  );
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: raw,
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+    catalogLeaf,
+    { ...pair, facetKeys: ["diameter_before", "diameter_after"] },
+  );
+  assert(resolved?.reasoningEvidence.includes("› 10 мм"));
+  assert(resolved?.reasoningEvidence.includes("‹ 10 мм"));
+  assertEquals(
+    terminalPairedFitDecision(
+      pair,
+      customer,
+      resolved?.reasoningEvidence ?? "",
+      facets,
+      catalogLeaf,
+    ).state,
+    "required",
+  );
+});
+
 Deno.test({
   name:
-    "TTU fit keeps certified before/after criteria in the emitted selection contract",
+    "TTU fit publishes certified bounds, cards and honest empty through SSE and replay",
   permissions: { read: true, env: false, net: false },
   async fn() {
     const originalFetch = globalThis.fetch;
@@ -55,7 +108,10 @@ Deno.test({
     const intervals = new Set<number>();
     const requests: string[] = [];
     const steps: Array<{ step?: string; meta?: unknown }> = [];
+    let persistedEvents: Array<Record<string, unknown>> = [];
     let modelCalls = 0;
+    let mockNoCandidates = false;
+    const queuedReasoning: string[] = [];
     try {
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = originalSetInterval(callback, delay, ...args);
@@ -80,8 +136,12 @@ Deno.test({
           ) {
             const body = await request.json() as {
               steps?: Array<{ step?: string; meta?: unknown }>;
+              response_events?: Array<Record<string, unknown>>;
             };
             steps.push(...(body.steps ?? []));
+            if (Array.isArray(body.response_events)) {
+              persistedEvents = body.response_events;
+            }
             return new Response(null, { status: 204 });
           }
           if (url.pathname === "/rest/v1/app_settings") {
@@ -142,8 +202,8 @@ Deno.test({
           if (url.pathname === "/api/products") {
             return json({
               data: {
-                results: products,
-                pagination: { total: products.length },
+                results: mockNoCandidates ? [] : products,
+                pagination: { total: mockNoCandidates ? 0 : products.length },
               },
             });
           }
@@ -171,7 +231,7 @@ Deno.test({
                     function: {
                       name: forced,
                       arguments: JSON.stringify({
-                        reasoning: pairedReasoning,
+                        reasoning: queuedReasoning.shift() ?? pairedReasoning,
                         measurement_scope: "per_product",
                         compatible_classifications: [],
                         excluded_classifications: [],
@@ -257,6 +317,24 @@ Deno.test({
       );
       assertEquals(response.status, 200);
       const events = eventsFromSse(await response.text());
+      const publicDeltas = events.flatMap((event) =>
+        (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+          ?.map((choice) => choice.delta?.content ?? "") ?? []
+      ).filter(Boolean).join("\n");
+      assert(publicDeltas.length > 0, JSON.stringify(events));
+      assert(!publicDeltas.includes(pairedReasoning), publicDeltas);
+      assert(!/Клиент запросил|сначала проверю фасеты/iu.test(publicDeltas));
+      assert(/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(publicDeltas), publicDeltas);
+      assert(/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(publicDeltas), publicDeltas);
+      assert(!/diameter_(?:before|after)/iu.test(publicDeltas), publicDeltas);
+      const persistedDeltas = persistedEvents.filter((event) =>
+        event.type === "delta"
+      ).map((event) => String(event.content ?? "")).join("\n");
+      assertEquals(persistedDeltas, publicDeltas);
+      assert(!JSON.stringify(persistedEvents).includes(pairedReasoning));
+      assert(steps.some((entry) => entry.step === "v3_assistant_text" &&
+        Number((entry.meta as { reasoning_chars?: unknown } | undefined)
+          ?.reasoning_chars ?? 0) > 0), JSON.stringify(steps));
       const blocks = events.map((event) =>
         event.v3_event as {
           type?: string;
@@ -304,6 +382,163 @@ Deno.test({
           criterion.value === 4000 || /(?:светов|люмен)/iu.test(criterion.key)
         ),
       );
+      mockNoCandidates = true;
+      steps.length = 0;
+      persistedEvents = [];
+      const secondResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "подбери трубку ТТУ на кабель диаметром 10 мм",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(secondResponse.status, 200);
+      const secondEvents = eventsFromSse(await secondResponse.text());
+      const emptyDeltas = secondEvents.flatMap((event) =>
+        (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+          ?.map((choice) => choice.delta?.content ?? "") ?? []
+      ).filter(Boolean).join("\n");
+      assert(/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(emptyDeltas));
+      assert(/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(emptyDeltas));
+      assert(emptyDeltas.includes("Не нашёл подходящие товары"));
+      assert(!emptyDeltas.includes(pairedReasoning));
+      assertEquals(secondEvents.some((event) =>
+        (event.v3_event as { type?: string } | undefined)?.type ===
+          "products_block"
+      ), false);
+      assertEquals(
+        persistedEvents.filter((event) => event.type === "delta")
+          .map((event) => String(event.content ?? "")).join("\n"),
+        emptyDeltas,
+      );
+
+      // A model may use mathematical operators. The resolver escapes them
+      // for safe prose, but that must not erase either strict fit direction.
+      mockNoCandidates = false;
+      steps.length = 0;
+      persistedEvents = [];
+      queuedReasoning.push(
+        "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки > 10 мм. Внутренний диаметр после усадки < 10 мм.",
+      );
+      const symbolicResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "подбери трубку ТТУ на кабель диаметром 10 мм",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(symbolicResponse.status, 200);
+      const symbolicEvents = eventsFromSse(await symbolicResponse.text());
+      assert(symbolicEvents.some((event) =>
+        (event.v3_event as { type?: string; count?: number } | undefined)
+          ?.type === "products_block" &&
+        ((event.v3_event as { count?: number }).count ?? 0) >= 2
+      ));
+      assertEquals(steps.some((entry) =>
+        entry.step === "v3_derived_selection_measurement_retry"
+      ), false);
+
+      // The raw declaration appears to prove both sides, but its extra
+      // product-size assertion invalidates the resolved evidence. A single
+      // bounded correction must happen before search; the raw tool argument
+      // must not authorize the public fit claim or bypass the final gate.
+      mockNoCandidates = false;
+      steps.length = 0;
+      persistedEvents = [];
+      queuedReasoning.push(
+        "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки строго меньше 10 мм, поэтому нужен типоразмер 16 мм.",
+        pairedReasoning,
+      );
+      const correctedResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "подбери трубку ТТУ на кабель диаметром 10 мм",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(correctedResponse.status, 200);
+      const correctedEvents = eventsFromSse(await correctedResponse.text());
+      const correctionStep = steps.find((entry) =>
+        entry.step === "v3_derived_selection_measurement_retry"
+      );
+      assertEquals(
+        (correctionStep?.meta as { recovered?: boolean } | undefined)
+          ?.recovered,
+        true,
+        JSON.stringify(steps),
+      );
+      assert(correctedEvents.some((event) =>
+        (event.v3_event as { type?: string; count?: number } | undefined)
+          ?.type === "products_block" &&
+        ((event.v3_event as { count?: number }).count ?? 0) >= 2
+      ));
+
+      // A measured object can still leave a live before/after graph without
+      // a uniquely selected property. One corrective attempt is warranted,
+      // but even a fluent model paragraph cannot manufacture that missing
+      // customer-side proof. The public caption must not claim the pair.
+      steps.length = 0;
+      persistedEvents = [];
+      queuedReasoning.push(pairedReasoning, pairedReasoning);
+      const ambiguousResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "подбери трубку ТТУ на кабель 10 мм",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(ambiguousResponse.status, 200);
+      const ambiguousEvents = eventsFromSse(await ambiguousResponse.text());
+      const ambiguousDeltas = ambiguousEvents.flatMap((event) =>
+        (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+          ?.map((choice) => choice.delta?.content ?? "") ?? []
+      ).filter(Boolean).join("\n");
+      assert(
+        steps.some((entry) =>
+          entry.step === "v3_derived_selection_measurement_retry"
+        ),
+        JSON.stringify(steps),
+      );
+      assertEquals(ambiguousEvents.some((event) =>
+        (event.v3_event as { type?: string } | undefined)?.type ===
+          "products_block"
+      ), false);
+      assert(ambiguousDeltas.includes("Уточните, какой именно параметр объекта"));
+      assert(!ambiguousDeltas.includes("ошибка соединения"));
+      assert(!/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(ambiguousDeltas));
+      assert(!/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(ambiguousDeltas));
     } finally {
       for (const id of intervals) clearInterval(id);
       globalThis.setInterval = originalSetInterval;

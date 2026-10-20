@@ -333,7 +333,8 @@ Deno.test({
     const retainedReasoning = result.steps.findIndex(({ step, meta }) =>
       step === "v3_assistant_text" &&
       meta?.derived_selection === true &&
-      String(meta?.text ?? "").includes("полностью взаимозаменяемы")
+      Number(meta?.reasoning_chars ?? 0) > 0 &&
+      !String(meta?.text ?? "").includes("полностью взаимозаменяемы")
     );
     const groundedBrowse = result.steps.findIndex(({ step }) =>
       step === "v3_terminal_visible_request_recovery"

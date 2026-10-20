@@ -1481,6 +1481,10 @@ export function buildDerivedSelectionReasoningToolSchema(
 }
 
 export interface ResolvedDerivedSelectionReasoning {
+  /** Validated model reasoning for search, measurement and render gates only.
+   * Never send this field (or its legacy `text` alias) to the customer. */
+  reasoningEvidence: string;
+  /** Legacy internal alias. Public prose is composed only after criteria freeze. */
   text: string;
   measurementEvidence: string;
   measurementScope: "per_product" | "system_total" | "not_applicable";
@@ -1497,6 +1501,188 @@ export interface ResolvedDerivedSelectionReasoning {
   explicitCustomerMappings: Array<
     { phrase: string; key: string; value: string }
   >;
+}
+
+/** A model declaration is evidence for selection, not customer copy. Compose
+ * the pre-search explanation solely from the frozen, actionable contract.
+ * This is intentionally independent of product vocabulary and never claims
+ * that a product has already been found or passed a card check. */
+export function buildDerivedSelectionPublicExplanation(input: {
+  productClass?: string;
+  frozenCriteria: readonly Criterion[];
+  measurementScope?: ResolvedDerivedSelectionReasoning["measurementScope"];
+  /** Only a schema-verified before/after relation may be stated publicly. */
+  pairedFit?: {
+    value: number;
+    unit: string;
+    beforeCaption: string;
+    afterCaption: string;
+  } | null;
+}): string {
+  const productClass = stripDerivedSchemaIds(visibleFacetText(
+    input.productClass ?? "",
+  )).slice(0, 100);
+  const subject = productClass
+    ? `товары в разделе «${productClass}»`
+    : "подходящие товары";
+  const seen = new Set<string>();
+  const clauses: string[] = [];
+  const pair = input.pairedFit;
+  const pairValue = pair && Number.isFinite(pair.value) && pair.value > 0
+    ? visibleFacetText(String(pair.value))
+    : "";
+  const pairUnit = pair ? visibleFacetText(pair.unit).slice(0, 16) : "";
+  const pairCaption = (caption: string, fallback: string): string => {
+    const clean = stripDerivedSchemaIds(visibleFacetText(caption)).slice(0, 80);
+    return clean && !/[_{}]/u.test(clean) ? clean : fallback;
+  };
+  const beforeCaption = pair
+    ? pairCaption(pair.beforeCaption, "Параметр до изменения")
+    : "";
+  const afterCaption = pair
+    ? pairCaption(pair.afterCaption, "Параметр после изменения")
+    : "";
+  const pairedFacetNames = new Set(
+    [beforeCaption, afterCaption].map(normalizeLiteralEvidence).filter(Boolean),
+  );
+  for (const criterion of input.frozenCriteria) {
+    if ((criterion.level ?? "A") !== "A" ||
+      !["user_explicit", "derived_required", "catalog_verified"].includes(
+        criterion.evidence ?? "",
+      )) continue;
+    const key = stripDerivedSchemaIds(visibleFacetText(criterion.key))
+      .slice(0, 80);
+    const unit = stripDerivedSchemaIds(visibleFacetText(criterion.unit ?? ""))
+      .slice(0, 16);
+    if (!key || pairValue && pairedFacetNames.has(normalizeLiteralEvidence(key))) {
+      continue;
+    }
+    const values = Array.isArray(criterion.value)
+      ? criterion.value.map((value) => visibleFacetText(String(value)))
+      : [visibleFacetText(String(criterion.value))];
+    if (values.some((value) => !value || value.length > 80)) continue;
+    const withUnit = (value: string) => unit ? `${value} ${unit}` : value;
+    const value = criterion.op === "eq"
+      ? withUnit(values[0])
+      : criterion.op === "min"
+      ? `${criterion.exclusive ? ">" : "≥"} ${withUnit(values[0])}`
+      : criterion.op === "max"
+      ? `${criterion.exclusive ? "<" : "≤"} ${withUnit(values[0])}`
+      : criterion.op === "range" && values.length === 2
+      ? `${withUnit(values[0])}–${withUnit(values[1])}`
+      : "";
+    if (!value) continue;
+    const identity = `${normalizeLiteralEvidence(key)}\u0000${criterion.op}\u0000${normalizeLiteralEvidence(value)}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    clauses.push(`«${key}: ${value}»`);
+  }
+  const criteria = clauses.length > 0
+    ? ` По обязательным условиям проверяю ${clauses.slice(0, 6).join("; ")}${
+      clauses.length > 6 ? ` и ещё ${clauses.length - 6}` : ""
+    }.`
+    : " Сверяю заявленные условия с характеристиками каталога.";
+  const pairedFit = pairValue && pairUnit && beforeCaption && afterCaption
+    ? ` Для размера ${pairValue} ${pairUnit} проверяю оба условия совместимости: «${beforeCaption} > ${pairValue} ${pairUnit}» и «${afterCaption} < ${pairValue} ${pairUnit}».`
+    : "";
+  const systemScope = input.measurementScope === "system_total"
+    ? " Суммарную потребность всей системы не приписываю каждому отдельному товару."
+    : "";
+  return `Ищу ${subject}.${criteria}${pairedFit}${systemScope}`;
+}
+
+/** The declaration remains in model context so it can steer search. A later
+ * answer may echo a short private planning phrase inside an otherwise useful
+ * engineering sentence. Remove only source-matched planning fragments, not
+ * the sentence or technical clauses around them. */
+export function suppressDerivedReasoningEcho(
+  candidate: string,
+  privateReasoning: string,
+): { text: string; suppressed: boolean } {
+  if (!candidate.trim() || !privateReasoning.trim()) {
+    return { text: candidate, suppressed: false };
+  }
+  const normalized = (text: string) =>
+    (text.normalize("NFKC").toLocaleLowerCase("ru")
+      .match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+  const draftFragmentPattern =
+    /(?:клиент|пользователь|заказчик)\s+(?:запросил\p{L}*|попросил\p{L}*|просит|хочет)(?:\s+(?:подбор|поиск|товар\p{L}*|вариант\p{L}*))?|(?:сначала|затем|далее)\s+(?:проверю|сопоставлю|вызову|открою)\s+(?:фасет\p{L}*|инструмент\p{L}*|категори\p{L}*)|(?:затем|далее)\s+(?:поиск\p{L}*|каталог\p{L}*)(?:\s+по\s+каталогу)?/giu;
+  const sourceFragments = [...privateReasoning.matchAll(draftFragmentPattern)]
+    .map((match) => normalized(match[0])).filter(Boolean);
+  if (sourceFragments.length === 0) {
+    return { text: candidate, suppressed: false };
+  }
+  let suppressed = false;
+  const completeClauseStart =
+    /^(?:для|при|если|поэтому|чтобы|нужно|надо|требуется|должен|должна|должны|подходит|подходят|проверяю|сверяю)(?=$|[^\p{L}])/iu;
+  const technicalPredicate =
+    /[<>≤≥]|(?:долж\p{L}*|нужн\p{L}*|необходим\p{L}*|требу\p{L}*|больш\p{L}*|меньш\p{L}*|подход\p{L}*|совместим\p{L}*)/iu;
+  const kept = candidate.split(/(?<=[.!?])\s+|\n+/u).flatMap((sentence) => {
+    let removedInSentence = false;
+    // A comma/semicolon boundary is evidence of a separate clause. Keep a
+    // later technical clause even if the preceding meta clause also contains
+    // customer nouns or numbers. Decimal commas have no following space.
+    const clauses = sentence.split(/[;,:—](?=\s)/u);
+    const keptClauses = clauses.flatMap((clause) => {
+      let removedHere = false;
+      const withoutDraft = clause.replace(draftFragmentPattern, (fragment) => {
+        const value = normalized(fragment);
+        const repeated = sourceFragments.some((source) =>
+          source === value || source.startsWith(`${value} `) ||
+          value.startsWith(`${source} `)
+        );
+        if (!repeated) return fragment;
+        suppressed = true;
+        removedInSentence = true;
+        removedHere = true;
+        return "";
+      });
+      if (!removedHere) return [clause.trim()];
+      const cleaned = withoutDraft.replace(/^[\s,;:.!?—-]+/u, "")
+        .replace(/\s{2,}/gu, " ").trim();
+      if (!cleaned) return [];
+      // An isolated noun tail from "Клиент запросил подбор ..." is not
+      // itself an answer. When there is no reliable clause boundary, retain
+      // a technical proposition instead of dropping the whole final.
+      if (
+        !completeClauseStart.test(cleaned) &&
+        !technicalPredicate.test(cleaned)
+      ) return [];
+      return [cleaned];
+    });
+    if (!removedInSentence) return [sentence.trim()];
+    if (keptClauses.length === 0) return [];
+    const cleanedSentence = keptClauses.join(", ").replace(/^[\s,;:.!?—-]+/u, "")
+      .replace(/\s{2,}/gu, " ").trim();
+    return cleanedSentence
+      ? [cleanedSentence.replace(/^\p{Ll}/u, (char) =>
+        char.toLocaleUpperCase("ru"))]
+      : [];
+  });
+  return suppressed
+    ? { text: kept.join(" ").trim(), suppressed: true }
+    : { text: candidate, suppressed: false };
+}
+
+export function derivedReasoningPublicEgress(input: {
+  candidate: string;
+  privateReasoning: string;
+  isFinalTurn: boolean;
+  catalogLookupCompleted: boolean;
+  productsRendered: number;
+}): { text: string; suppressed: boolean } {
+  const cleaned = suppressDerivedReasoningEcho(
+    input.candidate,
+    input.privateReasoning,
+  );
+  if (cleaned.text || !cleaned.suppressed) return cleaned;
+  return {
+    ...cleaned,
+    text: input.isFinalTurn && input.catalogLookupCompleted &&
+        input.productsRendered === 0
+      ? "Не смог подтвердить подходящие товары по текущему поиску. Уточните параметры или повторите запрос."
+      : "",
+  };
 }
 
 /**
@@ -2846,8 +3032,10 @@ export function resolveDerivedSelectionReasoning(
       }.`,
     );
   }
+  const reasoningEvidence = sentences.join(" ");
   return {
-    text: sentences.join(" "),
+    reasoningEvidence,
+    text: reasoningEvidence,
     // Structured classification choices are enforced separately. Keep them
     // out of the generic prose-to-criteria compiler: sibling values from one
     // facet are an OR family, while that compiler can only express AND.

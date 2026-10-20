@@ -2702,11 +2702,14 @@ const DIRECTIONS: Array<{ re: string; op: "min" | "max"; strict: boolean }> = [
     strict: false,
   },
   {
-    re: String.raw`больше|более|свыше|выше|превыша\w*|>`,
+    // `visibleFacetText` escapes an ASCII comparison to the single angle
+    // glyph before the declaration is resolved. Preserve its strict meaning
+    // through the internal proof pipeline; it is not a new inferred bound.
+    re: String.raw`больше|более|свыше|выше|превыша\w*|>|›`,
     op: "min",
     strict: true,
   },
-  { re: String.raw`меньше|менее|ниже|<`, op: "max", strict: true },
+  { re: String.raw`меньше|менее|ниже|<|‹`, op: "max", strict: true },
   { re: String.raw`от`, op: "min", strict: false },
   { re: String.raw`до`, op: "max", strict: false },
 ];
@@ -2729,6 +2732,13 @@ export function extractReasoningBounds(text: string): ReasoningBound[] {
     );
     let m: RegExpExecArray | null;
     while ((m = re.exec(s)) !== null) {
+      // Do not turn typography such as `‹10 мм›` (a quoted value) into a
+      // directional product requirement. A true escaped comparator has no
+      // matching closing angle after its measured value.
+      if (
+        (m[0].includes("‹") && /^\s*›/u.test(s.slice(re.lastIndex))) ||
+        (m[0].includes("›") && /^\s*‹/u.test(s.slice(re.lastIndex)))
+      ) continue;
       const fragmentStart = Math.max(
         s.lastIndexOf(".", m.index),
         s.lastIndexOf("!", m.index),

@@ -13,10 +13,12 @@ import {
 import type { ProductRef } from "./types.ts";
 import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
 import {
+  buildDerivedSelectionPublicExplanation,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
   compileApplicationSuitabilityAlternatives,
   compileCustomerClassificationCriteria,
+  derivedReasoningPublicEgress,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -29,6 +31,7 @@ import {
   demoteUnsupportedSystemTotalClaims,
   reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
+  suppressDerivedReasoningEcho,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -36,6 +39,199 @@ import {
   shouldRequireDerivedSelectionReasoning,
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
+
+Deno.test("derived selection keeps malformed model planning private while explaining frozen criteria", () => {
+  const rawPlan =
+    "Клиент запросил двойные черные розетки Gallant. д. ). Сначала проверю фасеты, затем каталог.";
+  const declaration = resolveDerivedSelectionReasoning({
+    reasoning: rawPlan,
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: [],
+  }, [], "Нужны двойные черные розетки Gallant", "Розетки");
+  assertEquals(declaration?.reasoningEvidence.includes("Клиент запросил"), true);
+  assertEquals(declaration?.text, declaration?.reasoningEvidence);
+  const publicExplanation = buildDerivedSelectionPublicExplanation({
+    productClass: "Розетки",
+    frozenCriteria: [
+      {
+        key: "Бренд",
+        op: "eq",
+        value: "Gallant",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "Количество разъёмов",
+        op: "eq",
+        value: "2",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "Цвет",
+        op: "eq",
+        value: "чёрный",
+        level: "B",
+        evidence: "model_assumption",
+      },
+      {
+        key: "Модельная гипотеза без источника",
+        op: "eq",
+        value: "не проверено",
+        level: "A",
+      },
+    ],
+  });
+  assertEquals(publicExplanation.includes("Клиент запросил"), false);
+  assertEquals(publicExplanation.includes("д. )."), false);
+  assertEquals(publicExplanation.includes("Бренд: Gallant"), true);
+  assertEquals(publicExplanation.includes("Количество разъёмов: 2"), true);
+  assertEquals(publicExplanation.includes("Цвет: чёрный"), false);
+  assertEquals(publicExplanation.includes("Модельная гипотеза"), false);
+  assertEquals(/(?:наш[её]л|подтвержден[а-я]*\s+товар)/iu.test(publicExplanation), false);
+});
+
+Deno.test("later model text cannot replay a derived scratchpad but ordinary text survives", () => {
+  const privateReasoning =
+    "Клиент запросил подбор двойных розеток Gallant. Сначала проверю фасеты, затем поиск по каталогу.";
+  assertEquals(
+    suppressDerivedReasoningEcho(
+      `Проверка завершена. ${privateReasoning} Уточните цвет.`,
+      privateReasoning,
+    ),
+    { text: "Проверка завершена. Уточните цвет.", suppressed: true },
+  );
+  assertEquals(
+    suppressDerivedReasoningEcho(
+      "Клиенту можно предложить уточнить цвет корпуса.",
+      privateReasoning,
+    ),
+    {
+      text: "Клиенту можно предложить уточнить цвет корпуса.",
+      suppressed: false,
+    },
+  );
+});
+
+Deno.test("echo guard preserves repeated engineering fit while removing only private planning", () => {
+  const fit =
+    "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки — меньше 10 мм.";
+  const privateReasoning =
+    `Клиент запросил подбор, сначала проверю фасеты. ${fit}`;
+  assertEquals(
+    suppressDerivedReasoningEcho(fit, privateReasoning),
+    { text: fit, suppressed: false },
+  );
+  assertEquals(
+    suppressDerivedReasoningEcho(privateReasoning, privateReasoning),
+    { text: fit, suppressed: true },
+  );
+});
+
+Deno.test("echo guard keeps engineering evidence in the same sentence as a private plan", () => {
+  const oneSentence =
+    "Клиент запросил подбор, сначала проверю фасеты, для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки меньше 10 мм.";
+  const result = suppressDerivedReasoningEcho(oneSentence, oneSentence);
+  assertEquals(result.suppressed, true);
+  assertEquals(/Клиент запросил|сначала проверю фасеты/iu.test(result.text), false);
+  assertEquals(result.text.includes("диаметром 10 мм"), true);
+  assertEquals(result.text.includes("строго больше 10 мм"), true);
+  assertEquals(result.text.includes("после усадки меньше 10 мм"), true);
+  const numericClause =
+    "Клиент запросил подбор, внутренний диаметр до усадки > 10 мм, после усадки < 10 мм.";
+  const numericResult = suppressDerivedReasoningEcho(
+    numericClause,
+    numericClause,
+  );
+  assertEquals(numericResult.text.includes("диаметр до усадки > 10 мм"), true);
+  assertEquals(numericResult.text.includes("после усадки < 10 мм"), true);
+  assertEquals(numericResult.text.includes("Клиент запросил"), false);
+  const nounTail =
+    "Клиент запросил подбор ТТУ для кабеля 10 мм, поэтому внутренний диаметр до усадки должен быть больше 10 мм.";
+  const nounTailResult = suppressDerivedReasoningEcho(nounTail, nounTail);
+  assertEquals(nounTailResult.suppressed, true);
+  assertEquals(
+    nounTailResult.text,
+    "Поэтому внутренний диаметр до усадки должен быть больше 10 мм.",
+  );
+  const noBoundary =
+    "Клиент запросил подбор ТТУ для кабеля 10 мм внутренний диаметр должен быть больше 10 мм.";
+  const noBoundaryResult = suppressDerivedReasoningEcho(
+    noBoundary,
+    noBoundary,
+  );
+  assertEquals(noBoundaryResult.text.includes("должен быть больше 10 мм"), true);
+  assertEquals(noBoundaryResult.text.includes("Клиент запросил"), false);
+});
+
+Deno.test("private-plan-only final gets a neutral fallback without cards, not after cards", () => {
+  const draft = "Клиент запросил подбор, сначала проверю фасеты.";
+  const empty = derivedReasoningPublicEgress({
+    candidate: draft,
+    privateReasoning: draft,
+    isFinalTurn: true,
+    catalogLookupCompleted: true,
+    productsRendered: 0,
+  });
+  assertEquals(empty.suppressed, true);
+  assertEquals(empty.text.includes("Не смог подтвердить"), true);
+  assertEquals(empty.text.includes("Клиент запросил"), false);
+  assertEquals(derivedReasoningPublicEgress({
+    candidate: draft,
+    privateReasoning: draft,
+    isFinalTurn: true,
+    catalogLookupCompleted: true,
+    productsRendered: 2,
+  }), { text: "", suppressed: true });
+});
+
+Deno.test("derived public explanation preserves strict paired bounds without model scratchpad", () => {
+  const publicExplanation = buildDerivedSelectionPublicExplanation({
+    productClass: "Изоляционные изделия",
+    frozenCriteria: [
+      {
+        key: "Диаметр до изменения",
+        op: "min",
+        value: 10,
+        unit: "мм",
+        exclusive: true,
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Диаметр после изменения",
+        op: "max",
+        value: 10,
+        unit: "мм",
+        exclusive: true,
+        level: "A",
+        evidence: "derived_required",
+      },
+    ],
+    pairedFit: {
+      value: 10,
+      unit: "мм",
+      beforeCaption: "Внутренний диаметр до усадки, мм",
+      afterCaption: "Внутренний диаметр после усадки, мм",
+    },
+  });
+  assertEquals(publicExplanation.includes("Внутренний диаметр до усадки, мм > 10 мм"), true);
+  assertEquals(publicExplanation.includes("Внутренний диаметр после усадки, мм < 10 мм"), true);
+  assertEquals(publicExplanation.includes("≥ 10 мм"), false);
+  assertEquals(publicExplanation.includes("≤ 10 мм"), false);
+});
+
+Deno.test("derived pre-search explanation with no frozen criteria never promises a match", () => {
+  const publicExplanation = buildDerivedSelectionPublicExplanation({
+    productClass: "Розетки",
+    frozenCriteria: [],
+    measurementScope: "system_total",
+  });
+  assertEquals(publicExplanation.includes("Сверяю заявленные условия"), true);
+  assertEquals(publicExplanation.includes("Суммарную потребность"), true);
+  assertEquals(/(?:найден|подходят|прошли проверку)/iu.test(publicExplanation), false);
+});
 
 Deno.test("unspecified mixed-facet values in model reasoning never become mandatory", () => {
   const schemas = [
