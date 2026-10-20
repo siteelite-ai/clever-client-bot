@@ -1,0 +1,238 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T11:35:35.323Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-vvg-exact-cheapest": 1
+  },
+  "cases": [
+    {
+      "id": "customer-vvg-exact-cheapest",
+      "title": "Точная маркировка ВВГ 2×1,5 и минимальная цена",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvg-exact-cheapest_base_1792496135330_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 2*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 10489,
+              "network_attempts": 1,
+              "log_id": "f0370f1a-683c-4e4c-b180-4edb1deb17d0",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost",
+                  "verified": true,
+                  "sku": "Ем000024789",
+                  "name": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Бренд": "ВВГ",
+                    "Бронированный": "Нет",
+                    "Код ТН ВЭД": "8544499509",
+                    "Оболочка": "ПВХ пластикат",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.33",
+                    "Страна происхождения": "КАЗАХСТАН",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Гарантийный срок, лет": "5",
+                    "Производитель": "Harmony Cable",
+                    "Срок службы, мес": "360",
+                    "Код НКТ": "0200180846447",
+                    "Температура монтажа": "-15+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Количество жил": "2",
+                    "Единица измерения": "м",
+                    "Вес, кг.": "0.112",
+                    "Негорючесть": "Нет",
+                    "Материал проводника": "медь",
+                    "Объем, м3": "0.000023",
+                    "Изоляция": "ПВХ пластикат"
+                  },
+                  "offerPrice": 309,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "description_excerpt": "Кабель ВВГ - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительных устройствах, а также в обычных жилы"
+                }
+              ],
+              "catalog_minimum_evidence": {
+                "verified": true,
+                "checked_at": "2026-10-20T11:35:49.841Z",
+                "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/",
+                "listed_total": 11,
+                "matching_available": 10,
+                "eligible_products": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг 2*1,5 ГК ГОСТ",
+                    "price": 319,
+                    "unit": "м",
+                    "id": "20111"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 ГК ГОСТ",
+                    "price": 334,
+                    "unit": "м",
+                    "id": "20089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5/",
+                    "title": "Кабель ВВГ нг LS 2*1,5",
+                    "price": 330,
+                    "unit": "м",
+                    "id": "19937"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5/",
+                    "title": "Кабель ВВГ нг 2*1,5",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "19730"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5/",
+                    "title": "Кабель ВВГ 2*1,5",
+                    "price": 316,
+                    "unit": "м",
+                    "id": "19812"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-at/",
+                    "title": "Кабель ВВГ нг 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42015"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-frls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг FRLS 2*1,5 ГК ГОСТ",
+                    "price": 418,
+                    "unit": "м",
+                    "id": "32381"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-at/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-lsltx-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LSLTx 2*1,5 ГК ГОСТ",
+                    "price": 342,
+                    "unit": "м",
+                    "id": "34452"
+                  }
+                ],
+                "excluded_out_of_stock": 1,
+                "excluded_other_units": 0,
+                "minimum_price": 309,
+                "winners": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  }
+                ]
+              },
+              "products": [
+                {
+                  "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "price": 309,
+                  "stockLine": "Караганда (9150 м), Алматы (246 м), Шымкент (16 м)",
+                  "cardText": "- **[Кабель ВВГ 2*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/)**\n  Цена: *309* ₸/м\n  Наличие: Караганда (9150 м), Алматы (246 м), Шымкент (16 м)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 2*1,5», цены и единицы продажи; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-92d36121",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "2×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 5723
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T11:35:49.848Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "f0370f1a-683c-4e4c-b180-4edb1deb17d0"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": true
+}
