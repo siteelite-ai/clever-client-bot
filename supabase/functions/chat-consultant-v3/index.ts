@@ -196,8 +196,10 @@ import {
   type EnvironmentalProtectionRange,
 } from "../_shared/v3-tools/environmental-protection-range.ts";
 import {
+  classifyRequiredProductMeasurementGap,
   chooseDerivedReasoningRepair,
   INVALID_DERIVED_DECLARATION_CORRECTION,
+  type RequiredProductMeasurementGap,
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
 import {
   advanceSelectionTarget,
@@ -10484,25 +10486,34 @@ async function runExpertLoop(
             userMessage,
             lastDiscover?.facets ?? [],
           );
-          const missingRequiredProductMeasurement = () => {
-            if (!unresolvedProductMeasurementRequired || !declaration) {
-              return false;
-            }
-            // A spatial calculation for an open installation is a total
-            // demand, not an omitted scalar specification for every card.
-            // Do not spend a corrective call trying to invent one.
+          const requiredProductMeasurementGap = () => {
+            // Replacement has its own source-product and candidate card proof
+            // gate. A size in the source model is not automatically one new
+            // scalar required of every alternative product.
             if (
-              (provisionalCustomerMeasurementScope ??
-                declaration.measurementScope) === "system_total"
-            ) return false;
+              (replacementIntent || isReplacementProofRequest(userMessage)) ||
+              !unresolvedProductMeasurementRequired ||
+              !declaration
+            ) {
+              return null;
+            }
+            const measurementScope = provisionalCustomerMeasurementScope ??
+              declaration.measurementScope;
+            const pairedFitProven = pairedDecisionForEvidence(
+              declaration.reasoningEvidence,
+            ).state === "required";
+            // A spatial system total never becomes a criterion on each card;
+            // a resolved two-sided fit supplies its own strict relations.
+            if (measurementScope === "system_total" || pairedFitProven) {
+              return null;
+            }
             const compiled = compileMeasuredReasoningSearchContract(
               [],
               declaration.measurementEvidence,
               [],
               lastDiscover?.facets ?? [],
               {
-                measurementScope: provisionalCustomerMeasurementScope ??
-                  declaration.measurementScope,
+                measurementScope,
                 customerText: verifiedCustomerMeasurementEvidence,
               },
             );
@@ -10510,13 +10521,36 @@ async function runExpertLoop(
               declaration.measurementEvidence,
               lastDiscover?.facets ?? [],
             );
-            return (compiled.mandatory_criteria.length === 0 &&
-              compiled.projected_criteria.length === 0 &&
-              recommendedExact.criterion === null) ||
-              hasCompetingMeasuredSelectionTiers(
+            const certifiedRecommendedExact = recommendedExact.criterion
+              ? filterPerProductMeasuredCriteria(
+                [recommendedExact.criterion],
                 declaration.measurementEvidence,
-              );
+                verifiedCustomerMeasurementEvidence,
+                measurementScope,
+                lastDiscover?.facets ?? [],
+              ).criteria.length > 0
+              : false;
+            return classifyRequiredProductMeasurementGap({
+              required: unresolvedProductMeasurementRequired,
+              measurementScope,
+              pairedFitProven,
+              scalarProjectionAllowed: shouldProjectDerivedScalarMeasurement(
+                userMessage,
+                declaration.text,
+                measurementScope,
+              ),
+              // Advisory projections do not constrain search or cards. A
+              // required measurement is proven only by an A-level criterion.
+              mandatoryMeasuredCriterionProjected:
+                compiled.mandatory_criteria.length > 0 ||
+                certifiedRecommendedExact,
+              competingThresholds: hasCompetingMeasuredSelectionTiers(
+                declaration.measurementEvidence,
+              ) || recommendedExact.reason === "competing_values",
+            });
           };
+          const missingRequiredProductMeasurement = () =>
+            requiredProductMeasurementGap() !== null;
           const missingPairedFitProof = () => {
             // A measured object and a live paired graph create the obligation.
             // The raw tool argument is not the proof consumed by the terminal
@@ -10570,6 +10604,40 @@ async function runExpertLoop(
               meta: {
                 category: lastDiscover?.category?.pagetitle ?? "",
                 reason: "derived_declaration_incomplete",
+              },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
+          };
+          const stopForUnverifiedProductMeasurement = (
+            reason: RequiredProductMeasurementGap | null,
+            correctionFailure: ReturnType<typeof classifyPublicFailure> | null =
+              null,
+          ) => {
+            const notice = correctionFailure?.customer_message ??
+              "Не удалось однозначно проверить обязательный числовой параметр товара по каталогу. Не буду показывать неподтверждённые варианты; уточните требование к товару или повторите запрос.";
+            send({ type: "delta", content: notice });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({
+              step: "v3_product_measurement_unverified",
+              ms: now(),
+              meta: {
+                reason: correctionFailure
+                  ? "correction_service_failure"
+                  : reason ?? "correction_failed",
+                ...(correctionFailure
+                  ? {
+                    public_error: correctionFailure.public_code,
+                    retryable: correctionFailure.retryable,
+                  }
+                  : {}),
+                category: lastDiscover?.category?.pagetitle ?? "",
+                measurement_scope: provisionalCustomerMeasurementScope ??
+                  declaration?.measurementScope ?? null,
+                reasoning_attempts: derivedReasoningProviderAttempts,
               },
             });
             return {
@@ -10707,6 +10775,24 @@ async function runExpertLoop(
                   });
                   return stopForInvalidDerivedDeclaration();
                 }
+                if (repairReason === "product_measurement") {
+                  steps.push({
+                    step: "v3_product_measurement_correction_failed",
+                    ms: now(),
+                    meta: {
+                      error_category: correctionFailure.kind,
+                      upstream_status: correctionError instanceof
+                          UpstreamHttpError
+                        ? correctionError.status
+                        : null,
+                      timeout_ms: correctionTimeout,
+                    },
+                  });
+                  return stopForUnverifiedProductMeasurement(
+                    requiredProductMeasurementGap(),
+                    correctionFailure,
+                  );
+                }
                 throw correctionError;
               }
               derivedReasoningProviderAttempts += 1;
@@ -10747,6 +10833,10 @@ async function runExpertLoop(
           }
           if (!declaration?.text.trim()) {
             return stopForInvalidDerivedDeclaration();
+          }
+          const productMeasurementGap = requiredProductMeasurementGap();
+          if (productMeasurementGap) {
+            return stopForUnverifiedProductMeasurement(productMeasurementGap);
           }
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
