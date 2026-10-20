@@ -11,7 +11,7 @@ import {
   explicitReplacementModelValues,
   isReplacementIdentityFacet,
 } from "./search-filter-guard.ts";
-import type { ProductRef } from "./types.ts";
+import type { CatalogCandidateCoverage, ProductRef } from "./types.ts";
 
 export interface LiveReplacementClarification {
   facet_key: string;
@@ -206,9 +206,14 @@ export function resolveExactReplacementSource(
  * Code, series and first-hit matches are deliberately insufficient. */
 export function resolveUniqueExactReplacementTitle(
   claimedTitle: string,
-  result: { total: number; results: ProductRef[] },
+  result: {
+    total: number;
+    results: ProductRef[];
+    candidate_coverage?: CatalogCandidateCoverage;
+  },
 ): ProductRef | null {
-  if (result.total !== 1 || result.results.length !== 1) return null;
+  if (result.candidate_coverage !== "complete_query_window" ||
+    result.total !== 1 || result.results.length !== 1) return null;
   const exactTitle = (value: string) => String(value ?? "")
     .normalize("NFKC").toLocaleLowerCase("ru-RU")
     .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();

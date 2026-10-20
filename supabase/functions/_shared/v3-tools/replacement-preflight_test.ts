@@ -381,14 +381,22 @@ Deno.test("explicit replacement title requires one full-title-equal live source"
   assertEquals(resolveUniqueExactReplacementTitle(title, {
     total: 1,
     results: [source],
+    candidate_coverage: "complete_query_window",
   })?.id, source.id);
   assertEquals(resolveUniqueExactReplacementTitle(title, {
     total: 2,
     results: [source],
+    candidate_coverage: "partial",
   }), null);
   assertEquals(resolveUniqueExactReplacementTitle(title, {
     total: 1,
     results: [{ ...source, pagetitle: "Лампа светодиодная ECO T75 GX53 IEK" }],
+    candidate_coverage: "complete_query_window",
+  }), null);
+  assertEquals(resolveUniqueExactReplacementTitle(title, {
+    total: 1,
+    results: [source],
+    candidate_coverage: "unknown",
   }), null);
 });
 
