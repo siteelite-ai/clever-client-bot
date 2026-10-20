@@ -375,7 +375,7 @@ if [[ ! -f "$scratch_dir/lock-held" ]]; then
   printf 'Timed out waiting for first finish lock.\n' >&2
   exit 1
 fi
-second_result=$(db_psql -c "SET ROLE service_role; WITH r AS MATERIALIZED (SELECT public.test_atomic_success(jsonb_build_object('digest', '$race_digest', 'topic_id', '$race_topic', 'log_id', '$race_log', 'fence', $race_fence)) AS value) SELECT value->>'status' || ':' || value->>'replayed' FROM r;")
+second_result=$(db_psql -c "SET ROLE service_role; WITH r AS MATERIALIZED (SELECT public.test_atomic_success(jsonb_build_object('digest', '$race_digest', 'topic_id', '$race_topic', 'log_id', '$race_log', 'fence', $race_fence)) AS value) SELECT (value->>'status') || ':' || (value->>'replayed') FROM r;")
 wait "$first_pid"
 first_pid=''
 if ! grep -qx 'finalized' "$scratch_dir/first.out"; then
