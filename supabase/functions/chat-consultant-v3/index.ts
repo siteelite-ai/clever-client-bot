@@ -500,6 +500,7 @@ import {
   productProvesDirectReplacementAxes,
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
+  adjudicateVerifiedStructuralCandidate,
   evaluateStructuralReplacementCandidate,
   resolveStructuralReplacementProfile,
   type StructuralReplacementProfile,
@@ -512,10 +513,7 @@ import {
   extractReplacementDimensions,
   replacementDimensionBounds,
 } from "../_shared/v3-tools/replacement-provisional-evidence.ts";
-import {
-  evaluateReplacementCandidateFit,
-  type ReplacementCandidateFit,
-} from "../_shared/v3-tools/replacement-candidate-fit.ts";
+import type { ReplacementCandidateFit } from "../_shared/v3-tools/replacement-candidate-fit.ts";
 import { retrieveReplacementCandidateWindow } from "../_shared/v3-tools/replacement-candidate-retrieval.ts";
 import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
 import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
@@ -4251,7 +4249,7 @@ interface DirectReplacementResult {
 }
 
 const VERIFIED_MANUFACTURER_FACT_COLUMNS =
-  "product_id,article,catalog_url,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
+  "product_id,article,catalog_url,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
 
 async function loadApprovedManufacturerFacts(
   ctx: ToolContext,
@@ -4421,28 +4419,17 @@ async function selectGuardedStructuralReplacement(
       // Generic catalogue diameter is the outer housing on many products and
       // must not override a verified cut-out match. Other legacy routes keep
       // their original structural window.
-      const strict = evaluateStructuralReplacementCandidate(profile, full, {
-        dimensionPolicy: "verified_mounting_cutout",
-        customerCutoutMm,
-      });
-      if (!strict.ok) {
-        if (trace) reject(`strict:${strict.reason}`);
-        return null;
-      }
-      const fit = evaluateReplacementCandidateFit(source, full, {
-        customer_cutout_mm: customerCutoutMm,
-      });
-      if (
-        fit.status !== "provisional_candidate" ||
-        fit.checks.mounting_cutout_mm.status !== "match"
-      ) {
+      const proof = adjudicateVerifiedStructuralCandidate(
+        profile, full, customerCutoutMm,
+      );
+      if (!proof.ok) {
         if (trace) {
-          reject(`fit:${fit.checks.mounting_cutout_mm.reason}`);
+          reject(`strict:${proof.reason}`);
           const candidateCutout = extractReplacementDimensions(full)
             .mounting_cutout_mm.mm;
           const expectedCutout = customerCutoutMm ?? sourceCutout.mm;
           if (
-            fit.checks.mounting_cutout_mm.status === "mismatch" &&
+            proof.fit.checks.mounting_cutout_mm.status === "mismatch" &&
             candidateCutout !== null && expectedCutout !== null &&
             excludedCutoutExamples.length < 5
           ) {
@@ -4455,7 +4442,7 @@ async function selectGuardedStructuralReplacement(
         }
         return null;
       }
-      return { full, fit };
+      return { full, fit: proof.fit };
     };
   const strictOptions = Object.fromEntries(
     Object.entries(profile.searchOptions).filter(([, values]) =>

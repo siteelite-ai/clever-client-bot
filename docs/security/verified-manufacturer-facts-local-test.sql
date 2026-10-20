@@ -1,4 +1,5 @@
--- Run only after the exact candidate migration in a disposable PostgreSQL 16
+-- Run only after BOTH ordered candidate migrations (base then fixture-form
+-- extension) in a disposable PostgreSQL 16
 -- database with anon, authenticated and BYPASSRLS service_role already created.
 -- Fixtures are rolled back. Never run this script against a shared live project.
 -- Example: psql "$DISPOSABLE_DATABASE_URL" -v ON_ERROR_STOP=1 \
@@ -11,6 +12,7 @@ DECLARE
   v_pending uuid;
   v_first uuid;
   v_second uuid;
+  v_form uuid;
   v_checked_at timestamptz := clock_timestamp();
   v_rejected boolean;
   v_message text;
@@ -94,6 +96,16 @@ BEGIN
 
   v_rejected := false;
   BEGIN
+    UPDATE public.verified_product_facts SET fixture_form = 'точечные светильники'
+    WHERE id = v_pending;
+  EXCEPTION WHEN check_violation THEN v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'unapproved fixture-form vocabulary was accepted';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
     UPDATE public.verified_product_facts SET outer_diameter_mm = 90
     WHERE id = v_pending;
   EXCEPTION WHEN check_violation THEN v_rejected := true;
@@ -148,6 +160,42 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'approved technical evidence could be rewritten';
+  END IF;
+
+  -- Form alone is a typed manufacturer claim; neither cut-out nor any other
+  -- installation attribute is invented. Approval still makes it immutable.
+  INSERT INTO public.verified_product_facts (
+    product_id, article, catalog_url, source_url, document_version,
+    verified_at, valid_until, approval_status, approved_at, approved_by,
+    fixture_form
+  ) VALUES (
+    'ci-form-only', 'CI-FORM-ONLY',
+    'https://220volt.kz/catalog/svetotexnika/svetilniki/ci-form-only/',
+    'https://manufacturer.example/form-spec', 'CI test rev 1',
+    v_checked_at - interval '1 day', v_checked_at + interval '30 days',
+    'approved', v_checked_at, 'CI reviewer', 'downlight'
+  ) RETURNING id INTO v_form;
+  IF EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE id = v_form AND (cutout_min_mm IS NOT NULL OR socket_kind IS NOT NULL
+      OR supply_min_v IS NOT NULL)
+  ) THEN
+    RAISE EXCEPTION 'fixture form inferred unrelated technical claims';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts SET fixture_form = NULL
+    WHERE id = v_form;
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    IF v_message NOT LIKE 'approved manufacturer facts are immutable%' THEN
+      RAISE;
+    END IF;
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'approved fixture form could be rewritten';
   END IF;
 
   v_rejected := false;
@@ -237,8 +285,14 @@ $test$;
 SET LOCAL ROLE service_role;
 DO $test$
 BEGIN
-  IF (SELECT count(*) FROM public.verified_product_facts) <> 3 THEN
+  IF (SELECT count(*) FROM public.verified_product_facts) <> 4 THEN
     RAISE EXCEPTION 'service_role cannot read the expected evidence fixtures';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE product_id = 'ci-form-only' AND fixture_form = 'downlight'
+  ) THEN
+    RAISE EXCEPTION 'service_role cannot read the approved fixture form';
   END IF;
 END;
 $test$;

@@ -6,6 +6,10 @@ const migration = readFileSync(new URL(
   '../../supabase/migrations/20261020150000_verified_product_facts.sql',
   import.meta.url,
 ), 'utf8');
+const fixtureFormMigration = readFileSync(new URL(
+  '../../supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql',
+  import.meta.url,
+), 'utf8');
 
 test('verified facts row has the server validator contract, with no seeded SKU', () => {
   const columns = new Map([...migration.matchAll(/^  ([a-z_]+) (uuid|text|integer|timestamptz|numeric\(7, 2\)|boolean)(?=\s|,|$)/gm)]
@@ -23,6 +27,7 @@ test('verified facts row has the server validator contract, with no seeded SKU',
     driver_included: 'boolean', driver_type: 'text',
     supply_min_v: 'numeric(7, 2)', supply_max_v: 'numeric(7, 2)',
   })) assert.equal(columns.get(name), type, name);
+  assert.equal(columns.has('fixture_form'), false, 'the already-applied base migration must remain unchanged');
   assert.match(migration, /^  document_page integer,$/m);
   assert.ok(migration.includes("source_url !~* '[.]pdf("));
   assert.doesNotMatch(migration, /^INSERT INTO public\.verified_product_facts\b/im);
@@ -45,4 +50,25 @@ test('approval, geometry and access are constrained in the database', () => {
   assert.match(migration, /REVOKE ALL PRIVILEGES ON TABLE public\.verified_product_facts\s+FROM PUBLIC, anon, authenticated, service_role;/);
   assert.match(migration, /GRANT SELECT ON TABLE public\.verified_product_facts TO service_role;/);
   assert.doesNotMatch(migration, /GRANT (?:INSERT|UPDATE|DELETE|ALL).*service_role/i);
+});
+
+test('later migration extends the existing table without rewriting the base or access model', () => {
+  assert.match(fixtureFormMigration, /(?:^|\n)BEGIN;[\s\S]*\nCOMMIT;\s*$/);
+  assert.match(fixtureFormMigration, /ALTER TABLE public\.verified_product_facts\s+ADD COLUMN fixture_form text;/);
+  assert.match(fixtureFormMigration, /fixture_form IS NULL OR fixture_form = 'downlight'/);
+  assert.match(fixtureFormMigration, /DROP CONSTRAINT verified_product_facts_approved_claim_check;/);
+  assert.match(fixtureFormMigration, /ADD CONSTRAINT verified_product_facts_approved_claim_check CHECK \(/);
+  assert.doesNotMatch(fixtureFormMigration, /\b(?:INSERT|UPDATE|DELETE|GRANT|REVOKE|CREATE POLICY)\b/i);
+
+  const approvedClaimBody = (sql) => sql.match(/CONSTRAINT verified_product_facts_approved_claim_check CHECK \(([\s\S]*?)\n  \)/)?.[1];
+  const baseClaim = approvedClaimBody(migration);
+  const extendedClaim = approvedClaimBody(fixtureFormMigration);
+  assert.ok(baseClaim && extendedClaim, 'both approval constraints must be present');
+  assert.match(extendedClaim, /fixture_form IS NOT NULL OR/);
+  const normalize = (body) => body.replace(/\s+/g, ' ').trim();
+  assert.equal(
+    normalize(extendedClaim.replace('fixture_form IS NOT NULL OR', '')),
+    normalize(baseClaim),
+    'the extension may add the form claim but must preserve every old approved-claim condition',
+  );
 });

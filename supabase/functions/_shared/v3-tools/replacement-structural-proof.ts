@@ -1,8 +1,14 @@
 import type { Facet } from "./discover-category.ts";
-import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
+import {
+  evaluateReplacementCandidateFit,
+  type ReplacementCandidateFit,
+} from "./replacement-candidate-fit.ts";
 import { normalizeProductUrl } from "./search-catalog.ts";
 import type { ProductFull } from "./types.ts";
-import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
+import {
+  fixtureFormContradictsLiveCatalogue,
+  type VerifiedManufacturerFacts,
+} from "./verified-manufacturer-facts.ts";
 
 /**
  * A conservative, catalogue-derived shortlist contract for a verified exact
@@ -231,6 +237,45 @@ function catalogueSocket(raw: string): { kind: "none" } | { kind: "base"; code: 
     : null;
 }
 
+function opaqueCatalogueSocket(raw: string): boolean {
+  // These options say nothing about the actual lamp interface. Only a bound,
+  // approved manufacturer row can supply the missing fact; this function
+  // must never translate "прочее" into "без цоколя" by itself.
+  return /^(?:прочее|другое|не указано|неизвестно|other|unknown)$/u.test(
+    normalized(raw),
+  );
+}
+
+function socketProseContradictsTypedFact(
+  product: ProductFull,
+  expected: NonNullable<VerifiedManufacturerFacts["technical"]["socket"]>,
+): boolean {
+  const title = normalized(product.pagetitle ?? "").slice(0, 300);
+  const content = normalized(product.description_excerpt ?? "").slice(0, 1_200);
+  const claims: Array<{ kind: "none" } | { kind: "base"; code: string }> = [];
+  const explicitBase = /(?<![\p{L}\p{N}])((?:[gг][uуxх]|[eе]|r)\s*-?\s*\d{1,3}[a-z]?|[gг]\s*-?\s*\d{2,3}[a-z]?)(?![\p{L}\p{N}])/giu;
+  for (const match of title.matchAll(explicitBase)) {
+    const option = catalogueSocket(match[1]);
+    if (option) claims.push(option);
+  }
+  if (/(?:^|[^\p{L}])без цоколя(?!\p{L})/u.test(title)) {
+    claims.push({ kind: "none" });
+  }
+  for (
+    const match of content.matchAll(
+      /(?:тип цоколя|цоколь)\s*[:=–—-]\s*([^.;!?]{1,80})/gu,
+    )
+  ) {
+    const option = catalogueSocket(match[1]);
+    if (option) claims.push(option);
+  }
+  return claims.some((claim) =>
+    claim.kind !== expected.kind ||
+    (claim.kind === "base" && expected.kind === "base" &&
+      claim.code !== expected.code.toUpperCase())
+  );
+}
+
 function catalogueDriverIncluded(raw: string): boolean | null {
   const value = normalized(raw);
   if (/^(?:в комплекте|встроенн[\p{L}]*|интегрирован[\p{L}]*|included|built[ -]?in)$/u.test(value)) {
@@ -242,6 +287,14 @@ function catalogueDriverIncluded(raw: string): boolean | null {
   return null;
 }
 
+function catalogueDriverWithUnspecifiedInclusion(raw: string): boolean {
+  // A component name is not evidence that the driver is supplied. Its
+  // presence and electrical kind must both come from the approved row.
+  return /^(?:светодиодн[\p{L}]* драйвер|драйвер светодиодн[\p{L}]*|led[- ]?драйвер|led driver)$/u.test(
+    normalized(raw),
+  );
+}
+
 function catalogueKelvin(raw: string): number | null {
   const match = normalized(raw).match(/^(\d{4,5})\s*(?:к|k)?$/u);
   const value = match ? Number(match[1]) : NaN;
@@ -251,15 +304,25 @@ function catalogueKelvin(raw: string): number | null {
 }
 
 function lightColorClearlyContradictsKelvin(raw: string, kelvin: number): boolean {
-  const value = normalized(raw);
   // Descriptive color names have fuzzy boundaries. Only clear outliers are
   // contradictory; they never establish an exact Kelvin requirement.
-  if (/^нейтральн[\p{L} ]*$/u.test(value)) {
+  const colorClass = catalogueLightColorClass(raw);
+  if (colorClass === "neutral") {
     return kelvin < 3_500 || kelvin > 5_000;
   }
-  if (/^тепл[\p{L} ]*$/u.test(value)) return kelvin >= 4_000;
-  if (/^холодн[\p{L} ]*$/u.test(value)) return kelvin <= 3_500;
+  if (colorClass === "warm") return kelvin >= 4_000;
+  if (colorClass === "cold") return kelvin <= 3_500;
   return false;
+}
+
+function catalogueLightColorClass(raw: string): "warm" | "neutral" | "cold" | null {
+  const value = normalized(raw);
+  const classes = [
+    /(?:^|\s)тепл[\p{L}]*/u.test(value) ? "warm" : null,
+    /(?:^|\s)нейтральн[\p{L}]*/u.test(value) ? "neutral" : null,
+    /(?:^|\s)холодн[\p{L}]*/u.test(value) ? "cold" : null,
+  ].filter((item): item is "warm" | "neutral" | "cold" => item !== null);
+  return classes.length === 1 ? classes[0] : null;
 }
 
 function catalogueLed(raw: string): boolean | null {
@@ -300,6 +363,10 @@ function approvedFactContradictsCatalog(
 ): boolean {
   const facts = boundManufacturerFacts(product)?.technical;
   if (!facts) return false;
+  if (role === "kind") {
+    return facts.fixture_form === "downlight" &&
+      fixtureFormContradictsLiveCatalogue(product, "downlight");
+  }
   if (role === "technology") {
     // Integrated LED cannot be a halogen/fluorescent/incandescent fixture.
     return facts.integrated_led === true &&
@@ -310,7 +377,8 @@ function approvedFactContradictsCatalog(
     return Boolean(facts.socket && option &&
       (facts.socket.kind !== option.kind ||
         (facts.socket.kind === "base" && option.kind === "base" &&
-          facts.socket.code.toUpperCase() !== option.code)));
+          facts.socket.code.toUpperCase() !== option.code))) ||
+      Boolean(facts.socket && socketProseContradictsTypedFact(product, facts.socket));
   }
   if (role === "driver") {
     const option = catalogueDriverIncluded(raw);
@@ -342,10 +410,23 @@ function approvedSemanticEquality(
   candidate: ProductFull,
   sourceRaw: string,
   candidateRaw: string,
+  facetCaption?: string,
 ): boolean {
   const left = boundManufacturerFacts(source)?.technical;
   const right = boundManufacturerFacts(candidate)?.technical;
   if (!left || !right) return false;
+  if (role === "kind") {
+    // A broad catalogue class never proves a downlight on its own. Both exact
+    // cards must carry independently approved form evidence, and any explicit
+    // incompatible class in either live card vetoes the bridge.
+    // The generic role parser also recognizes "Вид управления". Manufacturer
+    // fixture form must never equate options of such an unrelated facet.
+    return normalized(facetCaption ?? "") === "вид светильника" &&
+      left.fixture_form === "downlight" &&
+      right.fixture_form === "downlight" &&
+      !fixtureFormContradictsLiveCatalogue(source, "downlight") &&
+      !fixtureFormContradictsLiveCatalogue(candidate, "downlight");
+  }
   if (role === "technology") {
     return left.integrated_led === true && right.integrated_led === true &&
       catalogueLed(sourceRaw) === true && catalogueLed(candidateRaw) === true;
@@ -353,29 +434,54 @@ function approvedSemanticEquality(
   if (role === "socket") {
     const sourceSocket = catalogueSocket(sourceRaw);
     const candidateSocket = catalogueSocket(candidateRaw);
-    if (!sourceSocket || !candidateSocket || !left.socket || !right.socket) return false;
-    if (sourceSocket.kind !== candidateSocket.kind ||
-      sourceSocket.kind !== left.socket.kind ||
-      candidateSocket.kind !== right.socket.kind) return false;
-    return sourceSocket.kind === "none" ||
-      (candidateSocket.kind === "base" && left.socket.kind === "base" &&
-        right.socket.kind === "base" && sourceSocket.code === candidateSocket.code &&
-        sourceSocket.code === left.socket.code.toUpperCase() &&
-        candidateSocket.code === right.socket.code.toUpperCase());
+    if (!left.socket || !right.socket ||
+      left.socket.kind !== right.socket.kind ||
+      (left.socket.kind === "base" && right.socket.kind === "base" &&
+        left.socket.code.toUpperCase() !== right.socket.code.toUpperCase())) {
+      return false;
+    }
+    const matchesApproved = (
+      option: ReturnType<typeof catalogueSocket>,
+      raw: string,
+      approved: NonNullable<VerifiedManufacturerFacts["technical"]["socket"]>,
+    ) => option
+      ? option.kind === approved.kind &&
+        (option.kind === "none" ||
+          (approved.kind === "base" && option.code === approved.code.toUpperCase()))
+      : opaqueCatalogueSocket(raw);
+    return matchesApproved(sourceSocket, sourceRaw, left.socket) &&
+      matchesApproved(candidateSocket, candidateRaw, right.socket) &&
+      !socketProseContradictsTypedFact(source, left.socket) &&
+      !socketProseContradictsTypedFact(candidate, right.socket);
   }
   if (role === "driver") {
     const sourceIncluded = catalogueDriverIncluded(sourceRaw);
     const candidateIncluded = catalogueDriverIncluded(candidateRaw);
     // "In the box" and "built in" establish presence, not electrical
     // interchangeability. Never bridge two different or unnamed driver kinds.
-    return sourceIncluded !== null && candidateIncluded !== null &&
-      sourceIncluded === candidateIncluded &&
-      left.driver?.included === sourceIncluded &&
-      right.driver?.included === candidateIncluded &&
+    // A neutral "LED driver" option establishes neither presence nor kind;
+    // only matching approved rows can complete that option.
+    return Boolean(left.driver && right.driver &&
+      (sourceIncluded === null
+        ? catalogueDriverWithUnspecifiedInclusion(sourceRaw)
+        : left.driver.included === sourceIncluded) &&
+      (candidateIncluded === null
+        ? catalogueDriverWithUnspecifiedInclusion(candidateRaw)
+        : right.driver.included === candidateIncluded) &&
+      left.driver.included === right.driver.included &&
       typeof left.driver.type === "string" && left.driver.type.length > 0 &&
       left.driver.type === right.driver.type &&
-      !proseContradictsTypedFact(role, source, sourceIncluded) &&
-      !proseContradictsTypedFact(role, candidate, candidateIncluded);
+      !proseContradictsTypedFact(role, source, left.driver.included) &&
+      !proseContradictsTypedFact(role, candidate, right.driver.included));
+  }
+  if (role === "lightColor") {
+    const sourceClass = catalogueLightColorClass(sourceRaw);
+    const candidateClass = catalogueLightColorClass(candidateRaw);
+    return Boolean(sourceClass && sourceClass === candidateClass &&
+      left.color_temperature_k !== null &&
+      left.color_temperature_k === right.color_temperature_k &&
+      !lightColorClearlyContradictsKelvin(sourceRaw, left.color_temperature_k) &&
+      !lightColorClearlyContradictsKelvin(candidateRaw, right.color_temperature_k!));
   }
   if (role === "colorTemperature") {
     const sourceKelvin = catalogueKelvin(sourceRaw);
@@ -387,6 +493,93 @@ function approvedSemanticEquality(
       !proseContradictsTypedFact(role, candidate, candidateKelvin);
   }
   return false;
+}
+
+function approvedPairContradicts(
+  role: Role,
+  source: ProductFull,
+  candidate: ProductFull,
+): boolean {
+  const left = boundManufacturerFacts(source)?.technical;
+  const right = boundManufacturerFacts(candidate)?.technical;
+  if (!left || !right) return false;
+  if (role === "kind" && left.fixture_form && right.fixture_form) {
+    return left.fixture_form !== right.fixture_form;
+  }
+  if (role === "technology" && left.integrated_led !== null &&
+    right.integrated_led !== null) {
+    return left.integrated_led !== right.integrated_led;
+  }
+  if (role === "colorTemperature" && left.color_temperature_k !== null &&
+    right.color_temperature_k !== null) {
+    return left.color_temperature_k !== right.color_temperature_k;
+  }
+  if (role === "socket" && left.socket && right.socket) {
+    return left.socket.kind !== right.socket.kind ||
+      (left.socket.kind === "base" && right.socket.kind === "base" &&
+        left.socket.code.toUpperCase() !== right.socket.code.toUpperCase());
+  }
+  if (role === "driver" && left.driver && right.driver) {
+    return left.driver.included !== right.driver.included ||
+      (left.driver.type !== null && right.driver.type !== null &&
+        left.driver.type !== right.driver.type);
+  }
+  if (role === "voltage" && left.supply_v && right.supply_v) {
+    return right.supply_v.min > left.supply_v.min ||
+      right.supply_v.max < left.supply_v.max;
+  }
+  return false;
+}
+
+function approvedInterfaceResolvesOnlyUnknownCatalogSocket(
+  profile: StructuralReplacementProfile,
+  candidate: ProductFull,
+  fit: ReturnType<typeof evaluateReplacementCandidateFit>,
+): boolean {
+  if (fit.status !== "insufficient_evidence" ||
+    fit.checks.lamp_interface.status !== "unknown" ||
+    fit.checks.lamp_interface.reason !== "lamp_interface_unverified") {
+    return false;
+  }
+  // The generic fit evaluator correctly refuses an opaque catalogue socket.
+  // Permit this *one* unknown only after two independently approved rows have
+  // established the same LED interface. Every other mandatory axis, voltage
+  // and IP must still match; even an optional outer-size hard mismatch vetoes.
+  const checks = fit.checks;
+  if (checks.outer_diameter_mm.status === "mismatch" ||
+    checks.source_identity.status !== "match" ||
+    checks.leaf_category.status !== "match" ||
+    checks.stock_and_price.status !== "match" ||
+    checks.mounting_kind.status !== "match" ||
+    checks.mounting_cutout_mm.status !== "match" ||
+    checks.voltage_v.status !== "match" ||
+    checks.ip_grade.status !== "match") return false;
+  const technology = profile.roles.technology;
+  const socket = profile.roles.socket;
+  if (!technology || !socket) return false;
+  const candidateTechnology = oneCorroboratedValue(candidate, technology.facet);
+  const candidateSocket = oneCorroboratedValue(candidate, socket.facet);
+  return Boolean(candidateTechnology && candidateSocket &&
+    approvedSemanticEquality(
+      "technology", profile.source, candidate,
+      technology.sourceValue, candidateTechnology,
+    ) &&
+    approvedSemanticEquality(
+      "socket", profile.source, candidate,
+      socket.sourceValue, candidateSocket,
+    ) &&
+    !approvedFactContradictsCatalog(
+      "technology", profile.source, technology.sourceValue,
+    ) &&
+    !approvedFactContradictsCatalog(
+      "technology", candidate, candidateTechnology,
+    ) &&
+    !approvedFactContradictsCatalog(
+      "socket", profile.source, socket.sourceValue,
+    ) &&
+    !approvedFactContradictsCatalog(
+      "socket", candidate, candidateSocket,
+    ));
 }
 
 function facetUnit(facet: Facet, accepted: readonly string[]): string | null {
@@ -634,6 +827,19 @@ export function evaluateStructuralReplacementCandidate(
       reason: `candidate_mounting_cutout_unverified:${cutoutFit.checks.mounting_cutout_mm.reason}`,
     };
   }
+  if (verifiedCutoutPolicy) {
+    // Approved hard facts are independent of the catalogue facet list. A
+    // missing optional live facet must not hide conflicting manufacturer rows.
+    for (
+      const role of [
+        "kind", "technology", "colorTemperature", "socket", "driver", "voltage",
+      ] as const
+    ) {
+      if (approvedPairContradicts(role, profile.source, candidate)) {
+        return { ok: false, reason: `manufacturer_pair_conflict:${role}` };
+      }
+    }
+  }
   const evidence: Extract<StructuralReplacementFit, { ok: true }>["evidence"] = [];
   for (const obligation of profile.obligations) {
     const role = obligation.role;
@@ -664,6 +870,7 @@ export function evaluateStructuralReplacementCandidate(
       const approvedSemantic = verifiedCutoutPolicy && !exact &&
         approvedSemanticEquality(
           role, profile.source, candidate, entry.sourceValue, raw,
+          entry.facet.caption,
         );
       if (!catalogOption || (!exact && !approvedSemantic)) {
         return { ok: false, reason: `candidate_mismatch:${role}` };
@@ -751,11 +958,47 @@ export function evaluateStructuralReplacementCandidate(
     }
     evidence.push({ role, caption: entry.facet.caption, source: entry.sourceValue, candidate: raw });
   }
-  if (cutoutFit && cutoutFit.status !== "provisional_candidate") {
+  if (cutoutFit && cutoutFit.status !== "provisional_candidate" &&
+    !approvedInterfaceResolvesOnlyUnknownCatalogSocket(
+      profile, candidate, cutoutFit,
+    )) {
     return {
       ok: false,
       reason: `candidate_fit_unverified:${cutoutFit.reasons[0] ?? cutoutFit.status}`,
     };
   }
   return { ok: true, candidate, evidence };
+}
+
+/** One guarded admission result for both shortlist and final contract.
+ * The generic fit evaluator still supplies diagnostics, but its opaque socket
+ * verdict cannot independently override this stricter typed-facts proof. */
+export type VerifiedStructuralCandidateProof =
+  | { ok: false; reason: string; fit: ReplacementCandidateFit }
+  | {
+    ok: true;
+    candidate: ProductFull;
+    evidence: Extract<StructuralReplacementFit, { ok: true }>["evidence"];
+    fit: ReplacementCandidateFit;
+  };
+
+export function adjudicateVerifiedStructuralCandidate(
+  profile: StructuralReplacementProfile,
+  candidate: ProductFull,
+  customerCutoutMm: number | null,
+): VerifiedStructuralCandidateProof {
+  const fit = evaluateReplacementCandidateFit(profile.source, candidate, {
+    customer_cutout_mm: customerCutoutMm,
+  });
+  const structural = evaluateStructuralReplacementCandidate(
+    profile,
+    candidate,
+    {
+      dimensionPolicy: "verified_mounting_cutout",
+      customerCutoutMm,
+    },
+  );
+  return structural.ok
+    ? { ok: true, candidate: structural.candidate, evidence: structural.evidence, fit }
+    : { ok: false, reason: structural.reason, fit };
 }

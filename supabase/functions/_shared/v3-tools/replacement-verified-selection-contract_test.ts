@@ -3,7 +3,10 @@ import {
   assertNotEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { Facet } from "./discover-category.ts";
-import { resolveStructuralReplacementProfile } from "./replacement-structural-proof.ts";
+import {
+  adjudicateVerifiedStructuralCandidate,
+  resolveStructuralReplacementProfile,
+} from "./replacement-structural-proof.ts";
 import {
   guardedStructuralSelectionContract,
   hasVerifiedRecessedStructuralMount,
@@ -305,6 +308,105 @@ Deno.test("approved inclusive cut-out range supports the exact opening, not a di
     }),
     null,
   );
+});
+
+Deno.test("approved opaque socket uses the same guarded proof in shortlist and final contract", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_socket" ? [{ value: "прочее", products_count: 1 }] : [],
+      ...facet.key === "live_voltage" ? [{ value: "230", products_count: 1 }] : [],
+    ],
+  }));
+  const approved = (item: ProductFull) => {
+    const bound = withApprovedRoundCutout(item, 90, 90);
+    bound.verified_manufacturer_facts!.technical.integrated_led = true;
+    bound.verified_manufacturer_facts!.technical.socket = { kind: "none" };
+    bound.verified_manufacturer_facts!.technical.supply_v = {
+      min: 220,
+      max: 240,
+    };
+    return bound;
+  };
+  const source = approved(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const candidate = approved(product("opaque", {
+    socket: "прочее",
+    voltage: "230",
+  }));
+  const proof = adjudicateVerifiedStructuralCandidate(
+    resolved.profile, candidate, 90,
+  );
+  assertEquals(proof.ok, true);
+  assertEquals(proof.fit.status, "insufficient_evidence");
+  assertEquals(proof.fit.checks.lamp_interface.reason, "lamp_interface_unverified");
+  const contract = guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [candidate],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  });
+  assertNotEquals(contract, null);
+  assertEquals(contract?.mandatory_criteria.some(({ key }) =>
+    key === "Тип цоколя" || key === "Напряжение, В"
+  ), false);
+  assertEquals(contract?.mandatory_criteria.some(({ key }) =>
+    key === "Способ монтажа"
+  ), true);
+  // Every source-facet criterion published for this card must be literally
+  // true of its corroborated live value. Semantic bridges remain in the
+  // private admission proof, not falsely represented as raw equality.
+  for (const criterion of contract?.mandatory_criteria ?? []) {
+    if (criterion.key === "Монтажное отверстие") {
+      assertEquals(criterion.value, 90);
+      continue;
+    }
+    const match = traits.find(([, caption]) => caption === criterion.key);
+    if (!match) throw new Error(`unmapped criterion: ${criterion.key}`);
+    const raw = candidate.facet_values?.[`live_${match[0]}`]?.[0];
+    if (criterion.op === "eq") {
+      assertEquals(raw, criterion.value, criterion.key);
+    } else if (criterion.op === "min") {
+      assertEquals(Number(raw) >= Number(criterion.value), true, criterion.key);
+    } else if (criterion.op === "range") {
+      const [min, max] = criterion.value as [number, number];
+      assertEquals(Number(raw) >= min && Number(raw) <= max, true, criterion.key);
+    } else {
+      throw new Error(`unexpected criterion operator: ${criterion.op}`);
+    }
+  }
+
+  const noFacts = product("opaque-no-facts", {
+    socket: "прочее",
+    voltage: "230",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" });
+  assertEquals(adjudicateVerifiedStructuralCandidate(
+    resolved.profile, noFacts, 90,
+  ).ok, false);
+  assertEquals(guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [noFacts],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  }), null);
+  const namedSocket = approved(product("named-socket", {
+    socket: "прочее",
+    voltage: "230",
+  }, { pagetitle: "Светильник LED GU10" }));
+  assertEquals(adjudicateVerifiedStructuralCandidate(
+    resolved.profile, namedSocket, 90,
+  ).ok, false);
+  assertEquals(guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [namedSocket],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  }), null);
 });
 
 Deno.test("a customer opening outside an approved source range cannot enter the final contract", () => {

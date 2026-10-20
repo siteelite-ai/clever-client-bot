@@ -3,6 +3,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  fixtureFormContradictsLiveCatalogue,
   validateVerifiedManufacturerFacts,
 } from "./verified-manufacturer-facts.ts";
 import type { ProductFull } from "./types.ts";
@@ -123,11 +124,148 @@ Deno.test("range is inclusive, and unknown optional technical values stay null",
   assertEquals(range.technical.socket, null);
   assertEquals(range.technical.driver, null);
   assertEquals(range.technical.supply_v, null);
+  assertEquals(range.technical.fixture_form, null);
   assert(check({
     cutout_shape: null,
     cutout_kind: null,
     cutout_min_mm: null,
     cutout_max_mm: null,
+  }));
+});
+
+Deno.test("an approved fixture form is typed, optional for old rows, and bound to the exact live card", () => {
+  assertEquals(
+    check({ fixture_form: "downlight" })?.technical.fixture_form,
+    "downlight",
+  );
+  assertEquals(check({ fixture_form: null })?.technical.fixture_form, null);
+  assertEquals(check()?.technical.fixture_form, null);
+  for (
+    const fixture_form of ["точечные светильники", "floodlight", "", 1, false]
+  ) {
+    assertEquals(check({ fixture_form }), null, String(fixture_form));
+  }
+  assertEquals(check({ fixture_form: "downlight", article: "OTHER" }), null);
+  assertEquals(
+    check({ fixture_form: "downlight", approval_status: "pending" }),
+    null,
+  );
+  assertEquals(
+    check({
+      fixture_form: "downlight",
+      source_url: "http://manufacturer.example/spec",
+    }),
+    null,
+  );
+});
+
+Deno.test("fixture form alone is a valid approved claim but does not silently assert other characteristics", () => {
+  const noOtherFacts = {
+    cutout_shape: null,
+    cutout_kind: null,
+    cutout_min_mm: null,
+    cutout_max_mm: null,
+    outer_diameter_mm: null,
+    color_temperature_k: null,
+    integrated_led: null,
+    socket_kind: null,
+    socket_code: null,
+    driver_included: null,
+    driver_type: null,
+    supply_min_v: null,
+    supply_max_v: null,
+  };
+  // A missing or explicitly null form remains unknown: the whole all-null
+  // approved row is unusable, rather than becoming a default downlight.
+  assertEquals(check(noOtherFacts), null);
+  assertEquals(check({ ...noOtherFacts, fixture_form: null }), null);
+  const result = check({ ...noOtherFacts, fixture_form: "downlight" });
+  assert(result);
+  assertEquals(result.technical.fixture_form, "downlight");
+  assertEquals(result.technical.cutout, null);
+  assertEquals(result.technical.socket, null);
+  assertEquals(result.technical.supply_v, null);
+});
+
+Deno.test("explicitly different live fixture classes veto downlight, while a broad spot class is not proof or contradiction", () => {
+  assertEquals(
+    fixtureFormContradictsLiveCatalogue(
+      product({
+        short_traits: ["Вид светильника: точечные светильники"],
+      }),
+      "downlight",
+    ),
+    false,
+  );
+  assertEquals(
+    fixtureFormContradictsLiveCatalogue(
+      product({
+        short_traits: ["Вид светильника: прожекторы"],
+      }),
+      "downlight",
+    ),
+    true,
+  );
+  assertEquals(
+    fixtureFormContradictsLiveCatalogue(
+      product({
+        short_traits: ["Вид светильника: бытовые линейные светильники"],
+      }),
+      "downlight",
+    ),
+    true,
+  );
+  assertEquals(
+    fixtureFormContradictsLiveCatalogue(
+      product({
+        facet_captions: { form: "Тип светильника" },
+        facet_values: { form: ["линейный светильник"] },
+      }),
+      "downlight",
+    ),
+    true,
+  );
+  assertEquals(
+    fixtureFormContradictsLiveCatalogue(
+      product({
+        description_excerpt: "Вид светильника: светодиодная панель.",
+      }),
+      "downlight",
+    ),
+    true,
+  );
+  assert(check({ fixture_form: "downlight" }, {
+    short_traits: ["Вид светильника: точечные светильники"],
+  }));
+  assert(check({ fixture_form: "downlight" }, {
+    pagetitle: "Линейный прожектор — заголовок не классификатор",
+    short_traits: ["Назначение: прожектор"],
+  }));
+  for (
+    const short_traits of [
+      ["Вид светильника: прожекторы"],
+      ["Вид светильника: бытовые линейные светильники"],
+      ["Тип светильника: офисные панели"],
+      ["Тип светильника: линейный светильник"],
+      ["Класс светильника: трековый светильник"],
+    ]
+  ) assertEquals(check({ fixture_form: "downlight" }, { short_traits }), null);
+  assertEquals(
+    check({ fixture_form: "downlight" }, {
+      facet_captions: { item_type: "Вид светильника" },
+      facet_values: { item_type: ["точечные светильники", "прожекторы"] },
+    }),
+    null,
+  );
+  assertEquals(
+    check({ fixture_form: "downlight" }, {
+      description_excerpt: "Вид светильника: светодиодная панель.",
+    }),
+    null,
+  );
+  assert(check({ fixture_form: "downlight" }, {
+    facet_captions: { item_type: "Вид светильника" },
+    facet_values: { item_type: ["точечные светильники"] },
   }));
 });
 
@@ -230,7 +368,12 @@ Deno.test("typed dimensions reject malformed units, geometry and extent", () => 
       { cutout_max_mm: null },
       { outer_diameter_mm: "110 mm" },
       { outer_diameter_mm: 80 },
-      { cutout_kind: "range", cutout_min_mm: 90, cutout_max_mm: 110, outer_diameter_mm: 95 },
+      {
+        cutout_kind: "range",
+        cutout_min_mm: 90,
+        cutout_max_mm: 110,
+        outer_diameter_mm: 95,
+      },
       { color_temperature_k: "4000 K" },
       { color_temperature_k: 999 },
       { color_temperature_k: 4000.5 },

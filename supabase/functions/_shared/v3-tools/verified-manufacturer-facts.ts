@@ -24,6 +24,8 @@ export interface VerifiedManufacturerFacts {
     approved_by: string;
   };
   technical: {
+    /** Explicit form in the approved manufacturer document, never a synonym inferred from catalogue grouping. */
+    fixture_form?: "downlight" | null;
     cutout: {
       shape: "round";
       kind: "exact" | "range";
@@ -284,6 +286,7 @@ function liveCatalogDimensions(
 }
 
 type TechnicalClaimRole =
+  | "fixture_form"
   | "color_temperature"
   | "integrated_led"
   | "lamp_technology"
@@ -300,6 +303,9 @@ type TechnicalClaim = {
  * caption paired with a live option or an explicit description label is. */
 function technicalClaimRole(rawCaption: string): TechnicalClaimRole | null {
   const caption = normalizedLabel(rawCaption);
+  if (/^(?:вид|тип|класс) светильника$/u.test(caption)) {
+    return "fixture_form";
+  }
   if (
     /^(?:цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?)$/u
       .test(caption)
@@ -335,7 +341,42 @@ function technicalClaimRole(rawCaption: string): TechnicalClaimRole | null {
 }
 
 const TECHNICAL_DESCRIPTION_LABEL =
-  /(?:^|[^\p{L}\p{N}])((?:цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?|встроенн(?:ый|ые) (?:светодиод(?:ы|ный источник света)|led(?:-модуль)?)|наличие встроенных светодиодов|integrated led|тип лампы|технология освещения|тип цоколя|цоколь|тип патрона|драйвер в комплекте|пра в комплекте|тип драйвера|драйвер|пра|(?:рабочее|питающее) напряжение|напряжение питания|напряжение)(?:,\s*(?:в|v))?)\s*[:=–—]\s*([^.;\n]{1,100})/giu;
+  /(?:^|[^\p{L}\p{N}])((?:(?:вид|тип|класс) светильника|цветовая температура(?:,\s*(?:к|k))?|color temperature(?:,\s*k)?|встроенн(?:ый|ые) (?:светодиод(?:ы|ный источник света)|led(?:-модуль)?)|наличие встроенных светодиодов|integrated led|тип лампы|технология освещения|тип цоколя|цоколь|тип патрона|драйвер в комплекте|пра в комплекте|тип драйвера|драйвер|пра|(?:рабочее|питающее) напряжение|напряжение питания|напряжение)(?:,\s*(?:в|v))?)\s*[:=–—]\s*([^.;\n]{1,100})/giu;
+
+/** Only mutually exclusive explicit catalogue classes can veto a downlight.
+ * A broader class such as "точечные светильники" stays unknown, never proof.
+ * Titles, model tokens and machine facet keys are not class evidence. */
+const NON_DOWNLIGHT_FIXTURE_CLASSES = new Set([
+  "прожектор",
+  "прожекторы",
+  "уличный прожектор",
+  "уличные прожекторы",
+  "линейный светильник",
+  "линейные светильники",
+  "трековый светильник",
+  "трековые светильники",
+  "панельный светильник",
+  "панельные светильники",
+  "светодиодная панель",
+  "светодиодные панели",
+  "люстра",
+  "люстры",
+  "настенное бра",
+  "светодиодная лента",
+  "floodlight",
+  "linear luminaire",
+  "track light",
+  "led panel",
+]);
+
+function explicitlyDifferentFixtureClass(value: string): boolean {
+  if (NON_DOWNLIGHT_FIXTURE_CLASSES.has(value)) return true;
+  // Catalogue classes can prepend usage and mounting adjectives. Only these
+  // bounded, positive modifiers plus an explicit incompatible form count;
+  // never treat "точечные" as an alias or a contradiction for downlight.
+  return /^(?:(?:бытов[а-я]*|офисн[а-я]*|уличн[а-я]*|промышленн[а-я]*|светодиодн[а-я]*|встраиваем[а-я]*|накладн[а-я]*|подвесн[а-я]*)\s+){1,3}(?:линейн(?:ый|ые)\s+светильник(?:и)?|треков(?:ый|ые)\s+светильник(?:и)?|панельн(?:ый|ые)\s+светильник(?:и)?|светодиодн(?:ая|ые)\s+панел(?:ь|и)|прожектор(?:ы)?|панели)$/u
+    .test(value);
+}
 
 function liveTechnicalClaims(product: ProductFull): TechnicalClaim[] {
   const claims: TechnicalClaim[] = [];
@@ -367,6 +408,21 @@ function liveTechnicalClaims(product: ProductFull): TechnicalClaim[] {
     }
   }
   return claims;
+}
+
+/** Re-check explicit live classes at the final selection boundary too. This
+ * guards callers that attach an already typed fact object without hydration.
+ * Unknown or broad classes are not proof of form; only an explicitly
+ * incompatible class can veto a manufacturer-approved downlight. */
+export function fixtureFormContradictsLiveCatalogue(
+  product: ProductFull,
+  form: "downlight",
+): boolean {
+  if (form !== "downlight") return true;
+  return liveTechnicalClaims(product).some((claim) =>
+    claim.role === "fixture_form" &&
+    explicitlyDifferentFixtureClass(claim.value)
+  );
 }
 
 function voltageInterval(raw: string): Interval | null {
@@ -468,6 +524,9 @@ function driverCurrentType(
 
 function technicalClaimContradicts(row: Row, claim: TechnicalClaim): boolean {
   const { role, caption, value } = claim;
+  if (role === "fixture_form" && row.fixture_form === "downlight") {
+    return explicitlyDifferentFixtureClass(value);
+  }
   if (role === "color_temperature" && row.color_temperature_k !== null) {
     const observed = kelvinInterval(value);
     return observed !== null && (
@@ -572,6 +631,8 @@ export function validateVerifiedManufacturerFacts(
       : row.cutout_min_mm < row.cutout_max_mm);
   if (!cutoutEmpty && !cutoutPresent) return null;
   if (
+    !(row.fixture_form === undefined || row.fixture_form === null ||
+      row.fixture_form === "downlight") ||
     !nullablePositive(row.outer_diameter_mm, 10_000) ||
     (row.color_temperature_k !== null &&
       (!Number.isInteger(row.color_temperature_k) ||
@@ -632,7 +693,8 @@ export function validateVerifiedManufacturerFacts(
   ) return null;
   // An all-null evidence row cannot support a claim, even if approved.
   if (
-    !cutoutPresent && row.outer_diameter_mm === null &&
+    row.fixture_form !== "downlight" && !cutoutPresent &&
+    row.outer_diameter_mm === null &&
     row.color_temperature_k === null && row.integrated_led === null &&
     row.socket_kind === null && row.driver_included === null &&
     row.supply_min_v === null
@@ -653,6 +715,7 @@ export function validateVerifiedManufacturerFacts(
       approved_by: row.approved_by,
     },
     technical: {
+      fixture_form: row.fixture_form === "downlight" ? "downlight" : null,
       cutout: cutoutPresent
         ? {
           shape: "round",
