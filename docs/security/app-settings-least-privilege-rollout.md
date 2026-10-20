@@ -1,7 +1,7 @@
 # `app_settings`: least-privilege rollout
 
-Status: local security branch only. The migration has not been pushed, merged,
-applied to Supabase, or tested against production data.
+Status: draft PR #122. The disposable PostgreSQL checks passed; the migration
+has not been merged or applied to Supabase, and no production data was changed.
 
 `public.app_settings` contains catalog and AI-provider credentials. Its existing
 RLS policies allow only admins to read and update rows, but table-level grants
