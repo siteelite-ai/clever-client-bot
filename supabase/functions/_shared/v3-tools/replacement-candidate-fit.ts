@@ -616,6 +616,69 @@ function voltageRange(raw: string): VoltageRange | null {
     : null;
 }
 
+const VOLTAGE_TOKEN =
+  /(?<![\p{L}\p{N}])(\d{1,4}(?:[.,]\d{1,2})?(?:\s*[-–—]\s*\d{1,4}(?:[.,]\d{1,2})?)?\s*(?:в|v))(?![\p{L}\p{N}])/giu;
+
+function voltageTextClaims(
+  product: ProductFull,
+): Array<{ value: VoltageRange; evidence: ReplacementFitEvidence }> {
+  const claims: Array<
+    { value: VoltageRange; evidence: ReplacementFitEvidence }
+  > = [];
+  const title = normalized(product.pagetitle ?? "").slice(0, 300);
+  for (const match of title.matchAll(VOLTAGE_TOKEN)) {
+    const value = voltageRange(match[1]);
+    if (value) {
+      claims.push({
+        value,
+        evidence: evidence("catalog_field", "pagetitle", match[1].slice(0, 40)),
+      });
+    }
+  }
+  const content = normalized(product.description_excerpt ?? "").slice(0, 1_200);
+  for (
+    const statement of content.matchAll(
+      /(?:входное\s+напряжение|номинальное\s+напряжение|напряжение(?:\s+питания)?)(?:,\s*(?:в|v))?\s*[:=–—]\s*([^.;!?]{1,100})/giu,
+    )
+  ) {
+    // An output/secondary driver voltage is not the luminaire's mains input.
+    // The standalone `напряжение` alternative must not start mid-label.
+    const before = content.slice(
+      Math.max(0, (statement.index ?? 0) - 24),
+      statement.index ?? 0,
+    );
+    if (/(?:выходное|вторичное)\s*$/u.test(before)) continue;
+    const tokens = [...statement[1].matchAll(VOLTAGE_TOKEN)];
+    const parsed = tokens.length > 0
+      ? tokens.map((token) => voltageRange(token[1]))
+      : [voltageRange(statement[1].trim())];
+    for (const value of parsed) {
+      if (value) {
+        claims.push({
+          value,
+          evidence: evidence(
+            "catalog_content",
+            "supply_voltage_statement",
+            statement[1].slice(0, 100),
+            statement[0].slice(0, 150),
+          ),
+        });
+      }
+    }
+  }
+  return claims;
+}
+
+function voltageTextConflicts(
+  product: ProductFull,
+  option: VoltageRange | null,
+): ReplacementFitEvidence[] {
+  if (!option) return [];
+  return voltageTextClaims(product)
+    .filter(({ value }) => value.max < option.min || value.min > option.max)
+    .map(({ evidence }) => evidence);
+}
+
 function voltageCheck(
   source: ProductFull,
   candidate: ProductFull,
@@ -624,6 +687,18 @@ function voltageCheck(
   const right = pairedCatalogOption(candidate, VOLTAGE_CAPTION);
   const sourceRange = left && voltageRange(left.value);
   const candidateRange = right && voltageRange(right.value);
+  const sourceConflicts = voltageTextConflicts(source, sourceRange);
+  const candidateConflicts = voltageTextConflicts(candidate, candidateRange);
+  if (sourceConflicts.length || candidateConflicts.length) {
+    return check(
+      "unknown",
+      sourceConflicts.length
+        ? "source_voltage_evidence_conflicts"
+        : "candidate_voltage_evidence_conflicts",
+      [...left?.evidence ?? [], ...sourceConflicts],
+      [...right?.evidence ?? [], ...candidateConflicts],
+    );
+  }
   if (!sourceRange || !candidateRange) {
     return check(
       "unknown",
@@ -666,6 +741,61 @@ function ipGrade(raw: string): [number, number] | null {
   return match ? [Number(match[1]), Number(match[2])] : null;
 }
 
+const IP_TOKEN = /(?<![\p{L}\p{N}])(ip\s*[0-6][0-9])(?![\p{L}\p{N}])/giu;
+
+function ipTextClaims(
+  product: ProductFull,
+): Array<{ value: [number, number]; evidence: ReplacementFitEvidence }> {
+  const claims: Array<
+    { value: [number, number]; evidence: ReplacementFitEvidence }
+  > = [];
+  const title = normalized(product.pagetitle ?? "").slice(0, 300);
+  for (const match of title.matchAll(IP_TOKEN)) {
+    const value = ipGrade(match[1]);
+    if (value) {
+      claims.push({
+        value,
+        evidence: evidence("catalog_field", "pagetitle", match[1].slice(0, 40)),
+      });
+    }
+  }
+  const content = normalized(product.description_excerpt ?? "").slice(0, 1_200);
+  for (
+    const statement of content.matchAll(
+      /(?:степень\s+защиты|класс\s+пылевлагозащиты)(?:,\s*ip)?\s*[:=–—]\s*([^.;!?]{1,80})/giu,
+    )
+  ) {
+    const tokens = [...statement[1].matchAll(IP_TOKEN)];
+    const parsed = tokens.length > 0
+      ? tokens.map((token) => ipGrade(token[1]))
+      : [ipGrade(statement[1].trim())];
+    for (const value of parsed) {
+      if (value) {
+        claims.push({
+          value,
+          evidence: evidence(
+            "catalog_content",
+            "ip_grade_statement",
+            statement[1].slice(0, 80),
+            statement[0].slice(0, 130),
+          ),
+        });
+      }
+    }
+  }
+  return claims;
+}
+
+function ipTextConflicts(
+  product: ProductFull,
+  option: [number, number] | null,
+): ReplacementFitEvidence[] {
+  if (!option) return [];
+  return ipTextClaims(product)
+    .filter(({ value }) => value[0] !== option[0] || value[1] !== option[1])
+    .map(({ evidence }) => evidence);
+}
+
 function ipCheck(
   source: ProductFull,
   candidate: ProductFull,
@@ -674,6 +804,18 @@ function ipCheck(
   const right = pairedCatalogOption(candidate, IP_CAPTION);
   const sourceIP = left && ipGrade(left.value);
   const candidateIP = right && ipGrade(right.value);
+  const sourceConflicts = ipTextConflicts(source, sourceIP);
+  const candidateConflicts = ipTextConflicts(candidate, candidateIP);
+  if (sourceConflicts.length || candidateConflicts.length) {
+    return check(
+      "unknown",
+      sourceConflicts.length
+        ? "source_ip_evidence_conflicts"
+        : "candidate_ip_evidence_conflicts",
+      [...left?.evidence ?? [], ...sourceConflicts],
+      [...right?.evidence ?? [], ...candidateConflicts],
+    );
+  }
   if (!sourceIP || !candidateIP) {
     return check(
       "unknown",
@@ -836,7 +978,11 @@ export function evaluateReplacementCandidateFit(
     hardAxes.some((axis) => checks[axis].status === "mismatch")
       ? "hard_mismatch"
       : mandatoryAxes.some((axis) => checks[axis].status === "unknown") ||
-          checks.voltage_v.status === "different"
+          checks.voltage_v.status === "different" ||
+          [checks.voltage_v, checks.ip_grade].some((axis) =>
+            axis.status === "unknown" &&
+            axis.reason.endsWith("evidence_conflicts")
+          )
       ? "insufficient_evidence"
       : "provisional_candidate";
   const remaining_checks = [

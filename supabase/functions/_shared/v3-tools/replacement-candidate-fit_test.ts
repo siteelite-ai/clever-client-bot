@@ -243,6 +243,111 @@ Deno.test("a verified IP downgrade rejects; an overlap-only voltage needs confir
   assertEquals(partialSupply.checks.voltage_v.status, "different");
 });
 
+Deno.test("explicit 12V title or supply-content contradicts a 220–240V option without becoming fit proof", () => {
+  const source = product("source");
+  for (
+    const candidate of [
+      product("title-12v", {}, {
+        pagetitle: "Встраиваемый светильник LED 12V",
+      }),
+      product("content-12v", {}, {
+        description_excerpt:
+          "Напряжение: 12 В. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+      }),
+    ]
+  ) {
+    const result = evaluateReplacementCandidateFit(source, candidate);
+    assertEquals(result.status, "insufficient_evidence");
+    assertEquals(result.checks.voltage_v.status, "unknown");
+    assertEquals(
+      result.checks.voltage_v.reason,
+      "candidate_voltage_evidence_conflicts",
+    );
+    assertEquals(
+      result.checks.voltage_v.candidate.some(({ origin }) =>
+        origin === "catalog_field" || origin === "catalog_content"
+      ),
+      true,
+    );
+  }
+  const missingOption = product("missing-voltage", {}, {
+    pagetitle: "Встраиваемый светильник LED 220V",
+  });
+  delete missingOption.facet_values?.voltage;
+  const unproven = evaluateReplacementCandidateFit(source, missingOption);
+  assertEquals(unproven.checks.voltage_v.status, "unknown");
+  assertEquals(unproven.checks.voltage_v.reason, "voltage_unverified");
+
+  const sourceContradiction = evaluateReplacementCandidateFit(
+    product("source", {}, {
+      description_excerpt:
+        "Напряжение питания: 12 В. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+    }),
+    product("candidate"),
+  );
+  assertEquals(sourceContradiction.status, "insufficient_evidence");
+  assertEquals(
+    sourceContradiction.checks.voltage_v.reason,
+    "source_voltage_evidence_conflicts",
+  );
+
+  const separateDriverOutput = evaluateReplacementCandidateFit(
+    source,
+    product("driver-output", {}, {
+      description_excerpt:
+        "Выходное напряжение: 12 В. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+    }),
+  );
+  assertEquals(separateDriverOutput.checks.voltage_v.status, "match");
+  assertEquals(separateDriverOutput.status, "provisional_candidate");
+});
+
+Deno.test("explicit IP20 title or content contradicts an IP65 option", () => {
+  const source = product("source", { ip: "65" });
+  for (
+    const candidate of [
+      product("title-ip20", { ip: "65" }, {
+        pagetitle: "Встраиваемый светильник LED IP20",
+      }),
+      product("content-ip20", { ip: "65" }, {
+        description_excerpt:
+          "Степень защиты: IP20. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+      }),
+    ]
+  ) {
+    const result = evaluateReplacementCandidateFit(source, candidate);
+    assertEquals(result.status, "insufficient_evidence");
+    assertEquals(result.checks.ip_grade.status, "unknown");
+    assertEquals(
+      result.checks.ip_grade.reason,
+      "candidate_ip_evidence_conflicts",
+    );
+  }
+  const missingOption = product("missing-ip", {}, {
+    pagetitle: "Встраиваемый светильник LED IP20",
+  });
+  delete missingOption.facet_values?.ip;
+  const unproven = evaluateReplacementCandidateFit(
+    product("source"),
+    missingOption,
+  );
+  assertEquals(unproven.checks.ip_grade.status, "unknown");
+  assertEquals(unproven.checks.ip_grade.reason, "ip_grade_unverified");
+
+  const sourceContradiction = evaluateReplacementCandidateFit(
+    product("source", { ip: "65" }, {
+      description_excerpt:
+        "Степень защиты: IP20. Монтажное отверстие: 90 мм. Наружный диаметр: 115 мм.",
+    }),
+    product("candidate", { ip: "65" }),
+  );
+  assertEquals(sourceContradiction.status, "insufficient_evidence");
+  assertEquals(
+    sourceContradiction.checks.ip_grade.reason,
+    "source_ip_evidence_conflicts",
+  );
+});
+
 Deno.test("an uncorroborated mounting facet is not treated as proof", () => {
   const candidate = product("unknown");
   candidate.short_traits = candidate.short_traits.filter((trait) =>
