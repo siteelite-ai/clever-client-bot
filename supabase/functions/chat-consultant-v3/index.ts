@@ -11167,8 +11167,23 @@ async function runExpertLoop(
               String((reasoningError as Error)?.message ?? reasoningError)
                 .includes("llm_call_timeout:")
             );
+            // The primary reasoning call can return HTTP 200 with no usable
+            // choice. Before origin diagnostics this surfaced as a synthetic
+            // 502 and received the one bounded alternate-model attempt. Keep
+            // that recovery only when no provider-level failover has already
+            // consumed the alternate; an HTTP auth/quota/rate-limit response
+            // (or a failed fallback after one) must never trigger a third call.
+            const unusablePrimaryCompletion =
+              reasoningError instanceof UpstreamHttpError &&
+              reasoningError.origin === "completion_envelope" &&
+              reasoningError.status === 502 &&
+              reasoningError.observed_http_status === 200 &&
+              reasoningError.failed_over === false &&
+              reasoningError.primary_status === null;
             const transientProviderFailure =
-              isConfirmedTransientUpstreamHttp5xx(reasoningError);
+              (isConfirmedTransientUpstreamHttp5xx(reasoningError) &&
+                reasoningError.failed_over !== true) ||
+              unusablePrimaryCompletion;
             const retryTimeout = (timedOut || transientProviderFailure) &&
                 !turnController.signal.aborted
               ? boundedAgentStepTimeout(
@@ -11187,6 +11202,7 @@ async function runExpertLoop(
                 retry_model: GENERAL_INQUIRY_MODEL,
                 primary_timeout_ms: primaryReasoningTimeout,
                 retry_timeout_ms: retryTimeout,
+                ...upstreamFailureDiagnosticMeta(reasoningError),
               },
             });
             structuredReasoning = await callOpenRouter(
