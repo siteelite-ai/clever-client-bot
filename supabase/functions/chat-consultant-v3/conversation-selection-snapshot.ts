@@ -1,21 +1,28 @@
 /**
  * A proposed, default-off continuation projection for conversation-state.
- * Only a durable, successful v3 log row may advance it. Browser history,
- * slots, and model prose are deliberately absent from this API. This module
- * is NOT imported by the live handler; the separate protocol/binding release
- * must fetch the row after its terminal UPDATE before calling it.
+ * A durable, successful v3 log row may advance it. The separate, default-off
+ * atomic-finish path can propose the same state before its one SQL commit,
+ * provided the caller supplies an already claimed server row and exact
+ * server-rendered egress proofs. Browser history, slots, and model prose are
+ * deliberately absent from both APIs. Neither is imported by the live handler.
  */
 import { boundedServerSnapshot } from "./conversation-state.ts";
+import {
+  buildConversationEgressProof,
+  type EgressProofResult,
+} from "./conversation-egress-proof.ts";
 import {
   type ServerDestinationFitProof,
   verifyReplacementDestinationFit,
 } from "../_shared/v3-tools/selection-contract.ts";
+import type { ProductCache, ProductFull } from "../_shared/v3-tools/types.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const CONTRACT_HASH = /^selection-[0-9a-f]{8}$/u;
 const MAX_SELECTION_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_URLS = 40;
 const MAX_CRITERIA = 20;
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CONTROLLED_CARD =
   /-\s+\*\*\[[^\]\r\n]{1,300}\]\((https:\/\/220volt\.kz\/catalog\/[^)\s]+)\)\*\*/gu;
 
@@ -72,6 +79,37 @@ export interface CompletedSelectionLogRow {
   created_at: unknown;
   response_events: unknown;
 }
+
+/** A service-role read of the log after atomic claim-and-begin returned
+ * `begun`. The provenance marker is a runtime assertion, not a credential:
+ * the caller must obtain this from its server-owned claim, never request JSON.
+ * `created_at` is the database row timestamp, not a browser clock. */
+export interface ServerClaimedSelectionLogRow {
+  provenance: "server_atomic_claim_v1";
+  id: string;
+  chat_v3_topic_id: string;
+  session_id: string;
+  user_query: string;
+  created_at: string;
+  pipeline: "v3";
+  error: "in_progress";
+}
+
+export type PrecommitSelectionSnapshotInput =
+  | { mode: "off" }
+  | {
+    mode: "on";
+    previous: unknown;
+    claim: ServerClaimedSelectionLogRow;
+    topicId: string;
+    /** The final server-owned log events, ending in complete + done. */
+    responseEvents: readonly unknown[];
+    /** One exact egress result per products_block, in event order. */
+    egressProofs: readonly EgressProofResult[];
+    continuationApproved: boolean;
+    continuationKind: "none" | "evidence" | "additional";
+    now?: number;
+  };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -497,4 +535,119 @@ export function advanceServerSelectionSnapshot(input: {
     topic_id: topicId,
     selection,
   }) as unknown as ServerSelectionSnapshot;
+}
+
+/** Build the state proposed to atomic finish, before that RPC commits the
+ * terminal log and state together. This is intentionally stricter than the
+ * durable projector: every displayed block must be re-certified against its
+ * exact renderer output, even when no measured-destination proof is needed.
+ * The pure function cannot establish database provenance; its caller must
+ * have obtained `claim` with service role after a successful atomic begin. */
+export function prepareServerSelectionSnapshotForAtomicFinish(
+  input: PrecommitSelectionSnapshotInput,
+): ServerSelectionSnapshot | null {
+  if (input.mode === "off") return null;
+  const {
+    claim,
+    topicId,
+    responseEvents,
+    egressProofs,
+    continuationApproved,
+    continuationKind,
+  } = input;
+  if (
+    !record(claim) ||
+    Object.keys(claim).sort().join(",") !==
+      "chat_v3_topic_id,created_at,error,id,pipeline,provenance,session_id,user_query" ||
+    claim.provenance !== "server_atomic_claim_v1" ||
+    claim.pipeline !== "v3" || claim.error !== "in_progress" ||
+    !UUID.test(claim.id) || !UUID.test(claim.chat_v3_topic_id) ||
+    claim.chat_v3_topic_id !== topicId ||
+    typeof claim.session_id !== "string" ||
+    claim.session_id.length < 1 || claim.session_id.length > 128 ||
+    !SESSION_ID.test(claim.session_id) ||
+    typeof claim.user_query !== "string" ||
+    !claim.user_query.trim() || claim.user_query !== claim.user_query.trim() ||
+    claim.user_query.length > 2_000 ||
+    typeof claim.created_at !== "string" ||
+    !Array.isArray(responseEvents) || !Array.isArray(egressProofs)
+  ) throw new Error("invalid_server_selection_claim");
+
+  // The claimed row is still in_progress. A synthetic successful row is
+  // valid only as a proposed atomic-finish payload, never as a durable read.
+  const proposedRow: CompletedSelectionLogRow = {
+    id: claim.id,
+    chat_v3_topic_id: claim.chat_v3_topic_id,
+    pipeline: claim.pipeline,
+    user_query: claim.user_query,
+    error: null,
+    created_at: claim.created_at,
+    response_events: [...responseEvents],
+  };
+  const events = completedEvents(proposedRow);
+  for (let index = 0; index < events.length - 1; index++) {
+    const event = record(events[index]);
+    if (
+      event?.type === "done" ||
+      (index < events.length - 2 && event?.type === "diagnostic" &&
+        event.phase === "complete")
+    ) throw new Error("early_selection_terminal_event");
+  }
+
+  const now = input.now ?? Date.now();
+  const explicitNewTopic = events.some((event) => {
+    const item = record(event);
+    return item?.type === "conversation_boundary" && item.mode === "new_task";
+  });
+  const dependent = continuationApproved && continuationKind !== "none";
+  const previous = dependent && !explicitNewTopic
+    ? priorSelection(input.previous, topicId, now)
+    : null;
+  const baseRequest = previous?.base_request ?? claim.user_query;
+  const blocks = events.filter((event) =>
+    record(event)?.type === "products_block"
+  );
+  if (blocks.length !== egressProofs.length) {
+    throw new Error("selection_egress_proof_count_mismatch");
+  }
+  for (let index = 0; index < blocks.length; index++) {
+    const proof = egressProofs[index];
+    const displayedProducts: unknown = proof?.displayedProducts;
+    if (
+      !proof || !Array.isArray(displayedProducts) ||
+      displayedProducts.length === 0 ||
+      !record(proof.internalEvent) || !record(proof.publicEvent) ||
+      JSON.stringify(blocks[index]) !== JSON.stringify(proof.internalEvent)
+    ) throw new Error("invalid_selection_egress_proof");
+    const ids = proof.displayedProducts.map((product: ProductFull) =>
+      product.id
+    );
+    const cache: ProductCache = new Map(
+      proof.displayedProducts.map((
+        product: ProductFull,
+      ) => [product.id, product]),
+    );
+    const certified = buildConversationEgressProof({
+      event: proof.publicEvent,
+      cache,
+      baseRequest,
+      selectionHash: proof.publicEvent.selection_contract?.hash ?? "",
+      requestedIds: ids,
+    });
+    if (
+      !certified ||
+      JSON.stringify(certified.publicEvent) !==
+        JSON.stringify(proof.publicEvent) ||
+      JSON.stringify(certified.internalEvent) !==
+        JSON.stringify(proof.internalEvent)
+    ) throw new Error("invalid_selection_egress_proof");
+  }
+  return advanceServerSelectionSnapshot({
+    previous: input.previous,
+    row: proposedRow,
+    topicId,
+    continuationApproved,
+    continuationKind,
+    now,
+  });
 }

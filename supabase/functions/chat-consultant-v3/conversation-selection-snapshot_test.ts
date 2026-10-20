@@ -1,10 +1,15 @@
 import {
   advanceServerSelectionSnapshot,
   type CompletedSelectionLogRow,
+  prepareServerSelectionSnapshotForAtomicFinish,
+  type ServerClaimedSelectionLogRow,
   type ServerSelectionSnapshot,
 } from "./conversation-selection-snapshot.ts";
-import { buildServerDestinationFitProof } from
-  "../_shared/v3-tools/selection-contract.ts";
+import { buildConversationEgressProof } from "./conversation-egress-proof.ts";
+import {
+  buildServerDestinationFitProof,
+} from "../_shared/v3-tools/selection-contract.ts";
+import { executeRenderProducts } from "../_shared/v3-tools/render.ts";
 import type { ProductFull } from "../_shared/v3-tools/types.ts";
 
 function assert(value: unknown, message: string): asserts value {
@@ -466,10 +471,15 @@ Deno.test("malformed or missing card proof cannot produce a measured replacement
     "empty facet criteria are permitted only with a full destination proof",
   );
   const emptyCriteria = advance(
-    completedRow(1, ORIGINAL, [productBlock([1], {
-      hash: "selection-d3bddbef",
-      mandatory_criteria: [],
-    }, undefined, false)]),
+    completedRow(1, ORIGINAL, [productBlock(
+      [1],
+      {
+        hash: "selection-d3bddbef",
+        mandatory_criteria: [],
+      },
+      undefined,
+      false,
+    )]),
     {},
     false,
   );
@@ -505,5 +515,248 @@ Deno.test("the projection remains default-off until the complete protocol is wir
     !source.includes('from "./conversation-selection-snapshot.ts"') &&
       !source.includes('from "./conversation-selection-snapshot"'),
     "live handler must not import a partial continuation implementation",
+  );
+});
+
+function claimedRow(
+  ordinal: number,
+  query: string,
+): ServerClaimedSelectionLogRow {
+  const row = completedRow(ordinal, query);
+  return {
+    provenance: "server_atomic_claim_v1",
+    id: row.id as string,
+    chat_v3_topic_id: TOPIC,
+    session_id: "server-session-1",
+    user_query: query,
+    created_at: row.created_at as string,
+    pipeline: "v3",
+    error: "in_progress",
+  };
+}
+
+function exactEgress(numbers: number[], baseRequest = ORIGINAL) {
+  const products: ProductFull[] = numbers.map((number) => ({
+    id: String(number),
+    url: productUrl(number),
+    pagetitle: `Люстра для гостиной ${number}`,
+    leaf_category: "Люстры",
+    vendor: null,
+    price: 1_000,
+    stock: "in_stock",
+    short_traits: [
+      "Назначение: Гостиная",
+      "Максимальная площадь освещения: 35 м²",
+    ],
+  }));
+  const cache = new Map(products.map((product) => [product.id, product]));
+  const rendered = executeRenderProducts(
+    { product_ids: products.map((product) => product.id) },
+    cache,
+  );
+  assert(rendered.ok, "test fixture renders exact cards");
+  const proof = buildConversationEgressProof({
+    event: {
+      type: "products_block",
+      markdown: rendered.markdown,
+      count: rendered.rendered_count,
+      selection_contract: CONTRACT,
+    },
+    cache,
+    baseRequest,
+    selectionHash: CONTRACT.hash,
+    requestedIds: products.map((product) => product.id),
+  });
+  assert(proof, "test fixture creates a source-backed egress proof");
+  return proof;
+}
+
+function proposedEvents(id: string, blocks: unknown[]) {
+  return [
+    ...blocks,
+    { type: "diagnostic", phase: "complete", log_id: id, error: null },
+    { type: "done" },
+  ];
+}
+
+Deno.test("precommit projection matches durable projection from exact server egress", () => {
+  const firstClaim = claimedRow(1, ORIGINAL);
+  const firstProof = exactEgress([1, 2]);
+  const firstEvents = proposedEvents(firstClaim.id, [firstProof.internalEvent]);
+  const first = prepareServerSelectionSnapshotForAtomicFinish({
+    mode: "on",
+    previous: {},
+    claim: firstClaim,
+    topicId: TOPIC,
+    responseEvents: firstEvents,
+    egressProofs: [firstProof],
+    continuationApproved: false,
+    continuationKind: "none",
+    now: NOW,
+  });
+  assert(first?.selection, "precommit includes verified displayed cards");
+  equal(
+    first,
+    advance(
+      {
+        ...completedRow(1, ORIGINAL),
+        response_events: firstEvents,
+      },
+      {},
+      false,
+    ),
+    "proposed and durable projections use the same selection rules",
+  );
+
+  const nextClaim = claimedRow(2, "А есть другие варианты?");
+  const nextProof = exactEgress([3], ORIGINAL);
+  const next = prepareServerSelectionSnapshotForAtomicFinish({
+    mode: "on",
+    previous: first,
+    claim: nextClaim,
+    topicId: TOPIC,
+    responseEvents: proposedEvents(nextClaim.id, [nextProof.internalEvent]),
+    egressProofs: [nextProof],
+    continuationApproved: true,
+    continuationKind: "additional",
+    now: NOW,
+  });
+  equal(
+    next?.selection?.shown_product_urls,
+    [1, 2, 3].map((number) => productUrl(number)),
+    "elliptic follow-up inherits the source-backed request and exact exclusions",
+  );
+});
+
+Deno.test("precommit rejects forged, missing, or stale displayed-card proofs", () => {
+  const claim = claimedRow(1, ORIGINAL);
+  const proof = exactEgress([1]);
+  const goodEvents = proposedEvents(claim.id, [proof.internalEvent]);
+  const input = {
+    mode: "on" as const,
+    previous: {},
+    claim,
+    topicId: TOPIC,
+    responseEvents: goodEvents,
+    egressProofs: [proof],
+    continuationApproved: false,
+    continuationKind: "none" as const,
+    now: NOW,
+  };
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        responseEvents: proposedEvents(claim.id, [{
+          ...proof.internalEvent,
+          markdown: proof.internalEvent.markdown.replace(
+            productUrl(1),
+            productUrl(99),
+          ),
+        }]),
+      }),
+    "a visible URL not certified by egress cannot enter proposed state",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        egressProofs: [],
+      }),
+    "a block without a one-to-one proof fails closed",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        egressProofs: [{
+          ...proof,
+          displayedProducts: [{
+            ...proof.displayedProducts[0],
+            short_traits: ["Назначение: Офис"],
+          }],
+        }],
+      }),
+    "a forged product facet cannot reuse a genuine destination proof",
+  );
+});
+
+Deno.test("precommit claim, topic, success, and terminal order fail closed", () => {
+  const claim = claimedRow(1, ORIGINAL);
+  const proof = exactEgress([1]);
+  const goodEvents = proposedEvents(claim.id, [proof.internalEvent]);
+  const input = {
+    mode: "on" as const,
+    previous: {},
+    claim,
+    topicId: TOPIC,
+    responseEvents: goodEvents,
+    egressProofs: [proof],
+    continuationApproved: false,
+    continuationKind: "none" as const,
+    now: NOW,
+  };
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        topicId: OTHER_TOPIC,
+      }),
+    "a claimed row for another topic cannot advance this topic",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        claim: {
+          ...claim,
+          error: "failed",
+        } as unknown as ServerClaimedSelectionLogRow,
+      }),
+    "only a still-active server claim may prepare a successful finish",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        claim: { ...claim, history: [] } as ServerClaimedSelectionLogRow,
+      }),
+    "browser-shaped extra fields cannot enter the narrow claim metadata",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        responseEvents: [
+          proof.internalEvent,
+          { type: "done" },
+          ...goodEvents.slice(-2),
+        ],
+      }),
+    "an early done marker must not be committed as a successful reply",
+  );
+  rejects(
+    () =>
+      prepareServerSelectionSnapshotForAtomicFinish({
+        ...input,
+        responseEvents: proposedEvents(claim.id, [
+          proof.internalEvent,
+          {
+            type: "diagnostic",
+            phase: "complete",
+            log_id: claim.id,
+            error: "failed",
+          },
+        ]),
+      }),
+    "an earlier error completion cannot advance a success snapshot",
+  );
+});
+
+Deno.test("precommit remains default-off and does not demand a claim", () => {
+  equal(
+    prepareServerSelectionSnapshotForAtomicFinish({ mode: "off" }),
+    null,
+    "disabled path neither projects state nor consumes browser data",
   );
 });
