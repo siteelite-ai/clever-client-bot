@@ -1,6 +1,8 @@
-import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   classifyPublicFailure,
+  isConfirmedTransientUpstreamHttp5xx,
+  retryConfirmedUpstreamHttp5xxOnce,
   upstreamFailureDiagnosticMeta,
   UpstreamHttpError,
 } from "./public-failure.ts";
@@ -89,6 +91,140 @@ Deno.test("an unusable HTTP 200 completion keeps synthetic 502 separate from obs
     "upstream_unavailable",
   );
   assertPublicOutputIsSafe(classifyPublicFailure(error));
+});
+
+Deno.test("only a confirmed real HTTP 5xx is eligible for the narrow correction retry", () => {
+  assertEquals(isConfirmedTransientUpstreamHttp5xx(
+    new UpstreamHttpError(502, "provider unavailable", {
+      origin: "http_response",
+      observedHttpStatus: 502,
+    }),
+  ), true);
+  for (const error of [
+    new UpstreamHttpError(502, "unusable HTTP 200", {
+      origin: "completion_envelope",
+      observedHttpStatus: 200,
+    }),
+    new UpstreamHttpError(502, "mismatched status", {
+      origin: "http_response",
+      observedHttpStatus: 200,
+    }),
+    new UpstreamHttpError(402, "quota"),
+    new UpstreamHttpError(403, "access"),
+    new UpstreamHttpError(429, "rate limit"),
+    ...[200, 402, 403, 429].map((primaryStatus) =>
+      new UpstreamHttpError(502, "fallback down after primary failure", {
+        origin: "http_response",
+        observedHttpStatus: 502,
+        primaryStatus,
+        failedOver: true,
+      })
+    ),
+    new UpstreamHttpError(600, "invalid status"),
+    new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"),
+    new DOMException("aborted", "AbortError"),
+  ]) {
+    assertEquals(isConfirmedTransientUpstreamHttp5xx(error), false);
+  }
+});
+
+Deno.test("confirmed HTTP 5xx gets one same-operation retry with a fresh bounded timeout", async () => {
+  const firstFailure = new UpstreamHttpError(503, "private upstream detail", {
+    origin: "http_response",
+    observedHttpStatus: 503,
+    provider: "openrouter",
+  });
+  const calls: number[] = [];
+  const retryTelemetry: Array<{ status: number; timeout: number }> = [];
+  const result = await retryConfirmedUpstreamHttp5xxOnce({
+    attempt: async (timeoutMs) => {
+      calls.push(timeoutMs);
+      if (calls.length === 1) throw firstFailure;
+      return "recovered";
+    },
+    initialTimeoutMs: 8_000,
+    retryTimeoutMs: () => 3_100,
+    signal: new AbortController().signal,
+    onRetry: (error, timeout) =>
+      retryTelemetry.push({ status: error.status, timeout }),
+    now: () => 1_000,
+  });
+  assertEquals(result, "recovered");
+  assertEquals(calls, [8_000, 3_100]);
+  assertEquals(retryTelemetry, [{ status: 503, timeout: 3_100 }]);
+});
+
+Deno.test("second HTTP failure is final: never issue a third correction call", async () => {
+  const first = new UpstreamHttpError(502, "first", {
+    origin: "http_response",
+    observedHttpStatus: 502,
+  });
+  const second = new UpstreamHttpError(503, "second", {
+    origin: "http_response",
+    observedHttpStatus: 503,
+    provider: "lovable",
+    failedOver: true,
+  });
+  let calls = 0;
+  let caught: unknown = null;
+  try {
+    await retryConfirmedUpstreamHttp5xxOnce({
+      attempt: async () => {
+        calls++;
+        throw calls === 1 ? first : second;
+      },
+      initialTimeoutMs: 8_000,
+      retryTimeoutMs: () => 3_000,
+      signal: new AbortController().signal,
+      now: () => 0,
+    });
+  } catch (error) {
+    caught = error;
+  }
+  assertEquals(calls, 2);
+  assertEquals(caught, second);
+  assertEquals(upstreamFailureDiagnosticMeta(caught).upstream_provider, "lovable");
+});
+
+Deno.test("synthetic 502, quotas, aborts, timeouts and insufficient time never start a second paid call", async () => {
+  const real502 = new UpstreamHttpError(502, "real", {
+    origin: "http_response",
+    observedHttpStatus: 502,
+  });
+  for (const [failure, remaining, elapsed, abortTurn] of [
+    [new UpstreamHttpError(502, "HTTP 200 envelope", {
+      origin: "completion_envelope",
+      observedHttpStatus: 200,
+    }), 3_000, 0, false],
+    [new UpstreamHttpError(402, "quota"), 3_000, 0, false],
+    [new UpstreamHttpError(403, "access"), 3_000, 0, false],
+    [new UpstreamHttpError(429, "rate"), 3_000, 0, false],
+    [new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"), 3_000, 0, false],
+    [new DOMException("aborted", "AbortError"), 3_000, 0, false],
+    [real502, 2_499, 0, false],
+    [real502, null, 0, false],
+    [real502, 3_000, 8_000, false],
+    [real502, 3_000, 0, true],
+  ] as const) {
+    const controller = new AbortController();
+    if (abortTurn) controller.abort();
+    let calls = 0;
+    let currentTime = 0;
+    await assertRejects(async () => {
+      await retryConfirmedUpstreamHttp5xxOnce({
+        attempt: async () => {
+          calls++;
+          currentTime = elapsed;
+          throw failure;
+        },
+        initialTimeoutMs: 8_000,
+        retryTimeoutMs: () => remaining,
+        signal: controller.signal,
+        now: () => currentTime,
+      });
+    });
+    assertEquals(calls, 1);
+  }
 });
 
 Deno.test("non-upstream failures add no provider metadata", () => {

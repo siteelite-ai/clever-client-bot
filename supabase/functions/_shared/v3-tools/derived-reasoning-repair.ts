@@ -42,10 +42,11 @@ export function classifyRequiredProductMeasurementGap(input: {
 export function chooseDerivedReasoningRepair(
   input: DerivedReasoningRepairInput,
 ): DerivedReasoningRepairReason | null {
-  // The provider retry and contract repair share a two-call budget. Keep the
-  // existing safety-specific repairs ahead of the generic malformed-contract
-  // case, so an exposed installation or unproven measured pair still receives
-  // the more useful correction (and its existing fail-closed terminal).
+  // The normal provider retry and contract repair share a two-call budget.
+  // The sole exception is one transport retry of a product_measurement
+  // correction after a confirmed real HTTP 5xx, within the same turn deadline:
+  // that can make at most three logical model calls, never a second repair.
+  // Keep safety-specific repairs ahead of the generic malformed-contract case.
   if (input.providerAttempts >= 2) return null;
   if (input.environmentalProtectionMissing) return "environmental_protection";
   if (input.pairedFitMissing) return "paired_fit";

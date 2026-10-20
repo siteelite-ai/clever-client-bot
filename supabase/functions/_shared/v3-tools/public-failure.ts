@@ -79,6 +79,59 @@ export function upstreamFailureDiagnosticMeta(
   };
 }
 
+/** A provider's actual HTTP 5xx, not a synthetic 502 from an unusable HTTP 200.
+ * A primary quota/rate-limit or malformed HTTP 200 followed by a failing
+ * fallback must not be hidden by another paid attempt either. */
+export function isConfirmedTransientUpstreamHttp5xx(
+  error: unknown,
+): error is UpstreamHttpError {
+  return error instanceof UpstreamHttpError &&
+    error.origin === "http_response" &&
+    Number.isInteger(error.status) &&
+    error.status >= 500 && error.status <= 599 &&
+    error.observed_http_status === error.status &&
+    (error.primary_status === null ||
+      Number.isInteger(error.primary_status) &&
+        error.primary_status >= 500 && error.primary_status <= 599);
+}
+
+/** At most one extra attempt, with a fresh caller-supplied deadline budget.
+ * Never start a second paid call after the first call's timeout or turn abort.
+ * The same `attempt` closure keeps messages, tool schema, and model identical. */
+export async function retryConfirmedUpstreamHttp5xxOnce<T>(input: {
+  attempt: (timeoutMs: number) => Promise<T>;
+  initialTimeoutMs: number;
+  retryTimeoutMs: () => number | null;
+  signal: AbortSignal;
+  onRetry?: (error: UpstreamHttpError, timeoutMs: number) => void;
+  now?: () => number;
+}): Promise<T> {
+  const now = input.now ?? (() => performance.now());
+  const startedAt = now();
+  try {
+    return await input.attempt(input.initialTimeoutMs);
+  } catch (error) {
+    if (
+      !isConfirmedTransientUpstreamHttp5xx(error) || input.signal.aborted ||
+      !Number.isFinite(input.initialTimeoutMs) ||
+      !Number.isFinite(startedAt)
+    ) throw error;
+    const elapsedMs = now() - startedAt;
+    if (
+      !Number.isFinite(elapsedMs) || elapsedMs < 0 ||
+      elapsedMs >= input.initialTimeoutMs
+    ) throw error;
+    const retryTimeoutMs = input.retryTimeoutMs();
+    if (
+      retryTimeoutMs === null || !Number.isFinite(retryTimeoutMs) ||
+      retryTimeoutMs < 2_500 || input.signal.aborted
+    ) throw error;
+    input.onRetry?.(error, retryTimeoutMs);
+    if (input.signal.aborted) throw error;
+    return await input.attempt(retryTimeoutMs);
+  }
+}
+
 const TEMPORARILY_UNAVAILABLE =
   "Онлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.";
 

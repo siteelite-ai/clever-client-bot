@@ -12,7 +12,11 @@ import {
   filterPerProductMeasuredCriteria,
   projectSingleRecommendedMeasuredCriterion,
 } from "./criteria-reasoning.ts";
-import { classifyPublicFailure, UpstreamHttpError } from "./public-failure.ts";
+import {
+  classifyPublicFailure,
+  retryConfirmedUpstreamHttp5xxOnce,
+  UpstreamHttpError,
+} from "./public-failure.ts";
 import { resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
 
 Deno.test("a rejected declaration gets one bounded retry without a safety-specific gap", () => {
@@ -70,6 +74,60 @@ Deno.test("a rejected declaration gets one bounded retry without a safety-specif
   );
 });
 
+Deno.test("initial reasoning retains timeout recovery but never retries an HTTP 200 synthetic 502", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../chat-consultant-v3/index.ts", import.meta.url),
+  );
+  const start = source.indexOf("} catch (reasoningError) {");
+  const end = source.indexOf("const cleanDeclarationCall = (", start);
+  assertEquals(start >= 0 && end > start, true);
+  const retryBranch = source.slice(start, end);
+  assertStringIncludes(retryBranch, 'name === "TimeoutError"');
+  assertStringIncludes(retryBranch, 'includes("llm_call_timeout:")');
+  assertStringIncludes(
+    retryBranch,
+    "!(reasoningError instanceof UpstreamHttpError)",
+  );
+  assertStringIncludes(
+    retryBranch,
+    "isConfirmedTransientUpstreamHttp5xx(reasoningError)",
+  );
+  assertEquals(retryBranch.includes("reasoningError.status >= 500"), false);
+});
+
+Deno.test("only product-measurement real-HTTP recovery may use a third logical model call", async () => {
+  const repairInput = {
+    resolvedText: "Рекомендованный минимум товара ещё не спроецирован.",
+    environmentalProtectionMissing: false,
+    pairedFitMissing: false,
+    productMeasurementMissing: true,
+    providerAttempts: 1,
+  };
+  assertEquals(chooseDerivedReasoningRepair(repairInput), "product_measurement");
+  let providerAttempts = 1;
+  const firstCorrectionFailure = new UpstreamHttpError(503, "provider outage", {
+    origin: "http_response",
+    observedHttpStatus: 503,
+  });
+  const result = await retryConfirmedUpstreamHttp5xxOnce({
+    attempt: async () => {
+      providerAttempts += 1;
+      if (providerAttempts === 2) throw firstCorrectionFailure;
+      return "corrected";
+    },
+    initialTimeoutMs: 8_000,
+    retryTimeoutMs: () => 3_000,
+    signal: new AbortController().signal,
+    now: () => 0,
+  });
+  assertEquals(result, "corrected");
+  assertEquals(providerAttempts, 3);
+  assertEquals(
+    chooseDerivedReasoningRepair({ ...repairInput, providerAttempts }),
+    null,
+  );
+});
+
 Deno.test("the handler wires invalid repair to its own telemetry and a safe terminal", async () => {
   const source = await Deno.readTextFile(
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
@@ -98,7 +156,7 @@ Deno.test("a failed invalid-declaration retry is logged and fails closed without
   );
   const catchStart = source.indexOf("} catch (correctionError) {");
   const catchEnd = source.indexOf(
-    "derivedReasoningProviderAttempts += 1;",
+    "declarationCall = cleanDeclarationCall(",
     catchStart,
   );
   assertEquals(catchStart >= 0 && catchEnd > catchStart, true);
@@ -341,9 +399,10 @@ Deno.test("measurement terminal precedes search and correction failure preserves
   );
   const catchStart = source.indexOf("} catch (correctionError) {");
   const catchEnd = source.indexOf(
-    "derivedReasoningProviderAttempts += 1;",
+    "declarationCall = cleanDeclarationCall(",
     catchStart,
   );
+  assertEquals(catchStart >= 0 && catchEnd > catchStart, true);
   const retryFailureBranch = source.slice(catchStart, catchEnd);
   assertStringIncludes(retryFailureBranch, "turnController.signal.aborted");
   assertStringIncludes(
@@ -383,6 +442,44 @@ Deno.test("measurement terminal precedes search and correction failure preserves
   assertStringIncludes(
     source,
     "replacementIntent || isReplacementProofRequest(userMessage)",
+  );
+});
+
+Deno.test("real HTTP retry is confined to product-measurement correction and the same proof call", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../../chat-consultant-v3/index.ts", import.meta.url),
+  );
+  const correctionStart = source.indexOf(
+    "const correctionAttempt = (timeoutMs: number) => {",
+  );
+  const correctionEnd = source.indexOf("} catch (correctionError) {", correctionStart);
+  assertEquals(correctionStart >= 0 && correctionEnd > correctionStart, true);
+  const correctionCall = source.slice(correctionStart, correctionEnd);
+  assertStringIncludes(
+    correctionCall,
+    'repairReason === "product_measurement"',
+  );
+  assertStringIncludes(correctionCall, "retryConfirmedUpstreamHttp5xxOnce({");
+  assertStringIncludes(correctionCall, "attempt: correctionAttempt,");
+  assertStringIncludes(correctionCall, "initialTimeoutMs: correctionTimeout,");
+  assertStringIncludes(correctionCall, "DERIVED_REASONING_SOFT_DEADLINE_MS,");
+  assertStringIncludes(correctionCall, "MIN_AGENT_STEP_BUDGET_MS,");
+  assertStringIncludes(correctionCall, "signal: turnController.signal,");
+  assertStringIncludes(correctionCall, ': await correctionAttempt(correctionTimeout);');
+  for (const mandatoryArg of [
+    "correctionMessages,",
+    "turnController.signal,",
+    '"derived_reasoning",',
+    '["declare_selection_reasoning"],',
+    '"declare_selection_reasoning",',
+    "[reasoningToolSchema],",
+    "GENERAL_INQUIRY_MODEL_ROUTING,",
+  ]) {
+    assertStringIncludes(correctionCall, mandatoryArg);
+  }
+  assertEquals(
+    source.match(/retryConfirmedUpstreamHttp5xxOnce\(\{/gu)?.length,
+    1,
   );
 });
 

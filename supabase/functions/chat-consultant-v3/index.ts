@@ -698,8 +698,10 @@ import {
 } from "../_shared/v3-tools/conversation-boundary.ts";
 import {
   classifyPublicFailure,
+  isConfirmedTransientUpstreamHttp5xx,
   type UpstreamFailureDiagnostics,
   UpstreamHttpError,
+  retryConfirmedUpstreamHttp5xxOnce,
   upstreamFailureDiagnosticMeta,
 } from "../_shared/v3-tools/public-failure.ts";
 import {
@@ -11121,12 +11123,13 @@ async function runExpertLoop(
               buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
             );
           } catch (reasoningError) {
-            const timedOut =
+            const timedOut = !(reasoningError instanceof UpstreamHttpError) && (
               (reasoningError as Error)?.name === "TimeoutError" ||
               String((reasoningError as Error)?.message ?? reasoningError)
-                .includes("llm_call_timeout:");
-            const transientProviderFailure = reasoningError instanceof
-                UpstreamHttpError && reasoningError.status >= 500;
+                .includes("llm_call_timeout:")
+            );
+            const transientProviderFailure =
+              isConfirmedTransientUpstreamHttp5xx(reasoningError);
             const retryTimeout = (timedOut || transientProviderFailure) &&
                 !turnController.signal.aborted
               ? boundedAgentStepTimeout(
@@ -11532,12 +11535,13 @@ async function runExpertLoop(
                   };
                 }
               }
-              try {
-                structuredReasoning = await callOpenRouter(
+              const correctionAttempt = (timeoutMs: number) => {
+                derivedReasoningProviderAttempts += 1;
+                return callOpenRouter(
                   apiKey,
                   correctionMessages,
                   turnController.signal,
-                  correctionTimeout,
+                  timeoutMs,
                   "derived_reasoning",
                   ["declare_selection_reasoning"],
                   "declare_selection_reasoning",
@@ -11546,6 +11550,33 @@ async function runExpertLoop(
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
                 );
+              };
+              try {
+                structuredReasoning = repairReason === "product_measurement"
+                  ? await retryConfirmedUpstreamHttp5xxOnce({
+                    attempt: correctionAttempt,
+                    initialTimeoutMs: correctionTimeout,
+                    retryTimeoutMs: () => boundedAgentStepTimeout(
+                      LLM_TIMEOUT_DERIVED_RETRY_MS,
+                      now(),
+                      DERIVED_REASONING_SOFT_DEADLINE_MS,
+                      MIN_AGENT_STEP_BUDGET_MS,
+                    ),
+                    signal: turnController.signal,
+                    onRetry: (httpError, retryTimeoutMs) => {
+                      steps.push({
+                        step: "v3_product_measurement_correction_http_retry",
+                        ms: now(),
+                        meta: {
+                          upstream_status: httpError.status,
+                          ...upstreamFailureDiagnosticMeta(httpError),
+                          initial_timeout_ms: correctionTimeout,
+                          retry_timeout_ms: retryTimeoutMs,
+                        },
+                      });
+                    },
+                  })
+                  : await correctionAttempt(correctionTimeout);
               } catch (correctionError) {
                 const correctionFailure = classifyPublicFailure(correctionError);
                 // A cancelled turn is not a failed declaration. Let the outer
@@ -11594,7 +11625,6 @@ async function runExpertLoop(
                 }
                 throw correctionError;
               }
-              derivedReasoningProviderAttempts += 1;
               declarationCall = cleanDeclarationCall(
                 structuredReasoning.toolCalls.find((toolCall) =>
                   toolCall.name === "declare_selection_reasoning"
