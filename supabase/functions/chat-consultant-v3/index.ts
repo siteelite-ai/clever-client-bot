@@ -4523,28 +4523,30 @@ async function selectVerifiedOrdinaryReplacement(
     }
   };
 
-  for (const article of lookup.articles) {
-    const found = await executeSearchCatalog({
-      mode: "by_article",
-      article,
-      per_page: 3,
-    }, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
-    if (found.ok && found.results.length > 0) {
-      addSourceCandidates(found.results);
-      anchor = found.results.find((product) =>
-        productBelongsToReplacementSourceScope(product, sourceClassLeaves)
-      ) ?? null;
-      if (anchor) {
-        const exactArticleMatches = found.results.filter((product) =>
-          String(product.article ?? "").replace(/\D/gu, "") === article
-        );
-        sourceIdentityVerified = found.total === 1 &&
-          exactArticleMatches.length === 1 &&
-          exactArticleMatches[0].id === anchor.id;
-        break;
+  if (!verifiedExactSource) {
+    for (const article of lookup.articles) {
+      const found = await executeSearchCatalog({
+        mode: "by_article",
+        article,
+        per_page: 3,
+      }, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: ctx.catalogToken,
+      }, ctx.cache);
+      if (found.ok && found.results.length > 0) {
+        addSourceCandidates(found.results);
+        anchor = found.results.find((product) =>
+          productBelongsToReplacementSourceScope(product, sourceClassLeaves)
+        ) ?? null;
+        if (anchor) {
+          const exactArticleMatches = found.results.filter((product) =>
+            String(product.article ?? "").replace(/\D/gu, "") === article
+          );
+          sourceIdentityVerified = found.total === 1 &&
+            exactArticleMatches.length === 1 &&
+            exactArticleMatches[0].id === anchor.id;
+          break;
+        }
       }
     }
   }
