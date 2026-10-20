@@ -211,7 +211,7 @@ FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'] = {
 // rewriting any historical V8/V5 suite or report.
 FULL_SUITE_MANIFESTS['customer-acceptance-cases-v2.json'] = {
   ...FULL_SUITE_MANIFESTS['customer-acceptance-cases.json'],
-  sha256: '6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7',
+  sha256: '27906da8225f1e7ba1297f99a9ab9de375fc583a5e8b1d58df9d2dea1b66c84d',
 };
 FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v6.json'] = {
   ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'],
@@ -393,6 +393,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_previous_freeform_slot',
   'require_previous_quick_reply',
   'require_catalog_minimum',
+  'require_confirmed_analogs',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
   'require_selection_criteria_exact',
@@ -536,6 +537,50 @@ export function validateExpectationObject(expect, location = 'expect') {
   if (expect.require_catalog_minimum !== undefined &&
       !validCatalogMinimumContract(expect.require_catalog_minimum)) {
     throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
+  }
+  if (expect.require_confirmed_analogs !== undefined) {
+    const contract = expect.require_confirmed_analogs;
+    const at = `${location}.require_confirmed_analogs`;
+    expectationKeys(contract, new Set(['minimum', 'source_product_url', 'required_axes']), at);
+    expectationInteger(contract.minimum, `${at}.minimum`, 1);
+    if (!productUrlIdentity(contract.source_product_url)) {
+      throw new Error(`${at}.source_product_url: requires a 220volt.kz product URL`);
+    }
+    if (!Array.isArray(contract.required_axes) || contract.required_axes.length < 2 ||
+        contract.required_axes.length > 32) {
+      throw new Error(`${at}.required_axes: requires 2–32 distinct technical axes`);
+    }
+    const axes = new Set();
+    for (const [index, rule] of contract.required_axes.entries()) {
+      const axisAt = `${at}.required_axes[${index}]`;
+      expectationKeys(rule, new Set(['key', 'op', 'value', 'min', 'max']), axisAt);
+      if (typeof rule.key !== 'string' || !/^[a-z][a-z0-9_]{1,63}$/u.test(rule.key) || axes.has(rule.key)) {
+        throw new Error(`${axisAt}.key: requires a unique bounded technical axis`);
+      }
+      axes.add(rule.key);
+      if (rule.op === 'eq') {
+        if (Object.hasOwn(rule, 'min') || Object.hasOwn(rule, 'max') ||
+            !['string', 'number', 'boolean'].includes(typeof rule.value) ||
+            (typeof rule.value === 'string' && (!rule.value.trim() || rule.value.length > 80)) ||
+            (typeof rule.value === 'number' && !Number.isFinite(rule.value))) {
+          throw new Error(`${axisAt}: eq requires one bounded scalar value`);
+        }
+      } else if (rule.op === 'covers') {
+        if (!Number.isFinite(rule.value) || Object.hasOwn(rule, 'min') || Object.hasOwn(rule, 'max')) {
+          throw new Error(`${axisAt}: covers requires one finite numeric target`);
+        }
+      } else if (rule.op === 'between') {
+        if (Object.hasOwn(rule, 'value') || !Number.isFinite(rule.min) ||
+            !Number.isFinite(rule.max) || rule.min > rule.max) {
+          throw new Error(`${axisAt}: between requires an ordered finite numeric interval`);
+        }
+      } else {
+        throw new Error(`${axisAt}.op: must be eq, covers or between`);
+      }
+    }
+    if (expect.min_products !== undefined && contract.minimum < expect.min_products) {
+      throw new Error(`${at}.minimum: cannot weaken min_products`);
+    }
   }
   expectationMinMax(expect, 'min_products', 'max_products', location);
   if (expect.require_every_product_exact_identifier !== undefined &&
@@ -1752,15 +1797,112 @@ function renderedStockUnitFailures(links, expectedUnit) {
   return failures;
 }
 
+function approvedAnalogAxis(axis, nowMs) {
+  const evidence = axis?.evidence;
+  if (evidence?.kind !== 'approved_manufacturer_fact' ||
+      typeof evidence.source_url !== 'string' ||
+      !/^https:\/\/[^\s@/]+\//u.test(evidence.source_url)) return false;
+  let source;
+  try { source = new URL(evidence.source_url); } catch { return false; }
+  if (source.protocol !== 'https:' || source.username || source.password ||
+      source.hash || source.port || !source.hostname.includes('.')) return false;
+  const approved = Date.parse(evidence.approved_at);
+  const validUntil = Date.parse(evidence.valid_until);
+  return Number.isFinite(approved) && Number.isFinite(validUntil) &&
+    approved <= nowMs && nowMs < validUntil && approved < validUntil;
+}
+
+function analogAxisMatches(rule, axis) {
+  const value = axis?.value;
+  if (rule.op === 'eq') return value === rule.value;
+  if (rule.op === 'between') return typeof value === 'number' && Number.isFinite(value) &&
+    value >= rule.min && value <= rule.max;
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Number.isFinite(value.min) && Number.isFinite(value.max) && value.min <= value.max &&
+    value.min <= rule.value && rule.value <= value.max;
+}
+
+// A selection contract is emitted by the server in products_block, not parsed
+// from assistant prose. The exact rendered product must also have an
+// independently fetched, current catalog Product page with matching SKU,
+// price and stock. A provisional shortlist or a model-authored claim cannot
+// satisfy the direct-analogue acceptance gate.
+export function confirmedAnalogFailures(contract, response, { nowMs = Date.now() } = {}) {
+  const failures = [];
+  const proof = response.selectionContract?.direct_analog_proof;
+  const sourceIdentity = productUrlIdentity(contract.source_product_url);
+  if (proof?.schema_version !== 1 || proof?.status !== 'confirmed_direct' ||
+      productUrlIdentity(proof.source_product_url) !== sourceIdentity ||
+      !Array.isArray(proof.candidates)) {
+    return ['confirmed direct-analog server proof is missing or not bound to the source product'];
+  }
+  const proofByIdentity = new Map();
+  for (const candidate of proof.candidates) {
+    const identity = productUrlIdentity(candidate?.product_url);
+    if (!identity || proofByIdentity.has(identity)) {
+      failures.push('direct-analog server proof has invalid or duplicate product identity');
+      continue;
+    }
+    proofByIdentity.set(identity, candidate);
+  }
+  const seenSkus = new Set();
+  const seenUrls = new Set();
+  let confirmed = 0;
+  for (const link of response.links ?? []) {
+    const identity = productUrlIdentity(link.url);
+    const page = response.verifiedProductPages?.get(identity);
+    const candidate = proofByIdentity.get(identity);
+    const label = page?.sku ?? identity ?? '(invalid URL)';
+    if (!identity || identity === sourceIdentity || seenUrls.has(identity) ||
+        !page?.verified || typeof page.sku !== 'string' || !page.sku.trim() ||
+        seenSkus.has(page.sku) || !candidate || candidate.sku !== page.sku ||
+        candidate.verdict !== 'confirmed_direct' ||
+        !Array.isArray(candidate.axes) || !/\/InStock$/iu.test(page.availability ?? '') ||
+        !Number.isFinite(page.offerPrice) || page.offerPrice <= 0 ||
+        !Number.isFinite(link.price) || Math.abs(link.price - page.offerPrice) > 0.51) {
+      failures.push(`rendered product ${label} lacks exact live-SKU-bound direct-analog proof`);
+      continue;
+    }
+    seenUrls.add(identity);
+    seenSkus.add(page.sku);
+    const axes = new Map();
+    for (const axis of candidate.axes) {
+      if (typeof axis?.key !== 'string' || axes.has(axis.key)) {
+        failures.push(`direct-analog proof for ${label} has invalid or duplicate technical axis`);
+        continue;
+      }
+      axes.set(axis.key, axis);
+    }
+    let compatible = true;
+    for (const rule of contract.required_axes) {
+      const axis = axes.get(rule.key);
+      if (!approvedAnalogAxis(axis, nowMs) || !analogAxisMatches(rule, axis)) {
+        failures.push(`product ${label} has no current approved compatible proof for ${rule.key}`);
+        compatible = false;
+      }
+    }
+    if (compatible) confirmed++;
+  }
+  if (proofByIdentity.size !== (response.links ?? []).length ||
+      [...proofByIdentity.keys()].some((identity) => !seenUrls.has(identity))) {
+    failures.push('direct-analog server proof does not match exactly the displayed cards');
+  }
+  if (confirmed < contract.minimum) {
+    failures.push(`confirmed direct analogs ${confirmed} < ${contract.minimum}`);
+  }
+  return failures;
+}
+
 export function evaluate(expect = {}, response, {
   requireVerifiedPages = false,
   previousVerifiedSkus = new Set(),
   previousVerifiedProductUrls = new Set(),
   previousClarificationChoice = null,
   message = null,
+  nowMs = Date.now(),
 } = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_every_product_page ||
+  const requireSourceProof = Boolean(expect.require_confirmed_analogs || expect.require_every_product_page ||
     expect.require_higher_product_facet_caveat || expect.require_catalog_minimum ||
     expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
@@ -1921,6 +2063,9 @@ export function evaluate(expect = {}, response, {
   }
   if (Number.isFinite(expect.min_products) && linkEvidence.uniqueCount < expect.min_products) {
     failures.push(`products ${linkEvidence.uniqueCount} < ${expect.min_products}`);
+  }
+  if (expect.require_confirmed_analogs) {
+    failures.push(...confirmedAnalogFailures(expect.require_confirmed_analogs, response, { nowMs }));
   }
   if (Number.isFinite(expect.max_products) && linkEvidence.uniqueCount > expect.max_products) {
     failures.push(`products ${linkEvidence.uniqueCount} > ${expect.max_products}`);
@@ -2393,7 +2538,8 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   const { response, raw, attempts } = fetched;
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
-  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_confirmed_analogs) ||
+    Boolean(expect.require_every_product_page) ||
     Boolean(expect.require_higher_product_facet_caveat) ||
     Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
