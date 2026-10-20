@@ -452,6 +452,117 @@ Deno.test("replacement explanation cites only criteria verified on every live ca
   assertEquals(ambiguous.verified_candidate_criteria, []);
 });
 
+Deno.test("replacement proof renders original catalog captions without exposing normalized facet keys", () => {
+  const source: ProductRef = {
+    id: "source",
+    pagetitle: "Светильник A",
+    article: "LIGHT-001",
+    vendor: "Test",
+    price: 1000,
+    unit: "шт",
+    stock: "in_stock",
+    leaf_category: "Светильники",
+    short_traits: ["Цвет корпуса: белый", "Гарантийный срок, мес: 36"],
+    facet_values: {
+      cvet_korpusa_korpus_t_s: ["белый"],
+      garantiynyy_srok_mes_kep_ld_k_merz_m_ay: ["36"],
+      obyem_k_lem: ["0,4"],
+    },
+    facet_captions: {
+      cvet_korpusa_korpus_t_s: "Цвет корпуса",
+      garantiynyy_srok_mes_kep_ld_k_merz_m_ay: "Гарантийный срок, мес",
+    },
+  } as ProductRef;
+  const candidate: ProductRef = {
+    ...source,
+    id: "candidate",
+    article: "LIGHT-002",
+    price: 900,
+    short_traits: ["Цвет корпуса: белый", "Гарантийный срок, мес: 24"],
+    facet_values: {
+      cvet_korpusa_korpus_t_s: ["белый"],
+      garantiynyy_srok_mes_kep_ld_k_merz_m_ay: ["24"],
+      obyem_k_lem: ["0,2"],
+    },
+  } as ProductRef;
+  const proof = buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [candidate],
+    sourcePriceIdentityVerified: true,
+  });
+  assertEquals(proof.candidates[0].matched.some(({ key }) =>
+    key === "cvet korpusa korpus t s"
+  ), true);
+  assertEquals(proof.candidates[0].lower_numeric.includes(
+    "garantiynyy srok mes kep ld k merz m ay"
+  ), true);
+  assertEquals(proof.candidates[0].lower_numeric.includes("obyem k lem"), true);
+  assertEquals(proof.candidates[0].lower_numeric.includes("гарантийный срок мес"), true);
+  assertEquals(proof.candidates[0].status, "candidate");
+  assertEquals(proof.cheaper_than_source_proven, true);
+  const caption = replacementProofCaption(proof);
+  assertEquals(caption.includes("Цвет корпуса: белый"), true);
+  assertEquals(caption.includes("«Гарантийный срок, мес»"), true);
+  assertEquals(caption.includes("другие более низкие числовые параметры"), true);
+  assertEquals(caption.includes("Полная взаимозаменяемость по данным каталога не подтверждена"), true);
+  assertEquals(caption.includes("Цены показанных товаров ниже актуальной цены"), true);
+  for (const machineKey of ["cvet korpusa", "garantiynyy srok", "obyem k lem"]) {
+    assertEquals(caption.includes(machineKey), false, machineKey);
+  }
+});
+
+Deno.test("replacement selection keeps verified machine criteria but omits inconsistent display labels", () => {
+  const candidate = (id: string, caption: string): ProductRef => ({
+    id,
+    pagetitle: `Светильник ${id}`,
+    vendor: "Test",
+    price: 900,
+    stock: "in_stock",
+    short_traits: [`${caption}: белый`],
+    facet_values: { cvet_korpusa: ["белый"] },
+    facet_captions: { cvet_korpusa: caption },
+  } as ProductRef);
+  const criterion = [{ key: "cvet_korpusa", op: "eq", value: "белый" }];
+  const consistent = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [candidate("a", "Цвет корпуса"), candidate("b", "Цвет корпуса")],
+    candidateSelectionCriteria: criterion,
+  });
+  assertEquals(consistent.verified_candidate_criteria, [{ key: "cvet korpusa", value: "белый" }]);
+  assertEquals(replacementProofCaption(consistent).includes("Цвет корпуса: белый"), true);
+  const inconsistent = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [candidate("a", "Цвет корпуса"), candidate("b", "Цвет покрытия")],
+    candidateSelectionCriteria: criterion,
+  });
+  assertEquals(inconsistent.verified_candidate_criteria, consistent.verified_candidate_criteria);
+  assertEquals(replacementProofCaption(inconsistent).includes("cvet korpusa"), false);
+  assertEquals(replacementProofCaption(inconsistent).includes("Цвет корпуса: белый"), false);
+  const missingSidecar = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [{
+      ...candidate("c", "Цвет корпуса"),
+      facet_captions: undefined,
+    } as ProductRef],
+    candidateSelectionCriteria: criterion,
+  });
+  assertEquals(missingSidecar.verified_candidate_criteria, consistent.verified_candidate_criteria);
+  assertEquals(replacementProofCaption(missingSidecar).includes("cvet korpusa"), false);
+  assertEquals(replacementProofCaption(missingSidecar).includes("Цвет корпуса: белый"), false);
+  const transliterated = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [candidate("a", "cvet korpusa")],
+    candidateSelectionCriteria: criterion,
+  });
+  assertEquals(transliterated.verified_candidate_criteria, consistent.verified_candidate_criteria);
+  assertEquals(replacementProofCaption(transliterated).includes("cvet korpusa"), false);
+});
+
 Deno.test("replacement egress is fail-closed for direct, model, terminal and mixed prose", () => {
   const unproven = [
     "Этот автомат подходит как замена исходному и стоит меньше",
@@ -661,7 +772,7 @@ Deno.test("a proven source safety rating cannot certify a known lower candidate"
   assertEquals(proof.cheaper_than_source_proven, true);
   assertEquals(/ниже значение/iu.test(replacementProofCaption(proof)), true);
   assertEquals(replacementProofCaption(proof).includes("№1"), true);
-  assertEquals(replacementProofCaption(proof).includes("номинальный ток: 16 А"), true);
+  assertEquals(replacementProofCaption(proof).includes("Номинальный ток: 16 А"), true);
   const fullRating = {
     ...lower,
     id: "candidate-safe",

@@ -102,7 +102,44 @@ Deno.test("live facet keys stay in the internal cache without inflating tool res
   assertEquals(result.ok, true);
   if (!result.ok) return;
   assertEquals("facet_values" in result.results[0], false);
+  assertEquals("facet_captions" in result.results[0], false);
   assertEquals(cache.get("c16")?.facet_values, { nominal_current: ["16"] });
+  assertEquals(cache.get("c16")?.facet_captions, { nominal_current: "Номинальный ток" });
+});
+
+Deno.test("catalog keeps only unambiguous key-to-human-caption pairs as internal display metadata", async () => {
+  const cache: ProductCache = new Map();
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "светильник",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "lamp",
+          pagetitle: "Светильник",
+          price: 900,
+          url: "https://220volt.kz/catalog/light/fixtures/lamp/",
+          options: [
+            { key: "cvet_korpusa", caption_ru: "Цвет корпуса", value_ru: "белый" },
+            { key: "cvet_korpusa", caption_ru: "Цвет корпуса", value_ru: "серый" },
+            { key: "ambiguous", caption_ru: "Ширина", value_ru: "10" },
+            { key: "ambiguous", caption_ru: "Высота", value_ru: "20" },
+            { key: "missing_caption", value_ru: "7" },
+            { key: "poiskovyy_zapros", caption_ru: "Поисковый запрос", value_ru: "лампа" },
+          ],
+        }],
+        pagination: { total: 1 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })),
+  }, cache);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals("facet_captions" in result.results[0], false);
+  assertEquals(cache.get("lamp")?.facet_values?.cvet_korpusa, ["белый", "серый"]);
+  assertEquals(cache.get("lamp")?.facet_captions, { cvet_korpusa: "Цвет корпуса" });
 });
 
 Deno.test("catalog cache distinguishes absent warehouse rows from explicit zero without changing public stock", async () => {

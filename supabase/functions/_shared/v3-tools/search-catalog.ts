@@ -234,6 +234,40 @@ function extractFacetValues(p: Record<string, unknown>): Record<string, string[]
   return Object.fromEntries([...collected].map(([key, values]) => [key, [...values]]));
 }
 
+/** Keep the original key/caption pair for display without changing the
+ * machine-keyed facet evidence. Conflicting captions for one key are not
+ * displayable; guessing which translation is right would be misleading. */
+function extractFacetCaptions(p: Record<string, unknown>): Record<string, string> {
+  const opts = p.options as Array<{
+    key?: unknown;
+    caption_ru?: unknown;
+    value_ru?: unknown;
+    value?: unknown;
+  }> | undefined;
+  if (!Array.isArray(opts)) return {};
+  const captions = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const option of opts) {
+    const key = String(option?.key ?? "").trim();
+    const caption = typeof option?.caption_ru === "string"
+      ? option.caption_ru.normalize("NFKC").trim()
+      : "";
+    const value = String(option?.value_ru ?? option?.value ?? "").trim();
+    if (!key || !caption || !value || key.length > 240 ||
+      caption.length > 160 || value.length > 240 || ambiguous.has(key) ||
+      isAdministrativeCatalogField({ key, caption })) continue;
+    const previous = captions.get(key);
+    if (previous && previous.toLocaleLowerCase("ru-RU") !==
+        caption.toLocaleLowerCase("ru-RU")) {
+      captions.delete(key);
+      ambiguous.add(key);
+      continue;
+    }
+    captions.set(key, previous ?? caption);
+  }
+  return Object.fromEntries(captions);
+}
+
 /**
  * Единица измерения товара — обычная характеристика каталога («Единица измерения»).
  * Сопоставление нормализованное, по подписи ИЛИ ключу характеристики: никаких словарей
@@ -430,11 +464,13 @@ async function singleSearch(
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       const facetValues = extractFacetValues(raw);
+      const facetCaptions = extractFacetCaptions(raw);
       cache.set(id, {
         ...ref,
         url: u,
         warehouse_evidence: warehouseEvidence(raw),
         ...(Object.keys(facetValues).length > 0 ? { facet_values: facetValues } : {}),
+        ...(Object.keys(facetCaptions).length > 0 ? { facet_captions: facetCaptions } : {}),
       });
       results.push(ref);
     }

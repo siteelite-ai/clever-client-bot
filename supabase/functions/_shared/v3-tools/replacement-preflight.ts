@@ -175,6 +175,8 @@ export interface ReplacementProofContract {
   cheaper_than_source_proven: boolean;
   /** User-requested criteria proven by the live facets of every shown card. */
   verified_candidate_criteria: Array<{ key: string; value: string }>;
+  /** Presentation only: catalog captions corroborated for every involved card. */
+  display_labels: Record<string, string>;
 }
 
 /** Exact article or complete catalogue title, never a series/compact code. */
@@ -269,6 +271,60 @@ function strictLiveCandidateFacetValue(
     .map(strictProofFacet).filter(Boolean);
   const unique = [...new Set(matching)];
   return unique.length === 1 ? unique[0] : null;
+}
+
+function safeProofDisplayLabel(raw: string): string | null {
+  const caption = String(raw).normalize("NFKC")
+    .replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+    .replace(/\s+/gu, " ").trim();
+  // A normalized ASCII key is not a Russian customer-facing caption. A
+  // catalogue acronym such as IP is still a legitimate display label.
+  if (caption.length > 60 || /[a-z]{3,}/u.test(caption)) return null;
+  return /\p{Script=Cyrillic}/u.test(caption) ||
+      /^[A-Z0-9/+()-]{2,12}$/u.test(caption)
+    ? caption
+    : null;
+}
+
+function proofDisplayLabelForProduct(
+  product: ProductRef,
+  key: string,
+): string | null {
+  const normalizedKey = norm(key);
+  const withFacets = product as ProductRef & {
+    facet_values?: Record<string, string[]>;
+    facet_captions?: Record<string, string>;
+  };
+  const rawKeys = Object.keys(withFacets.facet_values ?? {})
+    .filter((rawKey) => norm(rawKey) === normalizedKey);
+  if (rawKeys.length > 1) return null;
+  if (rawKeys.length === 1) {
+    const caption = withFacets.facet_captions?.[rawKeys[0]];
+    if (caption) return safeProofDisplayLabel(caption);
+  }
+  // Some live cards expose a human caption directly, without a machine-keyed
+  // facet. Accept only an exact caption match from the original short traits;
+  // never pretty-print the normalized key as a fallback.
+  const matching = [...new Set(traitEntries(product)
+    .filter(({ caption }) => norm(caption) === normalizedKey)
+    .map(({ caption }) => caption))];
+  return matching.length === 1 ? safeProofDisplayLabel(matching[0]) : null;
+}
+
+function commonProofDisplayLabels(
+  source: ProductRef | null,
+  candidates: ProductRef[],
+  keys: Iterable<string>,
+): Record<string, string> {
+  const products = source ? [source, ...candidates] : candidates;
+  if (products.length === 0) return {};
+  return Object.fromEntries([...keys].flatMap((key) => {
+    const captions = products.map((product) => proofDisplayLabelForProduct(product, key));
+    const first = captions[0];
+    return first && captions.every((caption) =>
+      caption && strictProofFacet(caption) === strictProofFacet(first)
+    ) ? [[key, first]] : [];
+  }));
 }
 
 /** A single server-owned proof for direct, model and fallback render paths. */
@@ -371,6 +427,13 @@ export function buildReplacementProofContract(
       if (verifiedCandidateCriteria.length >= 3) break;
     }
   }
+  const visibleKeys = new Set([
+    ...verifiedCandidateCriteria.map(({ key }) => key),
+    ...candidates.flatMap(({ matched, lower_numeric }) => [
+      ...matched.map(({ key }) => key),
+      ...lower_numeric,
+    ]),
+  ]);
   return {
     source_identity: source ? "exact" : "unverified",
     source_id: source?.id ?? null,
@@ -379,6 +442,7 @@ export function buildReplacementProofContract(
       candidates.every(({ status }) => status === "equivalent"),
     cheaper_than_source_proven: cheaperThanSourceProven,
     verified_candidate_criteria: verifiedCandidateCriteria,
+    display_labels: commonProofDisplayLabels(source, input.candidates, visibleKeys),
   };
 }
 
@@ -386,18 +450,26 @@ export function buildReplacementProofContract(
 export function replacementProofCaption(
   proof: ReplacementProofContract,
 ): string {
-  const verifiedSelection = proof.verified_candidate_criteria.length > 0
-    ? ` В карточках всех показанных товаров подтверждены параметры подбора: ${proof.verified_candidate_criteria.map(({ key, value }) =>
-      `${key}: ${value}`
-    ).join(", ")}.`
+  const label = (key: string) => proof.display_labels?.[key] ?? null;
+  const visibleSelection = [...new Set(proof.verified_candidate_criteria.flatMap(({ key, value }) =>
+    label(key) ? [`${label(key)}: ${value}`] : []
+  ))];
+  const verifiedSelection = visibleSelection.length > 0
+    ? ` В карточках всех показанных товаров подтверждены параметры подбора: ${visibleSelection.join(", ")}.`
     : "";
   if (proof.source_identity !== "exact") {
     return `Показываю кандидатов для замены.${verifiedSelection} Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.`;
   }
-  const lower = proof.candidates.flatMap((item, index) =>
-    item.lower_numeric.length > 0
-      ? [`№${index + 1}${item.title ? ` «${item.title}»` : ""}: «${item.lower_numeric.slice(0, 2).join("», «")}»`]
-      : []
+  const lower = proof.candidates.flatMap((item, index) => {
+    const captions = [...new Set(item.lower_numeric.flatMap((key) =>
+      label(key) ? [label(key)!] : []
+    ))].slice(0, 2);
+    return captions.length > 0
+      ? [`№${index + 1}${item.title ? ` «${item.title}»` : ""}: «${captions.join("», «")}»`]
+      : [];
+  });
+  const hiddenLower = proof.candidates.some((item) =>
+    item.lower_numeric.some((key) => !label(key))
   );
   const shared = proof.candidates[0]?.matched.filter(({ key, value }) =>
     proof.candidates.every((candidate) =>
@@ -405,18 +477,21 @@ export function replacementProofCaption(
         item.key === key && norm(item.value) === norm(value)
       )
     )
-  ).slice(0, 3) ?? [];
+  ).filter(({ key }) => label(key)).slice(0, 3) ?? [];
   const verifiedCriteria = shared.length > 0
-    ? ` По данным карточек совпадают отдельные параметры: ${shared.map((item) =>
-      `${item.key}: ${item.value}`
-    ).join(", ")}.`
+    ? ` По данным карточек совпадают отдельные параметры: ${[...new Set(shared.map((item) =>
+      `${label(item.key)}: ${item.value}`
+    ))].join(", ")}.`
     : "";
   const difference = lower.length > 0
     ? ` Ниже значение параметра у конкретных кандидатов (${lower.join("; ")}); не считайте их равноценной заменой без проверки.`
     : "";
+  const undisplayedDifference = hiddenLower
+    ? " У некоторых кандидатов подтверждены и другие более низкие числовые параметры; проверьте их в карточках и паспортах изделий."
+    : "";
   const compatibility = proof.all_equivalent
     ? "Совпадение подтверждено по полному набору проверенных критичных параметров каталога; перед установкой всё равно сверьте паспорт и монтаж."
-    : `Полная взаимозаменяемость по данным каталога не подтверждена.${difference} Перед покупкой сверьте остальные критичные паспортные и монтажные характеристики.`;
+    : `Полная взаимозаменяемость по данным каталога не подтверждена.${difference}${undisplayedDifference} Перед покупкой сверьте остальные критичные паспортные и монтажные характеристики.`;
   const price = proof.cheaper_than_source_proven
     ? " Цены показанных товаров ниже актуальной цены исходной карточки при той же единице продажи."
     : " Сравнение с ценой исходного товара не подтверждено.";
