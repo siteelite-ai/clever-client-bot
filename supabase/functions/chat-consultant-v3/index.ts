@@ -93,6 +93,9 @@ import {
   titleProvesCompactCriterion,
 } from "../_shared/v3-tools/criteria-gate.ts";
 import {
+  filterFinalCardsByMandatoryFacetEvidence,
+} from "../_shared/v3-tools/final-card-facet-gate.ts";
+import {
   correctCriteria,
   extractClientQuantities,
   findUnderstatedCriteria,
@@ -9579,10 +9582,31 @@ async function runExpertLoop(
           );
           return structurallySafe.filter((id) => eligible.has(id));
         })();
-    const classPriority = preferCustomerGroundedLiveClassification(
+    // A recovery may have introduced cards after its own criteria gate. The
+    // frozen mandatory contract still applies at the final egress. A missing
+    // compact trait is not treated as a contradiction of prior search proof;
+    // direct card/facet/title evidence that disagrees is never shown.
+    const finalFacetGate = filterFinalCardsByMandatoryFacetEvidence(
       classificationSafe
         .map((id) => ctx.cache.get(id))
         .filter((product): product is ProductFull => Boolean(product)),
+      currentSelectionCriteriaPlan()?.mandatory_criteria ?? [],
+      lastDiscover?.facets ?? [],
+    );
+    if (finalFacetGate.rejected.length > 0) {
+      steps.push({
+        step: "v3_final_mandatory_facet_contradiction",
+        ms: now(),
+        meta: {
+          plan_hash: currentSelectionCriteriaPlan()?.hash ?? null,
+          before: classificationSafe.length,
+          after: finalFacetGate.products.length,
+          rejected: finalFacetGate.rejected,
+        },
+      });
+    }
+    const classPriority = preferCustomerGroundedLiveClassification(
+      finalFacetGate.products,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,

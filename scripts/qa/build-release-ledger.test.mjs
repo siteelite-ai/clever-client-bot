@@ -13,7 +13,7 @@ import {
 } from './build-release-ledger.mjs';
 import { resolveCaseExecutions, resolveExpectations } from './run-customer-acceptance.mjs';
 
-const ledgerFile = new URL('../../docs/qa/release-inventory-v7-20261020.json', import.meta.url);
+const ledgerFile = new URL('../../docs/qa/release-inventory-v8-20261020.json', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function withChangedJson(filename, change, manifestChange = (manifest) => manifest) {
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases-v4.json', 40, 61],
+      ['notion-legacy-bug-cases-v5.json', 40, 61],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -135,7 +135,7 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   const sourceIndex = JSON.parse(fs.readFileSync(new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
   assert.equal(sourceIndex.synthetic_api_continuations.length, 15);
   const syntheticTurns = ledger.runs.flatMap((run) => run.turns)
-    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v4.json' && turn.synthetic_scenario);
+    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v5.json' && turn.synthetic_scenario);
   assert.equal(syntheticTurns.length, 22);
   for (const source of sourceIndex.synthetic_api_continuations) {
     const turn = syntheticTurns.find((item) => item.case_id === source.case_id && item.turn_index === source.turn_index);
@@ -203,7 +203,32 @@ test('V4 preserves V3 source messages and historical bytes while superseding onl
     { name: 'Номинальный ток', exact_any: ['16'] },
     { name: 'Характеристика срабатывания', exact_any: ['C', 'С'] },
   ]);
-  assert.match(buildReleaseLedger().revision_note, /unsafe V6 BT-924 Acti9 bare-show oracle/u);
+  assert.match(buildReleaseLedger().revision_note, /BT-746 black double-socket short-title count oracle/u);
+});
+
+test('V8 preserves pinned V7 while restoring the customer BT-746 wording and its socket oracle', () => {
+  const v4Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v4.json', import.meta.url));
+  const v5Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v5.json', import.meta.url));
+  const v7Bytes = fs.readFileSync(new URL('../../docs/qa/release-inventory-v7-20261020.json', import.meta.url));
+  assert.equal(sha256(v4Bytes), '882926735a6426bbfc3b560c2dddd82b8eb90a0803cec9bd1d597e1d558846ee');
+  assert.equal(sha256(v7Bytes), 'ff6284f1c47eb67bea178835765ada026e135e7fa63366ab59951147c0ce5d8b');
+  const v4 = JSON.parse(v4Bytes);
+  const v5 = JSON.parse(v5Bytes);
+  assert.deepEqual(v5.cases.map((testCase) => testCase.id), v4.cases.map((testCase) => testCase.id));
+  for (const oldCase of v4.cases) {
+    const next = v5.cases.find((testCase) => testCase.id === oldCase.id);
+    if (oldCase.id !== 'bt746-black-double-socket') {
+      assert.deepEqual(next.turns.map((turn) => turn.message), oldCase.turns.map((turn) => turn.message));
+      assert.deepEqual(next, oldCase);
+    }
+  }
+  const before = v4.cases.find((testCase) => testCase.id === 'bt746-black-double-socket');
+  const after = v5.cases.find((testCase) => testCase.id === before.id);
+  const expected = structuredClone(before);
+  expected.turns[0].message = 'Найди двойные черные розетки электрические';
+  expected.turns[0].expect.require_every_product_title_groups = [['розет'], ['черн', 'чёрн', 'графит']];
+  assert.deepEqual(after, expected);
+  assert.match(buildReleaseLedger().revision_note, /live catalog page must independently prove connector count 2/u);
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

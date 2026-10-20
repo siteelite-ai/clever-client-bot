@@ -17,6 +17,7 @@ const notionBytes = fs.readFileSync(new URL('./notion-legacy-bug-cases.json', im
 const notionV2Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v2.json', import.meta.url));
 const notionV3Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v3.json', import.meta.url));
 const notionV4Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v4.json', import.meta.url));
+const notionV5Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v5.json', import.meta.url));
 const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
 const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
 const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
@@ -25,6 +26,7 @@ const notionSuite = JSON.parse(notionBytes.toString('utf8'));
 const notionV2Suite = JSON.parse(notionV2Bytes.toString('utf8'));
 const notionV3Suite = JSON.parse(notionV3Bytes.toString('utf8'));
 const notionV4Suite = JSON.parse(notionV4Bytes.toString('utf8'));
+const notionV5Suite = JSON.parse(notionV5Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
@@ -712,6 +714,40 @@ test('Notion v4 strictly gates Acti9 cards on a server-issued pole-count choice'
   }), /SHA256 mismatch/);
 });
 
+test('Notion v5 keeps v4 source turns and gates black double sockets on live connector count', () => {
+  validateExpectationSuite(notionV5Suite);
+  assert.deepEqual(validateStrictFullSuite({
+    argv: strictArgs, suite: notionV5Suite, variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases-v5.json', variantsPath: null,
+    suiteBytes: notionV5Bytes, variantsBytes: null,
+  }), {
+    name: 'notion-legacy-bug-cases-v5.json', expected_cases: 32,
+    expected_turns_per_base_suite: 53, expected_repeat: 1,
+    expected_runs: 40, expected_evaluated_turns: 61,
+  });
+  assert.equal(notionV5Suite.schema_version, 5);
+  assert.deepEqual(notionV5Suite.cases.map((item) => item.id),
+    notionV4Suite.cases.map((item) => item.id));
+  for (const original of notionV4Suite.cases) {
+    const next = notionV5Suite.cases.find((item) => item.id === original.id);
+    assert.equal(next.repeat ?? 1, original.repeat ?? 1, original.id);
+    if (original.id !== 'bt746-black-double-socket') {
+      assert.deepEqual(next.turns.map((turn) => turn.message),
+        original.turns.map((turn) => turn.message), original.id);
+      assert.deepEqual(next, original, original.id);
+    }
+  }
+  const oldSocket = notionV4Suite.cases.find((item) => item.id === 'bt746-black-double-socket');
+  const newSocket = notionV5Suite.cases.find((item) => item.id === oldSocket.id);
+  const expectedSocket = structuredClone(oldSocket);
+  expectedSocket.turns[0].message = 'Найди двойные черные розетки электрические';
+  expectedSocket.turns[0].expect.require_every_product_title_groups =
+    [['розет'], ['черн', 'чёрн', 'графит']];
+  assert.deepEqual(newSocket, expectedSocket);
+  assert.deepEqual(newSocket.turns[0].expect.require_every_product_page.facets,
+    oldSocket.turns[0].expect.require_every_product_page.facets);
+});
+
 function analogReply(products, text = '') {
   return {
     text, productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
@@ -1021,6 +1057,64 @@ test('v3 source facets reject aluminium, network sockets and non-white three-way
   strip.verifiedProductPages.values().next().value.facets.Цвет = 'чёрный';
   assert(evaluate(v3('bt746-white-extension-3-sockets'), strip)
     .some((failure) => failure.includes('Цвет')));
+});
+
+test('v5 accepts an abbreviated black socket title only when the live page proves two electrical connectors', () => {
+  const url = 'https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/w5072135/';
+  const title = 'Розетка с заземлением Gallant /W5072135 (черный/хром)';
+  const identity = productUrlIdentity(url);
+  const facets = {
+    'Количество разъемов': '2', Цвет: 'черный', 'Вид розетки': 'электрическая',
+  };
+  const page = { identity, verified: true, sku: 'W5072135', name: title,
+    offerPrice: 6343, availability: 'https://schema.org/InStock', facets, description: '' };
+  const reply = {
+    text: '', productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'trace-black-socket', serverProductsCount: 1,
+    links: [{ title, url, price: 6343, stockLine: 'Караганда (4 шт)' }],
+    verifiedProductPages: new Map([[identity, page]]),
+  };
+  const v4 = notionV4Suite.cases.find((item) => item.id === 'bt746-black-double-socket').turns[0].expect;
+  const v5 = notionV5Suite.cases.find((item) => item.id === 'bt746-black-double-socket').turns[0].expect;
+  const inspect = (expectation) => evaluate(expectation, reply, { requireVerifiedPages: true });
+  assert(inspect(v4).some((failure) => failure.includes('product titles violate')),
+    'the historical v4 title-only count assertion remains strict');
+  assert.deepEqual(inspect(v5), []);
+  for (const [facet, wrong] of [
+    ['Количество разъемов', '1'], ['Цвет', 'белый'], ['Вид розетки', 'компьютерная RJ45'],
+  ]) {
+    const old = facets[facet];
+    facets[facet] = wrong;
+    assert(inspect(v5).some((failure) => failure.includes(facet)), facet);
+    facets[facet] = old;
+  }
+  reply.links[0].title = 'Розетка с заземлением Gallant /W5072135 (белый)';
+  assert(inspect(v5).some((failure) => failure.includes('product titles violate')));
+  reply.links[0].title = title;
+  page.name = 'Розетка другого производителя';
+  assert(inspect(v5).some((failure) => failure.includes('rendered product name disagrees')),
+    'a passing facet must not bypass the source-name identity gate');
+});
+
+test('v5 re-evaluates the recorded production socket cards without changing the historical v4 FAIL', () => {
+  const report = JSON.parse(fs.readFileSync(new URL(
+    '../../docs/qa/reports/prod-baseline-black-socket-20261020.json', import.meta.url), 'utf8'));
+  const turn = report.cases.find((item) => item.id === 'bt746-black-double-socket').repeats[0].turns[0];
+  assert.equal(report.suite_file, 'notion-legacy-bug-cases-v4.json');
+  assert.equal(turn.passed, false);
+  assert.equal(turn.product_identity_evidence.length, 4);
+  const response = {
+    text: turn.text, productsMarkdown: '', completed: turn.completed,
+    terminalDiagnosticSeen: true, logId: turn.log_id,
+    serverProductsCount: turn.products_count, links: turn.products,
+    verifiedProductPages: new Map(turn.product_identity_evidence
+      .map((page) => [page.identity, page])),
+  };
+  const before = notionV4Suite.cases.find((item) => item.id === 'bt746-black-double-socket').turns[0].expect;
+  const after = notionV5Suite.cases.find((item) => item.id === 'bt746-black-double-socket').turns[0].expect;
+  const inspect = (expectation) => evaluate(expectation, response, { requireVerifiedPages: true });
+  assert(inspect(before).some((failure) => failure.includes('product titles violate')));
+  assert.deepEqual(inspect(after), []);
 });
 
 function stockReply(stockLines) {
