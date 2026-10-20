@@ -519,7 +519,12 @@ Deno.test('parseNumericTraitValue: plain and unit-suffixed values', () => {
   assertEquals(parseNumericTraitValue('2,5'), 2.5);
   assertEquals(parseNumericTraitValue('2.5мм²'), 2.5);
   assertEquals(parseNumericTraitValue('220-240V'), 220);
+  assertEquals(parseNumericTraitValue('AC 220'), 220);
   assertEquals(parseNumericTraitValue('E27'), null);
+  assertEquals(parseNumericTraitValue('GU10'), null);
+  assertEquals(parseNumericTraitValue('IP65'), null);
+  assertEquals(parseNumericTraitValue('D90'), null);
+  assertEquals(parseNumericTraitValue('A9F79116'), null);
   assertEquals(parseNumericTraitValue(''), null);
   assertEquals(parseNumericTraitValue(null), null);
 });
@@ -530,10 +535,12 @@ Deno.test('splitNumericTraits: numeric vs strict separation', () => {
     diametr: '9',
     napryazhenie: '220-240V',
     tsokoly: 'E27',
+    zaschita: 'IP65',
+    posadochnyy_razmer: 'D90',
     forma: 'круглая',
   });
   assertEquals(numeric, { moschnosty_lamp: 7, diametr: 9, napryazhenie: 220 });
-  assertEquals(strict, { tsokoly: 'E27', forma: 'круглая' });
+  assertEquals(strict, { tsokoly: 'E27', zaschita: 'IP65', posadochnyy_razmer: 'D90', forma: 'круглая' });
 });
 
 Deno.test('applyNumericToleranceFilter: Meson 6W/8cm passes for DN027B 7W/9cm anchor (±15%)', () => {

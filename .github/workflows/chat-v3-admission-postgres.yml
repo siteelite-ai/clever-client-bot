@@ -1,19 +1,23 @@
-name: Chat v3 admission PostgreSQL 16
+name: Public API admission PostgreSQL 16
 
 on:
   push:
     paths:
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'supabase/migrations/20261020120000_public_api_admission.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
+      - 'scripts/qa/test-public-api-admission-concurrency.sh'
       - '.github/workflows/chat-v3-admission-postgres.yml'
   pull_request:
     paths:
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'supabase/migrations/20261020120000_public_api_admission.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
+      - 'scripts/qa/test-public-api-admission-concurrency.sh'
       - '.github/workflows/chat-v3-admission-postgres.yml'
 
 jobs:
@@ -50,6 +54,8 @@ jobs:
             -f docs/security/chat-v3-admission-guard-ci-schema.sql
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
             -f supabase/migrations/20261009150000_chat_v3_admission_guard.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020120000_public_api_admission.sql
 
       - name: Run transactional SQL behavior and privilege checks
         run: |
@@ -58,3 +64,6 @@ jobs:
 
       - name: Run two-connection limit and replay races
         run: timeout 35s bash scripts/qa/test-chat-v3-admission-concurrency.sh
+
+      - name: Run cross-route public API admission races
+        run: timeout 35s bash scripts/qa/test-public-api-admission-concurrency.sh

@@ -47,10 +47,16 @@ test("source title and article are lookup identity, not analogue literals", () =
   assert.doesNotMatch(preflight, /productTitleSupportsMandatoryAxes\s*\(/u);
   assert.match(preflight, /productContainsSourceModel\s*\(/u);
   assert.match(preflight, /sourceIdentityVerified = found\.total === 1 &&\s*exactArticleMatches\.length === 1 &&\s*exactArticleMatches\[0\]\.id === anchor\.id/u);
-  const disclosure = preflight.indexOf("content: provisionalReplacementCandidateText(axes, sourceIdentityVerified)");
-  const cards = preflight.indexOf('type: "products_block"', disclosure);
-  assert.ok(disclosure > -1 && cards > disclosure,
-    "provisional evidence disclosure must precede product cards");
+  const cards = preflight.indexOf('type: "products_block"');
+  assert.ok(cards > -1, "direct replacement still renders product cards");
+  // Disclosure now belongs to the common SSE proof boundary, not this one
+  // preflight branch: direct/model/fallback cards must share the same caption.
+  const egress = source.slice(source.indexOf("const send = (ev: SseEvent) => {"));
+  const proof = egress.indexOf("const caption = replacementProofCaption(replacementLastProof)");
+  const proofSent = egress.indexOf("responseEvents.push(disclosure)", proof);
+  const publicBlock = egress.indexOf("responseEvents.push(out)", proofSent);
+  assert.ok(proof > -1 && proofSent > proof && publicBlock > proofSent,
+    "server-owned replacement proof must precede product cards on every render path");
   assert.match(preflight, /replacement_evidence:\s*"provisional"/u);
 
   const axes = [{ caption: "Мощность", value: "7 Вт" }];
