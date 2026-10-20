@@ -4501,7 +4501,7 @@ async function selectVerifiedOrdinaryReplacement(
       source_candidate_ids: [],
     };
   }
-  if (sourceClassDiscovery.ok && !liveClarification) {
+  if (sourceClassDiscovery.ok && !liveClarification && !verifiedExactSource) {
     const compactContinuation =
       await selectVerifiedCompactReplacementContinuation(
         userMessage,
