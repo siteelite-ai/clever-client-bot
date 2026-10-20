@@ -47,7 +47,12 @@ wait_for_lock_marker() {
 race() {
   local first_id=$1 first_route=$2 first_lanes=$3
   local second_id=$4 second_route=$5 second_lanes=$6
-  local model_limit=$7 catalog_limit=$8 expected=$9 second_result
+  local model_limit=$7 catalog_limit=$8 expected=$9
+  local contested_lane='model' second_output second_before second_after
+  local second_result second_allowed second_reason second_replayed
+  local second_limit_reason second_in_flight_hit second_rate_hit
+  local first_window_end expected_limit_reason
+  if [[ "$second_route" == 'search-products' ]]; then contested_lane='catalog'; fi
   rm -f "$scratch_dir/lock-held"
   (
     db_psql <<SQL
@@ -57,6 +62,9 @@ SELECT public.reserve_public_api_admission(
   '$first_id'::uuid, '$first_route', 'enforce', '$first_lanes'::text[],
   $model_limit, 1, $catalog_limit, 1
 )->>'allowed';
+SELECT 'window_end|' || (extract(epoch FROM window_started_at + interval '1 minute') * 1000000)::bigint
+FROM public.public_api_admission_buckets
+WHERE mode = 'enforce' AND lane = '$contested_lane';
 \! touch "$scratch_dir/lock-held"
 SELECT pg_sleep(2);
 COMMIT;
@@ -64,16 +72,20 @@ SQL
   ) >"$scratch_dir/a.out" 2>"$scratch_dir/a.err" &
   a_pid=$!
   wait_for_lock_marker
-  second_result=$(db_psql <<SQL
+  second_output=$(db_psql <<SQL
 SET ROLE service_role;
-SELECT (decision->>'allowed') || '|' || (decision->>'reason') || '|' ||
+SELECT 'before|' || (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
+SELECT 'decision|' || (decision->>'allowed') || '|' || (decision->>'reason') || '|' ||
   (decision->>'replayed') || '|' || coalesce(decision->>'limit_reason', '-')
+  || '|' || coalesce(decision->'lane_decisions'->'$contested_lane'->>'in_flight_hit', '-')
+  || '|' || coalesce(decision->'lane_decisions'->'$contested_lane'->>'rate_hit', '-')
 FROM (
   SELECT public.reserve_public_api_admission(
     '$second_id'::uuid, '$second_route', 'enforce', '$second_lanes'::text[],
     $model_limit, 1, $catalog_limit, 1
   ) AS decision
 ) AS result;
+SELECT 'after|' || (extract(epoch FROM clock_timestamp()) * 1000000)::bigint;
 SQL
 )
   if ! wait "$a_pid"; then
@@ -87,9 +99,49 @@ SQL
     sed -n '1,100p' "$scratch_dir/a.out" >&2
     return 1
   fi
-  if [[ "$second_result" != "$expected" ]]; then
-    printf 'Unexpected concurrent decision: %s (expected %s)\n' \
-      "$second_result" "$expected" >&2
+  second_before=$(sed -n 's/^before|//p' <<< "$second_output")
+  second_after=$(sed -n 's/^after|//p' <<< "$second_output")
+  second_result=$(sed -n 's/^decision|//p' <<< "$second_output")
+  IFS='|' read -r second_allowed second_reason second_replayed \
+    second_limit_reason second_in_flight_hit second_rate_hit <<< "$second_result"
+  if [[ "$expected" == 'true|admitted|true|-' ]]; then
+    if [[ "$second_allowed|$second_reason|$second_replayed|$second_limit_reason" != "$expected" ]]; then
+      printf 'Unexpected concurrent replay: %s (expected %s)\n' \
+        "$second_result" "$expected" >&2
+      return 1
+    fi
+    return 0
+  fi
+  # The second transaction can wait across a real minute boundary while the
+  # first holds the bucket lock. A fresh minute removes only the rate hit, not
+  # the still-live in-flight reservation. Capture the first reservation's real
+  # bucket cutoff (not a wall-clock minute: resets can start mid-minute) and
+  # bracket the second RPC with DB clock reads. Require *both* reasons when
+  # the same window is proven; never accept a denial without the in-flight hit.
+  if [[ "$second_allowed|$second_reason|$second_replayed" != 'false|limit_exceeded|false' ||
+        "$second_in_flight_hit" != 'true' ]]; then
+    printf 'Concurrent reservation did not reject on the shared in-flight lane: %s\n' \
+      "$second_result" >&2
+    return 1
+  fi
+  first_window_end=$(sed -n 's/^window_end|//p' "$scratch_dir/a.out")
+  if [[ ! "$first_window_end" =~ ^[0-9]+$ || ! "$second_before" =~ ^[0-9]+$ ||
+        ! "$second_after" =~ ^[0-9]+$ ]]; then
+    printf 'Could not establish concurrent admission window boundaries.\n' >&2
+    return 1
+  fi
+  expected_limit_reason='minute_and_in_flight_limit'
+  if [[ "$second_rate_hit" == 'false' ]]; then
+    expected_limit_reason='in_flight_limit'
+  elif [[ "$second_rate_hit" != 'true' ]]; then
+    printf 'Missing rate-hit evidence in concurrent decision: %s\n' "$second_result" >&2
+    return 1
+  fi
+  if [[ "$second_limit_reason" != "$expected_limit_reason" ||
+        ( "$second_before" -lt "$first_window_end" && "$second_after" -lt "$first_window_end" && "$second_rate_hit" != 'true' ) ||
+        ( "$second_before" -ge "$first_window_end" && "$second_after" -ge "$first_window_end" && "$second_rate_hit" != 'false' ) ]]; then
+    printf 'Unexpected concurrent decision: %s (first cutoff/before/after: %s/%s/%s)\n' \
+      "$second_result" "$first_window_end" "$second_before" "$second_after" >&2
     return 1
   fi
 }
