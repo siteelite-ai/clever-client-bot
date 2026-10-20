@@ -45,6 +45,31 @@ export interface LedLampCompatibilityProfile {
   sourceShape: string;
 }
 
+export interface LedLampFamilyBrowseProfile {
+  family: "led_lamp_family_browse";
+  category: string;
+  required: Record<RequiredRole, Facet>;
+  base: string;
+  shape: string;
+  /** Declared series/model tokens; never interpreted as one source SKU. */
+  seriesTokens: string[];
+}
+
+export type LedLampFamilyBrowseResolution =
+  | { status: "not_applicable" }
+  | { status: "unverifiable"; reason: string }
+  | { status: "ready"; profile: LedLampFamilyBrowseProfile };
+
+export type LedLampFamilyBrowseFit =
+  | { ok: false; reason: string }
+  | {
+    ok: true;
+    candidate: ProductFull;
+    powerW: number;
+    diameterMm: number;
+    voltageRange: { min: number; max: number };
+  };
+
 export type LedLampCompatibilityResolution =
   | { status: "not_applicable" }
   | { status: "unverifiable"; reason: string }
@@ -162,6 +187,20 @@ function titleHasWholeBase(title: string, base: string): boolean {
     .some((token) => visualCode(token) === base);
 }
 
+function titleHasVisualToken(title: string, token: string): boolean {
+  return (String(title).match(/[\p{L}\p{N}]+/gu) ?? [])
+    .some((part) => visualCode(part) === token);
+}
+
+function containsWholePhrase(text: string, phrase: string): boolean {
+  const words = normalizedText(text).match(/[\p{L}\p{N}]+/gu) ?? [];
+  const phraseWords = normalizedText(phrase).match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (phraseWords.length === 0) return false;
+  return words.some((_, offset) =>
+    phraseWords.every((part, index) => words[offset + index] === part)
+  );
+}
+
 function canonicalBase(raw: string): string | null {
   const value = visualCode(raw);
   return /^[A-Z]{1,4}\d{1,3}[A-Z]?$/u.test(value) ? value : null;
@@ -192,6 +231,193 @@ function covered(
   nominal: number,
 ): boolean {
   return range.min <= nominal && nominal <= range.max;
+}
+
+/**
+ * Resolve a named *family* from customer-declared series, socket and shape.
+ * A family name does not identify an original SKU, voltage, wattage or size.
+ * Hence this route is a comparison browse, never a compatibility claim.
+ */
+export function resolveLedLampFamilyBrowseProfile(
+  sourceDescription: string,
+  category: string,
+  facets: Facet[],
+): LedLampFamilyBrowseResolution {
+  if (
+    normalizedText(category) !== LED_LAMP_FAMILY ||
+    !/(?:^|[^\p{L}])ламп\p{L}*(?:$|[^\p{L}])/iu.test(sourceDescription)
+  ) return { status: "not_applicable" };
+  // A complete technical source title needs exact-SKU handling; it must not
+  // be degraded into a loose family browse just because lookup failed.
+  if (/\d+(?:[.,]\d+)?\s*(?:вт|w|в|v|к|k|лм|lm|мм|mm)(?!\p{L})/iu.test(sourceDescription)) {
+    return { status: "not_applicable" };
+  }
+  const required = {} as Record<RequiredRole, Facet>;
+  for (const role of Object.keys(REQUIRED_CAPTIONS) as RequiredRole[]) {
+    const facet = liveFacetForCaption(facets, REQUIRED_CAPTIONS[role]);
+    if (!facet) return { status: "unverifiable", reason: `facet_missing:${role}` };
+    required[role] = facet;
+  }
+  const declaredBases = required.base.values
+    .map(({ value }) => ({ value, code: canonicalBase(value) }))
+    .filter((item): item is { value: string; code: string } => Boolean(item.code))
+    .filter(({ code }) => titleHasWholeBase(sourceDescription, code));
+  const declaredShapes = required.shape.values
+    .map(({ value }) => ({ value, shape: canonicalShape(value) }))
+    .filter((item): item is { value: string; shape: string } => Boolean(item.shape))
+    .filter(({ value }) => containsWholePhrase(sourceDescription, value));
+  const bases = [...new Set(declaredBases.map(({ code }) => code))];
+  const shapes = [...new Set(declaredShapes.map(({ shape }) => shape))];
+  if (bases.length !== 1 || shapes.length !== 1) {
+    return { status: "unverifiable", reason: "declared_base_or_shape_ambiguous" };
+  }
+  const seriesTokens = [...new Set(
+    (sourceDescription.match(/[A-Za-z][A-Za-z0-9]{1,23}/gu) ?? [])
+      .map(visualCode)
+      .filter((token) => token !== bases[0] && token !== "LED" && token !== "AC" && token !== "DC"),
+  )];
+  if (
+    seriesTokens.length === 0 ||
+    !seriesTokens.some((token) => /[A-Z]/u.test(token) && /\d/u.test(token))
+  ) return { status: "unverifiable", reason: "named_series_unproven" };
+  return {
+    status: "ready",
+    profile: {
+      family: "led_lamp_family_browse",
+      category,
+      required,
+      base: bases[0],
+      shape: shapes[0],
+      seriesTokens,
+    },
+  };
+}
+
+function evaluateLedLampFamilyProduct(
+  profile: LedLampFamilyBrowseProfile,
+  candidate: ProductFull | undefined,
+  namedSeries: boolean,
+): LedLampFamilyBrowseFit {
+  if (!candidate || normalizedText(candidate.leaf_category ?? "") !==
+    normalizedText(profile.category)) {
+    return { ok: false, reason: "category_unverified" };
+  }
+  if (
+    candidate.warehouse_evidence !== "positive" ||
+    !candidate.warehouses?.some(({ qty }) => Number.isFinite(qty) && qty > 0) ||
+    !Number.isFinite(candidate.price) || candidate.price <= 0
+  ) return { ok: false, reason: "stock_or_price_unverified" };
+  // A title containing the distinctive alphanumeric model token may be
+  // another variant of the declared source family even when a generic word
+  // (brand, ECO, etc.) is omitted. This is only title-signature exclusion:
+  // an absent token cannot prove that a card belongs to a different series.
+  const belongsToNamedSeries = profile.seriesTokens
+    .filter((token) => /[A-Z]/u.test(token) && /\d/u.test(token))
+    .some((token) => titleHasVisualToken(candidate.pagetitle, token));
+  if (belongsToNamedSeries !== namedSeries) {
+    return {
+      ok: false,
+      reason: namedSeries ? "not_named_source_series" : "named_source_series",
+    };
+  }
+  const values = {} as Record<RequiredRole, string>;
+  for (const role of Object.keys(profile.required) as RequiredRole[]) {
+    const value = oneLiveValue(candidate, profile.required[role]);
+    if (!value) return { ok: false, reason: `candidate_value_missing:${role}` };
+    values[role] = value;
+  }
+  if (
+    canonicalBase(values.base) !== profile.base ||
+    !titleHasWholeBase(candidate.pagetitle, profile.base) ||
+    !isLed(values.technology) || canonicalSupply(values.supply) !== "AC" ||
+    canonicalShape(values.shape) !== profile.shape
+  ) return { ok: false, reason: "family_facet_mismatch" };
+  const voltageRange = parseStrictLampRange(values.voltage);
+  // This is explicitly a curated mains-powered comparison, not a statement
+  // that the customer's unknown original voltage is 220/230 V.
+  if (!voltageRange || !covered(voltageRange, 220) ||
+    !covered(voltageRange, 230)) {
+    return { ok: false, reason: "mains_voltage_unverified" };
+  }
+  const diameterMm = parseStrictLampScalar(values.diameter, ["мм", "mm"]);
+  const powerW = parseStrictLampScalar(values.power, ["вт", "w"]);
+  if (diameterMm === null || powerW === null) {
+    return { ok: false, reason: "dimensions_or_power_unverified" };
+  }
+  return { ok: true, candidate, powerW, diameterMm, voltageRange };
+}
+
+export function evaluateLedLampFamilyBrowseCandidate(
+  profile: LedLampFamilyBrowseProfile,
+  candidate: ProductFull | undefined,
+): LedLampFamilyBrowseFit {
+  return evaluateLedLampFamilyProduct(profile, candidate, false);
+}
+
+/** Source-family members define an observed comparison envelope, not a SKU. */
+export function evaluateLedLampNamedSourceFamilyMember(
+  profile: LedLampFamilyBrowseProfile,
+  candidate: ProductFull | undefined,
+): LedLampFamilyBrowseFit {
+  return evaluateLedLampFamilyProduct(profile, candidate, true);
+}
+
+export function rankLedLampFamilyBrowseCandidates(
+  fits: ReadonlyArray<Extract<LedLampFamilyBrowseFit, { ok: true }>>,
+): Array<Extract<LedLampFamilyBrowseFit, { ok: true }>> {
+  const diameterFrequency = new Map<number, number>();
+  for (const fit of fits) {
+    diameterFrequency.set(
+      fit.diameterMm,
+      (diameterFrequency.get(fit.diameterMm) ?? 0) + 1,
+    );
+  }
+  return [...fits].sort((left, right) =>
+    (diameterFrequency.get(right.diameterMm) ?? 0) -
+      (diameterFrequency.get(left.diameterMm) ?? 0) ||
+    left.powerW - right.powerW ||
+    left.candidate.price - right.candidate.price ||
+    left.candidate.id.localeCompare(right.candidate.id)
+  );
+}
+
+export function observedLedLampFamilyEnvelope(
+  sourceMembers: ReadonlyArray<Extract<LedLampFamilyBrowseFit, { ok: true }>>,
+  alternatives: ReadonlyArray<Extract<LedLampFamilyBrowseFit, { ok: true }>>,
+): {
+  sourceMembers: number;
+  diameterMm: number;
+  minPowerW: number;
+  maxPowerW: number;
+  candidates: Array<Extract<LedLampFamilyBrowseFit, { ok: true }>>;
+} | null {
+  if (sourceMembers.length < 2) return null;
+  const diameterCounts = new Map<number, number>();
+  for (const member of sourceMembers) {
+    diameterCounts.set(
+      member.diameterMm,
+      (diameterCounts.get(member.diameterMm) ?? 0) + 1,
+    );
+  }
+  const stableDiameter = [...diameterCounts.entries()].sort((left, right) =>
+    right[1] - left[1] || left[0] - right[0]
+  )[0];
+  if (!stableDiameter || stableDiameter[1] < 2) return null;
+  const sameSizeSource = sourceMembers.filter(({ diameterMm }) =>
+    diameterMm === stableDiameter[0]
+  );
+  const minPowerW = Math.min(...sameSizeSource.map(({ powerW }) => powerW));
+  const maxPowerW = Math.max(...sameSizeSource.map(({ powerW }) => powerW));
+  return {
+    sourceMembers: sameSizeSource.length,
+    diameterMm: stableDiameter[0],
+    minPowerW,
+    maxPowerW,
+    candidates: rankLedLampFamilyBrowseCandidates(alternatives.filter((fit) =>
+      fit.diameterMm === stableDiameter[0] &&
+      fit.powerW >= minPowerW && fit.powerW <= maxPowerW
+    )),
+  };
 }
 
 export function resolveLedLampCompatibilityProfile(

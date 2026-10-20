@@ -483,11 +483,17 @@ import {
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
   evaluateLedLampCandidate,
+  evaluateLedLampFamilyBrowseCandidate,
+  evaluateLedLampNamedSourceFamilyMember,
   ledLampCandidateDisclosure,
+  observedLedLampFamilyEnvelope,
   rankLedLampCandidates,
+  resolveLedLampFamilyBrowseProfile,
   resolveLedLampCompatibilityProfile,
   type LedLampCandidateFit,
   type LedLampCompatibilityProfile,
+  type LedLampFamilyBrowseFit,
+  type LedLampFamilyBrowseProfile,
 } from "../_shared/v3-tools/replacement-compatibility.ts";
 import {
   buildReplacementProofContract,
@@ -4632,6 +4638,214 @@ async function selectVerifiedLedLampReplacement(
   };
 }
 
+type ProvenLedLampFamilyFit = Extract<LedLampFamilyBrowseFit, { ok: true }>;
+
+async function browseVerifiedLedLampFamilyAlternatives(
+  profile: LedLampFamilyBrowseProfile,
+  budgetCap: number | null,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<DirectReplacementResult> {
+  const started = Date.now();
+  const verified: ProvenLedLampFamilyFit[] = [];
+  const namedSourceMembers: ProvenLedLampFamilyFit[] = [];
+  const seen = new Set<string>();
+  const rejected: Record<string, number> = {};
+  let pagesChecked = 0;
+  let rawTotal: number | null = null;
+  let searchError: string | null = null;
+  // One customer-declared live socket facet is the recall filter. All other
+  // properties are checked on raw product options. No arbitrary family member
+  // is promoted to a source anchor.
+  for (let page = 1; page <= 2; page += 1) {
+    const found = await executeSearchCatalog({
+      mode: "by_filter",
+      category: profile.category,
+      anchor_leaf_category: profile.category,
+      options: { [profile.required.base.key]: [profile.base] },
+      min_price: 1,
+      ...(budgetCap !== null ? { max_price: budgetCap } : {}),
+      per_page: 50,
+      page,
+    }, {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+    }, ctx.cache);
+    if (!found.ok) {
+      searchError = found.error_code;
+      break;
+    }
+    pagesChecked += 1;
+    rawTotal = found.total;
+    for (const { id } of found.results) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const product = ctx.cache.get(id);
+      if (budgetCap !== null && (!product || product.price > budgetCap)) {
+        rejected.budget = (rejected.budget ?? 0) + 1;
+        continue;
+      }
+      const fit = evaluateLedLampFamilyBrowseCandidate(profile, product);
+      if (fit.ok) verified.push(fit);
+      else if (fit.reason === "named_source_series") {
+        const member = evaluateLedLampNamedSourceFamilyMember(profile, product);
+        if (member.ok) namedSourceMembers.push(member);
+        else rejected[member.reason] = (rejected[member.reason] ?? 0) + 1;
+      } else rejected[fit.reason] = (rejected[fit.reason] ?? 0) + 1;
+    }
+    const grouped = new Map<number, number>();
+    for (const fit of verified) {
+      grouped.set(fit.diameterMm, (grouped.get(fit.diameterMm) ?? 0) + 1);
+    }
+    if (
+      namedSourceMembers.length >= 2 &&
+      [...grouped.values()].some((count) => count >= 2)
+    ) break;
+    if (found.total <= page * 50 || found.results.length === 0) break;
+  }
+  const envelope = observedLedLampFamilyEnvelope(
+    namedSourceMembers,
+    verified,
+  );
+  const powers = [...new Set((envelope?.candidates ?? []).map(({ powerW }) => powerW))]
+    .sort((left, right) => left - right);
+  const powerCeiling = powers.find((power) =>
+    (envelope?.candidates ?? []).filter(({ powerW }) => powerW <= power)
+      .length >= 2
+  );
+  const selected = powerCeiling === undefined ? [] : envelope!.candidates
+    .filter(({ powerW }) => powerW <= powerCeiling)
+    .slice(0, 4);
+  steps.push({
+    step: "v3_led_lamp_ambiguous_family_browse_checked",
+    ms: Date.now() - t0,
+    meta: {
+      category: profile.category,
+      base_key: profile.required.base.key,
+      pages_checked: pagesChecked,
+      raw_total: rawTotal,
+      named_source_members: namedSourceMembers.length,
+      observed_min_power: envelope?.minPowerW ?? null,
+      observed_max_power: envelope?.maxPowerW ?? null,
+      verified_variants: verified.length,
+      selected_variants: selected.length,
+      selected_diameter: envelope?.diameterMm ?? null,
+      named_model_tokens_excluded: true,
+      rejected,
+      search_error: searchError,
+      duration_ms: Date.now() - started,
+    },
+  });
+  if (selected.length < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: searchError
+        ? "Сейчас каталог не дал завершить проверку вариантов этой серии. Повторите запрос позже; это не означает, что вариантов нет."
+        : "Указана серия ламп, но не точная исходная модель. В проверенной части каталога не удалось подтвердить два варианта другой серии в наблюдаемом диапазоне мощности и диаметра исходной серии. Уточните артикул исходной лампы, её мощность и размеры.",
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: searchError ? "upstream_error" : "query_inconsistent",
+    };
+  }
+  const rendered = executeRenderProducts({
+    product_ids: selected.map(({ candidate }) => candidate.id),
+    total_available: selected.length,
+  }, ctx.cache);
+  if (!rendered.ok || rendered.rendered_count < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Варианты подтверждены в каталоге, но карточки не удалось надёжно вывести. Повторите запрос позже.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const displayed = selected.filter(({ candidate }) =>
+    rendered.rendered_ids.includes(candidate.id)
+  );
+  if (displayed.length !== rendered.rendered_count) {
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const criteria: Criterion[] = [
+    {
+      key: profile.required.base.key,
+      op: "eq",
+      value: profile.base,
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: profile.required.shape.key,
+      op: "eq",
+      value: profile.shape,
+      level: "A",
+      evidence: "user_explicit",
+    },
+  ];
+  if (budgetCap !== null) {
+    criteria.push({
+      key: "Цена",
+      op: "max",
+      value: budgetCap,
+      unit: "₸",
+      level: "A",
+      evidence: "user_explicit",
+    });
+  }
+  const plan = extendSelectionCriteriaPlan(null, criteria, "guarded_search");
+  const perCard = displayed.map(({ powerW, diameterMm }, index) =>
+    `№${index + 1}: ${powerW} Вт, диаметр ${diameterMm} мм`
+  ).join("; ");
+  send({
+    type: "delta",
+    origin: "server",
+    content:
+      `Вы назвали серию, а не точный артикул исходной лампы. Поэтому это варианты для сравнения без названного кода модели в заголовке, а не подтверждённые взаимозаменяемые аналоги; принадлежность вариантов к другой серии каталогом не доказана. В двух или более проверенных карточках с названным кодом модели наблюдаются ${envelope!.minPowerW}–${envelope!.maxPowerW} Вт и диаметр ${envelope!.diameterMm} мм; это не полная спецификация серии. У показанных вариантов проверены категория «${profile.category}», цоколь ${profile.base}, форма «${profile.shape}», светодиодный тип, питание AC и рабочее напряжение, охватывающее 220–230 В; ${perCard}. Перед покупкой сверьте напряжение исходной лампы, её мощность, диаметр, высоту и посадку, а также максимально допустимую мощность светильника.`,
+  });
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: displayed.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map(({
+        key,
+        op,
+        value,
+        unit,
+        evidence,
+      }) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(evidence ? { evidence } : {}),
+      })),
+    },
+  });
+  steps.push({
+    step: "v3_led_lamp_ambiguous_family_browse_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      rendered: rendered.rendered_count,
+      source_identity_verified: false,
+      replacement_evidence: "provisional_family_browse",
+      selection_contract_hash: plan.hash,
+    },
+  });
+  return {
+    handled: true,
+    products: displayed.map(({ candidate }) => candidate),
+    outcome: "found",
+  };
+}
+
 async function selectVerifiedOrdinaryReplacement(
   userMessage: string,
   ctx: ToolContext,
@@ -4718,6 +4932,31 @@ async function selectVerifiedOrdinaryReplacement(
       sourceClassDiscovery.facets,
     )
     : null;
+  if (
+    sourceClassDiscovery.ok && !verifiedExactSource &&
+    lookup.articles.length === 0 &&
+    admitDirectSelectionRoute({
+      route: "replacement",
+      userMessage,
+      coversBudgetCap: budgetCap !== null,
+    })
+  ) {
+    const family = resolveLedLampFamilyBrowseProfile(
+      sourceDescription,
+      sourceClassDiscovery.category.pagetitle,
+      sourceClassDiscovery.facets,
+    );
+    if (family.status === "ready") {
+      return await browseVerifiedLedLampFamilyAlternatives(
+        family.profile,
+        budgetCap,
+        ctx,
+        send,
+        steps,
+        t0,
+      );
+    }
+  }
   // A named compact source may decode its rating while still representing
   // several structural variants. Discovery's live, customer-grounded class
   // and facet alternatives are enough to ask one question; a broad text hit
