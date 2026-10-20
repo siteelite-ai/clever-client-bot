@@ -1201,11 +1201,11 @@ function aggregateMeasurementAxisProof(
 }
 
 /** A certified two-sided fit is different from an invented per-card scalar:
- * its number is the customer's object dimension and its two product axes are
+ * the customer's object dimension and the product-side policy minimum are
  * independently proved by a server-validated live-facet pair. The caller must
  * supply only that certified pair, never raw model compatibility relations.
- * Match every field that affects the gate and require both strict sides, so a
- * loose single relation cannot turn into a general model-authority bypass. */
+ * Match every field that affects the gate and require both sides, so a loose
+ * single relation cannot turn into a general model-authority bypass. */
 function matchesCertifiedPairedCriterion(
   criterion: Criterion,
   certifiedPairedCriteria: readonly Criterion[],
@@ -1214,7 +1214,6 @@ function matchesCertifiedPairedCriterion(
     criterion.evidence !== "derived_required" ||
     (criterion.level ?? "A") !== "A" ||
     !["min", "max"].includes(criterion.op) ||
-    criterion.exclusive !== true ||
     typeof criterion.value !== "number" ||
     !Number.isFinite(criterion.value)
   ) return false;
@@ -1224,17 +1223,25 @@ function matchesCertifiedPairedCriterion(
     candidate.evidence === "derived_required" &&
     (candidate.level ?? "A") === "A" &&
     ["min", "max"].includes(candidate.op) &&
-    candidate.exclusive === true &&
     typeof candidate.value === "number" &&
     Number.isFinite(candidate.value) &&
-    candidate.value === criterion.value &&
     canonicalMeasurementUnit(candidate.unit ?? "") === unit
   );
-  return certified.some((candidate) =>
-    candidate.key === criterion.key && candidate.op === criterion.op
-  ) && certified.some((opposite) =>
-    opposite.key !== criterion.key &&
-    opposite.op === (criterion.op === "min" ? "max" : "min")
+  const min = certified.find((candidate) => candidate.op === "min");
+  const max = certified.find((candidate) =>
+    candidate.op === "max" && candidate.key !== min?.key
+  );
+  if (!min || !max || max.exclusive !== true) return false;
+  // Generic paired fits keep strict >D / <D. A server-owned installation
+  // clearance may instead certify inclusive >=K·D / strict <D. Its exact
+  // derived value is accepted only as part of the complete certified pair.
+  const completePair = min.exclusive === true && min.value === max.value ||
+    min.exclusive !== true && min.value > max.value;
+  if (!completePair) return false;
+  return [min, max].some((candidate) =>
+    candidate.key === criterion.key && candidate.op === criterion.op &&
+    candidate.value === criterion.value &&
+    (candidate.exclusive === true) === (criterion.exclusive === true)
   );
 }
 

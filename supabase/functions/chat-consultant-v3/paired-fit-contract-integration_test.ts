@@ -376,8 +376,8 @@ Deno.test({
       assert(
         criteria.some((criterion) =>
           criterion.key === "diameter_before" && criterion.op === "min" &&
-          criterion.value === 10 && criterion.unit === "мм" &&
-          criterion.exclusive === true
+          criterion.value === 12 && criterion.unit === "мм" &&
+          criterion.exclusive !== true
         ),
         JSON.stringify(criteria),
       );
@@ -423,6 +423,20 @@ Deno.test({
       ).map((event) => String((event.v3_event as { markdown?: string }).markdown ?? "")).join("\n");
       assert(strictMarkdown.includes("ТТУ 16/8"), JSON.stringify({ strictEvents, steps }));
       assert(!strictMarkdown.includes("ТТУ 14/7"), strictMarkdown);
+      const strictCriteria = strictEvents.flatMap((event) => {
+        const block = event.v3_event as typeof blocks[number] | undefined;
+        return block?.type === "products_block"
+          ? block.selection_contract?.mandatory_criteria ?? []
+          : [];
+      });
+      assert(strictCriteria.some((criterion) =>
+        criterion.key === "diameter_before" && criterion.op === "min" &&
+        criterion.value === 14.4 && criterion.unit === "мм" &&
+        criterion.exclusive !== true
+      ), JSON.stringify(strictCriteria));
+      assert(!strictCriteria.some((criterion) =>
+        criterion.key === "diameter_before" && criterion.value === 12
+      ), JSON.stringify(strictCriteria));
       assert(declarationPrompts.at(-1)?.includes("минимум 14,4 мм до усадки"));
       assert(!declarationPrompts.at(-1)?.includes("Размер изделия до установки должен быть строго больше размера объекта"));
       mockNoCandidates = true;

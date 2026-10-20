@@ -1,0 +1,797 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T11:26:14.315Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-dn027b-analogs": 1,
+    "customer-new-heat-shrink-12mm": 1,
+    "customer-new-heat-shrink-10mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-dn027b-analogs",
+      "title": "Аналоги точной модели DN027B",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-dn027b-analogs_base_1792495574320_1",
+          "turns": [
+            {
+              "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16346,
+              "network_attempts": 1,
+              "log_id": "139577a9-f4ef-4d57-865b-b2651d9b79a9",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse",
+                  "url": "https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/",
+                  "price": 1334,
+                  "stockLine": "Караганда (6800 шт), Актобе (301 шт), Астана (233 шт) и ещё 2 городов",
+                  "cardText": "- **[915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse](https://220volt.kz/catalog/svetotexnika/svetilniki/9150057460015944431c3-sv-k-59444-meson-080-6w-40k-wh-recesse/)**\n  Цена: *1 334* ₸\n  Бренд: Philips\n  Наличие: Караганда (6800 шт), Актобе (301 шт), Астана (233 шт) и ещё 2 городов"
+                }
+              ],
+              "text": "\n\nВ выполненном поиске удалось подтвердить 1 вариант. Если хотите больше вариантов, скажите, какое условие можно изменить; без вашего согласия я не расширю подбор.\n\nПоказываю кандидатов для замены. В карточках всех показанных товаров подтверждены параметры подбора: Цвет свечения: нейтральный, ПРА: в комплекте, Способ монтажа: встраиваемый. По данным карточек совпадают отдельные параметры: Бренд: Philips, Цвет корпуса: белый, Цвет свечения: нейтральный. Полная взаимозаменяемость по данным каталога не подтверждена. Ниже значение параметра у конкретных кандидатов (№1 «915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse»: «Диаметр, см», «Длина, см»); не считайте их равноценной заменой без проверки. Перед покупкой сверьте остальные критичные паспортные и монтажные характеристики. Цены показанных товаров ниже актуальной цены исходной карточки при той же единице продажи.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-43bbbb26",
+                "mandatory_criteria": [
+                  {
+                    "key": "Цвет свечения",
+                    "op": "eq",
+                    "value": "нейтральный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Диаметр, см",
+                    "op": "range",
+                    "value": [
+                      8,
+                      10
+                    ],
+                    "unit": "см",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Мощность ламп, Вт",
+                    "op": "range",
+                    "value": [
+                      6,
+                      8
+                    ],
+                    "unit": "вт",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Напряжение, В",
+                    "op": "range",
+                    "value": [
+                      220,
+                      220
+                    ],
+                    "unit": "В",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "ПРА",
+                    "op": "eq",
+                    "value": "в комплекте",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Способ монтажа",
+                    "op": "eq",
+                    "value": "встраиваемый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Степень защиты, IP",
+                    "op": "min",
+                    "value": 20,
+                    "unit": "IP",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Световой поток, Лм",
+                    "op": "range",
+                    "value": [
+                      400,
+                      800
+                    ],
+                    "unit": "лм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип цоколя",
+                    "op": "eq",
+                    "value": "нет",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип лампы",
+                    "op": "eq",
+                    "value": "LED",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Вид светильника",
+                    "op": "eq",
+                    "value": "даунлайт",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 5,
+                  "minimum": 3,
+                  "mode": "alternatives",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "Проверяю обозначение и уточнённые параметры по живым характеристикам каталога…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Компактный код пока не подтверждён полным live-контрактом; доказательных карточек: 8; примеры: 929002070102/871869967897500 Св-к DN027B G2 LED6/NW 7W 220-240V D90 R | 929002014902/871869964547200 Св-к DN027B LED6/NW L100 SQ RU",
+                  "duration_ms": 5424
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Replacement preflight: подтверждено 1; обязательные оси: Цвет свечения=нейтральный, Диаметр, см=8,10, Мощность ламп, Вт=6,8, Напряжение, В=220,220, ПРА=в комплекте, Способ монтажа=встраиваемый, Степень защиты, IP=20, Световой поток, Лм=400,800, Тип цоколя=нет, Тип лампы=LED, Вид светильника=даунлайт",
+                  "duration_ms": 13127
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 1 < 3"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-12mm_base_1792495590674_1",
+          "turns": [
+            {
+              "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16245,
+              "network_attempts": 1,
+              "log_id": "b318a1d6-50e3-437e-beba-decc0ef8f188",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator",
+                  "verified": true,
+                  "sku": "Ем000010608",
+                  "name": "Трубка термоусадочная NST-16/8-10-21 71 123 Navigator",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "8.3-15",
+                    "Цвет": "разноцветный",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиолефин",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Рабочая температура": "-55...105 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "0.1",
+                    "Единица измерения": "уп.",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.047",
+                    "Ширина, м": "0.016",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.000192",
+                    "Внутр диаметр до термоусадки,мм": "16",
+                    "Бренд": "Navigator",
+                    "Внутр диаметр после термоусадки, мм": "8",
+                    "Номинальное поперечное сечение, мм2": "15",
+                    "Код ТН ВЭД": "3917320001",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0.55±0.1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 606,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "description_excerpt": "Термоусадочные трубки Navigator серии NST предназначены для электрической изоляции, антикоррозионной защиты, защиты от механических повреждений и маркировки проводов и кабелей. Изготовлены из модифицированного полиэтилена, не поддерживающего горение и устойчивого к воздействию ультрафиолетового излучения. Преимущества: • Рабочее напряжение до 1кВ • Коэффициент усадки 2:1 • Прочность на растяжение не менее 10 МПа • Минимальное уплотнение перед разрывом 200% • Электрическая прочность не менее 20 к"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000665",
+                  "name": "Термоусадочная трубка ТТУ 20/10 желтая 100 м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Цвет": "жёлтый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "1",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "100",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.0447",
+                    "Ширина, м": "0.02",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-(m)/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000666",
+                  "name": "Трубка ТТУ 20/10 зеленая100м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Цвет": "зеленый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "1",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "100",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.0447",
+                    "Ширина, м": "0.45",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-(m)/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-krasnaya-100mupak-iek-(m)",
+                  "verified": true,
+                  "sku": "Ем000000667",
+                  "name": "Термоусадочная трубка ТТУ 20/10 красная 100 м/упак ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "10.4-19",
+                    "Цвет": "красный",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "1",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "100",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.0407",
+                    "Ширина, м": "0.02",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00012",
+                    "Внутр диаметр до термоусадки,мм": "20",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "10",
+                    "Номинальное поперечное сечение, мм2": "19",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,9±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 378,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-krasnaya-100mupak-iek-(m)/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка термо NST-16/8-10-21 71 123 Navigator",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/",
+                  "price": 606,
+                  "stockLine": "Астана (76 уп.), Караганда (22 уп.), Шымкент (10 уп.)",
+                  "cardText": "- **[Трубка термо NST-16/8-10-21 71 123 Navigator](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-termo-nst-168-10-21-71-123-navigator/)**\n  Цена: *606* ₸/уп\n  Бренд: Navigator\n  Наличие: Астана (76 уп.), Караганда (22 уп.), Шымкент (10 уп.)"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Актобе (288 м), Астана (280 м), Шымкент (109 м) и ещё 1 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 желтая 100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zheltaya-100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (288 м), Астана (280 м), Шымкент (109 м) и ещё 1 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 зеленая100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Шымкент (209 м), Астана (166 м), Актобе (139 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 зеленая100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-zelenaya100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (209 м), Астана (166 м), Актобе (139 м) и ещё 2 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 20/10 красная 100м/упак ИЭК (м)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-krasnaya-100mupak-iek-%28m%29/",
+                  "price": 378,
+                  "stockLine": "Шымкент (509 м), Астана (208 м), Актобе (184 м) и ещё 1 городов",
+                  "cardText": "- **[Трубка ТТУ 20/10 красная 100м/упак ИЭК (м)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-2010-krasnaya-100mupak-iek-%28m%29/)**\n  Цена: *378* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (509 м), Астана (208 м), Актобе (184 м) и ещё 1 городов"
+                }
+              ],
+              "text": "Ищу товары в разделе «Трубки термоусаживаемые». Сверяю заявленные условия с характеристиками каталога. Для размера 12 мм проверяю оба условия совместимости: «Внутр диаметр до термоусадки,мм ≥ 1,2 × 12 мм (запас 20%)» и «Внутр диаметр после термоусадки, мм < 12 мм».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-125ea00d",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 14.4,
+                    "unit": "мм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 12,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 33, листьев 1",
+                  "duration_ms": 3134
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=41; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 364",
+                  "duration_ms": 1607
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "selection criterion vnutr_diametr_do_termousadki: exclusive=undefined != false"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1792495609884_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 12965,
+              "network_attempts": 1,
+              "log_id": "9dc628e4-8523-4b3b-9dfc-164e74cd2203",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000013731",
+                  "name": "Термоусадочная трубка ТТУ 12/6 черная 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "чёрный",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.0002",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 133,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026499",
+                  "name": "Термоусадочная трубка ТТУ 12/6 белая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "белый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026500",
+                  "name": "Термоусадочная трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "жёлтый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026502",
+                  "name": "Термоусадочная трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "зеленый",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Да",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Код ТН ВЭД": "3917390008",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C"
+                  },
+                  "offerPrice": 114,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка ТТУ 12/6 черная 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "price": 133,
+                  "stockLine": "Астана (455 м), Актобе (280 м), Караганда (278 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 12/6 черная 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/)**\n  Цена: *133* ₸/м\n  Бренд: IEK\n  Наличие: Астана (455 м), Актобе (280 м), Караганда (278 м) и ещё 2 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 белая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Шымкент (294 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 белая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (294 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Актобе (161 м), Шымкент (65 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 желтая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (161 м), Шымкент (65 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "price": 114,
+                  "stockLine": "Шымкент (58 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 зеленая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/)**\n  Цена: *114* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (58 м)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Трубки термоусаживаемые». Сверяю заявленные условия с характеристиками каталога. Для размера 10 мм проверяю оба условия совместимости: «Внутр диаметр до термоусадки,мм ≥ 1,2 × 10 мм (запас 20%)» и «Внутр диаметр после термоусадки, мм < 10 мм».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-8b832043",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 12,
+                    "unit": "мм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 33, листьев 1",
+                  "duration_ms": 1433
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=38; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 415",
+                  "duration_ms": 864
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "selection criterion vnutr_diametr_do_termousadki: exclusive=undefined != false"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-20T11:27:04.894Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "139577a9-f4ef-4d57-865b-b2651d9b79a9",
+    "b318a1d6-50e3-437e-beba-decc0ef8f188",
+    "9dc628e4-8523-4b3b-9dfc-164e74cd2203"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 8,
+    "verified": 8,
+    "unverified": 0
+  },
+  "passed": false
+}

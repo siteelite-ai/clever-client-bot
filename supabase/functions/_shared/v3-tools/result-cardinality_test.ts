@@ -55,6 +55,20 @@ Deno.test("an explicit request for choices survives a model-like technical code"
     }),
     { target: 4, minimum: 4, mode: "explicit", explicit: true },
   );
+  assertEquals(
+    resolveResultCardinality(
+      "Предложи аналоги на светильник DN027B; 929002070102",
+      { selection: true, exactLookup: true },
+    ),
+    { target: 5, minimum: 3, mode: "alternatives", explicit: true },
+  );
+  assertEquals(
+    resolveResultCardinality("Предложи 3 аналога DN027B", {
+      selection: true,
+      exactLookup: true,
+    }),
+    { target: 3, minimum: 3, mode: "explicit", explicit: true },
+  );
 });
 
 Deno.test("single-result intents remain single", () => {

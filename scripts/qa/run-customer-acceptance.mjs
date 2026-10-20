@@ -207,6 +207,17 @@ FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'] = {
   sha256: 'f4ba64271c02cdbc7549be3061dc0171952fae8ac6555d2bba67d896209a1e61',
 };
 
+// V9 successor pins the customer's 20% cable-clearance decision without
+// rewriting any historical V8/V5 suite or report.
+FULL_SUITE_MANIFESTS['customer-acceptance-cases-v2.json'] = {
+  ...FULL_SUITE_MANIFESTS['customer-acceptance-cases.json'],
+  sha256: '6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7',
+};
+FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v6.json'] = {
+  ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'],
+  sha256: 'c45ef36b7bd713f003bfa4a46f2530f8e25b528947eb198f7f5243ff23a6f737',
+};
+
 export function validateStrictFullSuite({ argv, suite, variationSuite, casesPath, variantsPath, suiteBytes, variantsBytes }) {
   if (!argv.includes('--strict-full-suite')) return null;
   if (!argv.some((arg) => arg.startsWith('--endpoint=') && arg.slice('--endpoint='.length).trim())) {
@@ -384,6 +395,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_catalog_minimum',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
+  'require_selection_criteria_exact',
   'require_selection_criteria_groups',
   'require_text_groups',
   'require_tool_results',
@@ -497,6 +509,30 @@ function validateProductPageRuleKeys(rule, location) {
 
 export function validateExpectationObject(expect, location = 'expect') {
   expectationKeys(expect, SUPPORTED_EXPECTATION_KEYS, location);
+  if (expect.require_selection_criteria_exact !== undefined) {
+    const criteria = expect.require_selection_criteria_exact;
+    const criterionLocation = `${location}.require_selection_criteria_exact`;
+    if (!Array.isArray(criteria) || criteria.length === 0) {
+      throw new Error(`${criterionLocation}: must be a non-empty array`);
+    }
+    const selectors = new Set();
+    for (const [index, criterion] of criteria.entries()) {
+      const itemLocation = `${criterionLocation}[${index}]`;
+      expectationKeys(criterion, new Set(['key_contains', 'op', 'value', 'exclusive', 'unit', 'evidence']), itemLocation);
+      if (typeof criterion.key_contains !== 'string' ||
+          !/^[a-z][a-z0-9_]{2,127}$/u.test(criterion.key_contains) ||
+          selectors.has(criterion.key_contains)) {
+        throw new Error(`${itemLocation}.key_contains: requires a unique bounded facet-key fragment`);
+      }
+      selectors.add(criterion.key_contains);
+      if (!['min', 'max', 'eq'].includes(criterion.op) || !Number.isFinite(criterion.value) ||
+          typeof criterion.exclusive !== 'boolean' ||
+          (criterion.unit !== undefined && (typeof criterion.unit !== 'string' || !criterion.unit.trim())) ||
+          (criterion.evidence !== undefined && !['user_explicit', 'derived_required'].includes(criterion.evidence))) {
+        throw new Error(`${itemLocation}: requires op=min|max|eq, finite value, explicit exclusive and valid optional unit/evidence`);
+      }
+    }
+  }
   if (expect.require_catalog_minimum !== undefined &&
       !validCatalogMinimumContract(expect.require_catalog_minimum)) {
     throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
@@ -2032,6 +2068,32 @@ export function evaluate(expect = {}, response, {
     const criteriaText = JSON.stringify(response.selectionContract ?? {});
     if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
       failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+    }
+  }
+  if (Array.isArray(expect.require_selection_criteria_exact)) {
+    const suppliedCriteria = response.selectionContract?.mandatory_criteria;
+    if (!Array.isArray(suppliedCriteria)) {
+      failures.push('machine-readable mandatory selection criteria are missing');
+    } else {
+      for (const required of expect.require_selection_criteria_exact) {
+        const matches = suppliedCriteria.filter((criterion) =>
+          typeof criterion?.key === 'string' && criterion.key.includes(required.key_contains));
+        if (matches.length !== 1) {
+          failures.push(`selection criterion ${required.key_contains}: expected one matching facet, got ${matches.length}`);
+          continue;
+        }
+        const actual = matches[0];
+        for (const [field, expected] of Object.entries(required)) {
+          // The contract omits `exclusive` for inclusive ordered bounds. Treat only
+          // that omitted min/max flag as false; explicit true and other fields stay exact.
+          const actualValue = field === 'exclusive' &&
+            (actual.op === 'min' || actual.op === 'max') && actual.exclusive === undefined
+            ? false : actual[field];
+          if (field !== 'key_contains' && actualValue !== expected) {
+            failures.push(`selection criterion ${required.key_contains}: ${field}=${JSON.stringify(actualValue)} != ${JSON.stringify(expected)}`);
+          }
+        }
+      }
     }
   }
   if (Array.isArray(expect.forbid_selection_criteria_any)) {

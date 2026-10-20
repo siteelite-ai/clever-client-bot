@@ -1,12 +1,14 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildPairedCompatibilityReasoning,
+  beforeClearanceMinimum,
   alignCompatibilityRelationsWithReasoning,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
   completeSchemaBackedCompatibilityRelations,
   commonCompatibilityReference,
   enforceFinalPairedCompatibility,
+  equalsBeforeClearanceBoundary,
   extractSingleMeasuredReference,
   filterProductsByPairedTitleFit,
   hasOppositeCompatibilityDirections,
@@ -436,6 +438,85 @@ Deno.test("clearance constrains before-shrink facet projection without narrowing
     diameter_after: ["8", "7"],
   });
   assertEquals(projectCompatibilityFacetOptions(relations, [before, after]).options.diameter_before, ["14", "14,4", "16"]);
+});
+
+Deno.test("clearance projects the same minimum into certified criteria and the product-fit gate", () => {
+  const before = { key: "diameter_before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] };
+  const after = { key: "diameter_after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] };
+  const clearance = resolveCableSleeveClearance(
+    "подбери трубку на кабель диаметром 12 мм",
+    "Трубки термоусаживаемые",
+    before,
+    after,
+  );
+  if (!clearance) throw new Error("expected heat-shrink clearance");
+  for (const [diameter, minimum, rejected, accepted] of [
+    [12, 14.4, 14, 16],
+    [10, 12, 11.9, 12],
+  ]) {
+    const relations = parseCompatibilityRelations([
+      { product_key: before.key, relation: "gt", reference_value: diameter, unit: "мм" },
+      { product_key: after.key, relation: "lt", reference_value: diameter, unit: "мм" },
+    ]);
+    assertEquals(beforeClearanceMinimum(diameter, clearance), minimum);
+    assertEquals(compatibilityRelationsToCriteria(relations, clearance), [
+      { key: before.key, op: "min", value: minimum, unit: "мм", level: "A" },
+      { key: after.key, op: "max", value: diameter, unit: "мм", level: "A", exclusive: true },
+    ]);
+    assertEquals(meetsPairedFitMeasurements(rejected, 6, diameter, clearance), false);
+    assertEquals(meetsPairedFitMeasurements(accepted, 6, diameter, clearance), true);
+    // The unqualified generic pair keeps its independent >D / <D contract.
+    assertEquals(compatibilityRelationsToCriteria(relations)[0], {
+      key: before.key, op: "min", value: diameter, unit: "мм", level: "A", exclusive: true,
+    });
+  }
+});
+
+Deno.test("nonrepresentable 120% boundary rounds upward by one Number without weakening fit", () => {
+  const clearance = {
+    before_facet_key: "diameter_before",
+    minimum_before_ratio: { numerator: 6, denominator: 5 },
+  };
+  const reference = 12.345678901234567;
+  const justBelow = 14.81481468148148;
+  const minimum = 14.814814681481482;
+  assertEquals(beforeClearanceMinimum(reference, clearance), minimum);
+  assertEquals(meetsBeforeClearance(justBelow, reference, clearance), false);
+  assertEquals(meetsBeforeClearance(minimum, reference, clearance), true);
+  assertEquals(equalsBeforeClearanceBoundary(justBelow, reference, clearance), false);
+  assertEquals(equalsBeforeClearanceBoundary(minimum, reference, clearance), true);
+  assertEquals(equalsBeforeClearanceBoundary(14.814814681481484, reference, clearance), false);
+  const relations = parseCompatibilityRelations([
+    { product_key: clearance.before_facet_key, relation: "gt", reference_value: reference, unit: "мм" },
+    { product_key: "diameter_after", relation: "lt", reference_value: reference, unit: "мм" },
+  ]);
+  assertEquals(compatibilityRelationsToCriteria(relations, clearance), [
+    { key: clearance.before_facet_key, op: "min", value: minimum, unit: "мм", level: "A" },
+    { key: "diameter_after", op: "max", value: reference, unit: "мм", level: "A", exclusive: true },
+  ]);
+  assertEquals(beforeClearanceMinimum(10, clearance), 12);
+  assertEquals(beforeClearanceMinimum(12, clearance), 14.4);
+});
+
+Deno.test("unattainable finite clearance cannot throw or admit a product", () => {
+  const clearance = {
+    before_facet_key: "diameter_before",
+    minimum_before_ratio: { numerator: 6, denominator: 5 },
+  };
+  assertEquals(beforeClearanceMinimum(Number.MAX_VALUE, clearance), null);
+  const criteria = compatibilityRelationsToCriteria([
+    { product_key: clearance.before_facet_key, relation: "gt", reference_value: Number.MAX_VALUE, unit: "мм" },
+  ], clearance);
+  assertEquals(criteria, [
+    { key: clearance.before_facet_key, op: "min", value: Number.MAX_VALUE, unit: "мм", level: "A", exclusive: true },
+  ]);
+  const maxMeasuredProduct = {
+    ...product("max-measurement", "Предельный диаметр"),
+    short_traits: [`diameter_before: ${Number.MAX_VALUE.toFixed(0)} мм`],
+  };
+  const gate = applyCriteriaGate([maxMeasuredProduct], criteria);
+  assertEquals(gate.passed_ids, []);
+  assertEquals(gate.per_product[0].checks[0].verdict, "fail");
 });
 
 Deno.test("late catalog recovery cannot overwrite an already proven paired fit", () => {

@@ -1868,6 +1868,7 @@ Deno.test("TTU selection contract retains certified fit bounds only after the 20
   assertEquals(decision.selected_pair?.after_facet_key, facets[1].key);
   const compatibilityCriteria = compatibilityRelationsToCriteria(
     decision.relations,
+    decision.clearance,
   ).map((criterion) => ({
     ...criterion,
     evidence: "derived_required" as const,
@@ -1903,10 +1904,9 @@ Deno.test("TTU selection contract retains certified fit bounds only after the 20
     {
       key: facets[0].key,
       op: "min",
-      value: 10,
+      value: 12,
       unit: "мм",
       level: "A",
-      exclusive: true,
       evidence: "derived_required",
     },
     {
@@ -1919,6 +1919,14 @@ Deno.test("TTU selection contract retains certified fit bounds only after the 20
       evidence: "derived_required",
     },
   ]);
+  assertEquals(filterPerProductMeasuredCriteria(
+    merged,
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+    [],
+  ).criteria, []);
 
   // The same model-provided pair is not authoritative when the request owns
   // two different reference sizes. There is no certified relation to pass.
@@ -1955,6 +1963,39 @@ Deno.test("TTU selection contract retains certified fit bounds only after the 20
     ).criteria,
     [],
   );
+});
+
+Deno.test("12 mm cable's certified 14.4 mm boundary survives into selection metadata", () => {
+  const customer = "Подбери термоусадочную трубку на кабель диаметром 12 мм.";
+  const reasoning = "До усадки внутренний диаметр должен быть не менее 14,4 мм, а после усадки внутренний диаметр должен быть строго меньше 12 мм.";
+  const facets = [
+    { key: "diameter_before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [{ value: "14" }, { value: "14,4" }, { value: "16" }] },
+    { key: "diameter_after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [{ value: "7" }, { value: "8" }] },
+  ];
+  const decision = terminalPairedFitDecision(
+    { value: 12, unit: "мм" }, customer, reasoning, facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  const certified = compatibilityRelationsToCriteria(
+    decision.relations,
+    decision.clearance,
+  ).map((criterion) => ({ ...criterion, evidence: "derived_required" as const }));
+  const metadata = filterPerProductMeasuredCriteria(
+    mergeMandatorySelectionCriteria(certified),
+    reasoning,
+    customer,
+    "per_product",
+    facets,
+    certified,
+  ).criteria;
+  assertEquals(metadata, [
+    { key: facets[0].key, op: "min", value: 14.4, unit: "мм", level: "A", evidence: "derived_required" },
+    { key: facets[1].key, op: "max", value: 12, unit: "мм", level: "A", exclusive: true, evidence: "derived_required" },
+  ]);
+  assertEquals(filterPerProductMeasuredCriteria(
+    metadata, reasoning, customer, "per_product", facets, [],
+  ).criteria, []);
 });
 
 Deno.test("full-word kilowatt and length aliases are exact unit tokens", () => {

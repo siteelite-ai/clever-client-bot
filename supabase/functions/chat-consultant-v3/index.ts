@@ -4957,10 +4957,17 @@ async function selectVerifiedOrdinaryReplacement(
   const requirementText = independentRequestFrame ?? userMessage;
   const equivalentOnly = /равноцен\p{L}*/iu.test(requirementText);
   const budgetCap = extractBudgetCap(requirementText);
+  const lookup = extractReplacementLookupKeys(userMessage);
+  const requestedCardinality = resolveResultCardinality(userMessage, {
+    selection: true,
+    // An explicit plural request overrides a source code, but singular
+    // exact-source requests retain their prior one-result default.
+    exactLookup: lookup.articles.length > 0 || lookup.modelCodes.length > 0,
+    superlative: detectPriceDirection(userMessage)?.kind === "superlative",
+  });
   const requiredVisibleCodes = equivalentOnly
     ? extractExplicitSingleLetterCodes(requirementText)
     : [];
-  const lookup = extractReplacementLookupKeys(userMessage);
   const sourceDescription = extractReplacementSourceDescription(userMessage);
   const sourceCandidateIds = new Set<string>();
   // Only a unique, full-title-equal live catalog card may bypass the
@@ -5642,7 +5649,15 @@ async function selectVerifiedOrdinaryReplacement(
       ...baseSearch,
       ...(structuralProfile ? { per_page: 50 } : {}),
       ...(budgetCap !== null
-        ? { max_price: budgetCap, sort_cheapest: true }
+        ? {
+          max_price: budgetCap,
+          // Structural replacement scans raw catalog pages. The shared
+          // price-sort tool returns its top window, not a page cursor; using
+          // it here would repeat page one and falsely imply coverage.
+          ...(!structuralProfile || requestedCardinality.target <= 1
+            ? { sort_cheapest: true }
+            : {}),
+        }
         : {}),
       options: structuralProfile?.searchOptions ??
         Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
@@ -5650,36 +5665,84 @@ async function selectVerifiedOrdinaryReplacement(
     { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
     ctx.cache,
   );
+  const initialSelectedIds = new Set<string>();
   let selected = strict.ok
     ? strict.results
       .filter(isCandidate)
       .filter((product) => budgetCap === null || product.price <= budgetCap)
-      .slice(0, 4)
+      .filter((product) => {
+        if (initialSelectedIds.has(product.id)) return false;
+        initialSelectedIds.add(product.id);
+        return true;
+      })
+      .slice(0, requestedCardinality.target)
     : [];
   let splitSearchTotals: Array<number | null> = [];
   let broadSearchTotal: number | null | undefined;
 
   // A source-only analogue is searched by structural class, then every live
-  // candidate is proved locally. The catalog may have more than one page of
-  // this class; inspect a bounded continuation before declaring uncertainty.
+  // candidate is proved locally. A nonempty first page is not evidence that
+  // the requested choice set is complete: continue within a bounded window
+  // until the requested count is verified or that window is exhausted.
   let structuralPagesScanned = strict.ok ? 1 : 0;
-  if (selected.length === 0 && structuralProfile && strict.ok) {
+  const structuralSeenIds = new Set(
+    strict.ok && structuralProfile
+      ? strict.results.map((product) => product.id)
+      : [],
+  );
+  if (
+    selected.length < requestedCardinality.target && structuralProfile &&
+    strict.ok
+  ) {
+    // This route runs inside a 40-second accepted-work budget. A shared
+    // signal bounds the whole continuation, including catalog retries, so a
+    // sparse class cannot turn four sequential pages into a transport error.
+    const continuationBudgetMs = Math.min(
+      10_000,
+      28_000 - (Date.now() - t0),
+    );
+    const continuationSignal = AbortSignal.timeout(
+      Math.max(1, continuationBudgetMs),
+    );
     const lastPage = Math.min(5, Math.ceil(strict.total / 50));
-    for (let page = 2; page <= lastPage && selected.length === 0; page += 1) {
+    const selectedIds = new Set(selected.map((product) => product.id));
+    for (
+      let page = 2;
+      continuationBudgetMs > 0 && !continuationSignal.aborted &&
+        page <= lastPage && selected.length < requestedCardinality.target;
+      page += 1
+    ) {
       const continuation = await executeSearchCatalog({
         mode: "by_filter",
         ...baseSearch,
         per_page: 50,
         page,
+        ...(budgetCap !== null
+          ? { max_price: budgetCap }
+          : {}),
         options: structuralProfile.searchOptions,
       }, {
         baseUrl: CATALOG_BASE_URL,
         apiToken: ctx.catalogToken,
+        signal: continuationSignal,
       }, ctx.cache);
       if (!continuation.ok) break;
       structuralPagesScanned += 1;
-      selected = continuation.results.filter(isCandidate).slice(0, 4);
+      for (const product of continuation.results) {
+        structuralSeenIds.add(product.id);
+      }
+      for (const product of continuation.results.filter(isCandidate)) {
+        if (selectedIds.has(product.id)) continue;
+        selectedIds.add(product.id);
+        selected.push(product);
+        if (selected.length >= requestedCardinality.target) break;
+      }
     }
+  }
+  if (budgetCap !== null && structuralProfile && requestedCardinality.target > 1) {
+    // This orders the verified bounded window; it is not a certificate of a
+    // catalog-wide price minimum.
+    selected.sort((a, b) => a.price - b.price);
   }
 
   if (selected.length === 0 && !structuralProfile) {
@@ -5722,7 +5785,7 @@ async function selectVerifiedOrdinaryReplacement(
       .map((candidate) => ctx.cache.get(candidate.id))
       .filter((product): product is ProductFull =>
         Boolean(product && isCandidate(product))
-      );
+      ).slice(0, requestedCardinality.target);
   }
 
   if (equivalentOnly && selected.length === 0) {
@@ -5757,7 +5820,7 @@ async function selectVerifiedOrdinaryReplacement(
           .filter((product): product is ProductFull => Boolean(product));
         // Broad recovery omits facet filters. The shared isCandidate gate
         // verifies every live axis on each card before it can be rendered.
-        selected = broadCandidates.slice(0, 4);
+        selected = broadCandidates.slice(0, requestedCardinality.target);
       }
     }
   }
@@ -5899,6 +5962,21 @@ async function selectVerifiedOrdinaryReplacement(
     selectionCriteria,
     "guarded_search",
   );
+  const shortfall = resultCardinalityShortfallText(
+    selected.length,
+    requestedCardinality,
+    {
+      candidateCoverage: structuralProfile && strict.ok &&
+          strict.candidate_coverage !== "unknown" &&
+          structuralPagesScanned >= Math.ceil(strict.total / 50) &&
+          structuralSeenIds.size >= strict.total
+        ? "complete_query_window"
+        : "partial",
+    },
+  );
+  if (shortfall) {
+    send({ type: "delta", origin: "server", content: `\n\n${shortfall}` });
+  }
   send({
     type: "products_block",
     markdown: rendered.markdown,
@@ -5924,6 +6002,7 @@ async function selectVerifiedOrdinaryReplacement(
           })),
         }
         : {}),
+      result_cardinality: requestedCardinality,
     },
   });
   steps.push({
@@ -5944,6 +6023,8 @@ async function selectVerifiedOrdinaryReplacement(
       budget_cap: budgetCap,
       selection_contract_hash: selectionPlan.hash,
       rendered: rendered.rendered_count,
+      requested_cardinality: requestedCardinality,
+      pages_scanned: structuralPagesScanned,
       duration_ms: elapsed,
     },
   });
@@ -8092,6 +8173,7 @@ async function runExpertLoop(
     );
     const compatibilityCriteria = compatibilityRelationsToCriteria(
       activeCompatibilityRelations,
+      certifiedPairedFitClearance,
     )
       .map((criterion) => ({
         ...criterion,
@@ -8102,6 +8184,7 @@ async function runExpertLoop(
     // certified against the live two-state facet graph may cross that gate.
     const certifiedPairedCriteria = compatibilityRelationsToCriteria(
       certifiedPairedCompatibilityRelations,
+      certifiedPairedFitClearance,
     ).map((criterion) => ({
       ...criterion,
       evidence: "derived_required" as const,
@@ -8516,6 +8599,7 @@ async function runExpertLoop(
   let certifiedPairedCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
+  let certifiedPairedFitClearance: PairedFitClearance | null = null;
   const adoptValidatedPairedRelations = (
     decision: ReturnType<typeof terminalPairedFitDecision>,
     facets: DiscoverCategoryOk["facets"],
@@ -8540,6 +8624,7 @@ async function runExpertLoop(
       ),
       ...decision.relations,
     ];
+    certifiedPairedFitClearance = decision.clearance ?? null;
   };
   // Terminal recovery is allowed only after a complete render contract has
   // passed all target/criteria/compatibility checks. A rejected render must
@@ -14655,6 +14740,7 @@ async function runExpertLoop(
           // Any earlier paired certification must be re-established against
           // the current live facet pair before it may enter the render contract.
           certifiedPairedCompatibilityRelations = [];
+          certifiedPairedFitClearance = null;
           if (
             alignedCompatibility.alignments.length > 0 ||
             completedCompatibility.added.length > 0
@@ -18405,6 +18491,7 @@ async function runExpertLoop(
           // A certified pair belongs to one discovery's live facet graph.
           // Never carry it into a new or corrective category discovery.
           certifiedPairedCompatibilityRelations = [];
+          certifiedPairedFitClearance = null;
           if (correctiveDiscovery) {
             // The previous category has just been rejected by the consultant's
             // own reasoning. Never let its whitelist constrain the corrected

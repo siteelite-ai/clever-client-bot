@@ -81,9 +81,8 @@ export function pairedFitClearanceReasoningInstruction(
   reference?: { value: number; unit: string } | null,
 ): string {
   if (!clearance) return "";
-  const minimum = reference && Number.isFinite(reference.value) && reference.value > 0
-    ? Number((reference.value * clearance.minimum_before_ratio.numerator /
-      clearance.minimum_before_ratio.denominator).toPrecision(12))
+  const minimum = reference
+    ? beforeClearanceMinimum(reference.value, clearance)
     : null;
   const localBound = minimum !== null && Number.isFinite(minimum)
     ? ` При диаметре кабеля ${String(reference?.value).replace(".", ",")} ${reference?.unit ?? ""} это минимум ${String(minimum).replace(".", ",")} ${reference?.unit ?? ""} до усадки.`
@@ -91,7 +90,10 @@ export function pairedFitClearanceReasoningInstruction(
   return `Для термоусадочной трубки на кабель действует согласованное правило посадки: внутренний диаметр до усадки — не менее 120% диаметра кабеля (запас не менее 20%), внутренний диаметр после усадки — строго меньше диаметра кабеля.${localBound} Это обязательная граница совместимости, а не выбранный тобой ориентир. Не объявляй товар подходящим, пока обе величины не подтверждены карточкой.`;
 }
 
-function exactDecimal(value: number): { numerator: bigint; denominator: bigint } | null {
+function exactDecimal(
+  value: number,
+  boundedMeasurement = true,
+): { numerator: bigint; denominator: bigint } | null {
   if (!Number.isFinite(value)) return null;
   const match = String(value).match(/^(?<sign>-?)(?<whole>\d+)(?:\.(?<fraction>\d+))?(?:e(?<exponent>[+-]?\d+))?$/iu);
   if (!match?.groups) return null;
@@ -99,9 +101,11 @@ function exactDecimal(value: number): { numerator: bigint; denominator: bigint }
   const exponent = Number(match.groups.exponent ?? 0);
   const scale = fraction.length - exponent;
   // Physical fit values outside this decimal range are not trustworthy
-  // catalogue measurements; bound BigInt work on malformed/extreme input.
-  if (Math.abs(exponent) > 18 || Math.abs(scale) > 18 ||
-    match.groups.whole.length + fraction.length > 18) return null;
+  // catalogue measurements. Boundary projection itself must still compare
+  // every finite Number, including subnormals and values near MAX_VALUE, so
+  // that even an implausible input cannot make criterion compilation throw.
+  if (boundedMeasurement && (Math.abs(exponent) > 18 || Math.abs(scale) > 18 ||
+    match.groups.whole.length + fraction.length > 18)) return null;
   const digits = BigInt(`${match.groups.whole}${fraction}`);
   const numerator = (match.groups.sign ? -digits : digits) * (scale < 0 ? 10n ** BigInt(-scale) : 1n);
   return { numerator, denominator: scale > 0 ? 10n ** BigInt(scale) : 1n };
@@ -125,21 +129,64 @@ export function meetsBeforeClearance(
     customer.numerator * measured.denominator * BigInt(numerator);
 }
 
-/** Only the policy-owned minimum, not an arbitrary stronger model guess, may
- * cross the customer-authority gate as a mandatory derived measurement. */
+/** Only the policy-owned minimum, including its minimal upward-serialized
+ * Number when the exact decimal is unavailable, may cross the customer-
+ * authority gate as a mandatory derived measurement. */
 export function equalsBeforeClearanceBoundary(
   value: number,
   reference: number,
   clearance: PairedFitClearance,
 ): boolean {
-  const measured = exactDecimal(value);
-  const customer = exactDecimal(reference);
+  const measured = exactDecimal(value, false);
+  const customer = exactDecimal(reference, false);
   const { numerator, denominator } = clearance.minimum_before_ratio;
   if (!measured || !customer || !Number.isSafeInteger(numerator) ||
     !Number.isSafeInteger(denominator) || numerator <= denominator ||
     denominator <= 0) return false;
-  return measured.numerator * customer.denominator * BigInt(denominator) ===
-    customer.numerator * measured.denominator * BigInt(numerator);
+  if (measured.numerator * customer.denominator * BigInt(denominator) ===
+    customer.numerator * measured.denominator * BigInt(numerator)) return true;
+  return value === beforeClearanceMinimum(reference, clearance);
+}
+
+/** Project an exact policy ratio into the least representable Number at or
+ * above it. Every catalog measurement is also a Number, so this projection
+ * admits exactly the same representable values as the exact rational test;
+ * rounding down would silently weaken the customer's 20% requirement. */
+export function beforeClearanceMinimum(
+  reference: number,
+  clearance: PairedFitClearance,
+): number | null {
+  const { numerator, denominator } = clearance.minimum_before_ratio;
+  if (!Number.isFinite(reference) || reference <= 0 ||
+    !Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) ||
+    numerator <= denominator || denominator <= 0) return null;
+  const customer = exactDecimal(reference, false);
+  if (!customer) return null;
+  const fractionNumerator = customer.numerator * BigInt(numerator);
+  const fractionDenominator = customer.denominator * BigInt(denominator);
+  const bits = new DataView(new ArrayBuffer(8));
+  const fromBits = (encoded: bigint): number => {
+    bits.setBigUint64(0, encoded, false);
+    return bits.getFloat64(0, false);
+  };
+  const reachesBoundary = (value: number): boolean => {
+    const candidate = exactDecimal(value, false);
+    return candidate !== null &&
+      candidate.numerator * fractionDenominator >=
+        fractionNumerator * candidate.denominator;
+  };
+  // Positive IEEE-754 bit patterns are monotonic. Binary search finds the
+  // minimum finite representable threshold without assuming any decimal
+  // precision or relying on floating-point multiplication at the boundary.
+  let low = 0n;
+  let high = 0x7fefffffffffffffn; // Number.MAX_VALUE
+  if (!reachesBoundary(fromBits(high))) return null;
+  while (low + 1n < high) {
+    const middle = (low + high) >> 1n;
+    if (reachesBoundary(fromBits(middle))) high = middle;
+    else low = middle;
+  }
+  return fromBits(high);
 }
 
 export function meetsPairedFitMeasurements(
@@ -209,8 +256,15 @@ export function parseCompatibilityRelations(value: unknown): CompatibilityRelati
   });
 }
 
-/** Compile the category-neutral relation into the existing evidence gate. */
-export function compatibilityRelationsToCriteria(relations: CompatibilityRelation[]): Criterion[] {
+/** Compile the category-neutral relation into the existing evidence gate.
+ * When a server-certified installation clearance applies, project its exact
+ * before-side minimum into the public/frozen criterion. The raw relation
+ * stays anchored to the customer's reference for facet search projection,
+ * which applies the same clearance separately. */
+export function compatibilityRelationsToCriteria(
+  relations: CompatibilityRelation[],
+  clearance: PairedFitClearance | null = null,
+): Criterion[] {
   return relations.map((relation) => {
     const base = {
       key: relation.product_key,
@@ -218,6 +272,17 @@ export function compatibilityRelationsToCriteria(relations: CompatibilityRelatio
       unit: relation.unit ?? null,
       level: relation.level ?? "A",
     } as const;
+    if (clearance && relation.product_key === clearance.before_facet_key &&
+      (relation.relation === "gt" || relation.relation === "gte")) {
+      const minimum = beforeClearanceMinimum(relation.reference_value, clearance);
+      if (minimum === null) {
+        // The exact required diameter exceeds every finite Number (or the
+        // policy/reference is invalid). An impossible strict bound fails
+        // closed in the ordinary A-level product gate, without a 500 error.
+        return { ...base, op: "min", value: Number.MAX_VALUE, exclusive: true };
+      }
+      return { ...base, op: "min", value: minimum };
+    }
     switch (relation.relation) {
       case "gt": return { ...base, op: "min", exclusive: true };
       case "gte": return { ...base, op: "min" };
