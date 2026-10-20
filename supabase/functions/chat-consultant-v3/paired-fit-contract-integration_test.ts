@@ -122,6 +122,7 @@ Deno.test({
     let modelCalls = 0;
     let mockNoCandidates = false;
     const queuedReasoning: string[] = [];
+    const declarationPrompts: string[] = [];
     try {
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = originalSetInterval(callback, delay, ...args);
@@ -230,6 +231,7 @@ Deno.test({
           };
           const forced = body.tool_choice?.function?.name;
           if (forced === "declare_selection_reasoning") {
+            declarationPrompts.push(body.messages?.[0]?.content ?? "");
             return json({
               choices: [{
                 finish_reason: "tool_calls",
@@ -421,6 +423,8 @@ Deno.test({
       ).map((event) => String((event.v3_event as { markdown?: string }).markdown ?? "")).join("\n");
       assert(strictMarkdown.includes("ТТУ 16/8"), JSON.stringify({ strictEvents, steps }));
       assert(!strictMarkdown.includes("ТТУ 14/7"), strictMarkdown);
+      assert(declarationPrompts.at(-1)?.includes("минимум 14,4 мм до усадки"));
+      assert(!declarationPrompts.at(-1)?.includes("Размер изделия до установки должен быть строго больше размера объекта"));
       mockNoCandidates = true;
       steps.length = 0;
       persistedEvents = [];
@@ -500,6 +504,7 @@ Deno.test({
       mockNoCandidates = false;
       steps.length = 0;
       persistedEvents = [];
+      declarationPrompts.length = 0;
       queuedReasoning.push(
         "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки строго меньше 10 мм, поэтому нужен типоразмер 16 мм.",
         pairedReasoning,
@@ -530,6 +535,14 @@ Deno.test({
         true,
         JSON.stringify(steps),
       );
+      assertEquals(declarationPrompts.length, 2);
+      for (const prompt of declarationPrompts) {
+        assert(prompt.includes("минимум 12 мм до усадки"), prompt);
+        assert(!prompt.includes("Размер изделия до установки должен быть строго больше размера объекта"), prompt);
+      }
+      assert(declarationPrompts[1].includes("<correction>"));
+      assert(declarationPrompts[1].includes("не менее 120% диаметра кабеля"));
+      assert(!declarationPrompts[1].includes("до установки строго больше размера объекта"));
       assert(correctedEvents.some((event) =>
         (event.v3_event as { type?: string; count?: number } | undefined)
           ?.type === "products_block" &&

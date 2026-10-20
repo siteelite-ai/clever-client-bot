@@ -1046,6 +1046,8 @@ Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
   )[0].content;
   assertEquals(strict.includes("не менее 120% диаметра кабеля"), true);
   assertEquals(strict.includes("минимум 14,4 мм до усадки"), true);
+  assertEquals(strict.includes("Размер изделия до установки должен быть строго больше размера объекта"), false);
+  assertEquals(strict.includes("два строгих неравенства"), false);
   const unrelated = buildDerivedSelectionReasoningMessages(
     "подбери изделие для кабеля диаметром 12 мм",
     "Изделия",
@@ -1053,6 +1055,7 @@ Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
     reference,
   )[0].content;
   assertEquals(unrelated.includes("не менее 120% диаметра кабеля"), false);
+  assertEquals(unrelated.includes("Размер изделия до установки должен быть строго больше размера объекта"), true);
 });
 
 Deno.test("paired object size is not offered as an exact pre-search enum, while unrelated exact facets remain", () => {
