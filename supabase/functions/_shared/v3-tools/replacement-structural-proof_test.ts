@@ -136,6 +136,125 @@ Deno.test("candidate gate rejects oversized and missing diameter, and deficient 
   })), { ok: false, reason: "candidate_outside_window:flux" });
 });
 
+Deno.test("verified cut-out opt-in ignores only generic outer diameter without changing the source profile", () => {
+  const resolved = profile();
+  const originalProfile = JSON.stringify(resolved);
+  const candidate = product("wider-bezel", { diameter: "12" }, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate), {
+    ok: false,
+    reason: "candidate_outside_window:diameter",
+  });
+  const matched = evaluateStructuralReplacementCandidate(resolved, candidate, {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  });
+  assertEquals(matched.ok, true);
+  if (matched.ok) {
+    assertEquals(matched.evidence.some(({ role }) => role === "diameter"), false);
+    assertEquals(matched.evidence.some(({ role }) => role === "power"), true);
+  }
+  assertEquals(JSON.stringify(resolved), originalProfile);
+  assertEquals(resolved.obligations.find(({ role }) => role === "diameter")?.value, [8, 10]);
+});
+
+Deno.test("verified cut-out opt-in requires labelled candidate evidence and rejects missing or conflicting cut-outs", () => {
+  const resolved = profile();
+  const option = { dimensionPolicy: "verified_mounting_cutout" } as const;
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, product("no-cutout", {
+    diameter: "12",
+  }), { ...option, customerCutoutMm: 90 }), {
+    ok: false,
+    reason: "candidate_mounting_cutout_unverified:mounting_cutout_unverified",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, product("wrong-cutout", {
+    diameter: "12",
+  }, { description_excerpt: "Монтажное отверстие: 80 мм" }), {
+    ...option, customerCutoutMm: 90,
+  }), {
+    ok: false,
+    reason: "candidate_mounting_cutout_unverified:mounting_cutout_conflicts",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, product("title-only", {
+    diameter: "12",
+  }, { pagetitle: "Даунлайт монтажный D90 LED 7W" }), {
+    ...option, customerCutoutMm: 90,
+  }), {
+    ok: false,
+    reason: "candidate_mounting_cutout_unverified:mounting_cutout_unverified",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, product("source-cutout-unknown", {
+    diameter: "12",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }), option), {
+    ok: false,
+    reason: "candidate_mounting_cutout_unverified:mounting_cutout_unverified",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, product("invalid-customer-cutout", {
+    diameter: "12",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }), {
+    ...option, customerCutoutMm: Number.NaN,
+  }), { ok: false, reason: "customer_mounting_cutout_invalid" });
+  const sourceWithCutout = product("source", {}, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  const sourceResolution = resolveStructuralReplacementProfile(sourceWithCutout, facets);
+  assertEquals(sourceResolution.status, "ready");
+  if (sourceResolution.status !== "ready") throw new Error("cutout source not ready");
+  const noGenericDiameter = product("matching-cutout", {}, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  delete noGenericDiameter.facet_values?.live_diameter;
+  assertEquals(evaluateStructuralReplacementCandidate(
+    sourceResolution.profile,
+    noGenericDiameter,
+  ), { ok: false, reason: "candidate_value_unverified:diameter" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    sourceResolution.profile,
+    noGenericDiameter,
+    option,
+  ).ok, true);
+  assertEquals(evaluateStructuralReplacementCandidate(
+    sourceResolution.profile,
+    product("source-conflict", { diameter: "12" }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    { ...option, customerCutoutMm: 80 },
+  ), {
+    ok: false,
+    reason: "candidate_mounting_cutout_unverified:customer_and_source_cutout_conflict",
+  });
+});
+
+Deno.test("verified cut-out opt-in retains structural kind, mounting, interface, power and stock gates", () => {
+  const resolved = profile();
+  const options = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  const candidate = (id: string, values: Record<string, string> = {},
+    overrides: Partial<ProductFull> = {}) => product(id, {
+      diameter: "12", ...values,
+    }, { description_excerpt: "Монтажное отверстие: 90 мм", ...overrides });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-kind", {
+    kind: "бытовые линейные светильники",
+  }), options), { ok: false, reason: "candidate_mismatch:kind" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-mount", {
+    mount: "накладной",
+  }), options), { ok: false, reason: "candidate_mismatch:mount" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-socket", {
+    socket: "GU10",
+  }), options), { ok: false, reason: "candidate_mismatch:socket" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-power", {
+    power: "9",
+  }), options), { ok: false, reason: "candidate_outside_window:power" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("no-stock", {}, {
+    warehouse_evidence: "explicit_zero",
+    warehouses: [],
+    stock: "out",
+  }), options), { ok: false, reason: "candidate_stock_or_price_unverified" });
+});
+
 Deno.test("socket, driver, technology, electrical range and IP remain critical", () => {
   const resolved = profile();
   assertEquals(evaluateStructuralReplacementCandidate(resolved, product("socket", {

@@ -1,4 +1,5 @@
 import type { Facet } from "./discover-category.ts";
+import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
 import type { ProductFull } from "./types.ts";
 
 /**
@@ -67,6 +68,18 @@ export type StructuralReplacementFit =
       candidate: string;
     }>;
   };
+
+/**
+ * The default preserves the historical generic-diameter shortlist window.
+ * The opt-in policy is only valid when the independent fit evaluator verifies
+ * the actual mounting cut-out for this source/candidate pair. A product title
+ * or the generic `Диаметр` facet cannot activate it by itself.
+ */
+export interface StructuralReplacementEvaluationOptions {
+  dimensionPolicy?: "legacy" | "verified_mounting_cutout";
+  /** Server-verified customer ceiling cut-out; never infer from a model code. */
+  customerCutoutMm?: number | null;
+}
 
 function normalized(value: string): string {
   return String(value ?? "").normalize("NFKC").trim()
@@ -351,6 +364,7 @@ export function resolveStructuralReplacementProfile(
 export function evaluateStructuralReplacementCandidate(
   profile: StructuralReplacementProfile,
   candidate: ProductFull | undefined,
+  options: StructuralReplacementEvaluationOptions = {},
 ): StructuralReplacementFit {
   if (!candidate || candidate.id === profile.source.id) {
     return { ok: false, reason: "candidate_missing_or_source" };
@@ -364,8 +378,35 @@ export function evaluateStructuralReplacementCandidate(
     !Number.isFinite(candidate.price) || candidate.price <= 0) {
     return { ok: false, reason: "candidate_stock_or_price_unverified" };
   }
+  const verifiedCutoutPolicy =
+    options.dimensionPolicy === "verified_mounting_cutout";
+  if (
+    verifiedCutoutPolicy && options.customerCutoutMm != null &&
+    (!Number.isFinite(options.customerCutoutMm) ||
+      options.customerCutoutMm <= 0 || options.customerCutoutMm > 10_000)
+  ) {
+    return { ok: false, reason: "customer_mounting_cutout_invalid" };
+  }
+  const cutoutFit = verifiedCutoutPolicy
+    ? evaluateReplacementCandidateFit(profile.source, candidate, {
+      customer_cutout_mm: options.customerCutoutMm,
+    })
+    : null;
+  if (
+    cutoutFit && cutoutFit.checks.mounting_cutout_mm.status !== "match"
+  ) {
+    return {
+      ok: false,
+      reason: `candidate_mounting_cutout_unverified:${cutoutFit.checks.mounting_cutout_mm.reason}`,
+    };
+  }
   const evidence: Extract<StructuralReplacementFit, { ok: true }>["evidence"] = [];
   for (const obligation of profile.obligations) {
+    // The generic diameter describes the visible housing on many catalogue
+    // cards. Once the actual installation cut-out is independently matched,
+    // retaining its source-derived numerical window would reject genuine
+    // alternatives for the wrong measurement. All other obligations remain.
+    if (verifiedCutoutPolicy && obligation.role === "diameter") continue;
     const entry = profile.roles[obligation.role];
     if (!entry) return { ok: false, reason: `profile_role_missing:${obligation.role}` };
     const raw = oneCorroboratedValue(candidate, entry.facet);
@@ -400,6 +441,12 @@ export function evaluateStructuralReplacementCandidate(
       }
     }
     evidence.push({ role, caption: entry.facet.caption, source: entry.sourceValue, candidate: raw });
+  }
+  if (cutoutFit && cutoutFit.status !== "provisional_candidate") {
+    return {
+      ok: false,
+      reason: `candidate_fit_unverified:${cutoutFit.reasons[0] ?? cutoutFit.status}`,
+    };
   }
   return { ok: true, candidate, evidence };
 }

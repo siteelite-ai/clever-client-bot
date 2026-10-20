@@ -4335,7 +4335,14 @@ async function selectGuardedStructuralReplacement(
         if (trace) reject("customer_budget_exceeded");
         return null;
       }
-      const strict = evaluateStructuralReplacementCandidate(profile, full);
+      // This guarded path separately proves the actual mounting cut-out.
+      // Generic catalogue diameter is the outer housing on many products and
+      // must not override a verified cut-out match. Other legacy routes keep
+      // their original structural window.
+      const strict = evaluateStructuralReplacementCandidate(profile, full, {
+        dimensionPolicy: "verified_mounting_cutout",
+        customerCutoutMm,
+      });
       if (!strict.ok) {
         if (trace) reject(`strict:${strict.reason}`);
         return null;
