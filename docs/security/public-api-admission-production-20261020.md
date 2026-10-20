@@ -54,7 +54,12 @@ After enabling observation, a v3 chat request and a `search-products`
 category-facet request were admitted and released in the new ledger, each with
 `would_reject=false`; the catalog request returned HTTP 200 with 54 facet
 options. Five malformed/misrouted v3 security probes returned their expected
-405/400/400/413 responses without paid work. The first chat request used an
+405/400/400/413 responses without paid work. At 15:45 UTC, the same
+invalid-JSON POST to the direct Supabase v3 URL and the Cloudflare proxy v3 URL
+returned HTTP 400 in 1.26 s and 1.38 s, respectively. The handler rejects
+invalid JSON before database admission, catalog and model work; this checks
+reachability and early validation through both paths, **not** admission
+enforcement or a successful chat turn. The first chat request used an
 older synthetic prompt without an explicit electrical-socket constraint and
 exposed an electrical-vs-computer subtype ambiguity; it is **not** a passing
 customer acceptance result. The later exact client prompt, «Найди двойные
@@ -68,6 +73,11 @@ fetches were transiently unavailable; both pages subsequently verified.
 At 14:05 UTC a read-only aggregate of the production ledger showed 69 v3 and
 73 `search-products` reservations since observe began at 05:20 UTC; all 142
 were released, with zero `would_reject`, active, or expired-unreleased rows.
+At 15:43 UTC a further read-only aggregate showed 69 v3 and 127
+`search-products` reservations since observation began: 54 additional catalog
+reservations and no additional v3 reservation. `would_reject`, active and
+expired-unreleased counts remained zero for both routes. These are ledger
+counts, not proof of all-route coverage or of a representative day.
 Observed per-minute peaks were six model and 19 catalog reservations; p95
 release latency was 19.3 s for v3 and 3.4 s for catalog. Targeted Edge-log
 filters found no v1/v2 POST in the last 24 hours, but the all-route Logs

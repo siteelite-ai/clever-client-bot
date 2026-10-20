@@ -37,3 +37,9 @@ test('shared v3 rejects untrusted preview POST before parsing or paid work', () 
   assert.match(handler, /Deno\.env\.get\(PREVIEW_SECRET_ENV\)/);
   assert.match(handler.slice(gate, bodyRead), /status: 403/);
 });
+
+test('verified facts rollout follows the isolated preview lane, independent of provider variant', () => {
+  const handler = read('chat-consultant-v3/index.ts');
+  assert.match(handler, /const VERIFIED_MANUFACTURER_FACTS_ENABLED\s*=\s*verifiedManufacturerFactsEnabled\(\s*ADMISSION_SCOPE\s*,?\s*\)/);
+  assert.doesNotMatch(handler, /const VERIFIED_MANUFACTURER_FACTS_ENABLED\s*=\s*DEPLOYMENT_VARIANT/);
+});

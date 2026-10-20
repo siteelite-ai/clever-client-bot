@@ -715,6 +715,9 @@ import {
   PREVIEW_SECRET_HEADER,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
 import {
+  verifiedManufacturerFactsEnabled,
+} from "../_shared/v3-tools/verified-manufacturer-flags.ts";
+import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
   isProviderErrorFinishReason,
@@ -736,13 +739,13 @@ const DEPLOYMENT_VARIANT = (globalThis as typeof globalThis & {
   }).__VOLT220_FUNCTION_VARIANT__ === "preview"
   ? "preview"
   : "production";
-const VERIFIED_MANUFACTURER_FACTS_ENABLED = DEPLOYMENT_VARIANT === "preview"
-  ? Deno.env.get("VOLT220_VERIFIED_FACTS_PREVIEW_ENABLED") === "true"
-  : Deno.env.get("VOLT220_VERIFIED_FACTS_PRODUCTION_ENABLED") === "true";
 const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
   (globalThis as typeof globalThis & {
     __VOLT220_ADMISSION_SCOPE__?: "preview";
   }).__VOLT220_ADMISSION_SCOPE__,
+);
+const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
+  ADMISSION_SCOPE,
 );
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,

@@ -318,6 +318,12 @@ Deno.test({
   async fn() {
     try {
       const full = await runTurn([3, 4, 5, 6]);
+      assert(
+        !full.outbound.some((request) =>
+          request.includes("/rest/v1/verified_product_facts")
+        ),
+        "default-OFF route must not read the new facts table",
+      );
       const fullBlocks = productBlocks(full.events);
       assertEquals(fullBlocks.length, 1, JSON.stringify(full.steps));
       assertEquals(fullBlocks[0].count, 5);
