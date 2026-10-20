@@ -15,6 +15,10 @@ verify_jwt = true
 [functions.chat-consultant-v3-closure-preview]
 verify_jwt = true
 
+[functions.chat-consultant-beta-search]
+# Public only to return a static 410 to any old client; no paid work is reachable.
+verify_jwt = false
+
 [functions.widget-config]
 verify_jwt = false
 
