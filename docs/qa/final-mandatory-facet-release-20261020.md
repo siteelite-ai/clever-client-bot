@@ -6,9 +6,12 @@ Commit `3f6f6eae` adds a category-independent final contradiction check after
 recovery has assembled product cards. Each frozen level-A criterion is checked
 against the final card's own explicit traits and catalog facets; first-class
 price and the existing live-sibling title guard remain in force. OR values on
-one facet stay alternatives. Missing compact traits alone do not negate an
-earlier search proof. No category, product, model or customer phrase is
-allowlisted. The frontend, search routes, settings, and schema are unchanged.
+one facet stay alternatives. Missing compact traits alone are not treated as a
+contradiction, avoiding broad removal of valid sparse catalog cards. There is
+not yet a universal per-ID ledger of earlier search proofs, so this guard is
+**not** a certificate that every sparse recovered card is fully proven. No
+category, product, model or customer phrase is allowlisted. The frontend,
+search routes, settings, and schema are unchanged.
 
 The acceptance matrix is re-pinned as V5 for one source-text correction:
 BT-746 uses the customer's exact «Найди двойные черные розетки
@@ -49,6 +52,12 @@ This targeted proof is not a pass for the full 190-dialogue acceptance matrix;
 V8 retains `NOT_RUN` for the full inventory. Public API admission is in
 `observe`, not `enforce`; the separate security gate remains open. Before
 production, require GitHub CI success on this commit and a PR diff review.
+Independent review confirmed the remaining sparse-recovery gap: complete
+proof would require a turn-local `product ID → verified criterion` ledger
+populated by successful executed catalog filters. Rejecting unknown evidence
+without that lineage risks removing valid products, so it is deliberately not
+part of this small release. Do not present the new contradiction guard as a
+complete resolution of all selection-proof gaps.
 Deploy only `chat-consultant-v3`, verify its new bundle hash and a targeted
 browser request. The widget JavaScript did not change, so no Lovable frontend
 publication is required for this backend-only candidate.
