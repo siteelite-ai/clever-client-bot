@@ -9,6 +9,7 @@ import {
   extractReplacementLookupKeys,
   extractReplacementSourceDescription,
   inferLiveReplacementClarification,
+  isUnqualifiedVerifiedReplacementSource,
   isReplacementIntent,
   isReplacementProofRequest,
   guardReplacementEgressText,
@@ -1812,5 +1813,44 @@ Deno.test("live numeric axes inherit a unique explicit reasoning unit for title 
       { caption: "Номинальный ток", values: ["16"], unit: null },
     ], "Возможны 16 А и 16 кА для разных параметров."),
     [],
+  );
+});
+
+Deno.test("a verified complete source title does not turn its specs into exact user requirements", () => {
+  const title =
+    "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500";
+  const catalogTitle =
+    "929002070102/871869967897500 Св-к DN027B G2 LED6/NW 7W 220-240V D90 R";
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title}`, title),
+    true,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title} дешевле 1000`, title),
+    false,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи равноценные аналоги на ${title}`, title),
+    false,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title}`, "другая исходная карточка"),
+    false,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title}`, catalogTitle, "929002070102", "Светильники"),
+    true,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title} для улицы`, catalogTitle, "929002070102", "Светильники"),
+    false,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title}`, catalogTitle, "999999999999", "Светильники"),
+    false,
+  );
+  assertEquals(
+    isUnqualifiedVerifiedReplacementSource(`предложи аналоги на ${title.replace("; 929", "; чёрный 929")}`, catalogTitle, "929002070102", "Светильники"),
+    false,
   );
 });
