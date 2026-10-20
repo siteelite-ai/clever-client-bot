@@ -320,9 +320,11 @@ BEGIN
   IF NOT FOUND THEN RETURN jsonb_build_object('status', 'not_found'); END IF;
   SELECT * INTO v_turn FROM public.chat_v3_conversation_turns
   WHERE log_id = p_log_id;
-  IF NOT FOUND OR v_turn.conversation_id <> v_conversation.id OR
-    v_turn.fence <> p_fence THEN
+  IF NOT FOUND OR v_turn.conversation_id <> v_conversation.id THEN
     RETURN jsonb_build_object('status', 'not_begun');
+  END IF;
+  IF v_turn.fence <> p_fence THEN
+    RETURN jsonb_build_object('status', 'stale_turn');
   END IF;
   IF v_turn.status = 'aborted' THEN
     RETURN jsonb_build_object('status', 'aborted', 'replayed', true);
