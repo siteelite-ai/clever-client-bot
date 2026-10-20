@@ -1,0 +1,63 @@
+name: V3 conversation state PostgreSQL 16
+
+on:
+  push:
+    paths:
+      - 'supabase/migrations/20261020210000_chat_v3_conversation_state.sql'
+      - 'supabase/migrations/20261020210100_chat_v3_claim_binding.sql'
+      - 'supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql'
+      - 'docs/security/chat-v3-conversation-state-ci-schema.sql'
+      - 'docs/security/chat-v3-conversation-state-local-test.sql'
+      - 'scripts/qa/test-chat-v3-conversation-state-concurrency.sh'
+      - '.github/workflows/chat-v3-conversation-state-postgres.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261020210000_chat_v3_conversation_state.sql'
+      - 'supabase/migrations/20261020210100_chat_v3_claim_binding.sql'
+      - 'supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql'
+      - 'docs/security/chat-v3-conversation-state-ci-schema.sql'
+      - 'docs/security/chat-v3-conversation-state-local-test.sql'
+      - 'scripts/qa/test-chat-v3-conversation-state-concurrency.sh'
+      - '.github/workflows/chat-v3-conversation-state-postgres.yml'
+
+jobs:
+  conversation-state-sql:
+    name: disposable PostgreSQL 16 conversation tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: conversation_ci
+          POSTGRES_PASSWORD: conversation-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d conversation_ci"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGPASSWORD: conversation-ci-only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Apply disposable schema and candidate migration
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/chat-v3-conversation-state-ci-schema.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020210000_chat_v3_conversation_state.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020210100_chat_v3_claim_binding.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql
+      - name: Test privileges, binding, replay, fencing and topic isolation
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/chat-v3-conversation-state-local-test.sql
+      - name: Test two-connection CAS and duplicate begin
+        run: timeout 25s bash scripts/qa/test-chat-v3-conversation-state-concurrency.sh
