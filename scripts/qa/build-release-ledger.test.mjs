@@ -13,7 +13,7 @@ import {
 } from './build-release-ledger.mjs';
 import { resolveCaseExecutions, resolveExpectations } from './run-customer-acceptance.mjs';
 
-const ledgerFile = new URL('../../docs/qa/release-inventory-v6-20261019.json', import.meta.url);
+const ledgerFile = new URL('../../docs/qa/release-inventory-v7-20261020.json', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function withChangedJson(filename, change, manifestChange = (manifest) => manifest) {
@@ -34,7 +34,7 @@ function withChangedJson(filename, change, manifestChange = (manifest) => manife
 
 test('the pinned five matrix hashes and release dimensions match the actual files', () => {
   const ledger = buildReleaseLedger();
-  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 190, ordered_turns: 279 });
+  assert.deepEqual(ledger.counts, { matrix_files: 5, runs: 190, ordered_turns: 280 });
   for (const file of ledger.matrix_files) {
     assert.equal(sha256(fs.readFileSync(new URL(`./${file.basename}`, import.meta.url))), file.sha256);
   }
@@ -48,7 +48,7 @@ test('the pinned five matrix hashes and release dimensions match the actual file
     [
       ['customer-acceptance-cases.json', 81, 126],
       ['customer-audit-20260921-cases.json', 54, 78],
-      ['notion-legacy-bug-cases-v3.json', 40, 60],
+      ['notion-legacy-bug-cases-v4.json', 40, 61],
       ['systemic-cardinality-cases.json', 15, 15],
     ],
   );
@@ -85,7 +85,7 @@ test('every ordered run and turn has a unique composite key and remains NOT_RUN'
   }
 });
 
-test('all 138 base turns, including 21 synthetic turns, have explicit acceptance', () => {
+test('all 139 base turns, including 22 synthetic turns, have explicit acceptance', () => {
   let checked = 0;
   for (const manifest of MATRIX_MANIFESTS) {
     const suite = JSON.parse(fs.readFileSync(new URL(`./${manifest.file}`, import.meta.url), 'utf8'));
@@ -98,10 +98,10 @@ test('all 138 base turns, including 21 synthetic turns, have explicit acceptance
       }
     }
   }
-  assert.equal(checked, 138);
+  assert.equal(checked, 139);
 });
 
-test('all 279 messages and effective expectations match the acceptance runner plan', () => {
+test('all 280 messages and effective expectations match the acceptance runner plan', () => {
   const ledger = buildReleaseLedger();
   let cursor = 0;
   for (const manifest of MATRIX_MANIFESTS) {
@@ -135,8 +135,8 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   const sourceIndex = JSON.parse(fs.readFileSync(new URL('../../docs/qa/notion-source-index-20261009.json', import.meta.url), 'utf8'));
   assert.equal(sourceIndex.synthetic_api_continuations.length, 15);
   const syntheticTurns = ledger.runs.flatMap((run) => run.turns)
-    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v3.json' && turn.synthetic_scenario);
-  assert.equal(syntheticTurns.length, 21);
+    .filter((turn) => turn.suite_basename === 'notion-legacy-bug-cases-v4.json' && turn.synthetic_scenario);
+  assert.equal(syntheticTurns.length, 22);
   for (const source of sourceIndex.synthetic_api_continuations) {
     const turn = syntheticTurns.find((item) => item.case_id === source.case_id && item.turn_index === source.turn_index);
     assert(turn, `${source.case_id} turn ${source.turn_index}`);
@@ -151,6 +151,7 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   assert.deepEqual(syntheticTurns.filter((turn) => !indexed.has(`${turn.case_id}:${turn.turn_index}`))
     .map((turn) => `${turn.case_id}:${turn.turn_index}`).sort(), [
     'bt746-extension-50m:2',
+    'bt924-acti9-followup-show:3',
     'bt929-lugs-35mm-clarification:4',
     'bt929-surveillance-cable-clarification:5',
     'bt929-warm-led-clarification:2',
@@ -165,6 +166,44 @@ test('all Notion synthetic continuations and geometry probes remain distinct and
   assert.equal(paraphrasedLinkFollowUp.message, 'дай ссылку');
   assert.match(ledger.provenance_note, /336cf8d3-69ba-8092-ad9a-001d3f23aee6/u,
     'link-request paraphrase must retain its exact source-comment locator');
+});
+
+test('V4 preserves V3 source messages and historical bytes while superseding only the unsafe Acti9 oracle', () => {
+  const v3Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v3.json', import.meta.url));
+  const v4Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v4.json', import.meta.url));
+  const v6Bytes = fs.readFileSync(new URL('../../docs/qa/release-inventory-v6-20261019.json', import.meta.url));
+  assert.equal(sha256(v3Bytes), '3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009');
+  assert.equal(sha256(v6Bytes), 'b2ab45c808686b6a497053d1dd367f196576440ae4aa0ab9c7a225bcfe286591');
+  const v3 = JSON.parse(v3Bytes);
+  const v4 = JSON.parse(v4Bytes);
+  assert.equal(v4.schema_version, 4);
+  assert.deepEqual(v4.cases.map((testCase) => testCase.id), v3.cases.map((testCase) => testCase.id));
+  for (const original of v3.cases) {
+    const next = v4.cases.find((testCase) => testCase.id === original.id);
+    assert.equal(next.repeat ?? 1, original.repeat ?? 1, original.id);
+    assert.deepEqual(next.turns.slice(0, original.turns.length).map((turn) => turn.message),
+      original.turns.map((turn) => turn.message), original.id);
+    if (original.id !== 'bt924-acti9-followup-show') assert.deepEqual(next, original, original.id);
+  }
+  const acti9 = v4.cases.find((testCase) => testCase.id === 'bt924-acti9-followup-show');
+  assert.equal(acti9.turns.length, 3);
+  assert.deepEqual(acti9.turns.slice(0, 2).map((turn) => turn.expect.max_products), [0, 0]);
+  assert(acti9.turns.slice(0, 2).every((turn) =>
+    turn.expect.require_clarification_facet_key === 'kolichestvo_polyusov__polyuster_sany' &&
+    turn.expect.require_clarification_choice === 'options'));
+  assert.equal(acti9.turns[2].synthetic, true);
+  assert.equal(acti9.turns[2].message, '1');
+  assert.deepEqual(acti9.turns[2].expect.require_previous_quick_reply,
+    { facet_key: 'kolichestvo_polyusov__polyuster_sany', value: '1' });
+  assert.equal(v4.cases.find((testCase) => testCase.id === 'bt924-apartment-breaker-25a')
+    .turns[0].expect.require_clarification_facet_key, 'pole_count',
+  'unobserved separate scenario must not be silently re-pinned');
+  assert.deepEqual(acti9.turns[2].expect.require_every_product_page.facets, [
+    { name: 'Количество полюсов', exact_any: ['1'] },
+    { name: 'Номинальный ток', exact_any: ['16'] },
+    { name: 'Характеристика срабатывания', exact_any: ['C', 'С'] },
+  ]);
+  assert.match(buildReleaseLedger().revision_note, /unsafe V6 BT-924 Acti9 bare-show oracle/u);
 });
 
 test('effective expectations use the runner’s shallow defaults → turn → variant precedence', () => {

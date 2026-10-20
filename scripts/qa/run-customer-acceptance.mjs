@@ -183,6 +183,22 @@ FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'] = {
   },
 };
 
+// V3 remains a historical, independently pinned oracle. V4 preserves its
+// customer messages and IDs but supersedes the unsafe bare «покажи» assertion:
+// no card passes before the Acti9 pole count is supplied. The third turn is a
+// labelled synthetic safety continuation, never presented as a customer quote.
+FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v4.json'] = {
+  ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'],
+  sha256: '882926735a6426bbfc3b560c2dddd82b8eb90a0803cec9bd1d597e1d558846ee',
+  turns: 53,
+  runs: 40,
+  evaluatedTurns: 61,
+  turnsById: {
+    ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v3.json'].turnsById,
+    'bt924-acti9-followup-show': 3,
+  },
+};
+
 export function validateStrictFullSuite({ argv, suite, variationSuite, casesPath, variantsPath, suiteBytes, variantsBytes }) {
   if (!argv.includes('--strict-full-suite')) return null;
   if (!argv.some((arg) => arg.startsWith('--endpoint=') && arg.slice('--endpoint='.length).trim())) {
@@ -888,6 +904,38 @@ function includesAny(haystack, needles) {
   const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
   const lower = normalize(haystack);
   return needles.some((needle) => lower.includes(normalize(needle)));
+}
+
+// The customer may see a concise explanation of the selection, but not the
+// agent's third-person planning, catalog-schema scaffolding, or tool protocol.
+// Check only streamed assistant prose: product names and diagnostic tool events
+// are separate evidence, not an assistant disclosure.
+const INTERNAL_TOOL_NAMES = new Set([
+  'discover_category', 'search_catalog', 'jargon_recover_catalog',
+  'render_products', 'propose_clarification', 'lookup_contacts',
+  'escalate_to_manager',
+]);
+
+export function visibleInternalTextFailures(text, toolEvents = []) {
+  const prose = String(text ?? '');
+  const failures = [];
+  if (/(?:^|[.!?]\s*)(?:клиент|пользователь)\s+(?:запросил|указал|ищет|хочет|просит|спросил)(?![\p{L}])/imu.test(prose)) {
+    failures.push('internal third-person planning is visible in assistant text');
+  }
+  if (/(?:^|[^\p{L}])в\s+живой\s+схеме(?![\p{L}])|(?:^|[^\p{L}])в\s+схеме\s+(?:есть\s+значение|представлены\s+значения)(?![\p{L}])/iu.test(prose)) {
+    failures.push('internal catalog schema narration is visible in assistant text');
+  }
+  if (/<\|(?:im_start|im_end|assistant|analysis|tool)[^|]*\|>|\[(?:im_start|im_end)\]|\b(?:tool_calls?|function_call|selection_contract|mandatory_criteria)\b/iu.test(prose)) {
+    failures.push('internal message protocol is visible in assistant text');
+  }
+  const toolNames = new Set([...INTERNAL_TOOL_NAMES,
+    ...toolEvents.map((event) => event?.tool).filter((tool) =>
+      typeof tool === 'string' && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/u.test(tool) && tool.length <= 64)]);
+  if ([...toolNames].some((tool) =>
+    new RegExp(`(^|[^a-z0-9_])${tool}($|[^a-z0-9_])`, 'iu').test(prose))) {
+    failures.push('internal tool name is visible in assistant text');
+  }
+  return failures;
 }
 
 const SHORTFALL_WORD_COUNTS = new Map([
@@ -1677,6 +1725,7 @@ export function evaluate(expect = {}, response, {
   });
   const productTitles = response.links.map((link) => link.title).join('\n');
   const allOutput = `${response.text}\n${response.productsMarkdown}`;
+  failures.push(...visibleInternalTextFailures(response.text, response.toolEvents));
   if (linkEvidence.invalid.length > 0) {
     failures.push(`invalid 220volt.kz product URL(s): ${linkEvidence.invalid.join(' | ')}`);
   }
