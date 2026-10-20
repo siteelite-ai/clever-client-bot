@@ -613,7 +613,7 @@ Deno.test("schema-owned diameter survives a distinct length measurement", () => 
   );
   assertEquals(reference, { value: 12, unit: "мм" });
   const reasoning =
-    "До изменения внутренний диаметр должен быть строго больше 12 мм, а после изменения внутренний диаметр должен быть строго меньше 12 мм.";
+    "До изменения внутренний диаметр должен быть не менее 14,4 мм, а после изменения внутренний диаметр должен быть строго меньше 12 мм.";
   const decision = terminalPairedFitDecision(
     reference,
     request,
@@ -686,6 +686,72 @@ Deno.test("terminal jargon fit proves strict high > 10 > low from live paired sc
     ).map((product) => product.id),
     ["ok"],
   );
+});
+
+Deno.test("heat-shrink tube on cable uses 20% clearance at terminal title gate", () => {
+  const facets: CompatibilityFacet[] = [
+    { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },
+    { key: "after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] },
+  ];
+  const reasoning = "До усадки внутренний диаметр должен быть не менее 14,4 мм, а после усадки внутренний диаметр должен быть строго меньше 12 мм.";
+  const insufficientReasoning = "До усадки внутренний диаметр должен быть строго больше 12 мм, а после усадки внутренний диаметр должен быть строго меньше 12 мм.";
+  assertEquals(terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+    insufficientReasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  ).state, "unproven");
+  const decision = terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(decision.clearance?.minimum_before_ratio, { numerator: 6, denominator: 5 });
+  assertEquals(enforceTerminalPairedFit([
+    item("too-tight", "Трубка 14/7"),
+    item("boundary", "Трубка 14,4/7"),
+    item("valid", "Трубка 16/8"),
+    item("no-shrink", "Трубка 16/12"),
+  ], decision, reasoning).map(({ id }) => id), ["boundary", "valid"]);
+  assertEquals(terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    "найди ТТУ 10×5",
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  ).clearance ?? null, null);
+});
+
+Deno.test("heat-shrink clearance also protects terminal live-facet values", () => {
+  const facets: CompatibilityFacet[] = [
+    { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },
+    { key: "after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] },
+    { key: "width_before", caption: "Ширина до изменения, мм", unit: "мм", values: [] },
+    { key: "width_after", caption: "Ширина после изменения, мм", unit: "мм", values: [] },
+  ];
+  const reasoning = "До усадки внутренний диаметр должен быть не менее 14,4 мм, а после усадки внутренний диаметр должен быть строго меньше 12 мм.";
+  const decision = terminalPairedFitDecision(
+    { value: 12, unit: "мм" },
+    "подбери трубку для кабеля диаметром 12 мм",
+    reasoning,
+    facets,
+    "Трубки термоусаживаемые",
+  );
+  assertEquals(decision.state, "required");
+  assertEquals(decision.selected_pair?.require_facet_values, true);
+  const withValues = (id: string, before: string, after: string): ProductRef & { facet_values: Record<string, string[]> } => ({
+    ...item(id, `Трубка ${before}/${after}`),
+    facet_values: { before: [`${before} мм`], after: [`${after} мм`] },
+  });
+  assertEquals(enforceTerminalPairedFit([
+    withValues("too-tight", "14", "7"),
+    withValues("valid", "14,4", "7"),
+    withValues("after-equal", "16", "12"),
+  ], decision, reasoning).map(({ id }) => id), ["valid"]);
 });
 
 Deno.test("paired object measurements never become exact product sizes at 12 or 10 mm", () => {
@@ -992,7 +1058,7 @@ Deno.test("a global property mention cannot lend unrelated strict bounds to the 
 Deno.test("an immediately adjacent after-state clause may inherit its physical property", () => {
   const reference = { value: 12, unit: "мм" };
   const reasoning =
-    "Для кабеля диаметром 12 мм необходима термоусадочная трубка, внутренний диаметр которой до усадки должен быть строго больше 12 мм, а после усадки — строго меньше 12 мм, чтобы обеспечить плотное облегание кабеля.";
+    "Для кабеля диаметром 12 мм необходима термоусадочная трубка, внутренний диаметр которой до усадки должен быть не менее 14,4 мм, а после усадки — строго меньше 12 мм, чтобы обеспечить плотное облегание кабеля.";
   const decision = terminalPairedFitDecision(
     reference,
     "подбери термоусадочную трубку для кабеля диаметром 12 мм",
@@ -1003,7 +1069,7 @@ Deno.test("an immediately adjacent after-state clause may inherit its physical p
   assertEquals(decision.state, "required");
   assertEquals(
     enforceTerminalPairedFit(
-      [item("too-small", "Изделие 12/6"), item("fitting", "Изделие 14/7")],
+      [item("too-small", "Изделие 12/6"), item("insufficient-clearance", "Изделие 14/7"), item("fitting", "Изделие 16/8")],
       decision,
       reasoning,
     ).map((product) => product.id),

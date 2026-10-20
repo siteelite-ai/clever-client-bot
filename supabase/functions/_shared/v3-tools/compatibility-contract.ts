@@ -47,6 +47,111 @@ export interface CompatibilityFacetProjection {
   unmatched_keys: string[];
 }
 
+/** A context-bound installation clearance, not a property of every A/B pair. */
+export interface PairedFitClearance {
+  before_facet_key: string;
+  minimum_before_ratio: { numerator: number; denominator: number };
+}
+
+/** One application policy, selected from customer wording and the live schema.
+ * It applies to heat-shrink tubing fitted over a cable, not to a named SKU or
+ * every product with paired values. Other paired dimensions retain > / <. */
+export function resolveCableSleeveClearance(
+  userMessage: string,
+  requestedProductClass: string,
+  beforeFacet: CompatibilityFacet,
+  afterFacet: CompatibilityFacet,
+): PairedFitClearance | null {
+  const user = normalizeKey(userMessage);
+  const product = normalizeKey(`${userMessage} ${requestedProductClass}`);
+  const context = normalizeKey(`${requestedProductClass} ${beforeFacet.key} ${beforeFacet.caption} ${afterFacet.key} ${afterFacet.caption}`);
+  const before = normalizeKey(beforeFacet.caption || beforeFacet.key);
+  const after = normalizeKey(afterFacet.caption || afterFacet.key);
+  if (!/(?:^| )(?:кабел|провод)\p{L}*(?= |$)/u.test(user)) return null;
+  if (!/(?:^| )(?:термоуса(?:д|ж)|тту|трубк|heat shrink)\p{L}*(?= |$)/u.test(product)) return null;
+  if (!/(?:термоуса(?:д|ж)|усад|shrink|(?:^| )тту(?= |$))/u.test(context)) return null;
+  if (!/(?:диаметр|diameter)/u.test(before) || !/(?:диаметр|diameter)/u.test(after)) return null;
+  return { before_facet_key: beforeFacet.key, minimum_before_ratio: { numerator: 6, denominator: 5 } };
+}
+
+/** Keep application-specific wording beside the policy, not in the generic
+ * reasoning planner. It does not claim any catalogue item is yet compatible. */
+export function pairedFitClearanceReasoningInstruction(
+  clearance: PairedFitClearance | null,
+  reference?: { value: number; unit: string } | null,
+): string {
+  if (!clearance) return "";
+  const minimum = reference && Number.isFinite(reference.value) && reference.value > 0
+    ? Number((reference.value * clearance.minimum_before_ratio.numerator /
+      clearance.minimum_before_ratio.denominator).toPrecision(12))
+    : null;
+  const localBound = minimum !== null && Number.isFinite(minimum)
+    ? ` При диаметре кабеля ${String(reference?.value).replace(".", ",")} ${reference?.unit ?? ""} это минимум ${String(minimum).replace(".", ",")} ${reference?.unit ?? ""} до усадки.`
+    : "";
+  return `Для термоусадочной трубки на кабель действует согласованное правило посадки: внутренний диаметр до усадки — не менее 120% диаметра кабеля (запас не менее 20%), внутренний диаметр после усадки — строго меньше диаметра кабеля.${localBound} Это обязательная граница совместимости, а не выбранный тобой ориентир. Не объявляй товар подходящим, пока обе величины не подтверждены карточкой.`;
+}
+
+function exactDecimal(value: number): { numerator: bigint; denominator: bigint } | null {
+  if (!Number.isFinite(value)) return null;
+  const match = String(value).match(/^(?<sign>-?)(?<whole>\d+)(?:\.(?<fraction>\d+))?(?:e(?<exponent>[+-]?\d+))?$/iu);
+  if (!match?.groups) return null;
+  const fraction = match.groups.fraction ?? "";
+  const exponent = Number(match.groups.exponent ?? 0);
+  const scale = fraction.length - exponent;
+  // Physical fit values outside this decimal range are not trustworthy
+  // catalogue measurements; bound BigInt work on malformed/extreme input.
+  if (Math.abs(exponent) > 18 || Math.abs(scale) > 18 ||
+    match.groups.whole.length + fraction.length > 18) return null;
+  const digits = BigInt(`${match.groups.whole}${fraction}`);
+  const numerator = (match.groups.sign ? -digits : digits) * (scale < 0 ? 10n ** BigInt(-scale) : 1n);
+  return { numerator, denominator: scale > 0 ? 10n ** BigInt(scale) : 1n };
+}
+
+/** Compare decimal catalogue values as exact fractions at the clearance
+ * boundary, without multiplying binary floating-point approximations. */
+export function meetsBeforeClearance(
+  before: number,
+  reference: number,
+  clearance: PairedFitClearance | null = null,
+): boolean {
+  if (!Number.isFinite(before) || !Number.isFinite(reference) || reference <= 0) return false;
+  if (!clearance) return before > reference;
+  const { numerator, denominator } = clearance.minimum_before_ratio;
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || numerator <= denominator || denominator <= 0) return false;
+  const measured = exactDecimal(before);
+  const customer = exactDecimal(reference);
+  if (!measured || !customer) return false;
+  return measured.numerator * customer.denominator * BigInt(denominator) >=
+    customer.numerator * measured.denominator * BigInt(numerator);
+}
+
+/** Only the policy-owned minimum, not an arbitrary stronger model guess, may
+ * cross the customer-authority gate as a mandatory derived measurement. */
+export function equalsBeforeClearanceBoundary(
+  value: number,
+  reference: number,
+  clearance: PairedFitClearance,
+): boolean {
+  const measured = exactDecimal(value);
+  const customer = exactDecimal(reference);
+  const { numerator, denominator } = clearance.minimum_before_ratio;
+  if (!measured || !customer || !Number.isSafeInteger(numerator) ||
+    !Number.isSafeInteger(denominator) || numerator <= denominator ||
+    denominator <= 0) return false;
+  return measured.numerator * customer.denominator * BigInt(denominator) ===
+    customer.numerator * measured.denominator * BigInt(numerator);
+}
+
+export function meetsPairedFitMeasurements(
+  before: number,
+  after: number,
+  reference: number,
+  clearance: PairedFitClearance | null = null,
+): boolean {
+  return Number.isFinite(after) && after < reference &&
+    meetsBeforeClearance(before, reference, clearance);
+}
+
 export interface CompletedCompatibilityRelations {
   relations: CompatibilityRelation[];
   added: CompatibilityRelation[];
@@ -621,6 +726,7 @@ function relationAccepts(value: number, relation: CompatibilityRelationOp, refer
 export function projectCompatibilityFacetOptions(
   relations: CompatibilityRelation[],
   facets: CompatibilityFacet[],
+  clearance: PairedFitClearance | null = null,
 ): CompatibilityFacetProjection {
   const options = new Map<string, Set<string>>();
   const matchedKeys: string[] = [];
@@ -647,7 +753,11 @@ export function projectCompatibilityFacetOptions(
       const numeric = pair
         ? relation.relation === "gt" || relation.relation === "gte" ? pair.high : pair.low
         : Number(String(value).match(/\d+(?:[.,]\d+)?/u)?.[0].replace(",", "."));
-      return Number.isFinite(numeric) && relationAccepts(numeric, relation.relation, relation.reference_value)
+      const clearsObject = clearance && facet.key === clearance.before_facet_key &&
+          (relation.relation === "gt" || relation.relation === "gte")
+        ? meetsBeforeClearance(numeric, relation.reference_value, clearance)
+        : true;
+      return Number.isFinite(numeric) && relationAccepts(numeric, relation.relation, relation.reference_value) && clearsObject
         ? [{ value: String(value), distance: Math.abs(numeric - relation.reference_value) }]
         : [];
     }).sort((left, right) => left.distance - right.distance)
@@ -709,6 +819,7 @@ export function commonCompatibilityReference(
 export function filterProductsByPairedTitleFit<T extends ProductRef>(
   products: T[],
   referenceValue: number,
+  clearance: PairedFitClearance | null = null,
 ): { products: T[]; rejected_ids: string[]; unproven_ids: string[] } {
   const passed: T[] = [];
   const rejectedIds: string[] = [];
@@ -719,7 +830,7 @@ export function filterProductsByPairedTitleFit<T extends ProductRef>(
       unprovenIds.push(product.id);
       continue;
     }
-    if (pair.high > referenceValue && pair.low < referenceValue) passed.push(product);
+    if (meetsPairedFitMeasurements(pair.high, pair.low, referenceValue, clearance)) passed.push(product);
     else rejectedIds.push(product.id);
   }
   return { products: passed, rejected_ids: rejectedIds, unproven_ids: unprovenIds };
@@ -733,6 +844,7 @@ export function enforceFinalPairedCompatibility<T extends ProductRef>(
   relations: CompatibilityRelation[],
   reasoningText: string,
   provenReference: { value: number; unit: string } | null = null,
+  clearance: PairedFitClearance | null = null,
 ): {
   required: boolean;
   reference: { value: number; unit: string } | null;
@@ -749,7 +861,7 @@ export function enforceFinalPairedCompatibility<T extends ProductRef>(
   if (!required || !reference) {
     return { required: false, reference, products: [...products], rejected_ids: [], unproven_ids: [] };
   }
-  return { required: true, reference, ...filterProductsByPairedTitleFit(products, reference.value) };
+  return { required: true, reference, ...filterProductsByPairedTitleFit(products, reference.value, clearance) };
 }
 
 /**

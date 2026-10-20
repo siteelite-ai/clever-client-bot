@@ -16,7 +16,7 @@ const catalogLeaf = "Трубки термоусаживаемые";
 const before = "Внутренний диаметр до усадки, мм";
 const after = "Внутренний диаметр после усадки, мм";
 const pairedReasoning =
-  "Клиент запросил подбор, сначала проверю фасеты. Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а внутренний диаметр после усадки должен быть строго меньше 10 мм.";
+  "Клиент запросил подбор, сначала проверю фасеты. Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть не менее 12 мм, а внутренний диаметр после усадки должен быть строго меньше 10 мм.";
 const products = [
   { id: 101, pagetitle: "Трубка ТТУ 12/6 мм", before: "12 мм", after: "6 мм" },
   { id: 102, pagetitle: "Трубка ТТУ 14/7 мм", before: "14 мм", after: "7 мм" },
@@ -64,7 +64,7 @@ Deno.test("symbolic paired proof survives declaration sanitization unchanged in 
     },
   ];
   const raw =
-    "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки > 10 мм. Внутренний диаметр после усадки < 10 мм.";
+    "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки ≥ 12 мм. Внутренний диаметр после усадки < 10 мм.";
   const pair = { value: 10, unit: "мм" };
   assertEquals(
     terminalPairedFitDecision(pair, customer, raw, facets, catalogLeaf).state,
@@ -84,7 +84,7 @@ Deno.test("symbolic paired proof survives declaration sanitization unchanged in 
     catalogLeaf,
     { ...pair, facetKeys: ["diameter_before", "diameter_after"] },
   );
-  assert(resolved?.reasoningEvidence.includes("› 10 мм"));
+  assert(resolved?.reasoningEvidence.includes("≥ 12 мм"), JSON.stringify(resolved));
   assert(resolved?.reasoningEvidence.includes("‹ 10 мм"));
   assertEquals(
     terminalPairedFitDecision(
@@ -96,6 +96,16 @@ Deno.test("symbolic paired proof survives declaration sanitization unchanged in 
     ).state,
     "required",
   );
+});
+
+Deno.test({
+  name: "terminal paired recovery does not claim that facet-proven sizes appear in titles",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+    assert(source.includes("где оба размера подтверждены данными каталога"));
+    assert(!source.includes("где обе границы видны в названии"));
+  },
 });
 
 Deno.test({
@@ -324,7 +334,7 @@ Deno.test({
       assert(publicDeltas.length > 0, JSON.stringify(events));
       assert(!publicDeltas.includes(pairedReasoning), publicDeltas);
       assert(!/Клиент запросил|сначала проверю фасеты/iu.test(publicDeltas));
-      assert(/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(publicDeltas), publicDeltas);
+      assert(/Внутренний диаметр до усадки, мм\s*≥\s*1,2\s*×\s*10\s*мм/iu.test(publicDeltas), publicDeltas);
       assert(/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(publicDeltas), publicDeltas);
       assert(!/diameter_(?:before|after)/iu.test(publicDeltas), publicDeltas);
       const persistedDeltas = persistedEvents.filter((event) =>
@@ -382,6 +392,35 @@ Deno.test({
           criterion.value === 4000 || /(?:светов|люмен)/iu.test(criterion.key)
         ),
       );
+      // The same live flow must not merely describe the new clearance while
+      // still rendering a 14/7 card for a 12 mm cable (16.7% clearance).
+      steps.length = 0;
+      persistedEvents = [];
+      queuedReasoning.push(
+        "Для кабеля диаметром 12 мм внутренний диаметр трубки до усадки должен быть не менее 14,4 мм, а внутренний диаметр после усадки должен быть строго меньше 12 мм.",
+      );
+      const strictResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(strictResponse.status, 200);
+      const strictEvents = eventsFromSse(await strictResponse.text());
+      const strictMarkdown = strictEvents.filter((event) =>
+        (event.v3_event as { type?: string } | undefined)?.type === "products_block"
+      ).map((event) => String((event.v3_event as { markdown?: string }).markdown ?? "")).join("\n");
+      assert(strictMarkdown.includes("ТТУ 16/8"), JSON.stringify({ strictEvents, steps }));
+      assert(!strictMarkdown.includes("ТТУ 14/7"), strictMarkdown);
       mockNoCandidates = true;
       steps.length = 0;
       persistedEvents = [];
@@ -406,7 +445,7 @@ Deno.test({
         (event.choices as Array<{ delta?: { content?: string } }> | undefined)
           ?.map((choice) => choice.delta?.content ?? "") ?? []
       ).filter(Boolean).join("\n");
-      assert(/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(emptyDeltas));
+      assert(/Внутренний диаметр до усадки, мм\s*≥\s*1,2\s*×\s*10\s*мм/iu.test(emptyDeltas));
       assert(/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(emptyDeltas));
       assert(emptyDeltas.includes("Не нашёл подходящие товары"));
       assert(!emptyDeltas.includes(pairedReasoning));
@@ -426,7 +465,7 @@ Deno.test({
       steps.length = 0;
       persistedEvents = [];
       queuedReasoning.push(
-        "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки > 10 мм. Внутренний диаметр после усадки < 10 мм.",
+        "Для кабеля диаметром 10 мм внутренний диаметр трубки до усадки ≥ 12 мм. Внутренний диаметр после усадки < 10 мм.",
       );
       const symbolicResponse = await offlineHandler()(
         new Request(
@@ -537,7 +576,7 @@ Deno.test({
       ), false);
       assert(ambiguousDeltas.includes("Уточните, какой именно параметр объекта"));
       assert(!ambiguousDeltas.includes("ошибка соединения"));
-      assert(!/Внутренний диаметр до усадки, мм\s*>\s*10\s*мм/iu.test(ambiguousDeltas));
+      assert(!/Внутренний диаметр до усадки, мм\s*≥\s*1,2\s*×\s*10\s*мм/iu.test(ambiguousDeltas));
       assert(!/Внутренний диаметр после усадки, мм\s*<\s*10\s*мм/iu.test(ambiguousDeltas));
     } finally {
       for (const id of intervals) clearInterval(id);

@@ -1838,10 +1838,10 @@ Deno.test("only a complete certified paired fit survives the scalar authority ga
   ).criteria);
 });
 
-Deno.test("TTU selection contract retains exactly two server-certified strict fit bounds", () => {
+Deno.test("TTU selection contract retains certified fit bounds only after the 20% clearance is proven", () => {
   const customer = "Подбери трубку ТТУ для кабеля диаметром 10 мм.";
   const reasoning =
-    "До изменения внутренний диаметр должен быть строго больше 10 мм, а после изменения внутренний диаметр должен быть строго меньше 10 мм.";
+    "До изменения внутренний диаметр должен быть не менее 12 мм, а после изменения внутренний диаметр должен быть строго меньше 10 мм.";
   const facets = [
     {
       key: "diameter_before",

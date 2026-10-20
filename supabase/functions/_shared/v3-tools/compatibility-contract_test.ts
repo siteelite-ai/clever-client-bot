@@ -11,12 +11,15 @@ import {
   filterProductsByPairedTitleFit,
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
+  meetsBeforeClearance,
+  meetsPairedFitMeasurements,
   minimumCompatibilityRelationCount,
   pairedStateCriterionReference,
   parseCompatibilityRelations,
   projectPairedTitleEvidence,
   projectCompatibilityFacetOptions,
   reasoningNeedsCompatibilityRelations,
+  resolveCableSleeveClearance,
   subsumeCriteriaProvenByCompatibility,
   subsumeCriteriaProvenByPairedTitleRatio,
   subsumePairedStateCriteria,
@@ -364,6 +367,75 @@ Deno.test("paired title fit follows a single user reference without domain vocab
     { product_key: "A", relation: "gt", reference_value: 12, unit: "мм" },
     { product_key: "B", relation: "lt", reference_value: 12, unit: "мм" },
   ])), { value: 12, unit: "мм" });
+});
+
+Deno.test("cable sleeve fit applies 20% before-shrink clearance at exact decimal boundaries", () => {
+  const before = { key: "diameter_before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] };
+  const after = { key: "diameter_after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] };
+  const clearance = resolveCableSleeveClearance(
+    "подбери трубку ТТУ на кабель диаметром 12 мм",
+    "Трубки термоусаживаемые",
+    before,
+    after,
+  );
+  assertEquals(clearance, {
+    before_facet_key: "diameter_before",
+    minimum_before_ratio: { numerator: 6, denominator: 5 },
+  });
+  assertEquals(meetsPairedFitMeasurements(12, 6, 10, clearance), true);
+  assertEquals(meetsPairedFitMeasurements(11.999, 6, 10, clearance), false);
+  assertEquals(meetsPairedFitMeasurements(14, 7, 12, clearance), false);
+  assertEquals(meetsPairedFitMeasurements(14.399, 7, 12, clearance), false);
+  assertEquals(meetsPairedFitMeasurements(14.4, 7, 12, clearance), true);
+  assertEquals(meetsPairedFitMeasurements(16, 8, 12, clearance), true);
+  assertEquals(meetsPairedFitMeasurements(20, 10, 12, clearance), true);
+  assertEquals(meetsPairedFitMeasurements(16, 12, 12, clearance), false);
+  assertEquals(meetsBeforeClearance(1e100, 12, clearance), false);
+  const products = [
+    product("small", "Трубка 14/7"),
+    product("boundary", "Трубка 14,4/7"),
+    product("fit", "Трубка 16/8"),
+    product("after-equal", "Трубка 16/12"),
+  ];
+  assertEquals(filterProductsByPairedTitleFit(products, 12, clearance).products.map(({ id }) => id), ["boundary", "fit"]);
+});
+
+Deno.test("clearance is absent for unrelated pairs and direct product sizes", () => {
+  const before = { key: "diameter_before", caption: "Диаметр до изменения, мм", unit: "мм", values: [] };
+  const after = { key: "diameter_after", caption: "Диаметр после изменения, мм", unit: "мм", values: [] };
+  assertEquals(resolveCableSleeveClearance("кабель диаметром 12 мм", "Втулки", before, after), null);
+  assertEquals(resolveCableSleeveClearance("подбери трубку на кабель диаметром 12 мм", "Трубки термоусаживаемые", before, after), {
+    before_facet_key: "diameter_before",
+    minimum_before_ratio: { numerator: 6, denominator: 5 },
+  });
+  assertEquals(resolveCableSleeveClearance("подбери ТТУ на кабель диаметром 12 мм", "ТТУ", before, after), {
+    before_facet_key: "diameter_before",
+    minimum_before_ratio: { numerator: 6, denominator: 5 },
+  });
+  assertEquals(resolveCableSleeveClearance("подбери ТТУ диаметром 12 мм", "ТТУ", before, after), null);
+  assertEquals(resolveCableSleeveClearance("подбери трубку диаметром 12 мм", "Трубки термоусаживаемые", before, after), null);
+  assertEquals(resolveCableSleeveClearance("найди ТТУ 10×5", "Трубки термоусаживаемые", before, after), null);
+  assertEquals(resolveCableSleeveClearance("подбери трубку на кабель диаметром 12 мм", "Трубки термоусаживаемые", {
+    ...before,
+    caption: "Длина до усадки, мм",
+  }, { ...after, caption: "Длина после усадки, мм" }), null);
+  assertEquals(meetsPairedFitMeasurements(13, 6, 12), true);
+  assertEquals(filterProductsByPairedTitleFit([product("ordinary", "Изделие 13/6")], 12).products.length, 1);
+});
+
+Deno.test("clearance constrains before-shrink facet projection without narrowing the after facet", () => {
+  const before = { key: "diameter_before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: ["14", "14,4", "16"].map((value) => ({ value })) };
+  const after = { key: "diameter_after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: ["7", "8", "12"].map((value) => ({ value })) };
+  const clearance = resolveCableSleeveClearance("трубку для кабеля диаметром 12 мм", "Трубки термоусаживаемые", before, after);
+  const relations = parseCompatibilityRelations([
+    { product_key: "diameter_before", relation: "gt", reference_value: 12, unit: "мм" },
+    { product_key: "diameter_after", relation: "lt", reference_value: 12, unit: "мм" },
+  ]);
+  assertEquals(projectCompatibilityFacetOptions(relations, [before, after], clearance).options, {
+    diameter_before: ["14,4", "16"],
+    diameter_after: ["8", "7"],
+  });
+  assertEquals(projectCompatibilityFacetOptions(relations, [before, after]).options.diameter_before, ["14", "14,4", "16"]);
 });
 
 Deno.test("late catalog recovery cannot overwrite an already proven paired fit", () => {

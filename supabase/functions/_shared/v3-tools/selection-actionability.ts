@@ -6,8 +6,12 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import {
+  type PairedFitClearance,
+  equalsBeforeClearanceBoundary,
   minimumCompatibilityRelationCount,
+  pairedFitClearanceReasoningInstruction,
   reasoningNeedsCompatibilityRelations,
+  resolveCableSleeveClearance,
 } from "./compatibility-contract.ts";
 import {
   guardSearchFilters,
@@ -472,6 +476,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
   facets: DerivedSelectionFacet[],
   measurementScope: string,
   pairedObjectReference: PairedObjectReference | null,
+  productClass = "",
 ): string | null {
   if (!customerEvidence.trim()) return reasoning;
   const liveMeasuredFacets = facets.map((facet) => ({
@@ -488,6 +493,20 @@ function scrubUnsupportedPerProductMeasuredClaims(
     ).flatMap((facet) =>
       [facet.key, facet.caption].map((value) => normalizeKey(String(value ?? "")))
     ),
+  );
+  const beforeFacet = facets.find((facet) =>
+    facet.key === pairedObjectReference?.facetKeys[0]
+  );
+  const clearance = pairedClearanceForRequest(
+    customerEvidence,
+    productClass,
+    facets,
+    pairedObjectReference,
+  );
+  const beforeFacetNames = new Set(
+    [beforeFacet?.key, beforeFacet?.caption].map((name) =>
+      normalizeKey(String(name ?? ""))
+    ).filter(Boolean),
   );
   const claims = extractUnownedMeasuredClaims(
     reasoning,
@@ -506,7 +525,38 @@ function scrubUnsupportedPerProductMeasuredClaims(
         canonicalMeasurementUnit(pairedObjectReference.unit) &&
       claim.criterion.exclusive === true &&
       (claim.criterion.op === "min" || claim.criterion.op === "max");
-    return !verifiedPairedBound;
+    // The generic claim extractor may attach a bound to the later member of a
+    // paired facet when both states occur in one sentence. The local clause
+    // immediately governing the number is more precise: accept only the
+    // policy's exact threshold stated for the live before-diameter facet.
+    const localPrefix = normalizeKey(reasoning.slice(
+      Math.max(
+        reasoning.lastIndexOf(".", claim.start),
+        reasoning.lastIndexOf(";", claim.start),
+        reasoning.lastIndexOf(",", claim.start),
+      ) + 1,
+      claim.start,
+    ));
+    const paddedPrefix = ` ${localPrefix} `;
+    const beforeStateAt = paddedPrefix.lastIndexOf(" до ");
+    const afterStateAt = paddedPrefix.lastIndexOf(" после ");
+    const localBeforeFacet = beforeFacet &&
+      beforeStateAt >= 0 && beforeStateAt > afterStateAt &&
+      facetPropertyStems(beforeFacet).some((stem) =>
+        localPrefix.split(" ").some((word) => word.startsWith(stem))
+      );
+    const verifiedClearanceBound = clearance && pairedObjectReference &&
+      (beforeFacetNames.has(normalizeKey(claim.criterion.key)) || localBeforeFacet) &&
+      claim.criterion.op === "min" &&
+      claim.criterion.exclusive !== true &&
+      canonicalMeasurementUnit(claim.criterion.unit ?? "") ===
+        canonicalMeasurementUnit(pairedObjectReference.unit) &&
+      equalsBeforeClearanceBoundary(
+        Number(claim.criterion.value),
+        pairedObjectReference.value,
+        clearance,
+      );
+    return !verifiedPairedBound && !verifiedClearanceBound;
   });
   if (claims.length === 0) return reasoning;
 
@@ -1517,6 +1567,7 @@ export function buildDerivedSelectionPublicExplanation(input: {
     unit: string;
     beforeCaption: string;
     afterCaption: string;
+    clearance?: PairedFitClearance | null;
   } | null;
 }): string {
   const productClass = stripDerivedSchemaIds(visibleFacetText(
@@ -1625,8 +1676,11 @@ export function buildDerivedSelectionPublicExplanation(input: {
       renderedClauses.slice(0, 6).join("; ")
     }${clauses.length > 6 ? ` и ещё ${clauses.length - 6}` : ""}.`
     : " Сверяю заявленные условия с характеристиками каталога.";
+  const beforeBound = pair?.clearance
+    ? `≥ 1,2 × ${pairValue} ${pairUnit} (запас 20%)`
+    : `> ${pairValue} ${pairUnit}`;
   const pairedFit = pairValue && pairUnit && beforeCaption && afterCaption
-    ? ` Для размера ${pairValue} ${pairUnit} проверяю оба условия совместимости: «${beforeCaption} > ${pairValue} ${pairUnit}» и «${afterCaption} < ${pairValue} ${pairUnit}».`
+    ? ` Для размера ${pairValue} ${pairUnit} проверяю оба условия совместимости: «${beforeCaption} ${beforeBound}» и «${afterCaption} < ${pairValue} ${pairUnit}».`
     : "";
   const systemScope = input.measurementScope === "system_total"
     ? " Суммарную потребность всей системы не приписываю каждому отдельному товару."
@@ -1849,6 +1903,23 @@ interface PairedObjectReference {
   value: number;
   unit: string;
   facetKeys: string[];
+}
+
+function pairedClearanceForRequest(
+  customerEvidence: string,
+  productClass: string,
+  facets: DerivedSelectionFacet[],
+  reference: PairedObjectReference | null,
+): PairedFitClearance | null {
+  const before = facets.find((facet) => facet.key === reference?.facetKeys[0]);
+  const after = facets.find((facet) => facet.key === reference?.facetKeys[1]);
+  if (!reference || !before || !after) return null;
+  return resolveCableSleeveClearance(
+    customerEvidence,
+    productClass,
+    { key: before.key ?? "", caption: before.caption ?? "", unit: before.unit ?? null, values: [] },
+    { key: after.key ?? "", caption: after.caption ?? "", unit: after.unit ?? null, values: [] },
+  );
 }
 
 function facetMeasurementUnit(facet: DerivedSelectionFacet): string {
@@ -2085,6 +2156,8 @@ function omitUnverifiedPresearchPairedClaims(
   reasoning: string,
   facets: DerivedSelectionFacet[],
   reference: PairedObjectReference | null,
+  customerEvidence = "",
+  productClass = "",
 ): string {
   if (!reference || !Number.isFinite(reference.value)) return reasoning;
   const pairedFacets = facets.filter((facet) =>
@@ -2093,6 +2166,12 @@ function omitUnverifiedPresearchPairedClaims(
   if (pairedFacets.length !== 2) return reasoning;
   const axisStems = new Set(pairedFacets.flatMap(facetPropertyStems));
   const unit = canonicalMeasurementUnit(reference.unit);
+  const clearance = pairedClearanceForRequest(
+    customerEvidence,
+    productClass,
+    facets,
+    reference,
+  );
   // A model may append an unsupported observation to otherwise valid strict
   // bounds using a comma or a natural conjunction. Separate that tail first
   // so the evidence filter cannot discard the entire paired-fit proof.
@@ -2142,6 +2221,15 @@ function omitUnverifiedPresearchPairedClaims(
           value !== reference.value &&
           canonicalMeasurementUnit(foundUnit) === unit,
       );
+      const policyOwnedBoundaryOnly = Boolean(clearance) &&
+        extractClientQuantities(sentence)
+          .filter(({ value, unit: foundUnit }) =>
+            value !== reference.value &&
+            canonicalMeasurementUnit(foundUnit) === unit
+          )
+          .every(({ value }) =>
+            equalsBeforeClearanceBoundary(value, reference.value, clearance!)
+          );
       // A separable optional tier or concrete product-size prescription is
       // not part of the customer's two strict object-side fit directions.
       if (
@@ -2153,7 +2241,8 @@ function omitUnverifiedPresearchPairedClaims(
       if (
         namesPairedAxis && otherSameUnitValue &&
         /(?:требу\p{L}*|не\s+(?:менее|более)|долж\p{L}*)/iu.test(sentence) &&
-        !/строго\s+(?:больше|меньше)/iu.test(sentence)
+        !/строго\s+(?:больше|меньше)/iu.test(sentence) &&
+        !policyOwnedBoundaryOnly
       ) return false;
       if (namesPairedAxis) {
         for (
@@ -2421,6 +2510,8 @@ export function resolveDerivedSelectionReasoning(
     verifiedRangeReasoning,
     facets,
     pairedObjectReference,
+    customerEvidence,
+    productClass,
   );
   if (originalReasoning.length < 20) return null;
   const pairedObjectRangeIds = new Set(
@@ -2465,6 +2556,7 @@ export function resolveDerivedSelectionReasoning(
     facets,
     measurementScope,
     pairedObjectReference,
+    productClass,
   );
   if (!scopeConsistentReasoning) return null;
   const rawRetrievalQuery = visibleFacetText(
@@ -3322,6 +3414,15 @@ export function buildDerivedSelectionReasoningMessages(
   // for a hard catalog filter or a mandatory per-card claim.
   messages[0].content +=
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани два строгих условия совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
+  const cableSleeveClearance = pairedClearanceForRequest(
+    userMessage,
+    category,
+    facets,
+    pairedObjectReference,
+  );
+  if (cableSleeveClearance) {
+    messages[0].content += ` ${pairedFitClearanceReasoningInstruction(cableSleeveClearance, pairedObjectReference)}`;
+  }
   return messages;
 }
 
