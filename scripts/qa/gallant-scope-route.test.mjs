@@ -48,8 +48,8 @@ test('active scope lookup is server-owned despite stale client slots and routes 
   assert.match(source, /const activeScopeClassChanged = Boolean\([\s\S]*?isIndependentNominalRequestOutsideActiveScope\(/);
   assert.match(source, /newTaskBoundary: Boolean\(\s*readinessNewTask \|\| activeScopeExplicitBoundary/,
     'a new entity or product noun must not be merged with old readiness');
-  assert.match(source, /const startsNewTask = activeScopeExplicitBoundary \|\|/,
-    'a verified old scope must be cleared before routing a different entity or noun');
+  assert.match(source, /const startsNewTask = !verifiedCutoutContinuation &&\s*!dependentCutoutReply && \(\s*activeScopeExplicitBoundary \|\|/,
+    'a different entity or noun must clear the old scope, except a server-verified cut-out continuation');
   assert.match(source, /if \(!data\) \{[\s\S]*?lookupFailed: false \};/,
     'a genuinely fresh session must not be mistaken for a database error');
   assert.match(source, /\(!sameSectionScope &&\s*shouldResetUnverifiedBroadAssortmentTask\(/,
@@ -113,7 +113,7 @@ test('verified complete same-section request outranks stale readiness and consum
 
   const boundary = between('const sameSectionScope =', 'const cache: ProductCache =');
   assert.match(boundary, /isReadinessQuestionSupersededByVerifiedSection\(\s*userMessage,\s*readinessNewTask,\s*Boolean\(verifiedReadinessState\.slot\),\s*Boolean\(sameSectionScope\),\s*sameSectionNominalRefinement \|\|\s*activePrepositionalRefinement === "continue",\s*activeScopeExplicitBoundary/);
-  assert.match(boundary, /const startsNewTask = activeScopeExplicitBoundary \|\|\s*Boolean\(effectiveReadinessNewTask\)/);
+  assert.match(boundary, /const startsNewTask = !verifiedCutoutContinuation &&\s*!dependentCutoutReply && \(\s*activeScopeExplicitBoundary \|\|\s*Boolean\(effectiveReadinessNewTask\)/);
   assert.match(boundary, /newTaskBoundary: Boolean\(\s*readinessNewTask \|\| activeScopeExplicitBoundary \|\|\s*readinessQuestionSuperseded/,
     'superseded readiness must not prepend the old question to this same-section request');
   assert.match(boundary, /readinessQuestionSuperseded\s*\? \{ \.\.\.boundarySlots, pending_clarification: undefined \}/,

@@ -65,6 +65,18 @@ connectors and electrical subtype (report
 An earlier run with the same prompt failed only because two product-page
 fetches were transiently unavailable; both pages subsequently verified.
 
+At 14:05 UTC a read-only aggregate of the production ledger showed 69 v3 and
+73 `search-products` reservations since observe began at 05:20 UTC; all 142
+were released, with zero `would_reject`, active, or expired-unreleased rows.
+Observed per-minute peaks were six model and 19 catalog reservations; p95
+release latency was 19.3 s for v3 and 3.4 s for catalog. Targeted Edge-log
+filters found no v1/v2 POST in the last 24 hours, but the all-route Logs
+Explorer group was incomplete (it omitted catalog calls visible under a
+separate filter). The ledger does not distinguish direct Supabase from
+Cloudflare-proxied traffic. These data cover **less than nine hours** of
+observe mode, not the required representative day; they do not justify
+`enforce` or a public-security sign-off.
+
 ## Gate before enforcement
 
 Observe real traffic for at least one representative day, including both

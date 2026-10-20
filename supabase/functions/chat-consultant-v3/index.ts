@@ -503,6 +503,10 @@ import {
   resolveStructuralReplacementProfile,
   type StructuralReplacementProfile,
 } from "../_shared/v3-tools/replacement-structural-proof.ts";
+import {
+  guardedStructuralSelectionContract,
+  hasVerifiedRecessedStructuralMount,
+} from "../_shared/v3-tools/replacement-verified-selection-contract.ts";
 import { extractReplacementDimensions } from "../_shared/v3-tools/replacement-provisional-evidence.ts";
 import {
   evaluateReplacementCandidateFit,
@@ -4480,6 +4484,26 @@ async function selectGuardedStructuralReplacement(
     });
     return { handled: true, products: [], outcome: "upstream_error" };
   }
+  const selectionContract = guardedStructuralSelectionContract({
+    profile,
+    candidates: selected.map(({ full }) => full),
+    customerCutoutMm,
+    budgetCap,
+    requested,
+  });
+  if (!selectionContract) {
+    steps.push({
+      step: "v3_replacement_guarded_contract_unverified",
+      ms: Date.now() - t0,
+      meta: { selected: selected.length },
+    });
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Не удалось подтвердить общие условия подбора для всех карточек. Непроверенные варианты не показываю; повторите запрос позже.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
   const softName: Record<string, string> = {
     generic_diameter: "общий диаметр",
     power: "мощность",
@@ -4514,6 +4538,7 @@ async function selectGuardedStructuralReplacement(
     markdown: rendered.markdown,
     count: rendered.rendered_count,
     total_available: selected.length,
+    selection_contract: selectionContract,
   });
   return {
     handled: true,
@@ -5783,8 +5808,13 @@ async function selectVerifiedOrdinaryReplacement(
   const structuralProfile = structuralResolution.status === "ready"
     ? structuralResolution.profile
     : null;
+  const guardedStructuralMount = structuralProfile !== null &&
+    hasVerifiedRecessedStructuralMount(structuralProfile);
 
-  if (customerCutoutMm !== null && (!sourceOnlyVerified || !structuralProfile)) {
+  if (
+    customerCutoutMm !== null &&
+    (!sourceOnlyVerified || !guardedStructuralMount)
+  ) {
     send({
       type: "delta",
       origin: "server",
@@ -5797,12 +5827,13 @@ async function selectVerifiedOrdinaryReplacement(
         source_id: anchor.id,
         source_only_verified: sourceOnlyVerified,
         profile_ready: Boolean(structuralProfile),
+        recessed_mount_verified: guardedStructuralMount,
       },
     });
     return { handled: true, products: [], outcome: "query_inconsistent" };
   }
 
-  if (sourceOnlyVerified && structuralProfile) {
+  if (sourceOnlyVerified && structuralProfile && guardedStructuralMount) {
     return await selectGuardedStructuralReplacement(
       userMessage,
       structuralProfile,
