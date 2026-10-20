@@ -6,7 +6,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const outputFile = path.join(root, 'docs/qa/release-inventory-v6-20261019.json');
+const outputFile = path.join(root, 'docs/qa/release-inventory-v7-20261020.json');
 
 // These bytes and dimensions are pinned independently of the JSON inputs. They
 // mirror the runner's strict manifests without importing its live-request code.
@@ -31,9 +31,9 @@ export const MATRIX_MANIFESTS = [
     },
   },
   {
-    file: 'notion-legacy-bug-cases-v3.json',
-    sha256: '3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009',
-    caseCount: 32, sourceTurnCount: 52, runCount: 40, evaluatedTurnCount: 60,
+    file: 'notion-legacy-bug-cases-v4.json',
+    sha256: '882926735a6426bbfc3b560c2dddd82b8eb90a0803cec9bd1d597e1d558846ee',
+    caseCount: 32, sourceTurnCount: 53, runCount: 40, evaluatedTurnCount: 61,
     repeat: 1,
     repeatById: {
       'bt928-boiler-breaker-diagnostic': 3,
@@ -233,11 +233,11 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
     runs: runs.length,
     ordered_turns: runs.reduce((count, run) => count + run.turns.length, 0),
   };
-  assert.deepEqual(counts, { matrix_files: 5, runs: 190, ordered_turns: 279 });
+  assert.deepEqual(counts, { matrix_files: 5, runs: 190, ordered_turns: 280 });
   const ledger = {
     schema_version: 1,
     kind: 'offline_release_inventory',
-    revision_note: 'V6 re-pins the current customer suites after preserving the verified strict-household class and accepting one source-backed card only when the assistant states the actual rendered count and explicitly offers to relax conditions for a shortfall below three; the Acti9 first turn also rejects unrequested mandatory pole and voltage filters. UPS acceptance requires a structured successful catalog attempt rather than treating catalog_error as an honest empty result. Historical V5 and earlier reports remain unchanged and do not count for this candidate; candidate evidence is NOT_RUN.',
+    revision_note: 'V7 supersedes the unsafe V6 BT-924 Acti9 bare-show oracle: an unspecified pole count still blocks cards on the original and bare-show follow-up turns; only an explicitly synthetic, server-issued pole-count chip «1» may show catalog-verified 1P/C/16A cards. The exact catalog pole facet key is bound to production-observed kolichestvo_polyusov__polyuster_sany, not the unrelated generic pole_count key; the semantic zero-card and 1P/C/16A gates are unchanged. The pinned V3 source messages, 32 IDs and repetitions remain intact. Historical V6 and earlier reports remain unchanged and do not count for this candidate; candidate evidence is NOT_RUN.',
     candidate: {
       commit_sha: null,
       preview_version: null,
@@ -245,7 +245,7 @@ export function buildReleaseLedger({ readBytes = fs.readFileSync, manifests = MA
       note: 'No live result is bound to this inventory. Pin the candidate commit and preview identity in new execution evidence.',
     },
     historical_report_results_joined: false,
-    provenance_note: 'This inventory stores suite-level claims only. V3 preserves the first prompts from the pinned Notion v2 suite; exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json. The first 15 explicitly marked BT-929/BT-924 synthetic turns are indexed in docs/qa/notion-source-index-20261009.json; six further v3 turns are marked synthetic API continuations, not customer quotations or browser clicks. The BT-746 “дай ссылку” wording is a synthetic paraphrase of a source-observed request for a link (Notion comment 336cf8d3-69ba-8092-ad9a-001d3f23aee6); the exact second user message was not preserved. Its product identity is tested against the prior verified catalog URL. The BT-929 20% reserve versus 14/7 example remains unresolved.',
+    provenance_note: 'This inventory stores suite-level claims only. V4 preserves the first prompts and the bare BT-924 «покажи» from pinned Notion V3 SHA256 3e973d19352b03ea62d14a743393ac5f5ed07fda3ff00136ac4c7d02afdc0009; exact source-paragraph matches for 29 first prompts are recorded separately in docs/qa/source-provenance-20261009.json. The first 15 explicitly marked BT-929/BT-924 synthetic turns are indexed in docs/qa/notion-source-index-20261009.json; seven further V4 turns, including the new BT-924 pole-count chip «1» safety continuation, are marked synthetic API continuations, not customer quotations or browser clicks. The BT-746 «дай ссылку» wording is a synthetic paraphrase of a source-observed request for a link (Notion comment 336cf8d3-69ba-8092-ad9a-001d3f23aee6); the exact second user message was not preserved. Its product identity is tested against the prior verified catalog URL. The BT-929 20% reserve versus 14/7 example remains unresolved.',
     expectation_resolution: 'shallow merge: suite default_expectations, then case turn expect, then explicit variation expect_overrides',
     counts,
     matrix_files: matrixFiles,
@@ -270,7 +270,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else {
       assert.equal(fs.readFileSync(outputFile, 'utf8'), serialized,
         'release inventory is stale; rebuild with --write after reviewing matrix changes');
-      process.stdout.write('Release inventory matches the pinned five-file matrix (190 runs, 279 turns).\n');
+      process.stdout.write('Release inventory matches the pinned five-file matrix (190 runs, 280 turns).\n');
     }
   }
 }

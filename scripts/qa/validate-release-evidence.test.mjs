@@ -108,11 +108,18 @@ test('complete synthetic four-suite evidence passes with exact inventory coverag
   assert(!JSON.stringify(summary).includes('SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY'));
 });
 
-test('historical v3 inventory cannot be substituted for the re-pinned v4 matrix', () => {
+test('historical v3 inventory cannot be substituted for the re-pinned v7 matrix', () => {
   const evidence = syntheticEvidence();
   evidence.inventory = JSON.parse(fs.readFileSync(
     new URL('../../docs/qa/release-inventory-v3-20261009.json', import.meta.url), 'utf8'));
-  expectFailure(evidence, 'inventory_suite_matrix_mismatch');
+  expectFailure(evidence, 'inventory_invalid');
+});
+
+test('historical v6 inventory and its unsafe bare-show oracle cannot satisfy v7 evidence', () => {
+  const evidence = syntheticEvidence();
+  evidence.inventory = JSON.parse(fs.readFileSync(
+    new URL('../../docs/qa/release-inventory-v6-20261019.json', import.meta.url), 'utf8'));
+  expectFailure(evidence, 'inventory_invalid');
 });
 
 test('stale v11-style reports are rejected when they predate deployment observation', () => {
@@ -157,7 +164,7 @@ test('every synthetic marker must be explicit and agree with the pinned turn', (
 
   const mismatched = syntheticEvidence();
   const notion = mismatched.reports.find((report) =>
-    report.suite_file === 'notion-legacy-bug-cases-v3.json');
+    report.suite_file === 'notion-legacy-bug-cases-v4.json');
   const syntheticTurn = notion.cases.flatMap((testCase) => testCase.repeats.flatMap((repeat) => repeat.turns))
     .find((turn) => turn.synthetic_scenario === true);
   assert(syntheticTurn);

@@ -7,7 +7,7 @@ import {
   parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
   resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
   validateCliArgs, validateExpectationObject, validateExpectationSuite,
-  verifyProductLinks, verifyProductPage,
+  verifyProductLinks, verifyProductPage, visibleInternalTextFailures,
 } from './run-customer-acceptance.mjs';
 
 const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.json', import.meta.url));
@@ -16,6 +16,7 @@ const septemberVariationBytes = fs.readFileSync(new URL('./customer-audit-202609
 const notionBytes = fs.readFileSync(new URL('./notion-legacy-bug-cases.json', import.meta.url));
 const notionV2Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v2.json', import.meta.url));
 const notionV3Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v3.json', import.meta.url));
+const notionV4Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v4.json', import.meta.url));
 const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
 const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
 const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
@@ -23,6 +24,7 @@ const septemberVariations = JSON.parse(septemberVariationBytes.toString('utf8'))
 const notionSuite = JSON.parse(notionBytes.toString('utf8'));
 const notionV2Suite = JSON.parse(notionV2Bytes.toString('utf8'));
 const notionV3Suite = JSON.parse(notionV3Bytes.toString('utf8'));
+const notionV4Suite = JSON.parse(notionV4Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
 
@@ -674,6 +676,40 @@ test('Notion v3 keeps historical v2 intact and checks catalog-backed cable and o
     expected_turns_per_base_suite: 52, expected_repeat: 1,
     expected_runs: 40, expected_evaluated_turns: 60,
   });
+});
+
+test('Notion v4 strictly gates Acti9 cards on a server-issued pole-count choice', () => {
+  validateExpectationSuite(notionV4Suite);
+  assert.deepEqual(validateStrictFullSuite({
+    argv: strictArgs, suite: notionV4Suite, variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases-v4.json', variantsPath: null,
+    suiteBytes: notionV4Bytes, variantsBytes: null,
+  }), {
+    name: 'notion-legacy-bug-cases-v4.json', expected_cases: 32,
+    expected_turns_per_base_suite: 53, expected_repeat: 1,
+    expected_runs: 40, expected_evaluated_turns: 61,
+  });
+  assert.deepEqual(notionV4Suite.cases.map((item) => item.id),
+    notionV3Suite.cases.map((item) => item.id));
+  const v4 = notionV4Suite.cases.find((item) => item.id === 'bt924-acti9-followup-show');
+  const v3 = notionV3Suite.cases.find((item) => item.id === v4.id);
+  assert.deepEqual(v4.turns.slice(0, 2).map((turn) => turn.message),
+    v3.turns.map((turn) => turn.message));
+  assert.equal(v4.turns[0].expect.max_products, 0);
+  assert.equal(v4.turns[1].expect.max_products, 0);
+  assert.equal(v4.turns[1].expect.require_clarification_facet_key,
+    'kolichestvo_polyusov__polyuster_sany');
+  assert.equal(v4.turns[2].synthetic, true);
+  assert.deepEqual(v4.turns[2].expect.require_previous_quick_reply,
+    { facet_key: 'kolichestvo_polyusov__polyuster_sany', value: '1' });
+  assert.equal(v4.turns[2].expect.require_every_product_page.facets.length, 3);
+  const changedBare = structuredClone(notionV4Suite);
+  changedBare.cases.find((item) => item.id === v4.id).turns[1].expect.max_products = 1;
+  assert.throws(() => validateStrictFullSuite({
+    argv: strictArgs, suite: changedBare, variationSuite: null,
+    casesPath: '/qa/notion-legacy-bug-cases-v4.json', variantsPath: null,
+    suiteBytes: Buffer.from(JSON.stringify(changedBare)), variantsBytes: null,
+  }), /SHA256 mismatch/);
 });
 
 function analogReply(products, text = '') {
@@ -2050,6 +2086,45 @@ test('a visible clarification with server-bound quick replies passes the options
     .includes('clarification facet connection != mounting'));
 });
 
+test('BT-924 bare «покажи» rejects cards until the pole-count chip; then requires verified 1P/C/16A', () => {
+  const turns = notionV4Suite.cases.find((item) => item.id === 'bt924-acti9-followup-show').turns;
+  const replies = ['1', '2', '3', '4'].map((value) => ({ value, label: value }));
+  const clarification = clarificationReply({
+    text: 'Уточните, сколько полюсов у исходного автомата?',
+    question: 'Уточните, сколько полюсов у исходного автомата?',
+    facetKey: 'kolichestvo_polyusov__polyuster_sany', replies,
+  });
+  assert.deepEqual(evaluate(turns[0].expect, clarification), []);
+  assert.deepEqual(evaluate(turns[1].expect, clarification), []);
+  const card = {
+    url: 'https://220volt.kz/catalog/elektrotovary/avtomaticheskie-vyklyuchateli/avtomat-1p-16a-c/',
+    sku: 'TEST-1P-16-C', name: 'Автоматический выключатель 1P 16A C IEK', price: 950,
+    facets: { 'Количество полюсов': '1', 'Номинальный ток': '16', 'Характеристика срабатывания': 'C' },
+  };
+  const premature = { ...clarification, links: [{ title: card.name }], serverProductsCount: 1 };
+  assert(evaluate(turns[1].expect, premature).some((failure) => failure.includes('products 1 > 0')));
+  const prior = { mode: 'options', facet_key: 'kolichestvo_polyusov__polyuster_sany', values: ['1', '2', '3', '4'] };
+  const context = { requireVerifiedPages: true, previousClarificationChoice: prior, message: '1' };
+  assert.deepEqual(evaluate(turns[2].expect, analogReply([card]), context), []);
+  assert(evaluate(turns[2].expect, analogReply([card]), { ...context, previousClarificationChoice: null })
+    .some((failure) => failure.includes('not an exact server-issued quick-reply')));
+  assert(evaluate(turns[1].expect, clarificationReply({
+    text: 'Уточните, сколько полюсов у исходного автомата?',
+    question: 'Уточните, сколько полюсов у исходного автомата?',
+    facetKey: 'pole_count', replies,
+  })).some((failure) => failure.includes('clarification facet pole_count != kolichestvo_polyusov__polyuster_sany')),
+  'an unrelated generic slot must not pass the observed catalog pole facet gate');
+  assert(evaluate(turns[2].expect, analogReply([card]), {
+    ...context, previousClarificationChoice: { ...prior, facet_key: 'pole_count' },
+  }).some((failure) => failure.includes('not an exact server-issued quick-reply')));
+  assert(evaluate(turns[2].expect,
+    analogReply([{ ...card, facets: { ...card.facets, 'Количество полюсов': '3' } }]), context)
+    .some((failure) => failure.includes('facet Количество полюсов')));
+  assert(evaluate(turns[2].expect,
+    analogReply([{ ...card, facets: { ...card.facets, 'Характеристика срабатывания': 'B' } }]), context)
+    .some((failure) => failure.includes('facet Характеристика срабатывания')));
+});
+
 test('the Gallant release case requires actual section chips before a follow-up', () => {
   const gallant = acceptanceSuite.cases.find((item) => item.id === 'customer-new-gallant-catalog-section-chip');
   assert.equal(gallant.turns[0].expect.require_clarification_choice, 'options');
@@ -2516,6 +2591,53 @@ test('evaluate can forbid unsupported prose without rejecting evidence in produc
     ...response,
     text: 'В каталоге есть E27.',
   }).includes('forbidden assistant text: E27'));
+});
+
+test('every acceptance turn rejects internal planning and protocol in visible assistant prose', () => {
+  const response = {
+    text: 'Сверяю цену и характеристики каталога. Для кабеля 10 мм проверяю оба диаметра трубки.',
+    productsMarkdown: '', links: [], completed: true, diagnosticError: null,
+    serverProductsCount: 0,
+  };
+  assert.deepEqual(evaluate({}, response), []);
+  for (const [prose, failure] of [
+    ['Клиент запросил двойные электрические розетки.', 'internal third-person planning'],
+    ['Подбираю размер.Клиент указал диаметр кабеля 10 мм.', 'internal third-person planning'],
+    ['Пользователь ищет один автомат.', 'internal third-person planning'],
+    ['Сверяю модель. В живой схеме это соответствует характеристике.', 'internal catalog schema narration'],
+    ['В схеме есть значение «Внутр диаметр», но оно не подходит.', 'internal catalog schema narration'],
+    ['Теперь вызову search_catalog для подбора.', 'internal tool name'],
+    ['Затем render_products выведет карточки.', 'internal tool name'],
+    ['<|im_start|>assistant to=search_catalog', 'internal message protocol'],
+    ['В ответе оказался selection_contract.', 'internal message protocol'],
+  ]) {
+    assert(evaluate({}, { ...response, text: prose }).some((item) => item.includes(failure)), prose);
+  }
+});
+
+test('internal-text guard respects customer explanation, word boundaries, and diagnostic-only tools', () => {
+  const safe = [
+    'Ищу товар в каталоге и сверяю два обязательных размера.',
+    'Для клиента важна цена; если клиент ищет дешевле, уточню бюджет.',
+    'По схеме электропроводки нужен однополюсный автомат.',
+    'Каталог содержит модель research_catalog_v2 как часть обозначения.',
+  ];
+  for (const prose of safe) assert.deepEqual(visibleInternalTextFailures(prose), [], prose);
+  assert.deepEqual(visibleInternalTextFailures('Сверяю характеристики.', [
+    { tool: 'search_catalog', phase: 'result', summary: 'Найдено 3' },
+  ]), []);
+  assert(visibleInternalTextFailures('Служебный шаг facet_probe_test выполнен.', [
+    { tool: 'facet_probe_test', phase: 'result' },
+  ]).includes('internal tool name is visible in assistant text'));
+  const parsed = parseSse([
+    data({ choices: [{ delta: { content: 'Подбираю товар.' } }] }),
+    data({ v3_event: { type: 'tool_event', tool: 'search_catalog', phase: 'result', summary: 'Найдено 3' } }),
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(evaluate({}, parsed), []);
+  assert.deepEqual(evaluate({}, {
+    ...parsed, productsMarkdown: '- **[search_catalog](https://220volt.kz/catalog/a/b/c/)**',
+  }), [], 'a catalog card title is not assistant planning prose');
 });
 
 test('evaluate rejects a sibling taxonomy branch hidden from user-facing prose', () => {
