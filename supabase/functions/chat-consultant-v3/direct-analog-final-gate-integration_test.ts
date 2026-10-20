@@ -96,6 +96,9 @@ function approvedRow(id: number, overrides: Record<string, unknown> = {}) {
 
 type FinalReadMode =
   | "pass"
+  | "mixed"
+  | "mixed_five"
+  | "source_incomplete"
   | "revoked"
   | "changed"
   | "duplicate"
@@ -122,6 +125,8 @@ async function runTurn(mode: FinalReadMode) {
   const outbound: string[] = [];
   let steps: Array<{ step?: string; meta?: Record<string, unknown> }> = [];
   let finalReads = 0;
+  let hydrationReads = 0;
+  let catalogSearches = 0;
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
@@ -155,13 +160,22 @@ async function runTurn(mode: FinalReadMode) {
           });
         }
         if (url.pathname === "/rest/v1/verified_product_facts") {
-          // The bounded shortlist hint is not the final read. Product IDs are
-          // always the exact source and the three cards displayed this turn.
+          // The bounded shortlist hint is not the final read. The final read
+          // includes exactly the source and the cards displayed this turn.
           if (url.searchParams.has("cutout_min_mm")) {
-            return json([2, 3, 4].map((id) => approvedRow(id)));
+            return json(["mixed", "mixed_five", "source_incomplete"].includes(mode)
+              ? []
+              : [2, 3, 4].map((id) => approvedRow(id)));
           }
           const ids = url.searchParams.get("product_id") ?? "";
-          if (["1", "2", "3", "4"].every((id) => ids.includes(id))) {
+          const approvedIds = mode === "mixed_five"
+            ? [1, 2, 3, 4, 8, 9]
+            : [1, 2, 3, 4];
+          const factRow = (id: number) =>
+            id === 1 && mode === "source_incomplete"
+              ? approvedRow(id, { luminous_flux_lm: null })
+              : approvedRow(id);
+          if (approvedIds.every((id) => ids.includes(String(id)))) {
             finalReads++;
             if (mode === "db_failure") {
               return json({ message: "fixture DB unavailable" }, 500);
@@ -169,7 +183,7 @@ async function runTurn(mode: FinalReadMode) {
             if (mode === "timeout") {
               return await new Promise<Response>(() => {});
             }
-            const rows = [1, 2, 3, 4].map((id) => approvedRow(id));
+            const rows = approvedIds.map(factRow);
             if (mode === "revoked") rows.pop();
             if (mode === "changed") rows[3] = approvedRow(4, {
               luminous_flux_lm: 650,
@@ -177,8 +191,9 @@ async function runTurn(mode: FinalReadMode) {
             if (mode === "duplicate") rows.push(approvedRow(4));
             return json(rows);
           }
-          return json([1, 2, 3, 4].filter((id) => ids.includes(String(id)))
-            .map((id) => approvedRow(id)));
+          hydrationReads++;
+          return json(approvedIds.filter((id) => ids.includes(String(id)))
+            .map(factRow));
         }
         if (request.method === "GET" && url.pathname.startsWith("/rest/v1/")) {
           return json([]);
@@ -197,7 +212,7 @@ async function runTurn(mode: FinalReadMode) {
         if (url.pathname === "/api/categories/options") {
           return json({
             data: {
-              category: { id: 10, pagetitle: leaf, total_products: 4 },
+              category: { id: 10, pagetitle: leaf, total_products: 9 },
               options: options.map(([key, caption, value]) => ({
                 key, caption_ru: caption, type: "string",
                 values: [{ value_ru: value, products_count: 4 }],
@@ -207,11 +222,30 @@ async function runTurn(mode: FinalReadMode) {
         }
         if (url.pathname === "/api/products") {
           const article = url.searchParams.get("article");
-          const result = article
-            ? [1, 2, 3, 4].filter((id) => product(id).article === article).map(product)
-            : url.searchParams.has("query") || url.searchParams.has("pagetitle")
-            ? [product(1)]
-            : [product(2), product(3), product(4)];
+          let result: ReturnType<typeof product>[];
+          if (article) {
+            result = [1, 2, 3, 4].filter((id) =>
+              product(id).article === article
+            ).map(product);
+          } else if (
+            url.searchParams.has("query") || url.searchParams.has("pagetitle")
+          ) {
+            result = [product(1)];
+          } else {
+            catalogSearches++;
+            if (mode === "source_incomplete") {
+              result = [2, 3, 4, 5, 6].map(product);
+            } else if (mode === "mixed" || mode === "mixed_five") {
+              const ids = [2, 5, 3, 6, 7];
+              if (catalogSearches >= 2) ids.push(4);
+              if (mode === "mixed_five" && catalogSearches >= 3) {
+                ids.push(8, 9);
+              }
+              result = ids.map(product);
+            } else {
+              result = [2, 3, 4].map(product);
+            }
+          }
           return json({
             data: { results: result, pagination: { total: result.length } },
           });
@@ -247,7 +281,14 @@ async function runTurn(mode: FinalReadMode) {
       },
     ));
     assertEquals(response.status, 200);
-    return { events: events(await response.text()), steps, outbound, finalReads };
+    return {
+      events: events(await response.text()),
+      steps,
+      outbound,
+      finalReads,
+      hydrationReads,
+      catalogSearches,
+    };
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
@@ -280,6 +321,64 @@ Deno.test({
     assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 3);
     assert(result.steps.some(({ step }) => step === "v3_replacement_final_fact_gate_passed"));
     assert(!JSON.stringify(result.events).includes("private-technical-reviewer"));
+  },
+});
+
+Deno.test({
+  name: "mixed structural window falls back to three approved analogs when five are unavailable",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runTurn("mixed");
+    const blocks = productBlocks(result);
+    assert(result.catalogSearches >= 2, JSON.stringify(result.steps));
+    assertEquals(result.finalReads, 1, JSON.stringify(result.steps));
+    assertEquals(blocks.length, 1, JSON.stringify(result.steps));
+    assertEquals(blocks[0].count, 3);
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.status,
+      "confirmed_direct");
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 3);
+    assert(!JSON.stringify(blocks).includes("fixture-5/"));
+    assert(result.steps.some(({ step }) => step === "v3_replacement_final_fact_gate_passed"));
+  },
+});
+
+Deno.test({
+  name: "mixed structural window continues until five approved analogs are found",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runTurn("mixed_five");
+    const blocks = productBlocks(result);
+    assert(result.catalogSearches >= 3, JSON.stringify(result.steps));
+    assertEquals(result.finalReads, 1, JSON.stringify(result.steps));
+    assertEquals(blocks.length, 1, JSON.stringify(result.steps));
+    assertEquals(blocks[0].count, 5);
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.status,
+      "confirmed_direct");
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 5);
+    for (const id of [2, 3, 4, 8, 9]) {
+      assert(JSON.stringify(blocks).includes(`fixture-${id}/`));
+    }
+    for (const id of [5, 6, 7]) {
+      assert(!JSON.stringify(blocks).includes(`fixture-${id}/`));
+    }
+    assert(result.steps.some(({ step }) =>
+      step === "v3_replacement_final_fact_gate_passed"
+    ));
+  },
+});
+
+Deno.test({
+  name: "incomplete source facts do not expand the bounded structural search",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runTurn("source_incomplete");
+    const blocks = productBlocks(result);
+    assertEquals(result.catalogSearches, 1, JSON.stringify(result.steps));
+    assert(result.hydrationReads <= 2, JSON.stringify(result.steps));
+    assertEquals(blocks.length, 1, JSON.stringify(result.steps));
+    assertEquals(blocks[0].count, 5);
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof, undefined);
+    assert(!JSON.stringify(result.events).includes("Подборка прямых аналогов"));
   },
 });
 

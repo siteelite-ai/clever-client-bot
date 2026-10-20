@@ -526,6 +526,8 @@ import { validateVerifiedManufacturerFacts } from "../_shared/v3-tools/verified-
 import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
 import {
   buildDirectAnalogProof,
+  directAnalogSourceEligible,
+  selectProofEligibleDirectAnalogCandidates,
   type DirectAnalogProof,
 } from "../_shared/v3-tools/direct-analog-proof.ts";
 import {
@@ -4694,6 +4696,26 @@ async function selectGuardedStructuralReplacement(
       signal: ctx.turnSignal,
     })
     : null;
+  const proofAwareSearch = DIRECT_ANALOG_PROOF_ENABLED &&
+    manufacturerFacts !== null &&
+    directAnalogSourceEligible(source, customerCutoutMm) &&
+    requested.target >= 3;
+  const desiredProofCount = Math.min(5, requested.target);
+  const structuralCandidates = (products: readonly ProductRef[]) =>
+    products.flatMap((candidate) => {
+      const result = assess(candidate, false);
+      return result ? [result] : [];
+    });
+  const enoughCandidates = (products: readonly ProductRef[]) => {
+    const accepted = structuralCandidates(products);
+    if (!proofAwareSearch) return accepted.length >= requested.target;
+    return selectProofEligibleDirectAnalogCandidates({
+      source,
+      candidates: accepted.map(({ full }) => full),
+      customerCutoutMm,
+      maxCards: desiredProofCount,
+    }).candidates.length >= desiredProofCount;
+  };
   let shortlist: VerifiedCutoutShortlistResult | null = null;
   let shortlistReadFailed = false;
   let retrieved: Awaited<ReturnType<typeof retrieveReplacementCandidateWindow>> |
@@ -4755,7 +4777,7 @@ async function selectGuardedStructuralReplacement(
       }
     }
     if (
-      (shortlist?.products.length ?? 0) < requested.target &&
+      !enoughCandidates(shortlist?.products ?? []) &&
       (!guardedBudget ||
         (!guardedBudget.signal.aborted &&
           guardedBudget.remainingRequests() > 0 &&
@@ -4786,12 +4808,10 @@ async function selectGuardedStructuralReplacement(
         deadlineMs: guardedBudget?.remainingMs() ??
           Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
         stopWhen: (products) =>
-          [...new Map([
+          enoughCandidates([...new Map([
             ...(shortlist?.products ?? []),
             ...products,
-          ].map((candidate) => [candidate.id, candidate])).values()]
-            .filter((candidate) => assess(candidate, false)).length >=
-            requested.target,
+          ].map((candidate) => [candidate.id, candidate])).values()]),
         ...(manufacturerFacts
           ? {
             search: async (
@@ -4837,10 +4857,27 @@ async function selectGuardedStructuralReplacement(
     ...(shortlist?.products ?? []),
     ...(retrieved?.products ?? []),
   ].map((candidate) => [candidate.id, candidate])).values()];
-  const selected = candidatePool.flatMap((candidate) => {
+  const structuralSelection = candidatePool.flatMap((candidate) => {
     const result = assess(candidate, true);
     return result ? [result] : [];
-  }).slice(0, requested.target);
+  });
+  // A direct certificate must bind only the cards it actually renders. Keep
+  // the legacy structural window when the opt-in is OFF or fewer than three
+  // distinct live candidates satisfy every manufacturer-backed proof axis.
+  const proofSelection = proofAwareSearch
+    ? selectProofEligibleDirectAnalogCandidates({
+      source,
+      candidates: structuralSelection.map(({ full }) => full),
+      customerCutoutMm,
+      maxCards: Math.min(5, requested.target),
+    })
+    : null;
+  const provenIds = proofSelection?.proof
+    ? new Set(proofSelection.candidates.map(({ id }) => id))
+    : null;
+  const selected = provenIds
+    ? structuralSelection.filter(({ full }) => provenIds.has(full.id))
+    : structuralSelection.slice(0, requested.target);
   steps.push({
     step: "v3_replacement_guarded_window",
     ms: Date.now() - t0,
@@ -4848,6 +4885,7 @@ async function selectGuardedStructuralReplacement(
       source_id: source.id,
       selected: selected.length,
       target: requested.target,
+      direct_proof_eligible: proofSelection?.candidates.length ?? null,
       termination: retrieved?.termination ??
         ((shortlist?.products.length ?? 0) >= requested.target
           ? "verified_shortlist_target_reached"

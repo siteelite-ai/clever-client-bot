@@ -51,6 +51,16 @@ interface BuildDirectAnalogProofInput {
   nowMs?: number;
 }
 
+interface SelectDirectAnalogCandidatesInput extends BuildDirectAnalogProofInput {
+  /** Bounded visible-card cap; a direct certificate always needs at least 3. */
+  maxCards?: number;
+}
+
+export interface DirectAnalogCandidateSelection {
+  candidates: ProductFull[];
+  proof: DirectAnalogProof | null;
+}
+
 /**
  * Only these first-party public manufacturer sites may be named in a browser
  * certificate. The private approval table accepts a wider range of evidence
@@ -224,20 +234,22 @@ function technicalAxesComplete(facts: VerifiedManufacturerFacts): boolean {
     Number.isFinite(t.supply_v?.min) && Number.isFinite(t.supply_v?.max);
 }
 
-/**
- * Build a public, server-authored certificate only for three to five exact
- * rendered cards. This pure function does no retrieval: the caller must pass
- * products freshly read through the restricted-view-filtering catalog adapter
- * and service-role-hydrated manufacturer facts. Missing evidence rejects the
- * entire certificate; a provisional candidate never fills a direct slot.
- */
-export function buildDirectAnalogProof(
-  { source, candidates, customerCutoutMm = null, nowMs = Date.now() }:
-    BuildDirectAnalogProofInput,
-): DirectAnalogProof | null {
+interface DirectAnalogSourceContext {
+  source: ProductFull;
+  now: Date;
+  targetCutout: number;
+  sourceSupply: { min: number; max: number };
+  sourceFlux: number;
+  sourceCct: number;
+}
+
+function prepareDirectAnalogSource(
+  source: ProductFull,
+  customerCutoutMm: number | null,
+  nowMs: number,
+): DirectAnalogSourceContext | null {
   if (
-    !Number.isFinite(nowMs) || candidates.length < 3 ||
-    candidates.length > 5 || !canonicalProductIdentity(source) ||
+    !Number.isFinite(nowMs) || !canonicalProductIdentity(source) ||
     !hasNoExplicitRestrictedView(source) ||
     (customerCutoutMm !== null &&
       (!Number.isFinite(customerCutoutMm) || customerCutoutMm <= 0))
@@ -253,86 +265,182 @@ export function buildDirectAnalogProof(
     targetCutout === null || targetCutout > 10_000 ||
     !covers({ min: sourceCutout.min_mm, max: sourceCutout.max_mm }, targetCutout)
   ) return null;
-  const sourceSupply = sourceTech.supply_v!;
-  const sourceFlux = sourceTech.luminous_flux_lm!;
-  const sourceCct = sourceTech.color_temperature_k!;
-  const seenIds = new Set([source.id]);
-  const seenUrls = new Set([source.url]);
-  const seenArticles = new Set([source.article!]);
-  const provedCandidates: DirectAnalogProof["candidates"] = [];
+  return {
+    source,
+    now,
+    targetCutout,
+    sourceSupply: sourceTech.supply_v!,
+    sourceFlux: sourceTech.luminous_flux_lm!,
+    sourceCct: sourceTech.color_temperature_k!,
+  };
+}
 
-  for (const candidate of candidates) {
-    if (
-      !canonicalProductIdentity(candidate) ||
-      seenIds.has(candidate.id) || seenUrls.has(candidate.url) ||
-      seenArticles.has(candidate.article!) ||
-      normalized(candidate.pagetitle) === normalized(source.pagetitle) ||
-      normalized(candidate.leaf_category ?? "") !==
-        normalized(source.leaf_category ?? "") ||
-      !candidate.leaf_category || !source.leaf_category ||
-      !hasNoExplicitRestrictedView(candidate) ||
-      !hasPositiveLiveOffer(candidate) ||
-      !liveSellerProvesSingleSale(candidate)
-    ) return null;
-    seenIds.add(candidate.id);
-    seenUrls.add(candidate.url);
-    seenArticles.add(candidate.article!);
-    const facts = freshBoundFacts(candidate, now);
-    if (!facts || !technicalAxesComplete(facts)) return null;
-    const tech = facts.technical;
-    const cutout = tech.cutout!;
-    const supply = tech.supply_v!;
-    if (
-      !covers({ min: cutout.min_mm, max: cutout.max_mm }, targetCutout) ||
-      tech.luminous_flux_lm! < sourceFlux * (2 / 3) ||
-      tech.luminous_flux_lm! > sourceFlux * (4 / 3) ||
-      tech.color_temperature_k !== sourceCct ||
-      supply.min > sourceSupply.min || supply.max < sourceSupply.max
-    ) return null;
-    const provenance = {
-      kind: "approved_manufacturer_fact" as const,
-      source_url: facts.provenance.source_url,
-      approved_at: facts.provenance.approved_at,
-      valid_until: facts.provenance.valid_until,
-    };
-    provedCandidates.push({
-      product_url: candidate.url,
-      sku: candidate.article!,
-      verdict: "confirmed_direct",
-      axes: [
-        { key: "fixture_form", value: "downlight", evidence: provenance },
-        { key: "mounting_method", value: "recessed", evidence: provenance },
-        { key: "integrated_led", value: true, evidence: provenance },
-        { key: "socket_kind", value: "none", evidence: provenance },
-        {
-          key: "mounting_cutout_mm",
-          value: { min: cutout.min_mm, max: cutout.max_mm },
-          evidence: provenance,
-        },
-        {
-          key: "luminous_flux_lm",
-          value: tech.luminous_flux_lm!,
-          evidence: provenance,
-        },
-        {
-          key: "color_temperature_k",
-          value: tech.color_temperature_k!,
-          evidence: provenance,
-        },
-        {
-          key: "supply_voltage_v",
-          value: { min: supply.min, max: supply.max },
-          evidence: provenance,
-        },
-      ],
-    });
-  }
+/** A cheap pre-search gate: an incomplete source can never earn a direct proof. */
+export function directAnalogSourceEligible(
+  source: ProductFull,
+  customerCutoutMm: number | null = null,
+  nowMs = Date.now(),
+): boolean {
+  return prepareDirectAnalogSource(source, customerCutoutMm, nowMs) !== null;
+}
 
+function seenDirectAnalogIdentities(source: ProductFull) {
+  return {
+    ids: new Set([source.id]),
+    urls: new Set([source.url]),
+    articles: new Set([source.article!]),
+  };
+}
+
+function proveDirectAnalogCandidate(
+  context: DirectAnalogSourceContext,
+  candidate: ProductFull,
+  seen: ReturnType<typeof seenDirectAnalogIdentities>,
+): DirectAnalogProof["candidates"][number] | null {
+  const { source, now, targetCutout, sourceSupply, sourceFlux, sourceCct } =
+    context;
+  if (
+    !canonicalProductIdentity(candidate) ||
+    seen.ids.has(candidate.id) || seen.urls.has(candidate.url) ||
+    seen.articles.has(candidate.article!) ||
+    normalized(candidate.pagetitle) === normalized(source.pagetitle) ||
+    normalized(candidate.leaf_category ?? "") !==
+      normalized(source.leaf_category ?? "") ||
+    !candidate.leaf_category || !source.leaf_category ||
+    !hasNoExplicitRestrictedView(candidate) ||
+    !hasPositiveLiveOffer(candidate) ||
+    !liveSellerProvesSingleSale(candidate)
+  ) return null;
+  const facts = freshBoundFacts(candidate, now);
+  if (!facts || !technicalAxesComplete(facts)) return null;
+  const tech = facts.technical;
+  const cutout = tech.cutout!;
+  const supply = tech.supply_v!;
+  if (
+    !covers({ min: cutout.min_mm, max: cutout.max_mm }, targetCutout) ||
+    tech.luminous_flux_lm! < sourceFlux * (2 / 3) ||
+    tech.luminous_flux_lm! > sourceFlux * (4 / 3) ||
+    tech.color_temperature_k !== sourceCct ||
+    supply.min > sourceSupply.min || supply.max < sourceSupply.max
+  ) return null;
+  seen.ids.add(candidate.id);
+  seen.urls.add(candidate.url);
+  seen.articles.add(candidate.article!);
+  const provenance = {
+    kind: "approved_manufacturer_fact" as const,
+    source_url: facts.provenance.source_url,
+    approved_at: facts.provenance.approved_at,
+    valid_until: facts.provenance.valid_until,
+  };
+  return {
+    product_url: candidate.url,
+    sku: candidate.article!,
+    verdict: "confirmed_direct",
+    axes: [
+      { key: "fixture_form", value: "downlight", evidence: provenance },
+      { key: "mounting_method", value: "recessed", evidence: provenance },
+      { key: "integrated_led", value: true, evidence: provenance },
+      { key: "socket_kind", value: "none", evidence: provenance },
+      {
+        key: "mounting_cutout_mm",
+        value: { min: cutout.min_mm, max: cutout.max_mm },
+        evidence: provenance,
+      },
+      {
+        key: "luminous_flux_lm",
+        value: tech.luminous_flux_lm!,
+        evidence: provenance,
+      },
+      {
+        key: "color_temperature_k",
+        value: tech.color_temperature_k!,
+        evidence: provenance,
+      },
+      {
+        key: "supply_voltage_v",
+        value: { min: supply.min, max: supply.max },
+        evidence: provenance,
+      },
+    ],
+  };
+}
+
+function directAnalogCertificate(
+  context: DirectAnalogSourceContext,
+  candidates: DirectAnalogProof["candidates"],
+): DirectAnalogProof {
   return {
     schema_version: 1,
     status: "confirmed_direct",
-    source_product_url: source.url,
-    target_cutout_mm: targetCutout,
-    candidates: provedCandidates,
+    source_product_url: context.source.url,
+    target_cutout_mm: context.targetCutout,
+    candidates,
+  };
+}
+
+/**
+ * Build a public, server-authored certificate only for three to five exact
+ * rendered cards. This pure function does no retrieval: the caller must pass
+ * products freshly read through the restricted-view-filtering catalog adapter
+ * and service-role-hydrated manufacturer facts. Missing evidence rejects the
+ * entire certificate; a provisional candidate never fills a direct slot.
+ */
+export function buildDirectAnalogProof(
+  { source, candidates, customerCutoutMm = null, nowMs = Date.now() }:
+    BuildDirectAnalogProofInput,
+): DirectAnalogProof | null {
+  if (candidates.length < 3 || candidates.length > 5) return null;
+  const context = prepareDirectAnalogSource(source, customerCutoutMm, nowMs);
+  if (!context) return null;
+  const seen = seenDirectAnalogIdentities(source);
+  const provedCandidates: DirectAnalogProof["candidates"] = [];
+  for (const candidate of candidates) {
+    const proved = proveDirectAnalogCandidate(context, candidate, seen);
+    if (!proved) return null;
+    provedCandidates.push(proved);
+  }
+  return directAnalogCertificate(context, provedCandidates);
+}
+
+/**
+ * Search may find a mixture of structural candidates. Select only live,
+ * distinct and fully manufacturer-proven cards, in catalog order. The same
+ * predicate powers the strict rendered-set certificate above; an unapproved
+ * candidate can neither count toward the minimum nor poison an approved set.
+ * Until three cards pass, no direct certificate is issued.
+ */
+export function selectProofEligibleDirectAnalogCandidates(
+  {
+    source,
+    candidates,
+    customerCutoutMm = null,
+    nowMs = Date.now(),
+    maxCards = 5,
+  }: SelectDirectAnalogCandidatesInput,
+): DirectAnalogCandidateSelection {
+  const empty = (): DirectAnalogCandidateSelection => ({
+    candidates: [],
+    proof: null,
+  });
+  if (!Number.isInteger(maxCards) || maxCards < 3 || maxCards > 5) {
+    return empty();
+  }
+  const context = prepareDirectAnalogSource(source, customerCutoutMm, nowMs);
+  if (!context) return empty();
+  const seen = seenDirectAnalogIdentities(source);
+  const selected: ProductFull[] = [];
+  const proved: DirectAnalogProof["candidates"] = [];
+  for (const candidate of candidates) {
+    const item = proveDirectAnalogCandidate(context, candidate, seen);
+    if (!item) continue;
+    selected.push(candidate);
+    proved.push(item);
+    if (selected.length >= maxCards) break;
+  }
+  return {
+    candidates: selected,
+    proof: selected.length >= 3
+      ? directAnalogCertificate(context, proved)
+      : null,
   };
 }

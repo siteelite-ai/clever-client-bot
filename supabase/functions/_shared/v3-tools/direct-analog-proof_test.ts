@@ -2,7 +2,11 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildDirectAnalogProof } from "./direct-analog-proof.ts";
+import {
+  buildDirectAnalogProof,
+  directAnalogSourceEligible,
+  selectProofEligibleDirectAnalogCandidates,
+} from "./direct-analog-proof.ts";
 import type { ProductFull } from "./types.ts";
 import { validateVerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
 
@@ -123,6 +127,68 @@ Deno.test("exactly three or four distinct rendered candidates earn a determinist
   assertEquals(buildDirectAnalogProof(input)?.candidates.length, 5);
   input.candidates.push(approved("six"));
   assertEquals(buildDirectAnalogProof(input), null);
+});
+
+Deno.test("proof-aware selection skips mixed unapproved cards and preserves live proof order", () => {
+  const input = fixture();
+  const unapproved = product("unapproved");
+  const wrongStock = { ...approved("out-of-stock"), stock: "out" as const };
+  const zeroPrice = { ...approved("zero-price"), price: 0 };
+  const restricted = approved("restricted");
+  restricted.facet_values = {
+    ...restricted.facet_values,
+    ogranichennyy_prosmotr: ["Да"],
+  };
+  const duplicateArticle = {
+    ...approved("duplicate-article"),
+    article: input.candidates[0].article,
+  };
+  const candidates = [
+    input.candidates[0],
+    unapproved,
+    wrongStock,
+    zeroPrice,
+    restricted,
+    input.candidates[1],
+    duplicateArticle,
+    input.candidates[2],
+    approved("four"),
+  ];
+  assertEquals(buildDirectAnalogProof({ ...input, candidates }), null);
+  const selected = selectProofEligibleDirectAnalogCandidates({
+    ...input,
+    candidates,
+    maxCards: 5,
+  });
+  assertEquals(selected.candidates.map(({ id }) => id), [
+    "one", "two", "three", "four",
+  ]);
+  assertEquals(selected.proof?.candidates.map(({ sku }) => sku), [
+    "SKU-one", "SKU-two", "SKU-three", "SKU-four",
+  ]);
+  assertEquals(selected.proof, buildDirectAnalogProof({
+    ...input,
+    candidates: selected.candidates,
+  }));
+  assertEquals(selectProofEligibleDirectAnalogCandidates({
+    ...input,
+    candidates: candidates.slice(0, 6),
+    maxCards: 3,
+  }).proof, null);
+  assertEquals(selectProofEligibleDirectAnalogCandidates({
+    ...input,
+    candidates,
+    maxCards: 3,
+  }).candidates.map(({ id }) => id), ["one", "two", "three"]);
+});
+
+Deno.test("incomplete or expired source facts cannot trigger expanded direct-proof search", () => {
+  const source = approved("source");
+  assertEquals(directAnalogSourceEligible(source, 90, NOW), true);
+  const incomplete = approved("source-incomplete", { luminous_flux_lm: null });
+  assertEquals(directAnalogSourceEligible(incomplete, 90, NOW), false);
+  assertEquals(directAnalogSourceEligible(source, 90, Date.parse("2027-01-01T00:00:00Z")), false);
+  assertEquals(directAnalogSourceEligible(source, 95, NOW), false);
 });
 
 Deno.test("two candidates, source self-link, duplicate ID, URL or article never satisfy three", () => {

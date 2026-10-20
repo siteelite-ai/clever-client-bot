@@ -778,6 +778,7 @@ Deno.test({
     const cards = blocks(result);
     assertEquals(cards.length, 1, JSON.stringify(result.steps));
     assertEquals(cards[0].count, 4);
+    assertEquals(JSON.stringify(cards[0]).includes("direct_analog_proof"), false);
     assertEquals(result.catalogPages, [1, 2]);
     for (const id of [2, 3, 4, 5]) {
       assert(cards[0].markdown?.includes(`альтернатива ${id}`));
