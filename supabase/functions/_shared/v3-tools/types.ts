@@ -44,6 +44,12 @@ export interface ProductFull extends ProductRef {
    * results so it does not inflate or instruct the language model.
    */
   facet_values?: Record<string, string[]>;
+  /**
+   * Display-only human captions paired with facet keys in the same catalog
+   * option. Kept in the internal cache, never in model/tool results. An absent
+   * caption must not be reconstructed from a normalized machine key.
+   */
+  facet_captions?: Record<string, string>;
 }
 
 export type ToolName =

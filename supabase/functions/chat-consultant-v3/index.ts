@@ -301,6 +301,7 @@ import {
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
   omitPairedObjectReferenceExactCriteria,
+  parseExplicitReplacementSourceBoundary,
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
@@ -503,6 +504,7 @@ import {
   replacementProofCaption,
   replacementClassIsGroundedByLiveIdentity,
   resolveExactReplacementSource,
+  resolveUniqueExactReplacementTitle,
   resolveReplacementProofContext,
   replacementTerminalFallback,
   resolveReplacementIntent,
@@ -4399,6 +4401,7 @@ async function selectVerifiedOrdinaryReplacement(
   send: (event: SseEvent) => void,
   steps: StepLog[],
   t0: number,
+  verifiedExactSource: ProductRef | null = null,
 ): Promise<DirectReplacementResult> {
   const started = Date.now();
   const equivalentOnly = /равноцен\p{L}*/iu.test(userMessage);
@@ -4409,8 +4412,12 @@ async function selectVerifiedOrdinaryReplacement(
   const lookup = extractReplacementLookupKeys(userMessage);
   const sourceDescription = extractReplacementSourceDescription(userMessage);
   const sourceCandidateIds = new Set<string>();
-  let anchor: ProductRef | null = null;
-  let sourceIdentityVerified = false;
+  // Only a unique, full-title-equal live catalog card may bypass the
+  // ambiguity of nameplate specs inside an explicitly delimited source.
+  // Never promote a broad code hit to an exact source identity.
+  let anchor: ProductRef | null = verifiedExactSource;
+  let sourceIdentityVerified = Boolean(verifiedExactSource);
+  if (verifiedExactSource) sourceCandidateIds.add(verifiedExactSource.id);
 
   // Resolve only a class that is literally grounded in the customer's source
   // description. No model fallback is allowed here: the live taxonomy may
@@ -4460,7 +4467,7 @@ async function selectVerifiedOrdinaryReplacement(
   // must not nominate its first product as the source SKU. A literal article
   // is an exact source identity and stays on the existing anchor route.
   if (
-    sourceClassDiscovery.ok && liveClarification &&
+    sourceClassDiscovery.ok && liveClarification && !verifiedExactSource &&
     shouldClarifyCompactReplacementSource({
       grounded_source_class: sourceClassLeaves.length > 0,
       has_exact_article: lookup.articles.length > 0,
@@ -23372,12 +23379,54 @@ Deno.serve(async (req) => {
               );
             } else if (replacementSourceRequest) {
               let direct: DirectReplacementResult | null = null;
-              const replacementDirectAdmitted = admitDirectSelectionRoute({
+              let verifiedExactSource: ProductRef | null = null;
+              let replacementDirectAdmitted = admitDirectSelectionRoute({
                 route: "replacement",
                 userMessage: replacementSourceRequest,
                 coversBudgetCap:
                   extractBudgetCap(replacementSourceRequest) !== null,
               });
+              if (!replacementDirectAdmitted && !scopedReplacementSource) {
+                const boundary = parseExplicitReplacementSourceBoundary(
+                  replacementSourceRequest,
+                );
+                if (boundary && boundary.source.length <= 200) {
+                  const sourceResult = await executeSearchCatalog({
+                    mode: "by_pagetitle",
+                    pagetitle: boundary.source,
+                    per_page: 2,
+                  }, {
+                    baseUrl: CATALOG_BASE_URL,
+                    apiToken: ctx.catalogToken,
+                  }, ctx.cache);
+                  const source = sourceResult.ok
+                    ? resolveUniqueExactReplacementTitle(
+                      boundary.source,
+                      sourceResult,
+                    )
+                    : null;
+                  if (source) {
+                    replacementDirectAdmitted = admitDirectSelectionRoute({
+                      route: "replacement",
+                      userMessage: replacementSourceRequest,
+                      coversBudgetCap:
+                        extractBudgetCap(replacementSourceRequest) !== null,
+                      verifiedSourceTitle: source.pagetitle,
+                    });
+                    if (replacementDirectAdmitted) verifiedExactSource = source;
+                  }
+                  steps.push({
+                    step: "v3_replacement_explicit_source_checked",
+                    ms: Date.now() - t0,
+                    meta: {
+                      boundary: boundary.kind,
+                      unique_exact_title: Boolean(source),
+                      admitted: replacementDirectAdmitted,
+                      search_error: sourceResult.ok ? null : sourceResult.error_code,
+                    },
+                  });
+                }
+              }
               if (
                 scopedReplacementSource && pendingScopedCatalogContinuation &&
                 replacementDirectAdmitted
@@ -23498,6 +23547,7 @@ Deno.serve(async (req) => {
                     send,
                     steps,
                     t0,
+                    verifiedExactSource,
                   );
                 }
               }
@@ -23513,6 +23563,7 @@ Deno.serve(async (req) => {
                   send,
                   steps,
                   t0,
+                  verifiedExactSource,
                 );
               }
               if (direct.handled) {
