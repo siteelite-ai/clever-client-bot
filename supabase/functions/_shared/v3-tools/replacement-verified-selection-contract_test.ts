@@ -314,6 +314,7 @@ Deno.test("approved opaque socket uses the same guarded proof in shortlist and f
   const liveFacets = facets.map((facet) => ({
     ...facet,
     values: [...facet.values,
+      ...facet.key === "live_kind" ? [{ value: "точечные светильники", products_count: 1 }] : [],
       ...facet.key === "live_socket" ? [{ value: "прочее", products_count: 1 }] : [],
       ...facet.key === "live_voltage" ? [{ value: "230", products_count: 1 }] : [],
     ],
@@ -321,6 +322,7 @@ Deno.test("approved opaque socket uses the same guarded proof in shortlist and f
   const approved = (item: ProductFull) => {
     const bound = withApprovedRoundCutout(item, 90, 90);
     bound.verified_manufacturer_facts!.technical.integrated_led = true;
+    bound.verified_manufacturer_facts!.technical.fixture_form = "downlight";
     bound.verified_manufacturer_facts!.technical.socket = { kind: "none" };
     bound.verified_manufacturer_facts!.technical.supply_v = {
       min: 220,
@@ -333,6 +335,7 @@ Deno.test("approved opaque socket uses the same guarded proof in shortlist and f
   assertEquals(resolved.status, "ready");
   if (resolved.status !== "ready") throw new Error("profile not ready");
   const candidate = approved(product("opaque", {
+    kind: "точечные светильники",
     socket: "прочее",
     voltage: "230",
   }));
@@ -351,7 +354,8 @@ Deno.test("approved opaque socket uses the same guarded proof in shortlist and f
   });
   assertNotEquals(contract, null);
   assertEquals(contract?.mandatory_criteria.some(({ key }) =>
-    key === "Тип цоколя" || key === "Напряжение, В"
+    key === "Вид светильника" || key === "Тип цоколя" ||
+    key === "Напряжение, В"
   ), false);
   assertEquals(contract?.mandatory_criteria.some(({ key }) =>
     key === "Способ монтажа"

@@ -495,6 +495,50 @@ Deno.test("broad kind is bridged only by approved form on both exact cards; inco
   ), { ok: false, reason: "manufacturer_catalog_conflict:kind" });
 });
 
+Deno.test("compound catalogue aliases require one guarded typed-facts proof", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_kind" ? [{ value: "точечные светильники" }] : [],
+      ...facet.key === "live_socket" ? [{ value: "прочее" }] : [],
+      ...facet.key === "live_driver" ? [{ value: "светодиодный драйвер" }] : [],
+      ...facet.key === "live_voltage" ? [{ value: "230" }] : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source"), {
+    fixture_form: "downlight",
+    cutout: { shape: "round", kind: "exact", min_mm: 90, max_mm: 90 },
+  });
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("source profile not ready");
+  const candidate = withApprovedFacts(product("compound-approved", {
+    kind: "точечные светильники",
+    socket: "прочее",
+    driver: "светодиодный драйвер",
+    voltage: "230",
+    diameter: "11.8",
+    power: "9",
+    flux: "620",
+  }, {
+    pagetitle: "Светильник встраиваемый LED 9W 4000K",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  }), {
+    fixture_form: "downlight",
+    cutout: { shape: "round", kind: "exact", min_mm: 90, max_mm: 90 },
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate,
+  ), { ok: false, reason: "candidate_mismatch:kind" });
+  const guarded = evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate, {
+      dimensionPolicy: "verified_mounting_cutout",
+      customerCutoutMm: 90,
+    },
+  );
+  assertEquals(guarded.ok, true, JSON.stringify(guarded));
+});
+
 Deno.test("approved fixture form cannot bridge an unrelated Вид управления facet", () => {
   const controlFacets = facets.map((facet) => facet.key === "live_kind"
     ? {
