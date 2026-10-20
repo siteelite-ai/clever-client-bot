@@ -501,7 +501,19 @@ import {
 import {
   evaluateStructuralReplacementCandidate,
   resolveStructuralReplacementProfile,
+  type StructuralReplacementProfile,
 } from "../_shared/v3-tools/replacement-structural-proof.ts";
+import { extractReplacementDimensions } from "../_shared/v3-tools/replacement-provisional-evidence.ts";
+import {
+  evaluateReplacementCandidateFit,
+  type ReplacementCandidateFit,
+} from "../_shared/v3-tools/replacement-candidate-fit.ts";
+import { retrieveReplacementCandidateWindow } from "../_shared/v3-tools/replacement-candidate-retrieval.ts";
+import {
+  parseReplacementCutoutReply,
+  resolveServerIssuedReplacementCutoutPending,
+  type VerifiedReplacementCutoutPending,
+} from "../_shared/v3-tools/replacement-cutout-clarification.ts";
 import {
   evaluateLedLampCandidate,
   evaluateLedLampFamilyBrowseCandidate,
@@ -4222,6 +4234,287 @@ interface DirectReplacementResult {
   source_candidate_ids?: string[];
 }
 
+/** Source-only structural replacements remain a shortlist, never a fit certificate. */
+async function selectGuardedStructuralReplacement(
+  originalRequest: string,
+  profile: StructuralReplacementProfile,
+  requested: ResultCardinalityContract,
+  budgetCap: number | null,
+  customerCutoutMm: number | null,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<DirectReplacementResult> {
+  const source = profile.source;
+  const sourceCutout = extractReplacementDimensions(source).mounting_cutout_mm;
+  if (
+    sourceCutout.status === "conflicting" ||
+    (customerCutoutMm !== null && sourceCutout.mm !== null &&
+      sourceCutout.mm !== customerCutoutMm)
+  ) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Данные о монтажном отверстии исходного светильника противоречат друг другу. Не могу безопасно подобрать замену; уточните размер по паспорту или у менеджера.",
+    });
+    steps.push({
+      step: "v3_replacement_cutout_source_conflict",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id, catalog_cutout_mm: sourceCutout.mm },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+  if (sourceCutout.mm === null && customerCutoutMm === null) {
+    if (
+      !source.id || source.id.length > 200 ||
+      !source.pagetitle || source.pagetitle.length > 500 ||
+      !profile.leafCategory || profile.leafCategory.length > 300 ||
+      !originalRequest || originalRequest.length > 1_600
+    ) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: "Не удалось сохранить проверенный контекст исходного товара. Повторите запрос позже; неподтверждённые замены не показываю.",
+      });
+      return { handled: true, products: [], outcome: "query_inconsistent" };
+    }
+    const question = "Какой диаметр монтажного отверстия в потолке? Напишите одно число в миллиметрах, например 90 мм. Код размера в названии товара не подтверждает размер выреза.";
+    const pending: VerifiedReplacementCutoutPending = {
+      status: "pending",
+      slot_id: crypto.randomUUID(),
+      facet_key: "mounting_cutout_mm",
+      question,
+      options: [],
+      scope: {
+        kind: "replacement_mounting_cutout",
+        source_product_id: source.id,
+        source_title: source.pagetitle,
+        source_leaf: profile.leafCategory,
+        original_request: originalRequest,
+      },
+    };
+    send({ type: "delta", origin: "server", content: question });
+    send({ type: "slot_update", slots: { pending_clarification: pending } });
+    steps.push({
+      step: "v3_replacement_cutout_question_issued",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+
+  const rejected = new Map<string, number>();
+  const excludedCutoutExamples: Array<{
+    candidate_id: string;
+    source_or_customer_cutout_mm: number;
+    candidate_cutout_mm: number;
+  }> = [];
+  const reject = (reason: string) =>
+    rejected.set(reason, (rejected.get(reason) ?? 0) + 1);
+  const identity = (value: string | null | undefined) =>
+    String(value ?? "").normalize("NFKC").toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
+  const assess = (candidate: ProductRef, trace: boolean):
+    { full: ProductFull; fit: ReplacementCandidateFit } | null => {
+      const full = ctx.cache.get(candidate.id);
+      if (!full) {
+        if (trace) reject("candidate_full_card_missing");
+        return null;
+      }
+      if (
+        full.id === source.id ||
+        (full.article && source.article && full.article === source.article) ||
+        identity(full.pagetitle) === identity(source.pagetitle) ||
+        full.url === source.url
+      ) {
+        if (trace) reject("candidate_is_source");
+        return null;
+      }
+      if (budgetCap !== null && full.price > budgetCap) {
+        if (trace) reject("customer_budget_exceeded");
+        return null;
+      }
+      const strict = evaluateStructuralReplacementCandidate(profile, full);
+      if (!strict.ok) {
+        if (trace) reject(`strict:${strict.reason}`);
+        return null;
+      }
+      const fit = evaluateReplacementCandidateFit(source, full, {
+        customer_cutout_mm: customerCutoutMm,
+      });
+      if (
+        fit.status !== "provisional_candidate" ||
+        fit.checks.mounting_cutout_mm.status !== "match"
+      ) {
+        if (trace) {
+          reject(`fit:${fit.checks.mounting_cutout_mm.reason}`);
+          const candidateCutout = extractReplacementDimensions(full)
+            .mounting_cutout_mm.mm;
+          const expectedCutout = customerCutoutMm ?? sourceCutout.mm;
+          if (
+            fit.checks.mounting_cutout_mm.status === "mismatch" &&
+            candidateCutout !== null && expectedCutout !== null &&
+            excludedCutoutExamples.length < 5
+          ) {
+            excludedCutoutExamples.push({
+              candidate_id: full.id,
+              source_or_customer_cutout_mm: expectedCutout,
+              candidate_cutout_mm: candidateCutout,
+            });
+          }
+        }
+        return null;
+      }
+      return { full, fit };
+    };
+  const strictOptions = Object.fromEntries(
+    Object.entries(profile.searchOptions).filter(([, values]) =>
+      Array.isArray(values) && values.length === 1 &&
+      typeof values[0] === "string" && Boolean(values[0].trim())
+    ),
+  );
+  const softFacetOrder = Object.keys(strictOptions).sort((left, right) => {
+    const priority = (key: string) => {
+      const caption = identity(source.facet_captions?.[key]);
+      if (/цвет|температур|драйвер|пра/u.test(caption)) return 0;
+      if (/мощност|поток|диаметр/u.test(caption)) return 1;
+      if (/напряжен|защит/u.test(caption)) return 2;
+      if (/ламп|цокол|разъем|разъём/u.test(caption)) return 3;
+      if (/вид|монтаж|установк/u.test(caption)) return 4;
+      return 2;
+    };
+    return priority(left) - priority(right);
+  });
+  const retrieved = await retrieveReplacementCandidateWindow({
+    leafCategory: profile.leafCategory,
+    strictOptions,
+    softFacetOrder,
+    maxPrice: budgetCap ?? undefined,
+    deps: {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+    },
+    cache: ctx.cache,
+    maxPagesTotal: 12,
+    maxCatalogRequestsTotal: 20,
+    maxPagesPerStage: 1,
+    maxLeafPages: 4,
+    deadlineMs: Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+    stopWhen: (products) =>
+      products.filter((candidate) => assess(candidate, false)).length >=
+        requested.target,
+  });
+  const selected = retrieved.products.flatMap((candidate) => {
+    const result = assess(candidate, true);
+    return result ? [result] : [];
+  }).slice(0, requested.target);
+  steps.push({
+    step: "v3_replacement_guarded_window",
+    ms: Date.now() - t0,
+    meta: {
+      source_id: source.id,
+      selected: selected.length,
+      target: requested.target,
+      termination: retrieved.termination,
+      tool_pages: retrieved.pagesRequested,
+      catalog_requests: retrieved.catalogRequestsMade,
+      rejected: Object.fromEntries(rejected),
+      excluded_cutout_examples: excludedCutoutExamples,
+      catalog_exhaustiveness: "not_established",
+    },
+  });
+  if (selected.length === 0) {
+    const inspectedPages = retrieved.stages.reduce(
+      (total, stage) => total + stage.pages.length,
+      0,
+    );
+    const interrupted = ![
+      "stage_plan_completed",
+      "target_reached",
+    ].includes(retrieved.termination);
+    send({
+      type: "delta",
+      origin: "server",
+      content: inspectedPages === 0 || interrupted
+        ? "Проверка каталога не завершилась. Не могу судить, есть ли подходящие замены; повторите запрос позже. Товары с другим или неподтверждённым монтажным вырезом не показываю."
+        : "В просмотренном окне каталога не подтвердилось ни одного кандидата с тем же типом и характеристиками и доказанным совпадением монтажного отверстия. Товар с другим размером выреза или без указанного размера не показываю. Это не значит, что подходящих товаров нет; можно продолжить проверку или уточнить размер у менеджера.",
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: inspectedPages === 0 || interrupted
+        ? "upstream_error"
+        : "query_inconsistent",
+    };
+  }
+  const selectedIds = selected.map(({ full }) => full.id);
+  const rendered = executeRenderProducts({
+    product_ids: selectedIds,
+    total_available: selected.length,
+  }, ctx.cache);
+  if (
+    !rendered.ok || rendered.rendered_count !== selected.length ||
+    rendered.rendered_ids.length !== selectedIds.length ||
+    rendered.rendered_ids.some((id, index) => id !== selectedIds[index])
+  ) {
+    steps.push({
+      step: "v3_replacement_guarded_render_incomplete",
+      ms: Date.now() - t0,
+      meta: {
+        selected: selected.length,
+        rendered: rendered.ok ? rendered.rendered_count : null,
+      },
+    });
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Не удалось подтвердить полный набор карточек для показа. Повторите запрос позже; неполную подборку не показываю.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const softName: Record<string, string> = {
+    generic_diameter: "общий диаметр",
+    power: "мощность",
+    luminous_flux: "световой поток",
+    color_temperature: "цветовая температура",
+    kind: "вид светильника",
+    driver: "драйвер",
+  };
+  const perCard = selected.map(({ full, fit }, index) => {
+    const differences = fit.soft_differences.map(({ field }) =>
+      softName[field] ?? field
+    );
+    if (fit.checks.outer_diameter_mm.status === "different") {
+      differences.push("наружный диаметр");
+    }
+    return `№${index + 1} «${full.pagetitle}»: кандидат, не подтверждена полная взаимозаменяемость; монтажный вырез совпадает${
+      differences.length ? `; отличаются/требуют проверки: ${differences.join(", ")}` : ""
+    }. Проверьте перекрытие отверстия, глубину установки, подключение и условия эксплуатации.`;
+  });
+  const shortfall = resultCardinalityShortfallText(
+    selected.length,
+    requested,
+    { candidateCoverage: "partial" },
+  );
+  send({
+    type: "delta",
+    origin: "server",
+    content: `Это предварительные кандидаты, не подтверждённые взаимозаменяемые аналоги. Проверена только ограниченная часть каталога.\n\n${perCard.join("\n\n")}${shortfall ? `\n\n${shortfall}` : ""}`,
+  });
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: selected.length,
+  });
+  return {
+    handled: true,
+    products: selected.map(({ full }) => full),
+    outcome: "found",
+  };
+}
+
 async function selectVerifiedCompactReplacementContinuation(
   userMessage: string,
   discovery: DiscoverCategoryOk,
@@ -4933,12 +5226,16 @@ async function selectVerifiedOrdinaryReplacement(
   steps: StepLog[],
   t0: number,
   verifiedExactSource: ProductRef | null = null,
+  customerCutoutMm: number | null = null,
 ): Promise<DirectReplacementResult> {
   const started = Date.now();
   const verifiedSourceBoundary = verifiedExactSource
     ? parseExplicitReplacementSourceBoundary(userMessage)
     : null;
-  if (verifiedExactSource && !verifiedSourceBoundary) {
+  if (
+    verifiedExactSource && !verifiedSourceBoundary &&
+    customerCutoutMm === null
+  ) {
     // A source product may be reused only with the independently parsed
     // request frame that justified its exact-title admission.
     send({
@@ -5370,7 +5667,7 @@ async function selectVerifiedOrdinaryReplacement(
   }
   setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
 
-  if (sourceIdentityVerified) {
+  if (sourceIdentityVerified && customerCutoutMm === null) {
     const resolved = resolveLedLampCompatibilityProfile(
       ctx.cache.get(anchor.id) ?? (anchor as ProductFull),
       discovery.facets,
@@ -5479,6 +5776,38 @@ async function selectVerifiedOrdinaryReplacement(
   const structuralProfile = structuralResolution.status === "ready"
     ? structuralResolution.profile
     : null;
+
+  if (customerCutoutMm !== null && (!sourceOnlyVerified || !structuralProfile)) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "После уточнения монтажного выреза не удалось повторно подтвердить технические характеристики исходного товара. Чтобы не показать неподходящую замену, повторите исходный запрос позже.",
+    });
+    steps.push({
+      step: "v3_replacement_cutout_live_profile_unverified",
+      ms: Date.now() - t0,
+      meta: {
+        source_id: anchor.id,
+        source_only_verified: sourceOnlyVerified,
+        profile_ready: Boolean(structuralProfile),
+      },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+
+  if (sourceOnlyVerified && structuralProfile) {
+    return await selectGuardedStructuralReplacement(
+      userMessage,
+      structuralProfile,
+      requestedCardinality,
+      budgetCap,
+      customerCutoutMm,
+      ctx,
+      send,
+      steps,
+      t0,
+    );
+  }
 
   const axisLimit = equivalentOnly ? 6 : 3;
   const allExplicitAxes = structuralProfile ? []
@@ -7329,6 +7658,71 @@ async function loadVerifiedSelectionReadinessPending(
     }
   } catch (error) {
     console.error("[v3] selection readiness slot lookup exception", error);
+  }
+  return { slot: null, lookupFailed: true };
+}
+
+async function loadVerifiedReplacementCutoutPending(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  slots: Record<string, unknown>,
+): Promise<{
+  slot: VerifiedReplacementCutoutPending | null;
+  lookupFailed: boolean;
+}> {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return { slot: null, lookupFailed: false };
+  }
+  const scope = (pending as Record<string, unknown>).scope;
+  if (
+    !scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== "replacement_mounting_cutout"
+  ) return { slot: null, lookupFailed: false };
+
+  try {
+    // Only the immediate completed turn can issue a measurement slot. A
+    // browser-supplied or older slot cannot bind a new source product.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let { data, error } = await supabase.from("chat_request_logs")
+        .select("session_id,error,response_events")
+        .eq("session_id", sessionId)
+        .eq("pipeline", "v3")
+        .neq("id", currentLogId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && !data) {
+        const rotated = await supabase.from("chat_request_logs")
+          .select("session_id,error,response_events")
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .contains(
+            "response_events",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        data = rotated.data;
+        error = rotated.error;
+      }
+      if (error) return { slot: null, lookupFailed: true };
+      if (data && data.error !== "in_progress") {
+        return {
+          slot: resolveServerIssuedReplacementCutoutPending(
+            slots,
+            data,
+            sessionId,
+          ),
+          lookupFailed: false,
+        };
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  } catch (error) {
+    console.error("[v3] replacement cutout slot lookup exception", error);
   }
   return { slot: null, lookupFailed: true };
 }
@@ -23341,6 +23735,46 @@ Deno.serve(async (req) => {
                 (pendingScope as Record<string, unknown>).kind ===
                   "selection_readiness",
             );
+            const clientReplacementCutoutScope = Boolean(
+              pendingScope && typeof pendingScope === "object" &&
+                !Array.isArray(pendingScope) &&
+                (pendingScope as Record<string, unknown>).kind ===
+                  "replacement_mounting_cutout",
+            );
+            const verifiedCutoutState = clientReplacementCutoutScope
+              ? await loadVerifiedReplacementCutoutPending(
+                supabase,
+                sessionId,
+                logId,
+                slots,
+              )
+              : { slot: null, lookupFailed: false };
+            const verifiedCutoutMm = parseReplacementCutoutReply(
+              userMessage,
+              verifiedCutoutState.slot,
+            );
+            if (
+              clientReplacementCutoutScope && !verifiedCutoutState.slot &&
+              (/^\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?[.!]?\s*$/iu.test(userMessage) ||
+                isUnansweredReadinessProgressRequest(userMessage))
+            ) {
+              // An unverified browser slot cannot turn a number or "покажи"
+              // into a source-bound replacement search.
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: null },
+              });
+              send({
+                type: "delta",
+                origin: "server",
+                content: "Не удалось подтвердить прежний вопрос о монтажном отверстии. Повторите исходный запрос на подбор замены.",
+              });
+              steps.push({
+                step: "v3_replacement_cutout_unverified_reply_stopped",
+                ms: Date.now() - t0,
+              });
+              return;
+            }
             const verifiedReadinessState = clientSelectionReadinessScope
               ? await loadVerifiedSelectionReadinessPending(
                 supabase,
@@ -23358,7 +23792,8 @@ Deno.serve(async (req) => {
             // A broad slot is deliberately absent from boundary classification.
             // Otherwise the existing "server-scoped clarification" shortcut turns
             // even a complete unrelated request into a Gallant continuation.
-            const boundarySlots = clientCatalogClarification
+            const boundarySlots = clientCatalogClarification ||
+                clientReplacementCutoutScope
               ? {
                 ...readinessSlots,
                 pending_clarification: undefined,
@@ -23470,7 +23905,8 @@ Deno.serve(async (req) => {
               : { scope: null, lookupFailed: false };
             if (
               activeScopeState.lookupFailed ||
-              verifiedReadinessState.lookupFailed
+              verifiedReadinessState.lookupFailed ||
+              verifiedCutoutState.lookupFailed
             ) {
               // An unverified previous state may contain an active identity.
               // Never substitute unscoped cards when its read failed.
@@ -23487,6 +23923,7 @@ Deno.serve(async (req) => {
                 meta: {
                   active_scope: activeScopeState.lookupFailed,
                   readiness_slot: verifiedReadinessState.lookupFailed,
+                  replacement_cutout_slot: verifiedCutoutState.lookupFailed,
                 },
               });
               return;
@@ -23561,7 +23998,24 @@ Deno.serve(async (req) => {
             const effectiveReadinessNewTask = readinessQuestionSuperseded
               ? null
               : readinessNewTask;
-            const boundary = activeScopeExplicitBoundary
+            const verifiedCutoutContinuation = verifiedCutoutMm !== null &&
+              Boolean(verifiedCutoutState.slot);
+            const dependentCutoutReply = Boolean(
+              verifiedCutoutState.slot &&
+                (isUnansweredReadinessProgressRequest(userMessage) ||
+                  /^\s*(?:(?:около|примерно|приблизительно)\s+)?(?:отверстие|вырез|диаметр)?\s*[:=]?[Ø⌀]?\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?(?:\s*,?\s*(?:если верно|наверное|примерно))?[.!]?\s*$/iu
+                    .test(userMessage)),
+            );
+            const boundary = verifiedCutoutContinuation || dependentCutoutReply
+              ? {
+                mode: "continuation" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: verifiedCutoutContinuation
+                  ? "server_verified_replacement_cutout"
+                  : "server_verified_cutout_reply_requires_format",
+              }
+              : activeScopeExplicitBoundary
               ? {
                 mode: "new_task" as const,
                 confidence: 1,
@@ -23614,6 +24068,7 @@ Deno.serve(async (req) => {
             );
             const matchedPendingClarification = Boolean(
               matchedVerifiedBroadSelection || freeformCandidate ||
+                (verifiedCutoutMm !== null && verifiedCutoutState.slot) ||
                 verifiedNumericReadinessAnswer ||
                 resolvePendingClarificationChoice(boundarySlots, userMessage),
             );
@@ -23624,7 +24079,9 @@ Deno.serve(async (req) => {
                 isRecentProductShowFollowup(userMessage) ||
                 isRecentProductPriceSelectionFollowup(userMessage)
               );
-            const startsNewTask = activeScopeExplicitBoundary ||
+            const startsNewTask = !verifiedCutoutContinuation &&
+              !dependentCutoutReply && (
+              activeScopeExplicitBoundary ||
               Boolean(effectiveReadinessNewTask) ||
               shouldStartNewConversation(boundary, {
                 matchedPendingClarification,
@@ -23635,7 +24092,29 @@ Deno.serve(async (req) => {
                   userMessage,
                   clientCatalogClarification,
                   verifiedBroadChoiceState.verifiedSlot,
-                ));
+                )));
+            if (
+              verifiedCutoutState.slot && verifiedCutoutMm === null &&
+              !startsNewTask
+            ) {
+              // A conversational, out-of-range or bare-progress answer is not
+              // a measurement. Keep the immediate server-issued scope alive;
+              // a genuinely independent new topic bypasses this block.
+              send({
+                type: "delta",
+                origin: "server",
+                content: `Нужен один точный размер от 20 до 1000 мм, без диапазона и пояснений. ${verifiedCutoutState.slot.question}`,
+              });
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: verifiedCutoutState.slot },
+              });
+              steps.push({
+                step: "v3_replacement_cutout_question_reissued",
+                ms: Date.now() - t0,
+              });
+              return;
+            }
             // Only after a continuation decision may a server-verified free-form
             // broad scope reach the old expert route. Exact chips take the bounded
             // deterministic route below. A stale/forged scope is never restored.
@@ -23732,6 +24211,10 @@ Deno.serve(async (req) => {
                 verified_selection_readiness_slot: Boolean(
                   verifiedReadinessState.slot,
                 ),
+                verified_replacement_cutout_slot: Boolean(
+                  verifiedCutoutState.slot,
+                ),
+                verified_replacement_cutout_reply: verifiedCutoutMm !== null,
                 verified_freeform_readiness_answer:
                   verifiedFreeformReadinessAnswer,
                 readiness_independent_overridden_by_verified_answer:
@@ -23749,6 +24232,19 @@ Deno.serve(async (req) => {
                 type: "conversation_boundary",
                 mode: "new_task",
                 session_id: effectiveSessionId,
+              });
+              if (clientReplacementCutoutScope) {
+                send({
+                  type: "slot_update",
+                  slots: { pending_clarification: null },
+                });
+              }
+            } else if (verifiedCutoutContinuation) {
+              // The numeric reply consumes the issued source/measurement once,
+              // before any catalog lookup or early-return path below.
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: null },
               });
             } else if (
               matchedPendingClarification || pendingBroadAssortmentScope ||
@@ -24041,7 +24537,82 @@ Deno.serve(async (req) => {
             // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
             // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
             // Так утечка внутреннего устройства невозможна в принципе.
-            if (verifiedBroadChoice && !startsNewTask) {
+            if (
+              verifiedCutoutContinuation && verifiedCutoutState.slot &&
+              verifiedCutoutMm !== null
+            ) {
+              const issued = verifiedCutoutState.slot.scope;
+              replacementEgressRequest = issued.original_request;
+              const sourceResult = await executeSearchCatalog({
+                mode: "by_pagetitle",
+                pagetitle: issued.source_title,
+                per_page: 2,
+              }, {
+                baseUrl: CATALOG_BASE_URL,
+                apiToken: ctx.catalogToken,
+              }, ctx.cache);
+              const source = sourceResult.ok
+                ? resolveUniqueExactReplacementTitle(
+                  issued.source_title,
+                  sourceResult,
+                )
+                : null;
+              if (
+                !source || source.id !== issued.source_product_id ||
+                normalizeForMatch(source.leaf_category ?? "") !==
+                  normalizeForMatch(issued.source_leaf) ||
+                !isUnqualifiedVerifiedReplacementSource(
+                  issued.original_request,
+                  source.pagetitle,
+                  source.article,
+                  source.leaf_category,
+                )
+              ) {
+                send({
+                  type: "delta",
+                  origin: "server",
+                  content: "Не удалось повторно подтвердить исходный товар для подбора замены. Напишите исходный запрос заново; неподтверждённые карточки не показываю.",
+                });
+                steps.push({
+                  step: "v3_replacement_cutout_source_reverification_failed",
+                  ms: Date.now() - t0,
+                  meta: {
+                    source_id: issued.source_product_id,
+                    catalog_error: sourceResult.ok
+                      ? null
+                      : sourceResult.error_code,
+                  },
+                });
+              } else {
+                const direct = await selectVerifiedOrdinaryReplacement(
+                  issued.original_request,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  source,
+                  verifiedCutoutMm,
+                );
+                if (!direct.handled) {
+                  send({
+                    type: "delta",
+                    origin: "server",
+                    content: "Не удалось подтвердить совместимые варианты в каталоге. Повторите исходный запрос позже; неподтверждённые товары не показываю.",
+                  });
+                  steps.push({
+                    step: "v3_replacement_cutout_continuation_fail_closed",
+                    ms: Date.now() - t0,
+                  });
+                } else {
+                  productsCount = direct.products.length;
+                  await persistRecentProductEvidence(
+                    supabase,
+                    effectiveSessionId,
+                    direct.products,
+                  );
+                }
+              }
+            } else if (verifiedBroadChoice && !startsNewTask) {
               const products = await answerVerifiedBroadAssortmentChoice(
                 verifiedBroadChoice,
                 ctx,
