@@ -41,18 +41,34 @@ const CONTRACT = {
     evidence: "user_explicit",
   }],
 };
+const CABLE_CONTRACT = {
+  hash: "selection-5a9b3c20",
+  mandatory_criteria: [{
+    key: "Количество жил",
+    op: "eq",
+    value: "3",
+    evidence: "user_explicit",
+  }],
+};
 
-function productUrl(number: number): string {
-  return `https://220volt.kz/catalog/svetotexnika/lyustryi/verified-${number}/`;
+function productUrl(
+  number: number,
+  category = "svetotexnika/lyustryi",
+): string {
+  return `https://220volt.kz/catalog/${category}/verified-${number}/`;
 }
 
-function productBlock(numbers: number[], contract: unknown = CONTRACT) {
+function productBlock(
+  numbers: number[],
+  contract: unknown = CONTRACT,
+  category?: string,
+) {
   return {
     type: "products_block",
     count: numbers.length,
     markdown: numbers.map((number) =>
       `- **[Подтверждённый товар ${number}](${
-        productUrl(number)
+        productUrl(number, category)
       })**\n  Цена: *1 000* ₸`
     ).join("\n\n"),
     selection_contract: contract,
@@ -110,7 +126,7 @@ Deno.test("four-turn selection keeps the first verified contract and excludes sh
   );
   equal(
     first.selection.shown_product_urls,
-    [1, 2, 3].map(productUrl),
+    [1, 2, 3].map((number) => productUrl(number)),
     "only server-rendered URLs become exclusions",
   );
 
@@ -157,7 +173,7 @@ Deno.test("four-turn selection keeps the first verified contract and excludes sh
   );
   equal(
     fourth.selection.shown_product_urls,
-    [1, 2, 3, 4, 5].map(productUrl),
+    [1, 2, 3, 4, 5].map((number) => productUrl(number)),
     "new rendered cards extend generic exclusion state",
   );
 });
@@ -252,7 +268,7 @@ Deno.test("expiry, new task, and changed contract clear inherited selection", ()
       mode: "new_task",
       session_id: "session-new",
     },
-    productBlock([2]),
+    productBlock([2], CABLE_CONTRACT, "kabeli-provoda/kabeli"),
   ]);
   const newTask = advance(newTaskRow, first, true);
   assert(newTask.selection, "new independent selection may initialize state");
@@ -263,8 +279,33 @@ Deno.test("expiry, new task, and changed contract clear inherited selection", ()
   );
   equal(
     newTask.selection.shown_product_urls,
-    [productUrl(2)],
+    [productUrl(2, "kabeli-provoda/kabeli")],
     "new topic has only its own rendered cards",
+  );
+  equal(
+    newTask.selection.mandatory_criteria,
+    CABLE_CONTRACT.mandatory_criteria,
+    "new cable domain cannot carry the chandelier measurement",
+  );
+  equal(
+    newTask.selection.selection_hash,
+    CABLE_CONTRACT.hash,
+    "new domain has an independently verified contract",
+  );
+  const newTaskWithoutCards = advance(
+    completedRow(3, "Новая тема. Нужен кабель", [{
+      type: "conversation_boundary",
+      mode: "new_task",
+      session_id: "session-new",
+    }]),
+    first,
+    true,
+    "additional",
+  );
+  equal(
+    newTaskWithoutCards.selection,
+    null,
+    "new task with no verified cards clears old product selection",
   );
 
   const changed = advance(
