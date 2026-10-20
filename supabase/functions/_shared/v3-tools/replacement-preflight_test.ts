@@ -29,6 +29,7 @@ import {
   replacementProofCaption,
   replacementClassIsGroundedByLiveIdentity,
   resolveExactReplacementSource,
+  resolveUniqueExactReplacementTitle,
   resolveReplacementIntent,
   resolveReplacementProofContext,
   resolveReplacementSourceMessage,
@@ -36,6 +37,7 @@ import {
   resolveReplacementSourceModelCodes,
   resolveVerifiedIssuedLiveReplacementAxis,
   selectExplicitAnchorAxes,
+  selectUserOwnedReplacementAxes,
   shouldClarifyCompactReplacementSource,
   shouldApplyReplacementExclusionGuard,
 } from "./replacement-preflight.ts";
@@ -372,6 +374,31 @@ Deno.test("an Acti9-like series and compact C16 code do not prove a source SKU o
     replacementProofCaption(proof),
     true,
   ).text, replacementProofCaption(proof));
+});
+
+Deno.test("explicit replacement title requires one full-title-equal live source", () => {
+  const title = "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  const source = { ...anchor, id: "gx53-source", pagetitle: title };
+  assertEquals(resolveUniqueExactReplacementTitle(title, {
+    total: 1,
+    results: [source],
+    candidate_coverage: "complete_query_window",
+  })?.id, source.id);
+  assertEquals(resolveUniqueExactReplacementTitle(title, {
+    total: 2,
+    results: [source],
+    candidate_coverage: "partial",
+  }), null);
+  assertEquals(resolveUniqueExactReplacementTitle(title, {
+    total: 1,
+    results: [{ ...source, pagetitle: "Лампа светодиодная ECO T75 GX53 IEK" }],
+    candidate_coverage: "complete_query_window",
+  }), null);
+  assertEquals(resolveUniqueExactReplacementTitle(title, {
+    total: 1,
+    results: [source],
+    candidate_coverage: "unknown",
+  }), null);
 });
 
 Deno.test("replacement explanation cites only criteria verified on every live candidate card", () => {
@@ -1576,6 +1603,83 @@ Deno.test("explicit live technical codes become mandatory replacement axes", () 
     },
     { key: "power", caption: "Мощность", value: "10", total: 2 },
   ]);
+});
+
+Deno.test("verified source title is identity evidence, not a list of hard replacement axes", () => {
+  const source: ProductRef = {
+    id: "lamp-source",
+    pagetitle: "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
+    vendor: "IEK",
+    price: 500,
+    stock: "in_stock",
+    short_traits: [
+      "Тип цоколя: GX53",
+      "Форма колбы: T75",
+      "Мощность, Вт: 6",
+      "Цветовая температура, К: 6500",
+    ],
+  };
+  const facets = [
+    { key: "socket", caption: "Тип цоколя", type: "string", unit: null,
+      values: [{ value: "GX53", products_count: 35 }] },
+    { key: "shape", caption: "Форма колбы", type: "string", unit: null,
+      values: [{ value: "T75", products_count: 4 }] },
+    { key: "power", caption: "Мощность, Вт", type: "number", unit: "Вт",
+      values: [{ value: "6", products_count: 12 }] },
+    { key: "temperature", caption: "Цветовая температура, К", type: "number", unit: "К",
+      values: [{ value: "6500", products_count: 100 }] },
+  ];
+  assertEquals(
+    selectUserOwnedReplacementAxes(
+      source,
+      facets,
+      "подбери аналог для этой лампы:  ",
+      Number.MAX_SAFE_INTEGER,
+    ),
+    [],
+  );
+  const independentlyRequired = selectUserOwnedReplacementAxes(
+    source,
+    facets,
+    "подбери аналог с цоколем GX53 и мощностью 6 Вт не дороже 6500 тенге",
+    Number.MAX_SAFE_INTEGER,
+  );
+  assertEquals(independentlyRequired.map(({ key }) => key).sort(), [
+    "power", "socket",
+  ]);
+  assertEquals(independentlyRequired.find(({ key }) => key === "socket")?.mandatory,
+    true);
+});
+
+Deno.test("verified source frame keeps independent breaker requirements, not source codes", () => {
+  const source: ProductRef = {
+    id: "breaker-source",
+    pagetitle: "Автомат QX-20 1P 16A характеристика C",
+    vendor: "Vendor",
+    price: 900,
+    stock: "in_stock",
+    short_traits: [
+      "Количество полюсов: 1",
+      "Номинальный ток: 16",
+      "Характеристика срабатывания: Тип C",
+    ],
+  };
+  const facets = [
+    { key: "poles", caption: "Количество полюсов", type: "number", unit: null,
+      values: [{ value: "1", products_count: 40 }] },
+    { key: "current", caption: "Номинальный ток", type: "number", unit: "А",
+      values: [{ value: "16", products_count: 30 }] },
+    { key: "curve", caption: "Характеристика срабатывания", type: "string", unit: null,
+      values: [{ value: "Тип C", products_count: 15 }] },
+  ];
+  assertEquals(selectUserOwnedReplacementAxes(
+    source, facets, "найди замену этому автомату: ", Number.MAX_SAFE_INTEGER,
+  ), []);
+  assertEquals(selectUserOwnedReplacementAxes(
+    source, facets,
+    "найди замену с 1 полюсом, 16 А и характеристикой C",
+    Number.MAX_SAFE_INTEGER,
+  ).map(({ key }) => key).sort(), ["current", "curve", "poles"]);
 });
 
 Deno.test("portable technical codes compare as whole codes, not by their digits", () => {

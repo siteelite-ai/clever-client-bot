@@ -11,7 +11,7 @@ import {
   explicitReplacementModelValues,
   isReplacementIdentityFacet,
 } from "./search-filter-guard.ts";
-import type { ProductRef } from "./types.ts";
+import type { CatalogCandidateCoverage, ProductRef } from "./types.ts";
 
 export interface LiveReplacementClarification {
   facet_key: string;
@@ -200,6 +200,27 @@ export function resolveExactReplacementSource(
     );
   });
   return matches.length === 1 ? matches[0] : null;
+}
+
+/** A source-name boundary becomes an identity only after a unique live lookup.
+ * Code, series and first-hit matches are deliberately insufficient. */
+export function resolveUniqueExactReplacementTitle(
+  claimedTitle: string,
+  result: {
+    total: number;
+    results: ProductRef[];
+    candidate_coverage?: CatalogCandidateCoverage;
+  },
+): ProductRef | null {
+  if (result.candidate_coverage !== "complete_query_window" ||
+    result.total !== 1 || result.results.length !== 1) return null;
+  const exactTitle = (value: string) => String(value ?? "")
+    .normalize("NFKC").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
+  const title = exactTitle(claimedTitle);
+  return title && title === exactTitle(result.results[0].pagetitle)
+    ? result.results[0]
+    : null;
 }
 
 function replacementProofTraits(product: ProductRef): Map<string, string> {
@@ -1572,13 +1593,19 @@ function isExplicitPortableTechnicalCode(
  * and literals present in the customer's anchor description. No category or
  * product dictionaries are used. Identity facets never become analogue axes.
  */
-export function selectExplicitAnchorAxes(
+function selectAnchorAxes(
   product: ProductRef,
   facets: Facet[],
   userMessage: string,
-  limit = 3,
+  limit: number,
+  sourceTitleMayExpressRequirements: boolean,
 ): ExplicitReplacementAxis[] {
-  const evidence = `${userMessage}\n${product.pagetitle}`;
+  // A verified source title is evidence about the old product, not a customer
+  // instruction to preserve every number/code in that title. The legacy
+  // source-description route still searches against the whole utterance.
+  const evidence = sourceTitleMayExpressRequirements
+    ? `${userMessage}\n${product.pagetitle}`
+    : userMessage;
   const axes: ExplicitReplacementAxis[] = [];
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
@@ -1619,6 +1646,30 @@ export function selectExplicitAnchorAxes(
           ),
       );
     if (!explicitValue) continue;
+    const captionGrounded = captionIsEvidenced(facet.caption, userMessage);
+    const portableCodeGrounded = isExplicitPortableTechnicalCode(
+      canonical.value,
+      userMessage,
+      product.pagetitle,
+    );
+    const unitGrounded = (() => {
+      const value = canonical.value.trim();
+      const unit = String(facet.unit ?? "").trim();
+      if (!/^\d+(?:[.,]\d+)?$/u.test(value) || !unit) return false;
+      const escapedValue = value.replace(/[.,]/u, "[.,]");
+      const escapedUnit = unit.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+      return new RegExp(
+        `(?<![\\p{L}\\p{N}])${escapedValue}\\s*${escapedUnit}(?![\\p{L}\\p{N}])`,
+        "iu",
+      ).test(userMessage);
+    })();
+    // A source title can contain the same bare number as a budget, article or
+    // unrelated trait. In the independently stated request frame, require the
+    // facet meaning, an exact portable code, or a value with its live unit.
+    if (
+      !sourceTitleMayExpressRequirements &&
+      !captionGrounded && !portableCodeGrounded && !unitGrounded
+    ) continue;
     // A bare binary number occurs in many unrelated technical and merchandising
     // facets. It becomes an analogue axis only when the customer also named
     // the facet meaning (for example, a pole-count caption), not merely because
@@ -1627,14 +1678,10 @@ export function selectExplicitAnchorAxes(
       (facet.values ?? []).every(({ value }) =>
         /^[01](?:[.,]0+)?$/u.test(String(value).trim())
       );
-    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) {
+    if (facetIsBinary && !captionGrounded) {
       continue;
     }
-    const mandatory = isExplicitPortableTechnicalCode(
-      canonical.value,
-      userMessage,
-      product.pagetitle,
-    );
+    const mandatory = portableCodeGrounded;
     axes.push({
       key: facet.key,
       caption: facet.caption,
@@ -1650,6 +1697,39 @@ export function selectExplicitAnchorAxes(
       left.caption.localeCompare(right.caption, "ru")
     )
     .slice(0, Math.max(2, limit));
+}
+
+/**
+ * Legacy replacement requests have no independently verified source/title
+ * boundary. Keep their current conservative source-description behaviour.
+ */
+export function selectExplicitAnchorAxes(
+  product: ProductRef,
+  facets: Facet[],
+  userMessage: string,
+  limit = 3,
+): ExplicitReplacementAxis[] {
+  return selectAnchorAxes(product, facets, userMessage, limit, true);
+}
+
+/**
+ * Only the request frame outside a uniquely verified full source title may
+ * create hard replacement axes. The source card is used to verify each value,
+ * but its other traits remain evidence to disclose and check separately.
+ */
+export function selectUserOwnedReplacementAxes(
+  product: ProductRef,
+  facets: Facet[],
+  independentRequestFrame: string,
+  limit = 3,
+): ExplicitReplacementAxis[] {
+  return selectAnchorAxes(
+    product,
+    facets,
+    independentRequestFrame,
+    limit,
+    false,
+  );
 }
 
 export function productContainsSourceModel(

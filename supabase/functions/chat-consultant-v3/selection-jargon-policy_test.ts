@@ -5,6 +5,7 @@ import type { ProductRef } from "../_shared/v3-tools/types.ts";
 import { classifyOutdoorPoeIntent } from "../_shared/v3-tools/outdoor-poe-policy.ts";
 import {
   admitDirectSelectionRoute,
+  admitProvisionalReplacementFamilyRoute,
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
   enforceTerminalPairedFit,
@@ -12,9 +13,54 @@ import {
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
   omitPairedObjectReferenceExactCriteria,
+  parseExplicitReplacementSourceBoundary,
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
+
+Deno.test("provisional family route admits only source-only replacement frame and enforced budget", () => {
+  const title =
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  const sourceOnly = `Подбери аналог для этой лампы: ${title}`;
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: sourceOnly,
+    verifiedSourceTitle: title,
+    coversBudgetCap: false,
+  }), true);
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: `Найди аналоги лампы «${title}» не дороже 2000 тенге`,
+    verifiedSourceTitle: title,
+    coversBudgetCap: true,
+  }), true);
+  for (const independentConstraint of [
+    "только 3000К",
+    "не ярче 500 лм",
+    "только 3000К и не ярче 500 лм",
+    "с наличием в Алматы",
+    "строго равноценную замену",
+    "эквивалентную замену",
+  ]) {
+    assertEquals(admitProvisionalReplacementFamilyRoute({
+      userMessage: `Найди аналоги лампы «${title}» ${independentConstraint}`,
+      verifiedSourceTitle: title,
+      coversBudgetCap: true,
+    }), false, independentConstraint);
+  }
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: sourceOnly,
+    verifiedSourceTitle: `${title} другой товар`,
+    coversBudgetCap: false,
+  }), false);
+  // An exact article can independently verify a source, but it does not
+  // prove the full-title grammatical boundary required by this new route.
+  // The orchestrator must leave that request on its existing fallback path.
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage:
+      "Подбери аналоги лампы по артикулу LLE-T80-6-230-65-GX53",
+    verifiedSourceTitle: title,
+    coversBudgetCap: false,
+  }), false);
+});
 
 Deno.test("one direct-route admission rejects unproven compound, PoE and replacement obligations", () => {
   const marking = { first: 2, second: 1.5 };
@@ -228,6 +274,113 @@ Deno.test("long DN027B source identity remains a pure replacement, not a custome
   ) {
     assertEquals(
       admitDirectSelectionRoute({ route: "replacement", userMessage: request }),
+      false,
+      request,
+    );
+  }
+});
+
+Deno.test("replacement source boundaries separate explicit titles from the request frame", () => {
+  const title =
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  assertEquals(
+    parseExplicitReplacementSourceBoundary(
+      `Подбери аналог для этой лампы: ${title}`,
+    ),
+    {
+      kind: "colon",
+      source: title,
+      frame: "подбери аналог для этой лампы:  ",
+    },
+  );
+  assertEquals(
+    parseExplicitReplacementSourceBoundary(
+      `Найди аналоги лампы «${title}» с наличием в Алматы`,
+    ),
+    {
+      kind: "quoted",
+      source: title,
+      frame: "найди аналоги лампы « » с наличием в алматы",
+    },
+  );
+  assertEquals(
+    parseExplicitReplacementSourceBoundary(
+      `${title} — предложи равноценную замену`,
+    ),
+    {
+      kind: "source_first",
+      source: title,
+      frame: "  — предложи равноценную замену",
+    },
+  );
+  assertEquals(
+    parseExplicitReplacementSourceBoundary(`Предложи аналоги на ${title}`),
+    null,
+  );
+});
+
+Deno.test("explicit nameplate and terminal brand need exact live source title proof", () => {
+  const title =
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  const sourceRequests = [
+    `Подбери аналог для этой лампы: ${title}`,
+    `Найди аналоги лампы «${title}»`,
+    `${title} — предложи равноценную замену`,
+  ];
+  for (const request of sourceRequests) {
+    assertEquals(
+      admitDirectSelectionRoute({ route: "replacement", userMessage: request }),
+      false,
+      `unverified: ${request}`,
+    );
+    assertEquals(
+      admitDirectSelectionRoute({
+        route: "replacement",
+        userMessage: request,
+        verifiedSourceTitle: title,
+      }),
+      true,
+      `verified: ${request}`,
+    );
+    assertEquals(
+      admitDirectSelectionRoute({
+        route: "replacement",
+        userMessage: request,
+        verifiedSourceTitle: title.replace("6500К", "4000К"),
+      }),
+      false,
+      `different live title: ${request}`,
+    );
+  }
+  assertEquals(admitDirectSelectionRoute({
+    route: "replacement",
+    userMessage: `Предложи аналоги на ${title}`,
+    verifiedSourceTitle: title,
+  }), false, "undelimited source stays on the old conservative route");
+  assertEquals(admitDirectSelectionRoute({
+    route: "replacement",
+    userMessage: "Подбери аналог для этой лампы: Schneider Acti9 C16",
+  }), false, "an unverified colon must not relax the previous admission gate");
+});
+
+Deno.test("verified explicit source never swallows residual customer fit", () => {
+  const title =
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  for (const request of [
+    `Подбери аналог для этой лампы: ${title} для гостиной 25 м²`,
+    `Подбери аналог для этой лампы: ${title} до 4000 тенге`,
+    `Найди аналоги лампы «${title}» с наличием в Алматы`,
+    `Найди аналоги лампы «${title}» чёрные`,
+    `Найди аналоги лампы «${title}» для комнаты 25 м²`,
+    `${title} — предложи равноценную замену с наличием в Алматы`,
+    `${title} — предложи равноценную замену для комнаты 25 м²`,
+  ]) {
+    assertEquals(
+      admitDirectSelectionRoute({
+        route: "replacement",
+        userMessage: request,
+        verifiedSourceTitle: title,
+      }),
       false,
       request,
     );

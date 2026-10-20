@@ -294,6 +294,7 @@ import {
 } from "../_shared/v3-tools/terminal-clarification.ts";
 import {
   admitDirectSelectionRoute,
+  admitProvisionalReplacementFamilyRoute,
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
   enforceTerminalPairedFit,
@@ -301,6 +302,7 @@ import {
   isPureNamedSeriesBrowse,
   isPureRecentPriceFollowup,
   omitPairedObjectReferenceExactCriteria,
+  parseExplicitReplacementSourceBoundary,
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
@@ -480,6 +482,20 @@ import {
   productProvesDirectReplacementAxes,
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
+  evaluateLedLampCandidate,
+  evaluateLedLampFamilyBrowseCandidate,
+  evaluateLedLampNamedSourceFamilyMember,
+  ledLampCandidateDisclosure,
+  observedLedLampFamilyEnvelope,
+  rankLedLampCandidates,
+  resolveLedLampFamilyBrowseProfile,
+  resolveLedLampCompatibilityProfile,
+  type LedLampCandidateFit,
+  type LedLampCompatibilityProfile,
+  type LedLampFamilyBrowseFit,
+  type LedLampFamilyBrowseProfile,
+} from "../_shared/v3-tools/replacement-compatibility.ts";
+import {
   buildReplacementProofContract,
   compileLiveCompactReplacementContract,
   derivePortableAxisTitleRequirements,
@@ -503,6 +519,7 @@ import {
   replacementProofCaption,
   replacementClassIsGroundedByLiveIdentity,
   resolveExactReplacementSource,
+  resolveUniqueExactReplacementTitle,
   resolveReplacementProofContext,
   replacementTerminalFallback,
   resolveReplacementIntent,
@@ -514,6 +531,7 @@ import {
   shouldClarifyCompactReplacementSource,
   resolveReplacementSourceModelCodes,
   selectExplicitAnchorAxes,
+  selectUserOwnedReplacementAxes,
   shouldApplyReplacementExclusionGuard,
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
@@ -4393,24 +4411,484 @@ async function selectVerifiedCompactReplacementContinuation(
   };
 }
 
-async function selectVerifiedOrdinaryReplacement(
-  userMessage: string,
+type ProvenLedLampFit = Extract<LedLampCandidateFit, { ok: true }>;
+
+async function selectVerifiedLedLampReplacement(
+  profile: LedLampCompatibilityProfile,
+  budgetCap: number | null,
   ctx: ToolContext,
   send: (event: SseEvent) => void,
   steps: StepLog[],
   t0: number,
 ): Promise<DirectReplacementResult> {
   const started = Date.now();
-  const equivalentOnly = /равноцен\p{L}*/iu.test(userMessage);
-  const budgetCap = extractBudgetCap(userMessage);
+  const verified: ProvenLedLampFit[] = [];
+  const seen = new Set<string>();
+  const rejected: Record<string, number> = {};
+  let pagesChecked = 0;
+  let lastTotal: number | null = null;
+  let partialCoverage = false;
+  let searchError: string | null = null;
+  // The single live socket axis is a recall filter, not compatibility proof.
+  // A category-wide AND of every source trait would lose legitimate changes
+  // in voltage range, light colour, output and length before the typed gate.
+  for (let page = 1; page <= 2; page += 1) {
+    const found = await executeSearchCatalog({
+      mode: "by_filter",
+      category: profile.source.leaf_category!,
+      anchor_leaf_category: profile.source.leaf_category!,
+      options: {
+        [profile.required.base.key]: [profile.sourceValues.base],
+      },
+      min_price: 1,
+      ...(budgetCap !== null ? { max_price: budgetCap } : {}),
+      per_page: 50,
+      page,
+    }, {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+    }, ctx.cache);
+    if (!found.ok) {
+      searchError = found.error_code;
+      break;
+    }
+    pagesChecked += 1;
+    lastTotal = found.total;
+    partialCoverage ||= found.candidate_coverage !== "complete_query_window";
+    for (const { id } of found.results) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const product = ctx.cache.get(id);
+      if (
+        product &&
+        ((profile.source.article && product.article &&
+            profile.source.article === product.article) ||
+          normalizeForMatch(profile.source.pagetitle) ===
+            normalizeForMatch(product.pagetitle))
+      ) continue;
+      if (budgetCap !== null && (!product || product.price > budgetCap)) {
+        rejected.budget = (rejected.budget ?? 0) + 1;
+        continue;
+      }
+      const fit = evaluateLedLampCandidate(profile, product);
+      if (fit.ok) verified.push(fit);
+      else rejected[fit.reason] = (rejected[fit.reason] ?? 0) + 1;
+    }
+    // Search one more bounded page only if two same-power choices have not yet
+    // been proven. A later catalogue row may be materially closer than a
+    // lower-power card encountered first.
+    if (
+      verified.filter(({ differences }) =>
+        !differences.some(({ role }) => role === "power")
+      ).length >= 2
+    ) break;
+    if (found.total <= page * 50 || found.results.length === 0) break;
+  }
+  const selected = rankLedLampCandidates(verified).slice(0, 4);
+  steps.push({
+    step: "v3_led_lamp_family_fit_checked",
+    ms: Date.now() - t0,
+    meta: {
+      source_id: profile.source.id,
+      family: profile.family,
+      socket_key: profile.required.base.key,
+      pages_checked: pagesChecked,
+      raw_total: lastTotal,
+      partial_coverage: partialCoverage,
+      verified_candidates: verified.length,
+      displayed_candidate_pool: selected.length,
+      rejected,
+      search_error: searchError,
+      duration_ms: Date.now() - started,
+    },
+  });
+  if (selected.length < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: searchError
+        ? "Сейчас не удалось полностью проверить товары в каталоге. Это не означает, что подходящих вариантов нет. Повторите запрос позже."
+        : "По проверенной части каталога не удалось подтвердить два разных варианта с совместимыми цоколем, питанием и размерами. Это не означает, что других вариантов нет; уточните подбор у менеджера.",
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: searchError ? "upstream_error" : "query_inconsistent",
+    };
+  }
+
+  const ids = selected.map(({ candidate }) => candidate.id);
+  const rendered = executeRenderProducts({
+    product_ids: ids,
+    total_available: selected.length,
+  }, ctx.cache);
+  if (!rendered.ok || rendered.rendered_count < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Проверенные варианты есть, но сейчас не удалось надёжно показать их карточки. Повторите запрос позже.",
+    });
+    steps.push({
+      step: "v3_led_lamp_family_render_unproven",
+      ms: Date.now() - t0,
+      meta: { error_code: rendered.ok ? null : rendered.error_code },
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const displayedFits = selected.filter(({ candidate }) =>
+    rendered.rendered_ids.includes(candidate.id)
+  ).sort((left, right) =>
+    rendered.rendered_ids.indexOf(left.candidate.id) -
+      rendered.rendered_ids.indexOf(right.candidate.id)
+  );
+  if (displayedFits.length !== rendered.rendered_count) {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Не удалось сопоставить показанные карточки с проверкой совместимости. Повторите запрос позже.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+
+  // Only exact common source values are machine criteria. Voltage ranges and
+  // colour/lumen/length changes are proven by the typed family gate and
+  // disclosed in prose, not falsely encoded as equality filters.
+  const criteria: Criterion[] = [];
+  for (const role of ["base", "technology", "supply", "shape", "diameter"] as const) {
+    const facet = profile.required[role];
+    const sourceValue = profile.sourceValues[role];
+    if (displayedFits.every(({ candidate }) => {
+      const raw = candidate.facet_values?.[facet.key];
+      return Array.isArray(raw) && raw.length === 1 &&
+        normalizeForMatch(raw[0]) === normalizeForMatch(sourceValue);
+    })) {
+      criteria.push({
+        key: facet.key,
+        op: "eq",
+        value: sourceValue,
+        level: "A",
+        evidence: "derived_required",
+      });
+    }
+  }
+  if (budgetCap !== null) {
+    criteria.push({
+      key: "Цена",
+      op: "max",
+      value: budgetCap,
+      unit: "₸",
+      level: "A",
+      evidence: "user_explicit",
+    });
+  }
+  const plan = extendSelectionCriteriaPlan(null, criteria, "guarded_search");
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: Date.now() - started,
+    summary:
+      `Проверены ${pagesChecked} страницы категории; подтверждены ${displayedFits.length} кандидата семейства светодиодных ламп`,
+  });
+  send({
+    type: "delta",
+    origin: "server",
+    content: ledLampCandidateDisclosure(profile, displayedFits),
+  });
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: displayedFits.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map(({
+        key,
+        op,
+        value,
+        unit,
+        evidence,
+      }) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(evidence ? { evidence } : {}),
+      })),
+    },
+  });
+  steps.push({
+    step: "v3_led_lamp_family_provisional_candidates_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      source_id: profile.source.id,
+      rendered: rendered.rendered_count,
+      nominal_voltage: profile.sourceNominalVoltage,
+      selection_contract_hash: plan.hash,
+      replacement_evidence: "provisional",
+      budget_cap: budgetCap,
+    },
+  });
+  return {
+    handled: true,
+    products: displayedFits.map(({ candidate }) => candidate),
+    outcome: "found",
+  };
+}
+
+type ProvenLedLampFamilyFit = Extract<LedLampFamilyBrowseFit, { ok: true }>;
+
+async function browseVerifiedLedLampFamilyAlternatives(
+  profile: LedLampFamilyBrowseProfile,
+  budgetCap: number | null,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<DirectReplacementResult> {
+  const started = Date.now();
+  const verified: ProvenLedLampFamilyFit[] = [];
+  const namedSourceMembers: ProvenLedLampFamilyFit[] = [];
+  const seen = new Set<string>();
+  const rejected: Record<string, number> = {};
+  let pagesChecked = 0;
+  let rawTotal: number | null = null;
+  let searchError: string | null = null;
+  // One customer-declared live socket facet is the recall filter. All other
+  // properties are checked on raw product options. No arbitrary family member
+  // is promoted to a source anchor.
+  for (let page = 1; page <= 2; page += 1) {
+    const found = await executeSearchCatalog({
+      mode: "by_filter",
+      category: profile.category,
+      anchor_leaf_category: profile.category,
+      options: { [profile.required.base.key]: [profile.base] },
+      min_price: 1,
+      ...(budgetCap !== null ? { max_price: budgetCap } : {}),
+      per_page: 50,
+      page,
+    }, {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+    }, ctx.cache);
+    if (!found.ok) {
+      searchError = found.error_code;
+      break;
+    }
+    pagesChecked += 1;
+    rawTotal = found.total;
+    for (const { id } of found.results) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const product = ctx.cache.get(id);
+      if (budgetCap !== null && (!product || product.price > budgetCap)) {
+        rejected.budget = (rejected.budget ?? 0) + 1;
+        continue;
+      }
+      const fit = evaluateLedLampFamilyBrowseCandidate(profile, product);
+      if (fit.ok) verified.push(fit);
+      else if (fit.reason === "named_source_series") {
+        const member = evaluateLedLampNamedSourceFamilyMember(profile, product);
+        if (member.ok) namedSourceMembers.push(member);
+        else rejected[member.reason] = (rejected[member.reason] ?? 0) + 1;
+      } else rejected[fit.reason] = (rejected[fit.reason] ?? 0) + 1;
+    }
+    const grouped = new Map<number, number>();
+    for (const fit of verified) {
+      grouped.set(fit.diameterMm, (grouped.get(fit.diameterMm) ?? 0) + 1);
+    }
+    if (
+      namedSourceMembers.length >= 2 &&
+      [...grouped.values()].some((count) => count >= 2)
+    ) break;
+    if (found.total <= page * 50 || found.results.length === 0) break;
+  }
+  const envelope = observedLedLampFamilyEnvelope(
+    namedSourceMembers,
+    verified,
+  );
+  const powers = [...new Set((envelope?.candidates ?? []).map(({ powerW }) => powerW))]
+    .sort((left, right) => left - right);
+  const powerCeiling = powers.find((power) =>
+    (envelope?.candidates ?? []).filter(({ powerW }) => powerW <= power)
+      .length >= 2
+  );
+  const selected = powerCeiling === undefined ? [] : envelope!.candidates
+    .filter(({ powerW }) => powerW <= powerCeiling)
+    .slice(0, 4);
+  steps.push({
+    step: "v3_led_lamp_ambiguous_family_browse_checked",
+    ms: Date.now() - t0,
+    meta: {
+      category: profile.category,
+      base_key: profile.required.base.key,
+      pages_checked: pagesChecked,
+      raw_total: rawTotal,
+      named_source_members: namedSourceMembers.length,
+      observed_min_power: envelope?.minPowerW ?? null,
+      observed_max_power: envelope?.maxPowerW ?? null,
+      verified_variants: verified.length,
+      selected_variants: selected.length,
+      selected_diameter: envelope?.diameterMm ?? null,
+      named_model_tokens_excluded: true,
+      rejected,
+      search_error: searchError,
+      duration_ms: Date.now() - started,
+    },
+  });
+  if (selected.length < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: searchError
+        ? "Сейчас каталог не дал завершить проверку вариантов этой серии. Повторите запрос позже; это не означает, что вариантов нет."
+        : "Указана серия ламп, но не точная исходная модель. В проверенной части каталога не удалось подтвердить два варианта другой серии в наблюдаемом диапазоне мощности и диаметра исходной серии. Уточните артикул исходной лампы, её мощность и размеры.",
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: searchError ? "upstream_error" : "query_inconsistent",
+    };
+  }
+  const rendered = executeRenderProducts({
+    product_ids: selected.map(({ candidate }) => candidate.id),
+    total_available: selected.length,
+  }, ctx.cache);
+  if (!rendered.ok || rendered.rendered_count < 2) {
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Варианты подтверждены в каталоге, но карточки не удалось надёжно вывести. Повторите запрос позже.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const displayed = selected.filter(({ candidate }) =>
+    rendered.rendered_ids.includes(candidate.id)
+  );
+  if (displayed.length !== rendered.rendered_count) {
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const criteria: Criterion[] = [
+    {
+      key: profile.required.base.key,
+      op: "eq",
+      value: profile.base,
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: profile.required.shape.key,
+      op: "eq",
+      value: profile.shape,
+      level: "A",
+      evidence: "user_explicit",
+    },
+  ];
+  if (budgetCap !== null) {
+    criteria.push({
+      key: "Цена",
+      op: "max",
+      value: budgetCap,
+      unit: "₸",
+      level: "A",
+      evidence: "user_explicit",
+    });
+  }
+  const plan = extendSelectionCriteriaPlan(null, criteria, "guarded_search");
+  const perCard = displayed.map(({ powerW, diameterMm }, index) =>
+    `№${index + 1}: ${powerW} Вт, диаметр ${diameterMm} мм`
+  ).join("; ");
+  send({
+    type: "delta",
+    origin: "server",
+    content:
+      `Вы назвали серию, а не точный артикул исходной лампы. Поэтому это варианты для сравнения без названного кода модели в заголовке, а не подтверждённые взаимозаменяемые аналоги; принадлежность вариантов к другой серии каталогом не доказана. В двух или более проверенных карточках с названным кодом модели наблюдаются ${envelope!.minPowerW}–${envelope!.maxPowerW} Вт и диаметр ${envelope!.diameterMm} мм; это не полная спецификация серии. У показанных вариантов проверены категория «${profile.category}», цоколь ${profile.base}, форма «${profile.shape}», светодиодный тип, питание AC и рабочее напряжение, охватывающее 220–230 В; ${perCard}. Перед покупкой сверьте напряжение исходной лампы, её мощность, диаметр, высоту и посадку, а также максимально допустимую мощность светильника.`,
+  });
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: displayed.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map(({
+        key,
+        op,
+        value,
+        unit,
+        evidence,
+      }) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(evidence ? { evidence } : {}),
+      })),
+    },
+  });
+  steps.push({
+    step: "v3_led_lamp_ambiguous_family_browse_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      rendered: rendered.rendered_count,
+      source_identity_verified: false,
+      replacement_evidence: "provisional_family_browse",
+      selection_contract_hash: plan.hash,
+    },
+  });
+  return {
+    handled: true,
+    products: displayed.map(({ candidate }) => candidate),
+    outcome: "found",
+  };
+}
+
+async function selectVerifiedOrdinaryReplacement(
+  userMessage: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+  verifiedExactSource: ProductRef | null = null,
+): Promise<DirectReplacementResult> {
+  const started = Date.now();
+  const verifiedSourceBoundary = verifiedExactSource
+    ? parseExplicitReplacementSourceBoundary(userMessage)
+    : null;
+  if (verifiedExactSource && !verifiedSourceBoundary) {
+    // A source product may be reused only with the independently parsed
+    // request frame that justified its exact-title admission.
+    send({
+      type: "delta",
+      origin: "server",
+      content:
+        "Не удалось отделить название исходного товара от требований к замене. Уточните запрос, выделив точное название товара кавычками.",
+    });
+    steps.push({
+      step: "v3_replacement_verified_source_boundary_missing",
+      ms: Date.now() - t0,
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+  const independentRequestFrame = verifiedSourceBoundary?.frame ?? null;
+  const requirementText = independentRequestFrame ?? userMessage;
+  const equivalentOnly = /равноцен\p{L}*/iu.test(requirementText);
+  const budgetCap = extractBudgetCap(requirementText);
   const requiredVisibleCodes = equivalentOnly
-    ? extractExplicitSingleLetterCodes(userMessage)
+    ? extractExplicitSingleLetterCodes(requirementText)
     : [];
   const lookup = extractReplacementLookupKeys(userMessage);
   const sourceDescription = extractReplacementSourceDescription(userMessage);
   const sourceCandidateIds = new Set<string>();
-  let anchor: ProductRef | null = null;
-  let sourceIdentityVerified = false;
+  // Only a unique, full-title-equal live catalog card may bypass the
+  // ambiguity of nameplate specs inside an explicitly delimited source.
+  // Never promote a broad code hit to an exact source identity.
+  let anchor: ProductRef | null = verifiedExactSource;
+  let sourceIdentityVerified = Boolean(verifiedExactSource);
+  if (verifiedExactSource) sourceCandidateIds.add(verifiedExactSource.id);
 
   // Resolve only a class that is literally grounded in the customer's source
   // description. No model fallback is allowed here: the live taxonomy may
@@ -4454,13 +4932,38 @@ async function selectVerifiedOrdinaryReplacement(
       sourceClassDiscovery.facets,
     )
     : null;
+  if (
+    sourceClassDiscovery.ok && !verifiedExactSource &&
+    lookup.articles.length === 0 &&
+    admitDirectSelectionRoute({
+      route: "replacement",
+      userMessage,
+      coversBudgetCap: budgetCap !== null,
+    })
+  ) {
+    const family = resolveLedLampFamilyBrowseProfile(
+      sourceDescription,
+      sourceClassDiscovery.category.pagetitle,
+      sourceClassDiscovery.facets,
+    );
+    if (family.status === "ready") {
+      return await browseVerifiedLedLampFamilyAlternatives(
+        family.profile,
+        budgetCap,
+        ctx,
+        send,
+        steps,
+        t0,
+      );
+    }
+  }
   // A named compact source may decode its rating while still representing
   // several structural variants. Discovery's live, customer-grounded class
   // and facet alternatives are enough to ask one question; a broad text hit
   // must not nominate its first product as the source SKU. A literal article
   // is an exact source identity and stays on the existing anchor route.
   if (
-    sourceClassDiscovery.ok && liveClarification &&
+    sourceClassDiscovery.ok && liveClarification && !verifiedExactSource &&
     shouldClarifyCompactReplacementSource({
       grounded_source_class: sourceClassLeaves.length > 0,
       has_exact_article: lookup.articles.length > 0,
@@ -4494,7 +4997,7 @@ async function selectVerifiedOrdinaryReplacement(
       source_candidate_ids: [],
     };
   }
-  if (sourceClassDiscovery.ok && !liveClarification) {
+  if (sourceClassDiscovery.ok && !liveClarification && !verifiedExactSource) {
     const compactContinuation =
       await selectVerifiedCompactReplacementContinuation(
         userMessage,
@@ -4516,28 +5019,30 @@ async function selectVerifiedOrdinaryReplacement(
     }
   };
 
-  for (const article of lookup.articles) {
-    const found = await executeSearchCatalog({
-      mode: "by_article",
-      article,
-      per_page: 3,
-    }, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
-    if (found.ok && found.results.length > 0) {
-      addSourceCandidates(found.results);
-      anchor = found.results.find((product) =>
-        productBelongsToReplacementSourceScope(product, sourceClassLeaves)
-      ) ?? null;
-      if (anchor) {
-        const exactArticleMatches = found.results.filter((product) =>
-          String(product.article ?? "").replace(/\D/gu, "") === article
-        );
-        sourceIdentityVerified = found.total === 1 &&
-          exactArticleMatches.length === 1 &&
-          exactArticleMatches[0].id === anchor.id;
-        break;
+  if (!verifiedExactSource) {
+    for (const article of lookup.articles) {
+      const found = await executeSearchCatalog({
+        mode: "by_article",
+        article,
+        per_page: 3,
+      }, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: ctx.catalogToken,
+      }, ctx.cache);
+      if (found.ok && found.results.length > 0) {
+        addSourceCandidates(found.results);
+        anchor = found.results.find((product) =>
+          productBelongsToReplacementSourceScope(product, sourceClassLeaves)
+        ) ?? null;
+        if (anchor) {
+          const exactArticleMatches = found.results.filter((product) =>
+            String(product.article ?? "").replace(/\D/gu, "") === article
+          );
+          sourceIdentityVerified = found.total === 1 &&
+            exactArticleMatches.length === 1 &&
+            exactArticleMatches[0].id === anchor.id;
+          break;
+        }
       }
     }
   }
@@ -4777,14 +5282,100 @@ async function selectVerifiedOrdinaryReplacement(
     };
   }
 
+  if (sourceIdentityVerified) {
+    const resolved = resolveLedLampCompatibilityProfile(
+      ctx.cache.get(anchor.id) ?? (anchor as ProductFull),
+      discovery.facets,
+    );
+    if (resolved.status === "ready") {
+      const familyRouteAdmitted = admitProvisionalReplacementFamilyRoute({
+        userMessage,
+        verifiedSourceTitle: anchor.pagetitle,
+        coversBudgetCap: budgetCap !== null,
+      });
+      if (!familyRouteAdmitted) {
+        // The typed lamp path proves only source-family fit. Preserve the
+        // existing user-owned-axis route for additional constraints instead
+        // of swallowing them under a new provisional answer.
+        steps.push({
+          step: "v3_led_lamp_family_independent_frame_deferred",
+          ms: Date.now() - t0,
+          meta: { anchor_id: anchor.id, equivalent_only: equivalentOnly },
+        });
+      } else if (
+        normalizeForMatch(discovery.category.pagetitle) !==
+          normalizeForMatch(anchor.leaf_category)
+      ) {
+        send({
+          type: "delta",
+          origin: "server",
+          content:
+            "Категория исходной лампы и характеристики поиска не совпали. Не буду показывать неподтверждённые варианты; повторите запрос позже.",
+        });
+        steps.push({
+          step: "v3_led_lamp_family_discovery_mismatch_stopped",
+          ms: Date.now() - t0,
+          meta: {
+            anchor_leaf: anchor.leaf_category,
+            discovered_category: discovery.category.pagetitle,
+          },
+        });
+        return { handled: true, products: [], outcome: "query_inconsistent" };
+      } else {
+        return await selectVerifiedLedLampReplacement(
+          resolved.profile,
+          budgetCap,
+          ctx,
+          send,
+          steps,
+          t0,
+        );
+      }
+    }
+    if (resolved.status === "unverifiable") {
+      // An incomplete new family profile cannot erase a pre-existing route
+      // that may still prove independently requested axes. The legacy path
+      // below remains fail-closed when those axes are insufficient.
+      steps.push({
+        step: "v3_led_lamp_family_source_unverifiable_deferred",
+        ms: Date.now() - t0,
+        meta: { reason: resolved.reason, anchor_id: anchor.id },
+      });
+    }
+  }
+
   const axisLimit = equivalentOnly ? 6 : 3;
-  const allExplicitAxes = selectExplicitAnchorAxes(
-    anchor,
-    discovery.facets,
-    userMessage,
-    Number.MAX_SAFE_INTEGER,
-  );
+  const allExplicitAxes = independentRequestFrame !== null
+    ? selectUserOwnedReplacementAxes(
+      anchor,
+      discovery.facets,
+      independentRequestFrame,
+      Number.MAX_SAFE_INTEGER,
+    )
+    : selectExplicitAnchorAxes(
+      anchor,
+      discovery.facets,
+      userMessage,
+      Number.MAX_SAFE_INTEGER,
+    );
   if (allExplicitAxes.length > axisLimit) {
+    if (independentRequestFrame !== null) {
+      send({
+        type: "delta",
+        origin: "server",
+        content:
+          "Исходный товар найден, но вы указали больше обязательных параметров, чем можно одновременно проверить в текущем поиске каталога. Чтобы не выдать неподтверждённую замену, уточните самые важные параметры или обратитесь к менеджеру для проверки по паспорту изделия.",
+      });
+      steps.push({
+        step: "v3_replacement_verified_source_frame_overflow_stopped",
+        ms: Date.now() - t0,
+        meta: {
+          independent_axes: allExplicitAxes.length,
+          direct_limit: axisLimit,
+        },
+      });
+      return { handled: true, products: [], outcome: "query_inconsistent" };
+    }
     steps.push({
       step: "v3_replacement_direct_axes_overflow_delegated",
       ms: Date.now() - t0,
@@ -4802,6 +5393,24 @@ async function selectVerifiedOrdinaryReplacement(
   }
   const axes = allExplicitAxes;
   if (axes.length < 2) {
+    if (independentRequestFrame !== null) {
+      send({
+        type: "delta",
+        origin: "server",
+        content:
+          "Исходный товар найден, но по одному названию нельзя подтвердить безопасную замену: каталог не отмечает полный набор критичных параметров совместимости. Повторите запрос с названием товара и обязательными характеристиками; рабочие и монтажные параметры также сверьте по паспорту оборудования.",
+      });
+      steps.push({
+        step: "v3_replacement_verified_source_fit_unproven_stopped",
+        ms: Date.now() - t0,
+        meta: {
+          source_identity_verified: sourceIdentityVerified,
+          independent_axes: axes.length,
+          live_facets: discovery.facets.length,
+        },
+      });
+      return { handled: true, products: [], outcome: "query_inconsistent" };
+    }
     send({
       type: "tool_event",
       tool: "search_catalog",
@@ -4827,16 +5436,21 @@ async function selectVerifiedOrdinaryReplacement(
   }
 
   const sourceModel = extractModelCode(anchor.pagetitle);
-  const sourceModels = resolveReplacementSourceModelCodes(
-    userMessage,
-    anchor,
-    axes,
-    lookup.modelCodes.length > 0
-      ? lookup.modelCodes
-      : sourceModel
-      ? [sourceModel]
-      : [],
-  );
+  // A uniquely verified full title identifies one source product, not an
+  // entire model family. Family-level exclusion here would discard genuine
+  // variants (for example another power with the same lamp form code).
+  const sourceModels = verifiedExactSource
+    ? []
+    : resolveReplacementSourceModelCodes(
+      userMessage,
+      anchor,
+      axes,
+      lookup.modelCodes.length > 0
+        ? lookup.modelCodes
+        : sourceModel
+        ? [sourceModel]
+        : [],
+    );
   const excludedIds = new Set([anchor.id]);
   const mandatoryAxes: ReplacementAxis[] = axes
     .filter((axis) => axis.mandatory)
@@ -4849,8 +5463,16 @@ async function selectVerifiedOrdinaryReplacement(
     }));
   const unverifiedFacetCandidateIds = new Set<string>();
   const isCandidate = (product: ProductRef): boolean => {
+    const duplicateExactSource = Boolean(
+      verifiedExactSource &&
+        ((anchor.article && product.article &&
+            anchor.article === product.article) ||
+          normalizeForMatch(product.pagetitle) ===
+            normalizeForMatch(anchor.pagetitle)),
+    );
     if (
       excludedIds.has(product.id) ||
+      duplicateExactSource ||
       productContainsSourceModel(product, sourceModels) ||
       (budgetCap !== null && product.price > budgetCap)
     ) return false;
@@ -4945,7 +5567,7 @@ async function selectVerifiedOrdinaryReplacement(
 
   if (equivalentOnly && selected.length === 0) {
     const portableRequirements = extractPortableTechnicalRequirements(
-      userMessage,
+      requirementText,
     );
     if (portableRequirements.length >= 2) {
       const broad = await executeSearchCatalog(
@@ -5056,7 +5678,9 @@ async function selectVerifiedOrdinaryReplacement(
       level: "A",
       // The source model is only an identity. These transferable axes are
       // separately grounded in the live source card and catalog facets.
-      evidence: "derived_required",
+      evidence: independentRequestFrame !== null
+        ? "user_explicit"
+        : "derived_required",
     };
   });
   if (budgetCap !== null) {
@@ -23372,12 +23996,54 @@ Deno.serve(async (req) => {
               );
             } else if (replacementSourceRequest) {
               let direct: DirectReplacementResult | null = null;
-              const replacementDirectAdmitted = admitDirectSelectionRoute({
+              let verifiedExactSource: ProductRef | null = null;
+              let replacementDirectAdmitted = admitDirectSelectionRoute({
                 route: "replacement",
                 userMessage: replacementSourceRequest,
                 coversBudgetCap:
                   extractBudgetCap(replacementSourceRequest) !== null,
               });
+              if (!replacementDirectAdmitted && !scopedReplacementSource) {
+                const boundary = parseExplicitReplacementSourceBoundary(
+                  replacementSourceRequest,
+                );
+                if (boundary && boundary.source.length <= 200) {
+                  const sourceResult = await executeSearchCatalog({
+                    mode: "by_pagetitle",
+                    pagetitle: boundary.source,
+                    per_page: 2,
+                  }, {
+                    baseUrl: CATALOG_BASE_URL,
+                    apiToken: ctx.catalogToken,
+                  }, ctx.cache);
+                  const source = sourceResult.ok
+                    ? resolveUniqueExactReplacementTitle(
+                      boundary.source,
+                      sourceResult,
+                    )
+                    : null;
+                  if (source) {
+                    replacementDirectAdmitted = admitDirectSelectionRoute({
+                      route: "replacement",
+                      userMessage: replacementSourceRequest,
+                      coversBudgetCap:
+                        extractBudgetCap(replacementSourceRequest) !== null,
+                      verifiedSourceTitle: source.pagetitle,
+                    });
+                    if (replacementDirectAdmitted) verifiedExactSource = source;
+                  }
+                  steps.push({
+                    step: "v3_replacement_explicit_source_checked",
+                    ms: Date.now() - t0,
+                    meta: {
+                      boundary: boundary.kind,
+                      unique_exact_title: Boolean(source),
+                      admitted: replacementDirectAdmitted,
+                      search_error: sourceResult.ok ? null : sourceResult.error_code,
+                    },
+                  });
+                }
+              }
               if (
                 scopedReplacementSource && pendingScopedCatalogContinuation &&
                 replacementDirectAdmitted
@@ -23498,6 +24164,7 @@ Deno.serve(async (req) => {
                     send,
                     steps,
                     t0,
+                    verifiedExactSource,
                   );
                 }
               }
@@ -23513,6 +24180,7 @@ Deno.serve(async (req) => {
                   send,
                   steps,
                   t0,
+                  verifiedExactSource,
                 );
               }
               if (direct.handled) {

@@ -167,6 +167,79 @@ export type DirectSelectionRoute =
   | "replacement"
   | "exact_inquiry";
 
+export interface ExplicitReplacementSourceBoundary {
+  kind: "quoted" | "colon" | "source_first";
+  source: string;
+  frame: string;
+}
+
+function strictSourceTitle(value: string): string {
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * A quote, replacement-command colon or source-first imperative can delimit
+ * a *claimed* source title from the request frame. This is grammatical
+ * evidence only: callers must still independently verify the whole title in
+ * the live catalog before admitting a source with otherwise ambiguous specs.
+ */
+export function parseExplicitReplacementSourceBoundary(
+  userMessage: string,
+): ExplicitReplacementSourceBoundary | null {
+  const taskMessage = stripExplicitNewTaskPreface(userMessage);
+  const raw = String(taskMessage ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  const source = extractReplacementSourceDescription(taskMessage);
+  const normalizedSource = source.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+  if (!normalizedSource) return null;
+  const sourceOffset = raw.indexOf(normalizedSource);
+  if (sourceOffset < 0) return null;
+  const before = raw.slice(0, sourceOffset);
+  const after = raw.slice(sourceOffset + normalizedSource.length);
+  const trigger = /(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)/iu;
+  const frame = `${before} ${after}`;
+  if (
+    (before.trimEnd().endsWith("«") && after.trimStart().startsWith("»") ||
+      before.trimEnd().endsWith('"') && after.trimStart().startsWith('"')) &&
+    trigger.test(before)
+  ) return { kind: "quoted", source, frame };
+  if (before.trimEnd().endsWith(":") && trigger.test(before)) {
+    return { kind: "colon", source, frame };
+  }
+  if (
+    sourceOffset === 0 &&
+    /^[\s,;:–—-]+(?:предлож\p{L}*|подбер\p{L}*|найд\p{L}*|покаж\p{L}*)\s+(?:равноцен\p{L}*\s+)?(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*)/iu
+      .test(after)
+  ) return { kind: "source_first", source, frame };
+  return null;
+}
+
+/**
+ * A provisional family-fit comparison may not silently consume an additional
+ * customer requirement. The direct-route parser proves that the independent
+ * frame contains only a replacement request and, optionally, one enforced
+ * upper price bound. Requests for full equivalence need a different proof.
+ */
+export function admitProvisionalReplacementFamilyRoute(input: {
+  userMessage: string;
+  verifiedSourceTitle: string;
+  coversBudgetCap: boolean;
+}): boolean {
+  const boundary = parseExplicitReplacementSourceBoundary(input.userMessage);
+  if (!boundary) return false;
+  if (
+    /(?:равноцен|эквивалент|взаимозаменяем|идентичн)\p{L}*/iu
+      .test(boundary.frame)
+  ) return false;
+  return admitDirectSelectionRoute({
+    route: "replacement",
+    userMessage: input.userMessage,
+    verifiedSourceTitle: input.verifiedSourceTitle,
+    coversBudgetCap: input.coversBudgetCap,
+  });
+}
+
 /**
  * Direct routes prove only their declared invariant (marking, established PoE
  * safety profile, source identity or exact SKU facts). Anything that needs a
@@ -179,6 +252,8 @@ export function admitDirectSelectionRoute(input: {
   userMessage: string;
   coversBudgetCap?: boolean;
   coveredCompound?: { first: number; second: number } | null;
+  /** Exact full source title from a uniquely verified live catalog product. */
+  verifiedSourceTitle?: string;
 }): boolean {
   // A dialogue boundary is not a product condition. Apply the same generic
   // request normalization to every direct route before proving its residual
@@ -196,6 +271,12 @@ export function admitDirectSelectionRoute(input: {
     const normalizedSource = source.toLocaleLowerCase("ru-RU").replace(
       /ё/gu,
       "е",
+    );
+    const explicitBoundary = parseExplicitReplacementSourceBoundary(taskMessage);
+    const exactExplicitSource = Boolean(
+      explicitBoundary && input.verifiedSourceTitle &&
+        strictSourceTitle(explicitBoundary.source) ===
+          strictSourceTitle(input.verifiedSourceTitle),
     );
     const sourceOffset = raw.indexOf(normalizedSource);
     if (sourceOffset < 0) return false;
@@ -223,9 +304,27 @@ export function admitDirectSelectionRoute(input: {
     // It is not an independent fit criterion; qualifiers after that noun are
     // still left in the frame and will fail the allowlist below.
     frameText = frameText.replace(
-      /(?:^|\s)(?:этому|этой|этого|этот|эту)\s+\p{L}{3,}(?=$|\s)/giu,
+      exactExplicitSource
+        ? /(?:^|\s)(?:этому|этой|этого|этот|эту)\s+\p{L}{3,}(?=$|[^\p{L}\p{N}])/giu
+        : /(?:^|\s)(?:этому|этой|этого|этот|эту)\s+\p{L}{3,}(?=$|\s)/giu,
       " ",
     );
+    if (exactExplicitSource && explicitBoundary?.kind === "quoted") {
+      // A source-class noun immediately before a quoted *verified* title is
+      // grammatical reference, not a second product condition. Compare its
+      // stem with the title's first word; an unrelated adjective stays in
+      // the frame and fails admission below.
+      const firstSourceWord = normalize(source).split(" ")[0] ?? "";
+      if (firstSourceWord.length >= 4) {
+        frameText = frameText.replace(
+          /(аналог\p{L}*|замен\p{L}*)\s+(\p{L}{4,})(?=\s*[«"])/giu,
+          (match, noun: string, sourceClass: string) =>
+            normalize(sourceClass).slice(0, 4) === firstSourceWord.slice(0, 4)
+              ? noun
+              : match,
+        );
+      }
+    }
     const frame = normalize(frameText);
     const requestWords = new Set([
       "есть",
@@ -258,6 +357,7 @@ export function admitDirectSelectionRoute(input: {
       return false;
     }
     if (
+      !exactExplicitSource &&
       /(?:^|[^\p{L}])(?:для|чтобы|котор\p{L}*|с|со|без|кроме|исключая|цвет\p{L}*|налич\p{L}*|склад\p{L}*|город\p{L}*|подойд\p{L}*|годит\p{L}*|хватит)(?=$|[^\p{L}])/iu
         .test(normalizedSource) ||
       /\d[\d\s]{0,9}\s*(?:₸|тенге|тг|kzt)(?!\p{L})/iu.test(normalizedSource)
@@ -266,6 +366,7 @@ export function admitDirectSelectionRoute(input: {
     // as 7W/220V, 4.5kA and 1P. A separate length, area or diameter still
     // needs fit reasoning.
     if (
+      !exactExplicitSource &&
       extractClientQuantities(normalizedSource).some(({ unit }) =>
         isPhysicalMeasurementUnit(unit) &&
         !/^(?:w|вт|ватт|ватта|ваттов|v|в|вольт|вольта|вольтов|a|а|ампер|ампера|амперов|ka|ка|кa|kа|p|р)$/u
@@ -280,6 +381,10 @@ export function admitDirectSelectionRoute(input: {
       /^[\s,;:–—-]+(?:предлож\p{L}*|подбер\p{L}*|найд\p{L}*|покаж\p{L}*)\s+(?:равноцен\p{L}*\s+)?(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*)/iu
         .test(raw.slice(normalizedSource.length))
     ) return true;
+    // Exact live title equality proves that even a terminal brand or a
+    // nameplate Kelvin value belongs to the source span. Without that proof,
+    // keep the original suffix guard for undelimited/ambiguous requests.
+    if (exactExplicitSource) return true;
     // The lookup extractor intentionally omits short source codes such as
     // D90. They are still structural boundaries inside a long source name,
     // not a new customer criterion after the replacement instruction.
