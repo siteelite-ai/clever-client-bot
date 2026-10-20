@@ -3,10 +3,12 @@
 `chat-consultant-beta-search` is an independently deployed public Edge Function,
 not a widget route. On 2026-10-20, the Supabase function inventory reported it
 as `ACTIVE`, version `48`, with `verify_jwt=false`. A source search of the current
-repository found no runtime caller. The Supabase Dashboard showed zero
-invocations in the preceding five days, but those metrics may lag by up to
-24 hours and cannot rule out external or infrequent clients. Recheck immediately
-before deployment. Do not call this endpoint unused as a proven fact.
+repository found no runtime caller. The Supabase Dashboard showed no invocations
+in the visible recent window. This project is on the Free plan, whose log
+retention is only one day; selecting a longer date range does **not** establish
+that there were no calls throughout that range. Metrics may also lag. Recheck
+immediately before deployment, and do not call this endpoint unused as a
+proven fact.
 
 The exact deployed v48 bundle was downloaded before preparing this change. Its
 embedded source map yielded the function's TypeScript source. That source reads
