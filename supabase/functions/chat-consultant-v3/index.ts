@@ -164,10 +164,12 @@ import {
   unscopedSourceProvenCardinalityAttempt,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
+  buildDerivedSelectionPublicExplanation,
   buildDerivedSelectionReasoningMessages,
   buildDerivedSelectionReasoningToolSchema,
   compileApplicationSuitabilityAlternatives,
   compileCustomerClassificationCriteria,
+  derivedReasoningPublicEgress,
   derivedMeasurementMayConstrainIndividualProducts,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
@@ -177,6 +179,7 @@ import {
   preferCustomerGroundedLiveClassification,
   reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
+  suppressDerivedReasoningEcho,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -7020,6 +7023,10 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let derivedSelectionReasoningEvidence = "";
+  // A derived declaration stays in model context for search. This copy is
+  // used only to stop a later ordinary model paragraph from replaying it to
+  // the customer; it never changes search evidence or tool decisions.
+  let privateDerivedReasoningForEgress = "";
   let pendingDerivedSelectionMeasurementEvidence = "";
   let derivedSelectionMeasurementScope: string | null = null;
   let pendingDerivedSelectionMeasurementScope: string | null = null;
@@ -9273,6 +9280,9 @@ async function runExpertLoop(
       }
       if (!serverCompiledStepAvailable) remoteAgentSteps += 1;
       let resp: ORResponse;
+      // The validated declaration remains private evidence for search and
+      // card gates. A separate server-composed caption crosses SSE egress.
+      let derivedPublicExplanationForStep: string | null = null;
       let serverCompiledGroundedSearch = false;
       try {
         if (queuedServerGroundedSearch) {
@@ -9529,20 +9539,22 @@ async function runExpertLoop(
               toolCall.name === "declare_selection_reasoning"
             ),
           );
-          const pairedDeclarationDecision = (
-            args: Record<string, unknown>,
-          ) =>
+          const pairedReference = extractSchemaBackedMeasuredReference(
+            userMessage,
+            lastDiscover?.facets ?? [],
+            lastDiscover?.category?.pagetitle ?? "",
+          );
+          const pairedDecisionForEvidence = (reasoning: string) =>
             terminalPairedFitDecision(
-              extractSchemaBackedMeasuredReference(
-                userMessage,
-                lastDiscover?.facets ?? [],
-                lastDiscover?.category?.pagetitle ?? "",
-              ),
+              pairedReference,
               userMessage,
-              String(args.reasoning ?? ""),
+              reasoning,
               lastDiscover?.facets ?? [],
               lastDiscover?.category?.pagetitle ?? "",
             );
+          const pairedDeclarationDecision = (
+            args: Record<string, unknown>,
+          ) => pairedDecisionForEvidence(String(args.reasoning ?? ""));
           const resolvePairedDeclaration = (
             args: Record<string, unknown>,
           ) => {
@@ -9594,6 +9606,7 @@ async function runExpertLoop(
             }
             return {
               ...candidate,
+              reasoningEvidence: visible.text,
               text: visible.text,
               measurementEvidence: measurement.text,
               requiredFacetValues,
@@ -9640,9 +9653,39 @@ async function runExpertLoop(
               );
           };
           const missingPairedFitProof = () => {
-            if (!declarationCall) return false;
-            const pair = pairedDeclarationDecision(declarationCall.args);
-            return Boolean(pair.selected_pair) && pair.state !== "required";
+            // A measured object and a live paired graph create the obligation.
+            // The raw tool argument is not the proof consumed by the terminal
+            // gate: resolution may remove an unsupported clause or an entire
+            // side. Retry once against that *resolved* evidence even when the
+            // model omitted the pair selection altogether. An unrelated
+            // measured property stays not_applicable and costs no retry.
+            const pair = pairedDecisionForEvidence(
+              declaration?.reasoningEvidence ?? "",
+            );
+            return Boolean(pair.reference) && pair.state === "unproven";
+          };
+          const stopForUnverifiedPairedFit = () => {
+            const pair = pairedDecisionForEvidence(
+              declaration?.reasoningEvidence ?? "",
+            );
+            const notice = pair.selected_pair
+              ? "Не удалось подтвердить обе обязательные границы совместимости по характеристикам товара. Не буду показывать неподтверждённые варианты; повторите запрос или уточните условия подбора."
+              : "Не могу однозначно сопоставить размер вашего объекта с парными параметрами товара. Уточните, какой именно параметр объекта вы измерили, и я проверю совместимость по обеим границам.";
+            send({ type: "delta", content: notice });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({
+              step: "v3_paired_fit_unverified",
+              ms: now(),
+              meta: {
+                reference: pair.reference,
+                pair_selected: Boolean(pair.selected_pair),
+              },
+            });
+            return {
+              finalText,
+              productsRendered,
+              shownProductIds: [...shownIds],
+            };
           };
           const missingEnvironmentalProtection = () =>
             hasUnresolvedEnvironmentalProtectionObligation(
@@ -9673,8 +9716,8 @@ async function runExpertLoop(
             missingEnvironmentalProtection();
           if (
             ((declaration?.text.trim() &&
-              (missingRequiredProductMeasurement() ||
-                missingPairedFitProof())) ||
+              missingRequiredProductMeasurement()) ||
+              missingPairedFitProof() ||
               needsEnvironmentalProtectionRetry) &&
             derivedReasoningProviderAttempts < 2
           ) {
@@ -9765,6 +9808,9 @@ async function runExpertLoop(
           if (missingEnvironmentalProtection()) {
             return stopForUnverifiedProtection();
           }
+          if (missingPairedFitProof()) {
+            return stopForUnverifiedPairedFit();
+          }
           if (!declaration?.text.trim()) {
             const declarationArgs = declarationCall?.args &&
                 typeof declarationCall.args === "object"
@@ -9820,10 +9866,10 @@ async function runExpertLoop(
             lastDiscover?.facets ?? [],
             lastDiscover?.category?.pagetitle ?? "",
           );
-          // The consultant's own validated declaration is the visible proof.
+          // The consultant's validated declaration is internal search proof.
           // The live schema may create a fit obligation, but the server must
           // not manufacture the missing second side of its reasoning.
-          let visibleDeclarationText = declaration.text;
+          let visibleDeclarationText = declaration.reasoningEvidence;
           const measurementDeclarationEvidence =
             pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
@@ -9835,10 +9881,9 @@ async function runExpertLoop(
           reconcileSelectionMeasurementScope(
             `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
           );
-          // The model's structured declaration is immediately rendered back
-          // to visible prose and the internal function call is consumed here.
-          // Downstream search therefore reads exactly the same classification
-          // decision that the customer can see, with no hidden parallel plan.
+          // Keep the complete validated declaration in the agent context and
+          // all search gates. The public explanation is composed separately
+          // from frozen criteria below; the function call remains consumed.
           resp = {
             text: visibleDeclarationText,
             toolCalls: [],
@@ -10149,15 +10194,16 @@ async function runExpertLoop(
           // its server-generated sentence after the mandatory criteria have
           // been frozen for search and render. B-level advice is excluded by
           // the same boundary; free engineering explanation stays intact.
+          const reconciledCriteria = mergeMandatorySelectionCriteria([
+            ...(currentSelectionCriteriaPlan()?.mandatory_criteria ?? []),
+            ...userBackedSearchCriteria,
+            ...reasoningProjectedSearchCriteria,
+          ]);
           const validatedVisibleSummary =
             reconcileDerivedRequiredFacetSummary(
               { text: visibleDeclarationText,
                 requiredFacetValues: declaration.requiredFacetValues },
-              mergeMandatorySelectionCriteria([
-                ...(currentSelectionCriteriaPlan()?.mandatory_criteria ?? []),
-                ...userBackedSearchCriteria,
-                ...reasoningProjectedSearchCriteria,
-              ]),
+              reconciledCriteria,
             );
           if (validatedVisibleSummary.demoted > 0) {
             visibleDeclarationText = validatedVisibleSummary.text;
@@ -10175,6 +10221,44 @@ async function runExpertLoop(
               },
             });
           }
+          // Public copy is composed only after the unchanged reconciliation
+          // has decided which exact requirements survived the frozen plan.
+          const publicCaptionCriteria = mergeMandatorySelectionCriteria(
+            reconciledCriteria,
+          );
+          const publicPairedDecision = declarationCall
+            ? pairedDecisionForEvidence(
+              pendingDerivedSelectionMeasurementEvidence,
+            )
+            : null;
+          const publicPairedFit = publicPairedDecision?.state === "required" &&
+              publicPairedDecision.reference &&
+              publicPairedDecision.selected_pair
+            ? {
+              value: publicPairedDecision.reference.value,
+              unit: publicPairedDecision.reference.unit,
+              beforeCaption: lastDiscover?.facets?.find((facet) =>
+                facet.key ===
+                  publicPairedDecision.selected_pair?.before_facet_key
+              )?.caption ?? "",
+              afterCaption: lastDiscover?.facets?.find((facet) =>
+                facet.key ===
+                  publicPairedDecision.selected_pair?.after_facet_key
+              )?.caption ?? "",
+            }
+            : null;
+          derivedPublicExplanationForStep =
+            buildDerivedSelectionPublicExplanation({
+              productClass: lastDiscover?.category?.pagetitle ??
+                activeSelectionTarget ?? "",
+              frozenCriteria: publicCaptionCriteria,
+              measurementScope: effectiveDeclaredMeasurementScope,
+              pairedFit: publicPairedFit,
+            });
+          privateDerivedReasoningForEgress = [
+            privateDerivedReasoningForEgress,
+            visibleDeclarationText,
+          ].filter(Boolean).join("\n");
           // The forced declaration already owns the complete retrieval
           // decision. Project it directly into the live catalog instead of
           // paying for a second model call whose only useful outcome would be
@@ -10671,6 +10755,16 @@ async function runExpertLoop(
         });
       }
       const rawModelResponseText = resp.text;
+      const traceEcho = suppressDerivedReasoningEcho(
+        rawModelResponseText,
+        privateDerivedReasoningForEgress,
+      );
+      const traceModelResponseText = derivedPublicExplanationForStep ??
+        traceEcho.text;
+      const traceRemovedSegments = (removed: string[]) =>
+        derivedPublicExplanationForStep || traceEcho.suppressed
+          ? removed.map(() => "[derived reasoning redacted]")
+          : removed;
       const rejectedClarificationCall = resp.toolCalls.find((toolCall) => {
         if (toolCall.name !== "propose_clarification") return false;
         const args = toolCall.args as Partial<ProposeClarificationInput>;
@@ -10697,7 +10791,10 @@ async function runExpertLoop(
           steps.push({
             step: "v3_rejected_optional_clarification_text",
             ms: now(),
-            meta: { fragment_index: step, removed_segments: guarded.removed },
+            meta: {
+              fragment_index: step,
+              removed_segments: traceRemovedSegments(guarded.removed),
+            },
           });
         }
       }
@@ -10777,8 +10874,9 @@ async function runExpertLoop(
           ms: now(),
           meta: {
             fragment_index: step,
-            original_text: rawModelResponseText,
-            replacement_text: missingAnchorIntroGuard.text,
+            original_text: traceModelResponseText,
+            replacement_text: derivedPublicExplanationForStep ??
+              missingAnchorIntroGuard.text,
           },
         });
       }
@@ -10788,8 +10886,8 @@ async function runExpertLoop(
           ms: now(),
           meta: {
             fragment_index: step,
-            original_text: rawModelResponseText,
-            removed_segments: introAliasGuard.removed,
+            original_text: traceModelResponseText,
+            removed_segments: traceRemovedSegments(introAliasGuard.removed),
             kept_chars: resp.text.length,
           },
         });
@@ -10800,8 +10898,8 @@ async function runExpertLoop(
           ms: now(),
           meta: {
             fragment_index: step,
-            original_text: rawModelResponseText,
-            removed_segments: introAttributeGuard.removed,
+            original_text: traceModelResponseText,
+            removed_segments: traceRemovedSegments(introAttributeGuard.removed),
             kept_chars: resp.text.length,
           },
         });
@@ -10812,8 +10910,8 @@ async function runExpertLoop(
           ms: now(),
           meta: {
             fragment_index: step,
-            original_text: rawModelResponseText,
-            removed_segments: introFactGuard.removed,
+            original_text: traceModelResponseText,
+            removed_segments: traceRemovedSegments(introFactGuard.removed),
             kept_chars: resp.text.length,
           },
         });
@@ -10906,12 +11004,33 @@ async function runExpertLoop(
       //    (важно для предупреждений о несоответствии параметров: цоколь, мощность и т.п.)
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
-        // The same evidence-safe text drives both the visible bubble and all
-        // downstream proof contracts. Otherwise a hidden, unrequested code in
-        // raw model prose could still become a search/filter obligation even
-        // after being removed from the UI.
+        // The validated declaration is still the search/render evidence. Its
+        // raw prose is not customer copy: every visible branch below consumes
+        // only the server-composed caption when this was a derived step.
+        const laterEcho = derivedReasoningPublicEgress({
+          candidate: resp.text,
+          privateReasoning: privateDerivedReasoningForEgress,
+          isFinalTurn,
+          catalogLookupCompleted,
+          productsRendered,
+        });
+        const publicResponseText = derivedPublicExplanationForStep ??
+          laterEcho.text;
         const reasoningTextForContracts = resp.text;
         assistantReasoning += `\n${reasoningTextForContracts}`;
+        if (laterEcho.suppressed && !derivedPublicExplanationForStep) {
+          steps.push({
+            step: "v3_derived_private_echo_suppressed",
+            ms: now(),
+            meta: { fragment_index: step, phase: agentPhase },
+          });
+        }
+        const firstInternalDeclaration = derivedPublicExplanationForStep
+          ? safeVisiblePriceProse(
+            sanitizeIntermediateReasoning(reasoningTextForContracts).text
+              .trim(),
+          )
+          : "";
         declaredAliasQuery ??= targetCatalogAliasClaim(
           extractDeclaredCatalogAlias(
             userMessage,
@@ -10921,7 +11040,7 @@ async function runExpertLoop(
         );
         if (isFirstTurn && !hasRender && !isFinalTurn) {
           const safeReasoning = sanitizeIntermediateReasoning(
-            reasoningTextForContracts,
+            publicResponseText,
           );
           const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
             (catalogPriceExtreme
@@ -10946,15 +11065,17 @@ async function runExpertLoop(
               step: "v3_assistant_text_inquiry_deferred",
               ms: now(),
               meta: {
-                chars: resp.text.length,
+                chars: publicResponseText.length,
                 fragment_index: step,
-                text: resp.text,
+                text: publicResponseText,
               },
             });
           } else if (introText) {
             send({ type: "delta", content: introText });
             finalText += introText;
-            firstAssistantText = introText;
+            firstAssistantText = derivedPublicExplanationForStep
+              ? firstInternalDeclaration
+              : introText;
             steps.push({
               step: "v3_assistant_text",
               ms: now(),
@@ -10982,9 +11103,9 @@ async function runExpertLoop(
           // поэтому такой текст подменяем на честный honest-empty.
           // Data-agnostic: никаких brand/category хардкодов, только структурные
           // регэкспы (URL host, валютные единицы, [..](..) синтаксис).
-          let outText = resp.text;
+          let outText = publicResponseText;
           if (!hasRender) {
-            const rawText = resp.text;
+            const rawText = publicResponseText;
             const hasCatalogUrl = /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/i
               .test(rawText);
             const hasPrice = /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu
@@ -11065,7 +11186,9 @@ async function runExpertLoop(
             send({ type: "delta", content: outText, origin: "model" });
             finalText += outText;
             if (isFirstTurn) {
-              firstAssistantText = outText.trim();
+              firstAssistantText = derivedPublicExplanationForStep
+                ? firstInternalDeclaration
+                : outText.trim();
             }
             steps.push({
               step: "v3_assistant_text_final",
@@ -11094,9 +11217,9 @@ async function runExpertLoop(
               step: "v3_assistant_text_suppressed_render_caption",
               ms: now(),
               meta: {
-                chars: resp.text.length,
+                chars: publicResponseText.length,
                 fragment_index: step,
-                text: resp.text,
+                text: publicResponseText,
               },
             });
           } else {
@@ -11106,11 +11229,13 @@ async function runExpertLoop(
                 reason: "text_before_render",
               });
             }
-            const modelCaption = safeVisiblePriceProse(resp.text);
+            const modelCaption = safeVisiblePriceProse(publicResponseText);
             if (modelCaption) send({ type: "delta", content: modelCaption });
             finalText += modelCaption;
             if (isFirstTurn) {
-              firstAssistantText = modelCaption.trim();
+              firstAssistantText = derivedPublicExplanationForStep
+                ? firstInternalDeclaration
+                : modelCaption.trim();
             }
             steps.push({
               step: intentMode === "inquire"
@@ -11118,28 +11243,34 @@ async function runExpertLoop(
                 : "v3_assistant_text_with_render",
               ms: now(),
               meta: {
-                chars: resp.text.length,
+                chars: publicResponseText.length,
                 fragment_index: step,
-                text: resp.text,
+                text: publicResponseText,
               },
             });
           }
         } else if (selectionReasoningOnlyRequired) {
-          // A derived plan is a customer-visible proof obligation, even when
-          // an earlier generic intro bubble already exists. Hiding this text
-          // while using its numbers for retrieval would make the machine
-          // contract unverifiable from the conversation.
-          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          // Show the frozen criteria, never the model's selection scratchpad.
+          // The complete declaration stays in assistantReasoning and in the
+          // search/measurement contracts above and below this egress branch.
+          const safeReasoning = sanitizeIntermediateReasoning(
+            publicResponseText,
+          );
           const derivedText = safeVisiblePriceProse(safeReasoning.text.trim());
           if (derivedText) {
             send({ type: "assistant_turn_break", reason: "intro_late" });
             send({ type: "delta", content: derivedText });
             finalText += derivedText;
             if (!firstAssistantText) {
-              firstAssistantText = derivedText;
+              // firstAssistantText is an internal declaration source for
+              // corrective discovery and render gates, not the UI transcript.
+              // Preserve its pre-separation meaning; public copy lives only
+              // in SSE/finalText.
+              firstAssistantText = firstInternalDeclaration;
             }
             derivedSelectionReasoningEvidence =
-              pendingDerivedSelectionMeasurementEvidence || derivedText;
+              pendingDerivedSelectionMeasurementEvidence ||
+              reasoningTextForContracts;
             derivedSelectionMeasurementScope =
               pendingDerivedSelectionMeasurementScope;
             pendingDerivedSelectionMeasurementEvidence = "";
@@ -11151,6 +11282,7 @@ async function runExpertLoop(
                 chars: derivedText.length,
                 fragment_index: step,
                 text: derivedText,
+                reasoning_chars: reasoningTextForContracts.length,
                 derived_selection: true,
               },
             });
@@ -11170,7 +11302,9 @@ async function runExpertLoop(
           // текста), а сейчас наконец появилось «размышление» перед следующим
           // тулом — поднимаем его как intro bubble, чтобы пользователь видел,
           // что эксперт рассуждает, а не молча «думает».
-          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          const safeReasoning = sanitizeIntermediateReasoning(
+            publicResponseText,
+          );
           const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
             (catalogPriceExtreme
               ? "Проверяю подходящую категорию, наличие и цены в каталоге."
@@ -11179,7 +11313,9 @@ async function runExpertLoop(
             send({ type: "assistant_turn_break", reason: "intro_late" });
             send({ type: "delta", content: introText });
             finalText += introText;
-            firstAssistantText = introText;
+            firstAssistantText = derivedPublicExplanationForStep
+              ? firstInternalDeclaration
+              : introText;
             steps.push({
               step: "v3_assistant_text",
               ms: now(),
@@ -11206,9 +11342,9 @@ async function runExpertLoop(
             step: "v3_assistant_text_suppressed",
             ms: now(),
             meta: {
-              chars: resp.text.length,
+              chars: publicResponseText.length,
               fragment_index: step,
-              text: resp.text,
+              text: publicResponseText,
             },
           });
         }
@@ -20936,7 +21072,20 @@ async function runExpertLoop(
             [],
             null,
           );
-          const guarded = sanitizeIntermediateReasoning(synthesis.text);
+          const echoSafeSynthesis = suppressDerivedReasoningEcho(
+            synthesis.text,
+            privateDerivedReasoningForEgress,
+          );
+          if (echoSafeSynthesis.suppressed) {
+            steps.push({
+              step: "v3_derived_private_echo_suppressed",
+              ms: now(),
+              meta: { phase: "terminal_empty_synthesis" },
+            });
+          }
+          const guarded = sanitizeIntermediateReasoning(
+            echoSafeSynthesis.text,
+          );
           const catalogFree = guarded.suppressed
             ? { text: "", removed: [] as string[] }
             : stripUnrenderedCatalogFactSegments(guarded.text);
