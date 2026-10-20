@@ -6,18 +6,32 @@ on:
       - 'supabase/migrations/20261020210000_chat_v3_conversation_state.sql'
       - 'supabase/migrations/20261020210100_chat_v3_claim_binding.sql'
       - 'supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql'
-      - 'docs/security/chat-v3-conversation-state-ci-schema.sql'
+      - 'supabase/migrations/20260507081101_30c91ff9-9f7a-4048-b5bb-a3f62497ee17.sql'
+      - 'supabase/migrations/20260903120000_chat_request_idempotency.sql'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'supabase/migrations/20261020120000_public_api_admission.sql'
       - 'docs/security/chat-v3-conversation-state-local-test.sql'
       - 'scripts/qa/test-chat-v3-conversation-state-concurrency.sh'
+      - 'scripts/qa/chat-v3-conversation-state-relevant-bootstrap.sql'
+      - 'scripts/qa/chat-v3-conversation-state-relevant-compat.sql'
+      - 'scripts/qa/test-chat-v3-conversation-state-relevant-migrations.sh'
+      - 'scripts/qa/chat-v3-conversation-state-rehearsal.md'
       - '.github/workflows/chat-v3-conversation-state-postgres.yml'
   pull_request:
     paths:
       - 'supabase/migrations/20261020210000_chat_v3_conversation_state.sql'
       - 'supabase/migrations/20261020210100_chat_v3_claim_binding.sql'
       - 'supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql'
-      - 'docs/security/chat-v3-conversation-state-ci-schema.sql'
+      - 'supabase/migrations/20260507081101_30c91ff9-9f7a-4048-b5bb-a3f62497ee17.sql'
+      - 'supabase/migrations/20260903120000_chat_request_idempotency.sql'
+      - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
+      - 'supabase/migrations/20261020120000_public_api_admission.sql'
       - 'docs/security/chat-v3-conversation-state-local-test.sql'
       - 'scripts/qa/test-chat-v3-conversation-state-concurrency.sh'
+      - 'scripts/qa/chat-v3-conversation-state-relevant-bootstrap.sql'
+      - 'scripts/qa/chat-v3-conversation-state-relevant-compat.sql'
+      - 'scripts/qa/test-chat-v3-conversation-state-relevant-migrations.sh'
+      - 'scripts/qa/chat-v3-conversation-state-rehearsal.md'
       - '.github/workflows/chat-v3-conversation-state-postgres.yml'
 
 jobs:
@@ -45,16 +59,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
-      - name: Apply disposable schema and candidate migration
+      - name: Replay bounded real chat-log and admission migrations
+        run: bash scripts/qa/test-chat-v3-conversation-state-relevant-migrations.sh
+      - name: Declare rehearsal boundary
         run: |
-          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
-            -f docs/security/chat-v3-conversation-state-ci-schema.sql
-          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
-            -f supabase/migrations/20261020210000_chat_v3_conversation_state.sql
-          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
-            -f supabase/migrations/20261020210100_chat_v3_claim_binding.sql
-          psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
-            -f supabase/migrations/20261020210200_chat_v3_conversation_rpcs.sql
+          echo 'Replayed the actual chat-log, idempotency and admission migrations plus PR candidate on disposable PostgreSQL 16. Historical unrelated migrations, Supabase auth/default grants, the live schema and production locking are NOT covered; keep deployment blocked pending separate verification.' >> "$GITHUB_STEP_SUMMARY"
       - name: Test privileges, binding, replay, fencing and topic isolation
         run: |
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d conversation_ci -v ON_ERROR_STOP=1 \
