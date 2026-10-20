@@ -33,6 +33,12 @@ The postcheck confirmed that `anon` has no table privileges and no effective
 column privileges; `authenticated` has only `SELECT` and `UPDATE` table
 privileges; and `service_role` retains all table privileges. The table ACL
 (`relacl`) now names only `authenticated`, `postgres`, and `service_role`.
+The read-only history query for version `20261020230000` returned zero rows
+from `supabase_migrations.schema_migrations`: SQL Editor changed the schema but
+did not record this migration as applied. Do not run an unreviewed bulk
+`supabase db push`; the project already has other migration-history divergence.
+Before a future automated migration rollout, reconcile this exact version
+against the verified schema and review the remaining pending versions.
 
 At 2026-10-20 21:34:41 UTC, the Supabase API Gateway logged an Edge-service
 `GET /rest/v1/app_settings?select=volt220_api_token&limit=1` returning HTTP
