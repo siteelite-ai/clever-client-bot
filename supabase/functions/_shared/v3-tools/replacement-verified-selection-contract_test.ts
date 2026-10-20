@@ -86,10 +86,12 @@ const requested: ResultCardinalityContract = {
 Deno.test("guarded contract is common verified source/candidate proof, not a generic-diameter promise", () => {
   const sourceProfile = profile();
   const candidates = [
-    product("wide", { diameter: "12" }, {
+    product("wide", { diameter: "12", power: "9", flux: "620" }, {
+      pagetitle: "Светильник встраиваемый LED 9W",
       description_excerpt: "Монтажное отверстие: 90 мм",
     }),
-    product("narrow", { diameter: "8" }, {
+    product("narrow", { diameter: "8", power: "10", flux: "1000" }, {
+      pagetitle: "Светильник встраиваемый LED 10W",
       description_excerpt: "Монтажное отверстие: 90 мм",
     }),
   ];
@@ -103,7 +105,9 @@ Deno.test("guarded contract is common verified source/candidate proof, not a gen
   assertNotEquals(contract, null);
   assertEquals(contract?.result_cardinality, requested);
   assertEquals(
-    contract?.mandatory_criteria.some(({ key }) => key === "Диаметр, см"),
+    contract?.mandatory_criteria.some(({ key }) =>
+      ["Диаметр, см", "Мощность ламп, Вт", "Световой поток, Лм"].includes(key)
+    ),
     false,
   );
   assertEquals(
@@ -168,6 +172,16 @@ Deno.test("guarded contract rejects any unproved card instead of publishing a pa
         description_excerpt: "Монтажное отверстие: 90 мм",
         warehouse_evidence: "explicit_zero",
         warehouses: [],
+      }),
+      product("extreme-power", { power: "50", flux: "5000" }, {
+        description_excerpt: "Монтажное отверстие: 90 мм",
+      }),
+      product("conflicting-power-title", {}, {
+        pagetitle: "Светильник встраиваемый LED 50W",
+        description_excerpt: "Монтажное отверстие: 90 мм",
+      }),
+      product("conflicting-flux-content", {}, {
+        description_excerpt: "Световой поток: 1000 лм; Монтажное отверстие: 90 мм",
       }),
     ]
   ) {

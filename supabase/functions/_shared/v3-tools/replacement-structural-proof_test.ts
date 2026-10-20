@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { Facet } from "./discover-category.ts";
+import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
 import {
   evaluateStructuralReplacementCandidate,
   resolveStructuralReplacementProfile,
@@ -136,7 +137,7 @@ Deno.test("candidate gate rejects oversized and missing diameter, and deficient 
   })), { ok: false, reason: "candidate_outside_window:flux" });
 });
 
-Deno.test("verified cut-out opt-in ignores only generic outer diameter without changing the source profile", () => {
+Deno.test("verified cut-out opt-in ignores generic diameter and legacy power/flux windows without changing the source profile", () => {
   const resolved = profile();
   const originalProfile = JSON.stringify(resolved);
   const candidate = product("wider-bezel", { diameter: "12" }, {
@@ -154,6 +155,7 @@ Deno.test("verified cut-out opt-in ignores only generic outer diameter without c
   if (matched.ok) {
     assertEquals(matched.evidence.some(({ role }) => role === "diameter"), false);
     assertEquals(matched.evidence.some(({ role }) => role === "power"), true);
+    assertEquals(matched.evidence.some(({ role }) => role === "flux"), true);
   }
   assertEquals(JSON.stringify(resolved), originalProfile);
   assertEquals(resolved.obligations.find(({ role }) => role === "diameter")?.value, [8, 10]);
@@ -226,7 +228,7 @@ Deno.test("verified cut-out opt-in requires labelled candidate evidence and reje
   });
 });
 
-Deno.test("verified cut-out opt-in retains structural kind, mounting, interface, power and stock gates", () => {
+Deno.test("verified cut-out opt-in retains structural kind, mounting, interface, voltage, IP and stock gates", () => {
   const resolved = profile();
   const options = {
     dimensionPolicy: "verified_mounting_cutout",
@@ -245,14 +247,164 @@ Deno.test("verified cut-out opt-in retains structural kind, mounting, interface,
   assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-socket", {
     socket: "GU10",
   }), options), { ok: false, reason: "candidate_mismatch:socket" });
-  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-power", {
-    power: "9",
-  }), options), { ok: false, reason: "candidate_outside_window:power" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("not-led", {
+    technology: "люминесцентная",
+  }), options), { ok: false, reason: "candidate_mismatch:technology" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("missing-driver", {
+    driver: "не в комплекте",
+  }), options), { ok: false, reason: "candidate_mismatch:driver" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-voltage", {
+    voltage: "230",
+  }), options), { ok: false, reason: "candidate_voltage_unverified" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("wrong-ip", {
+    ip: "10",
+  }), options), { ok: false, reason: "candidate_ip_below_source" });
   assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate("no-stock", {}, {
     warehouse_evidence: "explicit_zero",
     warehouses: [],
     stock: "out",
   }), options), { ok: false, reason: "candidate_stock_or_price_unverified" });
+});
+
+Deno.test("verified cut-out accepts corroborated brighter provisional candidates but excludes extreme power", () => {
+  const resolved = profile();
+  const options = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  for (const [power, flux] of [["9", "620"], ["10", "1000"]]) {
+    const alternative = product(`${power}w-${flux}lm`, { power, flux }, {
+      pagetitle: `Светильник встраиваемый LED ${power}W`,
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    });
+    // Both exceed the legacy source-derived power or flux window. Their
+    // measured differences remain visible, not promised as direct fit.
+    assertEquals(evaluateStructuralReplacementCandidate(resolved, alternative)
+      .ok, false);
+    assertEquals(evaluateStructuralReplacementCandidate(resolved, alternative, options)
+      .ok, true);
+    const fit = evaluateReplacementCandidateFit(resolved.source, alternative, {
+      customer_cutout_mm: 90,
+    });
+    assertEquals(fit.status, "provisional_candidate");
+    assertEquals(fit.soft_differences.some(({ field }) => field === "power"), true);
+    assertEquals(fit.soft_differences.some(({ field }) => field === "luminous_flux"), true);
+  }
+  const extreme = product("50w-5000lm", { power: "50", flux: "5000" }, {
+    pagetitle: "Светильник встраиваемый LED 50W",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, extreme, options), {
+    ok: false,
+    reason: "candidate_power_extreme",
+  });
+  const dim = product("almost-dark", { power: "0.1", flux: "1" }, {
+    pagetitle: "Светильник встраиваемый LED 0.1W",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, dim, options), {
+    ok: false,
+    reason: "candidate_flux_below_useful_floor",
+  });
+  const belowUseful = product("below-useful", { power: "7", flux: "399" }, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, belowUseful, options), {
+    ok: false,
+    reason: "candidate_flux_below_useful_floor",
+  });
+  const lowerPower = product("lower-power", { power: "4", flux: "600" }, {
+    pagetitle: "Светильник встраиваемый LED 4W",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, lowerPower, options)
+    .ok, true);
+  const noFluxProof = product("missing-flux", { power: "9", flux: "620" }, {
+    pagetitle: "Светильник встраиваемый LED 9W",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  delete noFluxProof.facet_values?.live_flux;
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, noFluxProof, options), {
+    ok: false,
+    reason: "candidate_value_unverified:flux",
+  });
+});
+
+Deno.test("verified cut-out fails closed on explicit power and flux contradictions, not bare model digits", () => {
+  const resolved = profile();
+  const options = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  const candidate = (
+    id: string,
+    values: Record<string, string>,
+    overrides: Partial<ProductFull>,
+  ) => product(id, values, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+    ...overrides,
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "power-title-conflict", { power: "7" },
+    { pagetitle: "Светильник встраиваемый LED 50W" },
+  ), options), { ok: false, reason: "candidate_power_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "zero-power-title-conflict", { power: "7" },
+    { pagetitle: "Светильник встраиваемый LED 0W" },
+  ), options), { ok: false, reason: "candidate_power_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "power-description-conflict", { power: "7" },
+    { description_excerpt: "Мощность: 50 Вт; Монтажное отверстие: 90 мм" },
+  ), options), { ok: false, reason: "candidate_power_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "power-description-label-unit-conflict", { power: "7" },
+    { description_excerpt: "Мощность ламп, Вт: 50; Монтажное отверстие: 90 мм" },
+  ), options), { ok: false, reason: "candidate_power_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "flux-title-conflict", { flux: "620" },
+    { pagetitle: "Светильник встраиваемый LED 7W 1000lm" },
+  ), options), { ok: false, reason: "candidate_flux_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "flux-description-conflict", { flux: "620" },
+    { description_excerpt: "Световой поток: 1000 лм; Монтажное отверстие: 90 мм" },
+  ), options), { ok: false, reason: "candidate_flux_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "flux-description-label-unit-conflict", { flux: "620" },
+    { description_excerpt: "Световой поток, Лм: 1000; Монтажное отверстие: 90 мм" },
+  ), options), { ok: false, reason: "candidate_flux_evidence_conflicts" });
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "model-digits", {},
+    {
+      article: "DN027B-50",
+      pagetitle: "Светильник встраиваемый DN027B LED50W 7W",
+    },
+  ), options).ok, true);
+  const conflictingSource = resolveStructuralReplacementProfile(product("source", {}, {
+    pagetitle: "Светильник DN027B 50W",
+  }), facets);
+  assertEquals(conflictingSource.status, "ready");
+  if (conflictingSource.status !== "ready") throw new Error("source not ready");
+  assertEquals(evaluateStructuralReplacementCandidate(
+    conflictingSource.profile,
+    candidate("source-conflict", {}, {}),
+    options,
+  ), { ok: false, reason: "source_power_evidence_conflicts" });
+  const conflictingSourceFlux = resolveStructuralReplacementProfile(product("source", {}, {
+    description_excerpt: "Световой поток: 1000 лм",
+  }), facets);
+  assertEquals(conflictingSourceFlux.status, "ready");
+  if (conflictingSourceFlux.status !== "ready") throw new Error("source not ready");
+  assertEquals(evaluateStructuralReplacementCandidate(
+    conflictingSourceFlux.profile,
+    candidate("source-flux-conflict", {}, {}),
+    options,
+  ), { ok: false, reason: "source_flux_evidence_conflicts" });
+  // The historical route is unchanged; this additional fail-closed check is
+  // only activated for a server-verified mounting cut-out.
+  assertEquals(evaluateStructuralReplacementCandidate(resolved, candidate(
+    "power-title-conflict", { power: "7" },
+    { pagetitle: "Светильник встраиваемый LED 50W" },
+  )).ok, true);
 });
 
 Deno.test("socket, driver, technology, electrical range and IP remain critical", () => {

@@ -27,6 +27,13 @@ type CategoricalRole = Extract<
     "colorTemperature" | "socket" | "driver"
 >;
 type NumericRole = Exclude<Role, CategoricalRole>;
+/** Provisional differences are evidenced but never published as exact-fit obligations. */
+const PROVISIONAL_DIFFERENCE_ROLES: readonly Role[] = [
+  "diameter", "power", "flux",
+];
+export function isProvisionalReplacementDifferenceRole(role: Role): boolean {
+  return PROVISIONAL_DIFFERENCE_ROLES.includes(role);
+}
 const REQUIRED_SIGNATURE: readonly Role[] = [
   "kind", "mount", "diameter", "power", "flux", "voltage",
 ];
@@ -247,6 +254,45 @@ function numericSource(role: NumericRole, value: string, facet: Facet): number |
     : parsed;
 }
 
+type ProvisionalQuantityRole = "power" | "flux";
+const TITLE_QUANTITY_CLAIM: Record<ProvisionalQuantityRole, RegExp> = {
+  // A bare model token (LED6, DN027B) has no physical unit and is not proof.
+  // A hyphen-attached model suffix is also ambiguous and excluded.
+  power: /(?<![\p{L}\p{N}-])(\d{1,5}(?:[.,]\d{1,3})?)\s*(?:вт|w)(?![\p{L}\p{N}])/giu,
+  flux: /(?<![\p{L}\p{N}-])(\d{1,5}(?:[.,]\d{1,3})?)\s*(?:лм|lm)(?![\p{L}\p{N}])/giu,
+};
+const CONTENT_QUANTITY_CLAIM: Record<ProvisionalQuantityRole, RegExp> = {
+  // Catalog descriptions use both "Мощность: 50 Вт" and "Мощность, Вт: 50".
+  // Require an explicit unit in the label or after the value; either claim
+  // must agree with the independently corroborated live facet.
+  power: /(?<![\p{L}\p{N}])(?:потребляемая\s+мощность|мощность(?:\s+ламп)?|power(?:\s+consumption)?)\s*(?:,\s*(?:вт|w)\s*[:=–—-]\s*(\d{1,5}(?:[.,]\d{1,3})?)(?:\s*(?:вт|w))?|[:=–—-]\s*(\d{1,5}(?:[.,]\d{1,3})?)\s*(?:вт|w))(?![\p{L}\p{N}%])/giu,
+  flux: /(?<![\p{L}\p{N}])(?:световой\s+поток|luminous\s+flux)\s*(?:,\s*(?:лм|lm)\s*[:=–—-]\s*(\d{1,5}(?:[.,]\d{1,3})?)(?:\s*(?:лм|lm))?|[:=–—-]\s*(\d{1,5}(?:[.,]\d{1,3})?)\s*(?:лм|lm))(?![\p{L}\p{N}%])/giu,
+};
+
+function explicitQuantityConflicts(
+  product: ProductFull,
+  role: ProvisionalQuantityRole,
+  verified: number,
+): boolean {
+  const title = normalized(product.pagetitle ?? "").slice(0, 300);
+  const content = normalized(product.description_excerpt ?? "").slice(0, 1_200);
+  const claims = [
+    ...title.matchAll(TITLE_QUANTITY_CLAIM[role]),
+    ...content.matchAll(CONTENT_QUANTITY_CLAIM[role]),
+  ];
+  return claims.some((claim) => {
+    const text = claim.input ?? "";
+    const prefix = text.slice(Math.max(0, (claim.index ?? 0) - 36), claim.index);
+    // A capacity, comparison or equivalent-lamp claim is not the product's
+    // own power/output. Ignore it instead of contradicting a verified facet.
+    if (/(?:эквивалент[\p{L}]*|equivalent(?:\s+to)?|аналог|замен[\p{L}]*|до|максимальн[\p{L}]*|max(?:imum)?)\s*$/u.test(prefix) ||
+      /\d+\s*[×*]\s*$/u.test(prefix)) return false;
+    const amount = Number((claim[1] ?? claim[2]).replace(",", "."));
+    return Number.isFinite(amount) && amount >= 0 &&
+      Math.abs(amount - verified) > 0.001;
+  });
+}
+
 function shortlistBounds(role: "diameter" | "power" | "flux", value: number): [number, number] {
   // These conservative comparison windows only choose cards for inspection;
   // they do not prove installation fit or electrical interchangeability.
@@ -402,18 +448,23 @@ export function evaluateStructuralReplacementCandidate(
   }
   const evidence: Extract<StructuralReplacementFit, { ok: true }>["evidence"] = [];
   for (const obligation of profile.obligations) {
+    const role = obligation.role;
+    const provisionalDifference = verifiedCutoutPolicy &&
+      isProvisionalReplacementDifferenceRole(role);
     // The generic diameter describes the visible housing on many catalogue
     // cards. Once the actual installation cut-out is independently matched,
     // retaining its source-derived numerical window would reject genuine
-    // alternatives for the wrong measurement. All other obligations remain.
-    if (verifiedCutoutPolicy && obligation.role === "diameter") continue;
-    const entry = profile.roles[obligation.role];
-    if (!entry) return { ok: false, reason: `profile_role_missing:${obligation.role}` };
+    // alternatives for the wrong measurement. Power and luminous flux are
+    // verified descriptive facts, not proof of mechanical/electrical fit;
+    // their approximate legacy shortlist windows must not turn into hard
+    // compatibility limits on this explicitly provisional route.
+    if (provisionalDifference && role === "diameter") continue;
+    const entry = profile.roles[role];
+    if (!entry) return { ok: false, reason: `profile_role_missing:${role}` };
     const raw = oneCorroboratedValue(candidate, entry.facet);
     if (!raw) {
-      return { ok: false, reason: `candidate_value_unverified:${obligation.role}` };
+      return { ok: false, reason: `candidate_value_unverified:${role}` };
     }
-    const role = obligation.role;
     if (obligation.op === "eq") {
       if (!oneCatalogOption(entry.facet, raw) ||
         normalized(raw) !== normalized(entry.sourceValue)) {
@@ -435,7 +486,47 @@ export function evaluateStructuralReplacementCandidate(
       const parsed = numericSource(role as NumericRole, raw, entry.facet);
       const bounds = obligation.value;
       const factor = role === "diameter" && obligation.unit === "см" ? 10 : 1;
-      if (typeof parsed !== "number" || !Array.isArray(bounds) ||
+      if (typeof parsed !== "number") {
+        return {
+          ok: false,
+          reason: provisionalDifference
+            ? `candidate_numeric_unverified:${role}`
+            : `candidate_outside_window:${role}`,
+        };
+      }
+      if (provisionalDifference) {
+        if (role === "power") {
+          const sourcePower = numericSource("power", entry.sourceValue, entry.facet);
+          // A fixture drawing over twice the source's power is too far away
+          // for a provisional replacement shortlist without an installation
+          // and thermal review. This is only an extreme-divergence recall
+          // guard, never an assertion that a smaller difference is safe.
+          if (typeof sourcePower !== "number" || parsed > sourcePower * 2) {
+            return { ok: false, reason: "candidate_power_extreme" };
+          }
+          if (explicitQuantityConflicts(profile.source, "power", sourcePower)) {
+            return { ok: false, reason: "source_power_evidence_conflicts" };
+          }
+          if (explicitQuantityConflicts(candidate, "power", parsed)) {
+            return { ok: false, reason: "candidate_power_evidence_conflicts" };
+          }
+        } else if (role === "flux") {
+          const sourceFlux = numericSource("flux", entry.sourceValue, entry.facet);
+          // Keep the legacy lower *usefulness* threshold (600 lm -> 400 lm),
+          // but not its upper limit. It is a shortlist relevance guard, not a
+          // promise of light-level or installation compatibility.
+          if (typeof sourceFlux !== "number" || !Array.isArray(bounds) ||
+            parsed < bounds[0]) {
+            return { ok: false, reason: "candidate_flux_below_useful_floor" };
+          }
+          if (explicitQuantityConflicts(profile.source, "flux", sourceFlux)) {
+            return { ok: false, reason: "source_flux_evidence_conflicts" };
+          }
+          if (explicitQuantityConflicts(candidate, "flux", parsed)) {
+            return { ok: false, reason: "candidate_flux_evidence_conflicts" };
+          }
+        }
+      } else if (!Array.isArray(bounds) ||
         parsed < bounds[0] * factor || parsed > bounds[1] * factor) {
         return { ok: false, reason: `candidate_outside_window:${role}` };
       }

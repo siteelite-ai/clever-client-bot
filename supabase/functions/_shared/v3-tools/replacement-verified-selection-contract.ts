@@ -6,6 +6,7 @@ import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts"
 import { extractReplacementDimensions } from "./replacement-provisional-evidence.ts";
 import {
   evaluateStructuralReplacementCandidate,
+  isProvisionalReplacementDifferenceRole,
   type StructuralReplacementFit,
   type StructuralReplacementProfile,
 } from "./replacement-structural-proof.ts";
@@ -114,7 +115,7 @@ export function guardedStructuralSelectionContract(input: {
   }
 
   const commonObligations = profile.obligations.filter((obligation) =>
-    obligation.role !== "diameter" &&
+    !isProvisionalReplacementDifferenceRole(obligation.role) &&
     perCandidateEvidence.every((evidence) =>
       evidence.some((item) =>
         item.role === obligation.role && item.caption === obligation.caption
@@ -123,7 +124,9 @@ export function guardedStructuralSelectionContract(input: {
   );
   if (
     commonObligations.length !==
-      profile.obligations.filter(({ role }) => role !== "diameter").length
+      profile.obligations.filter(({ role }) =>
+        !isProvisionalReplacementDifferenceRole(role)
+      ).length
   ) return null;
 
   const criteria: Criterion[] = commonObligations.map((obligation) => ({
