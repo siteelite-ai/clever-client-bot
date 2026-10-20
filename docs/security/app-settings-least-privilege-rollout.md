@@ -33,12 +33,22 @@ The postcheck confirmed that `anon` has no table privileges and no effective
 column privileges; `authenticated` has only `SELECT` and `UPDATE` table
 privileges; and `service_role` retains all table privileges. The table ACL
 (`relacl`) now names only `authenticated`, `postgres`, and `service_role`.
-The read-only history query for version `20261020230000` returned zero rows
-from `supabase_migrations.schema_migrations`: SQL Editor changed the schema but
-did not record this migration as applied. Do not run an unreviewed bulk
-`supabase db push`; the project already has other migration-history divergence.
-Before a future automated migration rollout, reconcile this exact version
-against the verified schema and review the remaining pending versions.
+SQL Editor did not initially record version `20261020230000` in
+`supabase_migrations.schema_migrations`. On 2026-10-20 UTC, the official
+Supabase CLI v2.114.0 was linked to the exact production project
+`yngoixmvmxdfxokuafjp`. Before repair, a read-only query found zero rows for
+that version; the local migration SHA-256 was
+`8c435f5678755637bff8459bc62ccdbc07472b324853a49565be71acbf1e2d39`.
+RLS, both admin-only policies, every table privilege including `MAINTAIN`,
+and the absence of explicit column grants matched the already applied SQL.
+Only `supabase migration repair 20261020230000 --status applied --linked`
+was run. [Supabase documents](https://supabase.com/docs/guides/deployment/database-migrations)
+this operation as changing the history table without rerunning migration SQL.
+The CLI reported the version as applied; a fresh read-only query
+found exactly one row, `migration list --linked` showed that version on both
+sides, and the post-repair RLS, policies, table grants and column ACLs were
+unchanged. No migration SQL was rerun. Other pre-existing history divergence
+was not modified; do not run an unreviewed bulk `supabase db push`.
 
 At 2026-10-20 21:34:41 UTC, the Supabase API Gateway logged an Edge-service
 `GET /rest/v1/app_settings?select=volt220_api_token&limit=1` returning HTTP
