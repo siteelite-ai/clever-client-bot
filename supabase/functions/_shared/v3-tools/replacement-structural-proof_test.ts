@@ -2,6 +2,8 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { Facet } from "./discover-category.ts";
 import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
 import {
+  adjudicateTieredStructuralCandidate,
+  adjudicateVerifiedStructuralCandidate,
   evaluateStructuralReplacementCandidate,
   resolveStructuralReplacementProfile,
 } from "./replacement-structural-proof.ts";
@@ -1274,4 +1276,287 @@ Deno.test("a complete signature applies without a category or model allowlist", 
   assertEquals(resolved.status, "ready");
   if (resolved.status !== "ready") throw new Error("generic profile not ready");
   assertEquals(evaluateStructuralReplacementCandidate(resolved.profile, otherProduct("other")).ok, true);
+});
+
+function conditionalFixture() {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [
+      ...facet.values,
+      ...facet.key === "live_colorTemperature" ? [{ value: "3000" }] : [],
+      ...facet.key === "live_lightColor" ? [{ value: "тёплый" }] : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source", {}, { unit: "шт" }), {
+    fixture_form: "downlight",
+    cutout: { shape: "round", kind: "exact", min_mm: 90, max_mm: 90 },
+  });
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const candidate = withApprovedFacts(
+    product("warm-option", {
+      lightColor: "тёплый",
+      colorTemperature: "3000",
+      flux: "400",
+    }, {
+      unit: "шт",
+      pagetitle: "Встраиваемый LED светильник 7W 3000K",
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    {
+      fixture_form: "downlight",
+      cutout: { shape: "round", kind: "exact", min_mm: 90, max_mm: 90 },
+      color_temperature_k: 3000,
+    },
+  );
+  return { profile: resolved.profile, candidate };
+}
+
+const tieredPolicy = {
+  enabled: true,
+  userRequirementsProven: true,
+} as const;
+
+Deno.test("default-off tiered proof is byte-equivalent to the pre-existing proof", () => {
+  const { profile, candidate } = conditionalFixture();
+  for (
+    const item of [
+      candidate,
+      withApprovedFacts(product("unchanged", {}, {
+        description_excerpt: "Монтажное отверстие: 90 мм",
+      })),
+      product("wrong-mount", { mount: "накладной" }, {
+        description_excerpt: "Монтажное отверстие: 90 мм",
+      }),
+    ]
+  ) {
+    const oldProof = adjudicateVerifiedStructuralCandidate(profile, item, 90);
+    assertEquals(
+      JSON.stringify(adjudicateTieredStructuralCandidate(profile, item, 90)),
+      JSON.stringify(oldProof),
+    );
+    assertEquals(
+      JSON.stringify(adjudicateTieredStructuralCandidate(profile, item, 90, {
+        enabled: true,
+      })),
+      JSON.stringify(oldProof),
+    );
+  }
+});
+
+Deno.test("approved 3000 K versus 4000 K may be an explicitly conditional choice, never an equal fit", () => {
+  const { profile, candidate } = conditionalFixture();
+  assertEquals(
+    adjudicateVerifiedStructuralCandidate(profile, candidate, 90).ok,
+    false,
+  );
+  const alternative = adjudicateTieredStructuralCandidate(
+    profile,
+    candidate,
+    90,
+    tieredPolicy,
+  );
+  assertEquals(alternative.ok, true, JSON.stringify(alternative));
+  if (alternative.ok && "tier" in alternative) {
+    assertEquals(alternative.tier, "conditional_alternative");
+    assertEquals(alternative.disclosures, [{
+      role: "colorTemperature",
+      source: 4000,
+      candidate: 3000,
+      unit: "K",
+    }]);
+  }
+  assertEquals(
+    adjudicateTieredStructuralCandidate(profile, candidate, 90, {
+      ...tieredPolicy,
+      equivalentRequired: true,
+    }).ok,
+    false,
+  );
+  assertEquals(
+    adjudicateTieredStructuralCandidate(profile, candidate, 90, {
+      ...tieredPolicy,
+      explicitRequiredRoles: ["colorTemperature"],
+    }).ok,
+    false,
+  );
+});
+
+Deno.test("approved Kelvin cannot override a contradictory live colour option or prose", () => {
+  const { profile, candidate } = conditionalFixture();
+  const contradictory = product("neutral-card", {
+    lightColor: "нейтральный",
+    colorTemperature: "3000",
+  }, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  withApprovedFacts(contradictory, {
+    fixture_form: "downlight",
+    color_temperature_k: 3000,
+  });
+  assertEquals(
+    adjudicateTieredStructuralCandidate(
+      profile,
+      contradictory,
+      90,
+      tieredPolicy,
+    ).ok,
+    false,
+  );
+  candidate.description_excerpt =
+    "Монтажное отверстие: 90 мм. Цветовая температура: 4000 К.";
+  assertEquals(
+    adjudicateTieredStructuralCandidate(
+      profile,
+      candidate,
+      90,
+      tieredPolicy,
+    ).ok,
+    false,
+  );
+});
+
+Deno.test("verified brighter output is disclosed as conditional and user-owned flux is not relaxed", () => {
+  const { profile } = conditionalFixture();
+  const bright = withApprovedFacts(
+    product("brighter", { flux: "1000" }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    { fixture_form: "downlight" },
+  );
+  const proof = adjudicateTieredStructuralCandidate(
+    profile,
+    bright,
+    90,
+    tieredPolicy,
+  );
+  assertEquals(proof.ok, true, JSON.stringify(proof));
+  if (proof.ok && "tier" in proof) {
+    assertEquals(proof.tier, "conditional_alternative");
+    assertEquals(proof.disclosures, [{
+      role: "flux",
+      source: 600,
+      candidate: 1000,
+      unit: "лм",
+    }]);
+  }
+  assertEquals(
+    adjudicateTieredStructuralCandidate(profile, bright, 90, {
+      ...tieredPolicy,
+      explicitRequiredRoles: ["flux"],
+    }).ok,
+    false,
+  );
+  const almostSame = withApprovedFacts(product("almost-same", {
+    flux: "650",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }));
+  assertEquals(adjudicateTieredStructuralCandidate(
+    profile, almostSame, 90, tieredPolicy,
+  ).ok, true);
+  assertEquals(adjudicateTieredStructuralCandidate(profile, almostSame, 90, {
+    ...tieredPolicy,
+    explicitRequiredRoles: ["flux"],
+  }).ok, false);
+});
+
+Deno.test("sale package requires corroborated exact count and explicit disclosure", () => {
+  const { profile } = conditionalFixture();
+  const packed = withApprovedFacts(
+    product("sale-pack", {}, {
+      unit: "уп",
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    { fixture_form: "downlight" },
+  );
+  packed.facet_captions!.live_pack = "Количество в упаковке";
+  packed.facet_values!.live_pack = ["10"];
+  packed.short_traits.push("Количество в упаковке: 10");
+  const proof = adjudicateTieredStructuralCandidate(
+    profile,
+    packed,
+    90,
+    tieredPolicy,
+  );
+  assertEquals(proof.ok, true, JSON.stringify(proof));
+  if (proof.ok && "tier" in proof) {
+    assertEquals(proof.tier, "conditional_alternative");
+    assertEquals(proof.disclosures, [{
+      role: "saleUnit",
+      unit: "уп",
+      itemsPerPack: 10,
+    }]);
+  }
+  const missing = { ...packed, facet_values: { ...packed.facet_values } };
+  delete missing.facet_values!.live_pack;
+  assertEquals(
+    adjudicateTieredStructuralCandidate(
+      profile,
+      missing,
+      90,
+      tieredPolicy,
+    ).ok,
+    false,
+  );
+  const groupOnly = product("group-only", {}, {
+    unit: "шт",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  groupOnly.facet_captions!.live_group = "Количество в групповой упаковке";
+  groupOnly.facet_values!.live_group = ["10"];
+  groupOnly.short_traits.push("Количество в групповой упаковке: 10");
+  assertEquals(
+    adjudicateTieredStructuralCandidate(
+      profile,
+      groupOnly,
+      90,
+      tieredPolicy,
+    ).ok,
+    false,
+  );
+  const unkeyedGroup = product("unkeyed-group", {}, {
+    unit: "шт",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  unkeyedGroup.short_traits.push("Количество в групповой упаковке: 10");
+  assertEquals(adjudicateTieredStructuralCandidate(
+    profile, unkeyedGroup, 90, tieredPolicy,
+  ).ok, false);
+  const otherUnit = product("other-unit", {}, {
+    unit: "компл",
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(adjudicateTieredStructuralCandidate(
+    profile, otherUnit, 90, tieredPolicy,
+  ).ok, false);
+});
+
+Deno.test("conditional tier still rejects wrong cut-out, mount, interface, voltage, stock and price", () => {
+  const { profile, candidate } = conditionalFixture();
+  const altered: ProductFull[] = [
+    { ...candidate, description_excerpt: "Монтажное отверстие: 80 мм" },
+    product("surface", { mount: "накладной" }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    product("socket", { socket: "GU10" }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    product("voltage", { voltage: "110" }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    { ...candidate, warehouse_evidence: "explicit_zero", warehouses: [] },
+    { ...candidate, price: 0 },
+  ];
+  for (const item of altered) {
+    assertEquals(
+      adjudicateTieredStructuralCandidate(
+        profile,
+        item,
+        90,
+        tieredPolicy,
+      ).ok,
+      false,
+      item.id,
+    );
+  }
 });
