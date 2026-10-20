@@ -43,7 +43,8 @@ Deno.test("every rotated-boundary lookup serializes the same JSONB argument", as
   const serialized = [...source.matchAll(
     /\.contains\(\s*"response_events",\s*conversationBoundaryJsonbContainment\(sessionId\),?\s*\)/g,
   )];
-  assertEquals(all.length, 3);
+  // Includes the server-issued replacement-cutout recovery lookup.
+  assertEquals(all.length, 4);
   assertEquals(serialized.length, all.length);
   assertEquals(source.includes("return JSON.stringify([{"), true);
 });
