@@ -28,6 +28,7 @@ test('verified facts row has the server validator contract, with no seeded SKU',
     supply_min_v: 'numeric(7, 2)', supply_max_v: 'numeric(7, 2)',
   })) assert.equal(columns.get(name), type, name);
   assert.equal(columns.has('fixture_form'), false, 'the already-applied base migration must remain unchanged');
+  assert.equal(columns.has('catalog_leaf_category'), false, 'the already-applied base migration must remain unchanged');
   assert.match(migration, /^  document_page integer,$/m);
   assert.ok(migration.includes("source_url !~* '[.]pdf("));
   assert.doesNotMatch(migration, /^INSERT INTO public\.verified_product_facts\b/im);
@@ -54,8 +55,10 @@ test('approval, geometry and access are constrained in the database', () => {
 
 test('later migration extends the existing table without rewriting the base or access model', () => {
   assert.match(fixtureFormMigration, /(?:^|\n)BEGIN;[\s\S]*\nCOMMIT;\s*$/);
-  assert.match(fixtureFormMigration, /ALTER TABLE public\.verified_product_facts\s+ADD COLUMN fixture_form text;/);
+  assert.match(fixtureFormMigration, /ALTER TABLE public\.verified_product_facts\s+ADD COLUMN fixture_form text,\s+ADD COLUMN catalog_leaf_category text;/);
   assert.match(fixtureFormMigration, /fixture_form IS NULL OR fixture_form = 'downlight'/);
+  assert.match(fixtureFormMigration, /CONSTRAINT verified_product_facts_catalog_leaf_category_check CHECK \([\s\S]*?catalog_leaf_category IS NULL OR \([\s\S]*?char_length\(catalog_leaf_category\) BETWEEN 1 AND 240 AND[\s\S]*?catalog_leaf_category = btrim\(catalog_leaf_category\)/);
+  assert.match(fixtureFormMigration, /CREATE INDEX verified_product_facts_cutout_leaf_shortlist_idx\s+ON public\.verified_product_facts \([\s\S]*?catalog_leaf_category, cutout_shape, cutout_min_mm, cutout_max_mm,[\s\S]*?approved_at DESC[\s\S]*?WHERE approval_status = 'approved' AND revoked_at IS NULL AND[\s\S]*?catalog_leaf_category IS NOT NULL AND cutout_min_mm IS NOT NULL AND[\s\S]*?cutout_max_mm IS NOT NULL;/);
   assert.match(fixtureFormMigration, /DROP CONSTRAINT verified_product_facts_approved_claim_check;/);
   assert.match(fixtureFormMigration, /ADD CONSTRAINT verified_product_facts_approved_claim_check CHECK \(/);
   assert.doesNotMatch(fixtureFormMigration, /\b(?:INSERT|UPDATE|DELETE|GRANT|REVOKE|CREATE POLICY)\b/i);
@@ -71,4 +74,5 @@ test('later migration extends the existing table without rewriting the base or a
     normalize(baseClaim),
     'the extension may add the form claim but must preserve every old approved-claim condition',
   );
+  assert.doesNotMatch(extendedClaim, /catalog_leaf_category/, 'leaf category is discovery metadata, never a technical claim');
 });

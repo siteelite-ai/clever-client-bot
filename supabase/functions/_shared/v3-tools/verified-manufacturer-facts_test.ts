@@ -133,6 +133,26 @@ Deno.test("range is inclusive, and unknown optional technical values stay null",
   }));
 });
 
+Deno.test("typed leaf permits legacy hydration but binds shortlist rows to the live leaf", () => {
+  assert(check({ catalog_leaf_category: null }));
+  assert(check());
+  const exact = check(
+    { catalog_leaf_category: "Светильники" },
+    { leaf_category: "Светильники" },
+  );
+  assertEquals(exact?.binding.catalog_leaf_category, "Светильники");
+  assertEquals(
+    check(
+      { catalog_leaf_category: "Светильники" },
+      { leaf_category: "Прожекторы" },
+    ),
+    null,
+  );
+  assertEquals(check({ catalog_leaf_category: "Светильники" }), null);
+  assertEquals(check({ catalog_leaf_category: "" }), null);
+  assertEquals(check({ catalog_leaf_category: "Светильники " }), null);
+});
+
 Deno.test("an approved fixture form is typed, optional for old rows, and bound to the exact live card", () => {
   assertEquals(
     check({ fixture_form: "downlight" })?.technical.fixture_form,

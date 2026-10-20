@@ -515,6 +515,12 @@ import {
 } from "../_shared/v3-tools/replacement-provisional-evidence.ts";
 import type { ReplacementCandidateFit } from "../_shared/v3-tools/replacement-candidate-fit.ts";
 import { retrieveReplacementCandidateWindow } from "../_shared/v3-tools/replacement-candidate-retrieval.ts";
+import {
+  createReplacementCatalogBudget,
+  retrieveVerifiedCutoutShortlist,
+  selectVerifiedCutoutHints,
+  type VerifiedCutoutShortlistResult,
+} from "../_shared/v3-tools/replacement-verified-shortlist.ts";
 import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
 import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
 import {
@@ -4249,7 +4255,7 @@ interface DirectReplacementResult {
 }
 
 const VERIFIED_MANUFACTURER_FACT_COLUMNS =
-  "product_id,article,catalog_url,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
+  "product_id,article,catalog_url,catalog_leaf_category,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
 
 async function loadApprovedManufacturerFacts(
   ctx: ToolContext,
@@ -4278,6 +4284,40 @@ async function loadApprovedManufacturerFacts(
   return data;
 }
 
+async function loadApprovedCutoutHints(
+  ctx: ToolContext,
+  cutoutMm: number,
+  leafCategory: string,
+  signal: AbortSignal,
+): Promise<unknown[]> {
+  if (
+    signal.aborted || !Number.isFinite(cutoutMm) ||
+    cutoutMm <= 0 || cutoutMm > 10_000 ||
+    !leafCategory || leafCategory.length > 240
+  ) return [];
+  // Only private, currently approved evidence supplies search hints. No row
+  // leaves the service-role handler, and all technical claims are independently
+  // revalidated against a fresh live catalog card before selection.
+  const { data, error } = await ctx.supabase.from("verified_product_facts")
+    .select(
+      "product_id,article,catalog_url,catalog_leaf_category,approval_status,revoked_at,valid_until,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm",
+    )
+    .eq("approval_status", "approved")
+    .is("revoked_at", null)
+    .gt("valid_until", new Date().toISOString())
+    .eq("catalog_leaf_category", leafCategory)
+    .eq("cutout_shape", "round")
+    .lte("cutout_min_mm", cutoutMm)
+    .gte("cutout_max_mm", cutoutMm)
+    .order("approved_at", { ascending: false })
+    .limit(8)
+    .abortSignal(signal);
+  if (error || !Array.isArray(data) || data.length > 8) {
+    throw new Error("verified_cutout_hint_read_unavailable");
+  }
+  return data;
+}
+
 /** Source-only structural replacements remain a shortlist, never a fit certificate. */
 async function selectGuardedStructuralReplacement(
   originalRequest: string,
@@ -4294,7 +4334,10 @@ async function selectGuardedStructuralReplacement(
   const manufacturerFacts = VERIFIED_MANUFACTURER_FACTS_ENABLED
     ? createVerifiedManufacturerHydrator(
       (ids, signal) => loadApprovedManufacturerFacts(ctx, ids, signal),
-      { maxBatchIds: 100, maxQueries: 13, maxFailures: 2 },
+      // One source, at most eight shortlist article waves, and the remaining
+      // paginated pages share a twenty-query budget. Each live search page is
+      // hydrated at most once and the page cap below reserves the remainder.
+      { maxBatchIds: 100, maxQueries: 20, maxFailures: 2 },
     )
     : null;
   if (manufacturerFacts && ctx.cache.get(source.id) === source) {
@@ -4462,44 +4505,133 @@ async function selectGuardedStructuralReplacement(
     };
     return priority(left) - priority(right);
   });
-  const retrieved = await retrieveReplacementCandidateWindow({
-    leafCategory: profile.leafCategory,
-    strictOptions,
-    softFacetOrder,
-    maxPrice: budgetCap ?? undefined,
-    deps: {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    },
-    cache: ctx.cache,
-    maxPagesTotal: 12,
-    maxCatalogRequestsTotal: 20,
-    maxPagesPerStage: 1,
-    maxLeafPages: 4,
-    deadlineMs: Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
-    stopWhen: (products) =>
-      products.filter((candidate) => assess(candidate, false)).length >=
-        requested.target,
-    ...(manufacturerFacts
-      ? {
-        search: async (
-          input: SearchCatalogInput,
-          deps: CatalogClientDeps,
-          cache: ProductCache,
-        ) => {
-          const result = await executeSearchCatalog(input, deps, cache);
-          if (result.ok) {
-            await manufacturerFacts.hydrate(
-              cache,
-              result.results.map(({ id }) => id),
-              deps.signal,
-            );
-          }
-          return result;
-        },
+  const guardedBudget = manufacturerFacts
+    ? createReplacementCatalogBudget({
+      deadlineMs: Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+    })
+    : null;
+  let shortlist: VerifiedCutoutShortlistResult | null = null;
+  let shortlistReadFailed = false;
+  let retrieved: Awaited<ReturnType<typeof retrieveReplacementCandidateWindow>> |
+    null = null;
+  try {
+    const targetCutoutMm = customerCutoutMm ?? sourceCutout.mm;
+    if (
+      guardedBudget && manufacturerFacts && targetCutoutMm !== null &&
+      !guardedBudget.signal.aborted
+    ) {
+      let onAbort: (() => void) | undefined;
+      try {
+        const cancelled = new Promise<unknown[]>((resolve) => {
+          onAbort = () => resolve([]);
+          guardedBudget.signal.addEventListener("abort", onAbort, {
+            once: true,
+          });
+          if (guardedBudget.signal.aborted) resolve([]);
+        });
+        const rows = await Promise.race([
+          loadApprovedCutoutHints(
+            ctx,
+            targetCutoutMm,
+            profile.leafCategory,
+            guardedBudget.signal,
+          ),
+          cancelled,
+        ]);
+        const hints = selectVerifiedCutoutHints(
+          rows,
+          targetCutoutMm,
+          profile.leafCategory,
+          new Date(),
+        );
+        if (!guardedBudget.signal.aborted && hints.length > 0) {
+          shortlist = await retrieveVerifiedCutoutShortlist({
+            hints,
+            sourceProductId: source.id,
+            leafCategory: profile.leafCategory,
+            maxPrice: budgetCap ?? undefined,
+            deps: {
+              baseUrl: CATALOG_BASE_URL,
+              apiToken: ctx.catalogToken,
+              fetchImpl: guardedBudget.shortlistFetch,
+              signal: guardedBudget.signal,
+            },
+            cache: ctx.cache,
+            remainingMs: guardedBudget.remainingMs,
+            hydrate: (cache, ids, signal) =>
+              manufacturerFacts.hydrate(cache, ids, signal),
+            accept: (candidate) => assess(candidate, false) !== null,
+            target: requested.target,
+          });
+        }
+      } catch {
+        shortlistReadFailed = true;
+      } finally {
+        if (onAbort) guardedBudget.signal.removeEventListener("abort", onAbort);
       }
-      : {}),
-  });
+    }
+    if (
+      (shortlist?.products.length ?? 0) < requested.target &&
+      (!guardedBudget ||
+        (!guardedBudget.signal.aborted &&
+          guardedBudget.remainingRequests() > 0 &&
+          guardedBudget.remainingMs() > 0))
+    ) {
+      retrieved = await retrieveReplacementCandidateWindow({
+        leafCategory: profile.leafCategory,
+        strictOptions,
+        softFacetOrder,
+        maxPrice: budgetCap ?? undefined,
+        deps: {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+          ...(guardedBudget
+            ? {
+              fetchImpl: guardedBudget.fallbackFetch,
+              signal: guardedBudget.signal,
+            }
+            : {}),
+        },
+        cache: ctx.cache,
+        maxPagesTotal: manufacturerFacts
+          ? Math.min(12, 20 - manufacturerFacts.stats().queries)
+          : 12,
+        maxCatalogRequestsTotal: guardedBudget?.remainingRequests() ?? 20,
+        maxPagesPerStage: 1,
+        maxLeafPages: 4,
+        deadlineMs: guardedBudget?.remainingMs() ??
+          Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+        stopWhen: (products) =>
+          [...new Map([
+            ...(shortlist?.products ?? []),
+            ...products,
+          ].map((candidate) => [candidate.id, candidate])).values()]
+            .filter((candidate) => assess(candidate, false)).length >=
+            requested.target,
+        ...(manufacturerFacts
+          ? {
+            search: async (
+              input: SearchCatalogInput,
+              deps: CatalogClientDeps,
+              cache: ProductCache,
+            ) => {
+              const result = await executeSearchCatalog(input, deps, cache);
+              if (result.ok) {
+                await manufacturerFacts.hydrate(
+                  cache,
+                  result.results.map(({ id }) => id),
+                  deps.signal,
+                );
+              }
+              return result;
+            },
+          }
+          : {}),
+      });
+    }
+  } finally {
+    guardedBudget?.close();
+  }
   if (
     manufacturerFacts &&
     structuralSourceEvidenceSnapshot(ctx.cache.get(source.id)) !==
@@ -4517,7 +4649,11 @@ async function selectGuardedStructuralReplacement(
     });
     return { handled: true, products: [], outcome: "upstream_error" };
   }
-  const selected = retrieved.products.flatMap((candidate) => {
+  const candidatePool = [...new Map([
+    ...(shortlist?.products ?? []),
+    ...(retrieved?.products ?? []),
+  ].map((candidate) => [candidate.id, candidate])).values()];
+  const selected = candidatePool.flatMap((candidate) => {
     const result = assess(candidate, true);
     return result ? [result] : [];
   }).slice(0, requested.target);
@@ -4528,9 +4664,23 @@ async function selectGuardedStructuralReplacement(
       source_id: source.id,
       selected: selected.length,
       target: requested.target,
-      termination: retrieved.termination,
-      tool_pages: retrieved.pagesRequested,
-      catalog_requests: retrieved.catalogRequestsMade,
+      termination: retrieved?.termination ??
+        ((shortlist?.products.length ?? 0) >= requested.target
+          ? "verified_shortlist_target_reached"
+          : "verified_shortlist_interrupted"),
+      tool_pages: retrieved?.pagesRequested ?? 0,
+      catalog_requests: guardedBudget?.stats().totalRequests ??
+        retrieved?.catalogRequestsMade ?? 0,
+      verified_shortlist: shortlist
+        ? {
+          attempted: shortlist.attempted,
+          accepted: shortlist.products.length,
+          rejected: shortlist.rejected,
+          catalog_errors: shortlist.catalogErrors,
+          interrupted: shortlist.interrupted,
+        }
+        : null,
+      verified_shortlist_read_failed: shortlistReadFailed,
       manufacturer_facts: manufacturerFacts?.stats() ?? null,
       rejected: Object.fromEntries(rejected),
       excluded_cutout_examples: excludedCutoutExamples,
@@ -4538,11 +4688,15 @@ async function selectGuardedStructuralReplacement(
     },
   });
   if (selected.length === 0) {
-    const inspectedPages = retrieved.stages.reduce(
+    const inspectedPages = (retrieved?.stages ?? []).reduce(
       (total, stage) => total + stage.pages.length,
       0,
     );
-    const interrupted = ![
+    const interrupted = shortlistReadFailed || shortlist?.interrupted ||
+      (manufacturerFacts?.stats().failed ?? 0) > 0 ||
+      (manufacturerFacts?.stats().aborted ?? 0) > 0 ||
+      (manufacturerFacts?.stats().exhausted ?? 0) > 0 ||
+      retrieved === null || ![
       "stage_plan_completed",
       "target_reached",
     ].includes(retrieved.termination);

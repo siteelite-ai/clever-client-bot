@@ -167,3 +167,22 @@ Deno.test("transient DB failure is closed and retried within the request budget"
   assertEquals(queries, 2);
   assertEquals(hydrator.stats().failed, 1);
 });
+
+Deno.test("a later candidate after the bounded DB cap is explicitly incomplete", async () => {
+  const cards = cache();
+  cards.set("late", {
+    ...product("LATE"),
+    id: "late",
+    url: "https://220volt.kz/catalog/svetotexnika/svetilniki/late/",
+  });
+  let queries = 0;
+  const hydrator = createVerifiedManufacturerHydrator(async () => {
+    queries++;
+    return [row()];
+  }, { now: () => NOW, maxQueries: 1 });
+  await hydrator.hydrate(cards, ["catalog-lamp-1"]);
+  await hydrator.hydrate(cards, ["late"]);
+  assertEquals(queries, 1);
+  assertEquals(cards.get("late")?.verified_manufacturer_facts, undefined);
+  assertEquals(hydrator.stats().exhausted, 1);
+});

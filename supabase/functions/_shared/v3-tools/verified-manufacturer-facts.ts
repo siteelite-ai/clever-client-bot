@@ -12,6 +12,8 @@ export interface VerifiedManufacturerFacts {
     product_id: string;
     article: string;
     catalog_url: string;
+    /** Optional for legacy rows; required for cut-out shortlist discovery. */
+    catalog_leaf_category?: string | null;
   };
   provenance: {
     source_url: string;
@@ -612,6 +614,10 @@ export function validateVerifiedManufacturerFacts(
     row.product_id !== product.id || row.article !== product.article ||
     !canonicalCatalogUrl(row.catalog_url) ||
     normalizeProductUrl(product.url) !== row.catalog_url ||
+    !(row.catalog_leaf_category === undefined ||
+      row.catalog_leaf_category === null ||
+      (boundedText(row.catalog_leaf_category, 240) &&
+        row.catalog_leaf_category === product.leaf_category)) ||
     !source ||
     !boundedText(row.document_version, 80) ||
     !/^[\p{L}\p{N}][\p{L}\p{N} ._+\-()/]{0,79}$/u.test(row.document_version) ||
@@ -704,6 +710,9 @@ export function validateVerifiedManufacturerFacts(
       product_id: row.product_id,
       article: row.article,
       catalog_url: row.catalog_url,
+      ...(row.catalog_leaf_category !== undefined
+        ? { catalog_leaf_category: row.catalog_leaf_category as string | null }
+        : {}),
     },
     provenance: {
       source_url: row.source_url as string,

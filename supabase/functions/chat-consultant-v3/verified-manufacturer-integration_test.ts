@@ -1,5 +1,6 @@
 // Offline handler regression: manually approved private facts can establish a
-// mounting cut-out only for the exact live product. No real catalog, DB, or
+// mounting cut-out only for the exact live product. An approved candidate can
+// be recalled by its exact article even after the four-page leaf window. No real catalog, DB, or
 // paid model is contacted. The flag is enabled only in this test module.
 import {
   assert,
@@ -56,6 +57,7 @@ function approvedRow(id: number) {
     product_id: String(id),
     article: item.article,
     catalog_url: item.url,
+    catalog_leaf_category: leaf,
     source_url: "https://manufacturer.example/specification.pdf",
     document_version: "rev-1",
     document_page: 2,
@@ -104,6 +106,7 @@ Deno.test({
     const intervals = new Set<number>();
     const outbound: string[] = [];
     let steps: Array<{ step?: string; meta?: Record<string, unknown> }> = [];
+    let failCandidateHydration = false;
     try {
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = originalSetInterval(callback, delay, ...args);
@@ -145,8 +148,15 @@ Deno.test({
           }
           if (url.pathname === "/rest/v1/verified_product_facts") {
             const ids = url.searchParams.get("product_id") ?? "";
+            if (failCandidateHydration && ids.includes("2")) {
+              return json({ message: "fixture DB unavailable" }, 500);
+            }
             return json(
-              [1, 2].filter((id) => ids.includes(String(id))).map(approvedRow),
+              ids
+                ? [1, 2].filter((id) => ids.includes(String(id))).map(
+                  approvedRow,
+                )
+                : [approvedRow(2)],
             );
           }
           if (
@@ -184,14 +194,15 @@ Deno.test({
             });
           }
           if (url.pathname === "/api/products") {
-            const exact = url.searchParams.has("article") ||
-              url.searchParams.has("pagetitle") ||
-              url.searchParams.has("query");
-            const results = exact
-              ? [catalogProduct(1)]
-              : [catalogProduct(1), catalogProduct(2)];
+            const article = url.searchParams.get("article");
+            const results = article === "OTHER-7W"
+              ? [catalogProduct(2)]
+              : [catalogProduct(1)];
             return json({
-              data: { results, pagination: { total: results.length } },
+              data: {
+                results,
+                pagination: { total: article ? results.length : 1_314 },
+              },
             });
           }
         }
@@ -263,6 +274,50 @@ Deno.test({
           step === "v3_replacement_guarded_window" &&
           ((meta?.manufacturer_facts as { attached?: number } | undefined)
               ?.attached ?? 0) >= 2
+        ),
+        JSON.stringify(steps),
+      );
+      assert(
+        steps.some(({ step, meta }) =>
+          step === "v3_replacement_guarded_window" &&
+          ((meta?.verified_shortlist as { accepted?: number } | undefined)
+              ?.accepted ?? 0) === 1 &&
+          (meta?.catalog_requests as number) <= 20
+        ),
+        JSON.stringify(steps),
+      );
+      assert(
+        !steps.some(({ step }) =>
+          step === "v3_replacement_guarded_contract_unverified"
+        ),
+        JSON.stringify(steps),
+      );
+
+      failCandidateHydration = true;
+      const failedResponse = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: `предложи аналоги на ${sourceTitle}`,
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+            }),
+          },
+        ),
+      );
+      assertEquals(failedResponse.status, 200);
+      const failedStream = await failedResponse.text();
+      assert(failedStream.includes("Проверка каталога не завершилась"));
+      assert(!failedStream.includes("не подтвердилось ни одного кандидата"));
+      assert(
+        steps.some(({ step, meta }) =>
+          step === "v3_replacement_guarded_window" &&
+          ((meta?.manufacturer_facts as { failed?: number } | undefined)
+              ?.failed ?? 0) > 0
         ),
         JSON.stringify(steps),
       );

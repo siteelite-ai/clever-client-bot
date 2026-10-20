@@ -16,6 +16,8 @@ export interface VerifiedManufacturerHydrationStats {
   rejected: number;
   failed: number;
   aborted: number;
+  /** A requested, uncached ID could not be checked within DB query/failure caps. */
+  exhausted: number;
 }
 
 export interface VerifiedManufacturerHydrator {
@@ -60,6 +62,7 @@ export function createVerifiedManufacturerHydrator(
     rejected: 0,
     failed: 0,
     aborted: 0,
+    exhausted: 0,
   };
 
   const attach = (product: ProductFull, rows: readonly unknown[]) => {
@@ -95,6 +98,7 @@ export function createVerifiedManufacturerHydrator(
       const missing = ids.filter((id) => !memo.has(id));
       if (missing.length) {
         if (counters.queries >= maxQueries || counters.failed >= maxFailures) {
+          counters.exhausted++;
           return;
         }
         counters.queries++;

@@ -1,4 +1,4 @@
--- Run only after BOTH ordered candidate migrations (base then fixture-form
+-- Run only after BOTH ordered candidate migrations (base then typed-field
 -- extension) in a disposable PostgreSQL 16
 -- database with anon, authenticated and BYPASSRLS service_role already created.
 -- Fixtures are rolled back. Never run this script against a shared live project.
@@ -16,6 +16,7 @@ DECLARE
   v_checked_at timestamptz := clock_timestamp();
   v_rejected boolean;
   v_message text;
+  v_invalid_leaf text;
 BEGIN
   -- The migration is schema-only. Running this test against populated data
   -- would invalidate that assertion, which is why CI uses a fresh database.
@@ -72,6 +73,14 @@ BEGIN
     RAISE EXCEPTION 'approval immutability trigger is absent or SECURITY DEFINER';
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'verified_product_facts'
+      AND indexname = 'verified_product_facts_cutout_leaf_shortlist_idx'
+  ) THEN
+    RAISE EXCEPTION 'typed leaf/cutout shortlist index is absent';
+  END IF;
+
   INSERT INTO public.verified_product_facts (
     product_id, article, catalog_url, source_url, document_version,
     verified_at, valid_until, cutout_shape, cutout_kind,
@@ -103,6 +112,19 @@ BEGIN
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'unapproved fixture-form vocabulary was accepted';
   END IF;
+
+  FOREACH v_invalid_leaf IN ARRAY ARRAY['', ' Светильники', repeat('X', 241)] LOOP
+    v_rejected := false;
+    BEGIN
+      UPDATE public.verified_product_facts
+      SET catalog_leaf_category = v_invalid_leaf
+      WHERE id = v_pending;
+    EXCEPTION WHEN check_violation THEN v_rejected := true;
+    END;
+    IF NOT v_rejected THEN
+      RAISE EXCEPTION 'invalid catalog leaf category was accepted: %', v_invalid_leaf;
+    END IF;
+  END LOOP;
 
   v_rejected := false;
   BEGIN
@@ -137,15 +159,23 @@ BEGIN
   INSERT INTO public.verified_product_facts (
     product_id, article, catalog_url, source_url, document_version,
     verified_at, valid_until, approval_status, approved_at, approved_by,
-    cutout_shape, cutout_kind, cutout_min_mm, cutout_max_mm, outer_diameter_mm
+    cutout_shape, cutout_kind, cutout_min_mm, cutout_max_mm, outer_diameter_mm,
+    catalog_leaf_category
   ) VALUES (
     'ci-approved-1', 'CI-APPROVED-1',
     'https://220volt.kz/catalog/svetotexnika/svetilniki/ci-approved-1/',
     'https://manufacturer.example/spec', 'CI test rev 1',
     v_checked_at - interval '1 day', v_checked_at + interval '30 days',
     'approved', v_checked_at, 'CI reviewer',
-    'round', 'exact', 90, 90, 120
+    'round', 'exact', 90, 90, 120, 'Светильники'
   ) RETURNING id INTO v_first;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE id = v_first AND catalog_leaf_category = 'Светильники'
+  ) THEN
+    RAISE EXCEPTION 'typed catalog leaf category was not persisted';
+  END IF;
 
   v_rejected := false;
   BEGIN
@@ -160,6 +190,22 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'approved technical evidence could be rewritten';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts
+    SET catalog_leaf_category = 'Прожекторы'
+    WHERE id = v_first;
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    IF v_message NOT LIKE 'approved manufacturer facts are immutable%' THEN
+      RAISE;
+    END IF;
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'approved catalog leaf category could be rewritten';
   END IF;
 
   -- Form alone is a typed manufacturer claim; neither cut-out nor any other
@@ -259,14 +305,15 @@ BEGIN
   INSERT INTO public.verified_product_facts (
     product_id, article, catalog_url, source_url, document_version,
     verified_at, valid_until, approval_status, approved_at, approved_by,
-    cutout_shape, cutout_kind, cutout_min_mm, cutout_max_mm, outer_diameter_mm
+    cutout_shape, cutout_kind, cutout_min_mm, cutout_max_mm, outer_diameter_mm,
+    catalog_leaf_category
   ) VALUES (
     'ci-approved-1', 'CI-APPROVED-1',
     'https://220volt.kz/catalog/svetotexnika/svetilniki/ci-approved-1/',
     'https://manufacturer.example/spec-v2', 'CI test rev 2',
     v_checked_at - interval '1 day', v_checked_at + interval '30 days',
     'approved', v_checked_at, 'CI reviewer',
-    'round', 'range', 90, 110, 120
+    'round', 'range', 90, 110, 120, 'Светильники'
   ) RETURNING id INTO v_second;
 
   IF (SELECT count(*) FROM public.verified_product_facts
@@ -293,6 +340,15 @@ BEGIN
     WHERE product_id = 'ci-form-only' AND fixture_form = 'downlight'
   ) THEN
     RAISE EXCEPTION 'service_role cannot read the approved fixture form';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.verified_product_facts
+    WHERE product_id = 'ci-approved-1' AND catalog_leaf_category = 'Светильники'
+      AND approval_status = 'approved' AND revoked_at IS NULL
+      AND cutout_shape = 'round' AND cutout_min_mm <= 90
+      AND cutout_max_mm >= 90
+  ) THEN
+    RAISE EXCEPTION 'service_role cannot read the typed leaf/cutout shortlist';
   END IF;
 END;
 $test$;
