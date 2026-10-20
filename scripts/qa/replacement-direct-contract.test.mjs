@@ -25,13 +25,14 @@ const compactPreflight = source.slice(compactBegin, begin);
 
 test("ordinary direct analogue cards publish only live transferable axes and an explicit price cap", () => {
   assert.match(preflight, /selectExplicitAnchorAxes\(\s*anchor,\s*discovery\.facets,\s*userMessage/u);
+  assert.match(preflight, /selectUserOwnedReplacementAxes\(\s*anchor,\s*discovery\.facets,\s*independentRequestFrame/u);
   assert.match(preflight, /options:\s*Object\.fromEntries\(axes\.map\(\(axis\)\s*=>\s*\[axis\.key,\s*\[axis\.value\]\]\)\)/u);
   assert.match(preflight, /max_price:\s*budgetCap/u);
   assert.match(preflight, /product\.price <= budgetCap/u);
 
   const contract = preflight.slice(preflight.indexOf("const selectionCriteria: Criterion[]"));
   assert.match(contract, /discovery\.facets\.find\(\(\{ key \}\) => key === axis\.key\)/u);
-  assert.match(contract, /key:\s*axis\.caption,[\s\S]*?value:\s*axis\.value,[\s\S]*?evidence:\s*"derived_required"/u);
+  assert.match(contract, /key:\s*axis\.caption,[\s\S]*?value:\s*axis\.value,[\s\S]*?evidence:\s*independentRequestFrame !== null\s*\? "user_explicit"\s*:\s*"derived_required"/u);
   assert.match(contract, /if \(budgetCap !== null\) \{[\s\S]*?key:\s*"Цена",[\s\S]*?op:\s*"max",[\s\S]*?value:\s*budgetCap,[\s\S]*?evidence:\s*"user_explicit"/u);
   assert.match(contract, /selection_contract:\s*\{[\s\S]*?hash:\s*selectionPlan\.hash,[\s\S]*?mandatory_criteria:\s*selectionPlan\.mandatory_criteria/u);
   assert.doesNotMatch(contract, /key:\s*(?:sourceModel|sourceModels|anchor\.pagetitle|sourceDescription)/u);
