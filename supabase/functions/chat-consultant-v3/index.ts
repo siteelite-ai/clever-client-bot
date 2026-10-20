@@ -1219,6 +1219,63 @@ function normalizeForMatch(s: string): string {
     .trim();
 }
 
+/** A model-selected live value is not, by itself, a customer requirement. */
+export function declaredExactFacetCriterion(
+  key: string,
+  value: string,
+  customerGrounded: boolean,
+): Criterion {
+  return {
+    key,
+    op: "eq",
+    value,
+    level: customerGrounded ? "A" : "B",
+    evidence: customerGrounded ? "user_explicit" : "model_assumption",
+  };
+}
+
+/** Keep unowned exact advice out of catalog filters as well as the frozen
+ * render contract. Otherwise a B-level criterion still silently becomes a
+ * strict `by_filter` intersection before the card gate can see it. */
+export function omitUnownedExactFacetOptions(
+  options: Record<string, string[]>,
+  facets: Array<{ key: string; caption: string }>,
+  unowned: Array<{ key: string; value: string }>,
+  owned: Array<{ key: string; value: string }> = [],
+): { options: Record<string, string[]>; removed: Array<{ key: string; value: string }> } {
+  const sameAxis = (left: string, right: string): boolean => {
+    const names = (key: string) => {
+      const facet = facets.find(({ key: id, caption }) =>
+        normalizeForMatch(key) === normalizeForMatch(id) ||
+        normalizeForMatch(key) === normalizeForMatch(caption)
+      );
+      return [key, facet?.key ?? "", facet?.caption ?? ""]
+        .map(normalizeForMatch).filter(Boolean);
+    };
+    const rightNames = new Set(names(right));
+    return names(left).some((name) => rightNames.has(name));
+  };
+  const removed: Array<{ key: string; value: string }> = [];
+  const kept: Record<string, string[]> = {};
+  for (const [key, values] of Object.entries(options)) {
+    const filtered = values.filter((value) => {
+      const isUnowned = unowned.some((candidate) =>
+        sameAxis(key, candidate.key) &&
+        normalizeForMatch(value) === normalizeForMatch(candidate.value)
+      );
+      const isOwned = owned.some((candidate) =>
+        sameAxis(key, candidate.key) &&
+        normalizeForMatch(value) === normalizeForMatch(candidate.value)
+      );
+      if (!isUnowned || isOwned) return true;
+      removed.push({ key, value });
+      return false;
+    });
+    if (filtered.length > 0) kept[key] = filtered;
+  }
+  return { options: kept, removed };
+}
+
 function normalizeCodeLike(s: string): string {
   const map: Record<string, string> = {
     а: "a",
@@ -7891,6 +7948,10 @@ async function runExpertLoop(
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
   const modelAssumedSearchFacetValues: Array<{ key: string; value: string }> =
     [];
+  // Distinct from provisional class guidance: these exact values were named
+  // by the model, not entailed by the customer or a verified relation.
+  const modelAssumedExactFacetValues: Array<{ key: string; value: string }> =
+    [];
   const modelAssumedClassificationFacetValues: Array<{
     key: string;
     value: string;
@@ -7899,7 +7960,12 @@ async function runExpertLoop(
     facets: DiscoverCategoryOk["facets"],
   ): Record<string, string[]> =>
     projectAdvisoryCriteriaFacetOptions(
-      modelAssumedSearchFacetValues.map(({ key, value }) => ({
+      modelAssumedSearchFacetValues.filter(({ key, value }) =>
+        !modelAssumedExactFacetValues.some((candidate) =>
+          normalizeForMatch(candidate.key) === normalizeForMatch(key) &&
+          normalizeForMatch(candidate.value) === normalizeForMatch(value)
+        )
+      ).map(({ key, value }) => ({
         key,
         op: "eq" as const,
         value,
@@ -10846,13 +10912,17 @@ async function runExpertLoop(
                     normalizeForMatch(value)
                 )
               ) modelAssumedSearchFacetValues.push({ key, value });
-              return {
-                ...proposedCriterion,
-                level: "A" as const,
-                evidence: customerGrounded
-                  ? "user_explicit" as const
-                  : "derived_required" as const,
-              };
+              if (
+                !customerGrounded &&
+                !modelAssumedExactFacetValues.some((candidate) =>
+                  normalizeForMatch(candidate.key) === normalizeForMatch(key) &&
+                  normalizeForMatch(candidate.value) === normalizeForMatch(value)
+                )
+              ) modelAssumedExactFacetValues.push({ key, value });
+              // Measured/compatibility derivations are validated by separate
+              // contracts below. The model's own mandatory prose cannot turn
+              // this exact-value guess into a customer-owned equality.
+              return declaredExactFacetCriterion(key, value, customerGrounded);
             });
           const customerGroundedExactFacetCriteria =
             proposedDerivedExactFacetCriteria.filter((criterion) =>
@@ -10946,7 +11016,6 @@ async function runExpertLoop(
             projectAdvisoryCriteriaFacetOptions(
               scopeCardCriteria([
                 ...proposedClassificationCriteria,
-                ...derivedExactFacetCriteria,
               ], visibleDeclarationText).criteria,
               lastDiscover.facets ?? [],
             );
@@ -12690,10 +12759,37 @@ async function runExpertLoop(
               lastDiscover.facets,
               declaredReasoning,
             );
-            if (Object.keys(scopedOptions).length > 0) {
-              scopedGuardArgs.options = scopedOptions;
+            const frozenExact = (currentSelectionCriteriaPlan()?.mandatory_criteria ?? [])
+              .filter((criterion) => criterion.op === "eq")
+              .map(({ key, value }) => ({ key, value: String(value) }));
+            const provenOptions = omitUnownedExactFacetOptions(
+              scopedOptions,
+              lastDiscover.facets,
+              modelAssumedExactFacetValues,
+              [...effectiveUserBacked, ...frozenExact],
+            );
+            if (Object.keys(provenOptions.options).length > 0) {
+              scopedGuardArgs.options = provenOptions.options;
             } else {
               delete scopedGuardArgs.options;
+              if (
+                scopedGuardArgs.mode === "by_filter" &&
+                !scopedGuardArgs.category &&
+                !scopedGuardArgs.category_in
+              ) {
+                const leaves = lastDiscover.leaf_categories.map(({ pagetitle }) =>
+                  pagetitle
+                ).filter(Boolean);
+                if (leaves.length > 0) scopedGuardArgs.category_in = leaves;
+                else scopedGuardArgs.category = lastDiscover.category.pagetitle;
+              }
+            }
+            if (provenOptions.removed.length > 0) {
+              steps.push({
+                step: "v3_unowned_exact_advice_removed_from_search",
+                ms: now(),
+                meta: { removed: provenOptions.removed },
+              });
             }
           }
           tc.args = scopedGuardArgs;
