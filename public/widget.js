@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-09840a22e7398e26';
+  var WIDGET_VERSION = 'widget-122fff82608d4689';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -564,6 +564,12 @@
     error.code = errorCode;
     error.issues = issues;
     return error;
+  }
+
+  function isTerminalHttpStatus(status) {
+    // Authentication and admission decisions are authoritative at HTTP
+    // headers. Another route must not turn a denial into an origin request.
+    return status === 401 || status === 403 || status === 429;
   }
 
   // Clean up any previous widget instance before initializing again
@@ -1540,6 +1546,7 @@
     }
 
     function describeTransportError(error) {
+      if (isTerminalHttpStatus(error && error.status)) return error;
       if (controller.signal.aborted && transportAbortReason) {
         var timeoutError = new Error(label + ': ' + transportAbortReason);
         timeoutError.code = transportAbortReason;
@@ -1608,6 +1615,16 @@
         throw networkError;
       }
       throw fetchError;
+    }
+
+    // Do not read a denied response body before making the routing decision:
+    // an intermediary can leave that body open until a transport watchdog
+    // fires, incorrectly turning a definitive 401/403/429 into failover.
+    if (isTerminalHttpStatus(response.status)) {
+      var terminalHttpError = new Error(label + ' HTTP ' + response.status);
+      terminalHttpError.status = response.status;
+      terminalHttpError.code = 'terminal_http';
+      throw terminalHttpError;
     }
 
     // Headers/initial SSE bytes arrived: the connection budget no longer
@@ -2130,6 +2147,12 @@
             message: err && err.message ? String(err.message) : String(err)
           });
           try { console.warn('[Widget] attempt=' + requestMessageId + ' stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
+          if (isTerminalHttpStatus(err && err.status)) {
+            // A prior proxy timeout may have temporarily preferred direct;
+            // a later explicit proxy denial must restore proxy-first routing.
+            if (streamEndpoints[i].label === 'proxy') proxyDirectFirstUntil = 0;
+            break;
+          }
           if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
@@ -2211,6 +2234,10 @@
             message: resumeError && resumeError.message ? String(resumeError.message) : String(resumeError)
           });
           try { console.warn('[Widget] attempt=' + requestMessageId + ' resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
+          if (isTerminalHttpStatus(resumeError && resumeError.status)) {
+            if (resumeEndpoints[r].label === 'proxy') proxyDirectFirstUntil = 0;
+            break;
+          }
         }
       }
       var selectedReplay = completedReplay || bestPartialReplay;
@@ -2358,13 +2385,17 @@
       var failureMessage;
       if (lastError && lastError.status === 400) {
         failureMessage = addMessage('Не удалось продолжить диалог из-за некорректных или устаревших данных. Обновите страницу и повторите запрос.', 'assistant');
+      } else if (lastError && lastError.status === 429) {
+        failureMessage = addMessage('Слишком много запросов. Попробуйте чуть позже.', 'assistant');
+      } else if (lastError && (lastError.status === 401 || lastError.status === 403)) {
+        failureMessage = addMessage('Консультант сейчас недоступен. Попробуйте позже.', 'assistant');
       } else {
         failureMessage = addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
       }
       addAttemptLabel(failureMessage, requestMessageId);
       var transientPreAcceptanceFailure = routeFailures.length >= streamEndpoints.length &&
         routeFailures.every(function(failure) {
-          return failure.status === null || failure.status === 429 || failure.status >= 500;
+          return failure.status === null || failure.status >= 500;
         });
       if (failedUserRolledBack && !firstTokenArrived && !protocolAccepted &&
           transientPreAcceptanceFailure && requestSessionId === sessionId &&

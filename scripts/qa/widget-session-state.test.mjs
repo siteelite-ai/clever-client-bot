@@ -1976,6 +1976,72 @@ test('an unreachable proxy fails over quickly to direct Supabase', async () => {
   dom.window.close();
 });
 
+test('proxy HTTP 401, 403 and 429 never fail over to direct Supabase', async () => {
+  for (const status of [401, 403, 429]) {
+    const calls = [];
+    const query = `Проверка отказа ${status}`;
+    const dom = bootWidget({
+      source: withTransportTimeouts({ connect: 20, accept: 20, idle: 40, total: 150 }),
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), messageId: JSON.parse(init.body).messageId });
+        if (!String(url).includes('supabase-proxy')) {
+          return new Response(completeAnswerSse('Прямой маршрут не должен вызываться.'), {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+        // A 429 body that never finishes used to become a transport timeout
+        // and trigger the origin fallback despite the definitive HTTP status.
+        const body = status === 429
+          ? new ReadableStream({ start() {} })
+          : JSON.stringify({ error: 'denied' });
+        return new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+      },
+    });
+    const input = dom.window.document.querySelector('#volt-widget-input');
+    const send = dom.window.document.querySelector('#volt-widget-send');
+    input.value = query;
+    send.click();
+    await waitForWidget(() => !send.disabled &&
+      visibleMessages(dom).includes(status === 429 ? 'Слишком много запросов' : 'Консультант сейчас недоступен'),
+    `HTTP ${status} should settle without contacting the origin`, 250);
+    assert.equal(calls.length, 1, `HTTP ${status} must not bypass the proxy`);
+    assert.match(calls[0].url, /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+    assert.doesNotMatch(visibleMessages(dom), /Прямой маршрут не должен вызываться/u);
+    assert.equal(readState(dom).history.some((item) => item.content === query), false);
+
+    input.value = query;
+    send.click();
+    await waitForWidget(() => calls.length === 2 && !send.disabled,
+      `a manual retry after HTTP ${status} should use the proxy again`, 250);
+    assert.match(calls[1].url, /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+    assert.notEqual(calls[0].messageId, calls[1].messageId,
+      'a denied request is not an accepted backend claim to replay');
+    dom.window.close();
+  }
+});
+
+test('proxy network failure still fails over to direct Supabase', async () => {
+  const urls = [];
+  const dom = bootWidget({
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      if (urls.length === 1) throw new TypeError('Failed to fetch');
+      return new Response(completeAnswerSse('Резервный маршрут работает.'), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Проверка сетевой ошибки';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes('Резервный маршрут работает.') &&
+    !dom.window.document.querySelector('#volt-widget-send').disabled,
+  'network failure should still recover through the direct route');
+  assert.equal(urls.length, 2);
+  assert.match(urls[0], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.match(urls[1], /yngoixmvmxdfxokuafjp\.supabase\.co/u);
+  dom.window.close();
+});
+
 test('slow HTTP headers do not consume the separate application-acceptance budget', async () => {
   const urls = [];
   const answer = 'Заголовки и подтверждение пришли в пределах отдельных бюджетов.';
@@ -3395,11 +3461,12 @@ test('HTTP 400, 429 and 503 are not silently retried as network failures', async
     });
     dom.window.document.querySelector('#volt-widget-input').value = 'Проверь розетку';
     dom.window.document.querySelector('#volt-widget-send').click();
-    await waitForWidget(() => calls.length === 2 &&
+    const expectedRouteCalls = status === 429 ? 1 : 2;
+    await waitForWidget(() => calls.length === expectedRouteCalls &&
       !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
     `HTTP ${status} should settle without an automatic retry`);
-    assert.equal(calls.length, 2);
-    assert.match(visibleMessages(dom), /ошибка соединения/iu);
+    assert.equal(calls.length, expectedRouteCalls);
+    assert.match(visibleMessages(dom), status === 429 ? /Слишком много запросов/iu : /ошибка соединения/iu);
     dom.window.close();
   }
 });
