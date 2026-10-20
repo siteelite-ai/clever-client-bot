@@ -3,7 +3,10 @@ import {
   extendSelectionCriteriaPlan,
 } from "./criteria-gate.ts";
 import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
-import { extractReplacementDimensions } from "./replacement-provisional-evidence.ts";
+import {
+  extractReplacementDimensions,
+  replacementDimensionBounds,
+} from "./replacement-provisional-evidence.ts";
 import {
   evaluateStructuralReplacementCandidate,
   isProvisionalReplacementDifferenceRole,
@@ -75,13 +78,16 @@ export function guardedStructuralSelectionContract(input: {
   }
   const sourceCutout = extractReplacementDimensions(profile.source)
     .mounting_cutout_mm;
+  const sourceCutoutBounds = replacementDimensionBounds(sourceCutout);
   const expectedCutout = customerCutoutMm ?? sourceCutout.mm;
   if (
     !Number.isFinite(expectedCutout) || expectedCutout === null ||
     expectedCutout <= 0 || expectedCutout > 10_000 ||
     sourceCutout.status === "conflicting" ||
-    (customerCutoutMm !== null && sourceCutout.mm !== null &&
-      sourceCutout.mm !== customerCutoutMm) ||
+    (customerCutoutMm !== null && sourceCutout.status === "known" &&
+      (!sourceCutoutBounds ||
+        customerCutoutMm < sourceCutoutBounds.min_mm ||
+        customerCutoutMm > sourceCutoutBounds.max_mm)) ||
     (budgetCap !== null && (!Number.isFinite(budgetCap) || budgetCap <= 0))
   ) return null;
 
@@ -105,11 +111,17 @@ export function guardedStructuralSelectionContract(input: {
     const fit = evaluateReplacementCandidateFit(profile.source, candidate, {
       customer_cutout_mm: customerCutoutMm,
     });
+    const candidateCutout = extractReplacementDimensions(candidate)
+      .mounting_cutout_mm;
+    const candidateSupportsExpected = candidateCutout.status === "known" &&
+      (candidateCutout.mm === expectedCutout ||
+        (candidateCutout.range_mm !== undefined &&
+          candidateCutout.range_mm.min_mm <= expectedCutout &&
+          candidateCutout.range_mm.max_mm >= expectedCutout));
     if (
       fit.status !== "provisional_candidate" ||
       fit.checks.mounting_cutout_mm.status !== "match" ||
-      extractReplacementDimensions(candidate).mounting_cutout_mm.mm !==
-        expectedCutout
+      !candidateSupportsExpected
     ) return null;
     perCandidateEvidence.push(structural.evidence);
   }

@@ -6,6 +6,7 @@ import {
   resolveStructuralReplacementProfile,
 } from "./replacement-structural-proof.ts";
 import type { ProductFull } from "./types.ts";
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
 
 const specs = [
   ["kind", "Вид светильника", "даунлайт"],
@@ -79,6 +80,39 @@ function profile() {
   assertEquals(result.status, "ready");
   if (result.status !== "ready") throw new Error("profile not ready");
   return result.profile;
+}
+
+function withApprovedFacts(
+  product: ProductFull,
+  technical: Partial<VerifiedManufacturerFacts["technical"]> = {},
+): ProductFull {
+  product.verified_manufacturer_facts = {
+    binding: {
+      product_id: product.id,
+      article: product.article!,
+      catalog_url: product.url,
+    },
+    provenance: {
+      source_url: "https://manufacturer.example.com/datasheet.pdf",
+      document_version: "test-revision-1",
+      document_page: 1,
+      verified_at: "2026-10-20T00:00:00Z",
+      valid_until: "2027-10-19T00:00:00Z",
+      approved_at: "2026-10-20T01:00:00Z",
+      approved_by: "qa-reviewer",
+    },
+    technical: {
+      cutout: null,
+      outer_diameter_mm: null,
+      color_temperature_k: 4000,
+      integrated_led: true,
+      socket: { kind: "none" },
+      driver: { included: true, type: "constant-current" },
+      supply_v: { min: 220, max: 240 },
+      ...technical,
+    },
+  };
+  return product;
 }
 
 Deno.test("structural profile derives unique live roles, exact search options and numeric obligations", () => {
@@ -264,6 +298,229 @@ Deno.test("verified cut-out opt-in retains structural kind, mounting, interface,
     warehouses: [],
     stock: "out",
   }), options), { ok: false, reason: "candidate_stock_or_price_unverified" });
+});
+
+Deno.test("approved typed facts bridge only corroborated equivalent technical options on the guarded route", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_technology" ? [{ value: "светодиодная" }] : [],
+      ...facet.key === "live_socket" ? [{ value: "без цоколя" }] : [],
+      ...facet.key === "live_driver" ? [{ value: "встроенный" }] : [],
+      ...facet.key === "live_colorTemperature" ? [{ value: "4000 К" }] : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const equivalent = withApprovedFacts(product("equivalent", {
+    technology: "светодиодная",
+    socket: "без цоколя",
+    driver: "встроенный",
+    colorTemperature: "4000 К",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }));
+  const guarded = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, equivalent,
+  ), { ok: false, reason: "candidate_mismatch:technology" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, equivalent, guarded,
+  ).ok, true);
+  const noFacts = product("no-facts", {
+    technology: "светодиодная", socket: "без цоколя",
+    driver: "встроенный", colorTemperature: "4000 К",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, noFacts, guarded,
+  ), { ok: false, reason: "candidate_mismatch:technology" });
+  const wrongBinding = withApprovedFacts(product("wrong-binding", {
+    technology: "светодиодная", socket: "без цоколя",
+    driver: "встроенный", colorTemperature: "4000 К",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }));
+  wrongBinding.verified_manufacturer_facts!.binding.article = "different-article";
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, wrongBinding, guarded,
+  ), { ok: false, reason: "candidate_mismatch:technology" });
+});
+
+Deno.test("driver-presence synonyms require the same named approved kind on both cards", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_driver" ? [{ value: "встроенный" }] : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const candidate = (id: string) => withApprovedFacts(product(id, {
+    driver: "встроенный",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" }));
+  const guarded = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate("same-driver-kind"), guarded,
+  ).ok, true);
+  const oppositeKind = candidate("opposite-driver-kind");
+  oppositeKind.verified_manufacturer_facts!.technical.driver = {
+    included: true,
+    type: "constant-voltage",
+  };
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, oppositeKind, guarded,
+  ), { ok: false, reason: "candidate_mismatch:driver" });
+  const absentKind = candidate("absent-driver-kind");
+  absentKind.verified_manufacturer_facts!.technical.driver = {
+    included: true,
+    type: null,
+  };
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, absentKind, guarded,
+  ), { ok: false, reason: "candidate_mismatch:driver" });
+  const untypedSource = withApprovedFacts(product("source"), {
+    driver: { included: true, type: null },
+  });
+  const untypedProfile = resolveStructuralReplacementProfile(untypedSource, liveFacets);
+  assertEquals(untypedProfile.status, "ready");
+  if (untypedProfile.status !== "ready") throw new Error("profile not ready");
+  assertEquals(evaluateStructuralReplacementCandidate(
+    untypedProfile.profile, candidate("source-kind-absent"), guarded,
+  ), { ok: false, reason: "candidate_mismatch:driver" });
+});
+
+Deno.test("guarded manufacturer voltage bridge reconciles nominal 220 and 230 but never unsupported claims", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_voltage"
+        ? [{ value: "230" }, { value: "12" }, { value: "220-250" }]
+        : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const candidate = (id: string, voltage: string, overrides: Partial<ProductFull> = {}) =>
+    withApprovedFacts(product(id, { voltage }, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+      ...overrides,
+    }));
+  const guarded = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  const nominal = candidate("nominal-230", "230", {
+    pagetitle: "Светильник LED 230V",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, nominal, guarded,
+  ).ok, true);
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, nominal,
+  ), { ok: false, reason: "candidate_voltage_unverified" });
+  const withoutFacts = product("no-official-supply", { voltage: "230" }, {
+    description_excerpt: "Монтажное отверстие: 90 мм",
+  });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, withoutFacts, guarded,
+  ), { ok: false, reason: "candidate_voltage_unverified" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate("catalog-12v", "12"), guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:voltage" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate("title-12v", "230", {
+      pagetitle: "Светильник LED 12V",
+    }), guarded,
+  ), { ok: false, reason: "candidate_voltage_unverified" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, candidate("unsupported-range", "220-250"), guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:voltage" });
+  const partial = candidate("partial-official", "230");
+  partial.verified_manufacturer_facts!.technical.supply_v = { min: 220, max: 230 };
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, partial, guarded,
+  ), { ok: false, reason: "candidate_voltage_unverified" });
+  const wrongBinding = candidate("wrong-binding", "230");
+  wrongBinding.verified_manufacturer_facts!.binding.article = "other";
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile, wrongBinding, guarded,
+  ), { ok: false, reason: "candidate_voltage_unverified" });
+});
+
+Deno.test("typed bridge fails closed on explicit candidate and source contradictions", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_driver" ? [{ value: "встроенный" }] : [],
+      ...facet.key === "live_colorTemperature" ? [{ value: "4000 К" }] : [],
+    ],
+  }));
+  const source = withApprovedFacts(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const guarded = {
+    dimensionPolicy: "verified_mounting_cutout",
+    customerCutoutMm: 90,
+  } as const;
+  const candidate = (id: string, values: Record<string, string> = {},
+    overrides: Partial<ProductFull> = {}) => withApprovedFacts(product(id, values, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+      ...overrides,
+    }));
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile,
+    candidate("driver-facet-conflict", { driver: "не в комплекте" }),
+    guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:driver" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile,
+    candidate("driver-prose-conflict", { driver: "встроенный" }, {
+      pagetitle: "Светильник LED 7W без драйвера",
+    }),
+    guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:driver" });
+  assertEquals(evaluateStructuralReplacementCandidate(
+    resolved.profile,
+    candidate("kelvin-title-conflict", { colorTemperature: "4000 К" }, {
+      pagetitle: "Светильник LED 7W 6500K",
+    }),
+    guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:colorTemperature" });
+  const conflictingSource = withApprovedFacts(product("source", {}, {
+    description_excerpt: "ПРА: не в комплекте.",
+  }));
+  const conflictingResolution = resolveStructuralReplacementProfile(conflictingSource, liveFacets);
+  assertEquals(conflictingResolution.status, "ready");
+  if (conflictingResolution.status !== "ready") throw new Error("profile not ready");
+  assertEquals(evaluateStructuralReplacementCandidate(
+    conflictingResolution.profile,
+    candidate("clean-candidate", {}, {
+      description_excerpt: "Монтажное отверстие: 90 мм",
+    }),
+    guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:driver" });
+  const warmOfficialSource = withApprovedFacts(product("source"), {
+    color_temperature_k: 3000,
+  });
+  const warmOfficialResolution = resolveStructuralReplacementProfile(
+    warmOfficialSource, liveFacets,
+  );
+  assertEquals(warmOfficialResolution.status, "ready");
+  if (warmOfficialResolution.status !== "ready") throw new Error("profile not ready");
+  assertEquals(evaluateStructuralReplacementCandidate(
+    warmOfficialResolution.profile,
+    candidate("catalog-neutral-official-warm"),
+    guarded,
+  ), { ok: false, reason: "manufacturer_catalog_conflict:lightColor" });
 });
 
 Deno.test("verified cut-out accepts corroborated brighter provisional candidates but excludes extreme power", () => {

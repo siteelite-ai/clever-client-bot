@@ -3,6 +3,51 @@ import {
   evaluateReplacementDimensionalEvidence,
   extractReplacementDimensions,
 } from "./replacement-provisional-evidence.ts";
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
+
+const verifiedIdentity = {
+  id: "verified-luminaire",
+  article: "VL-90",
+  url: "https://220volt.kz/catalog/svetotexnika/svetilniki/verified-luminaire/",
+};
+const MANUFACTURER_TEST_NOW = new Date("2026-10-20T12:00:00Z");
+
+function manufacturerFacts(
+  min_mm: number | null,
+  max_mm: number | null,
+  outer_diameter_mm: number | null = null,
+): VerifiedManufacturerFacts {
+  return {
+    binding: {
+      product_id: verifiedIdentity.id,
+      article: verifiedIdentity.article,
+      catalog_url: verifiedIdentity.url,
+    },
+    provenance: {
+      source_url: "https://manufacturer.example.com/datasheets/vl-90.pdf",
+      document_version: "2026-08 rev A",
+      document_page: 2,
+      verified_at: "2026-10-20T08:00:00Z",
+      valid_until: "2027-01-20T08:00:00Z",
+      approved_at: "2026-10-20T09:00:00Z",
+      approved_by: "QA",
+    },
+    technical: {
+      cutout: min_mm === null || max_mm === null ? null : {
+        shape: "round",
+        kind: min_mm === max_mm ? "exact" : "range",
+        min_mm,
+        max_mm,
+      },
+      outer_diameter_mm,
+      color_temperature_k: null,
+      integrated_led: null,
+      socket: null,
+      driver: null,
+      supply_v: null,
+    },
+  };
+}
 
 Deno.test("source Ø90 cut-out versus candidate Ø80 is a measured mismatch", () => {
   const assessed = evaluateReplacementDimensionalEvidence(
@@ -215,4 +260,138 @@ Deno.test("explicit English cut-out and outer diameter are recognized", () => {
   });
   assertEquals(extracted.mounting_cutout_mm.mm, 90);
   assertEquals(extracted.outer_diameter_mm.mm, 118);
+});
+
+Deno.test("validated manufacturer-only range remains a range with auditable provenance", () => {
+  const extracted = extractReplacementDimensions({
+    ...verifiedIdentity,
+    description_excerpt: "Модель D90. Диаметр: 90 мм.",
+    verified_manufacturer_facts: manufacturerFacts(90, 95, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(extracted.mounting_cutout_mm.status, "known");
+  assertEquals(extracted.mounting_cutout_mm.mm, null);
+  assertEquals(extracted.mounting_cutout_mm.range_mm, {
+    min_mm: 90,
+    max_mm: 95,
+  });
+  assertEquals(extracted.mounting_cutout_mm.evidence[0].origin, "manufacturer");
+  assertEquals(extracted.mounting_cutout_mm.evidence[0].provenance, {
+    source_url: "https://manufacturer.example.com/datasheets/vl-90.pdf",
+    document_version: "2026-08 rev A",
+    document_page: 2,
+    verified_at: "2026-10-20T08:00:00Z",
+  });
+  assertEquals(extracted.outer_diameter_mm.mm, 118);
+  assertEquals(extracted.outer_diameter_mm.evidence[0].origin, "manufacturer");
+});
+
+Deno.test("catalog-labelled exact cut-out inside manufacturer range narrows to exact", () => {
+  const extracted = extractReplacementDimensions({
+    ...verifiedIdentity,
+    short_traits: ["Монтажное отверстие, мм: 95", "Наружный диаметр, мм: 118"],
+    verified_manufacturer_facts: manufacturerFacts(90, 95, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(extracted.mounting_cutout_mm.status, "known");
+  assertEquals(extracted.mounting_cutout_mm.mm, 95);
+  assertEquals(extracted.mounting_cutout_mm.range_mm, undefined);
+  assertEquals(extracted.mounting_cutout_mm.evidence.length, 2);
+  assertEquals(extracted.outer_diameter_mm.status, "known");
+  assertEquals(extracted.outer_diameter_mm.evidence.length, 2);
+});
+
+Deno.test("manufacturer-only exact dimension and agreeing catalog exact remain known", () => {
+  const onlyManufacturer = extractReplacementDimensions({
+    ...verifiedIdentity,
+    verified_manufacturer_facts: manufacturerFacts(90, 90, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(onlyManufacturer.mounting_cutout_mm.status, "known");
+  assertEquals(onlyManufacturer.mounting_cutout_mm.mm, 90);
+  assertEquals(onlyManufacturer.mounting_cutout_mm.range_mm, undefined);
+  const agreeingCatalog = extractReplacementDimensions({
+    ...verifiedIdentity,
+    short_traits: ["Монтажное отверстие, мм: 90"],
+    verified_manufacturer_facts: manufacturerFacts(90, 90, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(agreeingCatalog.mounting_cutout_mm.status, "known");
+  assertEquals(agreeingCatalog.mounting_cutout_mm.mm, 90);
+  assertEquals(agreeingCatalog.mounting_cutout_mm.evidence.length, 2);
+});
+
+Deno.test("catalog and manufacturer dimensional contradictions fail closed", () => {
+  const extracted = extractReplacementDimensions({
+    ...verifiedIdentity,
+    short_traits: ["Монтажное отверстие, мм: 80", "Наружный диаметр, мм: 115"],
+    verified_manufacturer_facts: manufacturerFacts(90, 95, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(extracted.mounting_cutout_mm.status, "conflicting");
+  assertEquals(extracted.mounting_cutout_mm.mm, null);
+  assertEquals(extracted.outer_diameter_mm.status, "conflicting");
+  assertEquals(extracted.outer_diameter_mm.mm, null);
+});
+
+Deno.test("manufacturer range matches only a known exact opening, inclusively", () => {
+  for (const opening of [90, 95]) {
+    const assessed = evaluateReplacementDimensionalEvidence(
+      { short_traits: [`Монтажное отверстие, мм: ${opening}`] },
+      {
+        ...verifiedIdentity,
+        verified_manufacturer_facts: manufacturerFacts(90, 95),
+      },
+      MANUFACTURER_TEST_NOW,
+    );
+    assertEquals(assessed.checks.mounting_cutout_mm.status, "match");
+    assertEquals(assessed.status, "candidate_with_remaining_checks");
+  }
+  const outside = evaluateReplacementDimensionalEvidence(
+    { short_traits: ["Монтажное отверстие, мм: 96"] },
+    {
+      ...verifiedIdentity,
+      verified_manufacturer_facts: manufacturerFacts(90, 95),
+    },
+    MANUFACTURER_TEST_NOW,
+  );
+  assertEquals(outside.checks.mounting_cutout_mm.status, "mismatch");
+  const sourceRange = evaluateReplacementDimensionalEvidence(
+    {
+      ...verifiedIdentity,
+      verified_manufacturer_facts: manufacturerFacts(90, 95),
+    },
+    { short_traits: ["Монтажное отверстие, мм: 92"] },
+    MANUFACTURER_TEST_NOW,
+  );
+  assertEquals(sourceRange.checks.mounting_cutout_mm.status, "unknown");
+});
+
+Deno.test("a mismatched product binding cannot launder a title into dimensions", () => {
+  const extracted = extractReplacementDimensions({
+    ...verifiedIdentity,
+    id: "other-product",
+    description_excerpt: "Модель D90. Диаметр: 90 мм.",
+    verified_manufacturer_facts: manufacturerFacts(90, 95, 118),
+  }, MANUFACTURER_TEST_NOW);
+  assertEquals(extracted.mounting_cutout_mm.status, "missing");
+  assertEquals(extracted.outer_diameter_mm.status, "missing");
+});
+
+Deno.test("manufacturer facts expired after hydration are rejected at final extraction", () => {
+  const facts = manufacturerFacts(90, 95, 118);
+  facts.provenance.valid_until = "2026-10-20T12:05:00Z";
+  const hydrated = {
+    ...verifiedIdentity,
+    verified_manufacturer_facts: facts,
+  };
+
+  const beforeExpiry = extractReplacementDimensions(
+    hydrated,
+    new Date("2026-10-20T12:04:59Z"),
+  );
+  assertEquals(beforeExpiry.mounting_cutout_mm.status, "known");
+  assertEquals(beforeExpiry.outer_diameter_mm.status, "known");
+
+  const atExpiry = extractReplacementDimensions(
+    hydrated,
+    new Date("2026-10-20T12:05:00Z"),
+  );
+  assertEquals(atExpiry.mounting_cutout_mm.status, "missing");
+  assertEquals(atExpiry.outer_diameter_mm.status, "missing");
 });

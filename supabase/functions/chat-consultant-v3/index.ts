@@ -28,6 +28,7 @@ import {
 import {
   executeSearchCatalog,
   expandOptionAlternatives,
+  type CatalogClientDeps,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
 import {
@@ -507,12 +508,17 @@ import {
   guardedStructuralSelectionContract,
   hasVerifiedRecessedStructuralMount,
 } from "../_shared/v3-tools/replacement-verified-selection-contract.ts";
-import { extractReplacementDimensions } from "../_shared/v3-tools/replacement-provisional-evidence.ts";
+import {
+  extractReplacementDimensions,
+  replacementDimensionBounds,
+} from "../_shared/v3-tools/replacement-provisional-evidence.ts";
 import {
   evaluateReplacementCandidateFit,
   type ReplacementCandidateFit,
 } from "../_shared/v3-tools/replacement-candidate-fit.ts";
 import { retrieveReplacementCandidateWindow } from "../_shared/v3-tools/replacement-candidate-retrieval.ts";
+import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
+import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
 import {
   parseReplacementCutoutReply,
   resolveServerIssuedReplacementCutoutPending,
@@ -730,6 +736,9 @@ const DEPLOYMENT_VARIANT = (globalThis as typeof globalThis & {
   }).__VOLT220_FUNCTION_VARIANT__ === "preview"
   ? "preview"
   : "production";
+const VERIFIED_MANUFACTURER_FACTS_ENABLED = DEPLOYMENT_VARIANT === "preview"
+  ? Deno.env.get("VOLT220_VERIFIED_FACTS_PREVIEW_ENABLED") === "true"
+  : Deno.env.get("VOLT220_VERIFIED_FACTS_PRODUCTION_ENABLED") === "true";
 const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
   (globalThis as typeof globalThis & {
     __VOLT220_ADMISSION_SCOPE__?: "preview";
@@ -4238,6 +4247,36 @@ interface DirectReplacementResult {
   source_candidate_ids?: string[];
 }
 
+const VERIFIED_MANUFACTURER_FACT_COLUMNS =
+  "product_id,article,catalog_url,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
+
+async function loadApprovedManufacturerFacts(
+  ctx: ToolContext,
+  productIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<unknown[]> {
+  if (productIds.length === 0) return [];
+  if (productIds.length > 100 || signal?.aborted) {
+    throw new Error("verified_fact_request_invalid");
+  }
+  // This client was constructed with the service-role key. The table denies
+  // public reads and runtime writes; a row is still revalidated against the
+  // live product's id, article and URL before any technical fact is used.
+  const query = ctx.supabase.from("verified_product_facts")
+    .select(VERIFIED_MANUFACTURER_FACT_COLUMNS)
+    .in("product_id", [...productIds])
+    .eq("approval_status", "approved")
+    .is("revoked_at", null)
+    .gt("valid_until", new Date().toISOString());
+  const { data, error } = signal
+    ? await query.abortSignal(signal)
+    : await query;
+  if (error || !Array.isArray(data)) {
+    throw new Error("verified_fact_read_unavailable");
+  }
+  return data;
+}
+
 /** Source-only structural replacements remain a shortlist, never a fit certificate. */
 async function selectGuardedStructuralReplacement(
   originalRequest: string,
@@ -4251,11 +4290,47 @@ async function selectGuardedStructuralReplacement(
   t0: number,
 ): Promise<DirectReplacementResult> {
   const source = profile.source;
+  const manufacturerFacts = VERIFIED_MANUFACTURER_FACTS_ENABLED
+    ? createVerifiedManufacturerHydrator(
+      (ids, signal) => loadApprovedManufacturerFacts(ctx, ids, signal),
+      { maxBatchIds: 100, maxQueries: 13, maxFailures: 2 },
+    )
+    : null;
+  if (manufacturerFacts && ctx.cache.get(source.id) === source) {
+    const sourceController = new AbortController();
+    let sourceTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // The database request should observe AbortSignal, but the handler must
+      // remain bounded even if a transport implementation fails to do so.
+      // The hydrator checks the signal again after await before touching cache.
+      await Promise.race([
+        manufacturerFacts.hydrate(
+          ctx.cache,
+          [source.id],
+          sourceController.signal,
+        ),
+        new Promise<void>((resolve) => {
+          sourceTimer = setTimeout(() => {
+            sourceController.abort();
+            resolve();
+          }, 1_200);
+        }),
+      ]);
+    } finally {
+      if (sourceTimer !== undefined) clearTimeout(sourceTimer);
+    }
+  }
   const sourceCutout = extractReplacementDimensions(source).mounting_cutout_mm;
+  const sourceCutoutBounds = replacementDimensionBounds(sourceCutout);
+  const sourceEvidenceSnapshot = manufacturerFacts
+    ? structuralSourceEvidenceSnapshot(source)
+    : null;
   if (
     sourceCutout.status === "conflicting" ||
-    (customerCutoutMm !== null && sourceCutout.mm !== null &&
-      sourceCutout.mm !== customerCutoutMm)
+    (customerCutoutMm !== null && sourceCutout.status === "known" &&
+      (!sourceCutoutBounds ||
+        customerCutoutMm < sourceCutoutBounds.min_mm ||
+        customerCutoutMm > sourceCutoutBounds.max_mm))
   ) {
     send({
       type: "delta",
@@ -4415,7 +4490,43 @@ async function selectGuardedStructuralReplacement(
     stopWhen: (products) =>
       products.filter((candidate) => assess(candidate, false)).length >=
         requested.target,
+    ...(manufacturerFacts
+      ? {
+        search: async (
+          input: SearchCatalogInput,
+          deps: CatalogClientDeps,
+          cache: ProductCache,
+        ) => {
+          const result = await executeSearchCatalog(input, deps, cache);
+          if (result.ok) {
+            await manufacturerFacts.hydrate(
+              cache,
+              result.results.map(({ id }) => id),
+              deps.signal,
+            );
+          }
+          return result;
+        },
+      }
+      : {}),
   });
+  if (
+    manufacturerFacts &&
+    structuralSourceEvidenceSnapshot(ctx.cache.get(source.id)) !==
+      sourceEvidenceSnapshot
+  ) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Исходная карточка изменилась во время проверки каталога. Повторите запрос; неподтверждённые аналоги не показываю.",
+    });
+    steps.push({
+      step: "v3_replacement_source_changed_during_search",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id },
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
   const selected = retrieved.products.flatMap((candidate) => {
     const result = assess(candidate, true);
     return result ? [result] : [];
@@ -4430,6 +4541,7 @@ async function selectGuardedStructuralReplacement(
       termination: retrieved.termination,
       tool_pages: retrieved.pagesRequested,
       catalog_requests: retrieved.catalogRequestsMade,
+      manufacturer_facts: manufacturerFacts?.stats() ?? null,
       rejected: Object.fromEntries(rejected),
       excluded_cutout_examples: excludedCutoutExamples,
       catalog_exhaustiveness: "not_established",
@@ -23068,8 +23180,8 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
-    // This pinned Supabase client has no per-query abortSignal method. Bound
-    // every database HTTP request centrally, including cache and log writes.
+    // Bound every database HTTP request centrally, including cache and log
+    // writes. Guarded fact reads also use their per-query abortSignal.
     global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
   });
 

@@ -16,6 +16,11 @@ const originalGet = Deno.env.get;
 const originalServe = Deno.serve;
 let handler: ((request: Request) => Promise<Response>) | null = null;
 
+/** Opt in only before a dynamic handler import in an isolated offline test. */
+export function enableVerifiedFactsInOfflineFixture(): void {
+  values.VOLT220_VERIFIED_FACTS_PRODUCTION_ENABLED = "true";
+}
+
 Deno.env.get = (name: string) => values[name];
 (Deno as unknown as { serve: typeof Deno.serve }).serve = ((
   callback: (

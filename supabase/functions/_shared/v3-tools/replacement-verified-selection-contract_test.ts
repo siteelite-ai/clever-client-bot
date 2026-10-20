@@ -10,6 +10,7 @@ import {
 } from "./replacement-verified-selection-contract.ts";
 import type { ResultCardinalityContract } from "./result-cardinality.ts";
 import type { ProductFull } from "./types.ts";
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
 
 const traits = [
   ["kind", "Вид светильника", "даунлайт"],
@@ -82,6 +83,44 @@ const requested: ResultCardinalityContract = {
   mode: "alternatives",
   explicit: true,
 };
+
+function withApprovedRoundCutout(
+  candidate: ProductFull,
+  min: number,
+  max: number,
+): ProductFull {
+  const facts: VerifiedManufacturerFacts = {
+    binding: {
+      product_id: candidate.id,
+      article: candidate.article!,
+      catalog_url: candidate.url,
+    },
+    provenance: {
+      source_url: "https://manufacturer.example/specification.html",
+      document_version: "rev-1",
+      document_page: null,
+      verified_at: "2026-10-18T12:00:00.000Z",
+      valid_until: "2026-11-18T12:00:00.000Z",
+      approved_at: "2026-10-19T12:00:00.000Z",
+      approved_by: "reviewer-1",
+    },
+    technical: {
+      cutout: {
+        shape: "round",
+        kind: min === max ? "exact" : "range",
+        min_mm: min,
+        max_mm: max,
+      },
+      outer_diameter_mm: 113,
+      color_temperature_k: null,
+      integrated_led: null,
+      socket: null,
+      driver: null,
+      supply_v: null,
+    },
+  };
+  return { ...candidate, verified_manufacturer_facts: facts };
+}
 
 Deno.test("guarded contract is common verified source/candidate proof, not a generic-diameter promise", () => {
   const sourceProfile = profile();
@@ -236,6 +275,56 @@ Deno.test("source-labelled cut-out alone can support a derived contract", () => 
       profile: sourceProfile,
       candidates: [candidate],
       customerCutoutMm: 80,
+      budgetCap: null,
+      requested,
+    }),
+    null,
+  );
+});
+
+Deno.test("approved inclusive cut-out range supports the exact opening, not a different one", () => {
+  const sourceProfile = profile();
+  const ranged = withApprovedRoundCutout(product("ranged", { diameter: "12" }), 90, 110);
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [ranged],
+      customerCutoutMm: 90,
+      budgetCap: null,
+      requested,
+    })?.visible_requirements[0].value,
+    90,
+  );
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [ranged],
+      customerCutoutMm: 89,
+      budgetCap: null,
+      requested,
+    }),
+    null,
+  );
+});
+
+Deno.test("a customer opening outside an approved source range cannot enter the final contract", () => {
+  const sourceProfile = profile(withApprovedRoundCutout(product("source"), 90, 110));
+  const candidate = withApprovedRoundCutout(product("candidate"), 90, 110);
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [candidate],
+      customerCutoutMm: 90,
+      budgetCap: null,
+      requested,
+    })?.visible_requirements[0].value,
+    90,
+  );
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [candidate],
+      customerCutoutMm: 120,
       budgetCap: null,
       requested,
     }),
