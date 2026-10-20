@@ -1188,7 +1188,7 @@ function semanticStem(token: string): string {
 
 function foldVisualCodeToken(token: string): string {
   return token.replace(
-    /[\u0430\u0432\u0441\u0435\u043d\u043a\u043c\u043e\u0440\u0442\u0445\u0443]/gu,
+    /[\u0430\u0432\u0441\u0435\u043d\u043a\u043c\u043e\u0440\u0442\u0445\u0443\u0456]/gu,
     (letter) => ({
       "\u0430": "a",
       "\u0432": "b",
@@ -1202,8 +1202,140 @@ function foldVisualCodeToken(token: string): string {
       "\u0442": "t",
       "\u0445": "x",
       "\u0443": "y",
+      "\u0456": "i",
     }[letter] ?? letter),
   );
+}
+
+/**
+ * A short mixed letter/number token is a technical code, not a phrase. An
+ * exact code requested on a named facet must not match a compound rating
+ * such as IP44-IP20 or a longer code merely containing the requested one.
+ * Spaces between the letter and number portions and visual Cyrillic/Latin
+ * equivalents are harmless spelling differences; separators between two
+ * codes are not. Descriptive equality values keep their existing semantics.
+ */
+function atomicTechnicalCode(value: string): string | null {
+  const raw = foldVisualCodeToken(String(value ?? "").toLowerCase().trim());
+  if (
+    !/^(?:[\p{L}]{1,6}\s*\d{1,6}[\p{L}]{0,4}|\d{1,6}\s*[\p{L}]{1,6}\d{0,4})$/u
+      .test(raw)
+  ) return null;
+  return raw.replace(/\s+/gu, "");
+}
+
+function criterionAtomicTechnicalCode(criterion: Criterion): string | null {
+  if (criterion.op !== "eq" || typeof criterion.value !== "string") {
+    return null;
+  }
+  const code = atomicTechnicalCode(criterion.value);
+  // Number-first values with a declared unit (20W + "Вт", 1P + "полюс")
+  // have historically been numeric measurements. Keep that path intact;
+  // number-first technical identifiers without a unit remain exact codes.
+  return code && criterion.unit && /^\d/u.test(code) ? null : code;
+}
+
+function hasExplicitIpToken(label: string): boolean {
+  return /(?:^|[^\p{L}\d])IP(?=$|[^\p{L}\d])/iu.test(label);
+}
+
+/** A two-digit scalar is an IP code only when the owning facet explicitly
+ * names IP. Do not reinterpret bare numeric values on poles, wattage, counts,
+ * or a generic protection axis as ingress-protection ratings. */
+function criterionBareIpCode(criterion: Criterion): string | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !hasExplicitIpToken(criterion.key)
+  ) return null;
+  const value = criterion.value.trim();
+  return /^[0-6][0-9]$/u.test(value) ? value : null;
+}
+
+/** Catalogs may render the same IP facet as `44` or `IP44`. Both forms are
+ * exact; composites and unrelated numeric evidence are not. A bare value
+ * needs the trait label's explicit IP token, while a prefixed value carries
+ * its own code type. The caller has already matched the named trait. */
+function namedFacetMatchesBareIpCode(
+  trait: { label: string; value: string },
+  digits: string,
+): boolean {
+  const actual = trait.value.trim();
+  if (actual === digits) {
+    return hasExplicitIpToken(trait.label);
+  }
+  const prefixed = /^IP\s*([0-6][0-9])$/iu.exec(actual);
+  return prefixed?.[1] === digits;
+}
+
+function atomicCodeTokens(value: string): RegExpMatchArray[] {
+  return [...String(value ?? "").toLowerCase().matchAll(
+    /(?<![\p{L}\p{N}])(?:[\p{L}]{1,6}\s*\d{1,6}[\p{L}]{0,4}|\d{1,6}\s*[\p{L}]{1,6}\d{0,4})(?![\p{L}\p{N}])/gu,
+  )];
+}
+
+function codeHasCompoundConnector(
+  source: string,
+  match: RegExpMatchArray,
+): boolean {
+  const start = match.index ?? 0;
+  const end = start + match[0].length;
+  const before = source.slice(0, start).trimEnd().slice(-1);
+  const after = source.slice(end).trimStart().slice(0, 1);
+  return /[-/\\+*×]/u.test(before) || /[-/\\+*×]/u.test(after);
+}
+
+/** A named scalar may include a prose descriptor, but never a second code or
+ * another number. An explicit one-code phrase is evidence; a compound rating
+ * remains ambiguous and cannot satisfy an exact customer value. */
+function namedFacetMatchesAtomicCode(
+  product: ProductRef,
+  trait: { label: string; value: string },
+  code: string,
+): boolean {
+  if (atomicTechnicalCode(trait.value) === code) return true;
+  const actual = String(trait.value).toLowerCase();
+  const tokens = atomicCodeTokens(actual);
+  if (tokens.length === 1 && atomicTechnicalCode(tokens[0][0]) === code) {
+    const token = tokens[0];
+    const start = token.index ?? 0;
+    const rest = actual.slice(0, start) + actual.slice(start + token[0].length);
+    if (!codeHasCompoundConnector(actual, token) && !/\d/u.test(rest)) {
+      return true;
+    }
+  }
+
+  // Some live facets encode the alphabetic code prefix in their own caption
+  // and store only the digits as values (e.g. caption "..., IP", value "65").
+  // Reconstruct only from the catalog label, never from an assumed criterion
+  // unit or a bare number in an unrelated facet.
+  const parts = code.match(/^([\p{L}]{1,6})(\d{1,6})$/u);
+  if (!parts || actual.trim() !== parts[2]) return false;
+  const labels = [trait.label];
+  for (const line of product.short_traits ?? []) {
+    const separator = String(line).indexOf(":");
+    if (separator <= 0) continue;
+    if (String(line).slice(separator + 1).trim() !== trait.value) continue;
+    labels.push(String(line).slice(0, separator).trim());
+  }
+  return labels.some((label) =>
+    normalizeKey(label).split(/\s+/u).some((token) =>
+      foldVisualCodeToken(token) === parts[1]
+    )
+  );
+}
+
+/** Raw evidence is essential here: normalizeKey erases the slash or dash in
+ * IP44-IP20 and would turn one compound rating into two false exact proofs. */
+function rawTextProvesAtomicCode(code: string, evidence: string): boolean {
+  const raw = String(evidence ?? "").toLowerCase();
+  for (const token of atomicCodeTokens(raw)) {
+    if (atomicTechnicalCode(token[0]) !== code) continue;
+    // A connector adjacent to the candidate makes the exact property
+    // ambiguous without a named facet, even with whitespace around it.
+    if (codeHasCompoundConnector(raw, token)) continue;
+    return true;
+  }
+  return false;
 }
 
 function stringEvidenceMatches(wanted: string, evidence: string): boolean {
@@ -1371,12 +1503,32 @@ export function checkCriterion(
   }
   const expected = expectedLabel(c);
   const trait = findTrait(product, c.key);
+  const bareIpCode = criterionBareIpCode(c);
   if (!trait) {
+    // A two-digit IP enum without its named facet is not proved by a random
+    // model number, wattage, or IP-like token in the title.
+    if (bareIpCode) {
+      return { key: c.key, verdict: "unknown", expected, actual: null };
+    }
     // Часть доказательных признаков живёт только в названии/описании товара,
     // а не в отдельном фасете. Строковое требование можно подтвердить по всему
     // каталожному evidence, но отсутствие слова остаётся unknown, а не fail.
     if (c.op === "eq" && typeof c.value === "string") {
       const want = normalizeKey(c.value);
+      const technicalCode = criterionAtomicTechnicalCode(c);
+      if (technicalCode) {
+        const rawEvidence = [
+          product.pagetitle,
+          product.article ?? "",
+          ...(product.short_traits ?? []),
+          product.description_excerpt ?? "",
+        ];
+        return rawEvidence.some((part) =>
+            rawTextProvesAtomicCode(technicalCode, part)
+          )
+          ? { key: c.key, verdict: "pass", expected, actual: c.value }
+          : { key: c.key, verdict: "unknown", expected, actual: null };
+      }
       const evidence = productEvidenceText(product);
       // Boolean facets are often sparse in the source catalog even when the
       // feature is explicitly described in the product title or description.
@@ -1412,6 +1564,33 @@ export function checkCriterion(
 
   if (contradictsAffirmativeSensorEvidence(product, c)) {
     return { key: c.key, verdict: "fail", expected, actual };
+  }
+
+  if (bareIpCode) {
+    return {
+      key: c.key,
+      verdict: namedFacetMatchesBareIpCode(trait, bareIpCode)
+        ? "pass"
+        : "fail",
+      expected,
+      actual,
+    };
+  }
+
+  // Exact technical codes must be checked before numeric parsing: a stray
+  // unit on `IP44` must not reduce the obligation to the number 44.
+  if (c.op === "eq" && typeof c.value === "string") {
+    const technicalCode = criterionAtomicTechnicalCode(c);
+    if (technicalCode) {
+      return {
+        key: c.key,
+        verdict: namedFacetMatchesAtomicCode(product, trait, technicalCode)
+          ? "pass"
+          : "fail",
+        expected,
+        actual,
+      };
+    }
   }
 
   // Catalog facet values are strings even when they represent measurements.

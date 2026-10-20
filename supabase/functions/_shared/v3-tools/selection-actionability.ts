@@ -1526,7 +1526,17 @@ export function buildDerivedSelectionPublicExplanation(input: {
     ? `товары в разделе «${productClass}»`
     : "подходящие товары";
   const seen = new Set<string>();
-  const clauses: string[] = [];
+  const clauses: Array<
+    { kind: "single"; text: string } | {
+      kind: "alternatives";
+      key: string;
+      values: string[];
+    }
+  > = [];
+  const equalityGroups = new Map<
+    string,
+    Extract<typeof clauses[number], { kind: "alternatives" }>
+  >();
   const pair = input.pairedFit;
   const pairValue = pair && Number.isFinite(pair.value) && pair.value > 0
     ? visibleFacetText(String(pair.value))
@@ -1546,15 +1556,19 @@ export function buildDerivedSelectionPublicExplanation(input: {
     [beforeCaption, afterCaption].map(normalizeLiteralEvidence).filter(Boolean),
   );
   for (const criterion of input.frozenCriteria) {
-    if ((criterion.level ?? "A") !== "A" ||
+    if (
+      (criterion.level ?? "A") !== "A" ||
       !["user_explicit", "derived_required", "catalog_verified"].includes(
         criterion.evidence ?? "",
-      )) continue;
+      )
+    ) continue;
     const key = stripDerivedSchemaIds(visibleFacetText(criterion.key))
       .slice(0, 80);
     const unit = stripDerivedSchemaIds(visibleFacetText(criterion.unit ?? ""))
       .slice(0, 16);
-    if (!key || pairValue && pairedFacetNames.has(normalizeLiteralEvidence(key))) {
+    if (
+      !key || pairValue && pairedFacetNames.has(normalizeLiteralEvidence(key))
+    ) {
       continue;
     }
     const values = Array.isArray(criterion.value)
@@ -1572,15 +1586,44 @@ export function buildDerivedSelectionPublicExplanation(input: {
       ? `${withUnit(values[0])}–${withUnit(values[1])}`
       : "";
     if (!value) continue;
-    const identity = `${normalizeLiteralEvidence(key)}\u0000${criterion.op}\u0000${normalizeLiteralEvidence(value)}`;
+    const identity = `${
+      normalizeLiteralEvidence(key)
+    }\u0000${criterion.op}\u0000${normalizeLiteralEvidence(value)}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    clauses.push(`«${key}: ${value}»`);
+    if (criterion.op === "eq") {
+      // Several allowed values of one live facet form an OR. Preserve the
+      // first occurrence's position, and never describe them as independent
+      // mandatory clauses (which would incorrectly read as an AND).
+      const groupIdentity = `${normalizeLiteralEvidence(key)}\u0000${
+        normalizeLiteralEvidence(unit)
+      }`;
+      let group = equalityGroups.get(groupIdentity);
+      if (!group) {
+        group = { kind: "alternatives", key, values: [] };
+        equalityGroups.set(groupIdentity, group);
+        clauses.push(group);
+      }
+      group.values.push(value);
+    } else {
+      clauses.push({ kind: "single", text: `«${key}: ${value}»` });
+    }
   }
+  const renderedClauses = clauses.map((clause) => {
+    if (clause.kind === "single") return clause.text;
+    if (clause.values.length === 1) {
+      return `«${clause.key}: ${clause.values[0]}»`;
+    }
+    const last = clause.values[clause.values.length - 1];
+    const alternatives = clause.values.length === 2
+      ? `${clause.values[0]} или ${last}`
+      : `${clause.values.slice(0, -1).join(", ")} или ${last}`;
+    return `«${clause.key}: одно из значений ${alternatives}»`;
+  });
   const criteria = clauses.length > 0
-    ? ` По обязательным условиям проверяю ${clauses.slice(0, 6).join("; ")}${
-      clauses.length > 6 ? ` и ещё ${clauses.length - 6}` : ""
-    }.`
+    ? ` По обязательным условиям проверяю ${
+      renderedClauses.slice(0, 6).join("; ")
+    }${clauses.length > 6 ? ` и ещё ${clauses.length - 6}` : ""}.`
     : " Сверяю заявленные условия с характеристиками каталога.";
   const pairedFit = pairValue && pairUnit && beforeCaption && afterCaption
     ? ` Для размера ${pairValue} ${pairUnit} проверяю оба условия совместимости: «${beforeCaption} > ${pairValue} ${pairUnit}» и «${afterCaption} < ${pairValue} ${pairUnit}».`

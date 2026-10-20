@@ -92,6 +92,112 @@ Deno.test("derived selection keeps malformed model planning private while explai
   assertEquals(/(?:наш[её]л|подтвержден[а-я]*\s+товар)/iu.test(publicExplanation), false);
 });
 
+Deno.test("public explanation renders same-facet exact alternatives as one OR clause", () => {
+  const publicExplanation = buildDerivedSelectionPublicExplanation({
+    productClass: "Прожекторы",
+    frozenCriteria: [
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP44",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Бренд",
+        op: "eq",
+        value: "IEK",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "степень защиты",
+        op: "eq",
+        value: "IP54",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP65",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP65",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Датчик движения",
+        op: "eq",
+        value: "Да",
+        level: "A",
+        evidence: "model_assumption",
+      },
+    ],
+  });
+  assertEquals(
+    publicExplanation.includes(
+      "«Степень защиты: одно из значений IP44, IP54 или IP65»",
+    ),
+    true,
+  );
+  assertEquals(publicExplanation.includes("«Бренд: IEK»"), true);
+  assertEquals(publicExplanation.includes("; «Степень защиты:"), false);
+  assertEquals(publicExplanation.includes("Датчик движения"), false);
+  assertEquals((publicExplanation.match(/Степень защиты:/gu) ?? []).length, 1);
+});
+
+Deno.test("public explanation preserves singleton wording and six-clause cap", () => {
+  const singleton = buildDerivedSelectionPublicExplanation({
+    frozenCriteria: [
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP65",
+        level: "A",
+        evidence: "user_explicit",
+      },
+    ],
+  });
+  assertEquals(singleton.includes("«Степень защиты: IP65»"), true);
+  assertEquals(singleton.includes("одно из значений"), false);
+
+  const capped = buildDerivedSelectionPublicExplanation({
+    frozenCriteria: [
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP44",
+        level: "A",
+        evidence: "derived_required",
+      },
+      {
+        key: "Степень защиты",
+        op: "eq",
+        value: "IP65",
+        level: "A",
+        evidence: "derived_required",
+      },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        key: `Параметр ${index + 1}`,
+        op: "eq" as const,
+        value: `Значение ${index + 1}`,
+        level: "A" as const,
+        evidence: "user_explicit" as const,
+      })),
+    ],
+  });
+  assertEquals(capped.includes("одно из значений IP44 или IP65"), true);
+  assertEquals(capped.includes("Параметр 5: Значение 5"), true);
+  assertEquals(capped.includes("Параметр 6: Значение 6"), false);
+  assertEquals(capped.includes("и ещё 1"), true);
+});
+
 Deno.test("later model text cannot replay a derived scratchpad but ordinary text survives", () => {
   const privateReasoning =
     "Клиент запросил подбор двойных розеток Gallant. Сначала проверю фасеты, затем поиск по каталогу.";
