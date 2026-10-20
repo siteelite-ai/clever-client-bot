@@ -27,6 +27,7 @@ import {
 } from "../_shared/v3-tools/schemas.ts";
 import {
   executeSearchCatalog,
+  expandOptionAlternatives,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
 import {
@@ -190,6 +191,10 @@ import {
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
 } from "../_shared/v3-tools/selection-actionability.ts";
+import {
+  deriveEnvironmentalProtectionRange,
+  type EnvironmentalProtectionRange,
+} from "../_shared/v3-tools/environmental-protection-range.ts";
 import {
   advanceSelectionTarget,
   bootstrapSelectionTargetFromDiscovery,
@@ -8734,6 +8739,7 @@ async function runExpertLoop(
     | null = null;
   let derivedStructuredSearchPairedCompatibility = false;
   let derivedStructuredSearchGuidedByVisibleReasoning = false;
+  let certifiedEnvironmentalRange: EnvironmentalProtectionRange | null = null;
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
     | null = null;
@@ -10944,6 +10950,50 @@ async function runExpertLoop(
               meta: { keys: derivedExactImportance.demoted },
             });
           }
+          // An application environment can imply a *range* of acceptable
+          // live protection codes, never one model-selected exact code. This
+          // contract is independent of the model's required_facet_values and
+          // applies equally to every catalog category with a live IP axis.
+          const environmentalRange = deriveEnvironmentalProtectionRange(
+            userMessage,
+            lastDiscover.facets ?? [],
+          );
+          certifiedEnvironmentalRange =
+            environmentalRange.status === "enumerated"
+              ? environmentalRange
+              : null;
+          if (environmentalRange.status === "unresolved") {
+            steps.push({
+              step: "v3_environmental_protection_range_unresolved",
+              ms: now(),
+              meta: { reason: environmentalRange.reason },
+            });
+            return stopForUnverifiedProtection();
+          }
+          const environmentalRangeCriteria: Criterion[] =
+            environmentalRange.status === "enumerated"
+              ? environmentalRange.acceptedValues.map((value) => ({
+                key: environmentalRange.facetCaption ||
+                  environmentalRange.facetKey || "",
+                op: "eq" as const,
+                // Freeze a code-shaped product obligation, not a bare numeric
+                // enum that could match unrelated watts or dimensions. The
+                // projector maps it back to the exact live facet value.
+                value: /^IP/iu.test(value) ? value : `IP${value}`,
+                level: "A" as const,
+                evidence: "derived_required" as const,
+              }))
+              : [];
+          if (environmentalRange.status === "enumerated") {
+            steps.push({
+              step: "v3_environmental_protection_range_enumerated",
+              ms: now(),
+              meta: {
+                facet: environmentalRange.facetKey,
+                accepted_values: environmentalRange.acceptedValues,
+              },
+            });
+          }
           // Schema-ID classifications have already been validated against the
           // live facet and rendered back into the visible declaration. Do not
           // send them through prose importance parsing: a live compound value
@@ -10960,6 +11010,7 @@ async function runExpertLoop(
                 recommendedMeasuredProjection.criterion
               ? [recommendedMeasuredProjection.criterion]
               : []),
+            ...environmentalRangeCriteria,
           ]);
           const scopedDerivedMandatory = filterPerProductMeasuredCriteria(
             proposedDerivedMandatoryCriteria,
@@ -10988,6 +11039,17 @@ async function runExpertLoop(
                     key,
                     value: String(value ?? ""),
                   }),
+                ).concat(
+                  environmentalRange.status === "enumerated"
+                    ? environmentalRange.acceptedValues.map((value) => ({
+                      key: environmentalRange.facetCaption ||
+                        environmentalRange.facetKey || "",
+                      // The exposure validator parses a full IP code. Some
+                      // catalog IP facets expose bare two-digit values; only
+                      // the already-vetted live range may be normalized here.
+                      value: /^IP/iu.test(value) ? value : `IP${value}`,
+                    }))
+                    : [],
                 ),
               },
             )
@@ -11005,6 +11067,21 @@ async function runExpertLoop(
             derivedMandatoryCriteria,
             lastDiscover.facets ?? [],
           );
+          // The generic exact matcher is intentionally permissive for many
+          // human labels. An environmental OR is stricter: intersect with the
+          // complete atomic values independently enumerated from the live IP
+          // facet, and fail closed if any member disappeared in projection.
+          if (environmentalRange.status === "enumerated") {
+            const key = environmentalRange.facetKey!;
+            const accepted = new Set(environmentalRange.acceptedValues);
+            const safe = (derivedFacetProjection.options[key] ?? []).filter(
+              (value) => accepted.has(value),
+            );
+            if (new Set(safe).size !== accepted.size) {
+              return stopForUnverifiedProtection();
+            }
+            derivedFacetProjection.options[key] = safe;
+          }
           const declaredClassificationProjection = projectCriteriaFacetOptions(
             scopeCardCriteria(
               declaredClassificationCriteria,
@@ -11052,7 +11129,21 @@ async function runExpertLoop(
             reconcileDerivedRequiredFacetSummary(
               { text: visibleDeclarationText,
                 requiredFacetValues: declaration.requiredFacetValues },
-              reconciledCriteria,
+              // A value present as one member of a derived OR does not
+              // retroactively validate the model's earlier exact claim.
+              reconciledCriteria.filter((criterion) =>
+                !modelAssumedExactFacetValues.some((assumed) =>
+                  normalizeForMatch(assumed.key) ===
+                    normalizeForMatch(criterion.key) &&
+                  normalizeForMatch(assumed.value) ===
+                    normalizeForMatch(String(criterion.value))
+                ) || customerGroundedExactFacetCriteria.some((grounded) =>
+                  normalizeForMatch(grounded.key) ===
+                    normalizeForMatch(criterion.key) &&
+                  normalizeForMatch(String(grounded.value)) ===
+                    normalizeForMatch(String(criterion.value))
+                )
+              ),
             );
           if (validatedVisibleSummary.demoted > 0) {
             visibleDeclarationText = validatedVisibleSummary.text;
@@ -11125,6 +11216,17 @@ async function runExpertLoop(
             lastDiscover.facets ?? [],
             visibleDeclarationText,
           );
+          if (environmentalRange.status === "enumerated") {
+            const key = environmentalRange.facetKey!;
+            const accepted = new Set(environmentalRange.acceptedValues);
+            const safe = (directSearchOptions[key] ?? []).filter((value) =>
+              accepted.has(value)
+            );
+            if (new Set(safe).size !== accepted.size) {
+              return stopForUnverifiedProtection();
+            }
+            directSearchOptions[key] = safe;
+          }
           const recommendedCompoundMarking =
             extractExplicitCompoundMarking(userMessage) === null
               ? extractRecommendedCompoundMarking(visibleDeclarationText)
@@ -13077,7 +13179,8 @@ async function runExpertLoop(
           }
           // Search arguments are a projection of the frozen plan, never a new
           // independently authored contract. A later model/recovery call may
-          // add filters, but cannot omit an earlier mandatory live facet.
+          // add filters on independent axes, but cannot omit or narrow an
+          // earlier mandatory OR family on the same live facet.
           const frozenPlan = currentSelectionCriteriaPlan();
           if (frozenPlan && !compatibilityShapedSearch) {
             const planProjection = projectCriteriaFacetOptions(
@@ -13101,10 +13204,10 @@ async function runExpertLoop(
               planProjection.options,
               scopedCurrentOptions,
             );
-            const enforcedOptions =
-              mergedPlanOptions.conflicting_keys.length > 0
-                ? planProjection.options
-                : mergedPlanOptions.options;
+            const enforcedOptions = overlayMandatoryFacetOptions(
+              planProjection.options,
+              scopedCurrentOptions,
+            );
             const { options: _unscopedOptions, ...scopedSearchArgs } =
               tc.args as Record<string, unknown>;
             tc.args = {
@@ -13127,6 +13230,8 @@ async function runExpertLoop(
                 mandatory_count: frozenPlan.mandatory_criteria.length,
                 option_keys: Object.keys(enforcedOptions),
                 conflicting_keys: mergedPlanOptions.conflicting_keys,
+                same_axis_advice_ignored: Object.keys(planProjection.options)
+                  .filter((key) => key in scopedCurrentOptions),
                 unmatched_keys: planProjection.unmatched_keys,
               },
             });
@@ -15997,6 +16102,104 @@ async function runExpertLoop(
         }
 
         const runArgs: Record<string, unknown> = tc.args;
+        // A frozen OR must survive every later guard and search rewrite,
+        // including compatibility-shaped and named-series paths that do not
+        // use the ordinary frozen-plan overlay. Recheck the live facet and
+        // render plan immediately before the catalog call; only the complete
+        // independently certified range may be sent to the API.
+        if (
+          tc.name === "search_catalog" && certifiedEnvironmentalRange &&
+          gateShortCircuit === null && lastDiscover
+        ) {
+          const liveRange = deriveEnvironmentalProtectionRange(
+            userMessage,
+            lastDiscover.facets ?? [],
+          );
+          const certified = certifiedEnvironmentalRange;
+          const expected = new Set(certified.acceptedValues);
+          const frozenProtection = currentSelectionCriteriaPlan()
+            ? projectCriteriaFacetOptions(
+              [...currentSelectionCriteriaPlan()!.mandatory_criteria],
+              lastDiscover.facets ?? [],
+            ).options[certified.facetKey ?? ""] ?? []
+            : [];
+          const sameValues = (values: string[]) =>
+            new Set(values).size === expected.size &&
+            values.every((value) => expected.has(value));
+          if (
+            liveRange.status !== "enumerated" ||
+            liveRange.facetKey !== certified.facetKey ||
+            !sameValues(liveRange.acceptedValues) ||
+            !sameValues(frozenProtection) ||
+            (runArgs.mode !== "by_filter" && runArgs.mode !== "by_query")
+          ) {
+            gateShortCircuit = {
+              tool: "search_catalog",
+              ok: false,
+              error_code: "bad_input",
+              message: "Certified environmental protection range changed before search",
+            };
+            steps.push({
+              step: "v3_environmental_protection_range_search_rejected",
+              ms: now(),
+              meta: {
+                live_status: liveRange.status,
+                facet: certified.facetKey,
+                expected: certified.acceptedValues,
+                frozen: frozenProtection,
+              },
+            });
+          } else {
+            const currentOptions = runArgs.options &&
+                typeof runArgs.options === "object"
+              ? runArgs.options as Record<string, string[]>
+              : {};
+            runArgs.options = overlayMandatoryFacetOptions(
+              { [certified.facetKey!]: certified.acceptedValues },
+              currentOptions,
+            );
+            // The catalog client falls back to an unproven aggregate request
+            // when OR fan-out exceeds its bounded exact-branch capacity.
+            // That cannot certify a complete mandatory range.
+            const exactBranches = expandOptionAlternatives(
+              runArgs as unknown as SearchCatalogInput,
+            );
+            const hasAlternativeOptions = Object.values(
+              runArgs.options as Record<string, string[]>,
+            ).some((values) => values.length > 1);
+            if (
+              hasAlternativeOptions &&
+              (runArgs.mode !== "by_filter" || exactBranches.length === 1)
+            ) {
+              gateShortCircuit = {
+                tool: "search_catalog",
+                ok: false,
+                error_code: "bad_input",
+                message: "Certified environmental protection range cannot be executed as exact search branches",
+              };
+              steps.push({
+                step: "v3_environmental_protection_range_capacity_rejected",
+                ms: now(),
+                meta: {
+                  facet: certified.facetKey,
+                  accepted_values: certified.acceptedValues.length,
+                  option_axes: Object.keys(runArgs.options as object).length,
+                  mode: runArgs.mode,
+                },
+              });
+            } else {
+              steps.push({
+                step: "v3_environmental_protection_range_search_enforced",
+                ms: now(),
+                meta: {
+                  facet: certified.facetKey,
+                  accepted_values: certified.acceptedValues,
+                  exact_branches: exactBranches.length,
+                },
+              });
+            }
+          }
+        }
         let selectedSearchRecoveryAttempt:
           | SelectionSearchRecoveryAttempt
           | null = null;
