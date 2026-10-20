@@ -4,7 +4,8 @@ import {
   normalizeKey,
 } from "./criteria-gate.ts";
 import { filterProductsByMandatoryFacetTitleContradictions } from "./selection-contract.ts";
-import type { ProductFull } from "./types.ts";
+import { hasCatalogFacetFilterProof } from "./catalog-facet-proof-ledger.ts";
+import type { ProductCache, ProductFull } from "./types.ts";
 
 interface LiveFacet {
   key: string;
@@ -20,6 +21,7 @@ export interface FinalCardFacetRejection {
     | "card_trait"
     | "catalog_facet"
     | "other_card_evidence"
+    | "missing_proof"
     | "visible_title";
 }
 
@@ -27,8 +29,9 @@ export interface FinalCardFacetRejection {
  * A recovery may introduce a new card after the earlier criteria gate ran.
  * Recheck every frozen mandatory criterion against independent evidence on
  * that final card. An explicit contradiction wins over search provenance;
- * missing or incomparable card data does not erase an earlier catalog-filter
- * proof. In particular, a missing short trait is not evidence of a mismatch.
+ * missing or incomparable card data needs a per-SKU exact catalog-filter
+ * receipt. In particular, a missing short trait is not evidence of a mismatch
+ * but cannot silently confer eligibility on an unrelated recovery result.
  */
 export function filterFinalCardsByMandatoryFacetEvidence<
   T extends ProductFull,
@@ -36,6 +39,7 @@ export function filterFinalCardsByMandatoryFacetEvidence<
   products: T[],
   frozenCriteria: readonly Criterion[],
   liveFacets: LiveFacet[] = [],
+  proofCache?: ProductCache,
 ): { products: T[]; rejected: FinalCardFacetRejection[] } {
   const mandatory = (Array.isArray(frozenCriteria) ? frozenCriteria : [])
     .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A");
@@ -83,21 +87,37 @@ export function filterFinalCardsByMandatoryFacetEvidence<
         { source: "catalog_facet" as const, values: facetValues },
         { source: "card_trait" as const, values: traitValues },
       ].filter(({ values }) => values.length > 0);
+      const independentChecks = alternatives.map((criterion) =>
+        checkCriterion({ ...product, short_traits: [] }, criterion)
+      );
+      if (independentChecks.every((check) => check.verdict === "fail")) {
+        rejected.push({
+          id: product.id,
+          key,
+          actual: independentChecks.map((check) => check.actual).filter(Boolean)
+            .join(" | "),
+          source: "other_card_evidence",
+        });
+        return false;
+      }
+      const independentPass = independentChecks.some((check) =>
+        check.verdict === "pass"
+      );
+      let explicitFacetPass = false;
       if (sources.length === 0) {
-        // Retain a prior search proof when the card has no comparable facet.
-        // The shared checker can still detect an explicit denial in a title,
-        // description or first-class field such as price.
-        const checks = alternatives.map((criterion) =>
-          checkCriterion({ ...product, short_traits: [] }, criterion)
-        );
-        if (checks.every((check) => check.verdict === "fail")) {
+        if (
+          proofCache && !independentPass &&
+          !hasCatalogFacetFilterProof(
+            proofCache,
+            product,
+            alternatives,
+          )
+        ) {
           rejected.push({
             id: product.id,
             key,
-            actual: checks.map((check) => check.actual).filter(Boolean).join(
-              " | ",
-            ),
-            source: "other_card_evidence",
+            actual: "",
+            source: "missing_proof",
           });
           return false;
         }
@@ -123,6 +143,25 @@ export function filterFinalCardsByMandatoryFacetEvidence<
           });
           return false;
         }
+        if (checks.some((check) => check.verdict === "pass")) {
+          explicitFacetPass = true;
+        }
+      }
+      if (
+        proofCache && !independentPass && !explicitFacetPass &&
+        !hasCatalogFacetFilterProof(
+          proofCache,
+          product,
+          alternatives,
+        )
+      ) {
+        rejected.push({
+          id: product.id,
+          key,
+          actual: "",
+          source: "missing_proof",
+        });
+        return false;
       }
     }
     return true;
