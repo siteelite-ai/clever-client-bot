@@ -73,6 +73,64 @@ Deno.test("named facet requires the whole atomic technical code, even with a uni
   );
 });
 
+Deno.test("one technical code plus prose remains exact, but a second code does not", () => {
+  assertEquals(
+    checkCriterion(
+      product("description", "IP44 для наружной установки"),
+      protection,
+    )
+      .verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion(
+      product("socket", "E27 светодиодная"),
+      { key: "Степень защиты", op: "eq", value: "E27", level: "A" },
+    ).verdict,
+    "pass",
+  );
+  for (
+    const actual of [
+      "IP44-IP20",
+      "IP44 / IP20",
+      "IP44 снаружи, IP20 внутри",
+      "IP44 для улицы, класс 20",
+    ]
+  ) {
+    assertEquals(
+      checkCriterion(product(actual, actual), protection).verdict,
+      "fail",
+    );
+  }
+});
+
+Deno.test("numeric scalar is a code only when the live facet label owns its prefix", () => {
+  const requested: Criterion = { ...protection, value: "IP65" };
+  const labeled = product("labeled", null);
+  labeled.short_traits = ["Степень защиты, IP: 65"];
+  const bare = product("bare", "65");
+  assertEquals(checkCriterion(labeled, requested).verdict, "pass");
+  assertEquals(checkCriterion(bare, requested).verdict, "fail");
+
+  const numericFacet: CriteriaFacet[] = [{
+    key: "protection_ip",
+    caption: "Степень защиты",
+    unit: null,
+    values: [{ value: "44" }, { value: "65" }, { value: "44-20" }],
+  }];
+  assertEquals(projectCriteriaFacetOptions([requested], numericFacet).options, {
+    protection_ip: ["65"],
+  });
+  assertEquals(
+    criteriaProvenByExecutedFacetOptions(
+      [requested],
+      { protection_ip: ["65"] },
+      numericFacet,
+    ),
+    [requested],
+  );
+});
+
 Deno.test("atomic title fallback proves only a standalone code", () => {
   assertEquals(
     checkCriterion(product("title", null, "Прибор с корпусом IP44"), protection)

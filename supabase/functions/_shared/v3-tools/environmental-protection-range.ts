@@ -56,6 +56,15 @@ function result(
   };
 }
 
+/** Some live IP facets store only the two digits (for example, `44`). Such
+ * values are IP ratings only when the facet explicitly says `IP`; a bare
+ * number on a more general protection axis must not be reinterpreted. */
+function hasExplicitIpFacetLabel(facet: DerivedSelectionFacet): boolean {
+  return /(?:^|[^\p{L}\d])IP(?=$|[^\p{L}\d])/iu.test(
+    `${facet.caption ?? ""} ${facet.key ?? ""}`,
+  );
+}
+
 /**
  * Projects an environmental exposure obligation to the complete OR-family of
  * eligible values on one uniquely identified live IP facet. The existing
@@ -116,6 +125,7 @@ export function deriveEnvironmentalProtectionRange(
     return result("unresolved", "facet_missing_key", facet);
   }
   const declarationKey = facet.caption?.trim() || facet.key.trim();
+  const bareDigitsAreIp = hasExplicitIpFacetLabel(facet);
   const acceptedValues: string[] = [];
   const seen = new Set<string>();
   for (const item of facet.values ?? []) {
@@ -123,12 +133,17 @@ export function deriveEnvironmentalProtectionRange(
     // The existing floor checker accepts a parsed leading code so prose
     // declarations can be validated. An exact live enum used for search must
     // instead be a single, complete code: no unknown strings or composites.
-    if (!/^IP\s*[0-6X][0-9X]$/iu.test(value) || seen.has(value)) continue;
+    const prefixedCode = /^IP\s*[0-6X][0-9X]$/iu.test(value);
+    const bareCode = bareDigitsAreIp && /^[0-6][0-9]$/u.test(value);
+    if ((!prefixedCode && !bareCode) || seen.has(value)) continue;
+    // Validate against the existing hazard policy using its IP notation, but
+    // keep the exact live enum for downstream search and product proof.
+    const protectionCode = bareCode ? `IP${value}` : value;
     if (
       hasUnresolvedEnvironmentalProtectionObligation(
         customerEvidence,
         [facet],
-        { requiredFacetValues: [{ key: declarationKey, value }] },
+        { requiredFacetValues: [{ key: declarationKey, value: protectionCode }] },
       )
     ) continue;
     seen.add(value);

@@ -1235,22 +1235,72 @@ function criterionAtomicTechnicalCode(criterion: Criterion): string | null {
   return code && criterion.unit && /^\d/u.test(code) ? null : code;
 }
 
+function atomicCodeTokens(value: string): RegExpMatchArray[] {
+  return [...String(value ?? "").toLowerCase().matchAll(
+    /(?<![\p{L}\p{N}])(?:[\p{L}]{1,6}\s*\d{1,6}[\p{L}]{0,4}|\d{1,6}\s*[\p{L}]{1,6}\d{0,4})(?![\p{L}\p{N}])/gu,
+  )];
+}
+
+function codeHasCompoundConnector(
+  source: string,
+  match: RegExpMatchArray,
+): boolean {
+  const start = match.index ?? 0;
+  const end = start + match[0].length;
+  const before = source.slice(0, start).trimEnd().slice(-1);
+  const after = source.slice(end).trimStart().slice(0, 1);
+  return /[-/\\+*×]/u.test(before) || /[-/\\+*×]/u.test(after);
+}
+
+/** A named scalar may include a prose descriptor, but never a second code or
+ * another number. An explicit one-code phrase is evidence; a compound rating
+ * remains ambiguous and cannot satisfy an exact customer value. */
+function namedFacetMatchesAtomicCode(
+  product: ProductRef,
+  trait: { label: string; value: string },
+  code: string,
+): boolean {
+  if (atomicTechnicalCode(trait.value) === code) return true;
+  const actual = String(trait.value).toLowerCase();
+  const tokens = atomicCodeTokens(actual);
+  if (tokens.length === 1 && atomicTechnicalCode(tokens[0][0]) === code) {
+    const token = tokens[0];
+    const start = token.index ?? 0;
+    const rest = actual.slice(0, start) + actual.slice(start + token[0].length);
+    if (!codeHasCompoundConnector(actual, token) && !/\d/u.test(rest)) {
+      return true;
+    }
+  }
+
+  // Some live facets encode the alphabetic code prefix in their own caption
+  // and store only the digits as values (e.g. caption "..., IP", value "65").
+  // Reconstruct only from the catalog label, never from an assumed criterion
+  // unit or a bare number in an unrelated facet.
+  const parts = code.match(/^([\p{L}]{1,6})(\d{1,6})$/u);
+  if (!parts || actual.trim() !== parts[2]) return false;
+  const labels = [trait.label];
+  for (const line of product.short_traits ?? []) {
+    const separator = String(line).indexOf(":");
+    if (separator <= 0) continue;
+    if (String(line).slice(separator + 1).trim() !== trait.value) continue;
+    labels.push(String(line).slice(0, separator).trim());
+  }
+  return labels.some((label) =>
+    normalizeKey(label).split(/\s+/u).some((token) =>
+      foldVisualCodeToken(token) === parts[1]
+    )
+  );
+}
+
 /** Raw evidence is essential here: normalizeKey erases the slash or dash in
  * IP44-IP20 and would turn one compound rating into two false exact proofs. */
 function rawTextProvesAtomicCode(code: string, evidence: string): boolean {
   const raw = String(evidence ?? "").toLowerCase();
-  const tokens = raw.matchAll(
-    /(?<![\p{L}\p{N}])(?:[\p{L}]{1,6}\s*\d{1,6}[\p{L}]{0,4}|\d{1,6}\s*[\p{L}]{1,6}\d{0,4})(?![\p{L}\p{N}])/gu,
-  );
-  for (const token of tokens) {
+  for (const token of atomicCodeTokens(raw)) {
     if (atomicTechnicalCode(token[0]) !== code) continue;
-    const start = token.index ?? 0;
-    const end = start + token[0].length;
-    const before = raw.slice(0, start).trimEnd().slice(-1);
-    const after = raw.slice(end).trimStart().slice(0, 1);
     // A connector adjacent to the candidate makes the exact property
     // ambiguous without a named facet, even with whitespace around it.
-    if (/[-/\\+*×]/u.test(before) || /[-/\\+*×]/u.test(after)) continue;
+    if (codeHasCompoundConnector(raw, token)) continue;
     return true;
   }
   return false;
@@ -1485,7 +1535,7 @@ export function checkCriterion(
     if (technicalCode) {
       return {
         key: c.key,
-        verdict: atomicTechnicalCode(actual) === technicalCode
+        verdict: namedFacetMatchesAtomicCode(product, trait, technicalCode)
           ? "pass"
           : "fail",
         expected,

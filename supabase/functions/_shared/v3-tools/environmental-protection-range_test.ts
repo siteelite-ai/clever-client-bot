@@ -46,6 +46,75 @@ Deno.test("the same live range rule applies outside a particular product categor
   assertEquals(socket.status, "enumerated");
 });
 
+Deno.test("numeric IP enums on an explicitly labelled live facet retain raw search values", () => {
+  const facet = {
+    key: "stepeny_zaschity__ip__Қorғanys_deңgeyі__ip",
+    caption: "Степень защиты, IP",
+    values: [
+      { value: "20" },
+      { value: "40" },
+      { value: "44" },
+      { value: "54" },
+      { value: "65" },
+      { value: "IPX4" },
+      { value: "44-20" },
+      { value: "IP44-IP20" },
+      { value: "65 / 20" },
+      { value: "7X" },
+    ],
+  };
+  const result = deriveEnvironmentalProtectionRange(
+    "Нужен прожектор для улицы",
+    [facet],
+  );
+  assertEquals(result, {
+    status: "enumerated",
+    reason: "live_exposure_floor",
+    facetKey: facet.key,
+    facetCaption: facet.caption,
+    acceptedValues: ["44", "54", "65", "IPX4"],
+  });
+
+  const dust = deriveEnvironmentalProtectionRange(
+    "Нужен прибор для пыльного цеха",
+    [facet],
+  );
+  assertEquals(dust.acceptedValues, ["54", "65"]);
+});
+
+Deno.test("bare protection numbers need an explicit IP token in facet caption or key", () => {
+  const unlabeled = deriveEnvironmentalProtectionRange(
+    "Нужен прибор для двора",
+    [{
+      key: "stepeny_zaschity",
+      caption: "Степень защиты",
+      values: [{ value: "44" }, { value: "IP54" }],
+    }],
+  );
+  assertEquals(unlabeled.acceptedValues, ["IP54"]);
+
+  const keyLabeled = deriveEnvironmentalProtectionRange(
+    "Нужен прибор для двора",
+    [{
+      key: "ip_rating",
+      caption: "Степень защиты",
+      values: [{ value: "44" }, { value: "54-20" }],
+    }],
+  );
+  assertEquals(keyLabeled.acceptedValues, ["44"]);
+
+  const noEligible = deriveEnvironmentalProtectionRange(
+    "Нужен прибор для двора",
+    [{
+      key: "stepeny_zaschity",
+      caption: "Степень защиты",
+      values: [{ value: "44" }],
+    }],
+  );
+  assertEquals(noEligible.status, "unresolved");
+  assertEquals(noEligible.reason, "no_eligible_values");
+});
+
 Deno.test("explicit dust and weather obligations check independent IP digits", () => {
   const dust = deriveEnvironmentalProtectionRange(
     "Нужен прибор для пыльного цеха",
