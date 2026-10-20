@@ -34,7 +34,7 @@ function clampCandidateWindow(value: number): number {
 
 function explicitRequestedCount(message: string): number | null {
   const match = normalize(message).match(
-    /(?:^|[^\p{L}\p{N}])(\d{1,2})\s*(?:подходящ\p{L}*\s+)?(?:вариант\p{L}*|товар\p{L}*|позици\p{L}*|модел\p{L}*)(?:$|[^\p{L}\p{N}])/u,
+    /(?:^|[^\p{L}\p{N}])(\d{1,2})\s*(?:подходящ\p{L}*\s+)?(?:вариант\p{L}*|товар\p{L}*|позици\p{L}*|модел\p{L}*|аналог\p{L}*)(?:$|[^\p{L}\p{N}])/u,
   );
   if (!match) return null;
   const count = Number(match[1]);
@@ -85,7 +85,7 @@ export function resolveResultCardinality(
   }
 
   const asksForAlternatives =
-    /нескольк\p{L}*|(?:дай|покаж\p{L}*|подбер\p{L}*|предлож\p{L}*)[^.!?]{0,60}(?:вариант\p{L}*|альтернатив\p{L}*)|(?:вариант\p{L}*|альтернатив\p{L}*)\s+(?:на\s+выбор|подходящ\p{L}*)/u
+    /нескольк\p{L}*|(?:^|[^\p{L}\p{N}])аналог(?:и|ов|ам|ами|ах)(?:$|[^\p{L}\p{N}])|(?:дай|покаж\p{L}*|подбер\p{L}*|предлож\p{L}*)[^.!?]{0,60}(?:вариант\p{L}*|альтернатив\p{L}*)|(?:вариант\p{L}*|альтернатив\p{L}*)\s+(?:на\s+выбор|подходящ\p{L}*)/u
       .test(normalized);
   if (asksForAlternatives) {
     return {

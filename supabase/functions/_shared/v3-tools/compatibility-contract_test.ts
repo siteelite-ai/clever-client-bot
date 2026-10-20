@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildPairedCompatibilityReasoning,
+  beforeClearanceMinimum,
   alignCompatibilityRelationsWithReasoning,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
@@ -436,6 +437,38 @@ Deno.test("clearance constrains before-shrink facet projection without narrowing
     diameter_after: ["8", "7"],
   });
   assertEquals(projectCompatibilityFacetOptions(relations, [before, after]).options.diameter_before, ["14", "14,4", "16"]);
+});
+
+Deno.test("clearance projects the same minimum into certified criteria and the product-fit gate", () => {
+  const before = { key: "diameter_before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] };
+  const after = { key: "diameter_after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] };
+  const clearance = resolveCableSleeveClearance(
+    "подбери трубку на кабель диаметром 12 мм",
+    "Трубки термоусаживаемые",
+    before,
+    after,
+  );
+  if (!clearance) throw new Error("expected heat-shrink clearance");
+  for (const [diameter, minimum, rejected, accepted] of [
+    [12, 14.4, 14, 16],
+    [10, 12, 11.9, 12],
+  ]) {
+    const relations = parseCompatibilityRelations([
+      { product_key: before.key, relation: "gt", reference_value: diameter, unit: "мм" },
+      { product_key: after.key, relation: "lt", reference_value: diameter, unit: "мм" },
+    ]);
+    assertEquals(beforeClearanceMinimum(diameter, clearance), minimum);
+    assertEquals(compatibilityRelationsToCriteria(relations, clearance), [
+      { key: before.key, op: "min", value: minimum, unit: "мм", level: "A" },
+      { key: after.key, op: "max", value: diameter, unit: "мм", level: "A", exclusive: true },
+    ]);
+    assertEquals(meetsPairedFitMeasurements(rejected, 6, diameter, clearance), false);
+    assertEquals(meetsPairedFitMeasurements(accepted, 6, diameter, clearance), true);
+    // The unqualified generic pair keeps its independent >D / <D contract.
+    assertEquals(compatibilityRelationsToCriteria(relations)[0], {
+      key: before.key, op: "min", value: diameter, unit: "мм", level: "A", exclusive: true,
+    });
+  }
 });
 
 Deno.test("late catalog recovery cannot overwrite an already proven paired fit", () => {

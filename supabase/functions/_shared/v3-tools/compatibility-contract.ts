@@ -81,9 +81,8 @@ export function pairedFitClearanceReasoningInstruction(
   reference?: { value: number; unit: string } | null,
 ): string {
   if (!clearance) return "";
-  const minimum = reference && Number.isFinite(reference.value) && reference.value > 0
-    ? Number((reference.value * clearance.minimum_before_ratio.numerator /
-      clearance.minimum_before_ratio.denominator).toPrecision(12))
+  const minimum = reference
+    ? beforeClearanceMinimum(reference.value, clearance)
     : null;
   const localBound = minimum !== null && Number.isFinite(minimum)
     ? ` При диаметре кабеля ${String(reference?.value).replace(".", ",")} ${reference?.unit ?? ""} это минимум ${String(minimum).replace(".", ",")} ${reference?.unit ?? ""} до усадки.`
@@ -140,6 +139,27 @@ export function equalsBeforeClearanceBoundary(
     denominator <= 0) return false;
   return measured.numerator * customer.denominator * BigInt(denominator) ===
     customer.numerator * measured.denominator * BigInt(numerator);
+}
+
+/** Project an exact policy ratio into a serializable decimal. Never emit a
+ * rounded lower bound that disagrees with the exact product-fit comparison. */
+export function beforeClearanceMinimum(
+  reference: number,
+  clearance: PairedFitClearance,
+): number | null {
+  const { numerator, denominator } = clearance.minimum_before_ratio;
+  if (!Number.isFinite(reference) || reference <= 0 ||
+    !Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) ||
+    numerator <= denominator || denominator <= 0) return null;
+  const approximate = reference * numerator / denominator;
+  if (!Number.isFinite(approximate) || approximate <= 0) return null;
+  for (let precision = 1; precision <= 17; precision += 1) {
+    const value = Number(approximate.toPrecision(precision));
+    if (equalsBeforeClearanceBoundary(value, reference, clearance)) {
+      return value;
+    }
+  }
+  return null;
 }
 
 export function meetsPairedFitMeasurements(
@@ -209,8 +229,15 @@ export function parseCompatibilityRelations(value: unknown): CompatibilityRelati
   });
 }
 
-/** Compile the category-neutral relation into the existing evidence gate. */
-export function compatibilityRelationsToCriteria(relations: CompatibilityRelation[]): Criterion[] {
+/** Compile the category-neutral relation into the existing evidence gate.
+ * When a server-certified installation clearance applies, project its exact
+ * before-side minimum into the public/frozen criterion. The raw relation
+ * stays anchored to the customer's reference for facet search projection,
+ * which applies the same clearance separately. */
+export function compatibilityRelationsToCriteria(
+  relations: CompatibilityRelation[],
+  clearance: PairedFitClearance | null = null,
+): Criterion[] {
   return relations.map((relation) => {
     const base = {
       key: relation.product_key,
@@ -218,6 +245,14 @@ export function compatibilityRelationsToCriteria(relations: CompatibilityRelatio
       unit: relation.unit ?? null,
       level: relation.level ?? "A",
     } as const;
+    if (clearance && relation.product_key === clearance.before_facet_key &&
+      (relation.relation === "gt" || relation.relation === "gte")) {
+      const minimum = beforeClearanceMinimum(relation.reference_value, clearance);
+      if (minimum === null) {
+        throw new Error("paired_fit_clearance_boundary_unrepresentable");
+      }
+      return { ...base, op: "min", value: minimum };
+    }
     switch (relation.relation) {
       case "gt": return { ...base, op: "min", exclusive: true };
       case "gte": return { ...base, op: "min" };

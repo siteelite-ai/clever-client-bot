@@ -38,7 +38,8 @@ test("ordinary direct analogue cards publish only live transferable axes and an 
   assert.doesNotMatch(contract, /key:\s*(?:sourceModel|sourceModels|anchor\.pagetitle|sourceDescription)/u);
   assert.match(contract, /structuralProfile\.obligations\.map\(\(obligation\)\s*=>/u);
   assert.match(preflight, /evaluateStructuralReplacementCandidate\(\s*structuralProfile,\s*ctx\.cache\.get\(product\.id\)/u);
-  assert.match(preflight, /if \(selected\.length === 0 && structuralProfile && strict\.ok\)/u);
+  assert.match(preflight, /selected\.length < requestedCardinality\.target && structuralProfile &&\s*strict\.ok/u);
+  assert.match(preflight, /resultCardinalityShortfallText\(\s*selected\.length,\s*requestedCardinality/u);
   assert.match(preflight, /if \(selected\.length === 0 && !structuralProfile\)/u);
 });
 
