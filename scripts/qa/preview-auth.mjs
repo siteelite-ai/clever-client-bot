@@ -6,6 +6,7 @@ const previewFunctions = new Set([
 const previewOrigin = 'https://yngoixmvmxdfxokuafjp.supabase.co';
 
 export const PREVIEW_SECRET_ENV = 'VOLT220_V3_PREVIEW_SECRET';
+export const PREVIEW_QA_SECRET_ENV = 'VOLT220_V3_QA_SECRET';
 export const PREVIEW_SECRET_HEADER = 'x-volt-preview-secret';
 
 export function isPrivatePreviewEndpoint(endpoint) {
@@ -23,9 +24,14 @@ function assertCanonicalPreviewEndpoint(endpoint) {
 export function previewAuthHeaders(endpoint, env = process.env) {
   if (!isPrivatePreviewEndpoint(endpoint)) return {};
   assertCanonicalPreviewEndpoint(endpoint);
-  const secret = env[PREVIEW_SECRET_ENV];
+  // Prefer the isolated QA credential when configured. A malformed QA value
+  // must fail closed, not silently fall back to the production preview secret.
+  const selectedEnv = env[PREVIEW_QA_SECRET_ENV] === undefined
+    ? PREVIEW_SECRET_ENV
+    : PREVIEW_QA_SECRET_ENV;
+  const secret = env[selectedEnv];
   if (typeof secret !== 'string' || !/^[A-Za-z0-9_-]{32,256}$/.test(secret)) {
-    throw new Error(`Private preview QA requires a 32–256 character ${PREVIEW_SECRET_ENV} environment secret`);
+    throw new Error(`Private preview QA requires a 32–256 character ${selectedEnv} environment secret`);
   }
   return { [PREVIEW_SECRET_HEADER]: secret };
 }

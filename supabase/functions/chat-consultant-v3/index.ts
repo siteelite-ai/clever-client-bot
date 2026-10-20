@@ -477,6 +477,7 @@ import {
   productProvesDirectReplacementAxes,
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
+  buildReplacementProofContract,
   compileLiveCompactReplacementContract,
   derivePortableAxisTitleRequirements,
   extractExplicitSingleLetterCodes,
@@ -484,16 +485,27 @@ import {
   extractReplacementLookupKeys,
   extractReplacementSourceDescription,
   inferLiveReplacementClarification,
+  isReplacementProofRequest,
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
   productContainsExactModelCode,
   productContainsSourceModel,
   productTitleSupportsPortableRequirements,
-  provisionalReplacementCandidateText,
+  guardReplacementEgressText,
+  guardReplacementReplayEvents,
+  persistedReplacementEgressMode,
+  replacementReplayClarificationCaption,
+  shouldGuardReplayWithoutClientHistory,
+  replacementProofCaption,
   replacementClassIsGroundedByLiveIdentity,
+  resolveExactReplacementSource,
+  resolveReplacementProofContext,
+  replacementTerminalFallback,
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
+  sourceArticleIsExplicitInRequest,
+  verifiedReplacementClarificationFromLiveFacets,
   resolveScopedReplacementSource,
   resolveVerifiedIssuedLiveReplacementAxis,
   shouldClarifyCompactReplacementSource,
@@ -627,7 +639,13 @@ import {
   resolveChatV3AdmissionScope,
 } from "../_shared/v3-tools/chat-admission.ts";
 import {
+  type PublicApiAdmissionResult,
+  reservePublicApiAdmission,
+  releasePublicApiAdmission,
+} from "../_shared/public-api-admission.ts";
+import {
   previewSecretAuthorized,
+  PREVIEW_QA_SECRET_ENV,
   PREVIEW_SECRET_ENV,
   PREVIEW_SECRET_HEADER,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
@@ -710,7 +728,13 @@ const MIN_AGENT_STEP_BUDGET_MS = 2_500;
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
 type SseEvent =
-  | { type: "delta"; content: string; origin?: "model" | "server" }
+  | {
+    type: "delta";
+    content: string;
+    origin?: "model" | "server";
+    /** Persisted provenance only; never sent in the public SSE delta. */
+    replacement_proof?: boolean;
+  }
   | {
     type: "price_unit_evidence";
     product_url: string;
@@ -724,6 +748,8 @@ type SseEvent =
     phase: "start" | "complete";
     products_count?: number;
     error?: string | null;
+    /** Durable server-only replay classification, omitted on the live wire. */
+    replacement_egress?: "replacement" | "ordinary";
   }
   | { type: "conversation_boundary"; mode: "new_task"; session_id: string }
   | {
@@ -4264,6 +4290,7 @@ async function selectVerifiedCompactReplacementContinuation(
     }
     send({
       type: "delta",
+      origin: "server",
       content: `По подтверждённому сочетанию (${
         contract.axes.map(({ caption, value }) => `${caption}: ${value}`).join(
           ", ",
@@ -4320,10 +4347,6 @@ async function selectVerifiedCompactReplacementContinuation(
     selectionCriteria,
     "guarded_search",
   );
-  send({
-    type: "delta",
-    content: `Уточнение принято. ${provisionalReplacementCandidateText(contract.axes, false)}`,
-  });
   send({
     type: "products_block",
     markdown: rendered.markdown,
@@ -4441,7 +4464,7 @@ async function selectVerifiedOrdinaryReplacement(
       live_clarification: liveClarification,
     })
   ) {
-    send({ type: "delta", content: liveClarification.question });
+    send({ type: "delta", content: liveClarification.question, origin: "server" });
     const clarification = executeProposeClarification({
       question: liveClarification.question,
       facet_key: liveClarification.facet_key,
@@ -4626,6 +4649,7 @@ async function selectVerifiedOrdinaryReplacement(
       sourceClassDiscovery.error_code === "category_not_found";
     send({
       type: "delta",
+      origin: "server",
       content: categoryUnresolved
         ? "Не удалось подтвердить тип исходного товара. Повторите запрос на подбор аналога, указав тип исходного товара и точный артикул или его полное название."
         : "Сейчас не удалось проверить исходный товар по каталогу. Повторите запрос на подбор аналога позже, указав точный артикул или полное название исходного товара. Это не означает, что аналогов нет.",
@@ -4654,7 +4678,7 @@ async function selectVerifiedOrdinaryReplacement(
   // failed. The new early check only prevents an arbitrary broad-hit anchor
   // from hiding an already proven missing structural axis.
   if (!anchor && sourceClassDiscovery.ok && liveClarification) {
-    send({ type: "delta", content: liveClarification.question });
+    send({ type: "delta", content: liveClarification.question, origin: "server" });
     const clarification = executeProposeClarification({
       question: liveClarification.question,
       facet_key: liveClarification.facet_key,
@@ -5006,10 +5030,6 @@ async function selectVerifiedOrdinaryReplacement(
     };
   }
 
-  send({
-    type: "delta",
-    content: provisionalReplacementCandidateText(axes, sourceIdentityVerified),
-  });
   const ids = selected.map((product) => product.id);
   const rendered = executeRenderProducts({
     product_ids: ids,
@@ -6924,7 +6944,7 @@ async function runExpertLoop(
   slots: Record<string, unknown>,
   apiKey: string,
   ctx: ToolContext,
-  send: (ev: SseEvent) => void,
+  send: (ev: SseEvent) => string,
   steps: StepLog[],
   t0: number,
   flags: {
@@ -6939,6 +6959,7 @@ async function runExpertLoop(
   ellipticalContinuation: EllipticalSelectionContinuation | null = null,
   preExcludedProductUrls: string[] = [],
   verifiedInitialDiscoveryLeaf: string | null = null,
+  replacementEgressGuarded = false,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -6970,6 +6991,12 @@ async function runExpertLoop(
   const initialDiscoveryMessage = verifiedInitialDiscoveryLeaf ??
     selectionDiscoveryMessage;
   let finalText = "";
+  // Keep the model's draft in finalText/firstAssistantText for search and
+  // criteria decisions. The shared egress may hide that same draft, so UI
+  // captions must consult the separately tracked emitted text instead.
+  let visibleText = "";
+  const hasVisibleText = () =>
+    (replacementEgressGuarded ? visibleText : finalText).trim().length > 0;
   let productsRendered = 0;
   // The generic expert route has candidate search, not a complete catalog
   // price proof. Exact compound and complete recent-set price requests are
@@ -7184,10 +7211,16 @@ async function runExpertLoop(
   const currentSelectionCriteriaPlan = (): SelectionCriteriaPlan | null =>
     selectionCriteriaPlan;
   const rawSend = send;
+  const rawSendVisibleDelta = (event: Extract<SseEvent, { type: "delta" }>) => {
+    const emittedText = rawSend(event);
+    visibleText += emittedText;
+    return emittedText;
+  };
   send = (event: SseEvent) => {
     if (event.type !== "products_block") {
-      rawSend(event);
-      return;
+      const emittedText = rawSend(event);
+      if (event.type === "delta") visibleText += emittedText;
+      return emittedText;
     }
     const plan = currentSelectionCriteriaPlan();
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
@@ -7302,14 +7335,22 @@ async function runExpertLoop(
       ...(unit ? { unit } : {}),
       ...(exclusive ? { exclusive } : {}),
     }));
-    if (intentMode === "select" && !finalText.trim() && activeSelectionTarget) {
+    if (
+      intentMode === "select" && !replacementEgressGuarded &&
+      !hasVisibleText() && activeSelectionTarget
+    ) {
       const caption = safeSelectionRenderCaption(
         activeSelectionTarget,
         [...emittedPlan.mandatory_criteria],
       );
-      rawSend({ type: "delta", content: caption });
+      const emittedCaption = rawSendVisibleDelta({
+        type: "delta",
+        content: caption,
+      });
       finalText = caption;
-      if (!firstAssistantText) firstAssistantText = caption;
+      if (!firstAssistantText && emittedCaption.trim()) {
+        firstAssistantText = emittedCaption.trim();
+      }
       steps.push({
         step: "v3_selection_contract_caption",
         ms: now(),
@@ -7329,7 +7370,7 @@ async function runExpertLoop(
       ).join("; ");
       const notice =
         `\n\nПодходящий тип товара подтверждён, но по данным карточек не удалось проверить: ${details}. Показываю варианты нужного типа; этот параметр уточните перед покупкой.`;
-      rawSend({ type: "delta", content: notice });
+      rawSendVisibleDelta({ type: "delta", content: notice });
       finalText += notice;
       unverifiedRecoveryNoticeSent = true;
     }
@@ -7356,7 +7397,7 @@ async function runExpertLoop(
           : "";
         const notice =
           `\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность${threshold}. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.`;
-        rawSend({ type: "delta", content: notice });
+        rawSendVisibleDelta({ type: "delta", content: notice });
         finalText += notice;
         steps.push({
           step: "v3_system_total_plan_unverified",
@@ -7373,7 +7414,11 @@ async function runExpertLoop(
     }
     if (catalogPriceExtreme && !priceScopeNoticeSent) {
       const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, true);
-      rawSend({ type: "delta", content: `\n\n${notice}`, origin: "server" });
+      rawSendVisibleDelta({
+        type: "delta",
+        content: `\n\n${notice}`,
+        origin: "server",
+      });
       finalText += `${finalText ? "\n\n" : ""}${notice}`;
       priceScopeNoticeSent = true;
       steps.push({
@@ -7387,7 +7432,11 @@ async function runExpertLoop(
       });
     }
     if (classNotice) {
-      rawSend({ type: "delta", content: `\n\n${classNotice}`, origin: "server" });
+      rawSendVisibleDelta({
+        type: "delta",
+        content: `\n\n${classNotice}`,
+        origin: "server",
+      });
       finalText += `${finalText ? "\n\n" : ""}${classNotice}`;
       applicationClassFallbackNoticeSent = true;
       steps.push({
@@ -7396,7 +7445,7 @@ async function runExpertLoop(
         meta: { tier: renderedClassTier, cards: renderedProducts.length },
       });
     }
-    rawSend({
+    const emittedBlockText = rawSend({
       ...event,
       selection_contract: {
         hash: emittedPlan.hash,
@@ -7418,6 +7467,8 @@ async function runExpertLoop(
           : {}),
       },
     });
+    visibleText += emittedBlockText;
+    return emittedBlockText;
   };
   const freezeSelectionCriteria = (
     criteria: Criterion[],
@@ -8177,7 +8228,10 @@ async function runExpertLoop(
     criteria: Criterion[],
     recoveryStep: string,
   ) => {
-    if (intentMode !== "select" || finalText.trim() || !activeSelectionTarget) {
+    if (
+      intentMode !== "select" || replacementEgressGuarded ||
+      hasVisibleText() || !activeSelectionTarget
+    ) {
       return;
     }
     const caption = safeSelectionRenderCaption(
@@ -11052,11 +11106,11 @@ async function runExpertLoop(
                 reason: "text_before_render",
               });
             }
-            const visibleText = safeVisiblePriceProse(resp.text);
-            if (visibleText) send({ type: "delta", content: visibleText });
-            finalText += visibleText;
+            const modelCaption = safeVisiblePriceProse(resp.text);
+            if (modelCaption) send({ type: "delta", content: modelCaption });
+            finalText += modelCaption;
             if (isFirstTurn) {
-              firstAssistantText = visibleText.trim();
+              firstAssistantText = modelCaption.trim();
             }
             steps.push({
               step: intentMode === "inquire"
@@ -16897,9 +16951,41 @@ async function runExpertLoop(
                 },
               });
             }
-            send({ type: "delta", content: delivery.question });
-            finalText += `${finalText ? "\n\n" : ""}${delivery.question}`;
-            emitSideEffects(result, send);
+            const replacementQuestionSafety = replacementIntent ||
+              isReplacementProofRequest(userMessage);
+            const verifiedLiveQuestion = replacementQuestionSafety
+              ? verifiedReplacementClarificationFromLiveFacets({
+                facet_key: typeof tc.args.facet_key === "string"
+                  ? tc.args.facet_key
+                  : "",
+                options: Array.isArray(tc.args.options)
+                  ? tc.args.options as Array<{ value: string; label?: string }>
+                  : [],
+              }, lastDiscover?.facets ?? [])
+              : null;
+            const verifiedResult = verifiedLiveQuestion
+              ? executeProposeClarification({
+                question: verifiedLiveQuestion.question,
+                facet_key: verifiedLiveQuestion.facet_key,
+                options: verifiedLiveQuestion.options,
+                scope: selectionReadinessScope(userMessage, {
+                  resolved_category: lastDiscover!.category.pagetitle,
+                }),
+              })
+              : null;
+            const question = replacementQuestionSafety
+              ? verifiedResult?.ok && verifiedLiveQuestion
+                ? verifiedLiveQuestion.question
+                : replacementTerminalFallback(userMessage)
+              : delivery.question;
+            send({
+              type: "delta",
+              content: question,
+              ...(replacementQuestionSafety ? { origin: "server" as const } : {}),
+            });
+            finalText += `${finalText ? "\n\n" : ""}${question}`;
+            if (verifiedResult?.ok) emitSideEffects(verifiedResult, send);
+            else if (!replacementQuestionSafety) emitSideEffects(result, send);
             steps.push({
               step: "v3_turn_end",
               ms: now(),
@@ -16981,7 +17067,7 @@ async function runExpertLoop(
                 );
                 if (liveClarification) {
                   finalText = liveClarification.question;
-                  send({ type: "delta", content: finalText });
+                  send({ type: "delta", content: finalText, origin: "server" });
                   const clarification = executeProposeClarification({
                     question: liveClarification.question,
                     facet_key: liveClarification.facet_key,
@@ -18148,7 +18234,8 @@ async function runExpertLoop(
           // deterministic caption. It is derived solely from the verified
           // selection contract; failed renders never reach this branch.
           if (
-            intentMode === "select" && !finalText.trim() &&
+            intentMode === "select" && !replacementEgressGuarded &&
+            !hasVisibleText() &&
             !replacementSplitFallbackCaptionSent
           ) {
             const criteria =
@@ -19343,7 +19430,7 @@ async function runExpertLoop(
       }
       if (recoveredAlias?.kind === "exact") {
         for (const id of recoveredAlias.safeIds) shownIds.add(id);
-        if (!finalText.trim()) {
+        if (!replacementEgressGuarded && !hasVisibleText()) {
           const caption = safeSelectionRenderCaption({
             product_class: recoveredAlias.matchedQuery,
             application_context: [],
@@ -20277,7 +20364,7 @@ async function runExpertLoop(
       }
       if (recoveredJargon?.kind === "exact") {
         for (const id of recoveredJargon.safeIds) shownIds.add(id);
-        if (!finalText.trim()) {
+        if (!replacementEgressGuarded && !hasVisibleText()) {
           const caption = safeSelectionRenderCaption({
             product_class: recoveredJargon.matchedQuery,
             application_context: [],
@@ -20976,6 +21063,7 @@ Deno.serve(async (req) => {
   if (ADMISSION_SCOPE === "preview" && !await previewSecretAuthorized(
     suppliedPreviewSecret,
     Deno.env.get(PREVIEW_SECRET_ENV),
+    Deno.env.get(PREVIEW_QA_SECRET_ENV),
   )) {
     return new Response(JSON.stringify({ error: "preview_access_denied" }), {
       status: 403,
@@ -20999,14 +21087,20 @@ Deno.serve(async (req) => {
 
   const readResult = await readRequestTextBounded(req);
   if (!readResult.ok) {
+    const ingressTimedOut = readResult.reason === "timeout" ||
+      readResult.reason === "aborted";
     return new Response(
       JSON.stringify({
         error: readResult.reason === "too_large"
           ? "payload_too_large"
+          : ingressTimedOut
+          ? "request_timeout"
           : "invalid_json",
       }),
       {
-        status: readResult.reason === "too_large" ? 413 : 400,
+        status: readResult.reason === "too_large" ? 413 : ingressTimedOut
+          ? 408
+          : 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       },
     );
@@ -21088,6 +21182,18 @@ Deno.serve(async (req) => {
   let finalTextAccum = "";
   let productsCount = 0;
   const responseEvents: SseEvent[] = [];
+  // This proof boundary is shared by direct selection, the expert loop and
+  // terminal recovery. It is set only from the server's resolved request and
+  // the current live catalog cache; no browser slot or model prose can certify
+  // a source SKU or the completeness of critical compatibility evidence.
+  let replacementEgressRequest: string | null = null;
+  let replacementEgressCache: ProductCache | null = null;
+  let replacementLastProof = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [],
+  });
+  let replacementSafetyTextSeen = false;
   let streamCompleted = false;
   let workTimedOut = false;
   let sendingTerminalFailure = false;
@@ -21101,16 +21207,37 @@ Deno.serve(async (req) => {
           console.error("[v3] enqueue failed:", e);
         }
       };
-      const send = (ev: SseEvent) => {
+      let replacementVisibleContentSeen = false;
+      let pendingReplacementTurnBreak:
+        | Extract<SseEvent, { type: "assistant_turn_break" }>
+        | null = null;
+      const flushReplacementTurnBreak = () => {
+        const pending = pendingReplacementTurnBreak;
+        pendingReplacementTurnBreak = null;
+        // A break before the first actually emitted bubble produces an empty
+        // bubble after the model paragraph is removed by proof egress.
+        if (!pending || !replacementVisibleContentSeen) return;
+        responseEvents.push(pending);
+        emit(pending);
+      };
+      const send = (ev: SseEvent): string => {
         // An uncooperative remote promise may settle after the turn deadline.
         // It must not append a second answer or mutate the persisted replay.
         if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) {
-          return;
+          return "";
+        }
+        if (ev.type === "assistant_turn_break" && replacementEgressRequest) {
+          // A following model delta may be discarded. Commit the boundary
+          // only when actual visible text/cards arrive, preserving live SSE
+          // and durable replay in the same order.
+          pendingReplacementTurnBreak = ev;
+          return "";
         }
         // GUARD: единственный выход текста наружу. Служебная лексика механики
         // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
         let out = ev;
+        let emittedAuxiliaryText = "";
         if (ev.type === "delta") {
           const origin = ev.origin ?? "model";
           const priceGuard = guardPriceEgressText({
@@ -21132,6 +21259,24 @@ Deno.serve(async (req) => {
             });
           }
           let content = r.text;
+          if (replacementEgressRequest) {
+            const replacementGuard = guardReplacementEgressText(
+              content,
+              origin === "server",
+            );
+            content = replacementGuard.text;
+            if (replacementGuard.removed > 0) {
+              steps.push({
+                step: "v3_replacement_unproved_claim_removed",
+                ms: Date.now() - t0,
+                meta: {
+                  origin,
+                  removed_deltas: replacementGuard.removed,
+                  source_identity: replacementLastProof.source_identity,
+                },
+              });
+            }
+          }
           if (priceGuard.claimRemoved) {
             steps.push({
               step: "v3_unproved_price_claim_removed",
@@ -21160,10 +21305,84 @@ Deno.serve(async (req) => {
               priceScopeDisclosureSent = true;
             }
           }
-          if (!content.trim()) return;
-          out = { type: "delta", content };
+          if (!content.trim()) return "";
+          if (replacementEgressRequest) {
+            flushReplacementTurnBreak();
+            replacementVisibleContentSeen = true;
+          }
+          if (replacementEgressRequest && origin === "server") {
+            replacementSafetyTextSeen = true;
+          }
+          // Persist provenance for safe replay; encodeSse sends only content
+          // to the browser, so this does not change the public wire format.
+          out = { type: "delta", content, ...(origin === "server" ? { origin } : {}) };
           finalTextAccum += content;
         } else if (ev.type === "products_block") {
+          if (replacementEgressRequest && ev.count > 0) {
+            flushReplacementTurnBreak();
+          }
+          if (replacementEgressRequest && ev.count > 0) {
+            const liveProducts = [...(replacementEgressCache?.values() ?? [])];
+            const renderedProducts = liveProducts.filter((product) =>
+              ev.markdown.includes(`](${product.url})`)
+            ).sort((left, right) =>
+              ev.markdown.indexOf(`](${left.url})`) -
+              ev.markdown.indexOf(`](${right.url})`)
+            );
+            const renderedIds = new Set(renderedProducts.map(({ id }) => id));
+            const source = resolveExactReplacementSource(
+              replacementEgressRequest,
+              liveProducts,
+              renderedIds,
+            );
+            // No route can currently attest that its selected search axes are
+            // the *complete* set of critical source specifications. Therefore
+            // even exact source lookups disclose candidate status; the proof
+            // engine permits confirmed equivalence only when an independent
+            // complete live critical-facet set is supplied in the future.
+            replacementLastProof = buildReplacementProofContract({
+              source,
+              sourceIdentity: source ? "exact" : "unverified",
+              candidates: renderedProducts,
+              // The block criteria may describe more cards than the URL
+              // projection recovered from the live cache. Never summarize
+              // them as common to every visible card in that partial case.
+              candidateSelectionCriteria: renderedProducts.length === ev.count
+                  && ev.count > 0
+                ? ev.selection_contract?.mandatory_criteria
+                : undefined,
+              sourcePriceIdentityVerified: sourceArticleIsExplicitInRequest(
+                replacementEgressRequest,
+                source,
+              ),
+            });
+            const caption = replacementProofCaption(replacementLastProof);
+            const disclosure: SseEvent = {
+              type: "delta",
+              content: `\n\n${caption}`,
+              origin: "server",
+              replacement_proof: true,
+            };
+            responseEvents.push(disclosure);
+            emit(disclosure);
+            replacementSafetyTextSeen = true;
+            replacementVisibleContentSeen = true;
+            finalTextAccum += `${finalTextAccum ? "\n\n" : ""}${caption}`;
+            emittedAuxiliaryText += caption;
+            steps.push({
+              step: "v3_replacement_proof_disclosed_before_cards",
+              ms: Date.now() - t0,
+              meta: {
+                source_identity: replacementLastProof.source_identity,
+                cards: renderedProducts.length,
+                lower_numeric: replacementLastProof.candidates.flatMap((item) =>
+                  item.lower_numeric
+                ),
+                price_comparison_proven:
+                  replacementLastProof.cheaper_than_source_proven,
+              },
+            });
+          }
           const cardPriceProofApplies = priceCertificateCoversCardBlock({
             requestMessage: userMessage,
             requestedExtreme: requestedPriceExtreme,
@@ -21180,6 +21399,7 @@ Deno.serve(async (req) => {
             responseEvents.push(disclosure);
             emit(disclosure);
             finalTextAccum += `${finalTextAccum ? "\n\n" : ""}${notice}`;
+            emittedAuxiliaryText += notice;
             priceScopeDisclosureSent = true;
             steps.push({
               step: "v3_unproved_price_scope_disclosed_before_cards",
@@ -21218,9 +21438,22 @@ Deno.serve(async (req) => {
               meta: { rendered_count: ev.count, plan_hash: emptyPlan.hash },
             });
           }
+        } else if (
+          ev.type === "quick_replies" && replacementEgressRequest &&
+          !replacementSafetyTextSeen
+        ) {
+          // A validated clarification can keep its choices. Its prose must
+          // still be server-owned because model co-text was discarded above.
+          send({
+            type: "delta",
+            origin: "server",
+            content:
+              "Уточните параметр исходного изделия, чтобы проверить кандидатов для замены.",
+          });
         }
         responseEvents.push(out);
         emit(out);
+        return out.type === "delta" ? out.content : emittedAuxiliaryText;
       };
 
       // Open the SSE transport before any settings/database dependency. When
@@ -21330,9 +21563,38 @@ Deno.serve(async (req) => {
           Math.max(1, t0 + RESPONSE_TARGET_MS - Date.now()),
         );
         const events = replayableSseEvents<SseEvent>(replay.response_events);
+        const persistedMode = persistedReplacementEgressMode(events);
+        // A legacy row has no durable mode. Its client history is not proof
+        // of the original route, so suppress old freeform prose for *all*
+        // unknown rows; current rows retain ordinary replay exactly.
+        const replayNeedsGuard = shouldGuardReplayWithoutClientHistory(events);
+        const replayEvents = replayNeedsGuard
+          ? guardReplacementReplayEvents(
+            events,
+            {
+              type: "delta",
+              origin: "server",
+              content: persistedMode === "replacement"
+                ? replacementProofCaption(buildReplacementProofContract({
+                  source: null,
+                  sourceIdentity: "unverified",
+                  candidates: [],
+                }))
+                : "Показываю ранее найденные карточки. При повторном подключении их соответствие запросу не перепроверялось.",
+            } satisfies SseEvent,
+            {
+              type: "delta",
+              origin: "server",
+              content: replacementReplayClarificationCaption(
+                events,
+                persistedMode === "replacement",
+              ),
+            } satisfies SseEvent,
+          )
+          : events;
         clearInterval(keepAliveTimer);
         if (events.length > 0 && replay.error !== "in_progress") {
-          for (const event of events) emit(event);
+          for (const event of replayEvents) emit(event);
         } else {
           emit({
             type: "delta",
@@ -21366,6 +21628,7 @@ Deno.serve(async (req) => {
       const executionController = new AbortController();
       let logFinalized = false;
       let admission: ChatV3AdmissionResult | null = null;
+      let publicAdmission: PublicApiAdmissionResult | null = null;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
         if (logFinalized) return;
@@ -21421,6 +21684,42 @@ Deno.serve(async (req) => {
               : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
           });
           return;
+        }
+        // This separate, cross-route guard shares model/catalog budgets with
+        // v1, v2 and search-products. It is off by default, and only the
+        // server-owned production entrypoint may reserve capacity; isolated
+        // preview never consumes or is denied by production quotas.
+        if (ADMISSION_SCOPE === "production") {
+          publicAdmission = await reservePublicApiAdmission({
+            route: "chat-consultant-v3",
+            lanes: ["model", "catalog"],
+            rpc: (name, args) => supabase.rpc(name, args),
+            timeoutMs: ADMISSION_RPC_TIMEOUT_MS,
+          });
+          steps.push({
+            step: "public_api_admission_checked",
+            ms: Date.now() - t0,
+            meta: {
+              mode: publicAdmission.mode,
+              allowed: publicAdmission.allowed,
+              reason: publicAdmission.reason,
+              would_reject: publicAdmission.wouldReject,
+              failure: publicAdmission.failure,
+            },
+          });
+          if (!publicAdmission.allowed) {
+            errorMsg = `public_admission_${publicAdmission.reason}`;
+            publicDiagnosticError = publicAdmission.reason === "limit_exceeded"
+              ? "rate_limited"
+              : "request_unavailable";
+            send({
+              type: "delta",
+              content: publicAdmission.reason === "limit_exceeded"
+                ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+                : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+            });
+            return;
+          }
         }
         await runWithDeadline(
           async (turnSignal) => {
@@ -21996,6 +22295,7 @@ Deno.serve(async (req) => {
               jargonAxialModifiersEnabled:
                 settings.v3_jargon_axial_modifiers_enabled,
             };
+            replacementEgressCache = cache;
 
             let recentProductEvidence = await loadRecentProductEvidence(
               supabase,
@@ -22165,6 +22465,20 @@ Deno.serve(async (req) => {
                   : scopedSelectionRequest.message,
                 effectiveHistory.slice(-8),
               );
+            // Output protection is intentionally broader than the existing
+            // exact-source replacement ROUTER. It cannot change catalog
+            // branches, but it prevents ordinary analog/follow-up prose from
+            // certifying a source SKU the server has never verified.
+            replacementEgressRequest = replacementSourceRequest ??
+              resolveReplacementProofContext(
+                userMessage,
+                effectiveHistory.slice(-8),
+                {
+                  newTask: startsNewTask,
+                  comparativeFollowup:
+                    detectPriceDirection(userMessage)?.kind === "comparative",
+                },
+              );
             const namedSeriesInquiryToken =
               detectUserIntentMode(userMessage) === "inquire"
                 ? resolveNamedSeriesToken(
@@ -22306,7 +22620,11 @@ Deno.serve(async (req) => {
               });
             } else if (readinessClarification) {
               const { profile, ...clarificationInput } = readinessClarification;
-              send({ type: "delta", content: clarificationInput.question });
+              send({
+                type: "delta",
+                content: clarificationInput.question,
+                origin: "server",
+              });
               if (clarificationInput.options.length >= 2) {
                 const clarification = executeProposeClarification(
                   clarificationInput,
@@ -22402,6 +22720,7 @@ Deno.serve(async (req) => {
                   ellipticalContinuation,
                   [],
                   verifiedBroadChoiceState.typedContinuation?.leaf ?? null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -22533,6 +22852,7 @@ Deno.serve(async (req) => {
                 isShortAttributeSelectionFollowup(userMessage)
                   ? sameSectionScope.leaf
                   : null,
+                Boolean(replacementEgressRequest),
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -22593,6 +22913,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -22751,6 +23074,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -23072,6 +23398,9 @@ Deno.serve(async (req) => {
                   direct.source_candidate_ids ?? [],
                   replacementSelectionPlan,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -23110,6 +23439,8 @@ Deno.serve(async (req) => {
                 null,
                 ellipticalContinuation,
                 priorShownProductUrls,
+                null,
+                Boolean(replacementEgressRequest),
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -23128,7 +23459,9 @@ Deno.serve(async (req) => {
             Date.now() - t0,
             RESPONSE_TARGET_MS,
             TERMINAL_LOG_RESERVE_MS +
-              (admission.releaseRequired ? ADMISSION_RPC_TIMEOUT_MS : 0),
+              (admission.releaseRequired || publicAdmission?.releaseRequired
+                ? ADMISSION_RPC_TIMEOUT_MS
+                : 0),
             MAX_ACCEPTED_WORK_MS,
           ),
           () => {
@@ -23161,6 +23494,7 @@ Deno.serve(async (req) => {
           send({
             type: "delta",
             content: `\n\n${publicFailure.customer_message}`,
+            origin: "server",
           });
         } catch {
           /* stream may be closed */
@@ -23188,6 +23522,15 @@ Deno.serve(async (req) => {
             });
           }
         }
+        if (
+          replacementEgressRequest && !replacementSafetyTextSeen
+        ) {
+          send({
+            type: "delta",
+            origin: "server",
+            content: replacementTerminalFallback(replacementEgressRequest),
+          });
+        }
         streamCompleted = true;
         const completeEvent: SseEvent = {
           type: "diagnostic",
@@ -23198,34 +23541,60 @@ Deno.serve(async (req) => {
         };
         // Persist the exact public protocol before closing the live stream, so
         // a reconnect can reproduce the completed answer without re-execution.
-        responseEvents.push(completeEvent, { type: "done" });
+        responseEvents.push({
+          ...completeEvent,
+          replacement_egress: replacementEgressRequest
+            ? "replacement"
+            : "ordinary",
+        }, { type: "done" });
         // КРИТИЧНО: сначала дожидаемся UPDATE'а лога, пока стрим ещё открыт и воркер жив.
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
         // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
         await finalizeLogAwait();
+        const releaseJobs: Promise<void>[] = [];
         if (admission) {
           const checkedAdmission = admission;
-          try {
-            const released = await runWithDeadline(
-              () =>
-                releaseChatV3Admission(
-                  logId,
-                  checkedAdmission,
-                  (name, args) => supabase.rpc(name, args),
-                ),
-              ADMISSION_RPC_TIMEOUT_MS,
-            );
+          releaseJobs.push((async () => {
+            try {
+              const released = await runWithDeadline(
+                () =>
+                  releaseChatV3Admission(
+                    logId,
+                    checkedAdmission,
+                    (name, args) => supabase.rpc(name, args),
+                  ),
+                ADMISSION_RPC_TIMEOUT_MS,
+              );
+              if (released.failure) {
+                console.error("[v3] admission reservation release incomplete", {
+                  failure: released.failure,
+                });
+              }
+            } catch {
+              // A failed release expires in the admission ledger after 3 min.
+              // It must not leave the live SSE open indefinitely.
+              console.error("[v3] admission reservation release timed out");
+            }
+          })());
+        }
+        if (publicAdmission) {
+          const checkedPublicAdmission = publicAdmission;
+          releaseJobs.push((async () => {
+            const released = await releasePublicApiAdmission({
+              reservation: checkedPublicAdmission,
+              rpc: (name, args) => supabase.rpc(name, args),
+            });
             if (released.failure) {
-              console.error("[v3] admission reservation release incomplete", {
+              console.error("[v3] public API reservation release incomplete", {
                 failure: released.failure,
               });
             }
-          } catch {
-            // A failed release expires in the admission ledger after 3 min.
-            // It must not leave the live SSE open indefinitely.
-            console.error("[v3] admission reservation release timed out");
-          }
+          })());
         }
+        // Both independent ledgers are released before closing SSE. Running
+        // these bounded releases together preserves the existing terminal
+        // response deadline instead of serially adding another DB timeout.
+        await Promise.allSettled(releaseJobs);
         emit(completeEvent);
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
         emit({ type: "done" });

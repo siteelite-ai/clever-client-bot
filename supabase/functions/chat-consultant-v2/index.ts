@@ -26,7 +26,6 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { z } from "https://esm.sh/zod@3.23.8";
 
 import type {
   ChatHistoryMessage,
@@ -64,6 +63,14 @@ import {
 import { composeCatalogAnswer } from "./s-catalog-composer.ts";
 import { computeNextAnchor } from "./anchor-tracker.ts";
 import { DEFAULT_SLOT_STATE } from "./types.ts";
+import { parseV2Request, type V2Request } from "./request-guard.ts";
+import {
+  releasePublicApiAdmission,
+  reservePublicApiAdmission,
+  wrapResponseForAdmissionRelease,
+  type PublicApiAdmissionResult,
+  type PublicApiAdmissionRpc,
+} from "../_shared/public-api-admission.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -73,24 +80,6 @@ const corsHeaders = {
 };
 
 const BUILD_MARKER = "v2-step11-category-only-search-2026-04-29";
-
-// ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
-// Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
-// Дополнительно принимаем `state` (ConversationState из spec §3.3) — если клиент
-// уже мигрирован. Если state не пришёл, маппим из dialogSlots для совместимости.
-const HistoryMsgSchema = z.object({
-  role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
-});
-const RequestSchema = z.object({
-  conversationId: z.string().min(1).max(200),
-  query: z.string().trim().min(1).max(2000),
-  history: z.array(HistoryMsgSchema).max(100).optional(),
-  messages: z.array(HistoryMsgSchema).max(100).optional(), // backward-compat alias
-  dialogSlots: z.record(z.string(), z.unknown()).optional(),
-  state: z.unknown().optional(), // ConversationState — валидируем мягко
-});
-type V2Request = z.infer<typeof RequestSchema>;
 
 // ─── SSE helpers (widget-compatible chunk shape) ─────────────────────────────
 const encoder = new TextEncoder();
@@ -109,6 +98,135 @@ function getAdminClient() {
     throw new Error("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set");
   }
   return createClient(url, key);
+}
+
+type V2AdmissionOptions = {
+  // Injection seam for deterministic route tests; HTTP requests cannot set it.
+  rpc?: PublicApiAdmissionRpc;
+  readEnv?: (name: string) => string | undefined;
+  acceptedWork?: (request: V2Request) => Promise<Response>;
+  bodyReadTimeoutMs?: number;
+};
+
+function v2AdmissionRpc(): PublicApiAdmissionRpc {
+  let client: ReturnType<typeof getAdminClient> | null = null;
+  return async (name, args) => {
+    const activeClient = client ?? (client = getAdminClient());
+    const call = activeClient.rpc.bind(activeClient) as unknown as PublicApiAdmissionRpc;
+    return await call(name, args);
+  };
+}
+
+function v2AdmissionDenied(
+  admission: PublicApiAdmissionResult,
+  traceId: string,
+): Response {
+  const limited = admission.reason === "limit_exceeded";
+  const error = limited ? "rate_limited" : "service_unavailable";
+  const content = limited
+    ? "Слишком много запросов. Подождите минуту."
+    : "Сервис временно недоступен. Попробуйте позже.";
+  // V2's successful route is SSE, so even admission failures retain the
+  // widget-compatible `data:`/`[DONE]` framing and trace correlation.
+  const payload = {
+    choices: [{ delta: { content } }],
+    meta: { pipeline_version: "v2", error, traceId },
+  };
+  return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
+    status: limited ? 429 : 503,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      ...(limited ? { "Retry-After": String(admission.retryAfterSeconds || 60) } : {}),
+    },
+  });
+}
+
+// V2's ReadableStream.start() runs catalog/model work after the handler has
+// returned a Response. A browser cancellation must stop forwarding bytes, not
+// make the in-flight reservation disappear while that work continues.
+function trackV2Upstream(response: Response): {
+  response: Response;
+  settled: Promise<void>;
+  detach: () => void;
+} {
+  if (!response.body) {
+    return { response, settled: Promise.resolve(), detach: () => {} };
+  }
+  const reader = response.body.getReader();
+  let resolveSettled!: () => void;
+  const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
+  let ended = false;
+  let detached = false;
+  let pendingPull: Promise<void> | null = null;
+  let downstream: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    resolveSettled();
+  };
+  const drain = async () => {
+    try {
+      await pendingPull;
+      while (!ended) {
+        if ((await reader.read()).done) finish();
+      }
+    } catch {
+      finish();
+    }
+  };
+  const detach = () => {
+    if (detached || ended) return;
+    detached = true;
+    try { downstream?.close(); } catch { /* already closed */ }
+    void drain();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { downstream = controller; },
+    async pull(controller) {
+      if (detached || ended) return;
+      const task = (async () => {
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            finish();
+            if (!detached) controller.close();
+          } else if (!detached) {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          finish();
+          if (!detached) controller.error(error);
+        }
+      })();
+      pendingPull = task;
+      await task;
+      if (pendingPull === task) pendingPull = null;
+    },
+    cancel() { detach(); },
+  });
+  return {
+    response: new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    settled,
+    detach,
+  };
+}
+
+function releaseV2OnlyAfterUpstream(
+  response: Response,
+  release: () => Promise<unknown>,
+): Response {
+  const tracker = trackV2Upstream(response);
+  return wrapResponseForAdmissionRelease(tracker.response, async () => {
+    tracker.detach();
+    await tracker.settled;
+    await release();
+  });
 }
 
 // ─── Маппинг входа V2 → spec ChatRequest ─────────────────────────────────────
@@ -212,7 +330,10 @@ function renderPlaceholder(decision: PipelineDecision): string {
 }
 
 // ─── HTTP handler ────────────────────────────────────────────────────────────
-serve(async (req) => {
+export async function handleChatConsultantV2(
+  req: Request,
+  admissionOptions: V2AdmissionOptions = {},
+): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -225,39 +346,42 @@ serve(async (req) => {
 
   const traceId = crypto.randomUUID();
 
-  // Body parse
-  let rawText = "";
-  let parsedBody: unknown = null;
-  try {
-    rawText = await req.text();
-    parsedBody = rawText ? JSON.parse(rawText) : {};
-  } catch (e) {
-    console.error(
-      `[chat-consultant-v2] body parse error trace=${traceId}: ${
-        e instanceof Error ? e.message : e
-      }`,
-    );
-    return new Response(
-      JSON.stringify({ error: "invalid_json", traceId }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  }
-
-  const validation = RequestSchema.safeParse(parsedBody);
-  if (!validation.success) {
-    const flat = validation.error.flatten();
+  const validation = await parseV2Request(req, admissionOptions.bodyReadTimeoutMs);
+  if (!validation.ok) {
     console.warn(
-      `[chat-consultant-v2] schema validation failed trace=${traceId}: ${
-        JSON.stringify(flat.fieldErrors)
-      }`,
+      `[chat-consultant-v2] request rejected trace=${traceId} error=${validation.error}`,
     );
     return new Response(
-      JSON.stringify({ error: "invalid_request", details: flat.fieldErrors, traceId }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      JSON.stringify({
+        error: validation.error,
+        ...(validation.details ? { details: validation.details } : {}),
+        traceId,
+      }),
+      {
+        status: validation.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
     );
   }
 
-  const v2req: V2Request = validation.data;
+  const v2req: V2Request = validation.value;
+  const admissionRpc = admissionOptions.rpc ?? v2AdmissionRpc();
+  const admission = await reservePublicApiAdmission({
+    route: "chat-consultant-v2",
+    lanes: ["model", "catalog"],
+    rpc: admissionRpc,
+    readEnv: admissionOptions.readEnv,
+  });
+  const releaseAdmission = () => releasePublicApiAdmission({
+    reservation: admission,
+    rpc: admissionRpc,
+  });
+  if (!admission.allowed) {
+    // An ambiguous RPC timeout might have committed a reservation.
+    await releaseAdmission();
+    return v2AdmissionDenied(admission, traceId);
+  }
+
   const clientMeta = {
     ip: req.headers.get("x-forwarded-for") ?? undefined,
     user_agent: req.headers.get("user-agent") ?? undefined,
@@ -269,7 +393,20 @@ serve(async (req) => {
     `[chat-consultant-v2] build=${BUILD_MARKER} trace=${traceId} conv=${v2req.conversationId} q="${v2req.query.slice(0, 80)}" slots_in=${chatReq.state.slots.length}`,
   );
 
+  if (admissionOptions.acceptedWork) {
+    try {
+      const response = await admissionOptions.acceptedWork(v2req);
+      return admission.releaseRequired
+        ? releaseV2OnlyAfterUpstream(response, releaseAdmission)
+        : response;
+    } catch (error) {
+      await releaseAdmission();
+      throw error;
+    }
+  }
+
   // SSE stream
+  let streamCanceled = false;
   const stream = new ReadableStream({
     async start(controller) {
       try {
@@ -655,6 +792,10 @@ serve(async (req) => {
         controller.enqueue(sseDone());
         controller.close();
       } catch (e) {
+        // Browser disconnects close the stream while upstream work may still
+        // settle. Do not turn that normal cancellation into an unhandled
+        // second enqueue/close error.
+        if (streamCanceled) return;
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[chat-consultant-v2] ERROR trace=${traceId}: ${msg}`);
         controller.enqueue(
@@ -679,9 +820,12 @@ serve(async (req) => {
         controller.close();
       }
     },
+    cancel() {
+      streamCanceled = true;
+    },
   });
 
-  return new Response(stream, {
+  const response = new Response(stream, {
     status: 200,
     headers: {
       ...corsHeaders,
@@ -691,4 +835,11 @@ serve(async (req) => {
       "X-Accel-Buffering": "no",
     },
   });
-});
+  return admission.releaseRequired
+    ? releaseV2OnlyAfterUpstream(response, releaseAdmission)
+    : response;
+}
+
+if (import.meta.main) {
+  serve((req) => handleChatConsultantV2(req));
+}

@@ -5,6 +5,7 @@
  * lane. The header must never be populated by browser code.
  */
 export const PREVIEW_SECRET_ENV = "VOLT220_V3_PREVIEW_SECRET";
+export const PREVIEW_QA_SECRET_ENV = "VOLT220_V3_QA_SECRET";
 export const PREVIEW_SECRET_HEADER = "x-volt-preview-secret";
 
 const PREVIEW_SECRET_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
@@ -23,23 +24,33 @@ async function sha256(value: string): Promise<Uint8Array> {
 export async function previewSecretAuthorized(
   provided: string | null,
   configured: string | null | undefined,
+  configuredQa?: string | null,
 ): Promise<boolean> {
   // A missing or accidentally weak deployment secret must always fail closed.
-  if (!validSecret(configured) || !validSecret(provided)) return false;
+  // The optional QA secret is independent: an invalid value cannot weaken the
+  // existing preview secret, and a valid one does not require the old secret.
+  if (!validSecret(provided)) return false;
+  const validConfigured = [configured, configuredQa].filter(validSecret);
+  if (validConfigured.length === 0) return false;
 
   try {
     // Compare fixed-size digests without an equality-dependent early exit.
     // Hashing time can depend on the caller-controlled header length, but the
-    // comparison does not reveal the matching prefix or secret length.
-    const [expectedDigest, providedDigest] = await Promise.all([
-      sha256(configured),
+    // comparison does not reveal the matching prefix or secret length. Every
+    // configured valid secret is compared even after a match.
+    const [providedDigest, ...expectedDigests] = await Promise.all([
       sha256(provided),
+      ...validConfigured.map(sha256),
     ]);
-    let difference = 0;
-    for (let i = 0; i < expectedDigest.length; i++) {
-      difference |= expectedDigest[i] ^ providedDigest[i];
+    let matches = 0;
+    for (const expectedDigest of expectedDigests) {
+      let difference = 0;
+      for (let i = 0; i < expectedDigest.length; i++) {
+        difference |= expectedDigest[i] ^ providedDigest[i];
+      }
+      matches |= Number(difference === 0);
     }
-    return difference === 0;
+    return matches !== 0;
   } catch {
     // WebCrypto failure is an authorization failure, never a bypass.
     return false;

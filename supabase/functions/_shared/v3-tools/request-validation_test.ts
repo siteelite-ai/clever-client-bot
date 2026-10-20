@@ -47,6 +47,56 @@ Deno.test("bounded ingress: rejects a body beyond its byte limit without Content
   assert(cancelled);
 });
 
+Deno.test("bounded ingress: one deadline covers a trickling stream and cancels the read", async () => {
+  let cancelled = false;
+  let chunkCount = 0;
+  let ticker: number | undefined;
+  const request = new Request("https://example.test/chat", {
+    method: "POST",
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{"));
+        chunkCount++;
+        // Sending more bytes does not restart the absolute ingress deadline.
+        ticker = setInterval(() => {
+          controller.enqueue(new TextEncoder().encode(" "));
+          chunkCount++;
+        }, 5);
+      },
+      cancel() {
+        cancelled = true;
+        clearInterval(ticker);
+        // A stalled source cancellation must not hold the response open.
+        return new Promise<void>(() => {});
+      },
+    }),
+  });
+  assertEquals(await readRequestTextBounded(request, 64, 40), {
+    ok: false,
+    reason: "timeout",
+  });
+  assert(cancelled);
+  assert(chunkCount > 1);
+});
+
+Deno.test("bounded ingress: an aborted client stops body consumption", async () => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const request = new Request("https://example.test/chat", {
+    method: "POST",
+    signal: controller.signal,
+    body: new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  });
+  const pending = readRequestTextBounded(request, 64, 1_000);
+  controller.abort();
+  assertEquals(await pending, { ok: false, reason: "aborted" });
+  assert(cancelled);
+});
+
 function validRequest(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {

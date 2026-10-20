@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildReplacementProofContract,
   compileLiveCompactReplacementContract,
   derivePortableAxisTitleRequirements,
   excludeMandatoryAxisCodesFromSourceModels,
@@ -9,6 +10,15 @@ import {
   extractReplacementSourceDescription,
   inferLiveReplacementClarification,
   isReplacementIntent,
+  isReplacementProofRequest,
+  guardReplacementEgressText,
+  guardReplacementReplayEvents,
+  persistedReplacementEgressMode,
+  replacementReplayClarificationCaption,
+  replacementTerminalFallback,
+  shouldGuardReplayWithoutClientHistory,
+  sourceArticleIsExplicitInRequest,
+  verifiedReplacementClarificationFromLiveFacets,
   portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
   productContainsExactModelCode,
@@ -16,8 +26,11 @@ import {
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
   provisionalReplacementCandidateText,
+  replacementProofCaption,
   replacementClassIsGroundedByLiveIdentity,
+  resolveExactReplacementSource,
   resolveReplacementIntent,
+  resolveReplacementProofContext,
   resolveReplacementSourceMessage,
   resolveScopedReplacementSource,
   resolveReplacementSourceModelCodes,
@@ -316,6 +329,451 @@ Deno.test("partial replacement axes remain provisional across product classes", 
   }
   assertEquals(compact.includes("нужен точный артикул исходного изделия"), true);
   assertEquals(exactSource.includes("сверьте остальные критичные"), true);
+});
+
+Deno.test("an Acti9-like series and compact C16 code do not prove a source SKU or cheaper equivalent", () => {
+  const request =
+    "Подбери более дешёвые аналоги автомата Schneider Electric Acti9 1P 16A C";
+  const candidates: ProductRef[] = [{
+    id: "breaker-45",
+    pagetitle: "Автоматический выключатель 1P C16 4,5кА",
+    article: "OTHER-C16",
+    vendor: "Other",
+    price: 477,
+    unit: "шт",
+    stock: "in_stock",
+    leaf_category: "Автоматические выключатели",
+    short_traits: ["Отключающая способность: 4,5 кА"],
+  }];
+  assertEquals(resolveExactReplacementSource(request, candidates), null);
+  const proof = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates,
+    completeCriticalFacetKeys: ["Отключающая способность"],
+  });
+  assertEquals(proof.all_equivalent, false);
+  assertEquals(proof.cheaper_than_source_proven, false);
+  assertEquals(proof.candidates[0].status, "candidate");
+  assertEquals(proof.candidates[0].matched, []);
+  assertEquals(replacementProofCaption(proof).includes("Уточните артикул"), true);
+  const guarded = guardReplacementEgressText(
+    "Это полноценный аналог и он дешевле исходного. Полная взаимозаменяемость не подтверждена.",
+  );
+  assertEquals(guarded.removed, 1);
+  assertEquals(guarded.text, "");
+  assertEquals(guardReplacementEgressText(
+    "Это полноценный аналог и дешевле исходного, но взаимозаменяемость не подтверждена.",
+  ).text, "");
+  assertEquals(guardReplacementEgressText(
+    "Не могу подтвердить, что товар дешевле исходного. Похожие позиции не проходят как полноценная замена.",
+  ).removed, 1);
+  assertEquals(guardReplacementEgressText(
+    replacementProofCaption(proof),
+    true,
+  ).text, replacementProofCaption(proof));
+});
+
+Deno.test("replacement explanation cites only criteria verified on every live candidate card", () => {
+  const candidates = ["10", "4.5", "6", "4.5"].map((rating, index) => ({
+    id: `breaker-${index}`,
+    pagetitle: `Автомат 1P C16 ${rating} кА`,
+    vendor: "Test",
+    price: 500 + index,
+    stock: "in_stock" as const,
+    leaf_category: "Автоматические выключатели",
+    short_traits: [
+      "Количество полюсов: 1",
+      "Номинальный ток: 16",
+      "Характеристика срабатывания: C",
+      `Отключающая способность: ${rating}`,
+    ],
+    facet_values: {
+      kolichestvo_polyusov: ["1"],
+      nominalnyi_tok: ["16"],
+      kharakteristika_srabatyvaniya: ["C"],
+      otklyuchayushchaya_sposobnost: [rating],
+    },
+  }));
+  const criteria = [
+    { key: "Количество полюсов", op: "eq", value: "1" },
+    { key: "Номинальный ток", op: "eq", value: "16" },
+    { key: "Характеристика срабатывания", op: "eq", value: "C" },
+    { key: "Отключающая способность", op: "eq", value: "10" },
+  ];
+  const proof = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates,
+    candidateSelectionCriteria: criteria,
+  });
+  assertEquals(proof.verified_candidate_criteria, criteria.slice(0, 3).map(
+    ({ key, value }) => ({ key, value }),
+  ));
+  const caption = replacementProofCaption(proof);
+  assertEquals(caption.includes("Количество полюсов: 1"), true);
+  assertEquals(caption.includes("Номинальный ток: 16"), true);
+  assertEquals(caption.includes("Характеристика срабатывания: C"), true);
+  assertEquals(caption.includes("Отключающая способность: 10"), false);
+  assertEquals(caption.includes("взаимозаменяемость и сравнение с его ценой не проверены"), true);
+  const missingOnOne = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: candidates.map((candidate, index) => index === 0
+      ? {
+        ...candidate,
+        short_traits: ["Номинальный ток: 16"],
+        facet_values: { nominalnyi_tok: ["16"] },
+      }
+      : candidate),
+    candidateSelectionCriteria: criteria,
+  });
+  assertEquals(missingOnOne.verified_candidate_criteria, [{
+    key: "Номинальный ток",
+    value: "16",
+  }]);
+  const ambiguous = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [{
+      ...candidates[0],
+      facet_values: {
+        "Размер": ["2/5"],
+        "Доля": ["1"],
+        "Номинальный ток": ["16"],
+      },
+    } as ProductRef],
+    candidateSelectionCriteria: [
+      { key: "Размер", op: "eq", value: "2,5" },
+      { key: "Доля", op: "eq", value: "1%" },
+      { key: "Номинальный ток", op: "eq", value: "16", unit: "А" },
+    ],
+  });
+  assertEquals(ambiguous.verified_candidate_criteria, []);
+});
+
+Deno.test("replacement egress is fail-closed for direct, model, terminal and mixed prose", () => {
+  const unproven = [
+    "Этот автомат подходит как замена исходному и стоит меньше",
+    "Параметры совпадают, можно установить вместо исходного",
+    "Это совместимый аналог модели",
+    "Цена на 30% ниже, чем у исходного",
+    "Это совместимый аналог модели. Уточните, какой цвет нужен?",
+  ];
+  for (const route of ["direct", "model", "terminal"]) {
+    for (const text of unproven) {
+      const projectedSse = guardReplacementEgressText(text).text;
+      assertEquals(projectedSse, "", `${route}: ${text}`);
+    }
+  }
+  const verifiedQuestion = "Уточните артикул исходного изделия.";
+  assertEquals(
+    guardReplacementEgressText(verifiedQuestion, true).text,
+    verifiedQuestion,
+  );
+});
+
+Deno.test("egress safety covers a brand-only analog and comparative follow-up without changing routing", () => {
+  assertEquals(isReplacementIntent("Подбери аналог розетки Gallant"), false);
+  assertEquals(isReplacementProofRequest("Подбери аналог розетки Gallant"), true);
+  assertEquals(isReplacementProofRequest(
+    "Хочу заменить люстру на светодиодный светильник в гостиной",
+  ), false);
+  for (const broad of [
+    "Подбери похожий светильник для гостиной 25 м²",
+    "Подбери похожий светильник Philips для гостиной",
+    "Подбери похожий светильник Philips для гостиной?",
+    "Найди альтернативы светильника Philips",
+    "Нужна похожая люстра в гостиную",
+    "Замена люстры в гостиной 25 м²",
+  ]) assertEquals(isReplacementProofRequest(broad), false, broad);
+  assertEquals(isReplacementProofRequest(
+    "Подбери похожий светильник Philips DN027B для гостиной",
+  ), true);
+  assertEquals(isReplacementProofRequest(
+    "Подбери аналог розетки серии Gallant",
+  ), true);
+  assertEquals(resolveReplacementProofContext(
+    "А есть подешевле?",
+    [{ role: "user", content: "Подбери аналог розетки Gallant" }],
+    { comparativeFollowup: true },
+  ), "Подбери аналог розетки Gallant");
+  assertEquals(resolveReplacementProofContext(
+    "А есть подешевле?",
+    [{ role: "user", content: "Подбери аналог розетки Gallant" }],
+    { comparativeFollowup: true, newTask: true },
+  ), null);
+  assertEquals(resolveReplacementProofContext(
+    "А есть подешевле?",
+    [{ role: "user", content: "Подбери похожий светильник Philips для гостиной" }],
+    { comparativeFollowup: true },
+  ), null);
+});
+
+Deno.test("named product lines remain replacement-proof requests despite a usage constraint", () => {
+  for (const sourceDirected of [
+    "Подбери аналог розетки Gallant",
+    "Подбери аналог розетки Gallant для кухни",
+    "Подбери аналог розетки Gallant в кухню",
+    "Подбери аналог розетки серии Gallant",
+    "Подбери аналог розетки серии Gallant для кухни",
+    "Подбери аналог розетки серии Gallant в кухню",
+    "Подбери аналог светильника Philips для гостиной",
+    "Подбери аналог светильника Philips в гостиную",
+    "Хочу заменить розетку серии Gallant на другую",
+    "Хочу заменить розетку Gallant на новую",
+  ]) {
+    assertEquals(isReplacementProofRequest(sourceDirected), true, sourceDirected);
+  }
+  for (const broadSelection of [
+    "Подбери похожие светильники Philips для гостиной",
+    "Подбери похожие светильники Philips в гостиную",
+    "Хочу заменить люстру на светодиодный светильник в гостиной",
+    "Замени люстру на светодиодное освещение",
+  ]) {
+    assertEquals(isReplacementProofRequest(broadSelection), false, broadSelection);
+  }
+});
+
+Deno.test("legacy replacement replay strips stored prose but keeps cards and clarification protocol", () => {
+  type Event = {
+    type: string;
+    content?: string;
+    phase?: string;
+    markdown?: string;
+    origin?: string;
+    replacement_proof?: boolean;
+  };
+  const candidateCaption: Event = { type: "delta", content: "Кандидаты; взаимозаменяемость не подтверждена." };
+  const clarificationCaption: Event = { type: "delta", content: "Уточните артикул исходного изделия." };
+  const stored: Event[] = [
+    { type: "diagnostic", phase: "start" },
+    { type: "delta", content: "Это совместимый аналог модели" },
+    { type: "products_block", markdown: "[Кандидат](https://example.com)" },
+    { type: "diagnostic", phase: "complete" },
+    { type: "done" },
+  ];
+  assertEquals(guardReplacementReplayEvents(
+    stored,
+    candidateCaption,
+    clarificationCaption,
+  ), [stored[0], candidateCaption, stored[2], stored[3], stored[4]]);
+  const questionOnly: Event[] = [
+    { type: "diagnostic", phase: "start" },
+    { type: "delta", content: "Параметры совпадают, можно установить вместо исходного" },
+    { type: "quick_replies" },
+    { type: "diagnostic", phase: "complete" },
+    { type: "done" },
+  ];
+  assertEquals(guardReplacementReplayEvents(
+    questionOnly,
+    candidateCaption,
+    clarificationCaption,
+  ), [questionOnly[0], clarificationCaption, ...questionOnly.slice(2)]);
+  const verifiedQuestion: Event = {
+    type: "delta",
+    origin: "server",
+    content: "Уточните артикул исходного изделия.",
+  };
+  assertEquals(guardReplacementReplayEvents(
+    [questionOnly[0], verifiedQuestion, ...questionOnly.slice(2)],
+    candidateCaption,
+    clarificationCaption,
+  ), [questionOnly[0], verifiedQuestion, ...questionOnly.slice(2)]);
+  const verifiedProof: Event = {
+    type: "delta",
+    origin: "server",
+    replacement_proof: true,
+    content: candidateCaption.content,
+  };
+  assertEquals(guardReplacementReplayEvents(
+    [stored[0], verifiedProof, ...stored.slice(2)],
+    candidateCaption,
+    clarificationCaption,
+  ), [stored[0], verifiedProof, ...stored.slice(2)]);
+  assertEquals(persistedReplacementEgressMode([
+    { type: "diagnostic", phase: "complete", replacement_egress: "replacement" },
+  ]), "replacement");
+  assertEquals(shouldGuardReplayWithoutClientHistory([
+    { type: "diagnostic", phase: "complete", replacement_egress: "ordinary" },
+  ]), false);
+  assertEquals(shouldGuardReplayWithoutClientHistory(stored), true);
+  assertEquals(replacementReplayClarificationCaption([{
+    type: "quick_replies",
+    facet_key: "Количество полюсов",
+    replies: [{ value: "1" }, { value: "2" }, { value: "3" }],
+  }]), "Уточните значение параметра «Количество полюсов» исходного изделия: 1 или 2 или 3?");
+  assertEquals(replacementReplayClarificationCaption([{
+    type: "quick_replies",
+    facet_key: "Количество полюсов",
+    replies: [{ value: "1" }, { value: "2" }],
+  }], false), "Уточните значение параметра «Количество полюсов» товара: 1 или 2?");
+});
+
+Deno.test("a proven source safety rating cannot certify a known lower candidate", () => {
+  const source: ProductRef = {
+    id: "source",
+    pagetitle: "Автоматический выключатель iC60N 1P C16",
+    article: "A9F79116",
+    vendor: "Schneider",
+    price: 3607,
+    unit: "шт",
+    stock: "in_stock",
+    leaf_category: "Автоматические выключатели",
+    short_traits: [
+      "Номинальный ток: 16 А",
+      "Отключающая способность: 6 кА",
+    ],
+  };
+  const lower: ProductRef = {
+    ...source,
+    id: "candidate",
+    article: "OTHER-16",
+    vendor: "Other",
+    price: 477,
+    short_traits: [
+      "Номинальный ток: 16 А",
+      "Отключающая способность: 4,5 кА",
+    ],
+  };
+  assertEquals(resolveExactReplacementSource(
+    "Аналог автомата A9F79116",
+    [source, lower],
+    new Set([lower.id]),
+  )?.id, source.id);
+  const proof = buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [lower],
+    sourcePriceIdentityVerified: true,
+    completeCriticalFacetKeys: [
+      "Номинальный ток",
+      "Отключающая способность",
+    ],
+  });
+  assertEquals(proof.candidates[0].status, "candidate");
+  assertEquals(proof.candidates[0].lower_numeric, [
+    "отключающая способность",
+  ]);
+  assertEquals(proof.candidates[0].matched, [
+    { key: "номинальный ток", value: "16 А" },
+  ]);
+  assertEquals(proof.cheaper_than_source_proven, true);
+  assertEquals(/ниже значение/iu.test(replacementProofCaption(proof)), true);
+  assertEquals(replacementProofCaption(proof).includes("№1"), true);
+  assertEquals(replacementProofCaption(proof).includes("номинальный ток: 16 А"), true);
+  const fullRating = {
+    ...lower,
+    id: "candidate-safe",
+    price: 570,
+    short_traits: [
+      "Номинальный ток: 16 А",
+      "Отключающая способность: 6 кА",
+    ],
+  };
+  const mixed = buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [fullRating, lower],
+    sourcePriceIdentityVerified: true,
+  });
+  assertEquals(replacementProofCaption(mixed).includes("№2"), true);
+  assertEquals(replacementProofCaption(mixed).includes("№1:"), false);
+  assertEquals(sourceArticleIsExplicitInRequest("Аналог автомата A9F79116", source), true);
+  assertEquals(sourceArticleIsExplicitInRequest("Аналог автомата iC60N 1P C16", source), false);
+  const titleOnlyRequest = `Аналог ${source.pagetitle}`;
+  assertEquals(resolveExactReplacementSource(
+    titleOnlyRequest,
+    [source, lower],
+    new Set([lower.id]),
+  )?.id, source.id);
+  assertEquals(sourceArticleIsExplicitInRequest(titleOnlyRequest, source), false);
+  assertEquals(buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [lower],
+  }).cheaper_than_source_proven, false);
+  assertEquals(replacementTerminalFallback("Аналог A9F79116").includes("Уточните точный артикул"), false);
+  assertEquals(replacementTerminalFallback("Аналог розетки Gallant").includes("Уточните точный артикул"), true);
+});
+
+Deno.test("replacement model clarification is rebuilt only from live facet values", () => {
+  const facets = [{
+    key: "pole_count",
+    caption: "Количество полюсов",
+    type: "string" as const,
+    unit: null,
+    values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+  }];
+  const verified = verifiedReplacementClarificationFromLiveFacets({
+    facet_key: "pole_count",
+    options: [{ value: "1", label: "точно совместим" }, { value: "2" }],
+  }, facets);
+  assertEquals(verified?.question,
+    "Уточните «Количество полюсов» исходного изделия: 1 или 2?");
+  assertEquals(verified?.options.map((item) => item.label), ["1", "2"]);
+  assertEquals(verifiedReplacementClarificationFromLiveFacets({
+    facet_key: "pole_count",
+    options: [{ value: "1" }, { value: "4" }],
+  }, facets), null);
+});
+
+Deno.test("another product class requires a complete live facet proof, not E27/IP65/D90 digit guesses", () => {
+  const source: ProductRef = {
+    id: "lamp-source",
+    pagetitle: "Светильник G2 E27 IP65 D90",
+    article: "LIGHT-001",
+    vendor: "First",
+    price: 6000,
+    unit: "шт",
+    stock: "in_stock",
+    leaf_category: "Светильники",
+    short_traits: [],
+    facet_values: {
+      socket: ["E27"],
+      ingress: ["IP65"],
+      cutout: ["D90"],
+    },
+  } as ProductRef;
+  const matching: ProductRef = {
+    ...source,
+    id: "lamp-match",
+    article: "LIGHT-002",
+    vendor: "Second",
+    price: 5500,
+  };
+  const contradicted: ProductRef = {
+    ...matching,
+    id: "lamp-conflict",
+    facet_values: {
+      socket: ["E14"],
+      ingress: ["IP44"],
+      cutout: ["D90"],
+    },
+  } as ProductRef;
+  const unverified = buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [matching],
+  });
+  assertEquals(unverified.candidates[0].status, "candidate");
+  const complete = buildReplacementProofContract({
+    source,
+    sourceIdentity: "exact",
+    candidates: [matching, contradicted],
+    completeCriticalFacetKeys: ["socket", "ingress", "cutout"],
+  });
+  assertEquals(complete.candidates[0].status, "equivalent");
+  assertEquals(complete.candidates[1].status, "candidate");
+  assertEquals(complete.candidates[1].contradicted, ["socket", "ingress"]);
+  assertEquals(complete.candidates[1].lower_numeric, []);
+  assertEquals(complete.all_equivalent, false);
+  assertEquals(buildReplacementProofContract({
+    source: { ...source, unit: null },
+    sourceIdentity: "exact",
+    candidates: [matching],
+    completeCriticalFacetKeys: ["socket", "ingress", "cutout"],
+  }).cheaper_than_source_proven, false);
 });
 
 Deno.test("replacement clarification does not invent an axis without a live compact-code decode", () => {

@@ -25,6 +25,14 @@ import {
   type RelatedAnchor,
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
+import {
+  releasePublicApiAdmission,
+  reservePublicApiAdmission,
+  wrapResponseForAdmissionRelease,
+  type PublicApiAdmissionResult,
+  type PublicApiAdmissionRpc,
+} from '../_shared/public-api-admission.ts';
+import { MAX_REQUEST_BODY_READ_MS, readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
 import { interpretRequirement, type ExpertOption } from '../_shared/expert-interpretation.ts';
@@ -66,6 +74,58 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+// The legacy endpoint still exists even though the current widget uses V3.
+// Keep its historical payload shape, but never buffer an unbounded request.
+const LEGACY_MAX_REQUEST_BODY_BYTES = 256 * 1024;
+
+export async function parseLegacyChatBody(
+  req: Request,
+  readTimeoutMs = MAX_REQUEST_BODY_READ_MS,
+): Promise<
+  | { ok: true; body: any }
+  | { ok: false; status: 400 | 408 | 413; error: string }
+> {
+  const declaredLength = Number(req.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > LEGACY_MAX_REQUEST_BODY_BYTES) {
+    return { ok: false, status: 413, error: 'payload_too_large' };
+  }
+  const result = await readRequestTextBounded(req, LEGACY_MAX_REQUEST_BODY_BYTES, readTimeoutMs);
+  if (!result.ok) {
+    return result.reason === 'too_large'
+      ? { ok: false, status: 413, error: 'payload_too_large' }
+      : result.reason === 'timeout' || result.reason === 'aborted'
+      ? { ok: false, status: 408, error: 'request_timeout' }
+      : { ok: false, status: 400, error: 'invalid_json' };
+  }
+  try {
+    const body = JSON.parse(result.text);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return { ok: false, status: 400, error: 'invalid_request' };
+    }
+    // Preserve the legacy precedence: `messages` wins over `message` when
+    // present. Require a real user text before any logging, DB or LLM work.
+    if (body.messages) {
+      if (
+        !Array.isArray(body.messages) ||
+        !body.messages.every((item: any) =>
+          item && typeof item === 'object' && !Array.isArray(item) &&
+          typeof item.role === 'string' && typeof item.content === 'string'
+        ) ||
+        !body.messages.some((item: any) =>
+          item.role === 'user' && item.content.trim().length > 0
+        )
+      ) {
+        return { ok: false, status: 400, error: 'invalid_request' };
+      }
+    } else if (typeof body.message !== 'string' || !body.message.trim()) {
+      return { ok: false, status: 400, error: 'invalid_request' };
+    }
+    return { ok: true, body };
+  } catch {
+    return { ok: false, status: 400, error: 'invalid_json' };
+  }
+}
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
 
@@ -6234,10 +6294,165 @@ function storeCachedResolvedFiltersAsync(key: string, value: Omit<CachedResolved
 }
 
 
-export async function handleChatConsultant(req: Request): Promise<Response> {
+type LegacyAdmissionOptions = {
+  // Injected only by route tests. Production callers use the server-owned RPC.
+  rpc?: PublicApiAdmissionRpc;
+  readEnv?: (name: string) => string | undefined;
+  acceptedWork?: (req: Request, body: any) => Promise<Response>;
+  bodyReadTimeoutMs?: number;
+};
+
+function legacyAdmissionRpc(): PublicApiAdmissionRpc {
+  let client: ReturnType<typeof createClient> | null = null;
+  return async (name, args) => {
+    if (!client) {
+      const url = Deno.env.get('SUPABASE_URL');
+      const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      if (!url || !key) throw new Error('public admission database unavailable');
+      client = createClient(url, key, { auth: { persistSession: false } });
+    }
+    // This shared RPC is deployed by a migration, so it is not yet present in
+    // the generated Supabase Database type used by the legacy client.
+    const call = client.rpc.bind(client) as unknown as PublicApiAdmissionRpc;
+    return await call(name, args);
+  };
+}
+
+function legacyAdmissionDenied(admission: PublicApiAdmissionResult): Response {
+  const limited = admission.reason === 'limit_exceeded';
+  return new Response(JSON.stringify({
+    error: limited
+      ? 'Слишком много запросов. Подождите минуту.'
+      : 'Сервис временно недоступен. Попробуйте позже.',
+  }), {
+    status: limited ? 429 : 503,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      ...(limited ? { 'Retry-After': String(admission.retryAfterSeconds || 60) } : {}),
+    },
+  });
+}
+
+/**
+ * The heartbeat can outlive the browser: its cancel handler stops heartbeats
+ * but does not abort the already-started catalog/model pipeline. Keep draining
+ * that pipeline without forwarding bytes after a client disconnect, so the
+ * global in-flight reservation is not released before paid work settles.
+ */
+function trackLegacyUpstream(response: Response): {
+  response: Response;
+  settled: Promise<void>;
+  detach: () => void;
+} {
+  if (!response.body) {
+    return { response, settled: Promise.resolve(), detach: () => {} };
+  }
+  const reader = response.body.getReader();
+  let resolveSettled!: () => void;
+  const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
+  let ended = false;
+  let detached = false;
+  let pendingPull: Promise<void> | null = null;
+  let downstream: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    resolveSettled();
+  };
+  const drain = async () => {
+    try {
+      await pendingPull;
+      while (!ended) {
+        if ((await reader.read()).done) finish();
+      }
+    } catch {
+      finish();
+    }
+  };
+  const detach = () => {
+    if (detached || ended) return;
+    detached = true;
+    try { downstream?.close(); } catch { /* already closed */ }
+    void drain();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { downstream = controller; },
+    async pull(controller) {
+      if (detached || ended) return;
+      const task = (async () => {
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            finish();
+            if (!detached) controller.close();
+          } else if (!detached) {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          finish();
+          if (!detached) controller.error(error);
+        }
+      })();
+      pendingPull = task;
+      await task;
+      if (pendingPull === task) pendingPull = null;
+    },
+    cancel() { detach(); },
+  });
+  return {
+    response: new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    settled,
+    detach,
+  };
+}
+
+export async function handleChatConsultant(
+  req: Request,
+  admissionOptions: LegacyAdmissionOptions = {},
+): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'method_not_allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Allow': 'POST, OPTIONS' },
+    });
+  }
+
+  const parsed = await parseLegacyChatBody(req, admissionOptions.bodyReadTimeoutMs);
+  if (!parsed.ok) {
+    return new Response(JSON.stringify({ error: parsed.error }), {
+      status: parsed.status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Shared, atomic budget for all public model/catalog routes. The default
+  // `off` mode performs no RPC and keeps the historical request path intact.
+  const admissionRpc = admissionOptions.rpc ?? legacyAdmissionRpc();
+  const admission = await reservePublicApiAdmission({
+    route: 'chat-consultant',
+    lanes: ['model', 'catalog'],
+    rpc: admissionRpc,
+    readEnv: admissionOptions.readEnv,
+  });
+  const releaseAdmission = () => releasePublicApiAdmission({
+    reservation: admission,
+    rpc: admissionRpc,
+  });
+  if (!admission.allowed) {
+    // A timed-out check may have committed a reservation before its result was
+    // lost. Best-effort release is required even when this request is denied.
+    await releaseAdmission();
+    return legacyAdmissionDenied(admission);
+  }
+  let releaseOnFailure = releaseAdmission;
 
   // Request-scoped logger (TTL 24ч в chat_request_logs)
   const logCtx = createLogCtx(req, 'v1');
@@ -6249,10 +6464,46 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
       //    sent immediately so proxies/NAT/browser don't drop the idle TCP
       //    connection (root cause of «Failed to fetch» on long requests).
       // The heavy pipeline runs unchanged inside _handleChatConsultantInner.
-      const innerPromise = _handleChatConsultantInner(req);
-      const wrapped = await wrapWithHeartbeat(innerPromise, { corsHeaders });
-      return wrapResponseForLogging(wrapped, logCtx);
+      const innerPromise = admissionOptions.acceptedWork
+        ? admissionOptions.acceptedWork(req, parsed.body)
+        : _handleChatConsultantInner(req, parsed.body);
+      let releaseAfterUpstream = releaseAdmission;
+      let responsePromise = innerPromise;
+      if (admission.releaseRequired) {
+        let markReady!: (tracker: ReturnType<typeof trackLegacyUpstream> | null) => void;
+        const trackerReady = new Promise<ReturnType<typeof trackLegacyUpstream> | null>(
+          (resolve) => { markReady = resolve; },
+        );
+        responsePromise = innerPromise.then(
+          (response) => {
+            try {
+              const tracker = trackLegacyUpstream(response);
+              markReady(tracker);
+              return tracker.response;
+            } catch (error) {
+              markReady(null);
+              throw error;
+            }
+          },
+          (error) => { markReady(null); throw error; },
+        );
+        releaseAfterUpstream = async () => {
+          const tracker = await trackerReady;
+          if (tracker) {
+            tracker.detach();
+            await tracker.settled;
+          }
+          return await releaseAdmission();
+        };
+        releaseOnFailure = releaseAfterUpstream;
+      }
+      const wrapped = await wrapWithHeartbeat(responsePromise, { corsHeaders });
+      const logged = wrapResponseForLogging(wrapped, logCtx);
+      return admission.releaseRequired
+        ? wrapResponseForAdmissionRelease(logged, releaseAfterUpstream)
+        : logged;
     } catch (e) {
+      await releaseOnFailure();
       logSetError(e);
       const { flushLog } = await import('../_shared/request-logger.ts');
       try {
@@ -6267,7 +6518,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
   });
 }
 
-async function _handleChatConsultantInner(req: Request): Promise<Response> {
+async function _handleChatConsultantInner(req: Request, body: any): Promise<Response> {
 
   // Per-request correlation id — included in every key log line so we can
   // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
@@ -6291,7 +6542,6 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
   }
 
   try {
-    const body = await req.json();
     const useStreaming = body.stream !== false;
 
     // Idempotency check: блокируем дубль-вызовы с тем же messageId
@@ -12992,5 +13242,5 @@ ${productInstructions}`;
 }
 
 if (import.meta.main) {
-  serve(handleChatConsultant);
+  serve((req) => handleChatConsultant(req));
 }

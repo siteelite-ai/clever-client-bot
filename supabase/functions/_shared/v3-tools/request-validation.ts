@@ -1,33 +1,61 @@
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+export const MAX_REQUEST_BODY_READ_MS = 15_000;
 
 export type BoundedRequestBodyResult =
   | { ok: true; text: string }
-  | { ok: false; reason: "too_large" | "read_error" };
+  | { ok: false; reason: "too_large" | "read_error" | "timeout" | "aborted" };
 
 // Content-Length is only a fast precheck: callers can omit or forge it. Bound
 // the bytes while reading so an oversized body is never buffered in full.
 export async function readRequestTextBounded(
   request: Request,
   maxBytes = MAX_REQUEST_BODY_BYTES,
+  readTimeoutMs = MAX_REQUEST_BODY_READ_MS,
 ): Promise<BoundedRequestBodyResult> {
+  if (request.signal.aborted) return { ok: false, reason: "aborted" };
   if (!request.body) return { ok: true, text: "" };
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let byteCount = 0;
+  let interrupted: "timeout" | "aborted" | undefined;
+  let rejectInterrupted!: (reason?: unknown) => void;
+  const interruption = new Promise<never>((_resolve, reject) => {
+    rejectInterrupted = reject;
+  });
+  const interrupt = (reason: "timeout" | "aborted") => {
+    if (interrupted) return;
+    interrupted = reason;
+    // Cancelling closes the stream and settles a pending read; do not await a
+    // user-supplied cancel callback, which itself can stall indefinitely.
+    void reader.cancel(reason).catch(() => {});
+    rejectInterrupted(new Error(reason));
+  };
+  const onAbort = () => interrupt("aborted");
+  request.signal.addEventListener("abort", onAbort, { once: true });
+  // Close the small gap between the initial signal check and listener setup.
+  if (request.signal.aborted) onAbort();
+  const timeoutMs = Number.isFinite(readTimeoutMs)
+    ? Math.max(1, Math.min(MAX_REQUEST_BODY_READ_MS, Math.floor(readTimeoutMs)))
+    : MAX_REQUEST_BODY_READ_MS;
+  const timer = setTimeout(() => interrupt("timeout"), timeoutMs);
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      if (interrupted) return { ok: false, reason: interrupted };
+      const { done, value } = await Promise.race([reader.read(), interruption]);
+      if (interrupted) return { ok: false, reason: interrupted };
       if (done) break;
       byteCount += value.byteLength;
       if (byteCount > maxBytes) {
-        await reader.cancel().catch(() => {});
+        void reader.cancel("too_large").catch(() => {});
         return { ok: false, reason: "too_large" };
       }
-      chunks.push(value);
+      chunks.push(value.slice());
     }
   } catch {
-    return { ok: false, reason: "read_error" };
+    return { ok: false, reason: interrupted ?? "read_error" };
   } finally {
+    clearTimeout(timer);
+    request.signal.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(byteCount);

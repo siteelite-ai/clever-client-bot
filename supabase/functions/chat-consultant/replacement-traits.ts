@@ -474,16 +474,21 @@ export function filterStructuralMarkings(
 // Data-agnostic: классификация по форме value (parse → number), не по
 // whitelist'у ключей.
 
-/** Парсит первое число из value (`"7"`, `"7W"`, `"7 Вт"`, `"2,5"`, `"220-240V"` → 220,
- *  `"AC 220"` → 220, `"D90"` → 90). Возвращает null если число не извлекается.
- *  Запятая трактуется как точка. Tolerant к ведущим единицам/префиксам — иначе
- *  numeric post-filter дропает кандидатов с реальным форматом каталога. */
+/** Парсит первое самостоятельное число из value (`"7"`, `"7W"`, `"7 Вт"`,
+ *  `"2,5"`, `"220-240V"` → 220, `"AC 220"` → 220).
+ *  Число, слитное с буквенным префиксом (`"E27"`, `"IP65"`, `"D90"`),
+ *  неоднозначно без контекста ключа: сохраняем его как strict trait, а не
+ *  подменяем допуском ±15%. Запятая трактуется как точка. */
 export function parseNumericTraitValue(value: string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   const s = String(value).trim().replace(',', '.');
   if (!s) return null;
   const m = s.match(/-?\d+(?:\.\d+)?/);
   if (!m) return null;
+  // Положительное значение после буквенного префикса часто является частью
+  // маркировки, а не числом с единицей измерения. Отдельный префикс с пробелом
+  // (например, "AC 220") сохраняет прежнюю поддержку реальных измерений.
+  if (m.index !== undefined && m.index > 0 && /[\p{L}\p{N}]/u.test(s[m.index - 1])) return null;
   const n = parseFloat(m[0]);
   return Number.isFinite(n) ? n : null;
 }

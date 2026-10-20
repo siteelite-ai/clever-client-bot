@@ -20,6 +20,41 @@ export interface LiveReplacementClarification {
   options: Array<{ value: string; label: string; count?: number }>;
 }
 
+/** Accept model-proposed chips only when a live facet independently contains
+ * every option. Rebuild the question and labels from catalog evidence so a
+ * model sentence cannot smuggle compatibility claims through server origin. */
+export function verifiedReplacementClarificationFromLiveFacets(
+  input: {
+    facet_key: string;
+    options: Array<{ value: string; label?: string }>;
+  },
+  facets: Facet[],
+): LiveReplacementClarification | null {
+  const facet = facets.find((item) => item.key === input.facet_key);
+  if (!facet || !Array.isArray(input.options) ||
+    input.options.length < 2 || input.options.length > 5) return null;
+  const caption = facet.caption.replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+    .replace(/\s+/gu, " ").trim().slice(0, 80);
+  if (!caption) return null;
+  const options = input.options.map(({ value }) => {
+    const live = facet.values.find((item) => norm(item.value) === norm(value));
+    return live && /^[\p{L}\p{N}\s.,%°/+()-]{1,80}$/u.test(live.value)
+      ? { value: live.value, label: live.value }
+      : null;
+  });
+  if (options.some((option) => !option)) return null;
+  const verified = options as Array<{ value: string; label: string }>;
+  if (new Set(verified.map(({ value }) => norm(value))).size !== verified.length) {
+    return null;
+  }
+  return {
+    facet_key: facet.key,
+    caption,
+    question: `Уточните «${caption}» исходного изделия: ${verified.map(({ label }) => label).join(" или ")}?`,
+    options: verified,
+  };
+}
+
 /** A compact source description is not a unique SKU when its live category
  * exposes an unstated structural variant. An exact article remains an exact
  * source lookup; an ungrounded taxonomy cannot authorize a question. */
@@ -95,6 +130,515 @@ export function provisionalReplacementCandidateText(
     ? "Перед заменой сверьте остальные критичные паспортные и монтажные характеристики исходного и выбранного изделия."
     : "Для проверки нужен точный артикул исходного изделия и сверка остальных критичных паспортных и монтажных характеристик.";
   return `Показываю кандидатов для замены из той же категории. ${evidence} Полная взаимозаменяемость не подтверждена. ${remaining}`;
+}
+
+/**
+ * A search match is not a substitution certificate. The complete list of
+ * critical live facet keys must come from an independently verified source
+ * specification; a model-selected subset, title code (E27/IP65/D90), or
+ * customer shorthand cannot opt into the `equivalent` state.
+ */
+export interface ReplacementProofInput {
+  source: ProductRef | null;
+  sourceIdentity: "exact" | "unverified";
+  candidates: ProductRef[];
+  /** The customer named the source's exact catalog article, not only a title. */
+  sourcePriceIdentityVerified?: boolean;
+  /** Complete, independently verified critical facet set. Empty = unknown. */
+  completeCriticalFacetKeys?: string[];
+  /** Final server selection contract. Only criteria verified on every rendered
+   * live catalogue card may be described to the customer. */
+  candidateSelectionCriteria?: ReadonlyArray<{
+    key: string;
+    op: string;
+    value: string | number | [number, number];
+    unit?: string | null;
+  }>;
+}
+
+export interface ReplacementProofContract {
+  source_identity: "exact" | "unverified";
+  source_id: string | null;
+  candidates: Array<{
+    id: string;
+    title: string;
+    status: "candidate" | "equivalent";
+    /** A known difference, not a model-inferred safety threshold. */
+    contradicted: string[];
+    /** Source evidence absent in the candidate. */
+    unverified: string[];
+    lower_numeric: string[];
+    /** Only exact live source-to-candidate trait equality. */
+    matched: Array<{ key: string; value: string }>;
+  }>;
+  all_equivalent: boolean;
+  cheaper_than_source_proven: boolean;
+  /** User-requested criteria proven by the live facets of every shown card. */
+  verified_candidate_criteria: Array<{ key: string; value: string }>;
+}
+
+/** Exact article or complete catalogue title, never a series/compact code. */
+export function resolveExactReplacementSource(
+  request: string,
+  products: ProductRef[],
+  candidateIds: ReadonlySet<string> = new Set(),
+): ProductRef | null {
+  const lookup = extractReplacementLookupKeys(request);
+  const identifiers = new Set([
+    ...lookup.articles.map(identityCodeNorm),
+    ...lookup.modelCodes.map(identityCodeNorm),
+  ].filter((value) => value.length >= 5));
+  const sourceDescription = norm(extractReplacementSourceDescription(request));
+  const matches = products.filter((product) => {
+    if (candidateIds.has(product.id)) return false;
+    const article = identityCodeNorm(product.article ?? "");
+    return Boolean(
+      (article && identifiers.has(article)) ||
+        (sourceDescription && sourceDescription === norm(product.pagetitle)),
+    );
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function replacementProofTraits(product: ProductRef): Map<string, string> {
+  const traits = new Map<string, string>();
+  for (const [key, values] of Object.entries(
+    (product as ProductRef & { facet_values?: Record<string, string[]> })
+      .facet_values ?? {},
+  )) {
+    if (isReplacementIdentityFacet({ key, caption: key })) continue;
+    const value = (values ?? []).map(String).map((item) => item.trim())
+      .filter(Boolean).join(" / ");
+    if (value) traits.set(norm(key), value);
+  }
+  for (const { caption, value } of traitEntries(product)) {
+    if (isReplacementIdentityFacet({ key: caption, caption })) continue;
+    const key = norm(caption);
+    if (key && !traits.has(key)) traits.set(key, value);
+  }
+  return traits;
+}
+
+function comparableNumericTrait(value: string): {
+  amount: number;
+  unit: string;
+} | null {
+  // A complete numeric value only: D90, IP65, E27, a range and a SKU must
+  // never be decomposed into an invented rating or compatibility threshold.
+  const match = String(value).trim().match(
+    /^(\d+(?:[.,]\d+)?)\s*([\p{L}%²]{0,8})$/u,
+  );
+  if (!match) return null;
+  const amount = Number(match[1].replace(",", "."));
+  return Number.isFinite(amount)
+    ? { amount, unit: norm(match[2]).replace(/\s+/gu, "") }
+    : null;
+}
+
+function strictProofFacet(value: string): string {
+  // `norm` is useful for search, but deliberately folds 2,5 / 2/5 and drops
+  // units. A customer-visible proof must preserve those distinctions.
+  return String(value).normalize("NFKC").trim().toLocaleLowerCase("ru")
+    .replace(/\s+/gu, " ");
+}
+
+function strictLiveCandidateFacetValue(
+  product: ProductRef,
+  key: string,
+): string | null {
+  // The API uses a machine `option.key` in facet_values but the final
+  // selection contract may use its human `caption_ru`. short_traits is built
+  // from that same live options array (all non-administrative captions), not
+  // from model prose. Match the complete caption literally, never fuzzily.
+  const captionValues = traitEntries(product)
+    .filter(({ caption }) =>
+      strictProofFacet(caption) === strictProofFacet(key)
+    )
+    .map(({ value }) => strictProofFacet(value)).filter(Boolean);
+  if (captionValues.length > 0) {
+    const uniqueCaptions = [...new Set(captionValues)];
+    return uniqueCaptions.length === 1 ? uniqueCaptions[0] : null;
+  }
+  const facets = (product as ProductRef & {
+    facet_values?: Record<string, string[]>;
+  }).facet_values;
+  if (!facets) return null;
+  const matching = Object.entries(facets)
+    .filter(([caption]) => strictProofFacet(caption) === strictProofFacet(key))
+    .flatMap(([, values]) => values ?? [])
+    .map(strictProofFacet).filter(Boolean);
+  const unique = [...new Set(matching)];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+/** A single server-owned proof for direct, model and fallback render paths. */
+export function buildReplacementProofContract(
+  input: ReplacementProofInput,
+): ReplacementProofContract {
+  const source = input.sourceIdentity === "exact" ? input.source : null;
+  const sourceTraits = source ? replacementProofTraits(source) : new Map();
+  const criticalKeys = [...new Set(
+    (input.completeCriticalFacetKeys ?? []).map(norm).filter(Boolean),
+  )];
+  const candidates = input.candidates.map((candidate) => {
+    const candidateTraits = replacementProofTraits(candidate);
+    const contradicted: string[] = [];
+    const unverified: string[] = [];
+    const lowerNumeric: string[] = [];
+    const matched: Array<{ key: string; value: string }> = [];
+    if (source) {
+      for (const [key, sourceValue] of sourceTraits) {
+        const candidateValue = candidateTraits.get(key);
+        if (!candidateValue) {
+          unverified.push(key);
+          continue;
+        }
+        if (norm(sourceValue) === norm(candidateValue)) {
+          matched.push({ key, value: sourceValue });
+          continue;
+        }
+        contradicted.push(key);
+        const sourceNumber = comparableNumericTrait(sourceValue);
+        const candidateNumber = comparableNumericTrait(candidateValue);
+        if (
+          sourceNumber && candidateNumber &&
+          sourceNumber.unit === candidateNumber.unit &&
+          candidateNumber.amount < sourceNumber.amount
+        ) lowerNumeric.push(key);
+      }
+    }
+    const categoryMatches = Boolean(
+      source?.leaf_category && candidate.leaf_category &&
+        norm(source.leaf_category) === norm(candidate.leaf_category),
+    );
+    const completeCriticalProof = criticalKeys.length > 0 &&
+      criticalKeys.every((key) =>
+        sourceTraits.has(key) && candidateTraits.has(key) &&
+        norm(sourceTraits.get(key)!) === norm(candidateTraits.get(key)!)
+      );
+    const status = source && source.id !== candidate.id && categoryMatches &&
+        completeCriticalProof && contradicted.length === 0 &&
+        unverified.length === 0
+      ? "equivalent"
+      : "candidate";
+    return {
+      id: candidate.id,
+      title: String(candidate.pagetitle ?? "").replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+        .replace(/\s+/gu, " ").trim().slice(0, 100),
+      status,
+      contradicted,
+      unverified,
+      lower_numeric: lowerNumeric,
+      matched,
+    } as const;
+  });
+  const sourceUnit = norm(source?.unit ?? "");
+  const cheaperThanSourceProven = Boolean(
+    source && input.sourcePriceIdentityVerified === true &&
+      Number.isFinite(source.price) && source.price > 0 &&
+      sourceUnit && input.candidates.length > 0 &&
+      input.candidates.every((candidate) =>
+        candidate.id !== source.id && Number.isFinite(candidate.price) &&
+        candidate.price > 0 && candidate.price < source.price &&
+        norm(candidate.unit ?? "") === sourceUnit
+      ),
+  );
+  const verifiedCandidateCriteria: Array<{ key: string; value: string }> = [];
+  const seenCriteria = new Set<string>();
+  if (input.candidates.length > 0) {
+    for (const criterion of input.candidateSelectionCriteria ?? []) {
+      // A contract is a search instruction, not proof of a card. Verify the
+      // final value against every rendered product before mentioning it.
+      if (criterion.op !== "eq" || criterion.unit ||
+        typeof criterion.value !== "string" &&
+        typeof criterion.value !== "number") continue;
+      const key = String(criterion.key);
+      const wanted = strictProofFacet(String(criterion.value));
+      const normalizedKey = strictProofFacet(key);
+      if (!normalizedKey || !wanted || seenCriteria.has(normalizedKey) ||
+        isReplacementIdentityFacet({ key, caption: key })) continue;
+      if (!input.candidates.every((candidate) =>
+        strictLiveCandidateFacetValue(candidate, key) === wanted
+      )) continue;
+      const safeKey = key.replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+        .replace(/\s+/gu, " ").trim().slice(0, 60);
+      const safeValue = String(criterion.value)
+        .replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+        .replace(/\s+/gu, " ").trim().slice(0, 40);
+      if (!safeKey || !safeValue) continue;
+      verifiedCandidateCriteria.push({ key: safeKey, value: safeValue });
+      seenCriteria.add(normalizedKey);
+      if (verifiedCandidateCriteria.length >= 3) break;
+    }
+  }
+  return {
+    source_identity: source ? "exact" : "unverified",
+    source_id: source?.id ?? null,
+    candidates,
+    all_equivalent: candidates.length > 0 &&
+      candidates.every(({ status }) => status === "equivalent"),
+    cheaper_than_source_proven: cheaperThanSourceProven,
+    verified_candidate_criteria: verifiedCandidateCriteria,
+  };
+}
+
+/** Caption belongs to the proof, not to whichever route found the cards. */
+export function replacementProofCaption(
+  proof: ReplacementProofContract,
+): string {
+  const verifiedSelection = proof.verified_candidate_criteria.length > 0
+    ? ` В карточках всех показанных товаров подтверждены параметры подбора: ${proof.verified_candidate_criteria.map(({ key, value }) =>
+      `${key}: ${value}`
+    ).join(", ")}.`
+    : "";
+  if (proof.source_identity !== "exact") {
+    return `Показываю кандидатов для замены.${verifiedSelection} Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.`;
+  }
+  const lower = proof.candidates.flatMap((item, index) =>
+    item.lower_numeric.length > 0
+      ? [`№${index + 1}${item.title ? ` «${item.title}»` : ""}: «${item.lower_numeric.slice(0, 2).join("», «")}»`]
+      : []
+  );
+  const shared = proof.candidates[0]?.matched.filter(({ key, value }) =>
+    proof.candidates.every((candidate) =>
+      candidate.matched.some((item) =>
+        item.key === key && norm(item.value) === norm(value)
+      )
+    )
+  ).slice(0, 3) ?? [];
+  const verifiedCriteria = shared.length > 0
+    ? ` По данным карточек совпадают отдельные параметры: ${shared.map((item) =>
+      `${item.key}: ${item.value}`
+    ).join(", ")}.`
+    : "";
+  const difference = lower.length > 0
+    ? ` Ниже значение параметра у конкретных кандидатов (${lower.join("; ")}); не считайте их равноценной заменой без проверки.`
+    : "";
+  const compatibility = proof.all_equivalent
+    ? "Совпадение подтверждено по полному набору проверенных критичных параметров каталога; перед установкой всё равно сверьте паспорт и монтаж."
+    : `Полная взаимозаменяемость по данным каталога не подтверждена.${difference} Перед покупкой сверьте остальные критичные паспортные и монтажные характеристики.`;
+  const price = proof.cheaper_than_source_proven
+    ? " Цены показанных товаров ниже актуальной цены исходной карточки при той же единице продажи."
+    : " Сравнение с ценой исходного товара не подтверждено.";
+  return `Показываю кандидатов для замены.${verifiedSelection}${verifiedCriteria} ${compatibility}${price}`;
+}
+
+/**
+ * Replacement prose is an information-flow decision, not a phrase classifier.
+ * Unknown freeform/model text may contain an unlimited paraphrase of a false
+ * compatibility or price claim, so only explicitly server-owned verified copy
+ * is admitted. The server's proof caption is generated separately above.
+ */
+export function guardReplacementEgressText(
+  text: string,
+  trustedServerCopy = false,
+): { text: string; removed: number } {
+  const value = String(text);
+  return trustedServerCopy
+    ? { text: value, removed: 0 }
+    : { text: "", removed: value.trim() ? 1 : 0 };
+}
+
+/** Structural replacement intent for egress, broader than direct routing. */
+export function isReplacementProofRequest(message: string): boolean {
+  const clean = norm(message);
+  const hasReplacementRelation =
+    /(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u
+      .test(clean);
+  if (!hasReplacementRelation) return false;
+  const hasNamedSourceToken = (text: string): boolean => {
+    const words = text.match(/\p{L}[\p{L}\p{N}-]*/gu) ?? [];
+    return words.some((word, index) =>
+      /^[A-Z][a-z]{2,}$/u.test(word) ||
+      /^[A-Z]{4,}$/u.test(word) ||
+      (index > 0 && /^[А-ЯЁ][а-яё]{2,}$/u.test(word))
+    );
+  };
+  const keys = extractReplacementLookupKeys(message);
+  const sourceBeforeReplacementTarget = String(message).match(
+    /(?:^|\s)замен\p{L}*\s+(.+?)\s+на\s+\S/iu,
+  )?.[1] ?? "";
+  const namedSourceBeforeReplacementTarget = hasNamedSourceToken(
+    sourceBeforeReplacementTarget,
+  );
+  // A category redesign ("replace a chandelier with LED lighting") has no
+  // named source product. It remains normal selection, not SKU equivalence.
+  if (
+    /замен\p{L}* .+ на .+/u.test(clean) &&
+    !/(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*)(?: |$)/u.test(clean) &&
+    keys.articles.length === 0 &&
+    keys.modelCodes.length === 0 &&
+    !namedSourceBeforeReplacementTarget
+  ) return false;
+  const source = extractReplacementSourceDescription(message);
+  if (source.length < 3) return false;
+  if (keys.articles.length > 0 || keys.modelCodes.length > 0) return true;
+  const quotedSource = /[«"][^»"]{3,}[»"]/u.test(message);
+  if (quotedSource) return true;
+  // Similarity/"alternatives" can describe a desired class or application;
+  // a brand alone is not a source SKU in that exploratory grammar. By contrast,
+  // an explicit analogue/replacement of a named line is a source-directed ask.
+  const explicitSubstitution =
+    /(?:^| )(?:аналог\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u.test(clean);
+  if (!explicitSubstitution) return false;
+  // A trailing application cannot erase an explicitly named source in an
+  // analogue/substitution ask ("... Gallant для кухни"). An unnamed class
+  // with an application remains ordinary selection. Broad similarity asks
+  // were excluded above, even when they happen to mention a brand.
+  const application = /(?:^|\s)(?:для|в)\s+\p{L}/iu.exec(source);
+  if (application) {
+    const beforeApplication = source.slice(0, application.index);
+    if (
+      !hasNamedSourceToken(beforeApplication) &&
+      !namedSourceBeforeReplacementTarget
+    ) return false;
+  }
+  // A named line is an identifiable source for output safety, while an
+  // unnamed class or room measurement is an ordinary selection.
+  return hasNamedSourceToken(source);
+}
+
+/** A relative-price claim needs an explicitly supplied exact source article. */
+export function sourceArticleIsExplicitInRequest(
+  request: string,
+  source: ProductRef | null,
+): boolean {
+  const article = identityCodeNorm(source?.article ?? "");
+  if (article.length < 5) return false;
+  const lookup = extractReplacementLookupKeys(request);
+  return [...lookup.articles, ...lookup.modelCodes]
+    .some((key) => identityCodeNorm(key) === article);
+}
+
+/** Terminal text must not imply catalog absence or ask again for a supplied SKU. */
+export function replacementTerminalFallback(request: string): string {
+  const keys = extractReplacementLookupKeys(request);
+  return keys.articles.length > 0 || keys.modelCodes.length > 0
+    ? "Не удалось завершить проверку замены по указанному артикулу или модели. Это не доказывает, что подходящих товаров нет. Повторите запрос позже."
+    : "Не удалось завершить проверку замены. Это не доказывает, что подходящих товаров нет. Уточните точный артикул исходного изделия или повторите запрос позже.";
+}
+
+/** Only the completed server log, never client history, authorizes replay. */
+export function persistedReplacementEgressMode(
+  events: readonly { type: string; phase?: string; replacement_egress?: string }[],
+): "replacement" | "ordinary" | null {
+  const complete = [...events].reverse().find((event) =>
+    event.type === "diagnostic" && event.phase === "complete"
+  );
+  return complete?.replacement_egress === "replacement" ||
+      complete?.replacement_egress === "ordinary"
+    ? complete.replacement_egress
+    : null;
+}
+
+export function shouldGuardReplayWithoutClientHistory(
+  events: readonly { type: string; phase?: string; replacement_egress?: string }[],
+): boolean {
+  // Unknown legacy rows are scrubbed rather than guessed from client history.
+  return persistedReplacementEgressMode(events) !== "ordinary";
+}
+
+/** Legacy chip replies keep a coherent, claim-free question without trusting
+ * the old model-authored question stored in a pending slot. */
+export function replacementReplayClarificationCaption(
+  events: readonly {
+    type: string;
+    facet_key?: string;
+    replies?: Array<{ value: string }>;
+  }[],
+  replacement = true,
+): string {
+  const chips = events.find((event) => event.type === "quick_replies");
+  const facet = String(chips?.facet_key ?? "").replace(/[_-]+/gu, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/gu, " ").trim()
+    .slice(0, 80);
+  const values = chips?.replies?.slice(0, 5).map((item) =>
+    String(item.value ?? "").replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+      .replace(/\s+/gu, " ").trim().slice(0, 40)
+  ).filter(Boolean) ?? [];
+  if (facet && values.length >= 2) {
+    const object = replacement ? "исходного изделия" : "товара";
+    return `Уточните значение параметра «${facet}» ${object}: ${values.join(" или ")}?`;
+  }
+  return replacement
+    ? "Уточните параметры исходного изделия, чтобы проверить замену."
+    : "Не удалось безопасно восстановить прежний текст ответа. Повторите запрос, если вопрос остался актуальным.";
+}
+
+/**
+ * Carry the protection through a short relative-price follow-up only when
+ * the previous user task was a replacement and no new task was detected.
+ * Routing remains unchanged: this is a monotone safety boundary.
+ */
+export function resolveReplacementProofContext(
+  currentMessage: string,
+  recentDialogue: ReplacementDialogueMessage[],
+  options: { newTask?: boolean; comparativeFollowup?: boolean } = {},
+): string | null {
+  if (isReplacementProofRequest(currentMessage)) return currentMessage;
+  if (options.newTask || !options.comparativeFollowup) return null;
+  const latestUser = [...recentDialogue].reverse().find((entry) =>
+    entry.role === "user"
+  );
+  return latestUser && isReplacementProofRequest(latestUser.content)
+    ? latestUser.content
+    : null;
+}
+
+/**
+ * Old persisted replies may predate this egress boundary. Replays cannot
+ * establish a fresh source SKU without catalog work, so they retain card and
+ * protocol events but replace all historical freeform deltas with a guarded
+ * server caption. No LLM/catalog request is made on reconnect.
+ */
+export function guardReplacementReplayEvents<T extends {
+  type: string;
+  phase?: string;
+  origin?: string;
+  replacement_proof?: boolean;
+}>(
+  events: readonly T[],
+  candidateCaption: T,
+  clarificationCaption: T,
+): T[] {
+  const guarded: T[] = [];
+  let sawCards = false;
+  let sawQuestion = false;
+  let sawTrustedText = false;
+  let sawProofCaption = false;
+  for (const event of events) {
+    if (event.type === "delta") {
+      if (event.origin === "server") {
+        guarded.push(event);
+        sawTrustedText = true;
+        if (event.replacement_proof) sawProofCaption = true;
+      }
+      continue;
+    }
+    if (event.type === "products_block") {
+      if (!sawProofCaption) guarded.push(candidateCaption);
+      sawCards = true;
+    } else if (
+      event.type === "quick_replies" && !sawCards && !sawQuestion &&
+      !sawTrustedText
+    ) {
+      guarded.push(clarificationCaption);
+      sawQuestion = true;
+    } else if (
+      event.type === "diagnostic" && event.phase === "complete" &&
+      !sawCards && !sawQuestion && !sawTrustedText
+    ) {
+      guarded.push(clarificationCaption);
+      sawQuestion = true;
+    } else if (
+      event.type === "done" && !sawCards && !sawQuestion && !sawTrustedText
+    ) {
+      guarded.push(clarificationCaption);
+      sawQuestion = true;
+    }
+    guarded.push(event);
+  }
+  return guarded;
 }
 
 /** The issued chip is a customer answer, not a catalog filter. Promote it only
