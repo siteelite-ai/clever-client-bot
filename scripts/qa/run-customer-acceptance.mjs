@@ -199,6 +199,14 @@ FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v4.json'] = {
   },
 };
 
+// V4 remains the historical Acti9 safety oracle. V5 changes only the BT-746
+// black double-socket assertion: connector count is proven by the live catalog
+// facet, not by a word in the abbreviated API card title.
+FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'] = {
+  ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v4.json'],
+  sha256: 'f4ba64271c02cdbc7549be3061dc0171952fae8ac6555d2bba67d896209a1e61',
+};
+
 export function validateStrictFullSuite({ argv, suite, variationSuite, casesPath, variantsPath, suiteBytes, variantsBytes }) {
   if (!argv.includes('--strict-full-suite')) return null;
   if (!argv.some((arg) => arg.startsWith('--endpoint=') && arg.slice('--endpoint='.length).trim())) {
