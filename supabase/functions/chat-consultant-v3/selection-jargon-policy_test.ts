@@ -5,6 +5,7 @@ import type { ProductRef } from "../_shared/v3-tools/types.ts";
 import { classifyOutdoorPoeIntent } from "../_shared/v3-tools/outdoor-poe-policy.ts";
 import {
   admitDirectSelectionRoute,
+  admitProvisionalReplacementFamilyRoute,
   customerOwnedJargonModifiers,
   directProductProvesLiteralWords,
   enforceTerminalPairedFit,
@@ -16,6 +17,50 @@ import {
   shouldDeferQueuedLexicalSearch,
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
+
+Deno.test("provisional family route admits only source-only replacement frame and enforced budget", () => {
+  const title =
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK";
+  const sourceOnly = `Подбери аналог для этой лампы: ${title}`;
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: sourceOnly,
+    verifiedSourceTitle: title,
+    coversBudgetCap: false,
+  }), true);
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: `Найди аналоги лампы «${title}» не дороже 2000 тенге`,
+    verifiedSourceTitle: title,
+    coversBudgetCap: true,
+  }), true);
+  for (const independentConstraint of [
+    "только 3000К",
+    "не ярче 500 лм",
+    "только 3000К и не ярче 500 лм",
+    "с наличием в Алматы",
+    "строго равноценную замену",
+    "эквивалентную замену",
+  ]) {
+    assertEquals(admitProvisionalReplacementFamilyRoute({
+      userMessage: `Найди аналоги лампы «${title}» ${independentConstraint}`,
+      verifiedSourceTitle: title,
+      coversBudgetCap: true,
+    }), false, independentConstraint);
+  }
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage: sourceOnly,
+    verifiedSourceTitle: `${title} другой товар`,
+    coversBudgetCap: false,
+  }), false);
+  // An exact article can independently verify a source, but it does not
+  // prove the full-title grammatical boundary required by this new route.
+  // The orchestrator must leave that request on its existing fallback path.
+  assertEquals(admitProvisionalReplacementFamilyRoute({
+    userMessage:
+      "Подбери аналоги лампы по артикулу LLE-T80-6-230-65-GX53",
+    verifiedSourceTitle: title,
+    coversBudgetCap: false,
+  }), false);
+});
 
 Deno.test("one direct-route admission rejects unproven compound, PoE and replacement obligations", () => {
   const marking = { first: 2, second: 1.5 };

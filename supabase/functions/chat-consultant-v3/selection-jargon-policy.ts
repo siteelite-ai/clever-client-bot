@@ -216,6 +216,31 @@ export function parseExplicitReplacementSourceBoundary(
 }
 
 /**
+ * A provisional family-fit comparison may not silently consume an additional
+ * customer requirement. The direct-route parser proves that the independent
+ * frame contains only a replacement request and, optionally, one enforced
+ * upper price bound. Requests for full equivalence need a different proof.
+ */
+export function admitProvisionalReplacementFamilyRoute(input: {
+  userMessage: string;
+  verifiedSourceTitle: string;
+  coversBudgetCap: boolean;
+}): boolean {
+  const boundary = parseExplicitReplacementSourceBoundary(input.userMessage);
+  if (!boundary) return false;
+  if (
+    /(?:равноцен|эквивалент|взаимозаменяем|идентичн)\p{L}*/iu
+      .test(boundary.frame)
+  ) return false;
+  return admitDirectSelectionRoute({
+    route: "replacement",
+    userMessage: input.userMessage,
+    verifiedSourceTitle: input.verifiedSourceTitle,
+    coversBudgetCap: input.coversBudgetCap,
+  });
+}
+
+/**
  * Direct routes prove only their declared invariant (marking, established PoE
  * safety profile, source identity or exact SKU facts). Anything that needs a
  * second customer-owned criterion is delegated to the expert contract. This
