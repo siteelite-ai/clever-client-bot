@@ -4,6 +4,35 @@
 import type { CatalogCandidateCoverage, ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import {
+  type CatalogFacetSchemaSnapshot,
+  recordSuccessfulCatalogFacetFilter,
+  snapshotActiveCatalogFacetSchema,
+} from "./catalog-facet-proof-ledger.ts";
+
+// Non-enumerable internal identity: this never appears in a tool result or a
+// model prompt. Keep the URL captured by the actual HTTP response rather than
+// reading a later cache overwrite with the same SKU.
+const PROOF_RESULT_URL = Symbol("catalog_filter_result_url");
+
+function recordExactFilterResult(
+  cache: ProductCache,
+  input: SearchCatalogInput,
+  products: ProductRef[],
+  facetSchema: CatalogFacetSchemaSnapshot | null,
+): void {
+  recordSuccessfulCatalogFacetFilter(
+    cache,
+    input,
+    products.flatMap((product) => {
+      const url = (product as ProductRef & {
+        [PROOF_RESULT_URL]?: string;
+      })[PROOF_RESULT_URL];
+      return url ? [{ id: product.id, url }] : [];
+    }),
+    facetSchema,
+  );
+}
 
 const PRODUCT_DESCRIPTION_MAX_CHARS = 1_200;
 const RESTRICTED_VIEW_OPTION_KEY = "ogranichennyy_prosmotr";
@@ -463,6 +492,7 @@ async function singleSearch(
         leaf_category: extractLeafCategory(raw) ?? categoryOverride ?? null,
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
+      Object.defineProperty(ref, PROOF_RESULT_URL, { value: u });
       const facetValues = extractFacetValues(raw);
       const facetCaptions = extractFacetCaptions(raw);
       cache.set(id, {
@@ -730,6 +760,7 @@ export async function executeSearchCatalog(
   deps: CatalogClientDeps,
   cache: ProductCache,
 ): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  const facetSchemaAtExecution = snapshotActiveCatalogFacetSchema(cache);
   // Валидация режима.
   if (input.mode === "by_article" && !input.article) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_article requires article" };
   if (input.mode === "by_pagetitle" && !input.pagetitle) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_pagetitle requires pagetitle" };
@@ -780,6 +811,9 @@ export async function executeSearchCatalog(
   if (categories.length <= 1 && optionVariants.length === 1) {
     const r = await searchWithRateLimitRetry(optionVariants[0], deps, cache, categories[0], warnings);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
+    if (!unresolvedOptionAlternatives) {
+      recordExactFilterResult(cache, optionVariants[0], r.results, facetSchemaAtExecution);
+    }
     return {
       tool: "search_catalog",
       ok: true,
@@ -796,6 +830,7 @@ export async function executeSearchCatalog(
   // OR between accepted values of the same facet.
   const categoryVariants = categories.length > 0 ? categories : [undefined];
   const settled: SingleSearchResult[] = [];
+  const executedVariants: SearchCatalogInput[] = [];
   if (optionVariants.length > 1) {
     // Exact alternatives are intentionally executed one variant at a time.
     // Bursting a dozen live values at once causes catalog 429 responses and a
@@ -810,6 +845,7 @@ export async function executeSearchCatalog(
         searchWithRateLimitRetry(variant, deps, cache, cat, warnings)
       ));
       settled.push(...batch);
+      executedVariants.push(...categoryVariants.map(() => variant));
       for (const result of batch) {
         if (result.ok) result.results.forEach((product) => collected.add(product.id));
       }
@@ -819,6 +855,7 @@ export async function executeSearchCatalog(
     settled.push(...await Promise.all(
       categoryVariants.map((cat) => searchWithRateLimitRetry(optionVariants[0], deps, cache, cat, warnings)),
     ));
+    executedVariants.push(...categoryVariants.map(() => optionVariants[0]));
   }
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {
@@ -874,6 +911,13 @@ export async function executeSearchCatalog(
       okResults.some((result) => result.candidate_coverage === "unknown")
     ? "unknown"
     : "complete_query_window";
+  if (!unresolvedOptionAlternatives) {
+    settled.forEach((result, index) => {
+      if (result.ok) {
+        recordExactFilterResult(cache, executedVariants[index], result.results, facetSchemaAtExecution);
+      }
+    });
+  }
   return {
     tool: "search_catalog",
     ok: true,

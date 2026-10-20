@@ -95,6 +95,7 @@ import {
 import {
   filterFinalCardsByMandatoryFacetEvidence,
 } from "../_shared/v3-tools/final-card-facet-gate.ts";
+import { setActiveCatalogFacetSchema } from "../_shared/v3-tools/catalog-facet-proof-ledger.ts";
 import {
   correctCriteria,
   extractClientQuantities,
@@ -4160,6 +4161,7 @@ async function selectVerifiedCompactReplacementContinuation(
   t0: number,
   verifiedAxis: { key: string; caption: string; value: string } | null = null,
 ): Promise<DirectReplacementResult | null> {
+  setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
   const compactTokens = compactCodeTokensInQuery(userMessage);
   if (compactTokens.length === 0) return null;
   const leaves = discovery.leaf_categories.map(({ pagetitle }) => pagetitle)
@@ -5289,6 +5291,7 @@ async function selectVerifiedOrdinaryReplacement(
       retryable_reason: "leaf_discovery_failed",
     };
   }
+  setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
 
   if (sourceIdentityVerified) {
     const resolved = resolveLedLampCompatibilityProfile(
@@ -5910,6 +5913,9 @@ async function selectVerifiedExactCompoundProducts(
         },
       )
       : null;
+    if (discovery?.ok) {
+      setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
+    }
     const proof = discovery?.ok
       ? await selectCompleteCategoryPrice({ request, discovery }, catalogDeps, ctx.cache)
       : null;
@@ -9584,7 +9590,7 @@ async function runExpertLoop(
         })();
     // A recovery may have introduced cards after its own criteria gate. The
     // frozen mandatory contract still applies at the final egress. A missing
-    // compact trait is not treated as a contradiction of prior search proof;
+    // compact trait needs an exact, turn-local SKU/URL × facet-filter receipt;
     // direct card/facet/title evidence that disagrees is never shown.
     const finalFacetGate = filterFinalCardsByMandatoryFacetEvidence(
       classificationSafe
@@ -9592,6 +9598,7 @@ async function runExpertLoop(
         .filter((product): product is ProductFull => Boolean(product)),
       currentSelectionCriteriaPlan()?.mandatory_criteria ?? [],
       lastDiscover?.facets ?? [],
+      ctx.cache,
     );
     if (finalFacetGate.rejected.length > 0) {
       steps.push({
@@ -17939,10 +17946,14 @@ async function runExpertLoop(
             // search or the jargon fallback after a failed correction.
             categoryWhitelist.clear();
             whitelistNorm.clear();
-            if (!result.ok) lastDiscover = null;
+            if (!result.ok) {
+              lastDiscover = null;
+              setActiveCatalogFacetSchema(ctx.cache, []);
+            }
           }
           if (result.ok) {
             lastDiscover = result as unknown as DiscoverCategoryOk;
+            setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
             selectionDiscoveries.push(lastDiscover);
             if (selectionDiscoveries.length > 8) selectionDiscoveries.shift();
             addToWhitelist(lastDiscover.category?.pagetitle);
