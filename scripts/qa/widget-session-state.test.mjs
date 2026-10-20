@@ -25,7 +25,8 @@ function savedDialogue(updatedAt) {
   };
 }
 
-function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomUUID, source = widgetSource } = {}) {
+function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomUUID,
+  cryptoGetRandomValues, disableCrypto = false, mathRandom, source = widgetSource } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://220volt.testdevops.ru/',
@@ -35,17 +36,32 @@ function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomU
   if (Number.isFinite(now)) dom.window.Date.now = () => now;
   dom.window.TextEncoder = TextEncoder;
   dom.window.TextDecoder = TextDecoder;
-  if (cryptoRandomUUID) {
-    Object.defineProperty(dom.window.crypto, 'randomUUID', {
+  if (disableCrypto) {
+    Object.defineProperty(dom.window, 'crypto', {
+      configurable: true,
+      value: undefined,
+    });
+  } else {
+    if (cryptoRandomUUID) Object.defineProperty(dom.window.crypto, 'randomUUID', {
       configurable: true,
       value: cryptoRandomUUID,
     });
+    if (cryptoGetRandomValues) Object.defineProperty(dom.window.crypto, 'getRandomValues', {
+      configurable: true,
+      value: cryptoGetRandomValues,
+    });
   }
+  if (mathRandom) dom.window.Math.random = mathRandom;
   dom.window.fetch = fetchImpl ?? (async () => {
     throw new Error('Unexpected fetch in widget session-state test');
   });
   if (state) dom.window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  dom.window.eval(source);
+  try {
+    dom.window.eval(source);
+  } catch (error) {
+    dom.window.close();
+    throw error;
+  }
   return dom;
 }
 
@@ -149,11 +165,12 @@ test('an existing in-progress request is accepted before the backend waits for r
 });
 
 test('widget exposes its API on the browser window and uses browser crypto for message IDs', async () => {
+  const sessionUUID = '123e4567-e89b-42d3-a456-426614174098';
   const messageId = '123e4567-e89b-42d3-a456-426614174099';
   let cryptoCalls = 0;
   let requestBody;
   const dom = bootWidget({
-    cryptoRandomUUID: () => { cryptoCalls += 1; return messageId; },
+    cryptoRandomUUID: () => { cryptoCalls += 1; return cryptoCalls === 1 ? sessionUUID : messageId; },
     fetchImpl: async (_url, init) => {
       requestBody = JSON.parse(init.body);
       return new Response(completeAnswerSse('Проверка завершена.'), {
@@ -178,7 +195,47 @@ test('widget exposes its API on the browser window and uses browser crypto for m
   await waitForWidget(() => visibleMessages(dom).includes('Проверка завершена.'), 'Widget response was not completed');
 
   assert.equal(requestBody.messageId, messageId);
-  assert.equal(cryptoCalls, 1);
+  assert.equal(requestBody.sessionId, `session_${sessionUUID}`);
+  assert.equal(readState(dom).sessionId, requestBody.sessionId, 'new secure session must persist after a turn');
+  assert.equal(cryptoCalls, 2);
+  dom.window.close();
+});
+
+test('new sessions use cryptographic bytes if randomUUID is unavailable and never use Math.random', () => {
+  let randomCalls = 0;
+  let secureCalls = 0;
+  const bytes = Uint8Array.from(Array.from({ length: 16 }, (_, i) => i + 1));
+  const expected = `session_${Buffer.from(bytes).toString('hex')}`;
+  const dom = bootWidget({
+    cryptoRandomUUID: () => { throw new Error('Unavailable outside secure context'); },
+    cryptoGetRandomValues: (target) => {
+      secureCalls += 1;
+      target.set(bytes);
+      return target;
+    },
+    mathRandom: () => { randomCalls += 1; return 0.5; },
+  });
+
+  dom.window.document.querySelector('[aria-label="Новый диалог"]').click();
+  assert.equal(readState(dom).sessionId, expected);
+  assert.match(expected, /^session_[0-9a-f]{32}$/u);
+  assert.equal(secureCalls, 2, 'initialization and reset must both use Web Crypto');
+  assert.equal(randomCalls, 0, 'session generation must not use Math.random');
+  dom.window.close();
+});
+
+test('unavailable Web Crypto fails closed for new sessions but preserves an active saved session', () => {
+  let randomCalls = 0;
+  assert.throws(() => bootWidget({
+    disableCrypto: true,
+    mathRandom: () => { randomCalls += 1; return 0.5; },
+  }), /Secure session ID generation is unavailable/u);
+  assert.equal(randomCalls, 0, 'no predictable fallback ID may be minted');
+
+  const now = 1_800_000_000_000;
+  const dom = bootWidget({ state: savedDialogue(now - 1_000), now, disableCrypto: true });
+  assert.equal(readState(dom).sessionId, 'session_saved_customer_test');
+  assert.match(visibleMessages(dom), /старый вопрос про кабель/u);
   dom.window.close();
 });
 

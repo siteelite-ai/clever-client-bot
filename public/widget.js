@@ -108,7 +108,29 @@
     }
   }
   function newSessionId() {
-    return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    var secureCrypto = window.crypto;
+    if (secureCrypto && typeof secureCrypto.randomUUID === 'function') {
+      try {
+        var uuid = secureCrypto.randomUUID();
+        if (typeof uuid === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uuid)) {
+          return 'session_' + uuid;
+        }
+      } catch(e) {
+        // Some browsers expose randomUUID but block it outside a secure context.
+        // getRandomValues remains available there and is still cryptographic.
+      }
+    }
+    if (secureCrypto && typeof secureCrypto.getRandomValues === 'function') {
+      var bytes = new Uint8Array(16);
+      secureCrypto.getRandomValues(bytes);
+      return 'session_' + Array.prototype.map.call(bytes, function(byte) {
+        return byte.toString(16).padStart(2, '0');
+      }).join('');
+    }
+    // A session ID can retrieve server-side conversation state. Never silently
+    // replace the secure source with Math.random or a timestamp.
+    throw new Error('Secure session ID generation is unavailable');
   }
   function isValidSessionId(value) {
     return typeof value === 'string' && value.length > 0 && value.length <= 128 &&
