@@ -54,6 +54,10 @@ const firstPage = [
   firstEligible,
   ...Array.from({ length: 48 }, (_, i) => product(100 + i, false)),
 ];
+const completeFirstPage = [
+  firstEligible,
+  ...Array.from({ length: 49 }, (_, i) => product(100 + i, false)),
+];
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -75,7 +79,10 @@ type Run = {
   outbound: string[];
 };
 
-async function runTurn(secondPageEligibleIds: number[]): Promise<Run> {
+async function runTurn(
+  secondPageEligibleIds: number[],
+  { completeWindow = false }: { completeWindow?: boolean } = {},
+): Promise<Run> {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -176,7 +183,10 @@ async function runTurn(secondPageEligibleIds: number[]): Promise<Run> {
           catalogPages.push(page);
           if (page === 1) {
             return json({
-              data: { results: firstPage, pagination: { total: 100 } },
+              data: {
+                results: completeWindow ? completeFirstPage : firstPage,
+                pagination: { total: completeWindow ? 50 : 100 },
+              },
             });
           }
           if (page === 2) {
@@ -326,6 +336,27 @@ Deno.test({
         disclosure,
       );
       assert(!disclosure.includes("аналогов нет"), disclosure);
+
+      // A single verified card can also be the complete *filtered query*
+      // result. That is a catalog-evidence shortage, not a pagination defect:
+      // do not manufacture extra cards or silently weaken structural gates.
+      const complete = await runTurn([], { completeWindow: true });
+      const completeBlocks = productBlocks(complete.events);
+      assertEquals(completeBlocks.length, 1, JSON.stringify(complete.steps));
+      assertEquals(completeBlocks[0].count, 1);
+      assertEquals(complete.catalogPages, [1]);
+      assert(
+        visibleText(complete.events).includes(
+          "В выполненном поиске удалось подтвердить 1 вариант",
+        ),
+      );
+      assert(
+        complete.steps.some(({ step, meta }) =>
+          step === "v3_replacement_preflight_rendered" &&
+          meta?.strict_total === 50 && meta?.pages_scanned === 1
+        ),
+        JSON.stringify(complete.steps),
+      );
     } finally {
       restoreOfflineModuleSetup();
     }

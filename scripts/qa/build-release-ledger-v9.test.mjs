@@ -159,6 +159,24 @@ test('generic exact-criterion oracle rejects stale limits while page facets reje
     require_selection_criteria_exact: required.require_selection_criteria_exact,
   };
   assert.deepEqual(evaluate(oracle, response), []);
+  const inclusiveBefore = { ...criterion(keyBefore, 'min', 14.4, false) };
+  delete inclusiveBefore.exclusive;
+  assert.deepEqual(evaluate(oracle, {
+    ...response, selectionContract: { mandatory_criteria: [
+      inclusiveBefore, criterion(keyAfter, 'max', 12, true),
+    ] },
+  }), [], 'omitted exclusive means inclusive for an ordered bound');
+  assert.deepEqual(evaluate({ require_selection_criteria_exact: [
+    { key_contains: keyBefore, op: 'max', value: 14.4, exclusive: false },
+  ] }, { ...response, selectionContract: { mandatory_criteria: [
+    { ...inclusiveBefore, op: 'max' },
+  ] } }), [], 'omitted exclusive also means inclusive for a maximum');
+  assert(evaluate({ require_selection_criteria_exact: [
+    { key_contains: keyBefore, op: 'eq', value: 14.4, exclusive: false },
+  ] }, { ...response, selectionContract: { mandatory_criteria: [
+    { ...inclusiveBefore, op: 'eq' },
+  ] } }).some((failure) => failure.includes('exclusive=undefined != false')),
+  'only ordered bounds may omit the inclusive flag');
   assert(evaluate(oracle, {
     ...response, verifiedProductPages: proof(14),
   }).some((failure) => failure.includes('source numeric value 14 < 14.4')));

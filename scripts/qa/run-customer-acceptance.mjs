@@ -2084,8 +2084,13 @@ export function evaluate(expect = {}, response, {
         }
         const actual = matches[0];
         for (const [field, expected] of Object.entries(required)) {
-          if (field !== 'key_contains' && actual[field] !== expected) {
-            failures.push(`selection criterion ${required.key_contains}: ${field}=${JSON.stringify(actual[field])} != ${JSON.stringify(expected)}`);
+          // The contract omits `exclusive` for inclusive ordered bounds. Treat only
+          // that omitted min/max flag as false; explicit true and other fields stay exact.
+          const actualValue = field === 'exclusive' &&
+            (actual.op === 'min' || actual.op === 'max') && actual.exclusive === undefined
+            ? false : actual[field];
+          if (field !== 'key_contains' && actualValue !== expected) {
+            failures.push(`selection criterion ${required.key_contains}: ${field}=${JSON.stringify(actualValue)} != ${JSON.stringify(expected)}`);
           }
         }
       }
