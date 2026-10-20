@@ -6,10 +6,12 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  enableVerifiedFactsInOfflineFixture,
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+enableVerifiedFactsInOfflineFixture();
+await import("./index.ts");
 
 const leaf = "Светильники";
 const sourceTitle =
@@ -181,10 +183,14 @@ async function runTurn(
           ) {
             return json({
               data: {
-                results: [sourceHasCutout ? source : {
-                  ...source,
-                  options: source.options.filter(({ key }) => key !== "cutout"),
-                }],
+                results: [
+                  sourceHasCutout ? source : {
+                    ...source,
+                    options: source.options.filter(({ key }) =>
+                      key !== "cutout"
+                    ),
+                  },
+                ],
                 pagination: { total: 1 },
               },
             });
@@ -192,10 +198,14 @@ async function runTurn(
           if (url.searchParams.has("query")) {
             return json({
               data: {
-                results: [sourceHasCutout ? source : {
-                  ...source,
-                  options: source.options.filter(({ key }) => key !== "cutout"),
-                }],
+                results: [
+                  sourceHasCutout ? source : {
+                    ...source,
+                    options: source.options.filter(({ key }) =>
+                      key !== "cutout"
+                    ),
+                  },
+                ],
                 pagination: { total: 1 },
               },
             });
@@ -319,10 +329,10 @@ Deno.test({
     try {
       const full = await runTurn([3, 4, 5, 6]);
       assert(
-        !full.outbound.some((request) =>
+        full.outbound.some((request) =>
           request.includes("/rest/v1/verified_product_facts")
         ),
-        "default-OFF route must not read the new facts table",
+        "the opt-in route must attempt to load the private evidence",
       );
       const fullBlocks = productBlocks(full.events);
       assertEquals(fullBlocks.length, 1, JSON.stringify(full.steps));
@@ -360,7 +370,10 @@ Deno.test({
       const shortBlocks = productBlocks(short.events);
       assertEquals(shortBlocks.length, 1, JSON.stringify(short.steps));
       assertEquals(shortBlocks[0].count, 2);
-      assert(short.catalogPages.includes(2), JSON.stringify(short.catalogPages));
+      assert(
+        short.catalogPages.includes(2),
+        JSON.stringify(short.catalogPages),
+      );
       assert(short.catalogPages.every((page) => page === 1 || page === 2));
       const disclosure = visibleText(short.events);
       assert(disclosure.includes("подтвердить 2 варианта"), disclosure);
@@ -399,7 +412,9 @@ Deno.test({
       assertEquals(productBlocks(unknownCutout.events).length, 0);
       assertEquals(unknownCutout.catalogPages, []);
       assert(
-        visibleText(unknownCutout.events).includes("диаметр монтажного отверстия"),
+        visibleText(unknownCutout.events).includes(
+          "диаметр монтажного отверстия",
+        ),
       );
       assert(
         unknownCutout.steps.some(({ step }) =>

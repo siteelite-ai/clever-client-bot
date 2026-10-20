@@ -706,6 +706,7 @@ import {
 } from "../_shared/v3-tools/public-failure.ts";
 import {
   type ChatV3AdmissionResult,
+  type ChatV3AdmissionScope,
   admissionDiagnosticError,
   checkChatV3AdmissionWithDeadline,
   releaseChatV3Admission,
@@ -755,6 +756,35 @@ const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
 const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
   ADMISSION_SCOPE,
 );
+/** The extra paid retry is independent of verified-facts rollout. Both lanes
+ * are server-only opt-ins; production keeps the old single-call behavior. */
+export function productMeasurementHttpRetryEnabled(
+  scope: ChatV3AdmissionScope,
+  readEnv: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): boolean {
+  const name = scope === "preview"
+    ? "VOLT220_PRODUCT_MEASUREMENT_HTTP_RETRY_PREVIEW_ENABLED"
+    : "VOLT220_PRODUCT_MEASUREMENT_HTTP_RETRY_PRODUCTION_ENABLED";
+  return readEnv(name) === "true";
+}
+const PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED =
+  productMeasurementHttpRetryEnabled(ADMISSION_SCOPE);
+
+/** One correction call is the legacy behavior. The second paid attempt is
+ * reachable only for a measured-product gap on an explicitly opted-in lane. */
+export function runProductMeasurementCorrection<T>(input: {
+  repairReason: string;
+  retryEnabled: boolean;
+  attempt: (timeoutMs: number) => Promise<T>;
+  initialTimeoutMs: number;
+  retryTimeoutMs: () => number | null;
+  signal: AbortSignal;
+  onRetry?: (error: UpstreamHttpError, timeoutMs: number) => void;
+}): Promise<T> {
+  return input.repairReason === "product_measurement" && input.retryEnabled
+    ? retryConfirmedUpstreamHttp5xxOnce(input)
+    : input.attempt(input.initialTimeoutMs);
+}
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,
   globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
@@ -6092,7 +6122,10 @@ async function selectVerifiedOrdinaryReplacement(
   const structuralProfile = structuralResolution.status === "ready"
     ? structuralResolution.profile
     : null;
-  const guardedStructuralMount = structuralProfile !== null &&
+  // Preserve the pre-existing structural algorithm when the verified-facts
+  // rollout is off. A public catalog cut-out alone cannot switch routes.
+  const guardedStructuralMount = VERIFIED_MANUFACTURER_FACTS_ENABLED &&
+    structuralProfile !== null &&
     hasVerifiedRecessedStructuralMount(structuralProfile);
 
   if (
@@ -11558,31 +11591,32 @@ async function runExpertLoop(
                 );
               };
               try {
-                structuredReasoning = repairReason === "product_measurement"
-                  ? await retryConfirmedUpstreamHttp5xxOnce({
-                    attempt: correctionAttempt,
-                    initialTimeoutMs: correctionTimeout,
-                    retryTimeoutMs: () => boundedAgentStepTimeout(
+                structuredReasoning = await runProductMeasurementCorrection({
+                  repairReason,
+                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED,
+                  attempt: correctionAttempt,
+                  initialTimeoutMs: correctionTimeout,
+                  retryTimeoutMs: () =>
+                    boundedAgentStepTimeout(
                       LLM_TIMEOUT_DERIVED_RETRY_MS,
                       now(),
                       DERIVED_REASONING_SOFT_DEADLINE_MS,
                       MIN_AGENT_STEP_BUDGET_MS,
                     ),
-                    signal: turnController.signal,
-                    onRetry: (httpError, retryTimeoutMs) => {
-                      steps.push({
-                        step: "v3_product_measurement_correction_http_retry",
-                        ms: now(),
-                        meta: {
-                          upstream_status: httpError.status,
-                          ...upstreamFailureDiagnosticMeta(httpError),
-                          initial_timeout_ms: correctionTimeout,
-                          retry_timeout_ms: retryTimeoutMs,
-                        },
-                      });
-                    },
-                  })
-                  : await correctionAttempt(correctionTimeout);
+                  signal: turnController.signal,
+                  onRetry: (httpError, retryTimeoutMs) => {
+                    steps.push({
+                      step: "v3_product_measurement_correction_http_retry",
+                      ms: now(),
+                      meta: {
+                        upstream_status: httpError.status,
+                        ...upstreamFailureDiagnosticMeta(httpError),
+                        initial_timeout_ms: correctionTimeout,
+                        retry_timeout_ms: retryTimeoutMs,
+                      },
+                    });
+                  },
+                });
               } catch (correctionError) {
                 const correctionFailure = classifyPublicFailure(correctionError);
                 // A cancelled turn is not a failed declaration. Let the outer
@@ -24086,12 +24120,13 @@ Deno.serve(async (req) => {
                 (pendingScope as Record<string, unknown>).kind ===
                   "selection_readiness",
             );
-            const clientReplacementCutoutScope = Boolean(
-              pendingScope && typeof pendingScope === "object" &&
-                !Array.isArray(pendingScope) &&
-                (pendingScope as Record<string, unknown>).kind ===
-                  "replacement_mounting_cutout",
-            );
+            const clientReplacementCutoutScope =
+              VERIFIED_MANUFACTURER_FACTS_ENABLED && Boolean(
+                pendingScope && typeof pendingScope === "object" &&
+                  !Array.isArray(pendingScope) &&
+                  (pendingScope as Record<string, unknown>).kind ===
+                    "replacement_mounting_cutout",
+              );
             const verifiedCutoutState = clientReplacementCutoutScope
               ? await loadVerifiedReplacementCutoutPending(
                 supabase,

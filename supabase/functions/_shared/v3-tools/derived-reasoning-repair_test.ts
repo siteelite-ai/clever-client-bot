@@ -103,7 +103,10 @@ Deno.test("only product-measurement real-HTTP recovery may use a third logical m
     productMeasurementMissing: true,
     providerAttempts: 1,
   };
-  assertEquals(chooseDerivedReasoningRepair(repairInput), "product_measurement");
+  assertEquals(
+    chooseDerivedReasoningRepair(repairInput),
+    "product_measurement",
+  );
   let providerAttempts = 1;
   const firstCorrectionFailure = new UpstreamHttpError(503, "provider outage", {
     origin: "http_response",
@@ -452,33 +455,52 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   const correctionStart = source.indexOf(
     "const correctionAttempt = (timeoutMs: number) => {",
   );
-  const correctionEnd = source.indexOf("} catch (correctionError) {", correctionStart);
+  const correctionEnd = source.indexOf(
+    "} catch (correctionError) {",
+    correctionStart,
+  );
   assertEquals(correctionStart >= 0 && correctionEnd > correctionStart, true);
   const correctionCall = source.slice(correctionStart, correctionEnd);
+  assertStringIncludes(correctionCall, "runProductMeasurementCorrection({");
   assertStringIncludes(
     correctionCall,
-    'repairReason === "product_measurement"',
+    "retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED,",
   );
-  assertStringIncludes(correctionCall, "retryConfirmedUpstreamHttp5xxOnce({");
   assertStringIncludes(correctionCall, "attempt: correctionAttempt,");
   assertStringIncludes(correctionCall, "initialTimeoutMs: correctionTimeout,");
   assertStringIncludes(correctionCall, "DERIVED_REASONING_SOFT_DEADLINE_MS,");
   assertStringIncludes(correctionCall, "MIN_AGENT_STEP_BUDGET_MS,");
   assertStringIncludes(correctionCall, "signal: turnController.signal,");
-  assertStringIncludes(correctionCall, ': await correctionAttempt(correctionTimeout);');
-  for (const mandatoryArg of [
-    "correctionMessages,",
-    "turnController.signal,",
-    '"derived_reasoning",',
-    '["declare_selection_reasoning"],',
-    '"declare_selection_reasoning",',
-    "[reasoningToolSchema],",
-    "GENERAL_INQUIRY_MODEL_ROUTING,",
-  ]) {
+  const optInStart = source.indexOf(
+    "export function runProductMeasurementCorrection<T>(input:",
+  );
+  const optInEnd = source.indexOf(
+    "const LOVABLE_AGENT_FAILOVER_ENABLED",
+    optInStart,
+  );
+  assertEquals(optInStart >= 0 && optInEnd > optInStart, true);
+  const optIn = source.slice(optInStart, optInEnd);
+  assertStringIncludes(
+    optIn,
+    'input.repairReason === "product_measurement" && input.retryEnabled',
+  );
+  assertStringIncludes(optIn, "retryConfirmedUpstreamHttp5xxOnce(input)");
+  assertStringIncludes(optIn, "input.attempt(input.initialTimeoutMs)");
+  for (
+    const mandatoryArg of [
+      "correctionMessages,",
+      "turnController.signal,",
+      '"derived_reasoning",',
+      '["declare_selection_reasoning"],',
+      '"declare_selection_reasoning",',
+      "[reasoningToolSchema],",
+      "GENERAL_INQUIRY_MODEL_ROUTING,",
+    ]
+  ) {
     assertStringIncludes(correctionCall, mandatoryArg);
   }
   assertEquals(
-    source.match(/retryConfirmedUpstreamHttp5xxOnce\(\{/gu)?.length,
+    source.match(/retryConfirmedUpstreamHttp5xxOnce\(input\)/gu)?.length,
     1,
   );
 });

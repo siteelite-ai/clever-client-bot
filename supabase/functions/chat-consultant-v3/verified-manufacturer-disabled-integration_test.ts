@@ -1,5 +1,5 @@
-// The opt-in manufacturer path must not read its private table when the
-// production flag is absent, even for a structural replacement request.
+// OFF must preserve the pre-existing structural replacement route. The new
+// guarded cut-out selection and private table may run only after server opt-in.
 import {
   assert,
   assertEquals,
@@ -101,7 +101,8 @@ function replacementBlocks(stream: string): Array<{
 }
 
 Deno.test({
-  name: "verified facts off performs no private shortlist or hydration read",
+  name:
+    "verified facts off retains legacy structural selection without private reads",
   permissions: { read: true, env: false, net: false },
   async fn() {
     const originalFetch = globalThis.fetch;
@@ -213,7 +214,7 @@ Deno.test({
         }
         throw new Error(`unexpected offline request: ${request.method} ${url}`);
       };
-      const runTurn = async () => {
+      const runTurn = async (slots?: Record<string, unknown>) => {
         const response = await offlineHandler()(
           new Request(
             "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
@@ -225,6 +226,7 @@ Deno.test({
                 messageId: crypto.randomUUID(),
                 sessionId: crypto.randomUUID(),
                 history: [],
+                ...(slots ? { slots } : {}),
               }),
             },
           ),
@@ -236,30 +238,41 @@ Deno.test({
       assertEquals(baseline.length, 1);
       assertEquals(baseline[0].count, 1);
       assert(baseline[0].markdown?.includes("Светильник встраиваемый LED 7W"));
-
-      // The generic diameter is the outer housing, not the mounting cut-out.
-      // A case/whitespace-equivalent mount and a decimal-comma 90 mm cut-out
-      // must preserve the default-OFF guarded shortlist. This is an offline
-      // behavior guard, not proof of equality with a separately run PR #119.
-      candidateVariant = "normalized_mount_other_outer";
-      const normalized = await runTurn();
-      assertEquals(normalized.length, 1);
-      assertEquals(normalized[0].count, baseline[0].count);
-      assert(
-        normalized[0].markdown?.includes("Светильник встраиваемый LED 7W"),
-      );
       assertEquals(
-        normalized[0].selection_contract?.visible_requirements?.find(
+        baseline[0].selection_contract?.visible_requirements?.find(
           ({ kind }) => kind === "mounting_cutout",
         ),
-        {
-          kind: "mounting_cutout",
-          label: "Диаметр монтажного отверстия",
-          op: "eq",
-          value: 90,
-          unit: "мм",
-        },
+        undefined,
       );
+
+      // The old structural route regards the outer diameter as a mandatory
+      // axis. The new guarded route would accept the verified equal cut-out
+      // despite a different housing diameter; OFF must not switch to it.
+      candidateVariant = "normalized_mount_other_outer";
+      const normalized = await runTurn();
+      assertEquals(normalized.length, 0);
+
+      // A stale preview cut-out slot in a browser cannot opt the production
+      // handler into the new source-bound continuation algorithm.
+      candidateVariant = "baseline";
+      const stalePreviewSlot = await runTurn({
+        pending_clarification: {
+          status: "pending",
+          slot_id: crypto.randomUUID(),
+          facet_key: "mounting_cutout_mm",
+          question: "Какой диаметр монтажного отверстия?",
+          options: [],
+          scope: {
+            kind: "replacement_mounting_cutout",
+            source_product_id: "1",
+            source_title: sourceTitle,
+            source_leaf: leaf,
+            original_request: `предложи аналоги на ${sourceTitle}`,
+          },
+        },
+      });
+      assertEquals(stalePreviewSlot.length, baseline.length);
+      assertEquals(stalePreviewSlot[0].count, baseline[0].count);
       assert(requests.some((entry) => entry.includes("/api/products?")));
       assertEquals(
         requests.some((entry) => entry.includes("verified_product_facts")),
@@ -273,4 +286,21 @@ Deno.test({
       restoreOfflineModuleSetup();
     }
   },
+});
+
+Deno.test("recessed routing and client cut-out continuation share the server opt-in", async () => {
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const route = source.slice(
+    source.indexOf("const guardedStructuralMount ="),
+    source.indexOf("const axisLimit =", source.indexOf("const guardedStructuralMount =")),
+  );
+  assert(route.includes("VERIFIED_MANUFACTURER_FACTS_ENABLED &&"));
+  assert(route.includes("sourceOnlyVerified && structuralProfile && guardedStructuralMount"));
+  const followup = source.slice(
+    source.indexOf("const clientReplacementCutoutScope ="),
+    source.indexOf("const verifiedCutoutMm =", source.indexOf("const clientReplacementCutoutScope =")),
+  );
+  assert(followup.includes("VERIFIED_MANUFACTURER_FACTS_ENABLED && Boolean("));
+  assert(followup.includes("clientReplacementCutoutScope\n"));
+  assert(followup.includes("loadVerifiedReplacementCutoutPending("));
 });
