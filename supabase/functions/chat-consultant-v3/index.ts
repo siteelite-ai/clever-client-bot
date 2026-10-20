@@ -698,7 +698,9 @@ import {
 } from "../_shared/v3-tools/conversation-boundary.ts";
 import {
   classifyPublicFailure,
+  type UpstreamFailureDiagnostics,
   UpstreamHttpError,
+  upstreamFailureDiagnosticMeta,
 } from "../_shared/v3-tools/public-failure.ts";
 import {
   type ChatV3AdmissionResult,
@@ -3380,10 +3382,23 @@ async function callOpenRouter(
     });
     res = completion.response;
     provider = completion.provider;
+    const providerDiagnostics: UpstreamFailureDiagnostics = {
+      provider: completion.provider === "openrouter" ||
+          completion.provider === "lovable"
+        ? completion.provider
+        : "other",
+      failedOver: completion.failedOver,
+      primaryStatus: completion.primaryStatus ?? null,
+      primarySkipped: completion.primarySkipped ?? false,
+    };
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new UpstreamHttpError(res.status, errText);
+      throw new UpstreamHttpError(res.status, errText, {
+        ...providerDiagnostics,
+        origin: "http_response",
+        observedHttpStatus: res.status,
+      });
     }
 
     // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
@@ -3397,6 +3412,11 @@ async function callOpenRouter(
       throw new UpstreamHttpError(
         502,
         "completion returned no usable provider choice",
+        {
+          ...providerDiagnostics,
+          origin: "completion_envelope",
+          observedHttpStatus: res.status,
+        },
       );
     }
   } finally {
@@ -11563,6 +11583,7 @@ async function runExpertLoop(
                           UpstreamHttpError
                         ? correctionError.status
                         : null,
+                      ...upstreamFailureDiagnosticMeta(correctionError),
                       timeout_ms: correctionTimeout,
                     },
                   });

@@ -22,18 +22,61 @@ export interface PublicFailure {
   retryable: boolean;
 }
 
+export type UpstreamFailureOrigin = "http_response" | "completion_envelope";
+export type UpstreamProvider = "openrouter" | "lovable" | "other";
+
+export interface UpstreamFailureDiagnostics {
+  origin?: UpstreamFailureOrigin;
+  observedHttpStatus?: number;
+  provider?: UpstreamProvider;
+  failedOver?: boolean;
+  primaryStatus?: number | null;
+  primarySkipped?: boolean;
+}
+
 /** Structured transport error: classification never depends on its rendered message. */
 export class UpstreamHttpError extends Error {
   readonly status: number;
   readonly response_body: string;
+  readonly origin: UpstreamFailureOrigin;
+  readonly observed_http_status: number;
+  readonly provider: UpstreamProvider | null;
+  readonly failed_over: boolean | null;
+  readonly primary_status: number | null;
+  readonly primary_skipped: boolean | null;
 
-  constructor(status: number, responseBody: string) {
+  constructor(
+    status: number,
+    responseBody: string,
+    diagnostics: UpstreamFailureDiagnostics = {},
+  ) {
     const boundedBody = String(responseBody ?? "").slice(0, 500);
     super(`model_upstream_http_${status}: ${boundedBody}`);
     this.name = "UpstreamHttpError";
     this.status = status;
     this.response_body = boundedBody;
+    this.origin = diagnostics.origin ?? "http_response";
+    this.observed_http_status = diagnostics.observedHttpStatus ?? status;
+    this.provider = diagnostics.provider ?? null;
+    this.failed_over = diagnostics.failedOver ?? null;
+    this.primary_status = diagnostics.primaryStatus ?? null;
+    this.primary_skipped = diagnostics.primarySkipped ?? null;
   }
+}
+
+/** Bounded operational metadata only; never includes provider text or request content. */
+export function upstreamFailureDiagnosticMeta(
+  error: unknown,
+): Record<string, unknown> {
+  if (!(error instanceof UpstreamHttpError)) return {};
+  return {
+    upstream_origin: error.origin,
+    observed_http_status: error.observed_http_status,
+    upstream_provider: error.provider,
+    provider_failed_over: error.failed_over,
+    primary_http_status: error.primary_status,
+    primary_skipped: error.primary_skipped,
+  };
 }
 
 const TEMPORARILY_UNAVAILABLE =
