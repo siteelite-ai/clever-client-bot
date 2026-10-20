@@ -503,8 +503,8 @@ Deno.test("replacement proof renders original catalog captions without exposing 
   assertEquals(proof.cheaper_than_source_proven, true);
   const caption = replacementProofCaption(proof);
   assertEquals(caption.includes("Цвет корпуса: белый"), true);
-  assertEquals(caption.includes("«Гарантийный срок, мес»"), true);
-  assertEquals(caption.includes("другие более низкие числовые параметры"), true);
+  assertEquals(caption.includes("«Гарантийный срок, мес»"), false);
+  assertEquals(caption.includes("другие более низкие числовые параметры"), false);
   assertEquals(caption.includes("Полная взаимозаменяемость по данным каталога не подтверждена"), true);
   assertEquals(caption.includes("Цены показанных товаров ниже актуальной цены"), true);
   for (const machineKey of ["cvet korpusa", "garantiynyy srok", "obyem k lem"]) {
@@ -788,7 +788,7 @@ Deno.test("a proven source safety rating cannot certify a known lower candidate"
     candidates: [fullRating, lower],
     sourcePriceIdentityVerified: true,
   });
-  assertEquals(replacementProofCaption(mixed).includes("№2"), true);
+  assertEquals(replacementProofCaption(mixed).includes("№2"), false);
   assertEquals(replacementProofCaption(mixed).includes("№1:"), false);
   assertEquals(sourceArticleIsExplicitInRequest("Аналог автомата A9F79116", source), true);
   assertEquals(sourceArticleIsExplicitInRequest("Аналог автомата iC60N 1P C16", source), false);

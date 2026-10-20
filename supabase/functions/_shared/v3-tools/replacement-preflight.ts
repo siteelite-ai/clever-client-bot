@@ -177,6 +177,9 @@ export interface ReplacementProofContract {
   verified_candidate_criteria: Array<{ key: string; value: string }>;
   /** Presentation only: catalog captions corroborated for every involved card. */
   display_labels: Record<string, string>;
+  /** Only a complete, independently supplied critical-facet set can support
+   * customer-facing claims about a lower compatibility parameter. */
+  critical_facet_keys: string[];
 }
 
 /** Exact article or complete catalogue title, never a series/compact code. */
@@ -431,7 +434,7 @@ export function buildReplacementProofContract(
     ...verifiedCandidateCriteria.map(({ key }) => key),
     ...candidates.flatMap(({ matched, lower_numeric }) => [
       ...matched.map(({ key }) => key),
-      ...lower_numeric,
+      ...lower_numeric.filter((key) => criticalKeys.includes(key)),
     ]),
   ]);
   return {
@@ -443,6 +446,7 @@ export function buildReplacementProofContract(
     cheaper_than_source_proven: cheaperThanSourceProven,
     verified_candidate_criteria: verifiedCandidateCriteria,
     display_labels: commonProofDisplayLabels(source, input.candidates, visibleKeys),
+    critical_facet_keys: criticalKeys,
   };
 }
 
@@ -451,6 +455,7 @@ export function replacementProofCaption(
   proof: ReplacementProofContract,
 ): string {
   const label = (key: string) => proof.display_labels?.[key] ?? null;
+  const criticalKeys = new Set(proof.critical_facet_keys ?? []);
   const visibleSelection = [...new Set(proof.verified_candidate_criteria.flatMap(({ key, value }) =>
     label(key) ? [`${label(key)}: ${value}`] : []
   ))];
@@ -461,15 +466,17 @@ export function replacementProofCaption(
     return `Показываю кандидатов для замены.${verifiedSelection} Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.`;
   }
   const lower = proof.candidates.flatMap((item, index) => {
-    const captions = [...new Set(item.lower_numeric.flatMap((key) =>
-      label(key) ? [label(key)!] : []
-    ))].slice(0, 2);
+    const captions = [...new Set(
+      item.lower_numeric.filter((key) => criticalKeys.has(key)).flatMap((key) =>
+        label(key) ? [label(key)!] : []
+      ),
+    )].slice(0, 2);
     return captions.length > 0
       ? [`№${index + 1}${item.title ? ` «${item.title}»` : ""}: «${captions.join("», «")}»`]
       : [];
   });
   const hiddenLower = proof.candidates.some((item) =>
-    item.lower_numeric.some((key) => !label(key))
+    item.lower_numeric.some((key) => criticalKeys.has(key) && !label(key))
   );
   const shared = proof.candidates[0]?.matched.filter(({ key, value }) =>
     proof.candidates.every((candidate) =>
