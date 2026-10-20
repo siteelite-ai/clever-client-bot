@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "source": "Отдельный перспективный контракт DN027B от 2026-10-20. Заказчик требует не менее трёх прямых аналогов. Инженерные диапазоны близости не являются дословной цитатой заказчика. Этот файл не входит в неизменяемую матрицу V9 и не свидетельствует о прохождении живого теста.",
+  "acceptance_status": "NO_GO_NOT_LIVE_VERIFIED",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "prospective-dn027b-confirmed-direct-analogs",
+      "title": "DN027B: минимум три подтверждённых прямых аналога",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "require_confirmed_analogs": {
+              "minimum": 3,
+              "source_product_url": "https://220volt.kz/catalog/svetotexnika/svetilniki/929002070102871869967897500-sv-k-dn027b-g2-led6nw-7w-220-240v-d90-r/",
+              "required_axes": [
+                { "key": "fixture_form", "op": "eq", "value": "downlight" },
+                { "key": "mounting_method", "op": "eq", "value": "recessed" },
+                { "key": "integrated_led", "op": "eq", "value": true },
+                { "key": "socket_kind", "op": "eq", "value": "none" },
+                { "key": "mounting_cutout_mm", "op": "covers", "value": 90 },
+                { "key": "luminous_flux_lm", "op": "between", "min": 400, "max": 800 },
+                { "key": "color_temperature_k", "op": "eq", "value": 4000 },
+                { "key": "supply_voltage_v", "op": "covers", "value": 230 },
+                { "key": "package_quantity", "op": "eq", "value": 1 }
+              ]
+            },
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"],
+            "forbid_product_title": ["DN027B"]
+          }
+        }
+      ]
+    }
+  ]
+}

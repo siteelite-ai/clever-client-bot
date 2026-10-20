@@ -1,20 +1,48 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 
+import { V9_MATRIX_MANIFESTS, buildReleaseLedgerV9 } from './build-release-ledger-v9.mjs';
 import {
   confirmedAnalogFailures,
   evaluate,
   parseSse,
   productUrlIdentity,
   validateExpectationObject,
+  validateExpectationSuite,
 } from './run-customer-acceptance.mjs';
 
-const suite = JSON.parse(fs.readFileSync(new URL('./customer-acceptance-cases-v2.json', import.meta.url)));
-const expect = suite.cases.find(({ id }) => id === 'customer-dn027b-analogs').turns[0].expect;
+const prospectiveBytes = fs.readFileSync(new URL('./dn027b-direct-analogs-prospective-v1.json', import.meta.url));
+const suite = JSON.parse(prospectiveBytes);
+const expect = suite.cases.find(({ id }) => id === 'prospective-dn027b-confirmed-direct-analogs').turns[0].expect;
 const contract = expect.require_confirmed_analogs;
 const nowMs = Date.parse('2026-10-20T12:00:00Z');
 const catalogBase = 'https://220volt.kz/catalog/svetotexnika/svetilniki/';
+
+test('prospective three-analog gate is separate from immutable V9 and has no live PASS', () => {
+  assert.equal(createHash('sha256').update(prospectiveBytes).digest('hex'),
+    '7953bbc3a1f6e817fc22bc9ccfdd754b5ab6fd6233219e2a9ec0f04e1b6e74c9',
+    'prospective DN027B contract changed; review the minimum and every compatibility axis');
+  const v9Bytes = fs.readFileSync(new URL('./customer-acceptance-cases-v2.json', import.meta.url));
+  assert.equal(createHash('sha256').update(v9Bytes).digest('hex'),
+    '6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7');
+  const v9 = JSON.parse(v9Bytes);
+  const oldCase = v9.cases.find(({ id }) => id === 'customer-dn027b-analogs');
+  assert.equal(oldCase.turns[0].expect.min_products, 3);
+  assert.equal(oldCase.turns[0].expect.require_confirmed_analogs, undefined);
+  assert.equal(suite.cases.length, 1);
+  assert.equal(suite.cases[0].turns[0].message, oldCase.turns[0].message);
+  assert.equal(suite.acceptance_status, 'NO_GO_NOT_LIVE_VERIFIED');
+  assert.equal(V9_MATRIX_MANIFESTS.some(({ file }) => file === 'dn027b-direct-analogs-prospective-v1.json'), false);
+  assert.equal(buildReleaseLedgerV9().candidate.status, 'NOT_RUN');
+  assert.doesNotThrow(() => validateExpectationSuite(suite));
+  assert(failures({
+    ...reply(),
+    selectionContract: null,
+  }).some((failure) => failure.includes('server proof is missing')),
+  'three rendered links without server-owned compatibility proof remain NO-GO');
+});
 
 function axisValue(rule) {
   if (rule.op === 'eq') return rule.value;
@@ -65,7 +93,7 @@ function reply(cards = [directCard(1), directCard(2), directCard(3)]) {
 
 const failures = (response) => evaluate(expect, response, { requireVerifiedPages: true, nowMs });
 
-test('V9 preserves three direct, verified analogs, not three links', () => {
+test('separate prospective gate requires three direct, verified analogs, not three links', () => {
   assert.equal(contract.minimum, 3);
   assert.equal(expect.min_products, 3);
   assert.doesNotThrow(() => validateExpectationObject(expect));

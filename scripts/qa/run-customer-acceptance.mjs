@@ -211,7 +211,7 @@ FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'] = {
 // rewriting any historical V8/V5 suite or report.
 FULL_SUITE_MANIFESTS['customer-acceptance-cases-v2.json'] = {
   ...FULL_SUITE_MANIFESTS['customer-acceptance-cases.json'],
-  sha256: '27906da8225f1e7ba1297f99a9ab9de375fc583a5e8b1d58df9d2dea1b66c84d',
+  sha256: '6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7',
 };
 FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v6.json'] = {
   ...FULL_SUITE_MANIFESTS['notion-legacy-bug-cases-v5.json'],

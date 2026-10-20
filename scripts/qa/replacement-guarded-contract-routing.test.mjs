@@ -23,7 +23,24 @@ test("guarded cards are emitted only with a contract proven from the selected ca
 });
 
 test("only a verified recessed source uses the cut-out path; surface mounts keep the existing structural branch", () => {
-  assert.match(direct, /const guardedStructuralMount = structuralProfile !== null &&\s*hasVerifiedRecessedStructuralMount\(structuralProfile\);/u);
+  const guardedMountExpression = direct.match(
+    /const guardedStructuralMount\s*=\s*([\s\S]*?);/u,
+  )?.[1];
+  assert(guardedMountExpression, "guarded structural mount declaration is missing");
+  const isGuardedMount = new Function(
+    "VERIFIED_MANUFACTURER_FACTS_ENABLED",
+    "structuralProfile",
+    "hasVerifiedRecessedStructuralMount",
+    `return Boolean(${guardedMountExpression});`,
+  );
+  const recessed = { mount: "recessed" };
+  const isRecessed = (profile) => profile.mount === "recessed";
+  // A verified recessed source must still follow the old route while the
+  // server-owned feature flag is off, including a stale client cut-out slot.
+  assert.equal(isGuardedMount(false, recessed, isRecessed), false);
+  assert.equal(isGuardedMount(true, recessed, isRecessed), true);
+  assert.equal(isGuardedMount(true, { mount: "surface" }, isRecessed), false);
+  assert.equal(isGuardedMount(true, null, isRecessed), false);
   assert.match(direct, /if \(sourceOnlyVerified && structuralProfile && guardedStructuralMount\) \{\s*return await selectGuardedStructuralReplacement\(/u);
   assert.match(direct, /const selectionCriteria: Criterion\[\] = structuralProfile\s*\? structuralProfile\.obligations\.map/u);
   assert.match(direct, /if \(\s*customerCutoutMm !== null &&\s*\(!sourceOnlyVerified \|\| !guardedStructuralMount\)\s*\)/u);
