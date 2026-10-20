@@ -49,7 +49,8 @@ Deno.test("retired beta search answers browser preflight without paid work", asy
       headers: {
         Origin: "https://220volt.testdevops.ru",
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "authorization,content-type",
+        "Access-Control-Request-Headers":
+          "authorization,content-type,x-supabase-client-platform-version",
       },
     },
   );
@@ -58,7 +59,13 @@ Deno.test("retired beta search answers browser preflight without paid work", asy
   assertEquals(await response.text(), "");
   assertEquals(
     response.headers.get("access-control-allow-methods"),
-    "GET, POST, OPTIONS",
+    "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
+  );
+  assertEquals(
+    response.headers.get("access-control-allow-headers")?.includes(
+      "x-supabase-client-platform-version",
+    ),
+    true,
   );
   assertEquals(response.headers.get("cache-control"), "no-store");
 });
