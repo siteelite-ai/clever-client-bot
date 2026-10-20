@@ -6,6 +6,7 @@ on:
       - 'supabase/migrations/20261020150000_verified_product_facts.sql'
       - 'supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql'
       - 'supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql'
+      - 'supabase/migrations/20261021020000_verified_product_facts_public_source.sql'
       - 'docs/security/verified-manufacturer-facts-local-test.sql'
       - '.github/workflows/verified-manufacturer-facts-postgres.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
       - 'supabase/migrations/20261020150000_verified_product_facts.sql'
       - 'supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql'
       - 'supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql'
+      - 'supabase/migrations/20261021020000_verified_product_facts_public_source.sql'
       - 'docs/security/verified-manufacturer-facts-local-test.sql'
       - '.github/workflows/verified-manufacturer-facts-postgres.yml'
 
@@ -57,6 +59,8 @@ jobs:
             -f supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
             -f supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261021020000_verified_product_facts_public_source.sql
 
       - name: Assert privileges, constraints and approval immutability
         run: |

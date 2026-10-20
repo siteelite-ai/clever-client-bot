@@ -1,5 +1,5 @@
--- Run only after all three ordered candidate migrations (base, fixture form,
--- then direct manufacturer axes) in a disposable PostgreSQL 16
+-- Run only after all four ordered candidate migrations (base, fixture form,
+-- direct manufacturer axes, then public source URL) in a disposable PostgreSQL 16
 -- database with anon, authenticated and BYPASSRLS service_role already created.
 -- Fixtures are rolled back. Never run this script against a shared live project.
 -- Example: psql "$DISPOSABLE_DATABASE_URL" -v ON_ERROR_STOP=1 \
@@ -171,6 +171,17 @@ BEGIN
 
   v_rejected := false;
   BEGIN
+    UPDATE public.verified_product_facts
+    SET public_source_url = 'https://lk.iek.ru/private/document.pdf'
+    WHERE id = v_pending;
+  EXCEPTION WHEN check_violation THEN v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'private manufacturer portal was accepted as a public URL';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
     UPDATE public.verified_product_facts SET valid_until = verified_at
     WHERE id = v_pending;
   EXCEPTION WHEN check_violation THEN v_rejected := true;
@@ -197,6 +208,7 @@ BEGIN
     SELECT 1 FROM public.verified_product_facts
     WHERE id = v_first AND catalog_leaf_category = 'Светильники'
       AND mounting_method IS NULL AND luminous_flux_lm IS NULL
+      AND public_source_url IS NULL
   ) THEN
     RAISE EXCEPTION 'typed leaf was not persisted or legacy axes were inferred';
   END IF;
@@ -214,6 +226,22 @@ BEGIN
   END;
   IF NOT v_rejected THEN
     RAISE EXCEPTION 'approved technical evidence could be rewritten';
+  END IF;
+
+  v_rejected := false;
+  BEGIN
+    UPDATE public.verified_product_facts
+    SET public_source_url = 'https://navigator-light.ru/products/approved'
+    WHERE id = v_first;
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
+    IF v_message NOT LIKE 'approved manufacturer facts are immutable%' THEN
+      RAISE;
+    END IF;
+    v_rejected := true;
+  END;
+  IF NOT v_rejected THEN
+    RAISE EXCEPTION 'legacy approval could be upgraded to a public URL in place';
   END IF;
 
   v_rejected := false;
@@ -273,19 +301,22 @@ BEGIN
   INSERT INTO public.verified_product_facts (
     product_id, article, catalog_url, source_url, document_version,
     verified_at, valid_until, approval_status, approved_at, approved_by,
-    mounting_method, luminous_flux_lm
+    mounting_method, luminous_flux_lm, public_source_url
   ) VALUES (
     'ci-direct-axes', 'CI-DIRECT-AXES',
     'https://220volt.kz/catalog/svetotexnika/svetilniki/ci-direct-axes/',
     'https://manufacturer.example/photometry', 'CI test rev 1',
     v_checked_at - interval '1 day', v_checked_at + interval '30 days',
-    'approved', v_checked_at, 'CI reviewer', 'recessed', 600
+    'approved', v_checked_at, 'CI reviewer', 'recessed', 600,
+    'https://www.assets.signify.com/is/content/Signify/approved.pdf'
   ) RETURNING id INTO v_axes;
   IF NOT EXISTS (
     SELECT 1 FROM public.verified_product_facts
     WHERE id = v_axes AND mounting_method = 'recessed'
       AND luminous_flux_lm = 600 AND cutout_min_mm IS NULL
       AND fixture_form IS NULL AND color_temperature_k IS NULL
+      AND public_source_url =
+        'https://www.assets.signify.com/is/content/Signify/approved.pdf'
   ) THEN
     RAISE EXCEPTION 'direct axes were not persisted as independent evidence';
   END IF;
@@ -421,6 +452,8 @@ BEGIN
     SELECT 1 FROM public.verified_product_facts
     WHERE product_id = 'ci-direct-axes' AND mounting_method = 'recessed'
       AND luminous_flux_lm = 600 AND approval_status = 'approved'
+      AND public_source_url =
+        'https://www.assets.signify.com/is/content/Signify/approved.pdf'
   ) THEN
     RAISE EXCEPTION 'service_role cannot read approved direct axes';
   END IF;

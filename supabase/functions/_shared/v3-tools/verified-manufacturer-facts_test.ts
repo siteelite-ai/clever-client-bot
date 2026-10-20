@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   fixtureFormContradictsLiveCatalogue,
+  publicManufacturerSourceUrl,
   validateVerifiedManufacturerFacts,
 } from "./verified-manufacturer-facts.ts";
 import type { ProductFull } from "./types.ts";
@@ -445,6 +446,47 @@ Deno.test("noncanonical catalog URLs and unsafe source URLs fail closed", () => 
   ) assertEquals(check({ source_url }), null, source_url);
   assertEquals(check({ document_version: "<script>alert(1)</script>" }), null);
   assertEquals(check({ document_version: "v".repeat(81) }), null);
+});
+
+Deno.test("public evidence URL is separately approved, exact-hosted and optional for legacy facts", () => {
+  const legacy = check();
+  assert(legacy);
+  assertEquals("public_source_url" in legacy.provenance, false);
+  const privateOperational = "https://internal.manufacturer.example/spec.pdf?secret=PRIVATE_SENTINEL";
+  const publicEvidence = "https://www.assets.signify.com/is/content/Signify/downlight.pdf";
+  const approved = check({
+    source_url: privateOperational,
+    document_page: 2,
+    public_source_url: publicEvidence,
+  });
+  assert(approved);
+  assertEquals(approved.provenance.source_url, privateOperational);
+  assertEquals(approved.provenance.public_source_url, publicEvidence);
+  assertEquals(check({ public_source_url: null })?.provenance.public_source_url, null);
+  assertEquals(publicManufacturerSourceUrl(publicEvidence), true);
+  assertEquals(publicManufacturerSourceUrl("https://cdn-01.iek.ru/media/original/document.pdf"), true);
+  assertEquals(publicManufacturerSourceUrl("https://images.philips.com/is/content/PhilipsConsumer/catalog.pdf"), true);
+  for (const public_source_url of [
+    "http://navigator-light.ru/products/item",
+    "https://navigator-light.ru/products/item?access_token=private",
+    "https://navigator-light.ru/products/item#fragment",
+    "https://u:p@navigator-light.ru/products/item",
+    "https://navigator-light.ru:8443/products/item",
+    "https://lk.iek.ru/api/store/document.pdf",
+    "https://unreviewed.assets.signify.com/files/item.pdf",
+    "https://navigator-light.ru.evil.example/products/item",
+    "https://127.0.0.1/products/item",
+    "https://navigator-light.ru/products/%2fsecret",
+    "https://navigator-light.ru/products/%5csecret",
+    "https://navigator-light.ru/products/%E2%80%8Bhidden",
+    "https://navigator-light.ru/products/%252Fsecret",
+    "https://navigator-light.ru/products/item;sid=private",
+    "https://navigator-light.ru/products/../other",
+    "https://navigator-light.ru/",
+  ]) {
+    assertEquals(publicManufacturerSourceUrl(public_source_url), false, public_source_url);
+    assertEquals(check({ public_source_url }), null, public_source_url);
+  }
 });
 
 Deno.test("PDF source requires a bounded page; unpaginated HTML may use null", () => {

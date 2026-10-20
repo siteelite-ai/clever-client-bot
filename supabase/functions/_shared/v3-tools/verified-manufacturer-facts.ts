@@ -16,7 +16,10 @@ export interface VerifiedManufacturerFacts {
     catalog_leaf_category?: string | null;
   };
   provenance: {
+    /** Internal evidence location; it may be signed and must never enter public SSE. */
     source_url: string;
+    /** Separately curator-approved public manufacturer URL. Missing on legacy rows. */
+    public_source_url?: string | null;
     document_version: string;
     /** Required for PDF sources; null for an unpaginated HTML product page. */
     document_page: number | null;
@@ -81,6 +84,38 @@ const REQUIRED_COLUMNS = [
 
 const DAY_MS = 86_400_000;
 const MAX_VALIDITY_MS = 366 * DAY_MS;
+
+// Exact public hosts only. In particular, private portals such as lk.iek.ru
+// and arbitrary vendor subdomains are not authorized by the parent domain.
+const PUBLIC_MANUFACTURER_HOSTS = new Set([
+  "signify.com", "www.signify.com", "www.assets.signify.com",
+  "philips.com", "www.philips.com", "images.philips.com",
+  "navigator-light.ru", "www.navigator-light.ru",
+  "iek.ru", "www.iek.ru", "cdn-01.iek.ru",
+  "gauss.ru", "www.gauss.ru",
+  "ledar.ru", "www.ledar.ru",
+]);
+
+/** Syntax guard, not an automatic endorsement: a private administrator must
+ * explicitly approve the separate public URL as part of the immutable row. */
+export function publicManufacturerSourceUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 1_000 ||
+      value !== value.trim() || /[\p{Cc}\p{Cf}]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    const path = url.pathname;
+    const decodedPath = decodeURIComponent(path);
+    return url.protocol === "https:" &&
+      PUBLIC_MANUFACTURER_HOSTS.has(url.hostname) &&
+      !url.username && !url.password && !url.port &&
+      !url.search && !url.hash && url.href === value &&
+      path.length > 1 && !path.startsWith("//") &&
+      !/[\p{Cc}\p{Cf}\\@;=?#]/u.test(decodedPath) &&
+      !/%(?:0[0-9a-f]|1[0-9a-f]|7f|2f|5c|3f|23|40|25)/iu.test(path);
+  } catch {
+    return false;
+  }
+}
 const CUTOUT_LABEL = String
   .raw`(?:диаметр\s+(?:монтажного|посадочного|установочного)\s+отверстия|(?:монтажное|посадочное|установочное)\s+отверстие|(?:монтажный|посадочный|установочный)\s+(?:вырез|диаметр)|диаметр\s+выреза|размер\s+(?:монтажного|посадочного|установочного)\s+отверстия|размер\s+выреза|вырез(?:\s+под\s+светильник)?|(?:cut[\s-]?out|mounting\s+hole|installation\s+hole)(?:\s+(?:diameter|size))?)`;
 const OUTER_LABEL = String
@@ -673,6 +708,8 @@ export function validateVerifiedManufacturerFacts(
       (boundedText(row.catalog_leaf_category, 240) &&
         row.catalog_leaf_category === product.leaf_category)) ||
     !source ||
+    !(row.public_source_url === undefined || row.public_source_url === null ||
+      publicManufacturerSourceUrl(row.public_source_url)) ||
     !boundedText(row.document_version, 80) ||
     !/^[\p{L}\p{N}][\p{L}\p{N} ._+\-()/]{0,79}$/u.test(row.document_version) ||
     !(row.document_page === null ||
@@ -775,6 +812,9 @@ export function validateVerifiedManufacturerFacts(
     },
     provenance: {
       source_url: row.source_url as string,
+      ...(row.public_source_url !== undefined
+        ? { public_source_url: row.public_source_url as string | null }
+        : {}),
       document_version: row.document_version,
       document_page: row.document_page as number | null,
       verified_at: row.verified_at as string,

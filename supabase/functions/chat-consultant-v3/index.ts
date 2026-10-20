@@ -4322,7 +4322,7 @@ interface DirectReplacementResult {
 const VERIFIED_MANUFACTURER_FACT_COLUMNS =
   "product_id,article,catalog_url,catalog_leaf_category,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
 const DIRECT_ANALOG_FACT_COLUMNS =
-  `${VERIFIED_MANUFACTURER_FACT_COLUMNS},mounting_method,luminous_flux_lm`;
+  `${VERIFIED_MANUFACTURER_FACT_COLUMNS},mounting_method,luminous_flux_lm,public_source_url`;
 
 async function loadApprovedManufacturerFacts(
   ctx: ToolContext,
@@ -4718,6 +4718,8 @@ async function selectGuardedStructuralReplacement(
   };
   let shortlist: VerifiedCutoutShortlistResult | null = null;
   let shortlistReadFailed = false;
+  const shortlistProofArticles = new Set<string>();
+  const shortlistProofUrls = new Set<string>();
   let retrieved: Awaited<ReturnType<typeof retrieveReplacementCandidateWindow>> |
     null = null;
   try {
@@ -4766,8 +4768,28 @@ async function selectGuardedStructuralReplacement(
             remainingMs: guardedBudget.remainingMs,
             hydrate: (cache, ids, signal) =>
               manufacturerFacts.hydrate(cache, ids, signal),
-            accept: (candidate) => assess(candidate, false) !== null,
-            target: requested.target,
+            accept: (candidate) => {
+              const assessed = assess(candidate, false);
+              if (!assessed) return false;
+              if (!proofAwareSearch) return true;
+              const { full } = assessed;
+              if (
+                !full.article || !full.url ||
+                shortlistProofArticles.has(full.article) ||
+                shortlistProofUrls.has(full.url)
+              ) return false;
+              const proved = selectProofEligibleDirectAnalogCandidates({
+                source,
+                candidates: [full],
+                customerCutoutMm,
+                maxCards: 3,
+              }).candidates.length === 1;
+              if (!proved) return false;
+              shortlistProofArticles.add(full.article);
+              shortlistProofUrls.add(full.url);
+              return true;
+            },
+            target: proofAwareSearch ? desiredProofCount : requested.target,
           });
         }
       } catch {
@@ -4887,7 +4909,7 @@ async function selectGuardedStructuralReplacement(
       target: requested.target,
       direct_proof_eligible: proofSelection?.candidates.length ?? null,
       termination: retrieved?.termination ??
-        ((shortlist?.products.length ?? 0) >= requested.target
+        (enoughCandidates(shortlist?.products ?? [])
           ? "verified_shortlist_target_reached"
           : "verified_shortlist_interrupted"),
       tool_pages: retrieved?.pagesRequested ?? 0,

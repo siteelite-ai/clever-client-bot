@@ -4,6 +4,7 @@ import {
 } from "./search-catalog.ts";
 import type { ProductFull } from "./types.ts";
 import {
+  publicManufacturerSourceUrl,
   validateVerifiedManufacturerFacts,
   type VerifiedManufacturerFacts,
 } from "./verified-manufacturer-facts.ts";
@@ -59,38 +60,6 @@ interface SelectDirectAnalogCandidatesInput extends BuildDirectAnalogProofInput 
 export interface DirectAnalogCandidateSelection {
   candidates: ProductFull[];
   proof: DirectAnalogProof | null;
-}
-
-/**
- * Only these first-party public manufacturer sites may be named in a browser
- * certificate. The private approval table accepts a wider range of evidence
- * URLs, including signed/download URLs; those must never be copied to SSE.
- * Extend this list only after verifying ownership of a new manufacturer's
- * public documentation host. A retailer mirror is not manufacturer proof.
- */
-const PUBLIC_MANUFACTURER_HOSTS = [
-  "signify.com",
-  "philips.com",
-  "navigator-light.ru",
-  "iek.ru",
-  "gauss.ru",
-  "ledar.ru",
-] as const;
-
-function publicManufacturerSourceUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.toLocaleLowerCase("en-US");
-    return url.protocol === "https:" &&
-      !url.username && !url.password && !url.port &&
-      !url.search && !url.hash && url.href === value &&
-      url.pathname !== "/" &&
-      PUBLIC_MANUFACTURER_HOSTS.some((allowed) =>
-        host === allowed || host.endsWith(`.${allowed}`)
-      );
-  } catch {
-    return false;
-  }
 }
 
 function normalized(value: string): string {
@@ -185,6 +154,7 @@ function freshBoundFacts(
     catalog_url: binding.catalog_url,
     catalog_leaf_category: binding.catalog_leaf_category ?? null,
     source_url: provenance.source_url,
+    public_source_url: provenance.public_source_url ?? null,
     document_version: provenance.document_version,
     document_page: provenance.document_page,
     verified_at: provenance.verified_at,
@@ -211,7 +181,7 @@ function freshBoundFacts(
     supply_max_v: supply?.max ?? null,
   }, product, now);
   return revalidated &&
-      publicManufacturerSourceUrl(revalidated.provenance.source_url)
+      publicManufacturerSourceUrl(revalidated.provenance.public_source_url)
     ? revalidated
     : null;
 }
@@ -328,7 +298,9 @@ function proveDirectAnalogCandidate(
   seen.articles.add(candidate.article!);
   const provenance = {
     kind: "approved_manufacturer_fact" as const,
-    source_url: facts.provenance.source_url,
+    // The operational evidence locator may be signed or private; only the
+    // separate, immutable administrator-approved public field may leave SSE.
+    source_url: facts.provenance.public_source_url!,
     approved_at: facts.provenance.approved_at,
     valid_until: facts.provenance.valid_until,
   };

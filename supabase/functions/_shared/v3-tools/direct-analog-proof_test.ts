@@ -46,6 +46,7 @@ function approvedRow(
     catalog_url: item.url,
     catalog_leaf_category: item.leaf_category,
     source_url: `https://navigator-light.ru/products/${item.id}`,
+    public_source_url: `https://navigator-light.ru/products/${item.id}`,
     document_version: "Rev 2026-10",
     document_page: null,
     verified_at: "2026-10-01T08:00:00Z",
@@ -227,9 +228,9 @@ Deno.test("stale, wrong-bound or changed live product facts fail closed", () => 
   assertEquals(buildDirectAnalogProof({ ...input, candidates: [...input.candidates.slice(0, 2), contradicted] }), null);
 });
 
-Deno.test("public proof rejects signed, private or credentialed provenance URLs", () => {
+Deno.test("public proof emits only separately approved public URLs, never operational locators", () => {
   const input = fixture();
-  const withSourceUrl = (url: string, onSource = false) => {
+  const withPublicUrl = (url: string | null, onSource = false) => {
     const item = onSource ? input.source : input.candidates[2];
     const altered = {
       ...item,
@@ -237,8 +238,7 @@ Deno.test("public proof rejects signed, private or credentialed provenance URLs"
         ...item.verified_manufacturer_facts!,
         provenance: {
           ...item.verified_manufacturer_facts!.provenance,
-          source_url: url,
-          document_page: url.endsWith(".pdf") ? 1 : null,
+          public_source_url: url,
         },
       },
     };
@@ -256,14 +256,38 @@ Deno.test("public proof rejects signed, private or credentialed provenance URLs"
     "https://private.example.com/products/three",
     "https://navigator-light.ru.evil.example/products/three",
     "https://127.0.0.1/products/three",
+    "https://lk.iek.ru/api/store/approved.pdf",
+    "https://unreviewed.assets.signify.com/is/content/Signify/approved.pdf",
+    "https://navigator-light.ru/products/%2Fprivate",
+    "https://navigator-light.ru/products/../other",
   ]) {
-    assertEquals(withSourceUrl(unsafe), null, unsafe);
-    assertEquals(withSourceUrl(unsafe, true), null, unsafe);
+    assertEquals(withPublicUrl(unsafe), null, unsafe);
+    assertEquals(withPublicUrl(unsafe, true), null, unsafe);
   }
-  assertEquals(withSourceUrl("https://www.assets.signify.com/is/content/Signify/approved.pdf")?.status,
+  assertEquals(withPublicUrl(null), null);
+  assertEquals(withPublicUrl(null, true), null);
+  assertEquals(withPublicUrl("https://www.assets.signify.com/is/content/Signify/approved.pdf")?.status,
     "confirmed_direct");
-  assertEquals(withSourceUrl("https://lk.iek.ru/api/store/approved.pdf")?.status,
-    "confirmed_direct");
+
+  const privateSource = {
+    ...input.candidates[2],
+    verified_manufacturer_facts: {
+      ...input.candidates[2].verified_manufacturer_facts!,
+      provenance: {
+        ...input.candidates[2].verified_manufacturer_facts!.provenance,
+        source_url: "https://internal.manufacturer.example/spec.pdf?secret=PRIVATE_SENTINEL",
+        document_page: 2,
+      },
+    },
+  };
+  const proof = buildDirectAnalogProof({
+    ...input,
+    candidates: [...input.candidates.slice(0, 2), privateSource],
+  });
+  assert(proof);
+  assertEquals(proof.candidates[2].axes[0].evidence.source_url,
+    "https://navigator-light.ru/products/three");
+  assertEquals(JSON.stringify(proof).includes("PRIVATE_SENTINEL"), false);
 });
 
 Deno.test("all eight source/candidate axes are mandatory; hard mismatches never fill a slot", () => {

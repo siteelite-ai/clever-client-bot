@@ -65,9 +65,10 @@ function approvedRow(id: number, overrides: Record<string, unknown> = {}) {
     article: item.article,
     catalog_url: item.url,
     catalog_leaf_category: leaf,
-    source_url: `https://navigator-light.ru/products/fixture-${id}`,
+    source_url: `https://internal.manufacturer.example/spec/fixture-${id}.pdf?secret=PRIVATE_SENTINEL`,
+    public_source_url: `https://navigator-light.ru/products/fixture-${id}`,
     document_version: "Rev 2026-10",
-    document_page: null,
+    document_page: 2,
     verified_at: "2026-10-01T08:00:00Z",
     valid_until: "2026-12-01T08:00:00Z",
     revoked_at: null,
@@ -98,9 +99,12 @@ type FinalReadMode =
   | "pass"
   | "mixed"
   | "mixed_five"
+  | "late_shortlist_proof"
   | "source_incomplete"
+  | "source_missing_public"
   | "revoked"
   | "changed"
+  | "changed_public_url"
   | "duplicate"
   | "db_failure"
   | "timeout";
@@ -163,17 +167,27 @@ async function runTurn(mode: FinalReadMode) {
           // The bounded shortlist hint is not the final read. The final read
           // includes exactly the source and the cards displayed this turn.
           if (url.searchParams.has("cutout_min_mm")) {
-            return json(["mixed", "mixed_five", "source_incomplete"].includes(mode)
+            if (mode === "late_shortlist_proof") {
+              return json(Array.from({ length: 8 }, (_, index) =>
+                approvedRow(index + 2)));
+            }
+            return json(["mixed", "mixed_five", "source_incomplete", "source_missing_public"].includes(mode)
               ? []
               : [2, 3, 4].map((id) => approvedRow(id)));
           }
           const ids = url.searchParams.get("product_id") ?? "";
-          const approvedIds = mode === "mixed_five"
+          const approvedIds = mode === "late_shortlist_proof"
+            ? [1, 7, 8, 9]
+            : mode === "mixed_five"
             ? [1, 2, 3, 4, 8, 9]
             : [1, 2, 3, 4];
           const factRow = (id: number) =>
-            id === 1 && mode === "source_incomplete"
+            mode === "late_shortlist_proof" && id >= 2 && id <= 6
               ? approvedRow(id, { luminous_flux_lm: null })
+              : id === 1 && mode === "source_incomplete"
+              ? approvedRow(id, { luminous_flux_lm: null })
+              : id === 1 && mode === "source_missing_public"
+              ? approvedRow(id, { public_source_url: null })
               : approvedRow(id);
           if (approvedIds.every((id) => ids.includes(String(id)))) {
             finalReads++;
@@ -188,11 +202,17 @@ async function runTurn(mode: FinalReadMode) {
             if (mode === "changed") rows[3] = approvedRow(4, {
               luminous_flux_lm: 650,
             });
+            if (mode === "changed_public_url") rows[3] = approvedRow(4, {
+              public_source_url: "https://navigator-light.ru/products/fixture-4-revised",
+            });
             if (mode === "duplicate") rows.push(approvedRow(4));
             return json(rows);
           }
           hydrationReads++;
-          return json(approvedIds.filter((id) => ids.includes(String(id)))
+          const hydrationIds = mode === "late_shortlist_proof"
+            ? Array.from({ length: 9 }, (_, index) => index + 1)
+            : approvedIds;
+          return json(hydrationIds.filter((id) => ids.includes(String(id)))
             .map(factRow));
         }
         if (request.method === "GET" && url.pathname.startsWith("/rest/v1/")) {
@@ -224,7 +244,10 @@ async function runTurn(mode: FinalReadMode) {
           const article = url.searchParams.get("article");
           let result: ReturnType<typeof product>[];
           if (article) {
-            result = [1, 2, 3, 4].filter((id) =>
+            const ids = mode === "late_shortlist_proof"
+              ? Array.from({ length: 9 }, (_, index) => index + 1)
+              : [1, 2, 3, 4];
+            result = ids.filter((id) =>
               product(id).article === article
             ).map(product);
           } else if (
@@ -233,7 +256,11 @@ async function runTurn(mode: FinalReadMode) {
             result = [product(1)];
           } else {
             catalogSearches++;
-            if (mode === "source_incomplete") {
+            if (mode === "late_shortlist_proof") {
+              // Generic search cannot supply three complete proofs; the
+              // exact-article hints must reach their late approved rows.
+              result = [2, 5, 3, 6, 7].map(product);
+            } else if (mode === "source_incomplete" || mode === "source_missing_public") {
               result = [2, 3, 4, 5, 6].map(product);
             } else if (mode === "mixed" || mode === "mixed_five") {
               const ids = [2, 5, 3, 6, 7];
@@ -321,6 +348,8 @@ Deno.test({
     assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 3);
     assert(result.steps.some(({ step }) => step === "v3_replacement_final_fact_gate_passed"));
     assert(!JSON.stringify(result.events).includes("private-technical-reviewer"));
+    assert(!JSON.stringify(result.events).includes("PRIVATE_SENTINEL"));
+    assert(JSON.stringify(blocks).includes("https://navigator-light.ru/products/fixture-2"));
   },
 });
 
@@ -368,6 +397,37 @@ Deno.test({
 });
 
 Deno.test({
+  name: "eight cutout hints reach late three fully proved cards after five incomplete facts",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runTurn("late_shortlist_proof");
+    const blocks = productBlocks(result);
+    const window = result.steps.find(({ step }) =>
+      step === "v3_replacement_guarded_window"
+    );
+    const shortlist = window?.meta?.verified_shortlist as
+      | { attempted?: number; accepted?: number; rejected?: number }
+      | undefined;
+    assertEquals(shortlist?.attempted, 8, JSON.stringify(result.steps));
+    assertEquals(shortlist?.accepted, 3, JSON.stringify(result.steps));
+    assertEquals(shortlist?.rejected, 5, JSON.stringify(result.steps));
+    assertEquals(result.finalReads, 1, JSON.stringify(result.steps));
+    assertEquals(blocks.length, 1, JSON.stringify(result.steps));
+    assertEquals(blocks[0].count, 3);
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.status,
+      "confirmed_direct");
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 3);
+    for (const id of [7, 8, 9]) {
+      assert(JSON.stringify(blocks).includes(`fixture-${id}/`));
+    }
+    for (const id of [2, 3, 4, 5, 6]) {
+      assert(!JSON.stringify(blocks).includes(`fixture-${id}/`));
+    }
+    assert(!JSON.stringify(result.events).includes("PRIVATE_SENTINEL"));
+  },
+});
+
+Deno.test({
   name: "incomplete source facts do not expand the bounded structural search",
   permissions: { read: true, env: false, net: false },
   async fn() {
@@ -382,7 +442,20 @@ Deno.test({
   },
 });
 
-for (const mode of ["revoked", "changed", "duplicate", "db_failure", "timeout"] as const) {
+Deno.test({
+  name: "legacy source facts without a separately approved public URL cannot trigger direct proof",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runTurn("source_missing_public");
+    const blocks = productBlocks(result);
+    assertEquals(result.catalogSearches, 1, JSON.stringify(result.steps));
+    assertEquals(blocks.length, 1, JSON.stringify(result.steps));
+    assertEquals(blocks[0].selection_contract?.direct_analog_proof, undefined);
+    assert(!JSON.stringify(result.events).includes("PRIVATE_SENTINEL"));
+  },
+});
+
+for (const mode of ["revoked", "changed", "changed_public_url", "duplicate", "db_failure", "timeout"] as const) {
   Deno.test({
     name: `final live approval ${mode} fails closed with no cards`,
     permissions: { read: true, env: false, net: false },
