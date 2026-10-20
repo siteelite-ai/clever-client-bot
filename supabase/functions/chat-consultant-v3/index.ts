@@ -10471,6 +10471,15 @@ async function runExpertLoop(
           let declaration = declarationCall
             ? cleanResolvedDeclaration(resolvePairedDeclaration(declarationCall.args))
             : null;
+          // The live catalog can independently certify the complete set of
+          // protection values for the customer's exposure. Resolve that
+          // certificate before asking the model to repair its declaration:
+          // a missing model-selected *single* IP value must not block the
+          // server's stricter OR search and per-product proof below.
+          const environmentalRange = deriveEnvironmentalProtectionRange(
+            userMessage,
+            lastDiscover?.facets ?? [],
+          );
           const missingRequiredProductMeasurement = () => {
             if (!unresolvedProductMeasurementRequired || !declaration) {
               return false;
@@ -10540,6 +10549,7 @@ async function runExpertLoop(
             };
           };
           const missingEnvironmentalProtection = () =>
+            environmentalRange.status !== "enumerated" &&
             hasUnresolvedEnvironmentalProtectionObligation(
               userMessage,
               lastDiscover?.facets ?? [],
@@ -10954,10 +10964,6 @@ async function runExpertLoop(
           // live protection codes, never one model-selected exact code. This
           // contract is independent of the model's required_facet_values and
           // applies equally to every catalog category with a live IP axis.
-          const environmentalRange = deriveEnvironmentalProtectionRange(
-            userMessage,
-            lastDiscover.facets ?? [],
-          );
           certifiedEnvironmentalRange =
             environmentalRange.status === "enumerated"
               ? environmentalRange
