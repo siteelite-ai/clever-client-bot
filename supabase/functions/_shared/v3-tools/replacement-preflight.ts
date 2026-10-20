@@ -146,6 +146,14 @@ export interface ReplacementProofInput {
   sourcePriceIdentityVerified?: boolean;
   /** Complete, independently verified critical facet set. Empty = unknown. */
   completeCriticalFacetKeys?: string[];
+  /** Final server selection contract. Only criteria verified on every rendered
+   * live catalogue card may be described to the customer. */
+  candidateSelectionCriteria?: ReadonlyArray<{
+    key: string;
+    op: string;
+    value: string | number | [number, number];
+    unit?: string | null;
+  }>;
 }
 
 export interface ReplacementProofContract {
@@ -165,6 +173,8 @@ export interface ReplacementProofContract {
   }>;
   all_equivalent: boolean;
   cheaper_than_source_proven: boolean;
+  /** User-requested criteria proven by the live facets of every shown card. */
+  verified_candidate_criteria: Array<{ key: string; value: string }>;
 }
 
 /** Exact article or complete catalogue title, never a series/compact code. */
@@ -223,6 +233,42 @@ function comparableNumericTrait(value: string): {
   return Number.isFinite(amount)
     ? { amount, unit: norm(match[2]).replace(/\s+/gu, "") }
     : null;
+}
+
+function strictProofFacet(value: string): string {
+  // `norm` is useful for search, but deliberately folds 2,5 / 2/5 and drops
+  // units. A customer-visible proof must preserve those distinctions.
+  return String(value).normalize("NFKC").trim().toLocaleLowerCase("ru")
+    .replace(/\s+/gu, " ");
+}
+
+function strictLiveCandidateFacetValue(
+  product: ProductRef,
+  key: string,
+): string | null {
+  // The API uses a machine `option.key` in facet_values but the final
+  // selection contract may use its human `caption_ru`. short_traits is built
+  // from that same live options array (all non-administrative captions), not
+  // from model prose. Match the complete caption literally, never fuzzily.
+  const captionValues = traitEntries(product)
+    .filter(({ caption }) =>
+      strictProofFacet(caption) === strictProofFacet(key)
+    )
+    .map(({ value }) => strictProofFacet(value)).filter(Boolean);
+  if (captionValues.length > 0) {
+    const uniqueCaptions = [...new Set(captionValues)];
+    return uniqueCaptions.length === 1 ? uniqueCaptions[0] : null;
+  }
+  const facets = (product as ProductRef & {
+    facet_values?: Record<string, string[]>;
+  }).facet_values;
+  if (!facets) return null;
+  const matching = Object.entries(facets)
+    .filter(([caption]) => strictProofFacet(caption) === strictProofFacet(key))
+    .flatMap(([, values]) => values ?? [])
+    .map(strictProofFacet).filter(Boolean);
+  const unique = [...new Set(matching)];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 /** A single server-owned proof for direct, model and fallback render paths. */
@@ -297,6 +343,34 @@ export function buildReplacementProofContract(
         norm(candidate.unit ?? "") === sourceUnit
       ),
   );
+  const verifiedCandidateCriteria: Array<{ key: string; value: string }> = [];
+  const seenCriteria = new Set<string>();
+  if (input.candidates.length > 0) {
+    for (const criterion of input.candidateSelectionCriteria ?? []) {
+      // A contract is a search instruction, not proof of a card. Verify the
+      // final value against every rendered product before mentioning it.
+      if (criterion.op !== "eq" || criterion.unit ||
+        typeof criterion.value !== "string" &&
+        typeof criterion.value !== "number") continue;
+      const key = String(criterion.key);
+      const wanted = strictProofFacet(String(criterion.value));
+      const normalizedKey = strictProofFacet(key);
+      if (!normalizedKey || !wanted || seenCriteria.has(normalizedKey) ||
+        isReplacementIdentityFacet({ key, caption: key })) continue;
+      if (!input.candidates.every((candidate) =>
+        strictLiveCandidateFacetValue(candidate, key) === wanted
+      )) continue;
+      const safeKey = key.replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+        .replace(/\s+/gu, " ").trim().slice(0, 60);
+      const safeValue = String(criterion.value)
+        .replace(/[^\p{L}\p{N}\s.,%°/+()-]/gu, " ")
+        .replace(/\s+/gu, " ").trim().slice(0, 40);
+      if (!safeKey || !safeValue) continue;
+      verifiedCandidateCriteria.push({ key: safeKey, value: safeValue });
+      seenCriteria.add(normalizedKey);
+      if (verifiedCandidateCriteria.length >= 3) break;
+    }
+  }
   return {
     source_identity: source ? "exact" : "unverified",
     source_id: source?.id ?? null,
@@ -304,6 +378,7 @@ export function buildReplacementProofContract(
     all_equivalent: candidates.length > 0 &&
       candidates.every(({ status }) => status === "equivalent"),
     cheaper_than_source_proven: cheaperThanSourceProven,
+    verified_candidate_criteria: verifiedCandidateCriteria,
   };
 }
 
@@ -311,8 +386,13 @@ export function buildReplacementProofContract(
 export function replacementProofCaption(
   proof: ReplacementProofContract,
 ): string {
+  const verifiedSelection = proof.verified_candidate_criteria.length > 0
+    ? ` В карточках всех показанных товаров подтверждены параметры подбора: ${proof.verified_candidate_criteria.map(({ key, value }) =>
+      `${key}: ${value}`
+    ).join(", ")}.`
+    : "";
   if (proof.source_identity !== "exact") {
-    return "Показываю кандидатов для замены. Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.";
+    return `Показываю кандидатов для замены.${verifiedSelection} Исходный товар не подтверждён по точному артикулу: взаимозаменяемость и сравнение с его ценой не проверены. Уточните артикул исходного изделия и его критичные паспортные параметры.`;
   }
   const lower = proof.candidates.flatMap((item, index) =>
     item.lower_numeric.length > 0
@@ -340,7 +420,7 @@ export function replacementProofCaption(
   const price = proof.cheaper_than_source_proven
     ? " Цены показанных товаров ниже актуальной цены исходной карточки при той же единице продажи."
     : " Сравнение с ценой исходного товара не подтверждено.";
-  return `Показываю кандидатов для замены.${verifiedCriteria} ${compatibility}${price}`;
+  return `Показываю кандидатов для замены.${verifiedSelection}${verifiedCriteria} ${compatibility}${price}`;
 }
 
 /**

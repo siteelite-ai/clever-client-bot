@@ -374,6 +374,84 @@ Deno.test("an Acti9-like series and compact C16 code do not prove a source SKU o
   ).text, replacementProofCaption(proof));
 });
 
+Deno.test("replacement explanation cites only criteria verified on every live candidate card", () => {
+  const candidates = ["10", "4.5", "6", "4.5"].map((rating, index) => ({
+    id: `breaker-${index}`,
+    pagetitle: `Автомат 1P C16 ${rating} кА`,
+    vendor: "Test",
+    price: 500 + index,
+    stock: "in_stock" as const,
+    leaf_category: "Автоматические выключатели",
+    short_traits: [
+      "Количество полюсов: 1",
+      "Номинальный ток: 16",
+      "Характеристика срабатывания: C",
+      `Отключающая способность: ${rating}`,
+    ],
+    facet_values: {
+      kolichestvo_polyusov: ["1"],
+      nominalnyi_tok: ["16"],
+      kharakteristika_srabatyvaniya: ["C"],
+      otklyuchayushchaya_sposobnost: [rating],
+    },
+  }));
+  const criteria = [
+    { key: "Количество полюсов", op: "eq", value: "1" },
+    { key: "Номинальный ток", op: "eq", value: "16" },
+    { key: "Характеристика срабатывания", op: "eq", value: "C" },
+    { key: "Отключающая способность", op: "eq", value: "10" },
+  ];
+  const proof = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates,
+    candidateSelectionCriteria: criteria,
+  });
+  assertEquals(proof.verified_candidate_criteria, criteria.slice(0, 3).map(
+    ({ key, value }) => ({ key, value }),
+  ));
+  const caption = replacementProofCaption(proof);
+  assertEquals(caption.includes("Количество полюсов: 1"), true);
+  assertEquals(caption.includes("Номинальный ток: 16"), true);
+  assertEquals(caption.includes("Характеристика срабатывания: C"), true);
+  assertEquals(caption.includes("Отключающая способность: 10"), false);
+  assertEquals(caption.includes("взаимозаменяемость и сравнение с его ценой не проверены"), true);
+  const missingOnOne = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: candidates.map((candidate, index) => index === 0
+      ? {
+        ...candidate,
+        short_traits: ["Номинальный ток: 16"],
+        facet_values: { nominalnyi_tok: ["16"] },
+      }
+      : candidate),
+    candidateSelectionCriteria: criteria,
+  });
+  assertEquals(missingOnOne.verified_candidate_criteria, [{
+    key: "Номинальный ток",
+    value: "16",
+  }]);
+  const ambiguous = buildReplacementProofContract({
+    source: null,
+    sourceIdentity: "unverified",
+    candidates: [{
+      ...candidates[0],
+      facet_values: {
+        "Размер": ["2/5"],
+        "Доля": ["1"],
+        "Номинальный ток": ["16"],
+      },
+    } as ProductRef],
+    candidateSelectionCriteria: [
+      { key: "Размер", op: "eq", value: "2,5" },
+      { key: "Доля", op: "eq", value: "1%" },
+      { key: "Номинальный ток", op: "eq", value: "16", unit: "А" },
+    ],
+  });
+  assertEquals(ambiguous.verified_candidate_criteria, []);
+});
+
 Deno.test("replacement egress is fail-closed for direct, model, terminal and mixed prose", () => {
   const unproven = [
     "Этот автомат подходит как замена исходному и стоит меньше",

@@ -6944,7 +6944,7 @@ async function runExpertLoop(
   slots: Record<string, unknown>,
   apiKey: string,
   ctx: ToolContext,
-  send: (ev: SseEvent) => void,
+  send: (ev: SseEvent) => string,
   steps: StepLog[],
   t0: number,
   flags: {
@@ -6959,6 +6959,7 @@ async function runExpertLoop(
   ellipticalContinuation: EllipticalSelectionContinuation | null = null,
   preExcludedProductUrls: string[] = [],
   verifiedInitialDiscoveryLeaf: string | null = null,
+  replacementEgressGuarded = false,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -6990,6 +6991,12 @@ async function runExpertLoop(
   const initialDiscoveryMessage = verifiedInitialDiscoveryLeaf ??
     selectionDiscoveryMessage;
   let finalText = "";
+  // Keep the model's draft in finalText/firstAssistantText for search and
+  // criteria decisions. The shared egress may hide that same draft, so UI
+  // captions must consult the separately tracked emitted text instead.
+  let visibleText = "";
+  const hasVisibleText = () =>
+    (replacementEgressGuarded ? visibleText : finalText).trim().length > 0;
   let productsRendered = 0;
   // The generic expert route has candidate search, not a complete catalog
   // price proof. Exact compound and complete recent-set price requests are
@@ -7204,10 +7211,16 @@ async function runExpertLoop(
   const currentSelectionCriteriaPlan = (): SelectionCriteriaPlan | null =>
     selectionCriteriaPlan;
   const rawSend = send;
+  const rawSendVisibleDelta = (event: Extract<SseEvent, { type: "delta" }>) => {
+    const emittedText = rawSend(event);
+    visibleText += emittedText;
+    return emittedText;
+  };
   send = (event: SseEvent) => {
     if (event.type !== "products_block") {
-      rawSend(event);
-      return;
+      const emittedText = rawSend(event);
+      if (event.type === "delta") visibleText += emittedText;
+      return emittedText;
     }
     const plan = currentSelectionCriteriaPlan();
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
@@ -7322,14 +7335,22 @@ async function runExpertLoop(
       ...(unit ? { unit } : {}),
       ...(exclusive ? { exclusive } : {}),
     }));
-    if (intentMode === "select" && !finalText.trim() && activeSelectionTarget) {
+    if (
+      intentMode === "select" && !replacementEgressGuarded &&
+      !hasVisibleText() && activeSelectionTarget
+    ) {
       const caption = safeSelectionRenderCaption(
         activeSelectionTarget,
         [...emittedPlan.mandatory_criteria],
       );
-      rawSend({ type: "delta", content: caption });
+      const emittedCaption = rawSendVisibleDelta({
+        type: "delta",
+        content: caption,
+      });
       finalText = caption;
-      if (!firstAssistantText) firstAssistantText = caption;
+      if (!firstAssistantText && emittedCaption.trim()) {
+        firstAssistantText = emittedCaption.trim();
+      }
       steps.push({
         step: "v3_selection_contract_caption",
         ms: now(),
@@ -7349,7 +7370,7 @@ async function runExpertLoop(
       ).join("; ");
       const notice =
         `\n\nПодходящий тип товара подтверждён, но по данным карточек не удалось проверить: ${details}. Показываю варианты нужного типа; этот параметр уточните перед покупкой.`;
-      rawSend({ type: "delta", content: notice });
+      rawSendVisibleDelta({ type: "delta", content: notice });
       finalText += notice;
       unverifiedRecoveryNoticeSent = true;
     }
@@ -7376,7 +7397,7 @@ async function runExpertLoop(
           : "";
         const notice =
           `\n\nПоказанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность${threshold}. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.`;
-        rawSend({ type: "delta", content: notice });
+        rawSendVisibleDelta({ type: "delta", content: notice });
         finalText += notice;
         steps.push({
           step: "v3_system_total_plan_unverified",
@@ -7393,7 +7414,11 @@ async function runExpertLoop(
     }
     if (catalogPriceExtreme && !priceScopeNoticeSent) {
       const notice = unprovenCatalogPriceNotice(catalogPriceExtreme, true);
-      rawSend({ type: "delta", content: `\n\n${notice}`, origin: "server" });
+      rawSendVisibleDelta({
+        type: "delta",
+        content: `\n\n${notice}`,
+        origin: "server",
+      });
       finalText += `${finalText ? "\n\n" : ""}${notice}`;
       priceScopeNoticeSent = true;
       steps.push({
@@ -7407,7 +7432,11 @@ async function runExpertLoop(
       });
     }
     if (classNotice) {
-      rawSend({ type: "delta", content: `\n\n${classNotice}`, origin: "server" });
+      rawSendVisibleDelta({
+        type: "delta",
+        content: `\n\n${classNotice}`,
+        origin: "server",
+      });
       finalText += `${finalText ? "\n\n" : ""}${classNotice}`;
       applicationClassFallbackNoticeSent = true;
       steps.push({
@@ -7416,7 +7445,7 @@ async function runExpertLoop(
         meta: { tier: renderedClassTier, cards: renderedProducts.length },
       });
     }
-    rawSend({
+    const emittedBlockText = rawSend({
       ...event,
       selection_contract: {
         hash: emittedPlan.hash,
@@ -7438,6 +7467,8 @@ async function runExpertLoop(
           : {}),
       },
     });
+    visibleText += emittedBlockText;
+    return emittedBlockText;
   };
   const freezeSelectionCriteria = (
     criteria: Criterion[],
@@ -8197,7 +8228,10 @@ async function runExpertLoop(
     criteria: Criterion[],
     recoveryStep: string,
   ) => {
-    if (intentMode !== "select" || finalText.trim() || !activeSelectionTarget) {
+    if (
+      intentMode !== "select" || replacementEgressGuarded ||
+      hasVisibleText() || !activeSelectionTarget
+    ) {
       return;
     }
     const caption = safeSelectionRenderCaption(
@@ -11072,11 +11106,11 @@ async function runExpertLoop(
                 reason: "text_before_render",
               });
             }
-            const visibleText = safeVisiblePriceProse(resp.text);
-            if (visibleText) send({ type: "delta", content: visibleText });
-            finalText += visibleText;
+            const modelCaption = safeVisiblePriceProse(resp.text);
+            if (modelCaption) send({ type: "delta", content: modelCaption });
+            finalText += modelCaption;
             if (isFirstTurn) {
-              firstAssistantText = visibleText.trim();
+              firstAssistantText = modelCaption.trim();
             }
             steps.push({
               step: intentMode === "inquire"
@@ -18200,7 +18234,8 @@ async function runExpertLoop(
           // deterministic caption. It is derived solely from the verified
           // selection contract; failed renders never reach this branch.
           if (
-            intentMode === "select" && !finalText.trim() &&
+            intentMode === "select" && !replacementEgressGuarded &&
+            !hasVisibleText() &&
             !replacementSplitFallbackCaptionSent
           ) {
             const criteria =
@@ -19395,7 +19430,7 @@ async function runExpertLoop(
       }
       if (recoveredAlias?.kind === "exact") {
         for (const id of recoveredAlias.safeIds) shownIds.add(id);
-        if (!finalText.trim()) {
+        if (!replacementEgressGuarded && !hasVisibleText()) {
           const caption = safeSelectionRenderCaption({
             product_class: recoveredAlias.matchedQuery,
             application_context: [],
@@ -20329,7 +20364,7 @@ async function runExpertLoop(
       }
       if (recoveredJargon?.kind === "exact") {
         for (const id of recoveredJargon.safeIds) shownIds.add(id);
-        if (!finalText.trim()) {
+        if (!replacementEgressGuarded && !hasVisibleText()) {
           const caption = safeSelectionRenderCaption({
             product_class: recoveredJargon.matchedQuery,
             application_context: [],
@@ -21172,16 +21207,37 @@ Deno.serve(async (req) => {
           console.error("[v3] enqueue failed:", e);
         }
       };
-      const send = (ev: SseEvent) => {
+      let replacementVisibleContentSeen = false;
+      let pendingReplacementTurnBreak:
+        | Extract<SseEvent, { type: "assistant_turn_break" }>
+        | null = null;
+      const flushReplacementTurnBreak = () => {
+        const pending = pendingReplacementTurnBreak;
+        pendingReplacementTurnBreak = null;
+        // A break before the first actually emitted bubble produces an empty
+        // bubble after the model paragraph is removed by proof egress.
+        if (!pending || !replacementVisibleContentSeen) return;
+        responseEvents.push(pending);
+        emit(pending);
+      };
+      const send = (ev: SseEvent): string => {
         // An uncooperative remote promise may settle after the turn deadline.
         // It must not append a second answer or mutate the persisted replay.
         if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) {
-          return;
+          return "";
+        }
+        if (ev.type === "assistant_turn_break" && replacementEgressRequest) {
+          // A following model delta may be discarded. Commit the boundary
+          // only when actual visible text/cards arrive, preserving live SSE
+          // and durable replay in the same order.
+          pendingReplacementTurnBreak = ev;
+          return "";
         }
         // GUARD: единственный выход текста наружу. Служебная лексика механики
         // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
         // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
         let out = ev;
+        let emittedAuxiliaryText = "";
         if (ev.type === "delta") {
           const origin = ev.origin ?? "model";
           const priceGuard = guardPriceEgressText({
@@ -21249,7 +21305,11 @@ Deno.serve(async (req) => {
               priceScopeDisclosureSent = true;
             }
           }
-          if (!content.trim()) return;
+          if (!content.trim()) return "";
+          if (replacementEgressRequest) {
+            flushReplacementTurnBreak();
+            replacementVisibleContentSeen = true;
+          }
           if (replacementEgressRequest && origin === "server") {
             replacementSafetyTextSeen = true;
           }
@@ -21258,6 +21318,9 @@ Deno.serve(async (req) => {
           out = { type: "delta", content, ...(origin === "server" ? { origin } : {}) };
           finalTextAccum += content;
         } else if (ev.type === "products_block") {
+          if (replacementEgressRequest && ev.count > 0) {
+            flushReplacementTurnBreak();
+          }
           if (replacementEgressRequest && ev.count > 0) {
             const liveProducts = [...(replacementEgressCache?.values() ?? [])];
             const renderedProducts = liveProducts.filter((product) =>
@@ -21281,6 +21344,13 @@ Deno.serve(async (req) => {
               source,
               sourceIdentity: source ? "exact" : "unverified",
               candidates: renderedProducts,
+              // The block criteria may describe more cards than the URL
+              // projection recovered from the live cache. Never summarize
+              // them as common to every visible card in that partial case.
+              candidateSelectionCriteria: renderedProducts.length === ev.count
+                  && ev.count > 0
+                ? ev.selection_contract?.mandatory_criteria
+                : undefined,
               sourcePriceIdentityVerified: sourceArticleIsExplicitInRequest(
                 replacementEgressRequest,
                 source,
@@ -21296,7 +21366,9 @@ Deno.serve(async (req) => {
             responseEvents.push(disclosure);
             emit(disclosure);
             replacementSafetyTextSeen = true;
+            replacementVisibleContentSeen = true;
             finalTextAccum += `${finalTextAccum ? "\n\n" : ""}${caption}`;
+            emittedAuxiliaryText += caption;
             steps.push({
               step: "v3_replacement_proof_disclosed_before_cards",
               ms: Date.now() - t0,
@@ -21327,6 +21399,7 @@ Deno.serve(async (req) => {
             responseEvents.push(disclosure);
             emit(disclosure);
             finalTextAccum += `${finalTextAccum ? "\n\n" : ""}${notice}`;
+            emittedAuxiliaryText += notice;
             priceScopeDisclosureSent = true;
             steps.push({
               step: "v3_unproved_price_scope_disclosed_before_cards",
@@ -21380,6 +21453,7 @@ Deno.serve(async (req) => {
         }
         responseEvents.push(out);
         emit(out);
+        return out.type === "delta" ? out.content : emittedAuxiliaryText;
       };
 
       // Open the SSE transport before any settings/database dependency. When
@@ -22646,6 +22720,7 @@ Deno.serve(async (req) => {
                   ellipticalContinuation,
                   [],
                   verifiedBroadChoiceState.typedContinuation?.leaf ?? null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -22777,6 +22852,7 @@ Deno.serve(async (req) => {
                 isShortAttributeSelectionFollowup(userMessage)
                   ? sameSectionScope.leaf
                   : null,
+                Boolean(replacementEgressRequest),
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -22837,6 +22913,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -22995,6 +23074,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -23316,6 +23398,9 @@ Deno.serve(async (req) => {
                   direct.source_candidate_ids ?? [],
                   replacementSelectionPlan,
                   ellipticalContinuation,
+                  [],
+                  null,
+                  Boolean(replacementEgressRequest),
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -23354,6 +23439,8 @@ Deno.serve(async (req) => {
                 null,
                 ellipticalContinuation,
                 priorShownProductUrls,
+                null,
+                Boolean(replacementEgressRequest),
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

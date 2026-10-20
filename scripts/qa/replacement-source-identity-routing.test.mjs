@@ -51,7 +51,7 @@ test("source title and article are lookup identity, not analogue literals", () =
   assert.ok(cards > -1, "direct replacement still renders product cards");
   // Disclosure now belongs to the common SSE proof boundary, not this one
   // preflight branch: direct/model/fallback cards must share the same caption.
-  const egress = source.slice(source.indexOf("const send = (ev: SseEvent) => {"));
+  const egress = source.slice(source.indexOf("const send = (ev: SseEvent)"));
   const proof = egress.indexOf("const caption = replacementProofCaption(replacementLastProof)");
   const proofSent = egress.indexOf("responseEvents.push(disclosure)", proof);
   const publicBlock = egress.indexOf("responseEvents.push(out)", proofSent);

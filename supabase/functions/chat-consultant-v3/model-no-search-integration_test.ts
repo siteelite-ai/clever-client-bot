@@ -135,7 +135,9 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
           });
         }
         if (url.pathname === "/api/products") {
-          assertEquals(url.searchParams.get("category"), catalogLeaf);
+          if (!message.includes("аналоги")) {
+            assertEquals(url.searchParams.get("category"), catalogLeaf);
+          }
           return json({
             data: {
               results: baseProducts,
@@ -159,7 +161,12 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
           return json({
             choices: [{
               finish_reason: "stop",
-              message: { content: "", tool_calls: [] },
+              message: {
+                content: message.includes("аналоги")
+                  ? "Эти модели полностью взаимозаменяемы и дешевле исходной."
+                  : "",
+                tool_calls: [],
+              },
             }],
           });
         }
@@ -167,14 +174,18 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
           choices: [{
             finish_reason: "tool_calls",
             message: {
-              content: null,
+              content: message.includes("аналоги")
+                ? "Эти модели полностью взаимозаменяемы и дешевле исходной."
+                : null,
               tool_calls: [{
                 id: "offline-reasoning",
                 type: "function",
                 function: {
                   name: "declare_selection_reasoning",
                   arguments: JSON.stringify({
-                    reasoning: message.includes("для дома")
+                    reasoning: message.includes("аналоги")
+                      ? "Ищу электрические удлинители из каталога. Эти модели полностью взаимозаменяемы и дешевле исходной."
+                      : message.includes("для дома")
                       ? "Покажу несколько электрических удлинителей для дома."
                       : "Покажу несколько электрических удлинителей из каталога для выбора.",
                     measurement_scope: "not_applicable",
@@ -268,6 +279,97 @@ Deno.test({
         !new URL(request.slice(4)).searchParams.has("query")
       ),
     );
+  },
+});
+
+Deno.test({
+  name:
+    "replacement drops unverified model prose without empty turn breaks and emits server proof",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn(
+      "Предложи аналоги электрического удлинителя Alpha 3 м",
+    );
+    const visibleText = result.events.flatMap((event) => {
+      const content = (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+        ?.[0]?.delta?.content;
+      return content ? [content] : [];
+    }).join("\n");
+    assert(!visibleText.includes("полностью взаимозаменяемы"));
+    assert(!visibleText.includes("дешевле исходной"));
+    assert(result.modelCalls > 0);
+    assert(
+      result.steps.some(({ step }) =>
+        step === "v3_replacement_unproved_claim_removed"
+      ),
+      JSON.stringify(result.steps.map(({ step }) => step)),
+    );
+    assertEquals(
+      result.steps.some(({ step }) =>
+        step === "v3_selection_contract_caption"
+      ),
+      false,
+      "replacement must use the live-card proof, not an unverified model contract",
+    );
+    const firstCardIndex = result.events.findIndex((event) =>
+      (event.v3_event as { type?: string } | undefined)?.type ===
+        "products_block"
+    );
+    assert(firstCardIndex >= 0, JSON.stringify({
+      visibleText,
+      steps: result.steps.map(({ step }) => step),
+    }));
+    const preCardText = result.events.slice(0, firstCardIndex).flatMap((event) => {
+      const content = (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+        ?.[0]?.delta?.content;
+      return content ? [content] : [];
+    }).join("\n");
+    assert(
+      preCardText.includes("Показываю кандидатов для замены") &&
+        preCardText.includes("взаимозаменяемость") &&
+        preCardText.includes("не проверены"),
+      `grounded replacement proof must explain candidate status before cards: ${preCardText}`,
+    );
+    const retainedReasoning = result.steps.findIndex(({ step, meta }) =>
+      step === "v3_assistant_text" &&
+      meta?.derived_selection === true &&
+      String(meta?.text ?? "").includes("полностью взаимозаменяемы")
+    );
+    const groundedBrowse = result.steps.findIndex(({ step }) =>
+      step === "v3_terminal_visible_request_recovery"
+    );
+    assert(
+      retainedReasoning >= 0 && groundedBrowse > retainedReasoning,
+      "model reasoning must remain available internally before grounded recovery even when its prose is not shown",
+    );
+    assert(visibleText.includes("не подтверж"), JSON.stringify({
+      visibleText,
+      steps: result.steps.map(({ step }) => step),
+    }));
+    let visibleBubbleSeen = false;
+    for (const [index, event] of result.events.entries()) {
+      const content = (event.choices as Array<{ delta?: { content?: string } }> | undefined)
+        ?.[0]?.delta?.content;
+      if (content?.trim()) visibleBubbleSeen = true;
+      const protocol = event.v3_event as { type?: string; count?: number } | undefined;
+      if (protocol?.type === "products_block" && (protocol.count ?? 0) > 0) {
+        visibleBubbleSeen = true;
+      }
+      if (protocol?.type === "assistant_turn_break") {
+        assert(visibleBubbleSeen, "an empty assistant bubble must not be emitted");
+        assert(
+          result.events.slice(index + 1).some((next) => {
+            const nextContent = (next.choices as Array<{ delta?: { content?: string } }> | undefined)
+              ?.[0]?.delta?.content;
+            const nextProtocol = next.v3_event as { type?: string; count?: number } | undefined;
+            return Boolean(nextContent?.trim()) ||
+              (nextProtocol?.type === "products_block" &&
+                (nextProtocol.count ?? 0) > 0);
+          }),
+          "a suppressed model paragraph must not leave a trailing empty bubble",
+        );
+      }
+    }
   },
 });
 
