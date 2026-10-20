@@ -484,7 +484,6 @@ Deno.test("egress safety covers a brand-only analog and comparative follow-up wi
     "Подбери похожий светильник Philips для гостиной",
     "Подбери похожий светильник Philips для гостиной?",
     "Найди альтернативы светильника Philips",
-    "Подбери аналог светильника Philips для гостиной",
     "Нужна похожая люстра в гостиную",
     "Замена люстры в гостиной 25 м²",
   ]) assertEquals(isReplacementProofRequest(broad), false, broad);
@@ -509,6 +508,31 @@ Deno.test("egress safety covers a brand-only analog and comparative follow-up wi
     [{ role: "user", content: "Подбери похожий светильник Philips для гостиной" }],
     { comparativeFollowup: true },
   ), null);
+});
+
+Deno.test("named product lines remain replacement-proof requests despite a usage constraint", () => {
+  for (const sourceDirected of [
+    "Подбери аналог розетки Gallant",
+    "Подбери аналог розетки Gallant для кухни",
+    "Подбери аналог розетки Gallant в кухню",
+    "Подбери аналог розетки серии Gallant",
+    "Подбери аналог розетки серии Gallant для кухни",
+    "Подбери аналог розетки серии Gallant в кухню",
+    "Подбери аналог светильника Philips для гостиной",
+    "Подбери аналог светильника Philips в гостиную",
+    "Хочу заменить розетку серии Gallant на другую",
+    "Хочу заменить розетку Gallant на новую",
+  ]) {
+    assertEquals(isReplacementProofRequest(sourceDirected), true, sourceDirected);
+  }
+  for (const broadSelection of [
+    "Подбери похожие светильники Philips для гостиной",
+    "Подбери похожие светильники Philips в гостиную",
+    "Хочу заменить люстру на светодиодный светильник в гостиной",
+    "Замени люстру на светодиодное освещение",
+  ]) {
+    assertEquals(isReplacementProofRequest(broadSelection), false, broadSelection);
+  }
 });
 
 Deno.test("legacy replacement replay strips stored prose but keeps cards and clarification protocol", () => {

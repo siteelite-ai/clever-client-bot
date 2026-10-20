@@ -446,17 +446,32 @@ export function isReplacementProofRequest(message: string): boolean {
     /(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u
       .test(clean);
   if (!hasReplacementRelation) return false;
+  const hasNamedSourceToken = (text: string): boolean => {
+    const words = text.match(/\p{L}[\p{L}\p{N}-]*/gu) ?? [];
+    return words.some((word, index) =>
+      /^[A-Z][a-z]{2,}$/u.test(word) ||
+      /^[A-Z]{4,}$/u.test(word) ||
+      (index > 0 && /^[А-ЯЁ][а-яё]{2,}$/u.test(word))
+    );
+  };
+  const keys = extractReplacementLookupKeys(message);
+  const sourceBeforeReplacementTarget = String(message).match(
+    /(?:^|\s)замен\p{L}*\s+(.+?)\s+на\s+\S/iu,
+  )?.[1] ?? "";
+  const namedSourceBeforeReplacementTarget = hasNamedSourceToken(
+    sourceBeforeReplacementTarget,
+  );
   // A category redesign ("replace a chandelier with LED lighting") has no
   // named source product. It remains normal selection, not SKU equivalence.
   if (
     /замен\p{L}* .+ на .+/u.test(clean) &&
     !/(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*)(?: |$)/u.test(clean) &&
-    extractReplacementLookupKeys(message).articles.length === 0 &&
-    extractReplacementLookupKeys(message).modelCodes.length === 0
+    keys.articles.length === 0 &&
+    keys.modelCodes.length === 0 &&
+    !namedSourceBeforeReplacementTarget
   ) return false;
   const source = extractReplacementSourceDescription(message);
   if (source.length < 3) return false;
-  const keys = extractReplacementLookupKeys(message);
   if (keys.articles.length > 0 || keys.modelCodes.length > 0) return true;
   const quotedSource = /[«"][^»"]{3,}[»"]/u.test(message);
   if (quotedSource) return true;
@@ -466,17 +481,21 @@ export function isReplacementProofRequest(message: string): boolean {
   const explicitSubstitution =
     /(?:^| )(?:аналог\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u.test(clean);
   if (!explicitSubstitution) return false;
-  // A trailing application after the name ("... Philips для гостиной")
-  // signals a new-selection brief, not an identifiable source product.
-  if (/(?:^|\s)для\s+\p{L}/iu.test(source)) return false;
+  // A trailing application cannot erase an explicitly named source in an
+  // analogue/substitution ask ("... Gallant для кухни"). An unnamed class
+  // with an application remains ordinary selection. Broad similarity asks
+  // were excluded above, even when they happen to mention a brand.
+  const application = /(?:^|\s)(?:для|в)\s+\p{L}/iu.exec(source);
+  if (application) {
+    const beforeApplication = source.slice(0, application.index);
+    if (
+      !hasNamedSourceToken(beforeApplication) &&
+      !namedSourceBeforeReplacementTarget
+    ) return false;
+  }
   // A named line is an identifiable source for output safety, while an
   // unnamed class or room measurement is an ordinary selection.
-  const words = source.match(/\p{L}[\p{L}\p{N}-]*/gu) ?? [];
-  return words.some((word, index) =>
-    /^[A-Z][a-z]{2,}$/u.test(word) ||
-    /^[A-Z]{4,}$/u.test(word) ||
-    (index > 0 && /^[А-ЯЁ][а-яё]{2,}$/u.test(word))
-  );
+  return hasNamedSourceToken(source);
 }
 
 /** A relative-price claim needs an explicitly supplied exact source article. */
