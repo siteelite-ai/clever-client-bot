@@ -23,6 +23,8 @@ const traits = [
   ["voltage", "Напряжение, В", "220"],
 ] as const;
 
+let candidateVariant: "baseline" | "normalized_mount_other_outer" = "baseline";
+
 function product(id: number) {
   return {
     id,
@@ -36,7 +38,16 @@ function product(id: number) {
       ...traits.map(([key, caption, value]) => ({
         key,
         caption_ru: caption,
-        value_ru: value,
+        value_ru:
+          id === 2 && candidateVariant === "normalized_mount_other_outer"
+            ? key === "mount"
+              ? "  ВСТРАИВАЕМЫЙ  "
+              : key === "diameter"
+              ? "11.3"
+              : key === "cutout"
+              ? "90,0 мм"
+              : value
+            : value,
       })),
       { key: "technology", caption_ru: "Тип лампы", value_ru: "LED" },
       { key: "socket", caption_ru: "Тип цоколя", value_ru: "нет" },
@@ -49,6 +60,44 @@ function json(value: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function replacementBlocks(stream: string): Array<{
+  count?: number;
+  markdown?: string;
+  selection_contract?: {
+    visible_requirements?: Array<{
+      kind?: string;
+      label?: string;
+      op?: string;
+      value?: number;
+      unit?: string;
+    }>;
+  };
+}> {
+  return stream.split("\n\n")
+    .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+    .map((line) =>
+      JSON.parse(line.slice(6)) as {
+        v3_event?: {
+          type?: string;
+          count?: number;
+          markdown?: string;
+          selection_contract?: {
+            visible_requirements?: Array<{
+              kind?: string;
+              label?: string;
+              op?: string;
+              value?: number;
+              unit?: string;
+            }>;
+          };
+        };
+      }
+    )
+    .flatMap(({ v3_event }) =>
+      v3_event?.type === "products_block" ? [v3_event] : []
+    );
 }
 
 Deno.test({
@@ -164,29 +213,60 @@ Deno.test({
         }
         throw new Error(`unexpected offline request: ${request.method} ${url}`);
       };
-      const response = await offlineHandler()(
-        new Request(
-          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              message: `предложи аналоги на ${sourceTitle}`,
-              messageId: crypto.randomUUID(),
-              sessionId: crypto.randomUUID(),
-              history: [],
-            }),
-          },
-        ),
+      const runTurn = async () => {
+        const response = await offlineHandler()(
+          new Request(
+            "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                message: `предложи аналоги на ${sourceTitle}`,
+                messageId: crypto.randomUUID(),
+                sessionId: crypto.randomUUID(),
+                history: [],
+              }),
+            },
+          ),
+        );
+        assertEquals(response.status, 200);
+        return replacementBlocks(await response.text());
+      };
+      const baseline = await runTurn();
+      assertEquals(baseline.length, 1);
+      assertEquals(baseline[0].count, 1);
+      assert(baseline[0].markdown?.includes("Светильник встраиваемый LED 7W"));
+
+      // The generic diameter is the outer housing, not the mounting cut-out.
+      // A case/whitespace-equivalent mount and a decimal-comma 90 mm cut-out
+      // must preserve the default-OFF guarded shortlist. This is an offline
+      // behavior guard, not proof of equality with a separately run PR #119.
+      candidateVariant = "normalized_mount_other_outer";
+      const normalized = await runTurn();
+      assertEquals(normalized.length, 1);
+      assertEquals(normalized[0].count, baseline[0].count);
+      assert(
+        normalized[0].markdown?.includes("Светильник встраиваемый LED 7W"),
       );
-      assertEquals(response.status, 200);
-      await response.text();
+      assertEquals(
+        normalized[0].selection_contract?.visible_requirements?.find(
+          ({ kind }) => kind === "mounting_cutout",
+        ),
+        {
+          kind: "mounting_cutout",
+          label: "Диаметр монтажного отверстия",
+          op: "eq",
+          value: 90,
+          unit: "мм",
+        },
+      );
       assert(requests.some((entry) => entry.includes("/api/products?")));
       assertEquals(
         requests.some((entry) => entry.includes("verified_product_facts")),
         false,
       );
     } finally {
+      candidateVariant = "baseline";
       for (const id of intervals) clearInterval(id);
       globalThis.setInterval = originalSetInterval;
       globalThis.fetch = originalFetch;
