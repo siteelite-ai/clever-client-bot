@@ -53,7 +53,13 @@ was not modified; do not run an unreviewed bulk `supabase db push`.
 At 2026-10-20 21:34:41 UTC, the Supabase API Gateway logged an Edge-service
 `GET /rest/v1/app_settings?select=volt220_api_token&limit=1` returning HTTP
 200. This supports the service-role read path, but is **not** an end-to-end bot
-smoke test. The admin UI opened its login page; an authenticated admin settings
+smoke test. A separate unauthenticated PostgREST probe of the same selected
+column returned HTTP 401 and no credential row. Five malformed-request probes
+against the public production chat endpoint also passed without making an AI
+or catalog request: unsupported method 405, invalid JSON 400, unknown field
+400, oversized message 400, and oversized request 413. These narrow negative
+checks do not demonstrate a successful product answer or full security audit.
+The admin UI opened its login page; an authenticated admin settings
 smoke test has **not** been completed. Exactly one public `search-products`
 probe returned HTTP 500. Its response body was not captured, but the matching
 Edge Function log shows a cache miss followed by nginx HTTP 502 from the
