@@ -561,13 +561,32 @@ Deno.test("grounded axis proof is structural and vocabulary-free", () => {
   assertEquals(titleSupportsGroundedAxis(product.pagetitle, "E27"), true);
 });
 
-Deno.test("axis split copy states that independently proven sections are not one match", () => {
+Deno.test("axis split copy scopes an unmatched CORN/E27 pair to found products and asks which matters", () => {
   const caption = buildGroundedAxisSplitCaption("CORN", ["E27"]);
-  assertEquals(caption.includes("одновременно"), true);
-  assertEquals(caption.includes("не нашлось"), true);
-  assertEquals(caption.includes("отдельно"), true);
+  assertEquals(caption.startsWith("Среди найденных товаров не удалось подтвердить сочетание «CORN» и «E27»."), true);
+  assertEquals(caption.includes("в актуальном каталоге"), false);
+  assertEquals(caption.includes("не нашлось"), false);
+  assertEquals(caption.includes("Показываю эти направления отдельно"), true);
   assertEquals(caption.includes("нельзя считать одним полным совпадением"), true);
+  assertEquals(caption.endsWith("Что для вас важнее: «CORN» или «E27»?"), true);
   assertEquals(buildGroundedAxisSectionHeading("E27"), "**Отдельно подтверждено «E27»:**");
+});
+
+Deno.test("axis split copy stays generic and readable for unrelated axes", () => {
+  const caption = buildGroundedAxisSplitCaption("WAGO", ["2P", "IP65"]);
+  assertEquals(caption.includes("сочетание «WAGO», «2P» и «IP65»."), true);
+  assertEquals(caption.endsWith("Что для вас важнее: «WAGO», «2P» или «IP65»?"), true);
+  assertEquals(caption.includes("  "), false);
+  assertEquals(caption.includes("в актуальном каталоге"), false);
+  assertEquals(caption.includes("не нашлось"), false);
+  assertEquals(buildGroundedAxisSplitCaption("WAGO", ["2P"]).endsWith("Что для вас важнее: «WAGO» или «2P»?"), true);
+});
+
+Deno.test("axis split copy does not claim catalog-wide absence when labels collapse", () => {
+  const caption = buildGroundedAxisSplitCaption("WAGO", ["wago", " "]);
+  assertEquals(caption.startsWith("Среди найденных товаров не удалось подтвердить сочетание всех условий."), true);
+  assertEquals(caption.endsWith("Какое условие для вас важнее?"), true);
+  assertEquals(caption.includes("в актуальном каталоге"), false);
 });
 
 Deno.test("empty jargon and modifier intersection always returns explicit partial evidence", async () => {
