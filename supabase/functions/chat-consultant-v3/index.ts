@@ -248,6 +248,7 @@ import {
   titleContainsDeclaredAlias,
 } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
+  type PairedFitClearance,
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
   compatibilityRelationsToCriteria,
@@ -258,6 +259,7 @@ import {
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
   minimumCompatibilityRelationCount,
+  pairedFitClearanceReasoningInstruction,
   parseCompatibilityRelations,
   projectCompatibilityFacetOptions,
   projectPairedTitleEvidence,
@@ -8510,6 +8512,7 @@ async function runExpertLoop(
   let activeCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
+  let activePairedFitClearance: PairedFitClearance | null = null;
   let certifiedPairedCompatibilityRelations: ReturnType<
     typeof parseCompatibilityRelations
   > = [];
@@ -10710,7 +10713,9 @@ async function runExpertLoop(
                   : repairReason === "environmental_protection"
                   ? "Предыдущая попытка не зафиксировала проверяемое обязательное условие защиты каждого товара для названной клиентом среды эксплуатации. Проверь технический фасет защиты в живой схеме. Если безопасный уровень обоснован, прямо назови в reasoning смысл фасета и его точное живое значение, затем передай ID этого значения именно в required_facet_values: compatible_classifications не подтверждает технический параметр каждого товара. Сохрани остальные обоснованные условия исходного запроса. Если данных клиента недостаточно для безопасного порога, явно назови недостающий параметр, не объявляй товары подходящими и не выдумывай уровень защиты. Не заменяй требование защиты числовой потребностью всей системы."
                   : repairReason === "paired_fit"
-                  ? "Предыдущая попытка не доказала обе стороны парного размера из живой схемы. Для измеренного клиентом объекта явно назови один и тот же параметр изделия до установки и после изменения: до установки строго больше размера объекта, после изменения строго меньше. Равенство не подходит; не копируй размер объекта в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу."
+                  ? presearchPairDecision.clearance
+                    ? `Предыдущая попытка не доказала обе стороны парного размера из живой схемы. ${pairedFitClearanceReasoningInstruction(presearchPairDecision.clearance, presearchPairDecision.reference)} Для выбранной пары явно назови числовой минимум до усадки и строгую верхнюю границу после усадки в тех же единицах, что и размер кабеля. Не копируй размер кабеля в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу.`
+                    : "Предыдущая попытка не доказала обе стороны парного размера из живой схемы. Для измеренного клиентом объекта явно назови один и тот же параметр изделия до установки и после изменения: до установки строго больше размера объекта, после изменения строго меньше. Равенство не подходит; не копируй размер объекта в точное значение фасета изделия и не рекомендуй типоразмер, который нарушает хотя бы одну границу."
                   : "Предыдущая попытка не дала одного исполнимого числового параметра выбираемого товара: он либо отсутствует, либо одновременно оставлены разные «минимальный» и «рекомендуемый» уровни одной величины. Повтори решение и выбери один обоснованный рекомендуемый порог или диапазон именно параметра товара с единицей измерения; не оставляй более слабый минимум параллельно с рекомендуемым уровнем. Передай соответствующее точное значение в required_facet_values, если оно есть среди живых значений. Не считай промежуточный ток, напряжение или число изделий итоговым параметром другого товара.";
                 const previousReasoning = repairReason ===
                     "environmental_protection"
@@ -11325,6 +11330,7 @@ async function runExpertLoop(
                 facet.key ===
                   publicPairedDecision.selected_pair?.after_facet_key
               )?.caption ?? "",
+              clearance: publicPairedDecision.clearance ?? null,
             }
             : null;
           derivedPublicExplanationForStep =
@@ -14625,6 +14631,16 @@ async function runExpertLoop(
               lastDiscover?.facets ?? [],
               lastDiscover?.category?.pagetitle ?? "",
             );
+          activePairedFitClearance = terminalPairedFitDecision(
+            customerMeasuredReference,
+            userMessage,
+            measuredSelectionContractEvidence(
+              derivedSelectionReasoningEvidence,
+              firstAssistantText,
+            ),
+            lastDiscover?.facets ?? [],
+            lastDiscover?.category?.pagetitle ?? "",
+          ).clearance ?? null;
           const completedCompatibility =
             completeSchemaBackedCompatibilityRelations(
               alignedCompatibility.relations,
@@ -14699,6 +14715,7 @@ async function runExpertLoop(
               let paired = filterProductsByPairedTitleFit(
                 candidates,
                 reference.value,
+                activePairedFitClearance,
               );
               let pairedSource = "model_render";
               const fallbackPool = reasoningBackedSearch?.ids ??
@@ -14712,6 +14729,7 @@ async function runExpertLoop(
                 const recovered = filterProductsByPairedTitleFit(
                   searchPool,
                   reference.value,
+                  activePairedFitClearance,
                 );
                 if (recovered.products.length > 0 && activeSelectionTarget) {
                   const targetReport = verifySelectionTargetWithVisibleTitle(
@@ -14748,6 +14766,7 @@ async function runExpertLoop(
                 const projected = projectCompatibilityFacetOptions(
                   compatibilityRelations,
                   lastDiscover.facets,
+                  activePairedFitClearance,
                 );
                 const remainingRawCriteria =
                   subsumeCriteriaProvenByCompatibility(
@@ -14784,6 +14803,7 @@ async function runExpertLoop(
                     const recoveredPairs = filterProductsByPairedTitleFit(
                       recoveredProducts,
                       reference.value,
+                      activePairedFitClearance,
                     );
                     const targetReport = verifySelectionTargetWithVisibleTitle(
                       activeSelectionTarget,
@@ -14878,6 +14898,7 @@ async function runExpertLoop(
                   const recoveredPairs = filterProductsByPairedTitleFit(
                     recoveredProducts,
                     reference.value,
+                    activePairedFitClearance,
                   );
                   const targetReport = verifySelectionTargetWithVisibleTitle(
                     activeSelectionTarget,
@@ -14917,8 +14938,11 @@ async function runExpertLoop(
                 pairedTitleContractProven = true;
                 pairedTitleReference = reference;
                 if (schemaBackedPairedReference) {
+                  const beforeBound = activePairedFitClearance
+                    ? `не меньше 1,2 × ${reference.value} ${reference.unit} (запас 20%)`
+                    : `строго больше ${reference.value} ${reference.unit}`;
                   pairedCompatibilityCorrection =
-                    `Проверяю совместимость по обеим сторонам: размер до изменения должен быть строго больше ${reference.value} ${reference.unit}, а после изменения — строго меньше. В карточках ниже обе границы подтверждены названием.`;
+                    `Проверяю совместимость по обеим сторонам: размер до изменения должен быть ${beforeBound}, а после изменения — строго меньше ${reference.value} ${reference.unit}. В карточках ниже обе границы подтверждены названием.`;
                 }
                 paired = { ...paired, products: paired.products.slice(0, 10) };
                 pairedTitleProvenIds = paired.products.map((product) =>
@@ -15900,6 +15924,7 @@ async function runExpertLoop(
             activeCompatibilityRelations,
             finalReasoningEvidence,
             pairedTitleReference,
+            activePairedFitClearance,
           );
           if (finalPairs.required) {
             let safePairIds = finalPairs.products.map((product) => product.id);
@@ -15916,6 +15941,7 @@ async function runExpertLoop(
                 activeCompatibilityRelations,
                 finalReasoningEvidence,
                 pairedTitleReference,
+                activePairedFitClearance,
               );
               const remainingCriteria = subsumePairedStateCriteria(
                 subsumeCriteriaProvenByCompatibility(
@@ -20664,6 +20690,7 @@ async function runExpertLoop(
         const paired = filterProductsByPairedTitleFit(
           products,
           terminalCompatibilityReference.value,
+          terminalPairDecision.clearance ?? null,
         );
         const target = verifySelectionTargetWithVisibleTitle(
           terminalSelectionTarget,
@@ -20720,8 +20747,11 @@ async function runExpertLoop(
         if (rendered.ok && rendered.tool === "render_products") {
           for (const id of safeIds) shownIds.add(id);
           if (minimumCompatibilityRelationCount(finalText) < 2) {
+            const beforeBound = terminalPairDecision.clearance
+              ? `не меньше 1,2 × ${terminalCompatibilityReference.value} ${terminalCompatibilityReference.unit} (запас 20%)`
+              : `больше ${terminalCompatibilityReference.value} ${terminalCompatibilityReference.unit}`;
             const compatibilityCaption =
-              `Уточняю по подтверждённым размерам: до установки размер должен быть больше ${terminalCompatibilityReference.value} ${terminalCompatibilityReference.unit}, а после изменения — меньше. Показываю только карточки, где обе границы видны в названии.`;
+              `Уточняю по подтверждённым размерам: до установки размер должен быть ${beforeBound}, а после изменения — меньше ${terminalCompatibilityReference.value} ${terminalCompatibilityReference.unit}. Показываю только карточки, где оба размера подтверждены данными каталога.`;
             send({
               type: "assistant_turn_break",
               reason: "text_before_render",

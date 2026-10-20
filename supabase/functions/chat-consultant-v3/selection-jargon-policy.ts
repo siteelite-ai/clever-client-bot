@@ -2,10 +2,15 @@ import type { Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import {
   type CompatibilityFacet,
   type CompatibilityRelation,
+  type PairedFitClearance,
+  buildPairedCompatibilityReasoning,
   completePairedCompatibilityRelations,
   enforceFinalPairedCompatibility,
   extractSingleMeasuredReference,
+  meetsBeforeClearance,
+  meetsPairedFitMeasurements,
   pairedStateCriterionReference,
+  resolveCableSleeveClearance,
 } from "../_shared/v3-tools/compatibility-contract.ts";
 import { extractReasoningBounds } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
@@ -593,6 +598,7 @@ export interface TerminalPairedFitDecision {
   state: "not_applicable" | "unproven" | "required";
   reference: { value: number; unit: string } | null;
   relations: CompatibilityRelation[];
+  clearance?: PairedFitClearance | null;
   selected_pair?: {
     before_facet_key: string;
     after_facet_key: string;
@@ -721,6 +727,7 @@ function modelProvesBothSelectedSides(
   reasoning: string,
   propertyStemValue: string,
   reference: { value: number; unit: string },
+  clearance: PairedFitClearance | null = null,
 ): boolean {
   const states = new Set<"before" | "after">();
   // Keep sentence boundaries: an omitted noun in "а после — меньше" may
@@ -731,16 +738,38 @@ function modelProvesBothSelectedSides(
   );
   for (const sentence of sentences) {
     let precedingExplicitProperty: string | null = null;
+    // A coordinated clause may repeat the measured property before its
+    // state: "... до усадки ..., и внутренним диаметром после усадки ...".
+    // Split only when the state is nearby, then keep the existing per-clause
+    // property, direction and negation checks. This cannot borrow a diameter
+    // claim across an unrelated length or a separate sentence.
     const clauses = sentence.split(
-      /,(?!\d)|(?<!\d),|\s+(?:а|и)\s+(?=(?:до|после|исходн|конечн))/iu,
+      /,(?!\d)|(?<!\d),|\s+(?:а|и)\s+(?=(?:[\p{L}-]+\s+){0,4}(?:до|после|исходн\p{L}*|конечн\p{L}*)(?!\p{L}))/iu,
     );
     for (const clause of clauses) {
       const words = normalize(clause).split(" ").filter(Boolean);
       if (words.length === 0) continue;
-      const bounds = extractReasoningBounds(clause).filter((bound) =>
-        bound.strict && bound.value === reference.value &&
+      const sameUnitBounds = extractReasoningBounds(clause).filter((bound) =>
         normalize(bound.unit) === normalize(reference.unit)
       );
+      const before = words.some((word) =>
+        word === "до" || /^(?:исходн|начальн|входн|before|initial)/u.test(word)
+      );
+      const after = words.some((word) =>
+        word === "после" || /^(?:конечн|финальн|выходн|after|final)/u.test(word)
+      );
+      const bounds = clearance
+        ? sameUnitBounds.filter((bound) => before !== after && (before
+          ? bound.op === "min" && meetsBeforeClearance(
+            bound.value,
+            reference.value,
+            clearance,
+          )
+          : bound.op === "max" && (bound.value < reference.value ||
+            bound.value === reference.value && bound.strict)))
+        : sameUnitBounds.filter((bound) =>
+          bound.strict && bound.value === reference.value
+        );
       if (bounds.length === 0) {
         precedingExplicitProperty = null;
         continue;
@@ -760,19 +789,16 @@ function modelProvesBothSelectedSides(
       }
       // "Не должен быть меньше" is a negated claim, not proof of a strict
       // maximum, even if the lower-level numeric extractor sees "меньше".
-      if (
+      const normalizedClause = normalize(clause);
+      const directInclusiveMinimum = Boolean(clearance && before &&
+        /(?:^|\s)не\s+(?:менее|меньше|ниже)(?:\s|$)/u.test(normalizedClause) &&
+        sameUnitBounds.every((bound) => bound.op === "min" && !bound.strict));
+      if (!directInclusiveMinimum &&
         /(?:^|\s)не\s+(?:\p{L}+\s+){0,4}(?:больше|более|свыше|выше|меньше|менее|ниже|превыша\p{L}*)(?:\s|$)/iu
-          .test(normalize(clause))
-      ) return false;
-      const before = words.some((word) =>
-        word === "до" || /^(?:исходн|начальн|входн|before|initial)/u.test(word)
-      );
-      const after = words.some((word) =>
-        word === "после" || /^(?:конечн|финальн|выходн|after|final)/u.test(word)
-      );
+          .test(normalizedClause)) return false;
       if (before === after) return false; // Missing or conflicting state attribution.
       const expected = before ? "min" : "max";
-      if (bounds.some((bound) => bound.op !== expected)) return false;
+      if ((clearance ? sameUnitBounds : bounds).some((bound) => bound.op !== expected)) return false;
       states.add(before ? "before" : "after");
       precedingExplicitProperty = namesProperty ? propertyStemValue : null;
     }
@@ -910,6 +936,12 @@ export function terminalPairedFitDecision(
     after_facet_key: selected.afterFacet.key,
     require_facet_values: graphs.length > 1,
   };
+  const clearance = resolveCableSleeveClearance(
+    userMessage,
+    requestedProductClass,
+    selected.beforeFacet,
+    selected.afterFacet,
+  );
   // A global mention of the property cannot lend unrelated numeric claims a
   // false proof. Each strict direction must belong to a local clause naming
   // the selected property, without a competing physical quantity.
@@ -918,6 +950,7 @@ export function terminalPairedFitDecision(
       visibleModelReasoning,
       nearestStem,
       reference,
+      clearance,
     )
   ) {
     return {
@@ -925,11 +958,14 @@ export function terminalPairedFitDecision(
       reference,
       relations: [],
       selected_pair: selectedPair,
+      clearance,
     };
   }
   const validated = completePairedCompatibilityRelations(
     [],
-    visibleModelReasoning,
+    clearance
+      ? `${visibleModelReasoning}\n${buildPairedCompatibilityReasoning(reference)}`
+      : visibleModelReasoning,
     [selected.beforeFacet, selected.afterFacet],
     reference,
   ).relations;
@@ -945,12 +981,14 @@ export function terminalPairedFitDecision(
       reference,
       relations: directions,
       selected_pair: selectedPair,
+      clearance,
     }
     : {
       state: "unproven",
       reference,
       relations: [],
       selected_pair: selectedPair,
+      clearance,
     };
 }
 
@@ -1047,7 +1085,7 @@ export function enforceTerminalPairedFit<T extends ProductRef>(
       const before = exactFacetScalar(facets?.[before_facet_key], unit);
       const after = exactFacetScalar(facets?.[after_facet_key], unit);
       return before !== null && after !== null &&
-        before > value && after < value;
+        meetsPairedFitMeasurements(before, after, value, decision.clearance ?? null);
     });
   }
   const guarded = enforceFinalPairedCompatibility(
@@ -1055,6 +1093,7 @@ export function enforceTerminalPairedFit<T extends ProductRef>(
     decision.relations,
     visibleModelReasoning,
     decision.reference,
+    decision.clearance ?? null,
   );
   return guarded.required ? guarded.products : [];
 }

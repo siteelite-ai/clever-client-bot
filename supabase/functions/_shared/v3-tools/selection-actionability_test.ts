@@ -328,6 +328,23 @@ Deno.test("derived public explanation preserves strict paired bounds without mod
   assertEquals(publicExplanation.includes("≤ 10 мм"), false);
 });
 
+Deno.test("public paired explanation states the verified cable sleeve clearance instead of only > D", () => {
+  const text = buildDerivedSelectionPublicExplanation({
+    productClass: "Трубки термоусаживаемые",
+    frozenCriteria: [],
+    pairedFit: {
+      value: 12,
+      unit: "мм",
+      beforeCaption: "Внутренний диаметр до усадки, мм",
+      afterCaption: "Внутренний диаметр после усадки, мм",
+      clearance: { before_facet_key: "before", minimum_before_ratio: { numerator: 6, denominator: 5 } },
+    },
+  });
+  assertEquals(text.includes("≥ 1,2 × 12 мм (запас 20%)"), true);
+  assertEquals(text.includes("< 12 мм"), true);
+  assertEquals(text.includes("> 12 мм"), false);
+});
+
 Deno.test("derived pre-search explanation with no frozen criteria never promises a match", () => {
   const publicExplanation = buildDerivedSelectionPublicExplanation({
     productClass: "Розетки",
@@ -1013,6 +1030,32 @@ Deno.test("derived reasoning instructions distinguish paired strict fit from an 
   assertEquals(system.includes("строго меньше"), true);
   assertEquals(system.includes("точное значение фасета"), true);
   assertEquals(system.includes("неполная выборка кандидатов"), true);
+});
+
+Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
+  const facets = [
+    { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },
+    { key: "after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] },
+  ];
+  const reference = { value: 12, unit: "мм", facetKeys: ["before", "after"] };
+  const strict = buildDerivedSelectionReasoningMessages(
+    "подбери трубку для кабеля диаметром 12 мм",
+    "Трубки термоусаживаемые",
+    facets,
+    reference,
+  )[0].content;
+  assertEquals(strict.includes("не менее 120% диаметра кабеля"), true);
+  assertEquals(strict.includes("минимум 14,4 мм до усадки"), true);
+  assertEquals(strict.includes("Размер изделия до установки должен быть строго больше размера объекта"), false);
+  assertEquals(strict.includes("два строгих неравенства"), false);
+  const unrelated = buildDerivedSelectionReasoningMessages(
+    "подбери изделие для кабеля диаметром 12 мм",
+    "Изделия",
+    facets,
+    reference,
+  )[0].content;
+  assertEquals(unrelated.includes("не менее 120% диаметра кабеля"), false);
+  assertEquals(unrelated.includes("Размер изделия до установки должен быть строго больше размера объекта"), true);
 });
 
 Deno.test("paired object size is not offered as an exact pre-search enum, while unrelated exact facets remain", () => {
