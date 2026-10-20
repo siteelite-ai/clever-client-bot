@@ -17,6 +17,7 @@
             "require_confirmed_analogs": {
               "minimum": 3,
               "source_product_url": "https://220volt.kz/catalog/svetotexnika/svetilniki/929002070102871869967897500-sv-k-dn027b-g2-led6nw-7w-220-240v-d90-r/",
+              "required_commerce": { "sold_singly": true },
               "required_axes": [
                 { "key": "fixture_form", "op": "eq", "value": "downlight" },
                 { "key": "mounting_method", "op": "eq", "value": "recessed" },
@@ -25,8 +26,7 @@
                 { "key": "mounting_cutout_mm", "op": "covers", "value": 90 },
                 { "key": "luminous_flux_lm", "op": "between", "min": 400, "max": 800 },
                 { "key": "color_temperature_k", "op": "eq", "value": 4000 },
-                { "key": "supply_voltage_v", "op": "covers", "value": 230 },
-                { "key": "package_quantity", "op": "eq", "value": 1 }
+                { "key": "supply_voltage_v", "op": "covers", "value": 230 }
               ]
             },
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"],

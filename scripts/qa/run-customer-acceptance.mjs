@@ -541,10 +541,16 @@ export function validateExpectationObject(expect, location = 'expect') {
   if (expect.require_confirmed_analogs !== undefined) {
     const contract = expect.require_confirmed_analogs;
     const at = `${location}.require_confirmed_analogs`;
-    expectationKeys(contract, new Set(['minimum', 'source_product_url', 'required_axes']), at);
+    expectationKeys(contract, new Set(['minimum', 'source_product_url', 'required_axes', 'required_commerce']), at);
     expectationInteger(contract.minimum, `${at}.minimum`, 1);
     if (!productUrlIdentity(contract.source_product_url)) {
       throw new Error(`${at}.source_product_url: requires a 220volt.kz product URL`);
+    }
+    if (contract.required_commerce !== undefined) {
+      expectationKeys(contract.required_commerce, new Set(['sold_singly']), `${at}.required_commerce`);
+      if (contract.required_commerce.sold_singly !== true) {
+        throw new Error(`${at}.required_commerce: sold_singly must be true`);
+      }
     }
     if (!Array.isArray(contract.required_axes) || contract.required_axes.length < 2 ||
         contract.required_axes.length > 32) {
@@ -1353,6 +1359,11 @@ function verifiedProductKey(proof, identity) {
   return proof.sku ?? noSkuProductKey(identity);
 }
 
+function normalizeSellerGroupFacetText(value) {
+  return String(value).normalize('NFKC').toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е').replace(/\s+/gu, ' ').replace(/[:.\s]+$/gu, '').trim();
+}
+
 export function productProofFromHtml(html, requestedIdentity) {
   if (typeof html !== 'string' || !requestedIdentity) return null;
   const dom = new JSDOM(html);
@@ -1373,9 +1384,13 @@ export function productProofFromHtml(html, requestedIdentity) {
         // ItemList or related-product carousel. A facet may be inaccurate,
         // so a requested motion trigger can demand independent prose proof.
         const facets = {};
+        let sellerGroupOnlyFacetCount = 0;
         for (const item of document.querySelectorAll('.product__tab-description-item')) {
           const label = item.querySelector('.product__description-title')?.textContent?.replace(/:\s*$/u, '').trim();
           const value = item.querySelector('.product__tab-description-text')?.textContent?.replace(/\s+/gu, ' ').trim();
+          if (label && normalizeSellerGroupFacetText(label) === 'продается только в групповой упаковке') {
+            sellerGroupOnlyFacetCount++;
+          }
           if (label && value) facets[label] = value;
         }
         const description = document
@@ -1406,12 +1421,14 @@ export function productProofFromHtml(html, requestedIdentity) {
             sku: null, identityMode: 'jsonld_no_sku_canonical_name_price_stock', canonicalUrl,
             name: product.name.trim(), facets, description,
             offerPrice: Number(offer.price), availability: offer.availability,
+            ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
           };
         }
         return {
           sku: sku.trim(), name: product.name.trim(), facets, description,
           offerPrice: offer ? Number(offer.price) : null,
           availability: typeof offer?.availability === 'string' ? offer.availability : null,
+          ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
           ...(canonicalMatches && sourceIdMatchesCanonical ? { canonicalUrl } : {}),
         };
       }
@@ -1822,6 +1839,18 @@ function analogAxisMatches(rule, axis) {
     value.min <= rule.value && rule.value <= value.max;
 }
 
+function verifiedSellerSingleSale(page) {
+  // Packaging quantity is a manufacturer/logistics property, not the seller's
+  // minimum order. Use only the independently fetched, exact live product page.
+  const facets = page?.facets;
+  if (page?.duplicateSellerGroupOnlyFacet || !facets ||
+      typeof facets !== 'object' || Array.isArray(facets)) return false;
+  const groupOnly = Object.entries(facets).filter(([key]) =>
+    normalizeSellerGroupFacetText(key) === 'продается только в групповой упаковке');
+  // Missing, duplicated or contradictory seller statements cannot pass.
+  return groupOnly.length === 1 && normalizeSellerGroupFacetText(groupOnly[0][1]) === 'нет';
+}
+
 // A selection contract is emitted by the server in products_block, not parsed
 // from assistant prose. The exact rendered product must also have an
 // independently fetched, current catalog Product page with matching SKU,
@@ -1880,6 +1909,10 @@ export function confirmedAnalogFailures(contract, response, { nowMs = Date.now()
         failures.push(`product ${label} has no current approved compatible proof for ${rule.key}`);
         compatible = false;
       }
+    }
+    if (contract.required_commerce?.sold_singly && !verifiedSellerSingleSale(page)) {
+      failures.push(`product ${label} has no exact live-page proof that it is sold singly`);
+      compatible = false;
     }
     if (compatible) confirmed++;
   }
