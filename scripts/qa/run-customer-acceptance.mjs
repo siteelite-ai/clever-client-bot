@@ -5,6 +5,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
+import { catalogPreflightRequired, runCatalogHealthPreflight } from './catalog-health-preflight.mjs';
 import { previewAuthHeaders, previewRedirectPolicy, redactPreviewSecret } from './preview-auth.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -2649,7 +2650,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   };
 }
 
-export async function main() {
+export async function main({ preflightFetchImpl = fetch, preflightEnv = process.env, emit = console.log } = {}) {
   const report = {
     suite_file: path.basename(casesPath),
     suite_version: suite.schema_version,
@@ -2667,6 +2668,49 @@ export async function main() {
     requested_repetitions: Object.fromEntries(runPlan.map(({ testCase, repeat }) => [testCase.id, repeat])),
     cases: [],
   };
+
+  // A catalog outage is not evidence of a customer-facing selection defect.
+  // The private probe runs before the first paid chat turn, including focused
+  // remote runs; a strict suite also requires it when pointed at localhost.
+  const preflight = catalogPreflightRequired(endpoint, strictFullSuite)
+    ? await runCatalogHealthPreflight({
+        endpoint,
+        anonKey: apiKey,
+        previewHeaders: privatePreviewHeaders,
+        env: preflightEnv,
+        fetchImpl: preflightFetchImpl,
+      })
+    : { ok: true, status: 'skipped_local' };
+  report.catalog_preflight = preflight;
+  if (!preflight.ok) {
+    // Preserve the pinned inventory/plan but record zero customer runs: the
+    // suite is NOT_RUN, never a customer FAIL or a misleading partial PASS.
+    delete report.endpoint;
+    report.status = 'not_run';
+    report.reason = 'infrastructure_unavailable';
+    report.infrastructure_status = 'infrastructure_unavailable';
+    report.selected_case_ids = selected.map((item) => item.id);
+    report.finished_at = new Date().toISOString();
+    report.completeness = {
+      complete: false,
+      planned_cases: selected.length,
+      recorded_cases: 0,
+      planned_runs: plannedRuns,
+      recorded_runs: 0,
+      planned_turns: plannedTurns,
+      recorded_turns: 0,
+    };
+    report.log_ids = [];
+    report.product_page_verification = { unique_urls_checked: 0, verified: 0, unverified: 0 };
+    report.passed = false;
+    if (reportFile) {
+      fs.mkdirSync(path.dirname(reportFile), { recursive: true });
+      fs.writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+    }
+    emit(JSON.stringify(report, null, 2));
+    process.exitCode = 1;
+    return report;
+  }
 
   for (const { testCase, repeat, executions } of runPlan) {
     const caseResult = { id: testCase.id, title: testCase.title, repeats: [] };
@@ -2785,8 +2829,9 @@ export async function main() {
         repeats: testCase.repeats.filter((repeat) => !repeat.passed),
       }));
   }
-  console.log(JSON.stringify(output, null, 2));
+  emit(JSON.stringify(output, null, 2));
   if (!report.passed) process.exitCode = 1;
+  return report;
 }
 
 /** A misspelled CLI option must never silently launch the production default. */

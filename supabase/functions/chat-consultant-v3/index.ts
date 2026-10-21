@@ -731,6 +731,14 @@ import {
   PREVIEW_SECRET_HEADER,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
 import {
+  CATALOG_QA_SECRET_ENV,
+  CATALOG_QA_SECRET_HEADER,
+  isExactCatalogHealthPreflightPayload,
+  runCatalogHealthPreflight,
+  type CatalogHealthClassification,
+  type CatalogHealthPreflightResult,
+} from "../_shared/v3-tools/catalog-health-preflight.ts";
+import {
   directAnalogProofEnabled,
   verifiedManufacturerFactsEnabled,
 } from "../_shared/v3-tools/verified-manufacturer-flags.ts";
@@ -23653,6 +23661,55 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  if (isExactCatalogHealthPreflightPayload(rawBody)) {
+    // This is a server-to-server QA route, independent of the public widget
+    // and of preview admission. Do not advertise its header in CORS. A bad or
+    // absent secret must fail before the first database/catalog/model request.
+    if (!await previewSecretAuthorized(
+      req.headers.get(CATALOG_QA_SECRET_HEADER),
+      Deno.env.get(CATALOG_QA_SECRET_ENV),
+    )) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    const unavailable = (
+      classification: CatalogHealthClassification,
+    ): CatalogHealthPreflightResult => ({
+      ok: false,
+      status: "unavailable",
+      classification,
+      checks: {
+        categories: { status: "unavailable", http_status: null, classification },
+        products: { status: "unavailable", http_status: null, classification },
+      },
+    });
+    let result: CatalogHealthPreflightResult;
+    try {
+      const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false },
+        global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
+      });
+      const settings = await loadSettings(supabase, AbortSignal.timeout(8_000));
+      result = settings.settings_read_status !== "ok"
+        ? unavailable("upstream")
+        : !settings.volt220_api_token
+        ? unavailable("auth")
+        : await runCatalogHealthPreflight({
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: settings.volt220_api_token,
+        });
+    } catch {
+      result = unavailable("upstream");
+    }
+    return new Response(JSON.stringify(result), {
+      status: result.ok ? 200 : 503,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
   }
 

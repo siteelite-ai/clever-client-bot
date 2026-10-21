@@ -4,11 +4,15 @@ import test from 'node:test';
 
 import {
   ACCEPTANCE_TURN_TIMEOUT_MS, DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn,
-  parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
+  main, parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
   resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
   validateCliArgs, validateExpectationObject, validateExpectationSuite,
   verifyProductLinks, verifyProductPage, visibleInternalTextFailures,
 } from './run-customer-acceptance.mjs';
+import {
+  CATALOG_QA_SECRET_ENV, CATALOG_QA_SECRET_HEADER, catalogPreflightRequired,
+  runCatalogHealthPreflight, trustedCatalogPreflightEndpoint,
+} from './catalog-health-preflight.mjs';
 
 const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.json', import.meta.url));
 const septemberBytes = fs.readFileSync(new URL('./customer-audit-20260921-cases.json', import.meta.url));
@@ -29,6 +33,189 @@ const notionV4Suite = JSON.parse(notionV4Bytes.toString('utf8'));
 const notionV5Suite = JSON.parse(notionV5Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
+const catalogQaSecret = 's'.repeat(32);
+
+test('remote and strict acceptance require a private catalog probe before paid turns', () => {
+  assert.equal(catalogPreflightRequired(DEFAULT_ENDPOINT), true);
+  assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3'), false);
+  assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3', true), true);
+  assert.equal(trustedCatalogPreflightEndpoint(DEFAULT_ENDPOINT), true);
+  for (const untrusted of [
+    'https://attacker.example/functions/v1/chat-consultant-v3',
+    'https://attacker@yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3',
+    `${DEFAULT_ENDPOINT}?next=https://attacker.example`,
+    'http://localhost:54321/functions/v1/unrelated-function',
+  ]) assert.equal(trustedCatalogPreflightEndpoint(untrusted), false);
+});
+
+test('catalog preflight sends only the private probe and recognizes both healthy API paths', async () => {
+  const previewHeader = { 'x-volt-preview-secret': 'p'.repeat(32) };
+  const previewEndpoint = `${DEFAULT_ENDPOINT}-preview`;
+  const requests = [];
+  const result = await runCatalogHealthPreflight({
+    endpoint: previewEndpoint,
+    anonKey: 'public-test-key',
+    previewHeaders: previewHeader,
+    env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return new Response(JSON.stringify({ ok: true, status: 'ready', checks: {
+        categories: { status: 'ok', http_status: 200 },
+        products: { status: 'ok', http_status: 200 },
+      } }), { status: 200 });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, previewEndpoint);
+  assert.equal(requests[0].init.method, 'POST');
+  assert.equal(requests[0].init.redirect, 'error');
+  assert.deepEqual(JSON.parse(requests[0].init.body), { type: 'catalog_health_preflight' });
+  assert.equal(requests[0].init.headers[CATALOG_QA_SECRET_HEADER], catalogQaSecret);
+  assert.equal(requests[0].init.headers['x-volt-preview-secret'], previewHeader['x-volt-preview-secret']);
+  assert.equal(requests[0].init.headers.apikey, 'public-test-key');
+});
+
+test('catalog preflight fails closed on outages and malformed success without reflecting secrets or response bodies', async () => {
+  const malicious = `private:${catalogQaSecret} https://attacker.example/private`;
+  for (const [status, body, classification] of [
+    [503, JSON.stringify({ ok: false, status: 'unavailable', classification: 'upstream', error: malicious }), 'upstream'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { products: { status: 'ok', http_status: 200 } }, error: malicious }), 'schema_error'],
+    [404, JSON.stringify({ error: malicious }), 'route'],
+  ]) {
+    const result = await runCatalogHealthPreflight({
+      endpoint: DEFAULT_ENDPOINT,
+      anonKey: 'public-test-key',
+      env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      fetchImpl: async () => new Response(body, { status }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.classification, classification);
+    assert.equal(JSON.stringify(result).includes(catalogQaSecret), false);
+    assert.equal(JSON.stringify(result).includes('attacker.example'), false);
+  }
+  const oversized = await runCatalogHealthPreflight({
+    endpoint: DEFAULT_ENDPOINT,
+    anonKey: 'public-test-key',
+    env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+    fetchImpl: async () => new Response('x'.repeat(4_097), { status: 200 }),
+  });
+  assert.equal(oversized.classification, 'schema_error');
+});
+
+test('catalog QA secret is never sent to an untrusted host and a hung probe has a deadline', async () => {
+  let requests = 0;
+  const env = { [CATALOG_QA_SECRET_ENV]: catalogQaSecret };
+  const denied = await runCatalogHealthPreflight({
+    endpoint: 'https://attacker.example/functions/v1/chat-consultant-v3',
+    anonKey: 'public-test-key', env,
+    fetchImpl: async () => { requests++; throw new Error('unexpected request'); },
+  });
+  assert.equal(denied.classification, 'config');
+  assert.equal(requests, 0);
+
+  let signal;
+  const timeout = await runCatalogHealthPreflight({
+    endpoint: DEFAULT_ENDPOINT,
+    anonKey: 'public-test-key', env, timeoutMs: 20,
+    fetchImpl: async (_url, init) => {
+      requests++;
+      signal = init.signal;
+      return await new Promise(() => {});
+    },
+  });
+  assert.equal(timeout.classification, 'transport');
+  assert.equal(requests, 1);
+  assert.equal(signal.aborted, true);
+});
+
+test('missing catalog secret stops acceptance before both probe and paid chat calls', async () => {
+  let requests = 0;
+  const oldExitCode = process.exitCode;
+  try {
+    const report = await main({
+      preflightEnv: {},
+      preflightFetchImpl: async () => { requests++; throw new Error('must not fetch'); },
+      emit: () => {},
+    });
+    assert.equal(requests, 0);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.reason, 'infrastructure_unavailable');
+    assert.equal(report.infrastructure_status, 'infrastructure_unavailable');
+    assert.equal(report.selected_case_ids.length, report.selected_count);
+    assert.match(report.suite_sha256, /^[a-f0-9]{64}$/u);
+    assert.equal(report.catalog_preflight.classification, 'config');
+    assert.equal(report.completeness.recorded_runs, 0);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+    assert.equal(report.passed, false);
+    assert.equal('endpoint' in report, false);
+  } finally {
+    process.exitCode = oldExitCode;
+  }
+});
+
+test('catalog outage marks the whole run not_run, without scoring customer cases or spending turns', async () => {
+  let requests = 0;
+  const oldExitCode = process.exitCode;
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('paid chat fetch must not happen'); };
+  try {
+    const report = await main({
+      preflightEnv: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      preflightFetchImpl: async (_url, init) => {
+        requests++;
+        assert.deepEqual(JSON.parse(init.body), { type: 'catalog_health_preflight' });
+        return new Response(JSON.stringify({ ok: false, status: 'unavailable', classification: 'upstream' }), { status: 503 });
+      },
+      emit: () => {},
+    });
+    assert.equal(requests, 1);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.reason, 'infrastructure_unavailable');
+    assert.equal(report.infrastructure_status, 'infrastructure_unavailable');
+    assert.equal(report.catalog_preflight.classification, 'upstream');
+    assert.equal(report.completeness.recorded_runs, 0);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+    assert.deepEqual(report.log_ids, []);
+    assert.equal(report.passed, false);
+  } finally {
+    globalThis.fetch = oldFetch;
+    process.exitCode = oldExitCode;
+  }
+});
+
+test('the pinned strict full suite also emits NOT_RUN with zero turns when the private probe is unavailable', async () => {
+  const oldArgv = process.argv;
+  const oldExitCode = process.exitCode;
+  process.argv = [
+    oldArgv[0], oldArgv[1], '--strict-full-suite', `--endpoint=${DEFAULT_ENDPOINT}`,
+  ];
+  try {
+    const strictRunner = await import(`./run-customer-acceptance.mjs?catalog-preflight-strict=${Date.now()}`);
+    let calls = 0;
+    const report = await strictRunner.main({
+      preflightEnv: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      preflightFetchImpl: async () => {
+        calls++;
+        return new Response(JSON.stringify({ ok: false, status: 'unavailable', classification: 'rate_limit' }), { status: 503 });
+      },
+      emit: () => {},
+    });
+    assert.equal(calls, 1);
+    assert.equal(report.strict_full_suite, true);
+    assert(report.strict_inventory);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.completeness.planned_runs, 81);
+    assert.equal(report.completeness.planned_turns, 126);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+  } finally {
+    process.argv = oldArgv;
+    process.exitCode = oldExitCode;
+  }
+});
 
 test('all pinned VVG cheapest cases require an independent complete-category minimum', () => {
   const cases = [
