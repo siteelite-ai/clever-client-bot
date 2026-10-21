@@ -2,8 +2,10 @@ import {
   extractRenderedProductUrls,
   isAdditionalProductSelectionFollowup,
   isEvidenceOnlyFollowup,
+  isPureRecentPriceFollowup,
   isRecentProductPriceSelectionFollowup,
   isRecentProductShowFollowup,
+  productUrlIdentity,
 } from "./recent-product-evidence.ts";
 import {
   verifiedRenderedDestinationContextUnchanged,
@@ -28,8 +30,16 @@ export interface ServerRenderedSelectionProof {
   baseRequest: string;
   /** Only URL identities actually rendered in completed, durable batches. */
   shownProductUrls: string[];
+  /** Product titles and identities copied from completed server products_block
+   * events. Browser-supplied assistant Markdown is never a source of cards. */
+  recentShownProductCards: ServerRenderedProductCard[];
   /** Full server-owned customer turns back through the base, newest first. */
   priorQueriesNewestFirst: string[];
+}
+
+export interface ServerRenderedProductCard {
+  pagetitle: string;
+  url: string;
 }
 
 // Eight same-session rows plus the separately queried session-rotation row.
@@ -88,22 +98,22 @@ function isNeutralRenderedEvidenceQuestion(query: string): boolean {
   if (
     clauses.length === 0 || clauses.length > 4 ||
     /\d/u.test(normalized) ||
-    /(?:^|\s)(?:для|в|во|на|под)\s+(?!чем(?:$|[^\p{L}]))\p{L}+/u.test(
+    /(?:^|\s)(?:для|в|во|на|под)\s+(?!(?:чем|наличии)(?:$|[^\p{L}]))\p{L}+/u.test(
       normalized,
     )
   ) return false;
   const words = normalized.match(/\p{L}+/gu) ?? [];
   const evidenceIntent =
-    /(?:почему|точно|действительно|сравн|отлич|разниц|подход|характеристик|параметр|цен|стоимост)/u
+    /(?:почему|точно|действительно|сравн|отлич|разниц|подход|характеристик|параметр|цен|стоимост|сто[яи]т|остат|налич|остал)/u
       .test(normalized);
   return evidenceIntent && words.length > 0 && words.length <= 40 &&
     words.every((word) =>
-      /^(?:а|ну|тогда|пожалуйста|почему|чем|как|что|какие|какой|какая|какое|это|этот|эта|эти|этого|этих|этим|этими|они|он|она|их|ними|них|между|из|по|у|ли|не|и|с|со|от|в|точно|действительно|ранее|перв\p{L}*|втор\p{L}*|треть\p{L}*|показан\p{L}*|предложен\p{L}*|подтвержден\p{L}*|сравн\p{L}*|отлич\p{L}*|разниц\p{L}*|подход\p{L}*|вариант\p{L}*|товар\p{L}*|модел\p{L}*|карточ\p{L}*|характеристик\p{L}*|параметр\p{L}*|цен\p{L}*|стоимост\p{L}*)$/u
+      /^(?:а|ну|тогда|пожалуйста|почему|чем|как|что|сколько|есть|какие|какой|какая|какое|это|этот|эта|эти|этого|этих|этим|этими|они|он|она|их|ними|них|между|из|по|у|ли|не|и|с|со|от|в|точно|действительно|ранее|перв\p{L}*|втор\p{L}*|треть\p{L}*|показан\p{L}*|предложен\p{L}*|подтвержден\p{L}*|сравн\p{L}*|отлич\p{L}*|разниц\p{L}*|подход\p{L}*|вариант\p{L}*|товар\p{L}*|модел\p{L}*|карточ\p{L}*|характеристик\p{L}*|параметр\p{L}*|цен\p{L}*|стоимост\p{L}*|сто[яи]т|остат\p{L}*|налич\p{L}*|остал\p{L}*)$/u
         .test(word)
     );
 }
 
-function isNeutralAcknowledgement(query: string): boolean {
+export function isNeutralAcknowledgement(query: string): boolean {
   return /^(?:спасибо|благодарю|понятно|хорошо|ок|ладно)[!.,\s]*$/iu
     .test(query);
 }
@@ -132,15 +142,28 @@ function isUnchangedDependentTurn(
   return isAdditionalProductSelectionFollowup(query) ||
     isNeutralAcknowledgement(query) ||
     isRecentProductShowFollowup(query) ||
+    isPureRecentPriceFollowup(query) ||
     isNeutralRenderedEvidenceQuestion(query) ||
     isSameAreaReaffirmation(query, base, currentFollowup);
 }
 
+function isReadOnlyRenderedFollowup(query: string, base: string): boolean {
+  return isAdditionalProductSelectionFollowup(query) ||
+    isRecentProductShowFollowup(query) ||
+    isPureRecentPriceFollowup(query) ||
+    isNeutralRenderedEvidenceQuestion(query) ||
+    // The existing destination guard accepts an unchanged-area reaffirmation
+    // as an intervening turn. Its selection argument must be the short
+    // additional-options form; use that same validation for a current
+    // evidence-only question without inheriting any new criterion.
+    isSameAreaReaffirmation(query, base, "А есть другие варианты?");
+}
+
 /** A positive count alone is not proof: require the exact completed stream,
  * matching durable count, and at least one controlled catalog card link. */
-function completedControlledCardUrls(
+function completedControlledCards(
   row: ServerRenderedSelectionLogRow,
-): string[] | null {
+): ServerRenderedProductCard[] | null {
   if (
     row.error !== null ||
     !Number.isSafeInteger(row.final_products_count) ||
@@ -150,7 +173,7 @@ function completedControlledCardUrls(
     row.response_events.length > MAX_EVENT_COUNT
   ) return null;
 
-  const urls: string[] = [];
+  const cards: ServerRenderedProductCard[] = [];
   const seenUrls = new Set<string>();
   let renderedCount = 0;
   let completeIndex = -1;
@@ -167,15 +190,29 @@ function completedControlledCardUrls(
       ) return null;
       renderedCount += event.count as number;
       if (renderedCount > (row.final_products_count as number)) return null;
+      const blockCards = [...event.markdown.matchAll(
+        /-\s+\*\*\[([^\]\r\n]{1,300})\]\((https:\/\/220volt\.kz\/catalog\/[^)\s]+)\)\*\*/giu,
+      )].map((match) => ({
+        pagetitle: match[1].replace(/\p{Cc}/gu, " ").replace(/\s+/gu, " ")
+          .trim(),
+        url: productUrlIdentity(match[2]),
+      }));
+      if (
+        blockCards.length !== event.count ||
+        blockCards.some(({ pagetitle, url }) => !pagetitle || !url)
+      ) return null;
+      // Reject malformed product blocks with extra or duplicate controlled
+      // links instead of silently treating only the first card as proof.
       const blockUrls = extractRenderedProductUrls([{
         role: "assistant",
         content: event.markdown,
       }]);
-      if (blockUrls.length !== event.count) return null;
-      for (const url of blockUrls) {
+      if (blockUrls.length !== blockCards.length) return null;
+      for (const card of blockCards) {
+        const url = card.url!;
         if (seenUrls.has(url)) return null;
         seenUrls.add(url);
-        urls.push(url);
+        cards.push({ pagetitle: card.pagetitle, url });
       }
     } else if (event.type === "diagnostic" && event.phase === "complete") {
       if (
@@ -189,10 +226,10 @@ function completedControlledCardUrls(
       doneIndex = index;
     }
   }
-  return urls.length > 0 && renderedCount === row.final_products_count &&
+  return cards.length > 0 && renderedCount === row.final_products_count &&
       completeIndex >= 0 &&
       doneIndex === row.response_events.length - 1 && completeIndex < doneIndex
-    ? urls
+    ? cards
     : null;
 }
 
@@ -210,8 +247,8 @@ function completedControlledCardUrls(
 export function resolveServerRenderedSelectionProof(
   rows: readonly ServerRenderedSelectionLogRow[],
   sessionId: string,
-  browserBase: string,
-  currentFollowup: string,
+  browserBase: string | null,
+  currentFollowup: string | null,
   now = Date.now(),
 ): ServerRenderedSelectionProof | null {
   if (
@@ -219,11 +256,19 @@ export function resolveServerRenderedSelectionProof(
     typeof sessionId !== "string" || !sessionId.trim() ||
     sessionId !== sessionId.trim() ||
     !Number.isFinite(now) ||
-    typeof currentFollowup !== "string" ||
-    !isAdditionalProductSelectionFollowup(currentFollowup)
+    currentFollowup !== null && typeof currentFollowup !== "string" ||
+    currentFollowup !== null && !(
+      isAdditionalProductSelectionFollowup(currentFollowup) ||
+      isEvidenceOnlyFollowup(currentFollowup) ||
+      isRecentProductShowFollowup(currentFollowup) ||
+      isRecentProductPriceSelectionFollowup(currentFollowup)
+    )
   ) return null;
-  const suggested = customerQuery(browserBase);
-  if (!suggested) return null;
+  // A missing browser card is not permission to trust a cached product. In
+  // that case derive the active base entirely from the latest durable server
+  // log. When browser cards are present their proposed base must match it.
+  const suggested = browserBase === null ? null : customerQuery(browserBase);
+  if (browserBase !== null && !suggested) return null;
 
   const unique = new Map<string, {
     row: ServerRenderedSelectionLogRow;
@@ -260,23 +305,41 @@ export function resolveServerRenderedSelectionProof(
       index > 0 && entry.createdAt === ordered[index - 1].createdAt
     )
   ) return null;
+  if (currentFollowup === null) {
+    // Provenance is independent of the wording of the *current* question.
+    // Only the newest completed server turn is usable here: an intervening
+    // zero-card or failed turn might have begun another task, and the log has
+    // no intent certificate that would let us safely skip over it.
+    const latest = ordered[0];
+    const cards = completedControlledCards(latest.row);
+    return cards
+      ? {
+        baseRequest: latest.row.user_query as string,
+        shownProductUrls: cards.map(({ url }) => url),
+        recentShownProductCards: cards,
+        priorQueriesNewestFirst: [latest.row.user_query as string],
+      }
+      : null;
+  }
   const baseIndex = ordered.findIndex(({ query }) =>
     !structurallyDependent(query)
   );
   if (baseIndex < 0) return null;
   const base = ordered[baseIndex];
-  if (base.query !== suggested) return null;
-  const baseUrls = completedControlledCardUrls(base.row);
-  if (!baseUrls) return null;
+  if (suggested !== null && base.query !== suggested) return null;
   const baseRequest = base.row.user_query as string;
+  if (!isReadOnlyRenderedFollowup(currentFollowup, baseRequest)) return null;
+  const baseCards = completedControlledCards(base.row);
+  if (!baseCards) return null;
   const intervening = ordered.slice(0, baseIndex);
   if (
     intervening.some(({ query }) =>
       !isUnchangedDependentTurn(query, baseRequest, currentFollowup)
     )
   ) return null;
-  const shownProductUrls = [...baseUrls];
+  const shownProductUrls = baseCards.map(({ url }) => url);
   const seenUrls = new Set(shownProductUrls);
+  let recentShownProductCards = baseCards;
   // A dependent turn can be a failed or zero-card answer. If it claims to
   // have rendered cards, the whole completed batch must validate before its
   // URLs can be trusted as exclusions for "other options".
@@ -291,9 +354,10 @@ export function resolveServerRenderedSelectionProof(
       ) return null;
       continue;
     }
-    const urls = completedControlledCardUrls(row);
-    if (!urls) return null;
-    for (const url of urls) {
+    const cards = completedControlledCards(row);
+    if (!cards) return null;
+    recentShownProductCards = cards;
+    for (const { url } of cards) {
       if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       shownProductUrls.push(url);
@@ -302,6 +366,7 @@ export function resolveServerRenderedSelectionProof(
   return {
     baseRequest,
     shownProductUrls,
+    recentShownProductCards,
     priorQueriesNewestFirst: [
       ...intervening.map(({ row }) => row.user_query as string),
       baseRequest,

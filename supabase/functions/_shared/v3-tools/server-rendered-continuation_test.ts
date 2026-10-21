@@ -1,4 +1,5 @@
 import {
+  isNeutralAcknowledgement,
   resolveServerRenderedSelectionBase,
   resolveServerRenderedSelectionProof,
   type ServerRenderedSelectionLogRow,
@@ -17,6 +18,16 @@ const sessionId = "session-new";
 const base = "Хочу заменить люстру в гостиной 30 м². Покажи варианты";
 const card =
   "- **[Люстра для гостиной](https://220volt.kz/catalog/svetotexnika/lyustry/lustra-1/)**\n  Цена: *9 500* ₸";
+
+Deno.test("neutral acknowledgement excludes short clarification answers", () => {
+  assertEquals(isNeutralAcknowledgement("Спасибо!"), true, "gratitude");
+  assertEquals(isNeutralAcknowledgement("Да"), false, "choice reply");
+  assertEquals(
+    isNeutralAcknowledgement("Хорошо, возьму второй"),
+    false,
+    "selection reply",
+  );
+});
 
 function minutesAgo(value: number): string {
   return new Date(now - value * 60_000).toISOString();
@@ -160,6 +171,55 @@ Deno.test("a later independent task closes the old scope even if it failed or sh
   ) {
     assertEquals(resolved([newer, successfulSelection()]), null, "new task");
   }
+});
+
+Deno.test("active batch identity is independent of current wording but never skips a newer turn", () => {
+  const latest = laterTurn("А есть другие варианты?", {
+    response_events: [
+      {
+        type: "products_block",
+        markdown:
+          "- **[Вторая люстра](https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/)**",
+        count: 1,
+      },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: "later",
+        products_count: 1,
+        error: null,
+      },
+      { type: "done" },
+    ],
+  });
+  const active = resolveServerRenderedSelectionProof(
+    [latest, successfulSelection()],
+    sessionId,
+    null,
+    null,
+    now,
+  );
+  assertEquals(
+    active?.recentShownProductCards[0].url,
+    "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/",
+    "latest completed server identity",
+  );
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [laterTurn("Спасибо", {
+        id: "newest",
+        created_at: minutesAgo(0.5),
+        final_products_count: 0,
+        response_events: [{ type: "done" }],
+      }), latest, successfulSelection()],
+      sessionId,
+      null,
+      null,
+      now,
+    ),
+    null,
+    "cannot revive older products across an unclassified newer turn",
+  );
 });
 
 Deno.test("count without valid controlled cards, complete marker, or durable agreement is no proof", () => {
@@ -485,6 +545,14 @@ Deno.test("shown URLs come only from completed server-rendered batches, not brow
     "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-1/|https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/",
     "only completed server URLs",
   );
+  assertEquals(
+    JSON.stringify(proof?.recentShownProductCards),
+    JSON.stringify([{
+      pagetitle: "Вторая люстра",
+      url: "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/",
+    }]),
+    "recovery title and URL are both from the latest completed server block",
+  );
   for (
     const broken of [
       laterTurn("А есть другие варианты?", {
@@ -532,4 +600,95 @@ Deno.test("shown URLs come only from completed server-rendered batches, not brow
       "partial or inconsistent dependent batch",
     );
   }
+});
+
+Deno.test("read-only evidence and price references require unchanged completed server scope", () => {
+  const original = successfulSelection();
+  for (
+    const question of [
+      "Почему эти варианты?",
+      "Сколько стоят эти товары?",
+      "Какие остатки у этих товаров?",
+      "Они точно подходят для освещения 30 м²?",
+      "Покажи их",
+      "Какой из этих вариантов самый дешёвый?",
+    ]
+  ) {
+    const proof = resolveServerRenderedSelectionProof(
+      [original], sessionId, base, question, now,
+    );
+    assertEquals(proof?.recentShownProductCards[0]?.pagetitle,
+      "Люстра для гостиной", question);
+  }
+  for (
+    const changed of [
+      "Они точно подходят для спальни 30 м²?",
+      "Они точно подходят для освещения 40 м²?",
+      "Сколько стоят эти товары для кухни?",
+      "Какие остатки у этих товаров в Алматы?",
+      "Какой из этих вариантов до 5000 тенге самый дешёвый?",
+    ]
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [original], sessionId, base, changed, now,
+      ),
+      null,
+      changed,
+    );
+  }
+  const noBrowserCard = resolveServerRenderedSelectionProof(
+    [original], sessionId, null, "Сколько стоят эти товары?", now,
+  );
+  assertEquals(
+    noBrowserCard?.recentShownProductCards[0]?.pagetitle,
+    "Люстра для гостиной",
+    "server-only active card when browser omitted Markdown",
+  );
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [laterTurn("Подбери кабель", {
+        error: "upstream_unavailable",
+        final_products_count: 0,
+        response_events: [],
+      }), original],
+      sessionId,
+      null,
+      "Сколько стоят эти товары?",
+      now,
+    ),
+    null,
+    "later standalone request closes server-only scope",
+  );
+});
+
+Deno.test("server card proof retains real formatted titles and canonicalizes controlled URLs", () => {
+  const title = "LIGHTING Светильник 1011 40Вт 4000К 1200*54*58мм, белый ИЭК";
+  const url = "https://220volt.kz/catalog/svetotexnika/svetilniki/lighting-1011-1200*54*58mm/?utm_source=widget";
+  const formatted = successfulSelection({
+    response_events: [
+      {
+        type: "products_block",
+        count: 1,
+        markdown: `- **[${title}](${url})**\n  Цена: *17 667* ₸`,
+      },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: "original-selection",
+        products_count: 1,
+        error: null,
+      },
+      { type: "done" },
+    ],
+  });
+  const proof = resolveServerRenderedSelectionProof(
+    [formatted], sessionId, base, "Почему эти варианты?", now,
+  );
+  assertEquals(proof?.recentShownProductCards[0]?.pagetitle, title, "title");
+  assertEquals(
+    proof?.recentShownProductCards[0]?.url,
+    "https://220volt.kz/catalog/svetotexnika/svetilniki/lighting-1011-1200*54*58mm/",
+    "canonical URL",
+  );
 });

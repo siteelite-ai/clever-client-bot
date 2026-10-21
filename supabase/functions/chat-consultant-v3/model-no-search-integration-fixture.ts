@@ -16,6 +16,15 @@ const originalGet = Deno.env.get;
 const originalServe = Deno.serve;
 let handler: ((request: Request) => Promise<Response>) | null = null;
 
+/** Prove that an env flag and key alone cannot activate a closure-only route
+ * in the ordinary production bootstrap, even when the client spoofs it. */
+export function configureClosureRetryWithoutMarkerInOfflineFixture(): void {
+  values.VOLT220_DERIVED_REASONING_LOVABLE_RETRY_CLOSURE_PREVIEW_ENABLED =
+    "true";
+  values.LOVABLE_API_KEY = "offline-lovable";
+  values.LOVABLE_AGENT_MODEL = "offline-lovable-model";
+}
+
 /** Opt in only before a dynamic handler import in an isolated offline test. */
 export function enableVerifiedFactsInOfflineFixture(): void {
   values.VOLT220_VERIFIED_FACTS_PRODUCTION_ENABLED = "true";
@@ -28,7 +37,9 @@ export function enableDirectAnalogProofInOfflineFixture(): void {
 }
 
 /** Toggle the server-only emergency path without changing production env. */
-export function setTaxonomyOutageExactLookupInOfflineFixture(enabled: boolean): void {
+export function setTaxonomyOutageExactLookupInOfflineFixture(
+  enabled: boolean,
+): void {
   if (enabled) values.VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED = "true";
   else delete values.VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED;
 }

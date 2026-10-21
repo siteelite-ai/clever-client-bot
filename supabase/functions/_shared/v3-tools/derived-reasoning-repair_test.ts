@@ -135,9 +135,19 @@ Deno.test("the handler wires invalid repair to its own telemetry and a safe term
   const source = await Deno.readTextFile(
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
   );
+  const repairStart = source.indexOf("const repairReason =");
+  const repairEnd = source.indexOf("if (repairReason) {", repairStart);
+  assertEquals(repairStart >= 0 && repairEnd > repairStart, true);
+  const repairGate = source.slice(repairStart, repairEnd);
+  assertStringIncludes(repairGate, "chooseDerivedReasoningRepair({");
+  assertEquals(
+    /DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*&&\s*derivedReasoningProviderAttempts\s*>=\s*2\s*\?\s*null\s*:\s*chooseDerivedReasoningRepair\(\{/u
+      .test(repairGate),
+    true,
+  );
   assertStringIncludes(
-    source,
-    "const repairReason = chooseDerivedReasoningRepair({",
+    repairGate,
+    "providerAttempts: derivedReasoningProviderAttempts,",
   );
   assertStringIncludes(
     source,
@@ -478,9 +488,10 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   assertEquals(correctionStart >= 0 && correctionEnd > correctionStart, true);
   const correctionCall = source.slice(correctionStart, correctionEnd);
   assertStringIncludes(correctionCall, "runProductMeasurementCorrection({");
-  assertStringIncludes(
-    correctionCall,
-    "retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED,",
+  assertEquals(
+    /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*,/u
+      .test(correctionCall),
+    true,
   );
   assertStringIncludes(correctionCall, "attempt: correctionAttempt,");
   assertStringIncludes(correctionCall, "initialTimeoutMs: correctionTimeout,");

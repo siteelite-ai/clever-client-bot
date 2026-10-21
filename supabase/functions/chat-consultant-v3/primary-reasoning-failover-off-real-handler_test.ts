@@ -5,10 +5,12 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  configureClosureRetryWithoutMarkerInOfflineFixture,
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+configureClosureRetryWithoutMarkerInOfflineFixture();
+await import("./index.ts");
 
 type Variant = "unusable_http_200" | "http_502" | "http_429";
 type Step = { step?: string; meta?: Record<string, unknown> };
@@ -217,7 +219,10 @@ async function runTurn(variant: Variant): Promise<{
         "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-volt-derived-reasoning-retry-scope": "closure_preview",
+          },
           body: JSON.stringify({
             message: "Нужен ИБП для оборудования мощностью 250 Вт",
             messageId: crypto.randomUUID(),
@@ -249,9 +254,27 @@ Deno.test({
   permissions: { read: true, env: false, net: false },
   async fn() {
     try {
+      const spoofedBody = await offlineHandler()(
+        new Request(
+          "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "Нужен ИБП для оборудования мощностью 250 Вт",
+              messageId: crypto.randomUUID(),
+              sessionId: crypto.randomUUID(),
+              history: [],
+              __VOLT220_DERIVED_REASONING_RETRY_SCOPE__: "closure_preview",
+            }),
+          },
+        ),
+      );
+      assertEquals(spoofedBody.status, 400);
       const result = await runTurn("unusable_http_200");
       assertEquals(result.declarationRequests, 2, JSON.stringify(result));
       assertEquals(result.correctionRequests, 0);
+      assertEquals(result.modelRequests >= 2, true);
       const retry = result.steps.find(({ step }) =>
         step === "v3_derived_selection_reasoning_retry"
       );

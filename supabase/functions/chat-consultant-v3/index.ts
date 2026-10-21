@@ -214,6 +214,7 @@ import {
   verifiedRenderedDestinationContextUnchanged,
 } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
 import {
+  isNeutralAcknowledgement,
   resolveServerRenderedSelectionProof,
   type ServerRenderedSelectionProof,
 } from "../_shared/v3-tools/server-rendered-continuation.ts";
@@ -400,7 +401,6 @@ import {
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
   extractPriorAssistantProse,
-  extractRenderedProductTitles,
   extractRenderedProductUrls,
   isAdditionalProductSelectionFollowup,
   isEvidenceOnlyFollowup,
@@ -409,14 +409,12 @@ import {
   latestRecentProductEvidenceSet,
   latestRenderedSelectionRequest,
   loadRecentProductEvidence,
+  MAX_RECENT_EVIDENCE_PRODUCTS,
   persistRecentProductEvidence as persistRecentProductEvidenceUnchecked,
   productUrlIdentity,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import {
-  exactRecentPriceSkuFromSearch,
-  proveRecentPriceSet,
-} from "../_shared/v3-tools/recent-price-proof.ts";
+import { proveRecentPriceSet } from "../_shared/v3-tools/recent-price-proof.ts";
 import {
   buildExactPriceUnitAnswer,
   isExactPriceUnitQuestion,
@@ -840,6 +838,29 @@ const LOVABLE_API_KEY = LOVABLE_AGENT_FAILOVER_ENABLED
   : null;
 const LOVABLE_AGENT_MODEL = Deno.env.get("LOVABLE_AGENT_MODEL") ??
   "google/gemini-3-flash-preview";
+
+/** A scoped reliability experiment, not general provider failover. It needs
+ * both the closure wrapper marker and an explicit server-side flag/key; even
+ * a project-wide flag cannot enable it in production or ordinary preview. */
+export function derivedReasoningLovableRetryEnabled(input: {
+  scope: unknown;
+  enabled: string | null | undefined;
+  apiKey: string | null | undefined;
+}): boolean {
+  return input.scope === "closure_preview" && input.enabled === "true" &&
+    Boolean(input.apiKey?.trim());
+}
+const DERIVED_REASONING_LOVABLE_RETRY_KEY = Deno.env.get("LOVABLE_API_KEY");
+const DERIVED_REASONING_LOVABLE_RETRY_ENABLED =
+  derivedReasoningLovableRetryEnabled({
+    scope: (globalThis as typeof globalThis & {
+      __VOLT220_DERIVED_REASONING_RETRY_SCOPE__?: "closure_preview";
+    }).__VOLT220_DERIVED_REASONING_RETRY_SCOPE__,
+    enabled: Deno.env.get(
+      "VOLT220_DERIVED_REASONING_LOVABLE_RETRY_CLOSURE_PREVIEW_ENABLED",
+    ),
+    apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY,
+  });
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
 const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
@@ -3381,6 +3402,8 @@ type LLMPhase =
   | "derived_reasoning"
   | "final_render";
 
+type LLMProviderRoute = "configured" | "openrouter_only" | "lovable_only";
+
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
@@ -3393,6 +3416,7 @@ async function callOpenRouter(
   toolSchemas: readonly ORToolSchema[] = TOOL_SCHEMAS,
   maxTokens = 4000,
   modelRouting: OpenRouterModelRouting = AGENT_MODEL_ROUTING,
+  providerRoute: LLMProviderRoute = "configured",
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -3427,17 +3451,28 @@ async function callOpenRouter(
     const availableTools = toolSchemas.filter((schema) =>
       availableToolNames.includes(schema.function.name)
     );
+    if (providerRoute === "lovable_only" &&
+      !DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+      throw new Error("derived_reasoning_lovable_retry_unavailable");
+    }
     const completion = await fetchChatCompletionWithFailover({
-      primary: {
-        id: "openrouter",
-        url: "https://openrouter.ai/api/v1/chat/completions",
-        apiKey,
-        headers: {
-          "HTTP-Referer": "https://chat-volt.testdevops.ru",
-          "X-Title": "220volt-chat-consultant-v3",
+      primary: providerRoute === "lovable_only"
+        ? {
+          id: "lovable",
+          url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+          apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY!,
+          model: LOVABLE_AGENT_MODEL,
+        }
+        : {
+          id: "openrouter",
+          url: "https://openrouter.ai/api/v1/chat/completions",
+          apiKey,
+          headers: {
+            "HTTP-Referer": "https://chat-volt.testdevops.ru",
+            "X-Title": "220volt-chat-consultant-v3",
+          },
         },
-      },
-      fallback: LOVABLE_API_KEY
+      fallback: providerRoute === "configured" && LOVABLE_API_KEY
         ? {
           id: "lovable",
           url: "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -7574,58 +7609,46 @@ async function selectVerifiedSemanticCompoundProducts(
   return { handled: true, products };
 }
 
-async function refreshRecentProductSet(
-  evidence: RecentProductEvidence[],
-  ctx: ToolContext,
-): Promise<ProductFull[]> {
-  const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const refreshed = await Promise.all(latestEvidence.map(async (previous) => {
-    const result = await executeSearchCatalog(
-      {
-        mode: "by_pagetitle",
-        pagetitle: previous.pagetitle,
-        per_page: 3,
-      },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
-      ctx.cache,
-    );
-    if (!result.ok) return null;
-    const wanted = previous.pagetitle.toLowerCase().replace(/ё/g, "е").replace(
-      /\s+/g,
-      " ",
-    ).trim();
-    const exact = result.results.find((product) =>
-      product.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ")
-        .trim() === wanted
-    );
-    return exact ? ctx.cache.get(String(exact.id)) ?? null : null;
-  }));
-  return refreshed.filter((product): product is ProductFull =>
-    Boolean(
-      product && Number.isFinite(product.price) && product.price > 0,
-    )
-  );
+function renderedCardTitleIdentity(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
 }
 
-/** Price comparison must refresh the exact previously shown SKU, not the first
- * search hit with the same title. Keep the ordinary show-followup unchanged. */
-async function refreshExactRecentPriceSet(
+function refreshRecentProductSet(
+  evidence: RecentProductEvidence[],
+  ctx: ToolContext,
+): ProductFull[] {
+  const latestEvidence = latestRecentProductEvidenceSet(evidence);
+  // The only admissible cache here was populated in this turn by the exact
+  // server-card rehydration below. Never launch another title-only search:
+  // two different SKUs can have exactly the same displayed title.
+  const refreshed = latestEvidence.map((previous) => {
+    const product = ctx.cache.get(previous.id);
+    return product &&
+        renderedCardTitleIdentity(product.pagetitle) ===
+          renderedCardTitleIdentity(previous.pagetitle) &&
+        productUrlIdentity(product.url) === productUrlIdentity(previous.url) &&
+        Number.isFinite(product.price) && product.price > 0
+      ? product
+      : null;
+  });
+  return refreshed.every(Boolean) ? refreshed as ProductFull[] : [];
+}
+
+/** Price comparison uses the complete, freshly rehydrated server batch. */
+function refreshExactRecentPriceSet(
   latestEvidence: RecentProductEvidence[],
   ctx: ToolContext,
-): Promise<Array<ProductFull | null>> {
-  return await Promise.all(latestEvidence.map(async (previous) => {
-    const result = await executeSearchCatalog(
-      {
-        mode: "by_pagetitle",
-        pagetitle: previous.pagetitle,
-        per_page: 50,
-      },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
-      ctx.cache,
-    );
-    if (!result.ok) return null;
-    return exactRecentPriceSkuFromSearch(previous, result.results, ctx.cache);
-  }));
+): Array<ProductFull | null> {
+  return latestEvidence.map((previous) => {
+    const product = ctx.cache.get(previous.id);
+    return product &&
+        renderedCardTitleIdentity(product.pagetitle) ===
+          renderedCardTitleIdentity(previous.pagetitle) &&
+        productUrlIdentity(product.url) === productUrlIdentity(previous.url)
+      ? product
+      : null;
+  });
 }
 
 async function selectVerifiedRecentShowFollowup(
@@ -7640,7 +7663,7 @@ async function selectVerifiedRecentShowFollowup(
     return { handled: false, products: [] };
   }
   const started = Date.now();
-  const liveProducts = (await refreshRecentProductSet(evidence, ctx)).slice(
+  const liveProducts = refreshRecentProductSet(evidence, ctx).slice(
     0,
     5,
   );
@@ -7709,7 +7732,7 @@ async function selectVerifiedRecentPriceFollowup(
 
   const started = Date.now();
   const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const refreshed = await refreshExactRecentPriceSet(latestEvidence, ctx);
+  const refreshed = refreshExactRecentPriceSet(latestEvidence, ctx);
   const proof = proveRecentPriceSet(
     latestEvidence,
     refreshed,
@@ -8091,12 +8114,18 @@ async function loadServerRenderedSelectionProof(
   supabase: SupabaseClient,
   sessionId: string,
   currentLogId: string,
-  browserBase: string,
-  currentFollowup: string,
+  browserBase: string | null,
+  currentFollowup: string | null,
   requestStartedAt: number,
-): Promise<ServerRenderedSelectionProof | null> {
-  if (!browserBase || browserBase.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS) {
-    return null;
+): Promise<{
+  proof: ServerRenderedSelectionProof | null;
+  lookupFailed: boolean;
+}> {
+  if (
+    browserBase !== null &&
+    (!browserBase || browserBase.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS)
+  ) {
+    return { proof: null, lookupFailed: false };
   }
   try {
     const createdAfter = activeSelectionScopeLookupCreatedAfter(requestStartedAt);
@@ -8134,15 +8163,18 @@ async function loadServerRenderedSelectionProof(
     if (
       sessionRead.error || boundaryRead.error ||
       !Array.isArray(sessionRead.data)
-    ) return null;
-    return resolveServerRenderedSelectionProof(
-      [...sessionRead.data, ...(boundaryRead.data ? [boundaryRead.data] : [])],
-      sessionId,
-      browserBase,
-      currentFollowup,
-    );
+    ) return { proof: null, lookupFailed: true };
+    return {
+      proof: resolveServerRenderedSelectionProof(
+        [...sessionRead.data, ...(boundaryRead.data ? [boundaryRead.data] : [])],
+        sessionId,
+        browserBase,
+        currentFollowup,
+      ),
+      lookupFailed: false,
+    };
   } catch {
-    return null;
+    return { proof: null, lookupFailed: true };
   }
 }
 
@@ -11531,6 +11563,11 @@ async function runExpertLoop(
           );
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
+          let closureRetryOutcomePending: {
+            model: string;
+            provider: string;
+            timeoutMs: number;
+          } | null = null;
           const primaryReasoningTimeout = Math.min(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
@@ -11548,6 +11585,9 @@ async function runExpertLoop(
               [reasoningToolSchema],
               1200,
               buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
+              DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                ? "openrouter_only"
+                : "configured",
             );
           } catch (reasoningError) {
             const timedOut = !(reasoningError instanceof UpstreamHttpError) && (
@@ -11587,7 +11627,12 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 primary_model: ctx.selectionReasoningModel,
-                retry_model: GENERAL_INQUIRY_MODEL,
+                retry_model: DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? LOVABLE_AGENT_MODEL
+                  : GENERAL_INQUIRY_MODEL,
+                retry_provider: DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? "lovable"
+                  : "openrouter",
                 primary_timeout_ms: primaryReasoningTimeout,
                 retry_timeout_ms: retryTimeout,
                 ...upstreamFailureDiagnosticMeta(reasoningError),
@@ -11605,17 +11650,51 @@ async function runExpertLoop(
               [reasoningToolSchema],
               1200,
               GENERAL_INQUIRY_MODEL_ROUTING,
+              DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                ? "lovable_only"
+                : "configured",
             );
             derivedReasoningProviderAttempts += 1;
+            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+              // A provider HTTP 200 is not yet a usable selection contract.
+              // Record success only after resolving and validating the forced
+              // declaration below, never merely after a named tool call.
+              closureRetryOutcomePending = {
+                model: LOVABLE_AGENT_MODEL,
+                provider: structuredReasoning.provider ?? "unknown",
+                timeoutMs: retryTimeout,
+              };
+            } else {
+              steps.push({
+                step: "v3_derived_selection_reasoning_retry_recovered",
+                ms: now(),
+                meta: {
+                  retry_model: GENERAL_INQUIRY_MODEL,
+                  retry_provider: structuredReasoning.provider ?? "unknown",
+                  retry_timeout_ms: retryTimeout,
+                },
+              });
+            }
+          }
+          const recordClosureRetryOutcome = (
+            validated: boolean,
+            reason: string | null = null,
+          ) => {
+            if (!closureRetryOutcomePending) return;
             steps.push({
-              step: "v3_derived_selection_reasoning_retry_recovered",
+              step: validated
+                ? "v3_derived_selection_reasoning_retry_recovered"
+                : "v3_derived_selection_reasoning_retry_contract_unverified",
               ms: now(),
               meta: {
-                retry_model: GENERAL_INQUIRY_MODEL,
-                retry_timeout_ms: retryTimeout,
+                retry_model: closureRetryOutcomePending.model,
+                retry_provider: closureRetryOutcomePending.provider,
+                retry_timeout_ms: closureRetryOutcomePending.timeoutMs,
+                ...(reason ? { reason } : {}),
               },
             });
-          }
+            closureRetryOutcomePending = null;
+          };
           const cleanDeclarationCall = (
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
@@ -11840,6 +11919,7 @@ async function runExpertLoop(
             return Boolean(pair.reference) && pair.state === "unproven";
           };
           const stopForUnverifiedPairedFit = () => {
+            recordClosureRetryOutcome(false, "paired_fit_unverified");
             const pair = pairedDecisionForEvidence(
               declaration?.reasoningEvidence ?? "",
             );
@@ -11870,6 +11950,7 @@ async function runExpertLoop(
               declaration,
             );
           const stopForUnverifiedProtection = () => {
+            recordClosureRetryOutcome(false, "environmental_protection_unverified");
             const notice =
               "Не удалось подтвердить обязательную защиту для указанных условий эксплуатации по характеристикам товаров. Не буду выдавать неподтверждённые варианты как подходящие; уточните требование к защите или повторите запрос.";
             send({ type: "delta", content: notice });
@@ -11893,6 +11974,7 @@ async function runExpertLoop(
             correctionFailure: ReturnType<typeof classifyPublicFailure> | null =
               null,
           ) => {
+            recordClosureRetryOutcome(false, "product_measurement_unverified");
             const notice = correctionFailure?.customer_message ??
               "Не удалось однозначно проверить обязательный числовой параметр товара по каталогу. Не буду показывать неподтверждённые варианты; уточните требование к товару или повторите запрос.";
             send({ type: "delta", content: notice });
@@ -11923,6 +12005,7 @@ async function runExpertLoop(
             };
           };
           const stopForInvalidDerivedDeclaration = () => {
+            recordClosureRetryOutcome(false, "invalid_declaration");
             const declarationArgs = declarationCall?.args &&
                 typeof declarationCall.args === "object"
               ? declarationCall.args as Record<string, unknown>
@@ -11962,13 +12045,19 @@ async function runExpertLoop(
           };
           const needsEnvironmentalProtectionRetry =
             missingEnvironmentalProtection();
-          const repairReason = chooseDerivedReasoningRepair({
-            resolvedText: declaration?.text,
-            environmentalProtectionMissing: needsEnvironmentalProtectionRetry,
-            pairedFitMissing: missingPairedFitProof(),
-            productMeasurementMissing: missingRequiredProductMeasurement(),
-            providerAttempts: derivedReasoningProviderAttempts,
-          });
+          // The closure-only two-provider route has already exhausted its
+          // allowance after a second response, including an invalid HTTP 200.
+          // Do not let any later contract correction reopen provider failover.
+          const repairReason = DERIVED_REASONING_LOVABLE_RETRY_ENABLED &&
+              derivedReasoningProviderAttempts >= 2
+            ? null
+            : chooseDerivedReasoningRepair({
+              resolvedText: declaration?.text,
+              environmentalProtectionMissing: needsEnvironmentalProtectionRetry,
+              pairedFitMissing: missingPairedFitProof(),
+              productMeasurementMissing: missingRequiredProductMeasurement(),
+              providerAttempts: derivedReasoningProviderAttempts,
+            });
           if (repairReason) {
             const correctionTimeout = boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS,
@@ -12026,12 +12115,16 @@ async function runExpertLoop(
                   [reasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
+                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                    ? "openrouter_only"
+                    : "configured",
                 );
               };
               try {
                 structuredReasoning = await runProductMeasurementCorrection({
                   repairReason,
-                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED,
+                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
                   attempt: correctionAttempt,
                   initialTimeoutMs: correctionTimeout,
                   retryTimeoutMs: () =>
@@ -12145,6 +12238,7 @@ async function runExpertLoop(
           if (productMeasurementGap) {
             return stopForUnverifiedProductMeasurement(productMeasurementGap);
           }
+          recordClosureRetryOutcome(true);
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
@@ -24738,6 +24832,7 @@ Deno.serve(async (req) => {
               database: SupabaseClient,
               evidenceSessionId: string,
               products: ProductFull[],
+              replaceExisting = false,
             ) =>
               persistRecentProductEvidenceUnchecked(
                 database,
@@ -24745,6 +24840,7 @@ Deno.serve(async (req) => {
                 products,
                 4_000,
                 () => !workTimedOut && !streamCompleted && !turnSignal.aborted,
+                replaceExisting,
               );
             const settings = await loadSettings(supabase, turnSignal);
             // A slow settings response must not start paid catalog/model work
@@ -24777,23 +24873,53 @@ Deno.serve(async (req) => {
             }
 
             const priorHistory = stripCurrentUserEcho(history, userMessage);
+            // A strict acknowledgement requires no prior product facts. Exit
+            // before the boundary model, server-log read or catalog hydration.
+            // A pending clarification is deliberately excluded; short answers
+            // to an issued question still follow the verified slot route.
+            if (
+              !Reflect.get(slots, "pending_clarification") &&
+              isNeutralAcknowledgement(userMessage)
+            ) {
+              send({
+                type: "delta",
+                content:
+                  "Пожалуйста! Обращайтесь, если понадобится помощь с подбором.",
+              });
+              steps.push({
+                step: "v3_neutral_acknowledgement_no_catalog",
+                ms: Date.now() - t0,
+              });
+              productsCount = 0;
+              return;
+            }
             const requestedAdditionalSelection =
               isAdditionalProductSelectionFollowup(userMessage);
-            const browserAdditionalBase = requestedAdditionalSelection &&
-                extractRenderedProductUrls(priorHistory).length > 0
+            const renderedReferenceRequested = requestedAdditionalSelection ||
+              isEvidenceOnlyFollowup(userMessage) ||
+              isRecentProductShowFollowup(userMessage) ||
+              isRecentProductPriceSelectionFollowup(userMessage);
+            const browserHasRenderedCard =
+              extractRenderedProductUrls(priorHistory).length > 0;
+            const browserRenderedBase = renderedReferenceRequested &&
+                browserHasRenderedCard
               ? latestRenderedSelectionRequest(priorHistory)
               : null;
-            const preflightAdditionalSelection =
-              requestedAdditionalSelection && browserAdditionalBase
+            const preflightRenderedRead = renderedReferenceRequested &&
+                (!browserHasRenderedCard || browserRenderedBase)
                 ? await loadServerRenderedSelectionProof(
                   supabase,
                   sessionId,
                   logId,
-                  browserAdditionalBase,
+                  browserRenderedBase,
                   userMessage,
                   t0,
                 )
-                : null;
+                : { proof: null, lookupFailed: false };
+            const preflightRenderedSelection = preflightRenderedRead.proof;
+            const preflightAdditionalSelection = requestedAdditionalSelection
+              ? preflightRenderedSelection
+              : null;
             if (requestedAdditionalSelection) {
               steps.push({
                 step: "v3_server_rendered_selection_base_checked",
@@ -24801,10 +24927,14 @@ Deno.serve(async (req) => {
                 meta: { matched: Boolean(preflightAdditionalSelection) },
               });
             }
-            if (requestedAdditionalSelection &&
-              !preflightAdditionalSelection) {
+            if (
+              renderedReferenceRequested &&
+              !preflightRenderedSelection
+            ) {
               // Prove a completed server-owned batch before any branch can
-              // spend a model/catalog call on browser-supplied history.
+              // spend a model/catalog call on browser-supplied history. This
+              // also prevents a forged card from retaining the old task at
+              // the conversation boundary below.
               send({
                 type: "delta",
                 content:
@@ -25228,7 +25358,11 @@ Deno.serve(async (req) => {
               }
               : await classifyConversationBoundary(
                 userMessage,
-                priorHistory,
+                // The browser can forge prior assistant prose and product
+                // cards. They must not enter even the boundary classifier;
+                // server-log proof below decides whether product context is
+                // available after routing.
+                priorHistory.filter((message) => message.role === "user"),
                 boundarySlots,
                 {
                   apiKey: settings.openrouter_api_key!,
@@ -25255,12 +25389,7 @@ Deno.serve(async (req) => {
                 resolvePendingClarificationChoice(boundarySlots, userMessage),
             );
             const referencesRenderedProducts =
-              extractRenderedProductTitles(priorHistory, 1).length > 0 && (
-                isAdditionalProductSelectionFollowup(userMessage) ||
-                isEvidenceOnlyFollowup(userMessage) ||
-                isRecentProductShowFollowup(userMessage) ||
-                isRecentProductPriceSelectionFollowup(userMessage)
-              );
+              Boolean(preflightRenderedSelection);
             const startsNewTask = !verifiedCutoutContinuation &&
               !dependentCutoutReply && (
               activeScopeExplicitBoundary ||
@@ -25325,7 +25454,7 @@ Deno.serve(async (req) => {
             const effectiveSessionId = startsNewTask
               ? `session_${crypto.randomUUID()}`
               : sessionId;
-            const effectiveHistory = startsNewTask ? [] : priorHistory;
+            let effectiveHistory = startsNewTask ? [] : priorHistory;
             const effectiveSlots = startsNewTask ? {} : trustedSlots;
             // Only an expert selection spends the extra read. The current
             // customer turn stays the routing input; earlier quantities may
@@ -25361,11 +25490,6 @@ Deno.serve(async (req) => {
                 });
                 return evidence;
               })();
-            const electricalTripDiagnostic =
-              resolveElectricalProtectionTripDiagnostic(
-                userMessage,
-                effectiveHistory,
-              );
             const measuredBreakerGuidance = buildMeasuredBreakerGuidance(
               userMessage,
             );
@@ -25473,52 +25597,165 @@ Deno.serve(async (req) => {
                 ? preflightAdditionalSelection
                 : null;
 
-            let recentProductEvidence = await loadRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-            );
-            if (
-              recentProductEvidence.length === 0 &&
-              isEvidenceOnlyFollowup(userMessage)
-            ) {
-              const lookupTitles = extractRenderedProductTitles(
+            // Cache v2 is not an authority for previously shown products. The
+            // latest completed server batch is the only source of card identity,
+            // even if the current wording escaped a follow-up classifier.
+            const activeRenderedRead = startsNewTask ||
+                preflightRenderedSelection
+              ? {
+                proof: preflightRenderedSelection,
+                lookupFailed: false,
+              }
+              : await loadServerRenderedSelectionProof(
+                  supabase,
+                  effectiveSessionId,
+                  logId,
+                  null,
+                  null,
+                  t0,
+                );
+            const activeRenderedProof = activeRenderedRead.proof;
+            if (activeRenderedRead.lookupFailed) {
+              const staleRows = await loadRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+              );
+              const referencedContext = renderedReferenceRequested ||
+                browserHasRenderedCard || staleRows.length > 0 ||
+                boundary.reason === "local_followup_reference" ||
+                isEllipticalAttributeFollowup(userMessage);
+              if (referencedContext) {
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось проверить контекст прежнего подбора из-за временной ошибки. Повторите запрос позже.",
+                });
+                steps.push({
+                  step: "v3_recent_product_evidence_lookup_failed_closed",
+                  ms: Date.now() - t0,
+                  meta: { referenced_context: true },
+                });
+                productsCount = 0;
+                return;
+              }
+            }
+            if (activeRenderedProof) {
+              // Browser-provided assistant prose, card Markdown, prices and
+              // even echoed prior customer turns are not proof. Model and
+              // criteria routes see only customer turns from the same durable
+              // server logs; the current batch's facts enter separately via
+              // fresh catalog evidence below.
+              effectiveHistory = [...activeRenderedProof.priorQueriesNewestFirst]
+                .reverse().map((content) => ({ role: "user" as const, content }));
+            } else {
+              // This also covers log-read failure with hidden browser links:
+              // no unproved assistant prose may enter any later model branch.
+              // The current request remains authoritative; prior customer
+              // text is conversational context only, never product proof.
+              effectiveHistory = effectiveHistory.filter((message) =>
+                message.role === "user"
+              );
+            }
+            const electricalTripDiagnostic =
+              resolveElectricalProtectionTripDiagnostic(
+                userMessage,
                 effectiveHistory,
               );
+            let recentProductEvidence: RecentProductEvidence[] = [];
+            if (activeRenderedProof && !additionalProductSelectionFollowup) {
+              // Rehydrate the *entire* latest batch. A partial set cannot
+              // justify a cheapest claim, a comparison, or "these products".
+              const lookupCards = activeRenderedProof.recentShownProductCards;
               const recoveredProducts: ProductFull[] = [];
-              for (const pagetitle of lookupTitles) {
-                const recovered = await runTool("search_catalog", {
-                  mode: "by_pagetitle",
-                  pagetitle,
-                  per_page: 3,
-                }, ctx);
-                if (
-                  !recovered.ok || recovered.tool !== "search_catalog"
-                ) continue;
-                const wanted = pagetitle.toLowerCase().replace(/ё/g, "е")
-                  .trim();
-                const exact = recovered.results.find((product) =>
-                  product.pagetitle.toLowerCase().replace(/ё/g, "е").trim() ===
-                    wanted
-                );
-                if (!exact) continue;
-                const full = ctx.cache.get(String(exact.id));
-                if (full) recoveredProducts.push(full);
+              if (lookupCards.length <= MAX_RECENT_EVIDENCE_PRODUCTS) {
+                for (const { pagetitle, url } of lookupCards) {
+                  const recovered = await runTool("search_catalog", {
+                    mode: "by_pagetitle",
+                    pagetitle,
+                    per_page: 50,
+                  }, ctx);
+                  if (
+                    !recovered.ok || recovered.tool !== "search_catalog"
+                  ) break;
+                  const exact = recovered.results.find((product) => {
+                    const full = ctx.cache.get(String(product.id));
+                    return full &&
+                      renderedCardTitleIdentity(full.pagetitle) ===
+                        renderedCardTitleIdentity(pagetitle) &&
+                      productUrlIdentity(full.url) === url;
+                  });
+                  if (!exact) break;
+                  const full = ctx.cache.get(String(exact.id));
+                  if (!full) break;
+                  recoveredProducts.push(full);
+                }
               }
-              recentProductEvidence = compactRecentProducts(recoveredProducts);
-              if (recentProductEvidence.length > 0) {
+              const complete = recoveredProducts.length === lookupCards.length;
+              const compact = complete
+                ? compactRecentProducts(recoveredProducts)
+                : [];
+              if (complete && compact.length === lookupCards.length) {
+                recentProductEvidence = compact;
                 steps.push({
                   step: "v3_recent_product_evidence_recovered",
                   ms: Date.now() - t0,
                   meta: {
                     count: recentProductEvidence.length,
-                    lookup_titles: lookupTitles.length,
+                    lookup_titles: lookupCards.length,
+                    source: "completed_server_products_block",
                   },
                 });
                 await persistRecentProductEvidence(
                   supabase,
                   effectiveSessionId,
                   recoveredProducts,
+                  true,
                 );
+              } else {
+                steps.push({
+                  step: "v3_recent_product_evidence_unavailable",
+                  ms: Date.now() - t0,
+                  meta: {
+                    source: "completed_server_products_block",
+                    expected_count: lookupCards.length,
+                    recovered_count: recoveredProducts.length,
+                  },
+                });
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось повторно проверить все ранее показанные товары в каталоге. Не буду делать вывод по неполному списку. Повторите полный запрос — проверю актуальные карточки заново.",
+                });
+                productsCount = 0;
+                return;
+              }
+            } else if (!startsNewTask && !activeRenderedProof) {
+              // A stale cache is only a signal to stop a dependent turn; its
+              // rows are never supplied as facts to any branch or model.
+              const staleRows = await loadRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+              );
+              if (
+                browserHasRenderedCard || staleRows.length > 0 ||
+                boundary.reason === "local_followup_reference" ||
+                isEllipticalAttributeFollowup(userMessage)
+              ) {
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось подтвердить прежнюю подборку на сервере. Повторите полный запрос — проверю товары заново.",
+                });
+                steps.push({
+                  step: "v3_recent_product_evidence_unproven_context_stopped",
+                  ms: Date.now() - t0,
+                  meta: {
+                    browser_card: browserHasRenderedCard,
+                    stale_cache_present: staleRows.length > 0,
+                  },
+                });
+                productsCount = 0;
+                return;
               }
             }
             if (recentProductEvidence.length > 0) {
@@ -25545,7 +25782,13 @@ Deno.serve(async (req) => {
             const ellipticalBaseRequest = additionalProductSelectionFollowup
               ? verifiedAdditionalSelection?.baseRequest ?? null
               : ellipticalAttributeFollowup
-              ? latestRenderedSelectionRequest(effectiveHistory)
+              ? (preflightRenderedSelection?.baseRequest ??
+                (activeRenderedProof &&
+                    !isAdditionalProductSelectionFollowup(
+                      activeRenderedProof.baseRequest,
+                    )
+                  ? activeRenderedProof.baseRequest
+                  : null))
               : null;
             const additionalSelectionRequest =
               additionalProductSelectionFollowup &&

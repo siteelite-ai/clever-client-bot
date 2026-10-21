@@ -8,7 +8,8 @@ import type { ProductFull } from "./types.ts";
 import { runWithDeadline } from "./turn-deadline.ts";
 
 const TTL_SECONDS = 30 * 60;
-const MAX_PRODUCTS = 8;
+export const MAX_RECENT_EVIDENCE_PRODUCTS = 8;
+const MAX_PRODUCTS = MAX_RECENT_EVIDENCE_PRODUCTS;
 // The catalog may put a selection-critical measured facet after cosmetic
 // fields. Retain a bounded full card window, then select relevant facts for
 // each follow-up instead of persisting/printing an arbitrary first-five slice.
@@ -256,6 +257,82 @@ export function isRecentProductPriceSelectionFollowup(
     /(?:ссылк|из\s+(?:них|этих|вариантов)|(?:этот|эта|эти|тот|та|те)\s+вариант|вариант\s+(?:выше|из\s+списка))/u
       .test(normalized);
   return hasPriceSuperlative && hasPriorSetReference;
+}
+
+/** Price-only selection from the last verified batch, never a new fit test.
+ * Shared by provenance and terminal routing so both apply one criterion gate. */
+export function isPureRecentPriceFollowup(userMessage: string): boolean {
+  if (!isRecentProductPriceSelectionFollowup(userMessage)) return false;
+  const words = String(userMessage ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/gu, " ").trim().split(" ").filter(Boolean);
+  const allowed = new Set([
+    "а",
+    "ну",
+    "тогда",
+    "пожалуйста",
+    "можно",
+    "мне",
+    "да",
+    "хорошо",
+    "покажи",
+    "покажите",
+    "выведи",
+    "выведите",
+    "дай",
+    "дайте",
+    "найди",
+    "найдите",
+    "какой",
+    "какая",
+    "какие",
+    "который",
+    "самый",
+    "самая",
+    "самые",
+    "дешевый",
+    "дешевая",
+    "дешевые",
+    "недорогой",
+    "недорогая",
+    "недорогие",
+    "доступный",
+    "доступная",
+    "доступные",
+    "дорогой",
+    "дорогая",
+    "дорогие",
+    "бюджетный",
+    "бюджетная",
+    "бюджетные",
+    "премиум",
+    "премьюм",
+    "флагман",
+    "из",
+    "них",
+    "этих",
+    "вариантов",
+    "варианта",
+    "вариант",
+    "этот",
+    "эта",
+    "эти",
+    "тот",
+    "та",
+    "те",
+    "выше",
+    "списка",
+    "ссылку",
+    "ссылка",
+    "на",
+    "товар",
+    "товары",
+    "цена",
+    "цену",
+    "стоит",
+    "сколько",
+  ]);
+  return words.every((word) => allowed.has(word));
 }
 
 /** Returns only the newest rendered batch, never older merged session items. */
@@ -609,13 +686,14 @@ export async function persistRecentProductEvidence(
   products: ProductFull[],
   timeoutMs = 4_000,
   canPersist: () => boolean = () => true,
+  replaceExisting = false,
 ): Promise<void> {
   if (!products.length || !canPersist()) return;
   try {
     await runWithDeadline(async (signal) => {
       const current = compactRecentProducts(products);
       if (!current.length) return;
-      const previous = await loadRecentProductEvidence(
+      const previous = replaceExisting ? [] : await loadRecentProductEvidence(
         supabase,
         sessionId,
         Math.min(2_500, timeoutMs),
