@@ -5,10 +5,11 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import type { ProductFull } from "./types.ts";
+import { detectPriceDirection } from "./price-scope-policy.ts";
 import { runWithDeadline } from "./turn-deadline.ts";
 
 const TTL_SECONDS = 30 * 60;
-export const MAX_RECENT_EVIDENCE_PRODUCTS = 8;
+export const MAX_RECENT_EVIDENCE_PRODUCTS = 10;
 const MAX_PRODUCTS = MAX_RECENT_EVIDENCE_PRODUCTS;
 // The catalog may put a selection-critical measured facet after cosmetic
 // fields. Retain a bounded full card window, then select relevant facts for
@@ -16,7 +17,7 @@ const MAX_PRODUCTS = MAX_RECENT_EVIDENCE_PRODUCTS;
 const MAX_TRAITS = 40;
 const MAX_DISPLAY_TRAITS = 8;
 // Recent cards are a supporting hint in the system prompt, not the primary
-// catalog source. A fixed budget prevents eight verbose cards from consuming
+// catalog source. A fixed budget prevents ten verbose cards from consuming
 // the model context and delaying every subsequent turn.
 const MAX_PROMPT_EVIDENCE_JSON_CHARS = 12_000;
 
@@ -240,23 +241,26 @@ export function isRecentProductShowFollowup(message: string): boolean {
 }
 
 /**
- * A price superlative plus an explicit reference signal means “choose from the
- * products you just showed”, not “start a new catalog selection”. Product
- * nouns are deliberately absent from this classifier: it is structural and
- * cannot grow into a category dictionary.
+ * A ranking request plus an explicit reference signal means “choose from the
+ * products you just showed”, not “start a new catalog selection”. Ranking and
+ * negation use the same classifier as ordinary catalog price requests; this
+ * module only decides whether the request refers to prior cards.
  */
 export function isRecentProductPriceSelectionFollowup(
   message: string,
 ): boolean {
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;
-  const hasPriceSuperlative =
-    /(?:самый\s+(?:дешев|недорог|доступн|дорог)|самые\s+(?:дешев|дорог)|бюджетн|поэконом|премиум|премьюм|флагман)/u
-      .test(normalized);
+  const ranking = detectPriceDirection(normalized);
+  if (ranking?.kind !== "superlative" || ranking.direction === "same") {
+    return false;
+  }
   const hasPriorSetReference =
-    /(?:ссылк|из\s+(?:них|этих|вариантов)|(?:этот|эта|эти|тот|та|те)\s+вариант|вариант\s+(?:выше|из\s+списка))/u
+    /(?:^|[^\p{L}])(?:из|среди)\s+(?:них|этих|тех|показанн\p{L}*|предложенн\p{L}*|(?:этих|тех)\s+(?:вариант|товар|модел|позиц)\p{L}*)(?=$|[^\p{L}])/u
+      .test(normalized) ||
+    /(?:^|[^\p{L}])(?:(?:этот|эта|эти|тот|та|те)\s+(?:вариант|товар|модел|позиц)\p{L}*|(?:вариант|товар|модел|позиц)\p{L}*\s+(?:выше|из\s+списка)|(?:ранее\s+)?(?:показанн|предложенн)\p{L}*\s+(?:вариант|товар|модел|позиц)\p{L}*|ссылк\p{L}*)(?=$|[^\p{L}])/u
       .test(normalized);
-  return hasPriceSuperlative && hasPriorSetReference;
+  return hasPriorSetReference;
 }
 
 /** Price-only selection from the last verified batch, never a new fit test.
@@ -266,73 +270,23 @@ export function isPureRecentPriceFollowup(userMessage: string): boolean {
   const words = String(userMessage ?? "").toLocaleLowerCase("ru-RU")
     .replace(/ё/gu, "е").replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/gu, " ").trim().split(" ").filter(Boolean);
-  const allowed = new Set([
-    "а",
-    "ну",
-    "тогда",
-    "пожалуйста",
-    "можно",
-    "мне",
-    "да",
-    "хорошо",
-    "покажи",
-    "покажите",
-    "выведи",
-    "выведите",
-    "дай",
-    "дайте",
-    "найди",
-    "найдите",
-    "какой",
-    "какая",
-    "какие",
-    "который",
-    "самый",
-    "самая",
-    "самые",
-    "дешевый",
-    "дешевая",
-    "дешевые",
-    "недорогой",
-    "недорогая",
-    "недорогие",
-    "доступный",
-    "доступная",
-    "доступные",
-    "дорогой",
-    "дорогая",
-    "дорогие",
-    "бюджетный",
-    "бюджетная",
-    "бюджетные",
-    "премиум",
-    "премьюм",
-    "флагман",
-    "из",
-    "них",
-    "этих",
-    "вариантов",
-    "варианта",
-    "вариант",
-    "этот",
-    "эта",
-    "эти",
-    "тот",
-    "та",
-    "те",
-    "выше",
-    "списка",
-    "ссылку",
-    "ссылка",
-    "на",
-    "товар",
-    "товары",
-    "цена",
-    "цену",
-    "стоит",
-    "сколько",
-  ]);
-  return words.every((word) => allowed.has(word));
+  if (words.length === 0 || words.some((word) => /\d/u.test(word))) {
+    return false;
+  }
+  // This is a dialogue-form grammar, not a product dictionary. An unknown
+  // content word (colour, size, class, brand, etc.) is a new selection filter
+  // and must not be silently applied to the previously rendered price set.
+  const allowed = [
+    /^(?:а|ну|тогда|пожалуйста|можно|мне|да|хорошо|но|ли|не|и|или|как|что|сколько|есть|с|со|по|на|для|из|среди|них|их|этих|тех|выше|ранее|всех|списка)$/u,
+    /^(?:покажи|покажите|выведи|выведите|дай|дайте|найди|найдите|назови|назовите|назовешь|выбери|выберите|укажи|укажите)$/u,
+    /^(?:как(?:ой|ая|ое|ие|ого|ому|ую|ой|им|их|ими)|котор(?:ый|ая|ое|ые|ого|ому|ую|ой|ым|ых|ыми)|какова)$/u,
+    /^(?:сам(?:ый|ая|ое|ые|ого|ому|ую|ой|ым|ом|ых|ими)|наиболее)$/u,
+    /^(?:дешев|недорог|доступн|дорог|бюджетн|поэконом|подоступн|премиум|премьюм|флагман)\p{L}*$/u,
+    /^(?:минимальн|максимальн|наименьш|наибольш|низш|высш|низк|высок)\p{L}*$/u,
+    /^(?:цен(?:а|ы|е|у|ой|ою|ам|ами|ах)?|стоимост(?:ь|и|ью|ей|ям|ями|ях)|стоит)$/u,
+    /^(?:вариант|товар|модел|позиц|карточ|ссылк|список|показан|предложен|найден)\p{L}*$/u,
+  ];
+  return words.every((word) => allowed.some((pattern) => pattern.test(word)));
 }
 
 /** Returns only the newest rendered batch, never older merged session items. */

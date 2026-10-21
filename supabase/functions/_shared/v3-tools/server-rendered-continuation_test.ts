@@ -84,6 +84,44 @@ function laterTurn(
   });
 }
 
+function certifiedZeroCardTurn(
+  query: string,
+  overrides: Partial<ServerRenderedSelectionLogRow> = {},
+): ServerRenderedSelectionLogRow {
+  const id = typeof overrides.id === "string" ? overrides.id : "later";
+  return laterTurn(query, {
+    id,
+    final_products_count: 0,
+    steps: isNeutralAcknowledgement(query)
+      ? [{ step: "v3_neutral_acknowledgement_no_catalog", ms: 10 }]
+      : [{
+        step: "v3_conversation_boundary",
+        ms: 10,
+        meta: {
+          mode: "continuation",
+          references_rendered_products: true,
+        },
+      }],
+    response_events: [
+      { type: "diagnostic", phase: "start", log_id: id },
+      {
+        type: "delta",
+        origin: "server",
+        content: "Проверил предыдущие варианты.",
+      },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: id,
+        products_count: 0,
+        error: null,
+      },
+      { type: "done" },
+    ],
+    ...overrides,
+  });
+}
+
 function resolved(
   rows: ServerRenderedSelectionLogRow[],
   proposed = base,
@@ -206,12 +244,16 @@ Deno.test("active batch identity is independent of current wording but never ski
   );
   assertEquals(
     resolveServerRenderedSelectionProof(
-      [laterTurn("Спасибо", {
-        id: "newest",
-        created_at: minutesAgo(0.5),
-        final_products_count: 0,
-        response_events: [{ type: "done" }],
-      }), latest, successfulSelection()],
+      [
+        laterTurn("Спасибо", {
+          id: "newest",
+          created_at: minutesAgo(0.5),
+          final_products_count: 0,
+          response_events: [{ type: "done" }],
+        }),
+        latest,
+        successfulSelection(),
+      ],
       sessionId,
       null,
       null,
@@ -220,6 +262,345 @@ Deno.test("active batch identity is independent of current wording but never ski
     null,
     "cannot revive older products across an unclassified newer turn",
   );
+});
+
+Deno.test("generic follow-up crosses only certified completed zero-card dependent turns", () => {
+  const ack = certifiedZeroCardTurn("Спасибо!", {
+    id: "ack",
+    created_at: minutesAgo(2),
+  });
+  const explanation = certifiedZeroCardTurn("Почему эти варианты?", {
+    id: "explanation",
+    created_at: minutesAgo(1),
+  });
+  const proof = resolveServerRenderedSelectionProof(
+    [explanation, successfulSelection(), ack],
+    sessionId,
+    null,
+    null,
+    now,
+  );
+  assertEquals(proof?.baseRequest, base, "original selection scope");
+  assertEquals(
+    proof?.recentShownProductCards[0]?.pagetitle,
+    "Люстра для гостиной",
+    "latest completed cards",
+  );
+  assertEquals(
+    proof?.priorQueriesNewestFirst.join("|"),
+    "Почему эти варианты?|Спасибо!|" + base,
+    "all server-owned turns",
+  );
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [explanation, ack, successfulSelection()],
+      sessionId,
+      "Подбери кабель ВВГ",
+      null,
+      now,
+    ),
+    null,
+    "forged browser base is never authority",
+  );
+});
+
+Deno.test("generic price dialogue keeps only the server-verified active card scope", () => {
+  const certifiedSteps = [
+    {
+      step: "v3_conversation_boundary",
+      meta: { mode: "continuation", references_rendered_products: false },
+    },
+    {
+      step: "v3_verified_rendered_scope_continuation",
+      meta: {
+        base_log_id: "original-selection",
+        latest_card_log_id: "original-selection",
+        recovered_count: 1,
+      },
+    },
+  ];
+  const verifiedPrice = certifiedZeroCardTurn("Какова их стоимость?", {
+    id: "verified-price",
+    created_at: minutesAgo(2),
+    steps: certifiedSteps,
+  });
+  const rows = [verifiedPrice, successfulSelection()];
+  const proof = resolveServerRenderedSelectionProof(
+    rows,
+    sessionId,
+    null,
+    null,
+    now,
+  );
+  assertEquals(proof?.baseRequest, base, "certified price answer keeps base");
+  assertEquals(proof?.latestCardLogId, "original-selection", "card anchor");
+  assertEquals(
+    proof?.priorQueriesNewestFirst.join("|"),
+    "Какова их стоимость?|" + base,
+    "second price question can inherit the verified dialogue",
+  );
+  const extra = laterTurn("А есть другие варианты?", {
+    id: "extra-cards",
+    created_at: minutesAgo(2),
+    steps: [{
+      step: "v3_conversation_boundary",
+      meta: { mode: "continuation", references_rendered_products: true },
+    }],
+  });
+  const afterExtra = certifiedZeroCardTurn("Какова их стоимость?", {
+    id: "price-after-extra",
+    created_at: minutesAgo(1),
+    steps: [
+      certifiedSteps[0],
+      {
+        ...certifiedSteps[1],
+        meta: { ...certifiedSteps[1].meta, latest_card_log_id: "extra-cards" },
+      },
+    ],
+  });
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [afterExtra, extra, successfulSelection()],
+      sessionId,
+      null,
+      null,
+      now,
+    )?.latestCardLogId,
+    "extra-cards",
+    "certificate follows the actual latest card batch",
+  );
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [{ ...afterExtra, steps: certifiedSteps }, extra, successfulSelection()],
+      sessionId,
+      null,
+      null,
+      now,
+    ),
+    null,
+    "an earlier but valid card ID is stale after newer cards",
+  );
+
+  for (const [row, reason] of [
+    [
+      { ...verifiedPrice, steps: certifiedSteps.slice(0, 1) },
+      "missing active-proof certificate",
+    ],
+    [
+      {
+        ...verifiedPrice,
+        steps: certifiedSteps.map((step) =>
+          step.step ===
+              "v3_verified_rendered_scope_continuation"
+            ? {
+              ...step,
+              meta: {
+                base_log_id: "another-selection",
+                latest_card_log_id: "original-selection",
+                recovered_count: 1,
+              },
+            }
+            : step
+        ),
+      },
+      "stale base certificate",
+    ],
+    [
+      { ...verifiedPrice, response_events: [{ type: "done" }] },
+      "partial SSE stream",
+    ],
+    [
+      { ...verifiedPrice, user_query: "Какова их стоимость для кухни?" },
+      "new product criterion",
+    ],
+  ] as const) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [row, successfulSelection()],
+        sessionId,
+        null,
+        null,
+        now,
+      ),
+      null,
+      reason,
+    );
+  }
+});
+
+Deno.test("generic follow-up retains original criteria after certified extra cards and zero-card explanation", () => {
+  const extra = laterTurn("А есть другие варианты?", {
+    id: "extra",
+    created_at: minutesAgo(2),
+    steps: [{
+      step: "v3_conversation_boundary",
+      ms: 10,
+      meta: { mode: "continuation", references_rendered_products: true },
+    }],
+    response_events: [
+      {
+        type: "products_block",
+        markdown:
+          "- **[Вторая люстра](https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/)**",
+        count: 1,
+      },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: "extra",
+        products_count: 1,
+        error: null,
+      },
+      { type: "done" },
+    ],
+  });
+  const explanation = certifiedZeroCardTurn(
+    "Почему эти варианты?",
+    {
+      id: "explanation",
+      created_at: minutesAgo(1),
+    },
+  );
+  const proof = resolveServerRenderedSelectionProof(
+    [explanation, extra, successfulSelection()],
+    sessionId,
+    null,
+    null,
+    now,
+  );
+  assertEquals(proof?.baseRequest, base, "original, not extra-options wording");
+  assertEquals(
+    proof?.recentShownProductCards[0]?.pagetitle,
+    "Вторая люстра",
+    "last rendered batch",
+  );
+  assertEquals(proof?.shownProductUrls.length, 2, "both verified batches only");
+});
+
+Deno.test("generic scope certificate rejects changed task, unclassified zero-card, errors, and partial responses", () => {
+  const original = successfulSelection();
+  const plain = certifiedZeroCardTurn("Спасибо!", { steps: undefined });
+  const changed = certifiedZeroCardTurn("Найди кабель ВВГ 3×1,5", {
+    steps: [{
+      step: "v3_conversation_boundary",
+      ms: 10,
+      meta: { mode: "new_task", references_rendered_products: false },
+    }],
+    response_events: [
+      {
+        type: "conversation_boundary",
+        mode: "new_task",
+        session_id: sessionId,
+      },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: "later",
+        products_count: 0,
+        error: null,
+      },
+      { type: "done" },
+    ],
+  });
+  const malformed = certifiedZeroCardTurn("Почему эти варианты?", {
+    response_events: [{ type: "delta", content: "Ещё проверяю" }],
+  });
+  const ambiguous = certifiedZeroCardTurn("Почему эти варианты?", {
+    steps: [{ step: "v3_active_selection_prepositional_ambiguous", ms: 10 }],
+  });
+  const changedCriterion = certifiedZeroCardTurn(
+    "Они точно подходят для кухни?",
+    {
+      steps: [{
+        step: "v3_conversation_boundary",
+        ms: 10,
+        meta: { mode: "continuation", references_rendered_products: true },
+      }],
+    },
+  );
+  for (
+    const [row, reason] of [
+      [plain, "missing certificate"],
+      [changed, "explicit new task"],
+      [malformed, "partial stream"],
+      [ambiguous, "ambiguous boundary"],
+      [changedCriterion, "changed criterion"],
+      [
+        certifiedZeroCardTurn("Почему эти варианты?", {
+          response_events: [
+            { type: "diagnostic", phase: "start", log_id: "later" },
+            {
+              type: "slot_update",
+              slots: { pending_clarification: { question: "Уточните" } },
+            },
+            {
+              type: "diagnostic",
+              phase: "complete",
+              log_id: "later",
+              products_count: 0,
+              error: null,
+            },
+            { type: "done" },
+          ],
+        }),
+        "new pending interaction",
+      ],
+      [
+        certifiedZeroCardTurn("Почему эти варианты?", {
+          response_events: [
+            { type: "diagnostic", phase: "start", log_id: "later" },
+            {
+              type: "delta",
+              content: "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-3/",
+            },
+            {
+              type: "diagnostic",
+              phase: "complete",
+              log_id: "later",
+              products_count: 0,
+              error: null,
+            },
+            { type: "done" },
+          ],
+        }),
+        "unaccounted catalog link",
+      ],
+      [
+        certifiedZeroCardTurn("Почему эти варианты?", {
+          response_events: [
+            { type: "delta", content: "Готово" },
+            {
+              type: "diagnostic",
+              phase: "complete",
+              log_id: "later",
+              products_count: 0,
+              error: null,
+            },
+            { type: "done" },
+          ],
+        }),
+        "missing start marker",
+      ],
+      [
+        certifiedZeroCardTurn("Почему эти варианты?", {
+          error: "upstream_unavailable",
+        }),
+        "error",
+      ],
+    ] as const
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [row, original],
+        sessionId,
+        null,
+        null,
+        now,
+      ),
+      null,
+      reason,
+    );
+  }
 });
 
 Deno.test("count without valid controlled cards, complete marker, or durable agreement is no proof", () => {
@@ -615,10 +996,17 @@ Deno.test("read-only evidence and price references require unchanged completed s
     ]
   ) {
     const proof = resolveServerRenderedSelectionProof(
-      [original], sessionId, base, question, now,
+      [original],
+      sessionId,
+      base,
+      question,
+      now,
     );
-    assertEquals(proof?.recentShownProductCards[0]?.pagetitle,
-      "Люстра для гостиной", question);
+    assertEquals(
+      proof?.recentShownProductCards[0]?.pagetitle,
+      "Люстра для гостиной",
+      question,
+    );
   }
   for (
     const changed of [
@@ -631,14 +1019,22 @@ Deno.test("read-only evidence and price references require unchanged completed s
   ) {
     assertEquals(
       resolveServerRenderedSelectionProof(
-        [original], sessionId, base, changed, now,
+        [original],
+        sessionId,
+        base,
+        changed,
+        now,
       ),
       null,
       changed,
     );
   }
   const noBrowserCard = resolveServerRenderedSelectionProof(
-    [original], sessionId, null, "Сколько стоят эти товары?", now,
+    [original],
+    sessionId,
+    null,
+    "Сколько стоят эти товары?",
+    now,
   );
   assertEquals(
     noBrowserCard?.recentShownProductCards[0]?.pagetitle,
@@ -647,11 +1043,14 @@ Deno.test("read-only evidence and price references require unchanged completed s
   );
   assertEquals(
     resolveServerRenderedSelectionProof(
-      [laterTurn("Подбери кабель", {
-        error: "upstream_unavailable",
-        final_products_count: 0,
-        response_events: [],
-      }), original],
+      [
+        laterTurn("Подбери кабель", {
+          error: "upstream_unavailable",
+          final_products_count: 0,
+          response_events: [],
+        }),
+        original,
+      ],
       sessionId,
       null,
       "Сколько стоят эти товары?",
@@ -664,7 +1063,8 @@ Deno.test("read-only evidence and price references require unchanged completed s
 
 Deno.test("server card proof retains real formatted titles and canonicalizes controlled URLs", () => {
   const title = "LIGHTING Светильник 1011 40Вт 4000К 1200*54*58мм, белый ИЭК";
-  const url = "https://220volt.kz/catalog/svetotexnika/svetilniki/lighting-1011-1200*54*58mm/?utm_source=widget";
+  const url =
+    "https://220volt.kz/catalog/svetotexnika/svetilniki/lighting-1011-1200*54*58mm/?utm_source=widget";
   const formatted = successfulSelection({
     response_events: [
       {
@@ -683,7 +1083,11 @@ Deno.test("server card proof retains real formatted titles and canonicalizes con
     ],
   });
   const proof = resolveServerRenderedSelectionProof(
-    [formatted], sessionId, base, "Почему эти варианты?", now,
+    [formatted],
+    sessionId,
+    base,
+    "Почему эти варианты?",
+    now,
   );
   assertEquals(proof?.recentShownProductCards[0]?.pagetitle, title, "title");
   assertEquals(

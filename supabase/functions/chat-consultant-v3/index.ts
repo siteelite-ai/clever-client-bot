@@ -216,6 +216,7 @@ import {
 import {
   isNeutralAcknowledgement,
   resolveServerRenderedSelectionProof,
+  type ServerRenderedProductCard,
   type ServerRenderedSelectionProof,
 } from "../_shared/v3-tools/server-rendered-continuation.ts";
 import {
@@ -7614,6 +7615,133 @@ function renderedCardTitleIdentity(value: string): string {
     .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
 }
 
+const RECENT_BATCH_REFRESH_CONCURRENCY = 3;
+const RECENT_BATCH_REFRESH_MAX_MS = 20_000;
+const RECENT_CARD_LOOKUP_TIMEOUT_MS = 5_000;
+
+/** Refresh a completed server-rendered batch, not browser history or a stale
+ * cache. Equal titles share one lookup, but each distinct URL must still be
+ * found exactly once. Work stays bounded even for the full ten-card renderer.
+ * No partial result is committed to the turn cache or passed to price proof. */
+async function rehydrateServerRenderedBatch(
+  cards: ServerRenderedProductCard[],
+  ctx: ToolContext,
+  t0: number,
+): Promise<{
+  products: ProductFull[];
+  recoveredCount: number;
+  catalogRequests: number;
+}> {
+  if (
+    cards.length === 0 || cards.length > MAX_RECENT_EVIDENCE_PRODUCTS ||
+    cards.some((card) =>
+      !renderedCardTitleIdentity(card.pagetitle) ||
+      !productUrlIdentity(card.url)
+    )
+  ) return { products: [], recoveredCount: 0, catalogRequests: 0 };
+
+  const grouped = new Map<string, {
+    title: string;
+    cards: Array<{ card: ServerRenderedProductCard; index: number }>;
+  }>();
+  cards.forEach((card, index) => {
+    const key = renderedCardTitleIdentity(card.pagetitle);
+    const group = grouped.get(key) ?? { title: card.pagetitle, cards: [] };
+    group.cards.push({ card, index });
+    grouped.set(key, group);
+  });
+  const groups = [...grouped.values()];
+  const products: Array<ProductFull | null> = Array(cards.length).fill(null);
+  const remainingTurnMs = MAX_ACCEPTED_WORK_MS - 5_000 - (Date.now() - t0);
+  const budgetMs = Math.min(RECENT_BATCH_REFRESH_MAX_MS, remainingTurnMs);
+  if (budgetMs < 500 || ctx.turnSignal?.aborted) {
+    return { products: [], recoveredCount: 0, catalogRequests: 0 };
+  }
+  const deadlineAt = Date.now() + budgetMs;
+  const controller = new AbortController();
+  const signal = ctx.turnSignal
+    ? AbortSignal.any([controller.signal, ctx.turnSignal])
+    : controller.signal;
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  let nextGroup = 0;
+  let recoveredCount = 0;
+  let catalogRequests = 0;
+  let failed = false;
+  try {
+    const workers = Array.from({
+      length: Math.min(RECENT_BATCH_REFRESH_CONCURRENCY, groups.length),
+    }, async () => {
+      while (!failed && !signal.aborted) {
+        const group = groups[nextGroup++];
+        if (!group) return;
+        const timeoutMs = Math.min(
+          RECENT_CARD_LOOKUP_TIMEOUT_MS,
+          deadlineAt - Date.now(),
+        );
+        if (timeoutMs < 500) {
+          failed = true;
+          controller.abort();
+          return;
+        }
+        // A private cache per request avoids concurrent lookups overwriting
+        // each other's IDs and prevents a failed batch from entering egress.
+        const lookupCache: ProductCache = new Map();
+        catalogRequests++;
+        const result = await executeSearchCatalog({
+          mode: "by_pagetitle",
+          pagetitle: group.title,
+          per_page: 50,
+        }, {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+          singleRequest: true,
+          signal,
+          timeoutMs,
+        }, lookupCache);
+        ctx.observeCatalogToolResult?.(result);
+        if (signal.aborted) return;
+        if (!result.ok) {
+          failed = true;
+          controller.abort();
+          return;
+        }
+        for (const { card, index } of group.cards) {
+          const exact = result.results.filter((ref) => {
+            const product = lookupCache.get(String(ref.id));
+            return product &&
+              renderedCardTitleIdentity(product.pagetitle) ===
+                renderedCardTitleIdentity(card.pagetitle) &&
+              productUrlIdentity(product.url) === card.url;
+          });
+          if (exact.length !== 1) {
+            failed = true;
+            controller.abort();
+            return;
+          }
+          products[index] = lookupCache.get(String(exact[0].id)) ?? null;
+          if (!products[index]) {
+            failed = true;
+            controller.abort();
+            return;
+          }
+          recoveredCount++;
+        }
+      }
+    });
+    await Promise.all(workers);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (
+    failed || signal.aborted || recoveredCount !== cards.length ||
+    products.some((product) => !product) ||
+    new Set(products.map((product) => product!.id)).size !== cards.length
+  ) return { products: [], recoveredCount, catalogRequests };
+  const complete = products as ProductFull[];
+  for (const product of complete) ctx.cache.set(product.id, product);
+  return { products: complete, recoveredCount, catalogRequests };
+}
+
 function refreshRecentProductSet(
   evidence: RecentProductEvidence[],
   ctx: ToolContext,
@@ -7663,10 +7791,7 @@ async function selectVerifiedRecentShowFollowup(
     return { handled: false, products: [] };
   }
   const started = Date.now();
-  const liveProducts = refreshRecentProductSet(evidence, ctx).slice(
-    0,
-    5,
-  );
+  const liveProducts = refreshRecentProductSet(evidence, ctx);
   const elapsed = Date.now() - started;
   if (liveProducts.length === 0) {
     send({
@@ -8131,7 +8256,7 @@ async function loadServerRenderedSelectionProof(
     const createdAfter = activeSelectionScopeLookupCreatedAfter(requestStartedAt);
     const createdBefore = new Date(requestStartedAt).toISOString();
     const columns =
-      "id,session_id,user_query,error,final_products_count,response_events,created_at";
+      "id,session_id,user_query,error,final_products_count,response_events,steps,created_at";
     const [sessionRead, boundaryRead] = await runWithDeadline(
       () => Promise.all([
         supabase.from("chat_request_logs")
@@ -25666,42 +25791,39 @@ Deno.serve(async (req) => {
               // Rehydrate the *entire* latest batch. A partial set cannot
               // justify a cheapest claim, a comparison, or "these products".
               const lookupCards = activeRenderedProof.recentShownProductCards;
-              const recoveredProducts: ProductFull[] = [];
-              if (lookupCards.length <= MAX_RECENT_EVIDENCE_PRODUCTS) {
-                for (const { pagetitle, url } of lookupCards) {
-                  const recovered = await runTool("search_catalog", {
-                    mode: "by_pagetitle",
-                    pagetitle,
-                    per_page: 50,
-                  }, ctx);
-                  if (
-                    !recovered.ok || recovered.tool !== "search_catalog"
-                  ) break;
-                  const exact = recovered.results.find((product) => {
-                    const full = ctx.cache.get(String(product.id));
-                    return full &&
-                      renderedCardTitleIdentity(full.pagetitle) ===
-                        renderedCardTitleIdentity(pagetitle) &&
-                      productUrlIdentity(full.url) === url;
-                  });
-                  if (!exact) break;
-                  const full = ctx.cache.get(String(exact.id));
-                  if (!full) break;
-                  recoveredProducts.push(full);
-                }
-              }
+              const refresh = await rehydrateServerRenderedBatch(
+                lookupCards,
+                ctx,
+                t0,
+              );
+              const recoveredProducts = refresh.products;
               const complete = recoveredProducts.length === lookupCards.length;
               const compact = complete
                 ? compactRecentProducts(recoveredProducts)
                 : [];
               if (complete && compact.length === lookupCards.length) {
                 recentProductEvidence = compact;
+                // This durable server-owned certificate is used by the next
+                // turn if the present generic evidence question completes
+                // without a new products_block. It is tied to the exact
+                // prior selection and batch, not to browser history or a
+                // broad lexical follow-up guess.
+                steps.push({
+                  step: "v3_verified_rendered_scope_continuation",
+                  ms: Date.now() - t0,
+                  meta: {
+                    base_log_id: activeRenderedProof.baseLogId,
+                    latest_card_log_id: activeRenderedProof.latestCardLogId,
+                    recovered_count: compact.length,
+                  },
+                });
                 steps.push({
                   step: "v3_recent_product_evidence_recovered",
                   ms: Date.now() - t0,
                   meta: {
                     count: recentProductEvidence.length,
                     lookup_titles: lookupCards.length,
+                    catalog_requests: refresh.catalogRequests,
                     source: "completed_server_products_block",
                   },
                 });
@@ -25718,7 +25840,8 @@ Deno.serve(async (req) => {
                   meta: {
                     source: "completed_server_products_block",
                     expected_count: lookupCards.length,
-                    recovered_count: recoveredProducts.length,
+                    recovered_count: refresh.recoveredCount,
+                    catalog_requests: refresh.catalogRequests,
                   },
                 });
                 send({

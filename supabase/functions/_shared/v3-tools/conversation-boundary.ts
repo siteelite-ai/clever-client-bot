@@ -523,6 +523,13 @@ export async function classifyConversationBoundary(
       source: "local",
     };
   }
+  // Browser history may be empty after a reload even when this session has
+  // older server-side selection state. A self-contained request must keep its
+  // new-task boundary independently of that client-carried history.
+  const localDecision = classifyConversationBoundaryLocally(userMessage);
+  if (localDecision?.mode === "new_task") {
+    return { ...localDecision, source: "local" };
+  }
   if (!hasPriorUserTurn(priorHistory)) {
     return {
       mode: "continuation",
@@ -532,7 +539,6 @@ export async function classifyConversationBoundary(
     };
   }
 
-  const localDecision = classifyConversationBoundaryLocally(userMessage);
   if (localDecision) return { ...localDecision, source: "local" };
 
   const localController = new AbortController();

@@ -100,7 +100,7 @@ Deno.test("catalog QA rejects disabled, missing and wrong secrets before DB or c
   }
 });
 
-Deno.test("catalog QA uses current settings and emits sanitized two-route result without AI calls", async () => {
+Deno.test("catalog QA uses current settings and emits sanitized three-route result without AI calls", async () => {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -145,6 +145,13 @@ Deno.test("catalog QA uses current settings and emits sanitized two-route result
         );
         return json({ data: { results: [healthyProduct] } });
       }
+      if (url.pathname === "/api/categories/options") {
+        assertEquals(url.searchParams.get("pagetitle"), "Root");
+        return json({ data: {
+          category: { id: 1, pagetitle: "Root", total_products: 1 },
+          options: [{ key: "type", caption_ru: "Type", values: [] }],
+        } });
+      }
     }
     throw new Error(`unexpected outbound route: ${url.origin}${url.pathname}`);
   }) as typeof fetch;
@@ -160,16 +167,59 @@ Deno.test("catalog QA uses current settings and emits sanitized two-route result
       checks: {
         categories: { status: "ok", http_status: 200 },
         products: { status: "ok", http_status: 200 },
+        facets: { status: "ok", http_status: 200 },
       },
     });
     assert(!body.includes("private-") && !body.includes("fixture."));
     assertEquals(
       routes.filter((route) => route.startsWith("GET /api/")).length,
-      2,
+      3,
     );
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("catalog QA reports facets 503 after healthy base routes, without AI or body leakage", async () => {
+  const originalFetch = globalThis.fetch;
+  const routes: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    routes.push(url.pathname);
+    if (url.pathname === "/rest/v1/app_settings") {
+      return json({ volt220_api_token: "private-catalog-do-not-expose" });
+    }
+    if (url.pathname === "/api/categories") {
+      return json({ data: { results: [{ id: 1, pagetitle: "Root", children: [] }] } });
+    }
+    if (url.pathname === "/api/products") {
+      return json({ data: { results: [healthyProduct] } });
+    }
+    if (url.pathname === "/api/categories/options") {
+      return json({ secret_body: "not-public" }, 503);
+    }
+    throw new Error(`unexpected route ${url.pathname}`);
+  }) as typeof fetch;
+  try {
+    const response = await invoke({ type: "catalog_health_preflight" }, secret);
+    assertEquals(response.status, 503);
+    const body = await response.text();
+    const parsed = JSON.parse(body);
+    assertEquals(parsed.classification, "upstream");
+    assertEquals(parsed.checks.categories.status, "ok");
+    assertEquals(parsed.checks.products.status, "ok");
+    assertEquals(parsed.checks.facets.http_status, 503);
+    assertEquals(routes, [
+      "/rest/v1/app_settings", "/api/categories", "/api/products",
+      "/api/categories/options",
+    ]);
+    for (const privateValue of ["private-catalog", "secret_body", "Root"]) {
+      assert(!body.includes(privateValue));
+    }
+  } finally {
     globalThis.fetch = originalFetch;
   }
 });

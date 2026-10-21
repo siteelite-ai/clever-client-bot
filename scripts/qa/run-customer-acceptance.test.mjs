@@ -50,7 +50,7 @@ test('remote and strict acceptance require a private catalog probe before paid t
   ]) assert.equal(trustedCatalogPreflightEndpoint(untrusted), false);
 });
 
-test('catalog preflight sends only the private probe and recognizes both healthy API paths', async () => {
+test('catalog preflight sends only the private probe and requires all three healthy API paths', async () => {
   const previewHeader = { 'x-volt-preview-secret': 'p'.repeat(32) };
   const previewEndpoint = `${DEFAULT_ENDPOINT}-preview`;
   const requests = [];
@@ -64,6 +64,7 @@ test('catalog preflight sends only the private probe and recognizes both healthy
       return new Response(JSON.stringify({ ok: true, status: 'ready', checks: {
         categories: { status: 'ok', http_status: 200 },
         products: { status: 'ok', http_status: 200 },
+        facets: { status: 'ok', http_status: 200 },
       } }), { status: 200 });
     },
   });
@@ -83,6 +84,8 @@ test('catalog preflight fails closed on outages and malformed success without re
   for (const [status, body, classification] of [
     [503, JSON.stringify({ ok: false, status: 'unavailable', classification: 'upstream', error: malicious }), 'upstream'],
     [200, JSON.stringify({ ok: true, status: 'ready', checks: { products: { status: 'ok', http_status: 200 } }, error: malicious }), 'schema_error'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { categories: { status: 'ok', http_status: 200 }, products: { status: 'ok', http_status: 200 } } }), 'schema_error'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { categories: { status: 'ok', http_status: 200 }, products: { status: 'ok', http_status: 200 }, facets: { status: 'unavailable', http_status: 503 } } }), 'schema_error'],
     [404, JSON.stringify({ error: malicious }), 'route'],
   ]) {
     const result = await runCatalogHealthPreflight({

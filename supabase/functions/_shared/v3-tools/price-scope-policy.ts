@@ -43,6 +43,31 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+/** Relative price-tier words are preferences, not catalog-wide proof. Exclude
+ * explicitly rejected tiers before they can become a positive ranking intent. */
+function positiveRelativePriceTier(
+  text: string,
+): PriceDirection | null {
+  const tiers = [
+    { direction: "cheaper", pattern: /(?<![\p{L}\p{N}])(?:бюджетн|поэконом|подоступн)\p{L}*(?![\p{L}])/gu },
+    { direction: "more_expensive", pattern: /(?<![\p{L}\p{N}])(?:премиум|премьюм|топов|подсолидн|флагман)\p{L}*(?![\p{L}])/gu },
+  ] as const;
+  const positive = new Set<PriceDirection>();
+  for (const { direction, pattern } of tiers) {
+    for (const match of text.matchAll(pattern)) {
+      if (match.index === undefined) continue;
+      const before = text.slice(0, match.index).split(/[.!?;,—]/u).at(-1) ?? "";
+      const after = text.slice(match.index + match[0].length).split(/[.!?;,—]/u, 1)[0];
+      const prefixNegated = /(?<![\p{L}\p{N}])не\s+(?:(?:хочу|ищу|нужен|нужна|нужно|нужны|надо|обязательно|именно|самый|самая|самое|самые)\s+){0,3}$/u
+        .test(before);
+      const suffixNegated = /^(?:\s+(?!(?:и|или|а|но)(?!\p{L}))[\p{L}\p{N}-]+){0,4}\s+не\s+(?:нужен|нужна|нужно|нужны|подходит|хочу)(?!\p{L})/u
+        .test(after);
+      if (!prefixNegated && !suffixNegated) positive.add(direction);
+    }
+  }
+  return positive.size === 1 ? [...positive][0] : null;
+}
+
 function absolutePricePhrases(text: string): Array<{ direction: CatalogPriceExtreme; negated: boolean }> {
   const matches: Array<{ direction: CatalogPriceExtreme; start: number; end: number }> = [];
   for (const [direction, patterns] of [
@@ -126,17 +151,8 @@ export function detectPriceDirection(message: string): PriceIntent | null {
   // Relative price-tier preferences remain candidate ranking only; the
   // separate explicit-extreme classifier decides whether a catalog-wide
   // minimum/maximum disclosure is required.
-  if (
-    /(?:бюджетн|поэконом|подоступн|премиум|премьюм|топов|подсолидн|флагман)/u
-      .test(text)
-  ) {
-    return {
-      kind: "superlative",
-      direction: /(?:бюджетн|поэконом|подоступн)/u.test(text)
-        ? "cheaper"
-        : "more_expensive",
-    };
-  }
+  const tier = positiveRelativePriceTier(text);
+  if (tier) return { kind: "superlative", direction: tier };
   return null;
 }
 

@@ -22,12 +22,18 @@ export interface ServerRenderedSelectionLogRow {
   error: unknown;
   final_products_count: unknown;
   response_events: unknown;
+  /** Optional durable server-side boundary steps; never browser-supplied. */
+  steps?: unknown;
   created_at: unknown;
 }
 
 export interface ServerRenderedSelectionProof {
   /** Exact request that produced the original completed server-side batch. */
   baseRequest: string;
+  /** Durable log identities bind later zero-card scope certificates to this
+   * exact server-owned selection and most recently rendered card batch. */
+  baseLogId: string;
+  latestCardLogId: string;
   /** Only URL identities actually rendered in completed, durable batches. */
   shownProductUrls: string[];
   /** Product titles and identities copied from completed server products_block
@@ -47,6 +53,7 @@ const MAX_ROWS = 9;
 const MAX_QUERY_CHARS = 2_000;
 const MAX_EVENT_COUNT = 2_000;
 const MAX_EVENT_MARKDOWN_CHARS = 100_000;
+const MAX_STEP_COUNT = 2_000;
 const PROOF_TTL_MS = 30 * 60 * 1_000;
 const FUTURE_SKEW_MS = 5 * 60 * 1_000;
 
@@ -98,9 +105,10 @@ function isNeutralRenderedEvidenceQuestion(query: string): boolean {
   if (
     clauses.length === 0 || clauses.length > 4 ||
     /\d/u.test(normalized) ||
-    /(?:^|\s)(?:для|в|во|на|под)\s+(?!(?:чем|наличии)(?:$|[^\p{L}]))\p{L}+/u.test(
-      normalized,
-    )
+    /(?:^|\s)(?:для|в|во|на|под)\s+(?!(?:чем|наличии)(?:$|[^\p{L}]))\p{L}+/u
+      .test(
+        normalized,
+      )
   ) return false;
   const words = normalized.match(/\p{L}+/gu) ?? [];
   const evidenceIntent =
@@ -108,7 +116,7 @@ function isNeutralRenderedEvidenceQuestion(query: string): boolean {
       .test(normalized);
   return evidenceIntent && words.length > 0 && words.length <= 40 &&
     words.every((word) =>
-      /^(?:а|ну|тогда|пожалуйста|почему|чем|как|что|сколько|есть|какие|какой|какая|какое|это|этот|эта|эти|этого|этих|этим|этими|они|он|она|их|ними|них|между|из|по|у|ли|не|и|с|со|от|в|точно|действительно|ранее|перв\p{L}*|втор\p{L}*|треть\p{L}*|показан\p{L}*|предложен\p{L}*|подтвержден\p{L}*|сравн\p{L}*|отлич\p{L}*|разниц\p{L}*|подход\p{L}*|вариант\p{L}*|товар\p{L}*|модел\p{L}*|карточ\p{L}*|характеристик\p{L}*|параметр\p{L}*|цен\p{L}*|стоимост\p{L}*|сто[яи]т|остат\p{L}*|налич\p{L}*|остал\p{L}*)$/u
+      /^(?:а|ну|тогда|пожалуйста|почему|чем|как|что|сколько|есть|какие|какой|какая|какое|какова|это|этот|эта|эти|этого|этих|этим|этими|они|он|она|их|ними|них|между|из|по|у|ли|не|и|с|со|от|в|точно|действительно|ранее|перв\p{L}*|втор\p{L}*|треть\p{L}*|показан\p{L}*|предложен\p{L}*|подтвержден\p{L}*|сравн\p{L}*|отлич\p{L}*|разниц\p{L}*|подход\p{L}*|вариант\p{L}*|товар\p{L}*|модел\p{L}*|карточ\p{L}*|характеристик\p{L}*|параметр\p{L}*|цен\p{L}*|стоимост\p{L}*|сто[яи]т|остат\p{L}*|налич\p{L}*|остал\p{L}*)$/u
         .test(word)
     );
 }
@@ -233,6 +241,179 @@ function completedControlledCards(
     : null;
 }
 
+/** A zero-card row must be a normally completed public response, not merely a
+ * database count of zero. Any emitted new-task boundary ends the old scope. */
+function completedZeroCardResponse(
+  row: ServerRenderedSelectionLogRow,
+): boolean {
+  if (
+    row.error !== null || row.final_products_count !== 0 ||
+    !Array.isArray(row.response_events) ||
+    row.response_events.length < 2 ||
+    row.response_events.length > MAX_EVENT_COUNT
+  ) return false;
+  let starts = 0;
+  let completions = 0;
+  for (let index = 0; index < row.response_events.length; index++) {
+    const event = record(row.response_events[index]);
+    if (!event || typeof event.type !== "string") return false;
+    // A clarification, scope update, contact block or price certificate is
+    // another active interaction, not a neutral zero-card bridge. Model prose
+    // containing a catalog URL could be an uncounted card, so never skip it.
+    if (![
+      "diagnostic",
+      "delta",
+      "tool_event",
+      "assistant_turn_break",
+      "done",
+    ].includes(event.type)) {
+      return false;
+    }
+    if (
+      event.type === "delta" &&
+      (typeof event.content !== "string" ||
+        /https:\/\/220volt\.kz\/catalog\//iu.test(event.content))
+    ) return false;
+    if (event.type === "diagnostic" && event.phase === "start") {
+      if (index !== 0 || ++starts !== 1 || event.log_id !== row.id) {
+        return false;
+      }
+    }
+    if (event.type === "diagnostic" && event.phase === "complete") {
+      if (
+        index !== row.response_events.length - 2 || ++completions !== 1 ||
+        event.log_id !== row.id || event.products_count !== 0 ||
+        event.error != null
+      ) return false;
+    }
+    if (
+      event.type === "done" &&
+      index !== row.response_events.length - 1
+    ) return false;
+  }
+  return starts === 1 && completions === 1 &&
+    record(row.response_events.at(-1))?.type === "done";
+}
+
+/** A server-owned decision is mandatory before a dependent row may be
+ * traversed. The deterministic acknowledgement route is its own certificate:
+ * it exits before the boundary classifier and cannot start a catalog task.
+ * Ordinary rows need the persisted boundary decision *and* proof that the
+ * rendered-product scope was checked in that turn. Query grammar alone is
+ * never a continuation certificate. */
+function hasDurableContinuationCertificate(
+  row: ServerRenderedSelectionLogRow,
+  query: string,
+  base: ServerRenderedSelectionLogRow,
+  latestCard: ServerRenderedSelectionLogRow,
+  latestCardCount: number,
+): boolean {
+  if (
+    !isUnchangedDependentTurn(
+      query,
+      base.user_query as string,
+      "А есть другие варианты?",
+    ) ||
+    !Array.isArray(row.steps) || row.steps.length === 0 ||
+    row.steps.length > MAX_STEP_COUNT ||
+    !Array.isArray(row.response_events) ||
+    row.response_events.some((raw) =>
+      record(raw)?.type === "conversation_boundary"
+    )
+  ) return false;
+  const steps = row.steps.map(record);
+  if (steps.some((step) => !step || typeof step.step !== "string")) {
+    return false;
+  }
+  const boundarySteps = steps.filter((step) =>
+    step?.step === "v3_conversation_boundary"
+  );
+  const acknowledgementSteps = steps.filter((step) =>
+    step?.step === "v3_neutral_acknowledgement_no_catalog"
+  );
+  if (isNeutralAcknowledgement(query)) {
+    return row.final_products_count === 0 &&
+      acknowledgementSteps.length === 1 && boundarySteps.length === 0;
+  }
+  if (acknowledgementSteps.length !== 0 || boundarySteps.length !== 1) {
+    return false;
+  }
+  const meta = record(boundarySteps[0]?.meta);
+  if (meta?.mode !== "continuation") return false;
+  if (meta.references_rendered_products === true) return true;
+  // Some generic questions about existing cards are recognised only after
+  // routing, by the server-side active-proof read. The prior request must
+  // have fully rehydrated that exact rendered batch; a browser assertion or
+  // a lexical continuation decision alone cannot bridge this zero-card row.
+  const activeProofSteps = steps.filter((step) =>
+    step?.step === "v3_verified_rendered_scope_continuation"
+  );
+  if (activeProofSteps.length !== 1) return false;
+  const verified = record(activeProofSteps[0]?.meta);
+  return Boolean(verified && verified.base_log_id === base.id &&
+    verified.latest_card_log_id === latestCard.id &&
+    verified.recovered_count === latestCardCount && latestCardCount > 0);
+}
+
+function proofFromVerifiedChain(
+  ordered: readonly {
+    row: ServerRenderedSelectionLogRow;
+    query: string;
+  }[],
+  baseIndex: number,
+  latestCardIndex: number,
+  suggested: string | null,
+): ServerRenderedSelectionProof | null {
+  const base = ordered[baseIndex];
+  const baseCards = completedControlledCards(base.row);
+  if (!baseCards || suggested !== null && suggested !== base.query) {
+    return null;
+  }
+  const seenUrls = new Set<string>();
+  const shownProductUrls: string[] = [];
+  let recentShownProductCards = baseCards;
+  let previousCardRow = base.row;
+  let previousCardCount = baseCards.length;
+  for (let index = baseIndex; index >= 0; index--) {
+    const { row, query } = ordered[index];
+    if (
+      index < baseIndex &&
+      !hasDurableContinuationCertificate(
+        row,
+        query,
+        base.row,
+        previousCardRow,
+        previousCardCount,
+      )
+    ) return null;
+    if (row.final_products_count === 0) {
+      if (!completedZeroCardResponse(row)) return null;
+      continue;
+    }
+    const cards = index === baseIndex
+      ? baseCards
+      : completedControlledCards(row);
+    if (!cards) return null;
+    previousCardRow = row;
+    previousCardCount = cards.length;
+    if (index === latestCardIndex) recentShownProductCards = cards;
+    for (const { url } of cards) {
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      shownProductUrls.push(url);
+    }
+  }
+  return {
+    baseRequest: base.row.user_query as string,
+    baseLogId: base.row.id as string,
+    latestCardLogId: ordered[latestCardIndex].row.id as string,
+    shownProductUrls,
+    recentShownProductCards,
+    priorQueriesNewestFirst: ordered.slice(0, baseIndex + 1)
+      .map(({ row }) => row.user_query as string),
+  };
+}
+
 /**
  * Resolve an elliptical “more options” request from server-owned evidence.
  * Browser history is only a candidate string, never authority: the original
@@ -242,7 +423,9 @@ function completedControlledCards(
  *
  * A failed *dependent* follow-up does not become proof; its logged customer
  * wording merely keeps the chain of dependence intact. An unfinished prior
- * turn cannot be ordered safely and therefore blocks recovery entirely.
+ * turn cannot be ordered safely and therefore blocks recovery entirely. The
+ * generic `currentFollowup=null` route is stricter: every skipped row must
+ * have a completed response and a durable server-owned scope certificate.
  */
 export function resolveServerRenderedSelectionProof(
   rows: readonly ServerRenderedSelectionLogRow[],
@@ -258,11 +441,11 @@ export function resolveServerRenderedSelectionProof(
     !Number.isFinite(now) ||
     currentFollowup !== null && typeof currentFollowup !== "string" ||
     currentFollowup !== null && !(
-      isAdditionalProductSelectionFollowup(currentFollowup) ||
-      isEvidenceOnlyFollowup(currentFollowup) ||
-      isRecentProductShowFollowup(currentFollowup) ||
-      isRecentProductPriceSelectionFollowup(currentFollowup)
-    )
+        isAdditionalProductSelectionFollowup(currentFollowup) ||
+        isEvidenceOnlyFollowup(currentFollowup) ||
+        isRecentProductShowFollowup(currentFollowup) ||
+        isRecentProductPriceSelectionFollowup(currentFollowup)
+      )
   ) return null;
   // A missing browser card is not permission to trust a cached product. In
   // that case derive the active base entirely from the latest durable server
@@ -306,19 +489,48 @@ export function resolveServerRenderedSelectionProof(
     )
   ) return null;
   if (currentFollowup === null) {
-    // Provenance is independent of the wording of the *current* question.
-    // Only the newest completed server turn is usable here: an intervening
-    // zero-card or failed turn might have begun another task, and the log has
-    // no intent certificate that would let us safely skip over it.
-    const latest = ordered[0];
-    const cards = completedControlledCards(latest.row);
-    return cards
-      ? {
-        baseRequest: latest.row.user_query as string,
-        shownProductUrls: cards.map(({ url }) => url),
-        recentShownProductCards: cards,
-        priorQueriesNewestFirst: [latest.row.user_query as string],
+    // The current wording does not prove provenance. Cross zero-card replies
+    // only when each completed row carries the server's continuation decision.
+    // This also recovers the original criteria behind a completed "more
+    // options" batch instead of treating that elliptical wording as a base.
+    let latestCardIndex = -1;
+    for (let index = 0; index < ordered.length; index++) {
+      const row = ordered[index].row;
+      if (row.final_products_count === 0) {
+        if (!completedZeroCardResponse(row)) return null;
+        continue;
       }
+      if (!completedControlledCards(row)) return null;
+      latestCardIndex = index;
+      break;
+    }
+    if (latestCardIndex < 0) return null;
+    const latestCards = ordered[latestCardIndex];
+    if (!structurallyDependent(latestCards.query)) {
+      return proofFromVerifiedChain(
+        ordered,
+        latestCardIndex,
+        latestCardIndex,
+        suggested,
+      );
+    }
+    const baseIndex = ordered.findIndex((entry, index) =>
+      index > latestCardIndex && !structurallyDependent(entry.query)
+    );
+    if (baseIndex >= 0) {
+      const proof = proofFromVerifiedChain(
+        ordered,
+        baseIndex,
+        latestCardIndex,
+        suggested,
+      );
+      if (proof) return proof;
+    }
+    // Existing completed rows predate persisted boundary steps. Preserve the
+    // old latest-batch-only behavior for those rows, but never use it to skip
+    // a zero-card turn or a newer certified/ambiguous boundary.
+    return latestCardIndex === 0 && latestCards.row.steps === undefined
+      ? proofFromVerifiedChain(ordered, 0, 0, suggested)
       : null;
   }
   const baseIndex = ordered.findIndex(({ query }) =>
@@ -340,6 +552,7 @@ export function resolveServerRenderedSelectionProof(
   const shownProductUrls = baseCards.map(({ url }) => url);
   const seenUrls = new Set(shownProductUrls);
   let recentShownProductCards = baseCards;
+  let latestCardLogId = base.row.id as string;
   // A dependent turn can be a failed or zero-card answer. If it claims to
   // have rendered cards, the whole completed batch must validate before its
   // URLs can be trusted as exclusions for "other options".
@@ -357,6 +570,7 @@ export function resolveServerRenderedSelectionProof(
     const cards = completedControlledCards(row);
     if (!cards) return null;
     recentShownProductCards = cards;
+    latestCardLogId = row.id as string;
     for (const { url } of cards) {
       if (seenUrls.has(url)) continue;
       seenUrls.add(url);
@@ -365,6 +579,8 @@ export function resolveServerRenderedSelectionProof(
   }
   return {
     baseRequest,
+    baseLogId: base.row.id as string,
+    latestCardLogId,
     shownProductUrls,
     recentShownProductCards,
     priorQueriesNewestFirst: [

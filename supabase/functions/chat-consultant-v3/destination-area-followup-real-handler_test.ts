@@ -12,6 +12,11 @@ import {
 } from "./model-no-search-integration-fixture.ts";
 import "./index.ts";
 
+// The fixture restores the native env accessor after each isolated case.
+// Reinstall the already-captured offline accessor before the next case so
+// `env: false` remains a genuine no-network/no-secrets integration test.
+const offlineEnvGet = Deno.env.get;
+
 type Step = { step?: string; meta?: Record<string, unknown> };
 type Event = Record<string, unknown>;
 type ServerLog = {
@@ -21,6 +26,7 @@ type ServerLog = {
   error: string | null;
   final_products_count: number;
   response_events: Event[];
+  steps?: Step[];
   created_at: string;
 };
 
@@ -152,6 +158,9 @@ interface Run {
   steps: Step[];
   catalogRequests: number;
   catalogProductReads: number;
+  catalogProductPeakInFlight: number;
+  catalogProductReadsAfterAbort: number;
+  catalogTitleLookups: string[];
   primaryReasoningRequests: number;
   correctionRequests: number;
   modelRequests: number;
@@ -172,8 +181,13 @@ async function runFollowup({
   latestServerBatch = false,
   serverBatchProducts = [products[0]],
   catalogProducts = products,
+  catalogProductDelayMs = 0,
+  catalogFailTitle = null,
+  catalogFailMode = null,
   rawReasoning = areaOnlyReasoning,
   interveningUserTurns = [],
+  interveningServerRows = null,
+  certifiedNeutralBridge = false,
 }: {
   baseRequest?: string;
   /** Browser history is a candidate, never authority for a prior request. */
@@ -187,10 +201,18 @@ async function runFollowup({
   latestServerBatch?: boolean;
   serverBatchProducts?: typeof products;
   catalogProducts?: typeof products;
+  catalogProductDelayMs?: number;
+  catalogFailTitle?: string | null;
+  catalogFailMode?: "status" | "hang_until_abort" | null;
   rawReasoning?: string;
   /** Completed dependent turns between the rendered batch and this request. */
   interveningUserTurns?: string[];
+  /** Exact completed server rows, used to replay a prior handler turn. */
+  interveningServerRows?: ServerLog[] | null;
+  /** Model-free server acknowledgement with a completed zero-card response. */
+  certifiedNeutralBridge?: boolean;
 } = {}): Promise<Run> {
+  Deno.env.get = offlineEnvGet;
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -220,22 +242,46 @@ async function runFollowup({
         { type: "done" },
       ],
     } satisfies ServerLog] : []),
-    ...interveningUserTurns.map((query, index): ServerLog => ({
-      id: `offline-dependent-${index}`,
-      session_id: sessionId,
-      user_query: query,
-      error: null,
-      final_products_count: 0,
-      created_at: new Date(
-        Date.now() - 1_500 + index * 100,
-      ).toISOString(),
-      response_events: [{ type: "done" }],
-    })).reverse(),
+    ...(interveningServerRows ?? interveningUserTurns.map((query, index): ServerLog => {
+      const id = `offline-dependent-${index}`;
+      const certified = certifiedNeutralBridge && query === "Спасибо.";
+      return {
+        id,
+        session_id: sessionId,
+        user_query: query,
+        error: null,
+        final_products_count: 0,
+        created_at: new Date(
+          Date.now() - 1_500 + index * 100,
+        ).toISOString(),
+        response_events: certified
+          ? [
+            { type: "diagnostic", phase: "start", log_id: id },
+            { type: "delta", content: "Пожалуйста! Обращайтесь." },
+            {
+              type: "diagnostic",
+              phase: "complete",
+              log_id: id,
+              error: null,
+              products_count: 0,
+            },
+            { type: "done" },
+          ]
+          : [{ type: "done" }],
+        ...(certified
+          ? { steps: [{ step: "v3_neutral_acknowledgement_no_catalog" }] }
+          : {}),
+      };
+    }).reverse()),
     ...(omitPriorLog ? [] : [prior]),
   ];
   let steps: Step[] = [];
   let catalogRequests = 0;
   let catalogProductReads = 0;
+  let catalogProductInFlight = 0;
+  let catalogProductPeakInFlight = 0;
+  let catalogProductReadsAfterAbort = 0;
+  const catalogTitleLookups: string[] = [];
   let primaryReasoningRequests = 0;
   let correctionRequests = 0;
   let modelRequests = 0;
@@ -274,7 +320,19 @@ async function runFollowup({
             // history. This two-turn dialogue has no session rotation.
             if (url.searchParams.has("response_events")) return json(null);
             const limit = Number(url.searchParams.get("limit") ?? 8);
-            return json(priorRows.slice(0, Number.isFinite(limit) ? limit : 8));
+            const selected = priorRows.slice(
+              0,
+              Number.isFinite(limit) ? limit : 8,
+            );
+            // A real PostgREST projection cannot return steps unless the
+            // handler requested that column. Keep this offline boundary real.
+            const projection = url.searchParams.get("select") ?? "";
+            return json(
+              projection.includes("final_products_count") &&
+                  !projection.includes("steps")
+                ? selected.map(({ steps: _steps, ...row }) => row)
+                : selected,
+            );
           }
         }
         if (url.pathname === "/rest/v1/app_settings") {
@@ -365,12 +423,58 @@ async function runFollowup({
         }
         if (url.pathname === "/api/products") {
           catalogProductReads++;
-          return json({
-            data: {
-              results: catalogProducts,
-              pagination: { total: catalogProducts.length },
-            },
-          });
+          catalogProductInFlight++;
+          catalogProductPeakInFlight = Math.max(
+            catalogProductPeakInFlight,
+            catalogProductInFlight,
+          );
+          if (request.signal.aborted) catalogProductReadsAfterAbort++;
+          const title = url.searchParams.get("pagetitle");
+          if (title) catalogTitleLookups.push(title);
+          try {
+            if (title === catalogFailTitle && catalogFailMode === "status") {
+              return json({ message: "catalog unavailable" }, 503);
+            }
+            if (
+              title === catalogFailTitle &&
+              catalogFailMode === "hang_until_abort"
+            ) {
+              await new Promise<never>((_, reject) => {
+                if (request.signal.aborted) {
+                  reject(new DOMException("aborted", "AbortError"));
+                  return;
+                }
+                request.signal.addEventListener("abort", () =>
+                  reject(new DOMException("aborted", "AbortError")), {
+                  once: true,
+                });
+              });
+            }
+            if (catalogProductDelayMs > 0) {
+              await new Promise<void>((resolve, reject) => {
+                if (request.signal.aborted) {
+                  reject(new DOMException("aborted", "AbortError"));
+                  return;
+                }
+                const timer = setTimeout(resolve, catalogProductDelayMs);
+                request.signal.addEventListener("abort", () => {
+                  clearTimeout(timer);
+                  reject(new DOMException("aborted", "AbortError"));
+                }, { once: true });
+              });
+            }
+            const matching = title
+              ? catalogProducts.filter((product) => product.pagetitle === title)
+              : catalogProducts;
+            return json({
+              data: {
+                results: matching,
+                pagination: { total: matching.length },
+              },
+            });
+          } finally {
+            catalogProductInFlight--;
+          }
         }
       }
       if (url.toString() === "https://openrouter.ai/api/v1/chat/completions") {
@@ -484,7 +588,8 @@ async function runFollowup({
             history: [
               { role: "user", content: historyBaseRequest },
               { role: "assistant", content: historyCard },
-              ...interveningUserTurns.flatMap((query) => [
+              ...(interveningServerRows?.map((row) => row.user_query) ??
+                interveningUserTurns).flatMap((query) => [
                 { role: "user", content: query },
                 {
                   role: "assistant",
@@ -502,6 +607,9 @@ async function runFollowup({
       steps,
       catalogRequests,
       catalogProductReads,
+      catalogProductPeakInFlight,
+      catalogProductReadsAfterAbort,
+      catalogTitleLookups,
       primaryReasoningRequests,
       correctionRequests,
       modelRequests,
@@ -516,12 +624,17 @@ async function runFollowup({
   }
 }
 
-function blocks(events: Event[]): Array<{ markdown?: string; count?: number }> {
+function blocks(events: Event[]): Array<{
+  markdown?: string;
+  count?: number;
+  total_available?: number;
+}> {
   return events.flatMap((event) => {
     const block = event.v3_event as {
       type?: string;
       markdown?: string;
       count?: number;
+      total_available?: number;
     } | undefined;
     return block?.type === "products_block" ? [block] : [];
   });
@@ -1244,16 +1357,16 @@ Deno.test({
           item(id, `fixture-${id}`, `Светильник для гостиной ${id}`, "для гостиной", 35)
         ),
       ];
-      const unsupportedNineCardPrice = await runFollowup({
+      const nineCardPriceWithoutVerifiedUnit = await runFollowup({
         followupMessage: "Какая из них самая дешевая?",
         serverBatchProducts: oversizedBatch,
         catalogProducts: oversizedBatch,
       });
-      assertEquals(unsupportedNineCardPrice.catalogProductReads, 0);
-      assertEquals(blocks(unsupportedNineCardPrice.events).length, 0);
+      assertEquals(nineCardPriceWithoutVerifiedUnit.catalogProductReads, 9);
+      assertEquals(blocks(nineCardPriceWithoutVerifiedUnit.events).length, 0);
       assert(
-        publicText(unsupportedNineCardPrice.events).includes("неполному списку"),
-        JSON.stringify(unsupportedNineCardPrice),
+        publicText(nineCardPriceWithoutVerifiedUnit.events).includes("единица продажи"),
+        JSON.stringify(nineCardPriceWithoutVerifiedUnit),
       );
 
       const unclassifiedDeictic = await runFollowup({
@@ -1390,6 +1503,459 @@ Deno.test({
       assert(
         publicText(omittedAndUnverified.events).includes("Повторите полный запрос"),
         JSON.stringify(omittedAndUnverified),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+function eightCardBatch() {
+  return [
+    products[0],
+    products[1],
+    ...[3, 4, 5, 6, 7, 8].map((id) =>
+      item(
+        id,
+        `fixture-${id}`,
+        `Светильник для гостиной ${id}`,
+        "для гостиной",
+        35,
+      )
+    ),
+  ].map((product) => ({
+    ...product,
+    price: product.id === 8 ? 750 : 2_000 + product.id,
+    options: [
+      ...product.options,
+      {
+        key: "edinica_izmereniya",
+        caption_ru: "Единица измерения",
+        value_ru: "шт",
+      },
+    ],
+  }));
+}
+
+function tenCardBatch() {
+  return [
+    ...eightCardBatch(),
+    ...[9, 10].map((id) => ({
+      ...item(
+        id,
+        `fixture-${id}`,
+        `Светильник для гостиной ${id}`,
+        "для гостиной",
+        35,
+      ),
+      price: id === 10 ? 500 : 2_000 + id,
+      options: [{
+        key: "edinica_izmereniya",
+        caption_ru: "Единица измерения",
+        value_ru: "шт",
+      }],
+    })),
+  ];
+}
+
+Deno.test({
+  name: "ten-card server batch stays complete, bounded and fail-closed across show and cheapest follow-ups",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const fullBatch = tenCardBatch();
+      const winner = fullBatch[9];
+      const cheapest = await runFollowup({
+        followupMessage: "Покажи из них самый дешёвый",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+        catalogProductDelayMs: 20,
+      });
+      assertEquals(cheapest.modelRequests, 0, JSON.stringify(cheapest.steps));
+      assertEquals(cheapest.catalogProductReads, 10);
+      assertEquals(cheapest.catalogProductReadsAfterAbort, 0);
+      assert(
+        cheapest.catalogProductPeakInFlight > 1 &&
+          cheapest.catalogProductPeakInFlight <= 3,
+        JSON.stringify(cheapest),
+      );
+      assert(
+        cheapest.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_recovered" &&
+          meta?.count === 10 &&
+          meta?.catalog_requests === 10
+        ),
+        JSON.stringify(cheapest.steps),
+      );
+      assert(
+        cheapest.steps.some(({ step, meta }) =>
+          step === "v3_recent_price_followup_rendered" &&
+          meta?.compared_count === 10 &&
+          meta?.selected_id === String(winner.id)
+        ),
+        JSON.stringify(cheapest.steps),
+      );
+      const cheapestBlocks = blocks(cheapest.events);
+      assertEquals(cheapestBlocks.length, 1, JSON.stringify(cheapest));
+      assertEquals(cheapestBlocks[0].count, 1);
+      assertEquals(cheapestBlocks[0].total_available, 10);
+      assert(cheapestBlocks[0].markdown?.includes(winner.url));
+
+      const show = await runFollowup({
+        followupMessage: "Покажи их",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+      });
+      assertEquals(show.modelRequests, 0, JSON.stringify(show.steps));
+      assertEquals(show.catalogProductReads, 10);
+      const shownBlocks = blocks(show.events);
+      assertEquals(shownBlocks.length, 1, JSON.stringify(show));
+      assertEquals(shownBlocks[0].count, 10);
+      assertEquals(shownBlocks[0].total_available, 10);
+      for (const product of fullBatch) {
+        assert(shownBlocks[0].markdown?.includes(product.url));
+      }
+
+      const missing = await runFollowup({
+        followupMessage: "Покажи из них самый дешёвый",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch.slice(0, -1),
+      });
+      assertEquals(blocks(missing.events).length, 0, JSON.stringify(missing));
+      assertEquals(missing.modelRequests, 0);
+      assert(
+        publicText(missing.events).includes("неполному списку") &&
+          !publicText(missing.events).includes("минимальная цена"),
+        JSON.stringify(missing),
+      );
+      assert(
+        missing.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_unavailable" &&
+          meta?.expected_count === 10 &&
+          meta?.recovered_count === 9
+        ),
+        JSON.stringify(missing.steps),
+      );
+
+      const failedFirstRequest = await runFollowup({
+        followupMessage: "Покажи из них самый дешёвый",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+        catalogProductDelayMs: 20,
+        catalogFailTitle: fullBatch[0].pagetitle,
+        catalogFailMode: "status",
+      });
+      assertEquals(blocks(failedFirstRequest.events).length, 0);
+      assertEquals(failedFirstRequest.modelRequests, 0);
+      assert(failedFirstRequest.catalogProductReads <= 3);
+      assertEquals(failedFirstRequest.catalogProductReadsAfterAbort, 0);
+
+      const timeout = await runFollowup({
+        followupMessage: "Покажи из них самый дешёвый",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+        catalogFailTitle: fullBatch[9].pagetitle,
+        catalogFailMode: "hang_until_abort",
+      });
+      assertEquals(blocks(timeout.events).length, 0, JSON.stringify(timeout));
+      assertEquals(timeout.modelRequests, 0);
+      assert(timeout.catalogProductReads <= 10);
+      assert(timeout.catalogProductPeakInFlight <= 3);
+      assertEquals(timeout.catalogProductReadsAfterAbort, 0);
+      assert(
+        publicText(timeout.events).includes("неполному списку"),
+        JSON.stringify(timeout),
+      );
+
+      const sharedTitle = fullBatch.map((product, index) => index === 9
+        ? { ...product, pagetitle: fullBatch[0].pagetitle }
+        : product);
+      const duplicateTitleShow = await runFollowup({
+        followupMessage: "Покажи их",
+        serverBatchProducts: sharedTitle,
+        catalogProducts: sharedTitle,
+      });
+      assertEquals(duplicateTitleShow.modelRequests, 0);
+      assertEquals(duplicateTitleShow.catalogProductReads, 9);
+      assertEquals(blocks(duplicateTitleShow.events)[0]?.count, 10);
+      assertEquals(
+        duplicateTitleShow.catalogTitleLookups.filter((title) =>
+          title === fullBatch[0].pagetitle
+        ).length,
+        1,
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "cheapest follow-up compares the entire eight-card server-rendered batch",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const fullBatch = eightCardBatch();
+      const winner = fullBatch[7];
+      const result = await runFollowup({
+        followupMessage: "Покажи из них самый дешёвый",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+      });
+
+      assertEquals(result.modelRequests, 0, JSON.stringify(result));
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_recovered" &&
+          meta?.source === "completed_server_products_block" &&
+          meta?.count === fullBatch.length &&
+          meta?.lookup_titles === fullBatch.length
+        ),
+        JSON.stringify(result.steps),
+      );
+      const recoveredCache = result.cacheWrites.find((write) => {
+        const cached = (write as {
+          cache_value?: { products?: Array<{ url?: string }> };
+        }).cache_value?.products;
+        return cached?.length === fullBatch.length;
+      }) as {
+        cache_value: { products: Array<{ url?: string }> };
+      } | undefined;
+      assert(recoveredCache, JSON.stringify(result.cacheWrites));
+      assertEquals(
+        new Set(recoveredCache.cache_value.products.map((entry) => entry.url)),
+        new Set(fullBatch.map((product) => product.url)),
+      );
+
+      const rendered = blocks(result.events);
+      assertEquals(rendered.length, 1, JSON.stringify(result));
+      assertEquals(rendered[0].count, 1, JSON.stringify(result));
+      assertEquals(rendered[0].total_available, fullBatch.length);
+      assert(rendered[0].markdown?.includes(winner.url), JSON.stringify(result));
+      for (const other of fullBatch.slice(0, -1)) {
+        assert(!rendered[0].markdown?.includes(other.url), JSON.stringify(result));
+      }
+      assert(
+        publicText(result.events).includes(`Среди ${fullBatch.length} ранее показанных товаров`),
+        JSON.stringify(result),
+      );
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_recent_price_followup_rendered" &&
+          meta?.latest_evidence_count === fullBatch.length &&
+          meta?.compared_count === fullBatch.length &&
+          meta?.selected_id === String(winner.id) &&
+          meta?.selected_price === winner.price
+        ),
+        JSON.stringify(result.steps),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "natural feminine cheapest follow-up chooses from the entire verified batch",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const fullBatch = eightCardBatch();
+      const winner = fullBatch[7];
+      const result = await runFollowup({
+        followupMessage: "Какая из них самая дешевая?",
+        serverBatchProducts: fullBatch,
+        catalogProducts: fullBatch,
+      });
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_recovered" &&
+          meta?.count === fullBatch.length
+        ),
+        JSON.stringify(result.steps),
+      );
+      assertEquals(result.modelRequests, 0, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_recent_price_followup_rendered" &&
+          meta?.compared_count === fullBatch.length &&
+          meta?.selected_id === String(winner.id)
+        ),
+        JSON.stringify(result.steps),
+      );
+      const rendered = blocks(result.events);
+      assertEquals(rendered.length, 1, JSON.stringify(result.steps));
+      assertEquals(rendered[0].total_available, fullBatch.length);
+      assert(rendered[0].markdown?.includes(winner.url));
+      for (const other of fullBatch.slice(0, -1)) {
+        assert(!rendered[0].markdown?.includes(other.url));
+      }
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "generic follow-up restores only a certified server batch after a zero-card acknowledgement",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const priorProducts = [products[0], products[1]];
+      const proved = await runFollowup({
+        followupMessage: "Какова их стоимость?",
+        interveningUserTurns: ["Спасибо."],
+        certifiedNeutralBridge: true,
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assert(
+        proved.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_recovered" &&
+          meta?.source === "completed_server_products_block" &&
+          meta?.count === priorProducts.length
+        ),
+        JSON.stringify(proved.steps),
+      );
+      assertEquals(proved.catalogProductReads, priorProducts.length);
+      assert(
+        proved.steps.some(({ step, meta }) =>
+          step === "v3_conversation_boundary" &&
+          meta?.mode === "continuation"
+        ),
+        JSON.stringify(proved.steps),
+      );
+
+      const uncertified = await runFollowup({
+        followupMessage: "Какова их стоимость?",
+        interveningUserTurns: ["Спасибо."],
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assert(
+        !uncertified.steps.some(({ step }) =>
+          step === "v3_recent_product_evidence_recovered"
+        ),
+        JSON.stringify(uncertified.steps),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "two generic price questions retain only a fully verified server card scope",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const priorProducts = [products[0], products[1]];
+      const first = await runFollowup({
+        followupMessage: "Какова их стоимость?",
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assertEquals(blocks(first.events).length, 0, JSON.stringify(first.steps));
+      assert(
+        first.steps.some(({ step, meta }) =>
+          step === "v3_conversation_boundary" &&
+          meta?.mode === "continuation" &&
+          meta?.references_rendered_products === false
+        ),
+        JSON.stringify(first.steps),
+      );
+      assert(
+        first.steps.some(({ step, meta }) =>
+          step === "v3_verified_rendered_scope_continuation" &&
+          meta?.base_log_id === "offline-completed-prior" &&
+          meta?.latest_card_log_id === "offline-completed-prior" &&
+          meta?.recovered_count === priorProducts.length
+        ),
+        JSON.stringify(first.steps),
+      );
+      const firstLogId = "offline-first-price-followup";
+      const firstLog: ServerLog = {
+        id: firstLogId,
+        session_id: sessionId,
+        user_query: "Какова их стоимость?",
+        error: null,
+        final_products_count: 0,
+        response_events: first.events.flatMap((event) =>
+          event.v3_event && typeof event.v3_event === "object"
+            ? [event.v3_event as Event]
+            : []
+        ).map((event) => event.type === "diagnostic"
+          ? { ...event, log_id: firstLogId }
+          : event).concat({ type: "done" }),
+        steps: first.steps,
+        created_at: new Date(Date.now() - 1_000).toISOString(),
+      };
+      assert(
+        firstLog.response_events.some((event) =>
+          event.type === "diagnostic" && event.phase === "start"
+        ) && firstLog.response_events.some((event) =>
+          event.type === "diagnostic" && event.phase === "complete"
+        ) && firstLog.response_events.at(-1)?.type === "done",
+        JSON.stringify(firstLog.response_events),
+      );
+      const second = await runFollowup({
+        followupMessage: "Сколько они стоят?",
+        interveningServerRows: [firstLog],
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assert(
+        second.steps.some(({ step, meta }) =>
+          step === "v3_recent_product_evidence_recovered" &&
+          meta?.count === priorProducts.length
+        ),
+        JSON.stringify(second.steps),
+      );
+      assertEquals(second.catalogProductReads, priorProducts.length);
+      assert(
+        second.steps.some(({ step, meta }) =>
+          step === "v3_conversation_boundary" && meta?.mode === "continuation"
+        ),
+        JSON.stringify(second.steps),
+      );
+      const stale = await runFollowup({
+        followupMessage: "Сколько они стоят?",
+        interveningServerRows: [{
+          ...firstLog,
+          steps: firstLog.steps?.map((step) =>
+            step.step === "v3_verified_rendered_scope_continuation"
+              ? {
+                ...step,
+                meta: { ...step.meta, base_log_id: "stale-selection" },
+              }
+              : step
+          ),
+        }],
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assert(
+        !stale.steps.some(({ step }) =>
+          step === "v3_recent_product_evidence_recovered"
+        ),
+        JSON.stringify(stale.steps),
+      );
+      const partial = await runFollowup({
+        followupMessage: "Сколько они стоят?",
+        interveningServerRows: [{
+          ...firstLog,
+          response_events: firstLog.response_events.filter((event) =>
+            event.type !== "done"
+          ),
+        }],
+        serverBatchProducts: priorProducts,
+        catalogProducts: priorProducts,
+      });
+      assert(
+        !partial.steps.some(({ step }) =>
+          step === "v3_recent_product_evidence_recovered"
+        ),
+        JSON.stringify(partial.steps),
       );
     } finally {
       restoreOfflineModuleSetup();

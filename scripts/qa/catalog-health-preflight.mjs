@@ -1,8 +1,10 @@
-/** A private, bounded catalog check before any paid customer-acceptance turn. */
+/** A private, bounded representative-route check before paid acceptance.
+ * Exact customer category health still needs the separate private route probe. */
 export const CATALOG_QA_SECRET_ENV = 'VOLT220_V3_CATALOG_QA_SECRET';
 export const CATALOG_QA_SECRET_HEADER = 'x-catalog-qa-secret';
-// The Edge probe performs two parallel checks with an 8 s server deadline.
-export const CATALOG_PREFLIGHT_TIMEOUT_MS = 12_000;
+// Settings load (8 s), parallel base routes (8 s), then one validated live
+// facet route (8 s). Keep one bounded outer deadline above their maximum.
+export const CATALOG_PREFLIGHT_TIMEOUT_MS = 28_000;
 
 const projectOrigin = 'https://yngoixmvmxdfxokuafjp.supabase.co';
 const functionPaths = new Set([
@@ -137,7 +139,9 @@ export async function runCatalogHealthPreflight({
     try { body = JSON.parse(raw); } catch { return result(false, 'schema_error', status); }
     if (status === 200 && body?.ok === true && body.status === 'ready' &&
       body.checks?.categories?.status === 'ok' && body.checks?.products?.status === 'ok' &&
-      body.checks.categories.http_status === 200 && body.checks.products.http_status === 200) {
+      body.checks?.facets?.status === 'ok' &&
+      body.checks.categories.http_status === 200 && body.checks.products.http_status === 200 &&
+      body.checks.facets.http_status === 200) {
       return result(true, null, status);
     }
     const serverClassification = body?.classification;

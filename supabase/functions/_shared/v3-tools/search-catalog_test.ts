@@ -42,6 +42,55 @@ Deno.test("server-only single-request identity lookup issues exactly one GET on 
   }
 });
 
+Deno.test("single-request rendered-title lookup uses one bounded page without retry or pagination", async () => {
+  for (const status of [200, 429]) {
+    const urls: string[] = [];
+    const result = await executeSearchCatalog({
+      mode: "by_pagetitle", pagetitle: "Светильник TEST", per_page: 50,
+    }, {
+      baseUrl: "https://catalog.test", apiToken: "test", singleRequest: true,
+      fetchImpl: (input) => {
+        urls.push(String(input));
+        return Promise.resolve(new Response(JSON.stringify({
+          data: { results: [], pagination: { total: 0 } },
+        }), { status, headers: { "content-type": "application/json" } }));
+      },
+    }, new Map());
+    assertEquals(urls.length, 1);
+    const url = new URL(urls[0]);
+    assertEquals(url.searchParams.get("pagetitle"), "Светильник TEST");
+    assertEquals(url.searchParams.get("per_page"), "50");
+    assertEquals(url.searchParams.get("page"), null);
+    assertEquals(result.ok, status === 200);
+  }
+});
+
+Deno.test("single-request rendered-title lookup rejects wider or scoped requests before HTTP", async () => {
+  let calls = 0;
+  for (const extra of [
+    { per_page: 51 },
+    { per_page: 1.5 },
+    { page: 2 },
+    { category: "Светильники" },
+    { min_price: 100 },
+    { max_price: 1000 },
+    { options: { color: ["white"] } },
+    { sort_cheapest: true },
+  ]) {
+    const result = await executeSearchCatalog({
+      mode: "by_pagetitle", pagetitle: "Светильник TEST", ...extra,
+    }, {
+      baseUrl: "https://catalog.test", apiToken: "test", singleRequest: true,
+      fetchImpl: () => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    }, new Map());
+    assertEquals(result.ok, false);
+  }
+  assertEquals(calls, 0);
+});
+
 Deno.test("single-request mode rejects category, facet and sorting fan-out before HTTP", async () => {
   let calls = 0;
   for (const extra of [

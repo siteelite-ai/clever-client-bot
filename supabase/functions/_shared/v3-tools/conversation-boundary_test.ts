@@ -180,6 +180,106 @@ Deno.test("complete local request does not spend a remote classifier call", asyn
   assertEquals(calls, 0);
 });
 
+Deno.test("complete new tasks keep their boundary when client history has no prior user turn", async () => {
+  let calls = 0;
+  const deps = {
+    apiKey: "test",
+    model: "test-model",
+    fetchImpl: () => {
+      calls += 1;
+      return Promise.reject(new Error("remote classifier must not be called"));
+    },
+  };
+  const cases: Array<{
+    message: string;
+    history: ConversationMessage[];
+    reason: string;
+  }> = [
+    {
+      message: "Найди кабель ВВГ 3*1,5 самый дешевый",
+      history: [],
+      reason: "local_complete_request",
+    },
+    {
+      message: "Мне нужен бытовой светильник с датчиком движения до 4000 тенге",
+      history: [{ role: "assistant", content: "Здравствуйте!" }],
+      reason: "local_complete_request",
+    },
+    {
+      message: "Новая тема: найди кабель ВВГ 3*1,5",
+      history: [],
+      reason: "local_explicit_new_task",
+    },
+  ];
+  for (const { message, history, reason } of cases) {
+    const result = await classifyConversationBoundary(
+      message,
+      history,
+      {},
+      deps,
+    );
+    assertEquals(result.mode, "new_task", message);
+    assertEquals(result.reason, reason, message);
+    assertEquals(result.source, "local", message);
+    assertEquals(shouldStartNewConversation(result), true, message);
+  }
+  assertEquals(calls, 0);
+});
+
+Deno.test("empty client history does not turn dependent replies into new tasks", async () => {
+  let calls = 0;
+  const deps = {
+    apiKey: "test",
+    model: "test-model",
+    fetchImpl: () => {
+      calls += 1;
+      return Promise.reject(new Error("remote classifier must not be called"));
+    },
+  };
+  for (const message of ["А есть белые?", "А есть другие варианты?", "35 м²"]) {
+    const result = await classifyConversationBoundary(message, [], {}, deps);
+    assertEquals(result, {
+      mode: "continuation",
+      confidence: 1,
+      reason: "no_prior_user_turn",
+      source: "fallback",
+    }, message);
+  }
+  assertEquals(calls, 0);
+});
+
+Deno.test("pending server clarification still outranks the empty-history new-task precheck", async () => {
+  let calls = 0;
+  const result = await classifyConversationBoundary(
+    "120 м², высота 4 м",
+    [],
+    {
+      pending_clarification: {
+        status: "pending",
+        scope: {
+          kind: "selection_readiness",
+          token: "Нужен прожектор на улицу для двора",
+        },
+      },
+    },
+    {
+      apiKey: "test",
+      model: "test-model",
+      fetchImpl: () => {
+        calls += 1;
+        return Promise.reject(new Error("remote classifier must not be called"));
+      },
+    },
+  );
+  assertEquals(result, {
+    mode: "continuation",
+    confidence: 1,
+    reason: "local_server_scoped_clarification",
+    source: "local",
+  });
+  assertEquals(calls, 0);
+});
+
 Deno.test("a server-scoped clarification answer never spends a boundary-model call", async () => {
   let calls = 0;
   const result = await classifyConversationBoundary(

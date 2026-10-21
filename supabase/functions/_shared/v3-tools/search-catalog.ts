@@ -779,12 +779,21 @@ export async function executeSearchCatalog(
   }
 
   if (deps.singleRequest) {
+    // Rechecking an already rendered card may need a wider *single page* to
+    // disambiguate duplicate titles. The caller must still prove its exact
+    // URL before using the result; this path never paginates, retries or
+    // broadens the query.
+    const oneTitlePage = input.mode === "by_pagetitle" &&
+      (input.per_page === undefined ||
+        (Number.isSafeInteger(input.per_page) && input.per_page >= 1 &&
+          input.per_page <= 50));
     if (
-      (input.mode !== "by_article" && input.mode !== "by_query") ||
+      (input.mode !== "by_article" && input.mode !== "by_query" && !oneTitlePage) ||
       input.category || input.category_in?.length || input.options ||
+      input.min_price !== undefined || input.max_price !== undefined ||
       input.sort_cheapest || input.sort_expensive ||
       (input.page !== undefined && input.page !== 1) ||
-      (input.per_page !== undefined && input.per_page > 3)
+      (!oneTitlePage && input.per_page !== undefined && input.per_page > 3)
     ) {
       return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "single-request mode requires one unscoped exact identity lookup" };
     }

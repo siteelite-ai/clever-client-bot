@@ -16,6 +16,18 @@ const HEALTHY_PRODUCT = {
   pagetitle: "Fixture product",
   price: 100,
   url: "https://220volt.kz/catalog/test/fixtures/product/",
+  category: { id: 7, pagetitle: "Live leaf & parts" },
+};
+const HEALTHY_CATEGORIES = [{
+  id: 1,
+  pagetitle: "Root",
+  children: [{ id: 7, pagetitle: "Live leaf & parts", children: [] }],
+}];
+const HEALTHY_FACETS = {
+  data: {
+    category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 },
+    options: [{ key: "color", caption_ru: "Color", values: [{ value_ru: "white", products_count: 1 }] }],
+  },
 };
 
 function json(value: unknown, status = 200): Response {
@@ -61,20 +73,25 @@ Deno.test("catalog QA classifies upstream statuses without exposing response bod
   }
 });
 
-Deno.test("catalog QA uses the real V3 taxonomy query and authenticated product route", async () => {
-  const requests: Array<{ url: URL; auth: string | null }> = [];
+Deno.test("catalog QA validates a live product leaf before the authenticated facets route", async () => {
+  const requests: Array<{ url: URL; auth: string | null; redirect: RequestRedirect }> = [];
   const result = await runCatalogHealthPreflight({
     baseUrl: BASE,
     apiToken: "fixture-private-token",
     fetchImpl: (async (input, init) => {
       const req = new Request(input, init);
       const url = new URL(req.url);
-      requests.push({ url, auth: req.headers.get("authorization") });
-      return url.pathname.endsWith("/categories")
-        ? json({
-          data: { results: [{ id: 1, pagetitle: "Root", children: [] }] },
-        })
-        : json({ data: { results: [HEALTHY_PRODUCT] } });
+      requests.push({ url, auth: req.headers.get("authorization"), redirect: req.redirect });
+      if (url.pathname.endsWith("/categories")) {
+        return json({ data: { results: HEALTHY_CATEGORIES } });
+      }
+      if (url.pathname.endsWith("/products")) {
+        return json({ data: { results: [HEALTHY_PRODUCT] } });
+      }
+      if (url.pathname.endsWith("/categories/options")) {
+        return json(HEALTHY_FACETS);
+      }
+      throw new Error(`unexpected path ${url.pathname}`);
     }) as typeof fetch,
   });
   assertEquals(result, {
@@ -83,16 +100,20 @@ Deno.test("catalog QA uses the real V3 taxonomy query and authenticated product 
     checks: {
       categories: { status: "ok", http_status: 200 },
       products: { status: "ok", http_status: 200 },
+      facets: { status: "ok", http_status: 200 },
     },
   });
-  assertEquals(requests.length, 2);
+  assertEquals(requests.length, 3);
   const categories = requests.find(({ url }) =>
     url.pathname.endsWith("/categories")
   );
   const products = requests.find(({ url }) =>
     url.pathname.endsWith("/products")
   );
-  assert(categories && products);
+  const facets = requests.find(({ url }) =>
+    url.pathname.endsWith("/categories/options")
+  );
+  assert(categories && products && facets);
   assertEquals(categories.url.origin, "https://fixture.catalog.invalid");
   assertEquals(
     categories.url.searchParams.toString(),
@@ -104,6 +125,42 @@ Deno.test("catalog QA uses the real V3 taxonomy query and authenticated product 
   );
   assertEquals(categories.auth, "Bearer fixture-private-token");
   assertEquals(products.auth, "Bearer fixture-private-token");
+  assertEquals(facets.auth, "Bearer fixture-private-token");
+  assertEquals(facets.redirect, "error");
+  assertEquals(facets.url.searchParams.get("pagetitle"), "Live leaf & parts");
+  assertEquals(facets.url.search, "?pagetitle=Live+leaf+%26+parts");
+});
+
+Deno.test("catalog QA prefers a usable product's exact live leaf over unrelated taxonomy order", async () => {
+  const categories = [{ id: 1, pagetitle: "Root", children: [
+    { id: 7, pagetitle: "Product leaf", children: [] },
+    { id: 8, pagetitle: "Unrelated leaf", children: [] },
+  ] }];
+  const product = {
+    ...HEALTHY_PRODUCT,
+    category: { id: 7, pagetitle: "Product leaf" },
+  };
+  let requestedLeaf: string | null = null;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) {
+        return json({ data: { results: categories } });
+      }
+      if (url.pathname.endsWith("/products")) {
+        return json({ data: { results: [product] } });
+      }
+      requestedLeaf = url.searchParams.get("pagetitle");
+      return json({ data: {
+        category: { id: 7, pagetitle: "Product leaf", total_products: 1 },
+        options: [],
+      } });
+    }) as typeof fetch,
+  });
+  assertEquals(requestedLeaf, "Product leaf");
+  assertEquals(result.ok, true);
+  assert(!JSON.stringify(result).includes("Product leaf"));
 });
 
 Deno.test("catalog QA retains independent results and never mistakes 500 for empty stock", async () => {
@@ -124,6 +181,7 @@ Deno.test("catalog QA retains independent results and never mistakes 500 for emp
     classification: "upstream",
   });
   assertEquals(result.checks.products, { status: "ok", http_status: 200 });
+  assertEquals(result.checks.facets, undefined);
   assert(!JSON.stringify(result).includes("private_error"));
   assert(!JSON.stringify(result).includes("fixture-private-token"));
 });
@@ -172,6 +230,93 @@ Deno.test("catalog QA classifies bounded transport failure", async () => {
   assertEquals(result.classification, "transport");
   assertEquals(result.checks.categories.http_status, null);
   assertEquals(result.checks.products.http_status, null);
+});
+
+Deno.test("catalog QA treats facets 503 as infrastructure outage, without disclosing body or title", async () => {
+  const requests: string[] = [];
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE,
+    apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      requests.push(url.pathname);
+      if (url.pathname.endsWith("/categories")) {
+        return json({ data: { results: HEALTHY_CATEGORIES } });
+      }
+      if (url.pathname.endsWith("/products")) {
+        return json({ data: { results: [HEALTHY_PRODUCT] } });
+      }
+      return json({ private_detail: "secret-category-and-token" }, 503);
+    }) as typeof fetch,
+  });
+  assertEquals(result.ok, false);
+  assertEquals(result.status, "unavailable");
+  assertEquals(result.classification, "upstream");
+  assertEquals(result.checks.facets, {
+    status: "unavailable", http_status: 503, classification: "upstream",
+  });
+  assertEquals(requests, ["/api/categories", "/api/products", "/api/categories/options"]);
+  const serialized = JSON.stringify(result);
+  for (const value of ["secret-category", "Live leaf", "fixture-private-token"]) {
+    assert(!serialized.includes(value));
+  }
+});
+
+Deno.test("catalog QA rejects malformed or wrong-leaf facets and times out the third route", async () => {
+  for (const body of [
+    { data: { category: { id: 8, pagetitle: "Other", total_products: 1 }, options: [] } },
+    { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 } } },
+    { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: -1 }, options: [] } },
+    { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 }, options: [null] } },
+    { success: false, ...HEALTHY_FACETS },
+    { success: false, error: "private" },
+  ]) {
+    const result = await runCatalogHealthPreflight({
+      baseUrl: BASE, apiToken: "fixture-private-token",
+      fetchImpl: (async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith("/categories")) return json({ data: { results: HEALTHY_CATEGORIES } });
+        if (path.endsWith("/products")) return json({ data: { results: [HEALTHY_PRODUCT] } });
+        return json(body);
+      }) as typeof fetch,
+    });
+    assertEquals(result.classification, "schema_error");
+    assertEquals(result.checks.facets?.http_status, 200);
+    assert(!JSON.stringify(result).includes("private"));
+  }
+  let facetSignal: AbortSignal | undefined;
+  const timeout = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token", timeoutMs: 10,
+    fetchImpl: (async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/categories")) return json({ data: { results: HEALTHY_CATEGORIES } });
+      if (path.endsWith("/products")) return json({ data: { results: [HEALTHY_PRODUCT] } });
+      facetSignal = init?.signal ?? undefined;
+      return await new Promise<Response>(() => {});
+    }) as typeof fetch,
+  });
+  assertEquals(timeout.classification, "transport");
+  assertEquals(timeout.checks.facets?.http_status, null);
+  assertEquals(facetSignal?.aborted, true);
+});
+
+Deno.test("catalog QA does not guess a leaf when live taxonomy is incomplete", async () => {
+  let facetCalls = 0;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/categories")) {
+        return json({ data: { results: [{ id: 1, pagetitle: "Root" }] } });
+      }
+      if (path.endsWith("/products")) return json({ data: { results: [HEALTHY_PRODUCT] } });
+      facetCalls++;
+      return json(HEALTHY_FACETS);
+    }) as typeof fetch,
+  });
+  assertEquals(result.classification, "schema_error");
+  assertEquals(result.checks.facets, undefined);
+  assertEquals(facetCalls, 0);
 });
 
 Deno.test("catalog QA does not start paid checks for empty or unusable product pages", async () => {
