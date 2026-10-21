@@ -109,12 +109,14 @@ import {
   alignCriteriaImportanceWithReasoning,
   alignCriteriaWithReasoning,
   canonicalMeasurementUnit,
+  certifiedCustomerApplicationCapacityOptions,
   compileMeasuredReasoningSearchContract,
   customerAggregateMeasurementScope,
   customerOwnsDerivedExactFacetValue,
   demoteUnfrozenRenderCriteria,
   filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
+  preserveCertifiedCustomerCapacityOptions,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
   projectSingleRecommendedMeasuredCriterion,
@@ -9069,16 +9071,33 @@ async function runExpertLoop(
     lastDiscover?.facets ?? [],
     certifiedPairedCriteria,
   );
+  const scopedApplicationCapacityContract = (
+    additionalCriteria: Criterion[] = [],
+  ): Criterion[] => scopeCardCriteria(
+    mergeMandatorySelectionCriteria([
+      ...userBackedSearchCriteria,
+      ...enforcedSearchCriteria,
+      ...(currentSelectionCriteriaPlan()?.mandatory_criteria ?? []),
+      ...additionalCriteria,
+    ]),
+    verifiedCustomerMeasurementEvidence,
+  ).criteria;
   const scopeLiveFacetOptions = (
     options: Record<string, unknown> | null | undefined,
     facets: Facet[],
     reasoningText: string,
   ): Record<string, string[]> => {
     const scoped: Record<string, string[]> = {};
+    const certifiedCapacityOptions = certifiedCustomerApplicationCapacityOptions(
+      scopedApplicationCapacityContract(),
+      verifiedCustomerMeasurementEvidence,
+      facets,
+    );
     for (const [key, rawValues] of Object.entries(options ?? {})) {
       if (!Array.isArray(rawValues)) continue;
       const facet = facets.find((candidate) => candidate.key === key);
       const retained = rawValues.map(String).filter((value) =>
+        certifiedCapacityOptions[key]?.includes(value) ||
         scopeCardCriteria([{
           key: facet?.caption || key,
           op: "eq",
@@ -12752,14 +12771,31 @@ async function runExpertLoop(
               },
             ).args
             : null;
-          if (directSearchArgs?.options) {
+          if (directSearchArgs) {
             const scopedOptions = scopeLiveFacetOptions(
               directSearchArgs.options as Record<string, unknown>,
               lastDiscover.facets ?? [],
               visibleDeclarationText,
             );
-            if (Object.keys(scopedOptions).length > 0) {
-              directSearchArgs.options = scopedOptions;
+            // The generic guard interprets each selected live tier as a new
+            // customer equality. For a customer-owned application threshold,
+            // higher catalog tiers are witnesses, not invented requests.
+            // Restore only witnesses already present in the direct
+            // search proposal and certified by the frozen customer criterion.
+            const scopedCustomerCriteria = scopedApplicationCapacityContract(
+              derivedMandatoryCriteria,
+            );
+            const retainedOptions = directSearchArgs.mode === "by_filter"
+              ? preserveCertifiedCustomerCapacityOptions(
+                scopedCustomerCriteria,
+                verifiedCustomerMeasurementEvidence,
+                lastDiscover.facets ?? [],
+                directSearchOptions,
+                scopedOptions,
+              )
+              : scopedOptions;
+            if (Object.keys(retainedOptions).length > 0) {
+              directSearchArgs.options = retainedOptions;
             } else {
               delete directSearchArgs.options;
             }

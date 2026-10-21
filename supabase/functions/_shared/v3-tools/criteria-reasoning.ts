@@ -13,12 +13,13 @@
 // из того, как число выглядело в чате. Сам ПОРОГ при этом не выдумывается —
 // используется число, которое модель назвала вслух.
 //
-// Модуль ЧИСТЫЙ и DATA-AGNOSTIC: только числа, единицы и направляющие слова —
-// никаких доменных ключей, категорий, брендов.
+// Модуль ЧИСТЫЙ: числа, единицы, направления и общие роли обслуживаемой
+// площади/объёма в живых фасетах; никаких категорий, брендов или SKU.
 
 import {
   type CriteriaFacet,
   type Criterion,
+  overlayMandatoryFacetOptions,
   projectCriteriaFacetOptions,
 } from "./criteria-gate.ts";
 import {
@@ -1106,16 +1107,117 @@ function customerMeasurementEvidence(
   return conflict ? "conflict" : "absent";
 }
 
-/** A customer may give an application size rather than a product scalar.
- * Reuse the existing one-to-one live-facet projector to authorize only the
- * same numeric value on a unique directional capacity facet. No model norm,
- * category label, or arithmetic result can manufacture this relation. */
+const NON_SERVICE_CAPACITY_ROLE =
+  /(?:упаков|короб|тар\p{L}*|достав|транспор|корпус|монтаж|кабел|сечен|габарит|footprint|package|shipping)/iu;
+
+/** A site measurement can certify a *directional service capacity*, but not
+ * an arbitrary product dimension with the same unit. These are semantic
+ * roles of catalog facets, not product/category names: a package area is
+ * never a service capacity, whereas lighting/heating/coverage area can be.
+ * Unknown roles deliberately require clarification rather than a guess. */
+function hasLiveServiceCapacityRole(
+  facet: MeasurementFacet,
+  unit: string,
+  op: Criterion["op"],
+): boolean {
+  const label = normalizeEvidence(facet.caption || facet.key);
+  const maximum = /(?:^| )(?:максимал\p{L}*|макс|max|maximum)(?: |$)/iu
+    .test(label);
+  const minimum = /(?:^| )(?:минимал\p{L}*|мин|min|minimum)(?: |$)/iu
+    .test(label);
+  if ((op === "min" && !maximum) || (op === "max" && !minimum)) {
+    return false;
+  }
+  if (
+    !/(?:освещ|обогрев|отопл|вентил|кондицион|охлажд|обслуж|покрыт|охват|очист|увлаж|осуш|обработ|орош|полив|lighting|heating|coverage|service)/iu
+      .test(label) ||
+    NON_SERVICE_CAPACITY_ROLE.test(label) ||
+    (unit === "м²" && !/(?:площад|area)/iu.test(label)) ||
+    (unit === "м³" && !/(?:объем|объём|volume)/iu.test(label))
+  ) return false;
+  const facetUnit = canonicalMeasurementUnit(facet.unit ?? "");
+  const captionUnits = schemaMeasurementUnitTokens(facet.caption || facet.key)
+    .map(canonicalMeasurementUnit).filter((candidate) =>
+      /^(?:м²|м³)$/u.test(candidate)
+    );
+  if (captionUnits.some((candidate) => candidate !== unit)) return false;
+  const captionUnit = captionUnits.includes(unit);
+  if (facetUnit !== unit && !captionUnit) return false;
+  return Array.isArray(facet.values) && facet.values.length > 0;
+}
+
+function isLiveServiceCapacityFacet(
+  facet: MeasurementFacet,
+  unit: string,
+  op: Criterion["op"],
+  value: number,
+): boolean {
+  if (!hasLiveServiceCapacityRole(facet, unit, op)) return false;
+  return (facet.values ?? []).some(({ value: raw }) => {
+    const parsed = parseNumericFacetValue(raw);
+    return parsed !== null &&
+      (op === "min" ? parsed.min >= value : parsed.max <= value);
+  });
+}
+
+/** The customer's number must describe a local site, not a package/product
+ * dimension or a model-computed norm. This is a deliberately conservative
+ * application-site vocabulary, shared by all product categories. */
+function customerOwnsLocalApplicationExtent(
+  customerText: string,
+  value: number,
+  unit: string,
+): boolean {
+  const source = normalizeMeasurementText(customerText);
+  const measurement = new RegExp(
+    String.raw`(?<![a-zа-я0-9])${
+      String(value).replace(".", "[.,]")
+    }\s*${unit}(?![a-zа-я0-9])`,
+    "giu",
+  );
+  for (const match of source.matchAll(measurement)) {
+    const index = match.index ?? 0;
+    const previousBoundary = Math.max(
+      source.lastIndexOf(".", index),
+      source.lastIndexOf("?", index),
+      source.lastIndexOf("!", index),
+      source.lastIndexOf(";", index),
+      source.lastIndexOf("\n", index),
+      source.lastIndexOf(",", index),
+    );
+    const afterMeasurement = index + match[0].length;
+    const nextBoundaries = [".", "?", "!", ";", "\n", ","]
+      .map((separator) => source.indexOf(separator, afterMeasurement))
+      .filter((position) => position >= 0);
+    const nextBoundary = nextBoundaries.length > 0
+      ? Math.min(...nextBoundaries)
+      : source.length;
+    const local = source.slice(
+      Math.max(previousBoundary + 1, index - 100),
+      Math.min(nextBoundary, afterMeasurement + 45),
+    );
+    if (
+      /(?:комнат|помещен|зал(?:а|е|у|ом)?(?!\p{L})|гостин|спальн|кухн|кабинет|офис|двор|участ|территор|пространств|площадк|парковк|гараж|склад|теплиц|сад(?!\p{L})|дом(?:а|е|у)?(?!\p{L})|квартир|магазин|объект|зон\p{L}*)/iu
+        .test(local) &&
+      !/(?:упаков|короб|тар\p{L}*|сечен|кабел|достав|монтаж)/iu
+        .test(local)
+    ) return true;
+  }
+  return false;
+}
+
+/** An explicit customer product maximum retains its prior literal contract.
+ * For site extents, keep the existing reasoning-backed path and add a narrow
+ * server-owned certificate when the model has not yet explained the fit. Both
+ * paths still require a literal one-to-one live projection; the card gate
+ * separately checks the actual capacity of each returned product. */
 function customerVerifiedCapacityRelation(
   criterion: Criterion,
   measurement: { values: number[]; unit: string },
   customerText: string,
   reasoningText: string,
   facets: MeasurementFacet[],
+  allowServerCertificate = true,
 ): boolean {
   if (
     !/^(?:м²|м³)$/u.test(measurement.unit) ||
@@ -1123,14 +1225,7 @@ function customerVerifiedCapacityRelation(
     measurement.values.length !== 1 || criterion.exclusive ||
     facets.length === 0
   ) return false;
-  // An application-to-capacity conversion is distinct from copying an area
-  // into an unrelated scalar facet. Require an explicit local fit relation in
-  // the consultant's explanation, not only equal numbers and units.
-  if (
-    criterion.op !== "eq" &&
-    !/(?:соответств|покрыва|покрыти|охват|обслуж|вмещ|хватит|подход|рассчит|выдерж|обеспеч)/iu
-      .test(reasoningText)
-  ) return false;
+  const value = measurement.values[0];
   const liveFacets = facets.filter((facet) =>
     Array.isArray(facet.values) && facet.values.length > 0
   ).map((facet) => ({
@@ -1144,13 +1239,62 @@ function customerVerifiedCapacityRelation(
     customerText,
     customerText,
     liveFacets,
-  ).matched;
-  return projected.some((candidate) =>
+  ).matched.filter((candidate) =>
     candidate.op === criterion.op &&
     canonicalMeasurementUnit(candidate.unit ?? "") === measurement.unit &&
-    Number(candidate.value) === measurement.values[0] &&
+    Number(candidate.value) === value &&
     normalizeEvidence(candidate.key) === normalizeEvidence(criterion.key)
   );
+  // Preserve the original equality behavior, independent of service class.
+  if (criterion.op === "eq") return projected.length > 0;
+  if (projected.length === 0) return false;
+  const matchedFacets = facets.filter((facet) =>
+    [facet.key, facet.caption].some((label) =>
+      normalizeEvidence(label) === normalizeEvidence(criterion.key)
+    )
+  );
+  // A package/transport/body dimension cannot certify area served even if a
+  // model happens to describe it with a fit verb.
+  if (
+    matchedFacets.some((facet) =>
+      NON_SERVICE_CAPACITY_ROLE.test(
+        normalizeEvidence(facet.caption || facet.key),
+      )
+    )
+  ) return false;
+  if (
+    /(?:соответств|покрыва|покрыти|охват|обслуж|вмещ|хватит|подход|рассчит|выдерж|обеспеч)/iu
+      .test(reasoningText)
+  ) return true;
+  // A minimum supported area is not an upper service-capacity guarantee:
+  // `minimum area <= room area` alone cannot prove that a product covers the
+  // room. Keep its existing reasoning-backed path, but never auto-certify it.
+  if (!allowServerCertificate || criterion.op !== "min") return false;
+  if (
+    !customerOwnsLocalApplicationExtent(
+      customerText,
+      value,
+      measurement.unit,
+    )
+  ) return false;
+  const capacityFacets = facets.filter((facet) =>
+    hasLiveServiceCapacityRole(facet, measurement.unit, criterion.op)
+  );
+  // Hints, reasoning, or an already-frozen criterion must not select one of
+  // two equal-unit capacities. A missing numeric live value is not evidence.
+  if (
+    capacityFacets.length !== 1 ||
+    !isLiveServiceCapacityFacet(
+      capacityFacets[0], measurement.unit, criterion.op, value,
+    )
+  ) return false;
+  const capacity = capacityFacets[0];
+  if (
+    ![capacity.key, capacity.caption].some((label) =>
+      normalizeEvidence(label) === normalizeEvidence(criterion.key)
+    )
+  ) return false;
+  return projected.length === 1;
 }
 
 /** Scope a total to its physical facet, not every numeric property in the
@@ -1389,6 +1533,7 @@ export function filterPerProductMeasuredCriteria(
           customerText,
           reasoningText,
           facets,
+          false,
         ))
     ) {
       next.push({ ...criterion });
@@ -2278,8 +2423,10 @@ export function projectReasoningRangeCriteria(
  * - the number always comes from the customer, never from model prose;
  * - a directional statement for the same number/unit is left to the range/
  *   bound contract instead of being narrowed to equality;
- * - a live exact value and one unambiguous facet are both required;
- * - no category, product or parameter vocabulary is embedded here.
+ * - one unambiguous live facet is required; a non-enumerated application-site
+ *   threshold is allowed only when a sufficient directional service-capacity
+ *   value exists in that facet, and is checked again on each product card;
+ * - no category, product name or SKU is embedded here.
  */
 export function projectLiteralMeasuredCriteria(
   criteria: Criterion[],
@@ -2322,6 +2469,31 @@ export function projectLiteralMeasuredCriteria(
       )
     ) continue;
 
+    // An application-site extent is a threshold on the item's service
+    // capacity, not necessarily one of the catalog's enumerated values.
+    // For a 27 m² room, a live maximum-capacity tier of 30 m² is enough, but
+    // the criterion remains the *customer's 27*, not a fabricated 30 or a
+    // model-computed output. Two applicable service axes are ambiguous.
+    const serviceCapacities = /^(?:м²|м³)$/u.test(unit) &&
+        customerOwnsLocalApplicationExtent(customerText, quantity.value, unit)
+      ? (facets ?? []).flatMap((facet) =>
+        hasLiveServiceCapacityRole(facet, unit, "min")
+          ? [{ facet, op: "min" as const }]
+          : []
+      )
+      : [];
+    if (serviceCapacities.length > 1) continue;
+    const serviceCapacity = serviceCapacities[0] &&
+        isLiveServiceCapacityFacet(
+          serviceCapacities[0].facet,
+          unit,
+          "min",
+          quantity.value,
+        )
+      ? serviceCapacities[0]
+      : null;
+    if (serviceCapacities.length === 1 && !serviceCapacity) continue;
+
     const exactValueFacets = (facets ?? []).filter((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const publicLabel = String(facet.caption ?? "").trim() || facet.key;
@@ -2361,7 +2533,9 @@ export function projectLiteralMeasuredCriteria(
         .some((token) => canonicalMeasurementUnit(token) === unit);
       return declaredUnit === unit || labelHasUnit;
     });
-    const unitFacets = explicitUnitFacets.length > 0
+    const unitFacets = serviceCapacity
+      ? [serviceCapacity.facet]
+      : explicitUnitFacets.length > 0
       ? explicitUnitFacets
       : exactValueFacets;
     if (unitFacets.length === 0) continue;
@@ -2497,26 +2671,31 @@ export function projectLiteralMeasuredCriteria(
     if (matchingFacets.length !== 1) continue;
 
     const facet = matchingFacets[0];
-    const liveValue = (facet.values ?? []).find(({ value }) => {
+    const exactLiveValue = (facet.values ?? []).find(({ value }) => {
       const span = parseNumericFacetValue(value);
       return span !== null && span.min === quantity.value &&
         span.max === quantity.value;
     })?.value;
+    const liveValue = exactLiveValue ??
+      (serviceCapacity ? String(quantity.value) : undefined);
     if (liveValue === undefined) continue;
     const facetMeaning = normalizeEvidence(facet.caption || facet.key);
-    const facetDirection =
-      /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
+    const facetDirection = serviceCapacity?.op ?? (
+      /(?:^| )(?:максимал\p{L}*|макс|maximum|max)(?: |$)/iu.test(facetMeaning)
         ? "min" as const
-        : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
+        : /(?:^| )(?:минимал\p{L}*|мин|minimum|min)(?: |$)/iu.test(facetMeaning)
         ? "max" as const
-        : "eq" as const;
-    const explicitExactProductValue = facetDirection !== "eq" &&
+        : "eq" as const
+    );
+    const explicitExactProductValue =
+      (facetDirection === "min" || facetDirection === "max") &&
       customerExplicitlyOwnsExactDirectionalFacetValue(
         customerText,
         quantity.value,
         unit,
         facet.caption || facet.key,
       );
+    if (explicitExactProductValue && exactLiveValue === undefined) continue;
     const projectedOp = explicitExactProductValue ? "eq" : facetDirection;
     const representedIndex = next.findIndex((criterion) => {
       const key = normalizeEvidence(criterion.key);
@@ -2571,6 +2750,108 @@ export function projectLiteralMeasuredCriteria(
     }
   }
   return { criteria: next, added, matched };
+}
+
+/** Catalog options are *witnesses* for a frozen customer capacity threshold,
+ * not new customer-authored equalities. Only a previously scoped A criterion
+ * whose number is independently projected from the customer's site extent may
+ * carry its satisfying live values through an option-level equality guard.
+ * Unknown/model-only options still take the ordinary equality gate. */
+export function certifiedCustomerApplicationCapacityOptions(
+  scopedCustomerCriteria: readonly Criterion[],
+  customerText: string,
+  facets: readonly MeasurementFacet[],
+): Record<string, string[]> {
+  const liveFacets = facets.filter((facet) =>
+    Array.isArray(facet.values) && facet.values.length > 0
+  ).map((facet) => ({
+    key: facet.key,
+    caption: facet.caption,
+    type: facet.type ?? "number",
+    unit: facet.unit,
+    values: [...(facet.values ?? [])],
+  }));
+  const projectedCustomer = projectLiteralMeasuredCriteria(
+    [],
+    customerText,
+    customerText,
+    liveFacets,
+  ).matched;
+  const certified = scopedCustomerCriteria.filter((criterion) => {
+    if (
+      criterion.level !== "A" || criterion.evidence !== "user_explicit" ||
+      criterion.op !== "min" || criterion.exclusive ||
+      Array.isArray(criterion.value)
+    ) return false;
+    const value = Number(String(criterion.value).replace(",", "."));
+    const unit = canonicalMeasurementUnit(criterion.unit ?? "");
+    if (
+      !Number.isFinite(value) || !/^(?:м²|м³)$/u.test(unit) ||
+      !customerOwnsLocalApplicationExtent(customerText, value, unit)
+    ) return false;
+    const capacityFacets = liveFacets.filter((facet) =>
+      hasLiveServiceCapacityRole(facet, unit, "min")
+    );
+    if (capacityFacets.length !== 1) return false;
+    const facet = capacityFacets[0];
+    if (!isLiveServiceCapacityFacet(facet, unit, "min", value)) return false;
+    if (
+      ![facet.key, facet.caption].some((label) =>
+        normalizeEvidence(label) === normalizeEvidence(criterion.key)
+      )
+    ) return false;
+    return projectedCustomer.some((candidate) =>
+      candidate.op === "min" && Number(candidate.value) === value &&
+      canonicalMeasurementUnit(candidate.unit ?? "") === unit &&
+      normalizeEvidence(candidate.key) === normalizeEvidence(criterion.key)
+    );
+  });
+  const certifiedOptions = projectCriteriaFacetOptions(
+    certified,
+    liveFacets,
+  ).options;
+  // A capacity certificate cannot broaden an independent mandatory equality
+  // or upper bound on the same facet. For example `room >= 27` plus customer
+  // `product capacity exactly 30` must not restore the live 35 tier.
+  const completeOptions = projectCriteriaFacetOptions(
+    scopedCustomerCriteria.filter((criterion) =>
+      (criterion.level ?? "A") === "A"
+    ),
+    liveFacets,
+  ).options;
+  return Object.fromEntries(
+    Object.entries(certifiedOptions).flatMap(([key, values]) => {
+      const allowed = new Set(completeOptions[key] ?? []);
+      const retained = values.filter((value) => allowed.has(value));
+      return retained.length > 0 ? [[key, retained]] : [];
+    }),
+  );
+}
+
+/** A generic search guard may discard a catalog tier because the customer
+ * supplied a lower application threshold, not that exact tier. Restore only
+ * the intersection of the originally proposed options and the server-issued
+ * capacity certificate. Unrelated guarded options retain their old policy. */
+export function preserveCertifiedCustomerCapacityOptions(
+  scopedCustomerCriteria: readonly Criterion[],
+  customerText: string,
+  facets: readonly MeasurementFacet[],
+  proposedOptions: Record<string, string[]>,
+  guardedOptions: Record<string, string[]>,
+): Record<string, string[]> {
+  const certified = certifiedCustomerApplicationCapacityOptions(
+    scopedCustomerCriteria,
+    customerText,
+    facets,
+  );
+  const proposedCertified = Object.fromEntries(
+    Object.entries(proposedOptions).flatMap(([key, values]) => {
+      const allowed = new Set(certified[key] ?? []);
+      const retained = (values ?? []).filter((value) => allowed.has(value));
+      return retained.length > 0 ? [[key, retained]] : [];
+    }),
+  );
+  return overlayMandatoryFacetOptions(proposedCertified, guardedOptions);
 }
 
 /** A customer's application measurement is not an exact product value merely
