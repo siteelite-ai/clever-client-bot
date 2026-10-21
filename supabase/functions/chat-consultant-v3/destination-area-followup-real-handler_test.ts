@@ -147,14 +147,31 @@ interface Run {
 async function runFollowup({
   failLogRead = false,
   rawReasoning = areaOnlyReasoning,
+  interveningUserTurns = [],
 }: {
   failLogRead?: boolean;
   rawReasoning?: string;
+  /** Completed dependent turns between the rendered batch and this request. */
+  interveningUserTurns?: string[];
 } = {}): Promise<Run> {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
   const prior = priorLog();
+  const priorRows = [
+    ...interveningUserTurns.map((query, index): ServerLog => ({
+      id: `offline-dependent-${index}`,
+      session_id: sessionId,
+      user_query: query,
+      error: null,
+      final_products_count: 0,
+      created_at: new Date(
+        Date.now() - 1_500 + index * 100,
+      ).toISOString(),
+      response_events: [{ type: "done" }],
+    })).reverse(),
+    prior,
+  ];
   let steps: Step[] = [];
   let catalogProductReads = 0;
   let primaryReasoningRequests = 0;
@@ -192,7 +209,8 @@ async function runFollowup({
             // The JSONB boundary query is separate from ordinary session
             // history. This two-turn dialogue has no session rotation.
             if (url.searchParams.has("response_events")) return json(null);
-            return json([prior]);
+            const limit = Number(url.searchParams.get("limit") ?? 8);
+            return json(priorRows.slice(0, Number.isFinite(limit) ? limit : 8));
           }
         }
         if (url.pathname === "/rest/v1/app_settings") {
@@ -362,6 +380,13 @@ async function runFollowup({
             history: [
               { role: "user", content: base },
               { role: "assistant", content: previousCard },
+              ...interveningUserTurns.flatMap((query) => [
+                { role: "user", content: query },
+                {
+                  role: "assistant",
+                  content: "Проверяю ранее предложенные товары.",
+                },
+              ]),
             ],
           }),
         },
@@ -574,6 +599,120 @@ Deno.test({
           meta?.matched === false
         ),
         JSON.stringify(failedRead.steps),
+      );
+
+      const fourTurn = await runFollowup({
+        interveningUserTurns: [
+          "Они точно подходят для освещения 30 квадратных метров?",
+          "Спасибо.",
+        ],
+      });
+      assertEquals(
+        fourTurn.primaryReasoningRequests,
+        1,
+        JSON.stringify(fourTurn),
+      );
+      assertEquals(fourTurn.correctionRequests, 0, JSON.stringify(fourTurn));
+      assert(
+        fourTurn.steps.some(({ step, meta }) =>
+          step === "v3_server_rendered_selection_base_checked" &&
+          meta?.matched === true
+        ),
+        JSON.stringify(fourTurn.steps),
+      );
+      assert(
+        fourTurn.steps.some(({ step, meta }) =>
+          step === "v3_destination_area_card_proof_covers_measurement" &&
+          meta?.minimum_area_m2 === 30
+        ),
+        JSON.stringify(fourTurn.steps),
+      );
+      const fourTurnBlocks = blocks(fourTurn.events);
+      assertEquals(fourTurnBlocks.length, 1, JSON.stringify(fourTurn));
+      assert(
+        fourTurnBlocks[0].markdown?.includes(nextUrl),
+        JSON.stringify(fourTurn),
+      );
+      assert(
+        !fourTurnBlocks[0].markdown?.includes(priorUrl),
+        JSON.stringify(fourTurn),
+      );
+      assert(
+        !fourTurnBlocks[0].markdown?.includes("офисный"),
+        JSON.stringify(fourTurn),
+      );
+      assert(
+        !fourTurnBlocks[0].markdown?.includes("компактный"),
+        JSON.stringify(fourTurn),
+      );
+
+      for (
+        const changedDestination of [
+          "Они точно подходят для спальни 30 м²?",
+          "Они точно подходят на кухню 30 м²?",
+          "Они точно подходят для спальни?",
+        ]
+      ) {
+        const changed = await runFollowup({
+          interveningUserTurns: [changedDestination, "Спасибо."],
+        });
+        assertEquals(changed.primaryReasoningRequests, 1, changedDestination);
+        assert(
+          changed.steps.some(({ step, meta }) =>
+            step === "v3_server_rendered_selection_base_checked" &&
+            meta?.matched === true
+          ),
+          changedDestination,
+        );
+        assert(changed.correctionRequests >= 1, changedDestination);
+        assertEquals(blocks(changed.events).length, 0, changedDestination);
+        assert(
+          !changed.steps.some(({ step }) =>
+            step === "v3_destination_area_card_proof_covers_measurement"
+          ),
+          changedDestination,
+        );
+      }
+
+      const revisedArea = await runFollowup({
+        interveningUserTurns: [
+          "Они точно подходят для освещения 40 квадратных метров?",
+          "Спасибо.",
+        ],
+      });
+      assertEquals(
+        revisedArea.primaryReasoningRequests,
+        1,
+        JSON.stringify(revisedArea),
+      );
+      assert(revisedArea.correctionRequests >= 1, JSON.stringify(revisedArea));
+      assertEquals(
+        blocks(revisedArea.events).length,
+        0,
+        JSON.stringify(revisedArea),
+      );
+      assert(
+        !revisedArea.steps.some(({ step }) =>
+          step === "v3_destination_area_card_proof_covers_measurement"
+        ),
+        JSON.stringify(revisedArea.steps),
+      );
+
+      const fourTurnInventedLumens = await runFollowup({
+        interveningUserTurns: [
+          "Они точно подходят для освещения 30 квадратных метров?",
+          "Спасибо.",
+        ],
+        rawReasoning: adversarialPerCardReasoning,
+      });
+      assert(
+        fourTurnInventedLumens.correctionRequests >= 1,
+        JSON.stringify(fourTurnInventedLumens),
+      );
+      assertEquals(
+        blocks(fourTurnInventedLumens.events).length,
+        0,
+        JSON.stringify(fourTurnInventedLumens),
       );
     } finally {
       restoreOfflineModuleSetup();

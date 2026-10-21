@@ -7921,6 +7921,8 @@ interface VerifiedCustomerMeasurementEvidence {
   text: string;
   sourceCount: number;
   lookupFailed: boolean;
+  /** Completed server-log customer turns before physical-unit compaction. */
+  priorQueriesNewestFirst: string[];
 }
 
 const MEASUREMENT_EVIDENCE_LOG_LIMIT = 8;
@@ -7981,6 +7983,7 @@ export async function loadVerifiedCustomerMeasurementEvidence(
     text: currentQuery,
     sourceCount: 0,
     lookupFailed: false,
+    priorQueriesNewestFirst: [] as string[],
   };
   if (skipPriorLookup) return currentOnly;
   const createdAfter = activeSelectionScopeLookupCreatedAfter(
@@ -8056,7 +8059,11 @@ export async function loadVerifiedCustomerMeasurementEvidence(
       currentQuery,
       previousQueries,
     );
-    return { ...composed, lookupFailed: false };
+    return {
+      ...composed,
+      lookupFailed: false,
+      priorQueriesNewestFirst: previousQueries,
+    };
   } catch (error) {
     console.error("[v3] customer measurement evidence lookup failed", error);
     return { ...currentOnly, lookupFailed: true };
@@ -8959,6 +8966,7 @@ async function runExpertLoop(
   verifiedInitialDiscoveryLeaf: string | null = null,
   replacementEgressGuarded = false,
   serverRenderedBaseRequest: string | null = null,
+  serverVerifiedPriorQueriesNewestFirst: readonly string[] = [],
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -9033,6 +9041,7 @@ async function runExpertLoop(
     baseRequest: ellipticalContinuation?.baseUserMessage ?? "",
     serverVerifiedBaseRequest: serverRenderedBaseRequest ?? "",
     customerMeasurementEvidence: verifiedCustomerMeasurementEvidence,
+    serverVerifiedPriorQueriesNewestFirst,
   });
   let destinationAreaCoverageLogged = false;
   let destinationAreaCoverageApplied = false;
@@ -25163,13 +25172,15 @@ Deno.serve(async (req) => {
             // customer turn stays the routing input; earlier quantities may
             // authorise a hard measured criterion only if recovered from the
             // completed server log for this exact active session.
-            let customerMeasurementEvidencePromise: Promise<string> | null =
-              null;
+            let customerMeasurementEvidencePromise:
+              | Promise<VerifiedCustomerMeasurementEvidence>
+              | null = null;
             const mayCarryPriorMeasurements = !startsNewTask && (
               effectiveHistory.some((message) => message.role === "user") ||
               matchedPendingClarification || Boolean(sameSectionScope)
             );
-            const verifiedCustomerMeasurementEvidence = (): Promise<string> =>
+            const verifiedCustomerMeasurementEvidence = ():
+              Promise<VerifiedCustomerMeasurementEvidence> =>
               customerMeasurementEvidencePromise ??= (async () => {
                 const evidence = await loadVerifiedCustomerMeasurementEvidence(
                   supabase,
@@ -25189,7 +25200,7 @@ Deno.serve(async (req) => {
                     prior_context_available: mayCarryPriorMeasurements,
                   },
                 });
-                return evidence.text;
+                return evidence;
               })();
             const electricalTripDiagnostic =
               resolveElectricalProtectionTripDiagnostic(
@@ -25788,7 +25799,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -25915,7 +25926,7 @@ Deno.serve(async (req) => {
                   relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
                   criteriaGateEnabled: true,
                 },
-                await verifiedCustomerMeasurementEvidence(),
+                (await verifiedCustomerMeasurementEvidence()).text,
                 recentProductEvidence,
                 [],
                 null,
@@ -25983,7 +25994,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -26144,7 +26155,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -26512,7 +26523,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   direct.source_candidate_ids ?? [],
                   replacementSelectionPlan,
@@ -26575,7 +26586,7 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                customerMeasurementEvidence,
+                customerMeasurementEvidence.text,
                 recentProductEvidence,
                 [],
                 null,
@@ -26584,6 +26595,7 @@ Deno.serve(async (req) => {
                 null,
                 Boolean(replacementEgressRequest),
                 verifiedRenderedBase,
+                customerMeasurementEvidence.priorQueriesNewestFirst,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

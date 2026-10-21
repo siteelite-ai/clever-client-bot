@@ -154,6 +154,7 @@ Deno.test("initial request and a new topic never read or inherit prior measureme
     text: "Новая тема. Нужен светильник на 3000 лм",
     sourceCount: 0,
     lookupFailed: false,
+    priorQueriesNewestFirst: [],
   });
   assertEquals(calls(), 0);
 });
@@ -172,6 +173,9 @@ Deno.test("same-topic follow-up inherits customer numbers from completed server 
   );
   assertEquals(calls(), 2);
   assertEquals(result.sourceCount, 1);
+  assertEquals(result.priorQueriesNewestFirst, [
+    "Нужен светильник не менее 3000 лм",
+  ]);
   assertMatch(result.text, /Нужен светильник не менее 3000 лм/u);
   assertFalse(result.lookupFailed);
 });
@@ -192,6 +196,10 @@ Deno.test("repeated follow-ups retain the initial number across a rotated sessio
     Date.now(),
   );
   assertEquals(result.sourceCount, 1);
+  assertEquals(result.priorQueriesNewestFirst, [
+    "А ещё?",
+    "Нужен светильник на 3000 лм",
+  ]);
   assertMatch(result.text, /Нужен светильник на 3000 лм/u);
   assertFalse(result.lookupFailed);
 });

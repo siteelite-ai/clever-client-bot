@@ -12,6 +12,7 @@ const input: DestinationAreaMeasurementCoverageInput = {
   baseRequest: base,
   serverVerifiedBaseRequest: base,
   customerMeasurementEvidence: `${followup}\n${base}`,
+  serverVerifiedPriorQueriesNewestFirst: [base],
 };
 
 Deno.test("a completed prior 25 m² room request covers only its repeated area obligation", () => {
@@ -29,6 +30,7 @@ Deno.test("area coverage is generic across room names and area values", () => {
       baseRequest: other,
       serverVerifiedBaseRequest: other,
       customerMeasurementEvidence: `Какие еще варианты есть?\n${other}`,
+      serverVerifiedPriorQueriesNewestFirst: [other],
     }),
     { covered: true, minimumAreaM2: 30 },
   );
@@ -42,8 +44,48 @@ Deno.test("a price or quantity is not a second physical measurement", () => {
       baseRequest: priced,
       serverVerifiedBaseRequest: priced,
       customerMeasurementEvidence: `${followup}\n${priced}`,
+      serverVerifiedPriorQueriesNewestFirst: [priced],
     }),
     { covered: true, minimumAreaM2: 25 },
+  );
+});
+
+Deno.test("latest server-owned same-unit question may reaffirm the original area", () => {
+  const room =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
+  assertEquals(
+    verifiedDestinationAreaCoversSoleMeasurement({
+      selectionRequest: `${room}\n${followup}`,
+      baseRequest: room,
+      serverVerifiedBaseRequest: room,
+      customerMeasurementEvidence:
+        `${followup}\nОни точно подходят для освещения 30 квадратных метров?`,
+      serverVerifiedPriorQueriesNewestFirst: [
+        "Спасибо.",
+        "Они точно подходят для освещения 30 квадратных метров?",
+        room,
+      ],
+    }),
+    { covered: true, minimumAreaM2: 30 },
+  );
+});
+
+Deno.test("later area correction never reuses stale base area proof", () => {
+  const room =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
+  assertEquals(
+    verifiedDestinationAreaCoversSoleMeasurement({
+      selectionRequest: `${room}\n${followup}`,
+      baseRequest: room,
+      serverVerifiedBaseRequest: room,
+      customerMeasurementEvidence:
+        `${followup}\nОни точно подходят для освещения 40 квадратных метров?`,
+      serverVerifiedPriorQueriesNewestFirst: [
+        "Они точно подходят для освещения 40 квадратных метров?",
+        room,
+      ],
+    }),
+    { covered: false, minimumAreaM2: null },
   );
 });
 
@@ -115,11 +157,53 @@ Deno.test("a new topic or a different destination cannot inherit room coverage",
     },
     { ...input, serverVerifiedBaseRequest: other },
     { ...input, customerMeasurementEvidence: `${followup}\n${other}\n${base}` },
+    {
+      ...input,
+      customerMeasurementEvidence:
+        `${followup}\nОни точно подойдут в спальне 25 м²?`,
+    },
+    {
+      ...input,
+      customerMeasurementEvidence:
+        `${followup}\nНужен прожектор на улицу для участка 25 м²`,
+    },
+    {
+      ...input,
+      customerMeasurementEvidence:
+        `${followup}\nОни точно подходят для 25 м² и 5500 лм?`,
+    },
   ];
   for (const candidate of cases) {
     assertEquals(verifiedDestinationAreaCoversSoleMeasurement(candidate), {
       covered: false,
       minimumAreaM2: null,
     });
+  }
+});
+
+Deno.test("full completed intervening turns veto changed destinations even when compaction hides them", () => {
+  const room =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
+  for (
+    const changed of [
+      "Они точно подходят для спальни 30 м²?",
+      "Они точно подходят на кухню 30 м²?",
+      "Они точно подходят для спальни?",
+    ]
+  ) {
+    const hasNumber = changed.includes("30 м²");
+    assertEquals(
+      verifiedDestinationAreaCoversSoleMeasurement({
+        selectionRequest: `${room}\n${followup}`,
+        baseRequest: room,
+        serverVerifiedBaseRequest: room,
+        customerMeasurementEvidence: `${followup}\n${
+          hasNumber ? changed : room
+        }`,
+        serverVerifiedPriorQueriesNewestFirst: ["Спасибо.", changed, room],
+      }),
+      { covered: false, minimumAreaM2: null },
+      changed,
+    );
   }
 });
