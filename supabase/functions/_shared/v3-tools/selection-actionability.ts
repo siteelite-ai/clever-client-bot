@@ -1119,7 +1119,7 @@ function omitUnownedDesignClaims(
   });
   if (unsupportedValueStems.length === 0) return reasoning;
   const clauses = String(reasoning ?? "").split(
-    /(?<!\d)[.!?…;]+(?!\d)|,(?!\d)\s*|\s+(?:и|а\s+также|при\s+этом|но)\s+/iu,
+    /[.!?…;]+(?!\d)|,(?!\d)\s*|\s+(?:и|а\s+также|при\s+этом|но)\s+/iu,
   );
   const retained = clauses.map((clause) => clause.trim()).filter((clause) => {
     if (!clause) return false;

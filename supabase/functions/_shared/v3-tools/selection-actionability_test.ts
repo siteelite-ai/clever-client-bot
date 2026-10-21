@@ -3873,6 +3873,18 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   assertEquals(mixed?.reasoningEvidence.includes("квадрат"), false);
   assertEquals(mixed?.retrievalQuery, null);
 
+  const separated = resolveDerivedSelectionReasoning({
+    ...declaration,
+    reasoning: "Для улицы нужна степень защиты IP65. Форма изделия: квадрат.",
+    required_facet_values: ["f0v0", "f1v0"],
+  }, mixedFacets, "Нужен прибор для улицы на участке 30 квадратов", "Изделия");
+  assertEquals(separated?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(separated?.reasoningEvidence.includes("IP65"), true);
+  assertEquals(separated?.reasoningEvidence.includes("квадрат"), false);
+
   const explicitMixed = resolveDerivedSelectionReasoning({
     ...declaration,
     reasoning: "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
