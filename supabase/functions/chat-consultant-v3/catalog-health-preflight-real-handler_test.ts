@@ -224,6 +224,72 @@ Deno.test("catalog QA reports taxonomy 500 without model calls or an auth refres
   }
 });
 
+Deno.test("representative catalog probe rejects unauthenticated and malformed requests before network", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    throw new Error("network must not be reached");
+  }) as typeof fetch;
+  try {
+    const unauthenticated = await invoke({
+      type: "catalog_route_probe", query: "Gallant",
+    });
+    assertEquals(unauthenticated.status, 404);
+    assertEquals(unauthenticated.headers.get("Access-Control-Allow-Origin"), null);
+    assertEquals(await unauthenticated.json(), { error: "Not found" });
+    const malformed = await invoke({
+      type: "catalog_route_probe", query: "Gallant", endpoint: "https://evil.invalid",
+    }, secret);
+    assertEquals(malformed.status, 400);
+    assertEquals(malformed.headers.get("Cache-Control"), "no-store");
+    assertEquals(malformed.headers.get("Access-Control-Allow-Origin"), null);
+    assertEquals(await malformed.json(), { error: "invalid_probe" });
+    assertEquals(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("representative catalog probe reports search status without echoing data or calling AI", async () => {
+  const originalFetch = globalThis.fetch;
+  const routes: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    routes.push(`${request.method} ${url.pathname}${url.search}`);
+    if (url.pathname === "/rest/v1/app_settings") {
+      return json({
+        openrouter_api_key: "private-openrouter-do-not-expose",
+        volt220_api_token: "private-catalog-do-not-expose",
+      });
+    }
+    if (url.pathname === "/api/products") {
+      assertEquals(request.headers.get("Authorization"), "Bearer private-catalog-do-not-expose");
+      return json({ data: { results: [healthyProduct], pagination: { total: 1 } } });
+    }
+    throw new Error(`unexpected outbound route: ${url.pathname}`);
+  }) as typeof fetch;
+  try {
+    const response = await invoke({ type: "catalog_route_probe", query: "Gallant" }, secret);
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("Access-Control-Allow-Origin"), null);
+    assertEquals(response.headers.get("Cache-Control"), "no-store");
+    const body = await response.text();
+    const parsed = JSON.parse(body);
+    assertEquals(parsed.ok, true);
+    assertEquals(parsed.checks.search.status, "ok");
+    assertEquals(routes.filter((route) => route.startsWith("GET /api/")), [
+      "GET /api/products?query=Gallant&min_price=1&per_page=50",
+    ]);
+    for (const privateValue of ["private-", "Gallant", healthyProduct.pagetitle]) {
+      assert(!body.includes(privateValue));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("ordinary invalid chat remains on the existing public validation path", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => {

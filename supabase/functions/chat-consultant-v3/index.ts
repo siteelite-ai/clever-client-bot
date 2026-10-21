@@ -35,6 +35,7 @@ import {
   type DiscoverCategoryInput,
   type DiscoverCategoryOk,
   executeDiscoverCategory,
+  verifyExactCatalogLeaf,
   type Facet,
 } from "../_shared/v3-tools/discover-category.ts";
 import {
@@ -744,6 +745,11 @@ import {
   type CatalogHealthClassification,
   type CatalogHealthPreflightResult,
 } from "../_shared/v3-tools/catalog-health-preflight.ts";
+import {
+  isCatalogRouteProbeCandidate,
+  parseCatalogRouteProbePayload,
+  runCatalogRouteProbe,
+} from "../_shared/v3-tools/catalog-route-probe.ts";
 import {
   directAnalogProofEnabled,
   verifiedManufacturerFactsEnabled,
@@ -23995,6 +24001,59 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (isCatalogRouteProbeCandidate(rawBody)) {
+    // The representative search/taxonomy probe is private QA infrastructure.
+    // Authenticate before parsing or touching settings, catalog, or model.
+    if (!await previewSecretAuthorized(
+      req.headers.get(CATALOG_QA_SECRET_HEADER),
+      Deno.env.get(CATALOG_QA_SECRET_ENV),
+    )) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+    const payload = parseCatalogRouteProbePayload(rawBody);
+    if (!payload) {
+      return new Response(JSON.stringify({ error: "invalid_probe" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+    try {
+      const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
+      });
+      const settings = await loadSettings(supabase, AbortSignal.timeout(8_000));
+      if (settings.settings_read_status !== "ok" || !settings.volt220_api_token) {
+        return new Response(JSON.stringify({
+          ok: false, status: "unavailable",
+          classification: settings.settings_read_status !== "ok" ? "upstream" : "auth",
+          checks: {},
+        }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        });
+      }
+      const result = await runCatalogRouteProbe(payload, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: settings.volt220_api_token,
+      });
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 503,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    } catch {
+      return new Response(JSON.stringify({
+        ok: false, status: "unavailable", classification: "upstream", checks: {},
+      }), {
+        status: 503,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+  }
+
   const validation = validateChatRequestBody(rawBody);
   if (!validation.ok) {
     return new Response(
@@ -24704,14 +24763,26 @@ Deno.serve(async (req) => {
             const freeformVerification = freeformCandidate
               ? await verifyServerIssuedBroadAssortmentFreeformLeaf(
                 freeformCandidate,
-                (leaf) => executeDiscoverCategory({ noun: leaf }, {
-                  baseUrl: CATALOG_BASE_URL,
-                  apiToken: settings.volt220_api_token!,
-                  // The catalog-derived taxonomy has a one-hour cache. Reuse
-                  // it when warm: the final product proof still checks the
-                  // live leaf and series, while a cold load is bounded below.
-                  timeoutMs: 6_000,
-                }),
+                async (leaf) => {
+                  const deps = {
+                    baseUrl: CATALOG_BASE_URL,
+                    apiToken: settings.volt220_api_token!,
+                    // The taxonomy cache may be reused; final product proof
+                    // still checks the live leaf/series intersection.
+                    timeoutMs: 6_000,
+                  };
+                  const exact = await verifyExactCatalogLeaf(leaf, deps);
+                  // Exact bare sections need only taxonomy. Compound answers
+                  // absent from taxonomy may keep the prior facet-assisted
+                  // resolver. Ambiguous or parent identities never bypass
+                  // the stricter exact-leaf gate by falling back.
+                  if (exact.ok) return exact;
+                  if (
+                    exact.error_code !== "category_not_found" ||
+                    exact.reason !== "absent"
+                  ) return exact;
+                  return await executeDiscoverCategory({ noun: leaf }, deps);
+                },
               )
               : null;
             const verifiedFreeformChoice =

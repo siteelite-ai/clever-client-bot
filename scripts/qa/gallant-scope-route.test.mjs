@@ -178,9 +178,13 @@ test('generic freeform assortment fallback verifies a live leaf, keeps compound 
     'const clientSelectionReadinessScope =',
   );
   assert.match(decision, /verifyServerIssuedBroadAssortmentFreeformLeaf\(/);
+  assert.match(decision, /verifyExactCatalogLeaf\(leaf, deps\)/,
+    'an exact typed leaf should not require the catalog options endpoint');
   assert.match(decision, /executeDiscoverCategory\(\{ noun: leaf \}/);
+  assert.match(decision, /exact\.reason !== "absent"/,
+    'ambiguous and parent identities must not fall back to the prior resolver');
   assert.match(decision, /timeoutMs: 6_000/);
-  assert.match(decision, /one-hour cache/);
+  assert.match(decision, /taxonomy cache may be reused/);
   assert.doesNotMatch(decision, /openrouterApiKey:/,
     'freeform section discovery must not need a model to invent a category');
   assert.match(decision, /verifiedFreeformChoice\?\.exact/,
