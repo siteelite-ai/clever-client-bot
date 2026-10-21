@@ -70,6 +70,94 @@ Deno.test("latest server-owned same-unit question may reaffirm the original area
   );
 });
 
+Deno.test("a server-logged evidence-only comparison preserves the confirmed destination area", () => {
+  const room =
+    "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?";
+  const reaffirmation =
+    "Они точно подходят для освещения 30 квадратных метров?";
+  const comparison =
+    "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.";
+  assertEquals(
+    verifiedDestinationAreaCoversSoleMeasurement({
+      selectionRequest: `${room}\n${followup}`,
+      baseRequest: room,
+      serverVerifiedBaseRequest: room,
+      customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+      serverVerifiedPriorQueriesNewestFirst: [comparison, reaffirmation, room],
+    }),
+    { covered: true, minimumAreaM2: 30 },
+  );
+});
+
+Deno.test("evidence-only continuation is generic but cannot introduce a new criterion or task", () => {
+  const room = "Хочу поменять люстру в гостиной 30 м². Покажи варианты.";
+  const reaffirmation = "Они точно подходят для освещения 30 м²?";
+  const baseline = {
+    selectionRequest: `${room}\n${followup}`,
+    baseRequest: room,
+    serverVerifiedBaseRequest: room,
+    customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+    serverVerifiedPriorQueriesNewestFirst: [
+      "Чем отличаются эти варианты?",
+      reaffirmation,
+      room,
+    ],
+  } satisfies DestinationAreaMeasurementCoverageInput;
+  assertEquals(verifiedDestinationAreaCoversSoleMeasurement(baseline), {
+    covered: true,
+    minimumAreaM2: 30,
+  });
+  for (
+    const changed of [
+      "Почему эти варианты подходят для спальни?",
+      "Сравни показанные варианты для кухни",
+      "Сравни варианты для другой комнаты",
+      "Сравни эти варианты по мощности 20 Вт",
+      "Сравни эти варианты для 40 м²",
+      "Сравни эти варианты. Мне нужен кабель",
+      "Сравни эти варианты. Теперь про кабель",
+      "Почему эти варианты другой категории?",
+      "Сравни красные варианты",
+      "Сравни варианты марки IEK",
+      "Сравни только дешёвые варианты",
+      "Сравни варианты по цвету",
+    ]
+  ) {
+    assertEquals(
+      verifiedDestinationAreaCoversSoleMeasurement({
+        ...baseline,
+        serverVerifiedPriorQueriesNewestFirst: [
+          changed,
+          reaffirmation,
+          room,
+        ],
+      }),
+      { covered: false, minimumAreaM2: null },
+      changed,
+    );
+  }
+});
+
+Deno.test("comparison never substitutes for an expired or unverified server-rendered base", () => {
+  const comparison = "Почему эти варианты отличаются по цене?";
+  const logged = {
+    ...input,
+    serverVerifiedPriorQueriesNewestFirst: [comparison, base],
+  };
+  for (
+    const candidate of [
+      { ...logged, serverVerifiedBaseRequest: "" },
+      { ...logged, serverVerifiedBaseRequest: `${base} Другой запрос.` },
+      { ...logged, serverVerifiedPriorQueriesNewestFirst: [comparison] },
+    ]
+  ) {
+    assertEquals(verifiedDestinationAreaCoversSoleMeasurement(candidate), {
+      covered: false,
+      minimumAreaM2: null,
+    });
+  }
+});
+
 Deno.test("later area correction never reuses stale base area proof", () => {
   const room =
     "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";

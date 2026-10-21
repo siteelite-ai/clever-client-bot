@@ -84,7 +84,47 @@ function hasServerVerifiedAreaEvidence(
 
 function isNeutralContinuation(query: string): boolean {
   return /^(?:спасибо|благодарю|понятно|хорошо|ок|ладно)[!.,\s]*$/iu
-    .test(query.trim()) || isAdditionalProductSelectionFollowup(query);
+    .test(query.trim()) ||
+    isAdditionalProductSelectionFollowup(query) ||
+    isNeutralRenderedEvidenceFollowup(query);
+}
+
+/** A comparison of already shown cards is not a new customer requirement.
+ * It can sit between a verified selection and “other options”, but never
+ * supply or alter the destination-area proof itself. Each clause must remain
+ * evidence-only; a new site, number, or independent task ends this chain. */
+function isNeutralRenderedEvidenceFollowup(query: string): boolean {
+  if (query.length > 800) return false;
+  const clauses = String(query ?? "").split(/[.!?;]+/u)
+    .map((clause) => clause.trim()).filter(Boolean);
+  if (
+    clauses.length === 0 || clauses.length > 4 ||
+    clauses.some((clause) => !isEvidenceOnlyFollowup(clause))
+  ) return false;
+  const normalized = normalizeMeasurementText(query).toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  // A number may be a new budget, area, power or product count. Without a
+  // fresh selection contract it is safer not to classify it as neutral.
+  if (/\d/u.test(normalized)) return false;
+  // Prepositions introducing a destination are intentionally fail-closed,
+  // including a room stated without a measurement. “В чём разница” is an
+  // evidence question, not a destination.
+  if (
+    /(?:^|\s)(?:для|в|во|на|под)\s+(?!ч[её]м(?:$|[^\p{L}]))\p{L}+/u.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  // This is a closed *dialogue-intent* vocabulary, not a product/category
+  // dictionary. Unknown content words could be a new nonnumeric filter
+  // (“red”, “brand X”, “outdoor”) and must use the normal selection route.
+  const words = normalized.match(/\p{L}+/gu) ?? [];
+  return words.length > 0 && words.length <= 40 &&
+    words.every((word) =>
+      /^(?:а|ну|тогда|пожалуйста|почему|чем|как|что|какие|какой|какая|какое|это|этот|эта|эти|этого|этих|этим|этими|они|их|ними|них|между|из|по|в|у|ли|не|точно|действительно|ранее|перв\p{L}*|втор\p{L}*|треть\p{L}*|показан\p{L}*|предложен\p{L}*|подтвержден\p{L}*|сравн\p{L}*|отлич\p{L}*|разниц\p{L}*|подход\p{L}*|вариант\p{L}*|товар\p{L}*|модел\p{L}*|карточ\p{L}*|характеристик\p{L}*|параметр\p{L}*|цен\p{L}*|стоимост\p{L}*)$/u
+        .test(word)
+    );
 }
 
 function isPureAreaReaffirmation(query: string, area: number): boolean {
