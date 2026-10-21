@@ -3773,6 +3773,108 @@ Deno.test("a room circumstance cannot become an exact catalog purpose filter", (
   assertEquals(forRoom?.customerGroundedCompatible, []);
 });
 
+Deno.test("a model cannot turn room area into a required product shape", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    type: "string",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }];
+  const declaration = {
+    reasoning: "Для подбора проверяю обязательную форму люстры: квадрат.",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: ["f0v0"],
+    explicit_customer_classifications: [],
+  };
+
+  for (const request of [
+    "Хочу поменять люстру в зале 30 квадратов",
+    "Хочу поменять люстру в зале 30 квадратных метров",
+    "Хочу поменять люстру в зале 30 квадратов. А есть другие варианты?",
+  ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      request,
+      "Люстры",
+    );
+    assertEquals(resolved?.requiredFacetValues, [], request);
+    assertEquals(resolved?.reasoningEvidence.includes("квадрат"), false, request);
+    assertEquals(resolved?.measurementEvidence.includes("квадрат"), false, request);
+  }
+
+  for (const request of [
+    "Нужна квадратная люстра для зала 30 квадратов",
+    "Нужна люстра квадратной формы для зала 30 квадратов",
+    "Нужна форма квадрат для зала 30 квадратов",
+  ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      request,
+      "Люстры",
+    );
+    assertEquals(resolved?.requiredFacetValues, [{
+      key: "Форма люстры",
+      value: "квадрат",
+    }], request);
+  }
+
+  // Another functional, model-derived technical requirement remains eligible.
+  const technical = resolveDerivedSelectionReasoning({
+    ...declaration,
+    reasoning: "Для установки на улице требуется степень защиты IP65.",
+  }, [{
+    key: "ip",
+    caption: "Степень защиты IP",
+    type: "string",
+    values: [{ value: "IP65" }, { value: "IP44" }],
+  }], "Нужен прожектор для улицы площадью 30 квадратов", "Прожекторы");
+  assertEquals(technical?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+
+  const mixedFacets = [{
+    key: "shape",
+    caption: "Форма изделия",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }, {
+    key: "ip",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }, { value: "IP44" }],
+  }];
+  const mixed = resolveDerivedSelectionReasoning({
+    ...declaration,
+    reasoning: "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
+    required_facet_values: ["f0v0", "f1v0"],
+    retrieval_query: "квадрат",
+  }, mixedFacets, "Нужен прибор для улицы на участке 30 квадратов", "Изделия");
+  assertEquals(mixed?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(mixed?.reasoningEvidence.includes("IP65"), true);
+  assertEquals(mixed?.reasoningEvidence.includes("квадрат"), false);
+  assertEquals(mixed?.retrievalQuery, null);
+
+  const explicitMixed = resolveDerivedSelectionReasoning({
+    ...declaration,
+    reasoning: "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
+    required_facet_values: ["f0v0", "f1v0"],
+    retrieval_query: "квадрат",
+  }, mixedFacets, "Нужно квадратное изделие для улицы на участке 30 квадратов", "Изделия");
+  assertEquals(explicitMixed?.requiredFacetValues, [{
+    key: "Форма изделия",
+    value: "квадрат",
+  }, {
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(explicitMixed?.retrievalQuery, "квадрат");
+});
+
 Deno.test("a direct product-use qualifier remains customer-owned", () => {
   const facets = [{
     key: "purpose",

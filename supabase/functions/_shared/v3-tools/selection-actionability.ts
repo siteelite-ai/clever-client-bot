@@ -721,6 +721,11 @@ interface DerivedRequiredFacetChoice {
 
 const CLASSIFICATION_FACET =
   /(?:^|[^\p{L}])(?:категори\p{L}*|класс\p{L}*|вид(?:а|ы|ов|у|ом|е)?|тип\p{L}*|назначен\p{L}*|применен\p{L}*)(?:$|[^\p{L}])/iu;
+// Shape and style are customer preferences, not physical properties implied
+// by room dimensions or an application. Their exact values can narrow the
+// result set only when grounded in the customer's own request.
+const CUSTOMER_CHOSEN_DESIGN_FACET =
+  /(?:^|[^\p{L}])(?:форм\p{L}*|стил\p{L}*|дизайн\p{L}*)(?:$|[^\p{L}])/iu;
 const IDENTITY_FACET =
   /(?:^|[^\p{L}])(?:brand|vendor|manufacturer|producer|trademark|model|series|collection|бренд|производител\p{L}*|торгов\p{L}*\s+марк\p{L}*|модел\p{L}*|сери\p{L}*|коллекц\p{L}*)(?:$|[^\p{L}])/iu;
 const BOOLEAN_FACET_VALUE =
@@ -1096,6 +1101,42 @@ function classificationLexicalTokens(value: string): string[] {
   return (String(value ?? "").match(/[a-zа-я0-9]{3,}/giu) ?? [])
     .map(classificationLexicalStem)
     .filter(Boolean);
+}
+
+/** Keep a rejected model-only design value out of every prose channel as
+ * well as `requiredFacetValues`. Otherwise later search projection can read
+ * the consultant's own words as a new preference and narrow retrieval again.
+ * Preserve separable technical clauses; if none remain, use neutral prose. */
+function omitUnownedDesignClaims(
+  reasoning: string,
+  unownedChoices: readonly DerivedRequiredFacetChoice[],
+): string {
+  const unsupportedValueStems = unownedChoices.flatMap(({ value }) => {
+    const stems = classificationLexicalTokens(value).filter((stem) =>
+      /[a-zа-я]/iu.test(stem)
+    );
+    return stems.length > 0 ? [stems] : [];
+  });
+  if (unsupportedValueStems.length === 0) return reasoning;
+  const clauses = String(reasoning ?? "").split(
+    /(?<!\d)[.!?…;]+(?!\d)|,(?!\d)\s*|\s+(?:и|а\s+также|при\s+этом|но)\s+/iu,
+  );
+  const retained = clauses.map((clause) => clause.trim()).filter((clause) => {
+    if (!clause) return false;
+    // `30 квадратов` is a unit, not a product-form assertion. Use the same
+    // dimension normalizer that protects numeric criteria elsewhere.
+    const stems = new Set(classificationLexicalTokens(
+      normalizeMeasurementText(clause),
+    ));
+    return !unsupportedValueStems.some((valueStems) =>
+      valueStems.every((stem) => stems.has(stem))
+    );
+  });
+  if (retained.length === clauses.filter((clause) => clause.trim()).length) {
+    return reasoning;
+  }
+  return retained.join(". ").trim() ||
+    "Подбираю варианты по указанным вами условиям; дополнительные предпочтения не добавляю без уточнения.";
 }
 
 const CLASSIFICATION_GLUE_STEMS = new Set([
@@ -2834,6 +2875,22 @@ export function resolveDerivedSelectionReasoning(
   );
   const requiredFacetChoices: DerivedRequiredFacetChoice[] = [];
   const requiredFacetKeys = new Set<string>();
+  const unownedDesignChoices: DerivedRequiredFacetChoice[] = [];
+  const customerBackedDesignValues = facets.some((facet) =>
+      CUSTOMER_CHOSEN_DESIGN_FACET.test(
+        String(facet.caption || facet.key || ""),
+      )
+    )
+    ? new Set(
+      guardSearchFilters(
+        { mode: "by_filter" },
+        facets as SearchFacet[],
+        customerEvidence,
+        customerEvidence,
+        "",
+      ).user_backed.map(({ key, value }) => `${key}\u0000${value}`),
+    )
+    : new Set<string>();
   const customerOwnedRequiredIds = new Set(
     derivedRequiredFacetChoices(facets, customerEvidence).map(({ id }) => id),
   );
@@ -2915,6 +2972,19 @@ export function resolveDerivedSelectionReasoning(
     const captionKey = String(
       sourceFacet?.caption || sourceFacet?.key || choice.facet,
     );
+    if (CUSTOMER_CHOSEN_DESIGN_FACET.test(captionKey)) {
+      // The model's `required_facet_values` and visible rationale cannot
+      // invent a hard design preference. Reuse the schema-aware search guard
+      // as the customer-evidence arbiter; it already distinguishes a room's
+      // `30 квадратов` from an explicitly requested square product.
+      if (
+        !customerBackedDesignValues.has(`${machineKey}\u0000${choice.value}`) &&
+        !customerBackedDesignValues.has(`${captionKey}\u0000${choice.value}`)
+      ) {
+        if (declaredRequiredIds.has(choice.id)) unownedDesignChoices.push(choice);
+        continue;
+      }
+    }
     const normalizedChoiceValue = normalizeLiteralEvidence(choice.value);
     const literalChoiceVisible = normalizedChoiceValue.length >= 2 &&
       (` ${normalizedOriginalReasoning} `).includes(
@@ -3084,6 +3154,10 @@ export function resolveDerivedSelectionReasoning(
       reasoning = reasoning.replace(new RegExp(escaped, "giu"), "другой класс");
     }
   }
+  reasoning = omitUnownedDesignClaims(
+    reasoning,
+    unownedDesignChoices,
+  );
 
   const normalizedFamilyFacetKeys = new Set(familyCompatibleFacetKeys);
   const exactCompatibleChoices = compatibleChoices.filter(({ facet }) =>
@@ -3211,7 +3285,12 @@ export function resolveDerivedSelectionReasoning(
       ? `${reasoning} ${aggregateScopeEvidence}`
       : reasoning,
     measurementScope,
-    retrievalQuery,
+    retrievalQuery: retrievalQuery &&
+        (` ${normalizeLiteralEvidence(reasoning)} `).includes(
+          ` ${normalizedRetrievalQuery} `,
+        )
+      ? retrievalQuery
+      : null,
     compatible: compatibleChoices.map(({ facet, value }) => ({
       key: facet,
       value,
