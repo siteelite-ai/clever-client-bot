@@ -3275,6 +3275,13 @@ export function resolveDerivedSelectionReasoning(
     );
   }
   const reasoningEvidence = sentences.join(" ");
+  const safeRetrievalQuery = unownedDesignChoices.length > 0 &&
+      retrievalQuery &&
+      !(` ${normalizeLiteralEvidence(reasoning)} `).includes(
+        ` ${normalizedRetrievalQuery} `,
+      )
+    ? null
+    : retrievalQuery;
   return {
     reasoningEvidence,
     text: reasoningEvidence,
@@ -3285,12 +3292,7 @@ export function resolveDerivedSelectionReasoning(
       ? `${reasoning} ${aggregateScopeEvidence}`
       : reasoning,
     measurementScope,
-    retrievalQuery: retrievalQuery &&
-        (` ${normalizeLiteralEvidence(reasoning)} `).includes(
-          ` ${normalizedRetrievalQuery} `,
-        )
-      ? retrievalQuery
-      : null,
+    retrievalQuery: safeRetrievalQuery,
     compatible: compatibleChoices.map(({ facet, value }) => ({
       key: facet,
       value,

@@ -3528,6 +3528,20 @@ Deno.test("a retrieval query is accepted only when it is already visible in reas
     explicit_customer_classifications: [],
   }, []);
   assertEquals(hidden?.retrievalQuery, null);
+
+  // The design guard must not silently change an unrelated retrieval branch,
+  // even when the existing classification cleanup rewrites visible prose.
+  const ordinary = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю накладные изделия для указанного применения.",
+    retrieval_query: "накладные изделия",
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "kind",
+    caption: "Класс применения",
+    values: [{ value: "подвесные изделия" }, { value: "накладные изделия" }],
+  }], "Нужны подвесные изделия", "Изделия");
+  assertEquals(ordinary?.retrievalQuery, "накладные изделия");
 });
 
 Deno.test("an exact technical ID becomes required only when visible reasoning states it", () => {
