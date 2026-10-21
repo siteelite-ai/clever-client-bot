@@ -168,6 +168,11 @@ test('numeric area cannot prove a mandatory shape facet, but an explicit shape c
   assert.equal(prospective.cases[0].turns[0].expect.require_every_product_page.facets.length, 2);
   const followup = prospective.cases[0].turns.at(-1).expect;
   assert.equal(followup.require_shape_facet_provenance, true);
+  assert.ok(followup.forbid_assistant_text.includes('Форма люстры: квадрат'));
+  assert.match(evaluate(followup, {
+    ...answer([]), selectionContract: { mandatory_criteria: [] },
+    text: 'Ищу товары по условию «Форма люстры: квадрат».',
+  }, { userMessages: areaOnly }).join(' '), /forbidden assistant text/u);
   assert.equal(followup.require_new_product_skus, true);
   assert.ok(followup.min_products >= 1);
   assert.equal(followup.require_every_product_page.facets.length, 2);

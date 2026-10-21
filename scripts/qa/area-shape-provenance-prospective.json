@@ -52,6 +52,7 @@
                 { "name": "Максимальная площадь освещения, м2", "min_numeric": 30 }
               ]
             },
+            "forbid_assistant_text": ["Форма люстры: квадрат"],
             "require_shape_facet_provenance": true
           }
         }

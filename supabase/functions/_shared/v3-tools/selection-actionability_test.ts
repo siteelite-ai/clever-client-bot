@@ -3901,6 +3901,116 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   assertEquals(explicitMixed?.retrievalQuery, "квадрат");
 });
 
+Deno.test("model-only appearance prose and retrieval are rejected without a required ID", () => {
+  const shapeFacets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }];
+  const model = {
+    reasoning:
+      "Для зала 30 квадратов проверяю достаточную яркость. Форма люстры: квадрат.",
+    retrieval_query: "квадрат",
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const inferred = resolveDerivedSelectionReasoning(
+    model,
+    shapeFacets,
+    "Нужна люстра в зал 30 квадратов",
+    "Люстры",
+  );
+  assertEquals(inferred?.requiredFacetValues, []);
+  assertEquals(inferred?.retrievalQuery, null);
+  assertEquals(inferred?.reasoningEvidence.includes("Форма люстры"), false);
+  assertEquals(inferred?.measurementEvidence.includes("Форма люстры"), false);
+  assertEquals(inferred?.reasoningEvidence.includes("30 квадратов"), true);
+
+  const explicit = resolveDerivedSelectionReasoning(
+    model,
+    shapeFacets,
+    "Нужна квадратная люстра в зал 30 квадратов",
+    "Люстры",
+  );
+  assertEquals(explicit?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "квадрат",
+  }]);
+  assertEquals(explicit?.retrievalQuery, "квадрат");
+  assertEquals(explicit?.reasoningEvidence.includes("Форма люстры"), true);
+
+  const style = resolveDerivedSelectionReasoning(
+    {
+      ...model,
+      reasoning: "Подбираю светильники для гостиной. Стиль: лофт.",
+      retrieval_query: "лофт",
+    },
+    [{
+      key: "style",
+      caption: "Стиль",
+      values: [{ value: "лофт" }, { value: "классика" }],
+    }],
+    "Нужны светильники в гостиную",
+    "Светильники",
+  );
+  assertEquals(style?.requiredFacetValues, []);
+  assertEquals(style?.reasoningEvidence.includes("лофт"), false);
+  assertEquals(style?.retrievalQuery, null);
+
+  const explicitStyle = resolveDerivedSelectionReasoning(
+    {
+      ...model,
+      reasoning: "Подбираю светильники для гостиной. Стиль: лофт.",
+      retrieval_query: "лофт",
+    },
+    [{
+      key: "style",
+      caption: "Стиль",
+      values: [{ value: "лофт" }, { value: "классика" }],
+    }],
+    "Нужны светильники в стиле лофт для гостиной",
+    "Светильники",
+  );
+  assertEquals(explicitStyle?.requiredFacetValues, [{
+    key: "Стиль",
+    value: "лофт",
+  }]);
+  assertEquals(explicitStyle?.retrievalQuery, "лофт");
+});
+
+Deno.test("dropping model-only appearance keeps independent technical reasoning and retrieval", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма изделия",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }, {
+    key: "ip",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }, { value: "IP44" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
+      retrieval_query: "IP65",
+      required_facet_values: [],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "Нужен светильник для улицы на участке 30 квадратов",
+    "Светильники",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(resolved?.reasoningEvidence.includes("IP65"), true);
+  assertEquals(resolved?.reasoningEvidence.includes("форма изделия"), false);
+  assertEquals(resolved?.retrievalQuery, "IP65");
+});
+
 Deno.test("English shape keys cannot bypass customer-owned design grounding", () => {
   for (const facet of [
     { key: "shape", caption: undefined },

@@ -123,7 +123,8 @@ function priorLog(
 ): ServerLog {
   const id = "offline-completed-prior";
   const markdown = renderedProducts.length === 1 &&
-      renderedProducts[0].id === products[0].id
+      renderedProducts[0].id === products[0].id &&
+      renderedProducts[0].pagetitle === products[0].pagetitle
     ? previousCard
     : renderedProducts.map((product) =>
       `- **[${product.pagetitle}](${product.url})**\n  Цена: ${product.price} ₸`
@@ -158,6 +159,7 @@ interface Run {
   steps: Step[];
   catalogRequests: number;
   catalogProductReads: number;
+  catalogProductRequestUrls: string[];
   catalogProductPeakInFlight: number;
   catalogProductReadsAfterAbort: number;
   catalogTitleLookups: string[];
@@ -181,10 +183,15 @@ async function runFollowup({
   latestServerBatch = false,
   serverBatchProducts = [products[0]],
   catalogProducts = products,
+  categoryLeaf = leaf,
+  includeShapeFacet = false,
   catalogProductDelayMs = 0,
   catalogFailTitle = null,
   catalogFailMode = null,
   rawReasoning = areaOnlyReasoning,
+  retrievalQuery = "светодиодный светильник",
+  requiredFacetValues = [],
+  modelSearchOptions = {},
   interveningUserTurns = [],
   interveningServerRows = null,
   certifiedNeutralBridge = false,
@@ -201,10 +208,15 @@ async function runFollowup({
   latestServerBatch?: boolean;
   serverBatchProducts?: typeof products;
   catalogProducts?: typeof products;
+  categoryLeaf?: string;
+  includeShapeFacet?: boolean;
   catalogProductDelayMs?: number;
   catalogFailTitle?: string | null;
   catalogFailMode?: "status" | "hang_until_abort" | null;
   rawReasoning?: string;
+  retrievalQuery?: string;
+  requiredFacetValues?: string[];
+  modelSearchOptions?: Record<string, string[]>;
   /** Completed dependent turns between the rendered batch and this request. */
   interveningUserTurns?: string[];
   /** Exact completed server rows, used to replay a prior handler turn. */
@@ -278,6 +290,7 @@ async function runFollowup({
   let steps: Step[] = [];
   let catalogRequests = 0;
   let catalogProductReads = 0;
+  const catalogProductRequestUrls: string[] = [];
   let catalogProductInFlight = 0;
   let catalogProductPeakInFlight = 0;
   let catalogProductReadsAfterAbort = 0;
@@ -391,15 +404,24 @@ async function runFollowup({
         if (url.pathname === "/api/categories") {
           return json({
             data: {
-              results: [{ id: 1, pagetitle: leaf, children: [] }],
-              pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+              // Discovery keeps an in-process taxonomy cache. Both leaves
+              // must exist regardless of which isolated case runs first.
+              results: [
+                { id: 1, pagetitle: leaf, children: [] },
+                { id: 2, pagetitle: "Люстры", children: [] },
+              ],
+              pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
             },
           });
         }
         if (url.pathname === "/api/categories/options") {
           return json({
             data: {
-              category: { id: 1, pagetitle: leaf, total_products: 4 },
+              category: {
+                id: 1,
+                pagetitle: categoryLeaf,
+                total_products: catalogProducts.length,
+              },
               options: [
                 {
                   key: "destination",
@@ -417,12 +439,24 @@ async function runFollowup({
                     products_count: 1,
                   })),
                 },
+                ...(includeShapeFacet
+                  ? [{
+                    key: "shape",
+                    caption_ru: "Форма люстры",
+                    type: "string",
+                    values: ["квадрат", "круг"].map((shape) => ({
+                      value_ru: shape,
+                      products_count: 1,
+                    })),
+                  }]
+                  : []),
               ],
             },
           });
         }
         if (url.pathname === "/api/products") {
           catalogProductReads++;
+          catalogProductRequestUrls.push(`${url.pathname}${url.search}`);
           catalogProductInFlight++;
           catalogProductPeakInFlight = Math.max(
             catalogProductPeakInFlight,
@@ -506,11 +540,11 @@ async function runFollowup({
                     name: "declare_selection_reasoning",
                     arguments: JSON.stringify({
                       reasoning: rawReasoning,
-                      retrieval_query: "светодиодный светильник",
+                      retrieval_query: retrievalQuery,
                       measurement_scope: "per_product",
                       compatible_classifications: [],
                       excluded_classifications: [],
-                      required_facet_values: [],
+                      required_facet_values: requiredFacetValues,
                       explicit_customer_classifications: [],
                     }),
                   },
@@ -530,7 +564,7 @@ async function runFollowup({
               finish_reason: "stop",
               message: {
                 content: JSON.stringify({
-                  candidates: [{ pagetitle: leaf, confidence: 0.99 }],
+                  candidates: [{ pagetitle: categoryLeaf, confidence: 0.99 }],
                 }),
               },
             }],
@@ -553,8 +587,11 @@ async function runFollowup({
                     name: "search_catalog",
                     arguments: JSON.stringify({
                       mode: "by_filter",
-                      category: leaf,
+                      category: categoryLeaf,
                       per_page: 50,
+                      ...(Object.keys(modelSearchOptions).length > 0
+                        ? { options: modelSearchOptions }
+                        : {}),
                     }),
                   },
                 }],
@@ -588,7 +625,9 @@ async function runFollowup({
             history: [
               { role: "user", content: historyBaseRequest },
               { role: "assistant", content: historyCard },
-              ...(interveningServerRows?.map((row) => row.user_query) ??
+              ...(interveningServerRows?.slice().reverse().map((row) =>
+                row.user_query
+              ) ??
                 interveningUserTurns).flatMap((query) => [
                 { role: "user", content: query },
                 {
@@ -607,6 +646,7 @@ async function runFollowup({
       steps,
       catalogRequests,
       catalogProductReads,
+      catalogProductRequestUrls,
       catalogProductPeakInFlight,
       catalogProductReadsAfterAbort,
       catalogTitleLookups,
@@ -628,6 +668,9 @@ function blocks(events: Event[]): Array<{
   markdown?: string;
   count?: number;
   total_available?: number;
+  selection_contract?: {
+    mandatory_criteria?: Array<{ key: string; value: unknown }>;
+  };
 }> {
   return events.flatMap((event) => {
     const block = event.v3_event as {
@@ -635,6 +678,9 @@ function blocks(events: Event[]): Array<{
       markdown?: string;
       count?: number;
       total_available?: number;
+      selection_contract?: {
+        mandatory_criteria?: Array<{ key: string; value: unknown }>;
+      };
     } | undefined;
     return block?.type === "products_block" ? [block] : [];
   });
@@ -715,6 +761,219 @@ function hasEnforcedDestinationArea(
   );
   return frozen && ((enforced && filteredSearch) || gatedRecovery);
 }
+
+Deno.test({
+  name: "four-turn room area cannot become a mandatory chandelier shape in the real handler",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const originalRequest =
+        "Хочу заменить люстру в гостиной 30 квадратов. Что подойдет?";
+      const squareRequest =
+        "Нужна квадратная люстра для гостиной 30 квадратов. Что подойдет?";
+      const squareCandidate = item(
+        5,
+        "square-fixture",
+        "Люстра светодиодная для гостиной квадратная",
+        "для гостиной",
+        35,
+      );
+      const titles = [
+        "Люстра светодиодная для гостиной Первая",
+        "Люстра светодиодная для гостиной Вторая",
+        "Люстра офисная",
+        "Люстра для гостиной компактная",
+        squareCandidate.pagetitle,
+      ];
+      const shapeValues = ["квадрат", "круг", "квадрат", "круг", "квадрат"];
+      const catalogWithShape = [...products, squareCandidate].map((product, i) => ({
+        ...product,
+        pagetitle: titles[i],
+        category: "Люстры",
+        options: [
+          ...product.options,
+          {
+            key: "shape",
+            caption_ru: "Форма люстры",
+            value_ru: shapeValues[i],
+          },
+        ],
+      }));
+      const completedRow = (
+        id: string,
+        query: string,
+        answer: string,
+        ageMs: number,
+      ): ServerLog => ({
+        id,
+        session_id: sessionId,
+        user_query: query,
+        error: null,
+        final_products_count: 0,
+        created_at: new Date(Date.now() - ageMs).toISOString(),
+        response_events: [
+          { type: "delta", content: answer },
+          {
+            type: "diagnostic",
+            phase: "complete",
+            log_id: id,
+            error: null,
+            products_count: 0,
+          },
+          { type: "done" },
+        ],
+      });
+      // Server rows are newest first; browser history is built oldest first.
+      // These are completed, zero-card answers, not hand-written browser facts.
+      const interveningServerRows = [
+        completedRow(
+          "offline-price-comparison",
+          "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+          "Сравниваю цены и характеристики ранее показанных вариантов.",
+          750,
+        ),
+        completedRow(
+          "offline-area-confirmation",
+          "Они точно подходят для освещения 30 квадратных метров?",
+          "Проверяю площадь освещения по карточкам ранее показанных товаров.",
+          1_250,
+        ),
+      ];
+      const adversarialReasoning =
+        `${areaOnlyReasoning} Форма люстры: квадрат.`;
+      const shared = {
+        followupMessage: "А есть другие варианты?",
+        categoryLeaf: "Люстры",
+        includeShapeFacet: true,
+        historyCard:
+          `- **[${catalogWithShape[0].pagetitle}](${priorUrl})**\n  Цена: 2500 ₸`,
+        serverBatchProducts: [catalogWithShape[0]],
+        catalogProducts: catalogWithShape,
+        interveningServerRows,
+        rawReasoning: adversarialReasoning,
+        modelSearchOptions: { shape: ["квадрат"] },
+      };
+
+      for (const scenario of [
+        { name: "required facet ID", requiredFacetValues: ["f2v0"] },
+        {
+          name: "reasoning and retrieval query without facet ID",
+          requiredFacetValues: [],
+          retrievalQuery: "квадрат",
+        },
+      ]) {
+        const result = await runFollowup({
+          ...shared,
+          baseRequest: originalRequest,
+          ...scenario,
+        });
+        assertEquals(
+          result.primaryReasoningRequests,
+          1,
+          `${scenario.name}: ${JSON.stringify(result.steps)}`,
+        );
+        assert(
+          result.steps.some(({ step, meta }) =>
+            step === "v3_server_rendered_selection_base_checked" &&
+            meta?.matched === true
+          ),
+          JSON.stringify(result.steps),
+        );
+        assert(
+          hasEnforcedDestinationArea(result.steps, 30),
+          JSON.stringify(result.steps),
+        );
+        const searches = result.steps.filter(({ step, meta }) =>
+          step === "v3_tool_call" && meta?.tool === "search_catalog" &&
+          meta?.ok === true
+        );
+        // The fixed path may use a compiled search or bounded terminal
+        // recovery. The latter is valid only when it keeps the same fresh
+        // per-card destination/area gate and does not narrow on shape.
+        assert(
+          searches.length > 0 || result.steps.some(({ step }) =>
+            step === "v3_terminal_visible_request_recovery"
+          ),
+          JSON.stringify(result.steps),
+        );
+        for (const { meta } of searches) {
+          const args = meta?.args as {
+            options?: Record<string, string[]>;
+            query?: string;
+          } | undefined;
+          assertEquals(args?.options?.shape, undefined, scenario.name);
+          assert(
+            !/квадрат/iu.test(args?.query ?? ""),
+            JSON.stringify(args),
+          );
+        }
+        assert(result.catalogProductReads > 0, JSON.stringify(result.steps));
+        for (const requestUrl of result.catalogProductRequestUrls) {
+          const params = new URL(requestUrl, "https://fixture.catalog.invalid")
+            .searchParams;
+          const selectionParams = [...params.entries()].filter(([key]) =>
+            key !== "pagetitle" && key !== "page" && key !== "per_page"
+          );
+          assert(
+            !selectionParams.some(([key, value]) =>
+              /shape/iu.test(key) ||
+              ((key === "query" || key === "q" || key === "search") &&
+                /(?<![\p{L}\p{N}])квадрат(?:ный|ная|ное|ные)?(?![\p{L}\p{N}])/iu.test(value))
+            ),
+            JSON.stringify(selectionParams),
+          );
+        }
+        const rendered = blocks(result.events);
+        assertEquals(rendered.length, 1, JSON.stringify(result.steps));
+        assert(rendered[0].markdown?.includes(nextUrl), JSON.stringify(result.steps));
+        assert(!rendered[0].markdown?.includes(priorUrl));
+        assert(!/офисн/iu.test(rendered[0].markdown ?? ""));
+        assert(!/компактн/iu.test(rendered[0].markdown ?? ""));
+        const mandatory = rendered[0].selection_contract?.mandatory_criteria;
+        assert(Array.isArray(mandatory), JSON.stringify(rendered[0]));
+        assert(
+          !mandatory.some(({ key }) => key === "Форма люстры" || key === "shape"),
+          JSON.stringify(mandatory),
+        );
+        assert(
+          !/Форма люстры:\s*квадрат/iu.test(publicText(result.events)),
+          publicText(result.events),
+        );
+      }
+
+      // A customer-owned appearance requirement must not be discarded by the
+      // same guard. Only the new square card may satisfy this continuation.
+      const explicitSquare = await runFollowup({
+        ...shared,
+        baseRequest: squareRequest,
+        // This control isolates customer-owned shape from the two completed
+        // explanatory turns replayed above; it does not claim their content.
+        interveningServerRows: [],
+        requiredFacetValues: ["f2v0"],
+      });
+      const explicitCards = blocks(explicitSquare.events);
+      assertEquals(explicitCards.length, 1, JSON.stringify(explicitSquare.steps));
+      assert(
+        hasEnforcedDestinationArea(explicitSquare.steps, 30),
+        JSON.stringify(explicitSquare.steps),
+      );
+      assert(
+        explicitCards[0].markdown?.includes(squareCandidate.url),
+        JSON.stringify(explicitSquare.steps),
+      );
+      assert(!explicitCards[0].markdown?.includes(nextUrl));
+      assert(!explicitCards[0].markdown?.includes(priorUrl));
+      assert(
+        explicitCards[0].selection_contract?.mandatory_criteria?.some((criterion) =>
+          criterion.key === "Форма люстры" && criterion.value === "квадрат"
+        ),
+        JSON.stringify(explicitCards[0].selection_contract),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
 
 Deno.test({
   name:

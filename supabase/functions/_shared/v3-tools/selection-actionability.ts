@@ -2927,6 +2927,13 @@ export function resolveDerivedSelectionReasoning(
       ? args.required_facet_values
       : []).map(String),
   );
+  // The visible explanation is a declaration too: the model may omit the
+  // structured ID while still asserting a product shape/style in prose and
+  // reusing it as the retrieval query. Normalize area units first so a room's
+  // `30 квадратов` never counts as the product value `квадрат`.
+  const modelReasoningStems = new Set(classificationLexicalTokens(
+    normalizeMeasurementText(scopeConsistentReasoning),
+  ));
   const customerOwnedFacets = new Map<string, Set<string>>();
   for (const choice of requiredById.values()) {
     if (!customerOwnedRequiredIds.has(choice.id)) continue;
@@ -2996,7 +3003,14 @@ export function resolveDerivedSelectionReasoning(
         )
         : false;
       if (!projectedCustomerChoice && !selectedCustomerChoice) {
-        if (declaredRequiredIds.has(choice.id)) unownedDesignChoices.push(choice);
+        const valueStems = classificationLexicalTokens(choice.value).filter(
+          (stem) => /[a-zа-я]/iu.test(stem),
+        );
+        if (
+          declaredRequiredIds.has(choice.id) ||
+          valueStems.length > 0 &&
+            valueStems.every((stem) => modelReasoningStems.has(stem))
+        ) unownedDesignChoices.push(choice);
         continue;
       }
     }
