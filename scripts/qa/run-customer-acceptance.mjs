@@ -395,6 +395,7 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_previous_quick_reply',
   'require_catalog_minimum',
   'require_confirmed_analogs',
+  'require_relative_price_comparison',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
   'require_selection_criteria_exact',
@@ -538,6 +539,44 @@ export function validateExpectationObject(expect, location = 'expect') {
   if (expect.require_catalog_minimum !== undefined &&
       !validCatalogMinimumContract(expect.require_catalog_minimum)) {
     throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
+  }
+  if (expect.require_relative_price_comparison !== undefined) {
+    const source = expect.require_relative_price_comparison;
+    const at = `${location}.require_relative_price_comparison`;
+    expectationKeys(source, new Set(['mode', 'product_url', 'sku']), at);
+    if (source.mode === 'ambiguous') {
+      if (Object.hasOwn(source, 'product_url') || Object.hasOwn(source, 'sku') ||
+          (expect.min_products ?? 0) > 0) {
+        throw new Error(`${at}: ambiguous source cannot assert an exact SKU or require product cards`);
+      }
+    } else if (source.mode === 'exact') {
+      if (!sourceCanonicalIdentity(source.product_url) ||
+          typeof source.sku !== 'string' || source.sku !== source.sku.trim() ||
+          !/^[\p{L}\p{N}][\p{L}\p{N}._/-]{0,79}$/u.test(source.sku) ||
+          expect.max_products === 0) {
+        throw new Error(`${at}: exact source requires one canonical product URL, bounded SKU and candidate cards`);
+      }
+      const structuralFacets = expect.require_every_product_page?.facets;
+      if (!Array.isArray(structuralFacets) ||
+          structuralFacets.filter((facet) => Array.isArray(facet?.exact_any) && facet.exact_any.length === 1).length < 2 ||
+          new Set(structuralFacets.map((facet) => normalizeSellerGroupFacetText(facet?.name))).size !== structuralFacets.length ||
+          !validProductPageRules(expect.require_every_product_page)) {
+        throw new Error(`${at}: exact cheaper analogs require at least two distinct single-value structural facets for both source and candidates`);
+      }
+      const analog = expect.require_confirmed_analogs;
+      if (!analog || !Number.isSafeInteger(analog.minimum) || analog.minimum < 1 ||
+          analog.required_commerce?.sold_singly !== true ||
+          !Array.isArray(analog.required_axes) || analog.required_axes.length < 3 ||
+          !analog.required_axes.some((axis) => axis?.op === 'eq' &&
+            /(?:^|_)(?:kind|type|class|form|category)(?:$|_)/u.test(axis.key ?? ''))) {
+        throw new Error(`${at}: exact cheaper analogs require a confirmed-direct-analog certificate with product type and mandatory technical axes`);
+      }
+      if (productUrlIdentity(analog.source_product_url) !== productUrlIdentity(source.product_url)) {
+        throw new Error(`${at}: relative-price source URL disagrees with direct-analog comparator source URL`);
+      }
+    } else {
+      throw new Error(`${at}.mode: must be exact or ambiguous`);
+    }
   }
   if (expect.require_confirmed_analogs !== undefined) {
     const contract = expect.require_confirmed_analogs;
@@ -1370,34 +1409,41 @@ export function productProofFromHtml(html, requestedIdentity) {
   const dom = new JSDOM(html);
   try {
     const document = dom.window.document;
+    const matchingProducts = [];
     for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
       let parsed;
       try { parsed = JSON.parse(script.textContent ?? ''); } catch { continue; }
       for (const product of productNodes(parsed)) {
+        if (productUrlIdentity(product['@id']) === requestedIdentity) {
+          matchingProducts.push(product);
+        }
+      }
+    }
+    for (const product of matchingProducts) {
+        if (typeof product.name !== 'string' || product.name.trim().length < 3) continue;
         const sku = typeof product.sku === 'number' && Number.isFinite(product.sku)
           ? String(product.sku)
           : product.sku;
-        if (
-          productUrlIdentity(product['@id']) !== requestedIdentity ||
-          typeof product.name !== 'string' || product.name.trim().length < 3
-        ) continue;
         // These are the product's own detail fields, not the category's
         // ItemList or related-product carousel. A facet may be inaccurate,
         // so a requested motion trigger can demand independent prose proof.
         const facets = {};
         let sellerGroupOnlyFacetCount = 0;
+        let saleUnitFacetCount = 0;
         for (const item of document.querySelectorAll('.product__tab-description-item')) {
           const label = item.querySelector('.product__description-title')?.textContent?.replace(/:\s*$/u, '').trim();
           const value = item.querySelector('.product__tab-description-text')?.textContent?.replace(/\s+/gu, ' ').trim();
           if (label && normalizeSellerGroupFacetText(label) === 'продается только в групповой упаковке') {
             sellerGroupOnlyFacetCount++;
           }
+          if (label && sameSourceLabel(label, 'Единица измерения')) saleUnitFacetCount++;
           if (label && value) facets[label] = value;
         }
         const description = document
           .querySelector('.product-item__tab-content[data-tab-content="description"]')
           ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
         const offers = Array.isArray(product.offers) ? product.offers : [product.offers];
+        const ambiguousOffers = offers.length !== 1 || matchingProducts.length !== 1;
         const offer = offers.find((entry) => entry && typeof entry === 'object' &&
           entry.priceCurrency === 'KZT' && Number.isFinite(Number(entry.price)) && Number(entry.price) > 0);
         const canonicalUrl = document.querySelector('link[rel~="canonical"][href]')?.getAttribute('href') ?? '';
@@ -1422,17 +1468,20 @@ export function productProofFromHtml(html, requestedIdentity) {
             sku: null, identityMode: 'jsonld_no_sku_canonical_name_price_stock', canonicalUrl,
             name: product.name.trim(), facets, description,
             offerPrice: Number(offer.price), availability: offer.availability,
+            ...(ambiguousOffers ? { ambiguousOffers: true } : {}),
             ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
+            ...(saleUnitFacetCount > 1 ? { duplicateSaleUnitFacet: true } : {}),
           };
         }
         return {
           sku: sku.trim(), name: product.name.trim(), facets, description,
           offerPrice: offer ? Number(offer.price) : null,
           availability: typeof offer?.availability === 'string' ? offer.availability : null,
+          ...(ambiguousOffers ? { ambiguousOffers: true } : {}),
           ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
+          ...(saleUnitFacetCount > 1 ? { duplicateSaleUnitFacet: true } : {}),
           ...(canonicalMatches && sourceIdMatchesCanonical ? { canonicalUrl } : {}),
         };
-      }
     }
     return null;
   } finally {
@@ -1715,6 +1764,115 @@ function quotedPricePerPieceFailures(response) {
   return failures;
 }
 
+const ATOMIC_PRICE_UNITS = new Map([
+  ['шт', 'шт'], ['штука', 'шт'], ['штуки', 'шт'], ['штук', 'шт'],
+  ['м', 'м'], ['метр', 'м'], ['метра', 'м'], ['метров', 'м'],
+  ['м²', 'м²'], ['кг', 'кг'], ['килограмм', 'кг'], ['килограмма', 'кг'],
+  ['л', 'л'], ['литр', 'л'], ['литра', 'л'],
+]);
+
+function comparableSaleUnit(page) {
+  const facets = page?.facets;
+  if (page?.duplicateSaleUnitFacet || !facets || typeof facets !== 'object' || Array.isArray(facets) ||
+      !verifiedSellerSingleSale(page)) return null;
+  const units = Object.entries(facets).filter(([name]) => sameSourceLabel(name, 'Единица измерения'));
+  if (units.length !== 1) return null;
+  // Pack, kit, composite or unknown units are not an atomic price basis.
+  // Never infer their conversion from a card title or a product's group size.
+  return ATOMIC_PRICE_UNITS.get(normalizeCatalogUnit(units[0][1])) ?? null;
+}
+
+// A relative price is only meaningful against an independently identified
+// catalog item. The assistant's own prose, card price or tool summary cannot
+// establish the source SKU or its price. Both sides must be fetched from live
+// Product pages, and the exact source identity is pinned by the test author.
+export function relativePriceComparisonFailures(contract, response, compatibilityRules = null,
+  analogContract = null, nowMs = Date.now()) {
+  if (contract.mode === 'ambiguous') {
+    const failures = [];
+    if ((response.links ?? []).length) {
+      failures.push('ambiguous source cannot support relative-price product cards');
+    }
+    const text = String(response.text ?? '');
+    if (String(response.productsMarkdown ?? '').trim()) {
+      failures.push('ambiguous source cannot support a products block');
+    }
+    if (/(?:дешевле|деш[её]в\p{L}*|выгоднее|(?:цен\p{L}*|стоимост\p{L}*)[\s\S]{0,30}(?:ниже|меньше)|(?:ниже|меньше)[\s\S]{0,30}(?:цен\p{L}*|стоимост\p{L}*))/iu.test(text) ||
+        /(?:экономи\p{L}*|сэконом\p{L}*|\d[\d\s.,]*\s*(?:₸|тенге|тг\.?|KZT))/iu.test(text) ||
+        /https?:\/\/(?:www\.)?220volt\.kz\/catalog\//iu.test(`${text}\n${response.productsMarkdown ?? ''}`)) {
+      failures.push('ambiguous source cannot support a cheaper-than-source claim');
+    }
+    if (!/(?:уточн\p{L}*|пришл\p{L}*|назов\p{L}*|укаж\p{L}*|нуж\p{L}*|не\s+могу\s+сравн\p{L}*)[\s\S]{0,160}(?:артикул|sku|ссылк\p{L}*|код\s+товара|точн\p{L}*\s+модел\p{L}*)/iu.test(text)) {
+      failures.push('ambiguous source requires an honest request for exact source identity');
+    }
+    return failures;
+  }
+  const failures = [];
+  if (!validProductPageRules(compatibilityRules) ||
+      !Array.isArray(compatibilityRules.facets) ||
+      compatibilityRules.facets.filter((facet) => Array.isArray(facet?.exact_any) && facet.exact_any.length === 1).length < 2) {
+    return ['relative price lacks structural source-and-candidate compatibility rules'];
+  }
+  if (!analogContract ||
+      productUrlIdentity(analogContract.source_product_url) !== productUrlIdentity(contract.product_url) ||
+      confirmedAnalogFailures(analogContract, response, { nowMs }).length) {
+    return ['relative price lacks a source-bound confirmed-direct-analog certificate for every candidate'];
+  }
+  const sourceIdentity = productUrlIdentity(contract.product_url);
+  const source = response.relativePriceSourceProof;
+  if (!sourceIdentity || source?.verified !== true || source.identity !== sourceIdentity ||
+      productUrlIdentity(source.canonicalUrl) !== sourceIdentity || source.sku !== contract.sku ||
+      source.ambiguousOffers === true || !/\/InStock$/iu.test(source.availability ?? '') ||
+      !Number.isFinite(source.offerPrice) || source.offerPrice <= 0) {
+    return ['relative price lacks independently verified exact source SKU and price'];
+  }
+  const sourceCompatibilityFailures = productPageRuleFailures(compatibilityRules, source);
+  if (sourceCompatibilityFailures.length) {
+    return ['relative-price source product does not meet shared structural compatibility rules',
+      ...sourceCompatibilityFailures];
+  }
+  // A certificate for candidates alone does not prove that the source has
+  // those same technical properties. Bind approved facts to its exact live
+  // SKU as well; otherwise a socket could be certified against a breaker URL
+  // using only shared brand/color storefront facets.
+  const sourceCertificate = response.selectionContract?.direct_analog_proof?.source;
+  if (productUrlIdentity(sourceCertificate?.product_url) !== sourceIdentity ||
+      sourceCertificate?.sku !== source.sku || !Array.isArray(sourceCertificate.axes) ||
+      sourceCertificate.axes.length !== new Set(sourceCertificate.axes.map((axis) => axis?.key)).size ||
+      !Array.isArray(analogContract.required_axes) ||
+      analogContract.required_axes.some((rule) => {
+        const axis = sourceCertificate.axes.find((entry) => entry?.key === rule.key);
+        return !approvedAnalogAxis(axis, nowMs) || !analogAxisMatches(rule, axis);
+      })) {
+    return ['relative price lacks approved manufacturer facts for the exact source SKU and required axes'];
+  }
+  const sourceUnit = comparableSaleUnit(source);
+  if (!sourceUnit) {
+    return ['relative price lacks independently comparable source sale unit'];
+  }
+  if (!(response.links ?? []).length) {
+    return ['relative price requires at least one candidate card'];
+  }
+  for (const link of response.links) {
+    const identity = productUrlIdentity(link.url);
+    const candidate = response.verifiedProductPages?.get(identity);
+    if (!identity || identity === sourceIdentity || candidate?.verified !== true ||
+        candidate.identity !== identity || !candidate.sku || candidate.sku === source.sku ||
+        productUrlIdentity(candidate.canonicalUrl) !== identity ||
+        candidate.ambiguousOffers === true || !/\/InStock$/iu.test(candidate.availability ?? '') ||
+        !Number.isFinite(candidate.offerPrice) || candidate.offerPrice <= 0 ||
+        !Number.isFinite(link.price) || Math.abs(link.price - candidate.offerPrice) > 0.51 ||
+        candidate.offerPrice >= source.offerPrice) {
+      failures.push(`candidate is not independently proven cheaper than source SKU ${source.sku}: ${link.url}`);
+    } else if (comparableSaleUnit(candidate) !== sourceUnit) {
+      failures.push(`candidate sale unit is not independently comparable to source SKU ${source.sku}: ${link.url}`);
+    } else if (productPageRuleFailures(compatibilityRules, candidate).length) {
+      failures.push(`candidate is not structurally compatible with source SKU ${source.sku}: ${link.url}`);
+    }
+  }
+  return failures;
+}
+
 function isSseRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -1936,7 +2094,7 @@ export function evaluate(expect = {}, response, {
   nowMs = Date.now(),
 } = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_confirmed_analogs || expect.require_every_product_page ||
+  const requireSourceProof = Boolean(expect.require_confirmed_analogs || expect.require_relative_price_comparison || expect.require_every_product_page ||
     expect.require_higher_product_facet_caveat || expect.require_catalog_minimum ||
     expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
@@ -2100,6 +2258,10 @@ export function evaluate(expect = {}, response, {
   }
   if (expect.require_confirmed_analogs) {
     failures.push(...confirmedAnalogFailures(expect.require_confirmed_analogs, response, { nowMs }));
+  }
+  if (expect.require_relative_price_comparison) {
+    failures.push(...relativePriceComparisonFailures(expect.require_relative_price_comparison,
+      response, expect.require_every_product_page, expect.require_confirmed_analogs, nowMs));
   }
   if (Number.isFinite(expect.max_products) && linkEvidence.uniqueCount > expect.max_products) {
     failures.push(`products ${linkEvidence.uniqueCount} > ${expect.max_products}`);
@@ -2573,13 +2735,22 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
   const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_confirmed_analogs) ||
+    Boolean(expect.require_relative_price_comparison) ||
     Boolean(expect.require_every_product_page) ||
     Boolean(expect.require_higher_product_facet_caveat) ||
     Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
     expect.require_new_product_skus === true || expect.require_previous_product_link === true;
+  // Relative-price evidence must be fresh for this turn; a prior suite turn's
+  // cached price could make a once-cheaper candidate look cheaper forever.
+  const productProofCache = expect.require_relative_price_comparison?.mode === 'exact'
+    ? new Map() : productPageCache;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
-    ? await verifyProductLinks(parsed.links, { cache: productPageCache })
+    ? await verifyProductLinks(parsed.links, { cache: productProofCache })
+    : null;
+  parsed.relativePriceSourceProof = response.ok && expect.require_relative_price_comparison?.mode === 'exact'
+    ? (await verifyProductLinks([{ url: expect.require_relative_price_comparison.product_url }],
+      { cache: productProofCache })).get(productUrlIdentity(expect.require_relative_price_comparison.product_url))
     : null;
   parsed.catalogMinimumProof = response.ok && expect.require_catalog_minimum
     ? await verifyCatalogMinimum(expect.require_catalog_minimum.source_url, expect.require_catalog_minimum)
@@ -2637,6 +2808,9 @@ async function runTurn({ message, expect, synthetic = false }, state) {
         }))
       : [],
     catalog_minimum_evidence: parsed.catalogMinimumProof,
+    ...(expect.require_relative_price_comparison
+      ? { relative_price_source_evidence: parsed.relativePriceSourceProof }
+      : {}),
     products: parsed.links,
     text: parsed.text,
     completed: parsed.completed,
