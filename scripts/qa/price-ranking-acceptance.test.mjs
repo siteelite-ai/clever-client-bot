@@ -160,5 +160,15 @@ test('numeric area cannot prove a mandatory shape facet, but an explicit shape c
     /opt in with true/u);
   const prospective = JSON.parse(fs.readFileSync(new URL('./area-shape-provenance-prospective.json', import.meta.url)));
   assert.doesNotThrow(() => validateExpectationSuite(prospective));
-  assert.equal(prospective.cases[0].turns.at(-1).expect.require_shape_facet_provenance, true);
+  const pinned = JSON.parse(fs.readFileSync(new URL('./customer-acceptance-cases-v2.json', import.meta.url)));
+  const chandelier = pinned.cases.find((item) => item.id === 'customer-chandelier-30m2');
+  assert.deepEqual(prospective.cases[0].turns.map((turn) => turn.message),
+    chandelier.turns.map((turn) => turn.message));
+  assert.ok(prospective.cases[0].turns[0].expect.min_products >= 3);
+  assert.equal(prospective.cases[0].turns[0].expect.require_every_product_page.facets.length, 2);
+  const followup = prospective.cases[0].turns.at(-1).expect;
+  assert.equal(followup.require_shape_facet_provenance, true);
+  assert.equal(followup.require_new_product_skus, true);
+  assert.ok(followup.min_products >= 1);
+  assert.equal(followup.require_every_product_page.facets.length, 2);
 });
