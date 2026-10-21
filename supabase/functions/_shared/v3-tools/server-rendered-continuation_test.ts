@@ -1,5 +1,6 @@
 import {
   resolveServerRenderedSelectionBase,
+  resolveServerRenderedSelectionProof,
   type ServerRenderedSelectionLogRow,
 } from "./server-rendered-continuation.ts";
 
@@ -51,17 +52,18 @@ function laterTurn(
   query: string,
   overrides: Partial<ServerRenderedSelectionLogRow> = {},
 ): ServerRenderedSelectionLogRow {
+  const id = typeof overrides.id === "string" ? overrides.id : "later";
   return successfulSelection({
-    id: "later",
+    id,
     user_query: query,
     created_at: minutesAgo(1),
     response_events: [
-      { type: "diagnostic", phase: "start", log_id: "later" },
+      { type: "diagnostic", phase: "start", log_id: id },
       { type: "products_block", markdown: card, count: 1 },
       {
         type: "diagnostic",
         phase: "complete",
-        log_id: "later",
+        log_id: id,
         products_count: 1,
         error: null,
       },
@@ -321,4 +323,213 @@ Deno.test("stale, future, conflicting, and unbounded logs fail closed", () => {
     null,
     "unbounded",
   );
+});
+
+Deno.test("generic continuation preserves non-area and multi-criterion original requests", () => {
+  const requests = [
+    "Нужен двойной выключатель Gallant, чёрный с хромом. Что есть?",
+    "Нужна люстра в гостиную 30 м², мощность не менее 20 Вт и бюджет до 15 000 тенге.",
+  ];
+  for (const request of requests) {
+    const original = successfulSelection({ user_query: request });
+    const proof = resolveServerRenderedSelectionProof(
+      [laterTurn("Чем отличается первый от второго?"), original],
+      sessionId,
+      request,
+      "А есть другие варианты?",
+      now,
+    );
+    assertEquals(proof?.baseRequest, request, "original request");
+    assertEquals(
+      proof?.priorQueriesNewestFirst[0],
+      "Чем отличается первый от второго?",
+      "prior comparison",
+    );
+    assertEquals(proof?.priorQueriesNewestFirst[1], request, "prior base");
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [laterTurn("Покажи их"), original],
+        sessionId,
+        request,
+        "А есть другие варианты?",
+        now,
+      )?.baseRequest,
+      request,
+      "read-only show follow-up",
+    );
+  }
+});
+
+Deno.test("same-area reaffirmation and read-only comparison preserve completed selection", () => {
+  const request =
+    "Хочу заменить люстру в зале 30 квадратов, мощность от 20 Вт. Покажи варианты";
+  const original = successfulSelection({ user_query: request });
+  const reaffirmation = laterTurn(
+    "Они точно подходят для освещения 30 квадратных метров?",
+    { id: "reaffirmation", created_at: minutesAgo(2) },
+  );
+  const comparison = laterTurn(
+    "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+    { id: "comparison", created_at: minutesAgo(1) },
+  );
+  const proof = resolveServerRenderedSelectionProof(
+    [comparison, original, reaffirmation],
+    sessionId,
+    request,
+    "А есть другие варианты?",
+    now,
+  );
+  assertEquals(proof?.baseRequest, request, "verified base");
+  assertEquals(proof?.priorQueriesNewestFirst.length, 3, "bounded chain");
+});
+
+Deno.test("semantic changes between cards and other-options request cannot inherit old selection", () => {
+  const request =
+    "Хочу заменить люстру в гостиной 30 м², мощность от 20 Вт. Покажи варианты";
+  const original = successfulSelection({ user_query: request });
+  for (
+    const changed of [
+      "Они точно подходят для спальни?",
+      "Они точно подходят для спальни 30 м²?",
+      "Они точно подходят для освещения 40 м²?",
+      "Сравни чёрные варианты",
+      "Сравни варианты по цвету",
+      "Почему эти варианты до 5000 тенге?",
+      "Сравни варианты марки IEK",
+      "Теперь найди кабель",
+      "Покажи другие варианты для спальни",
+    ]
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [laterTurn(changed), original],
+        sessionId,
+        request,
+        "А есть другие варианты?",
+        now,
+      ),
+      null,
+      changed,
+    );
+  }
+});
+
+Deno.test("proof requires exact current dependent wording and authentic completed server batch", () => {
+  for (
+    const [rows, proposed, current, session] of [
+      [
+        [successfulSelection()],
+        base,
+        "А для спальни есть другие варианты?",
+        sessionId,
+      ],
+      [
+        [successfulSelection()],
+        `${base} Предел до 5000 тенге`,
+        "А есть другие варианты?",
+        sessionId,
+      ],
+      [
+        [successfulSelection({ response_events: [] })],
+        base,
+        "А есть другие варианты?",
+        sessionId,
+      ],
+      [
+        [successfulSelection()],
+        base,
+        "А есть другие варианты?",
+        "forged-session",
+      ],
+    ] as const
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        rows,
+        session,
+        proposed,
+        current,
+        now,
+      ),
+      null,
+      "unverified proof",
+    );
+  }
+});
+
+Deno.test("shown URLs come only from completed server-rendered batches, not browser history", () => {
+  const anotherCard =
+    "- **[Вторая люстра](https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/)**\n  Цена: *11 500* ₸";
+  const second = laterTurn("А есть другие варианты?", {
+    response_events: [
+      { type: "products_block", markdown: anotherCard, count: 1 },
+      {
+        type: "diagnostic",
+        phase: "complete",
+        log_id: "later",
+        products_count: 1,
+        error: null,
+      },
+      { type: "done" },
+    ],
+  });
+  const proof = resolveServerRenderedSelectionProof(
+    [second, successfulSelection()],
+    sessionId,
+    base,
+    "А есть другие варианты?",
+    now,
+  );
+  assertEquals(
+    proof?.shownProductUrls.join("|"),
+    "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-1/|https://220volt.kz/catalog/svetotexnika/lyustry/lustra-2/",
+    "only completed server URLs",
+  );
+  for (
+    const broken of [
+      laterTurn("А есть другие варианты?", {
+        response_events: [
+          { type: "products_block", markdown: anotherCard, count: 1 },
+          { type: "done" },
+        ],
+      }),
+      laterTurn("А есть другие варианты?", {
+        error: "upstream_unavailable",
+        response_events: [
+          { type: "products_block", markdown: anotherCard, count: 1 },
+        ],
+      }),
+      laterTurn("А есть другие варианты?", {
+        error: "upstream_unavailable",
+        final_products_count: 1,
+        response_events: [],
+      }),
+      laterTurn("А есть другие варианты?", {
+        final_products_count: 2,
+        response_events: [
+          { type: "products_block", markdown: anotherCard, count: 2 },
+          {
+            type: "diagnostic",
+            phase: "complete",
+            log_id: "later",
+            products_count: 2,
+            error: null,
+          },
+          { type: "done" },
+        ],
+      }),
+    ]
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [broken, successfulSelection()],
+        sessionId,
+        base,
+        "А есть другие варианты?",
+        now,
+      ),
+      null,
+      "partial or inconsistent dependent batch",
+    );
+  }
 });

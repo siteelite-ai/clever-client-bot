@@ -137,6 +137,7 @@ function priorLog(baseRequest = base): ServerLog {
 interface Run {
   events: Event[];
   steps: Step[];
+  catalogRequests: number;
   catalogProductReads: number;
   primaryReasoningRequests: number;
   correctionRequests: number;
@@ -146,11 +147,18 @@ interface Run {
 
 async function runFollowup({
   baseRequest = base,
+  historyBaseRequest = baseRequest,
+  followupMessage = followup,
+  pendingClarification = null,
   failLogRead = false,
   rawReasoning = areaOnlyReasoning,
   interveningUserTurns = [],
 }: {
   baseRequest?: string;
+  /** Browser history is a candidate, never authority for a prior request. */
+  historyBaseRequest?: string;
+  followupMessage?: string;
+  pendingClarification?: Record<string, unknown> | null;
   failLogRead?: boolean;
   rawReasoning?: string;
   /** Completed dependent turns between the rendered batch and this request. */
@@ -175,6 +183,7 @@ async function runFollowup({
     prior,
   ];
   let steps: Step[] = [];
+  let catalogRequests = 0;
   let catalogProductReads = 0;
   let primaryReasoningRequests = 0;
   let correctionRequests = 0;
@@ -235,6 +244,7 @@ async function runFollowup({
         }
       }
       if (url.origin === "https://fixture.catalog.invalid") {
+        catalogRequests++;
         if (url.pathname === "/api/categories") {
           return json({
             data: {
@@ -376,11 +386,14 @@ async function runFollowup({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: followup,
+            message: followupMessage,
             messageId: crypto.randomUUID(),
             sessionId,
+            slots: pendingClarification
+              ? { pending_clarification: pendingClarification }
+              : {},
             history: [
-              { role: "user", content: baseRequest },
+              { role: "user", content: historyBaseRequest },
               { role: "assistant", content: previousCard },
               ...interveningUserTurns.flatMap((query) => [
                 { role: "user", content: query },
@@ -398,6 +411,7 @@ async function runFollowup({
     return {
       events: eventsFromSse(await response.text()),
       steps,
+      catalogRequests,
       catalogProductReads,
       primaryReasoningRequests,
       correctionRequests,
@@ -547,6 +561,81 @@ Deno.test({
         !rendered[0].markdown?.includes("компактный"),
         JSON.stringify(result),
       );
+
+      const genericBase = "Покажи светодиодные светильники для гостиной";
+      const genericReasoning =
+        "Покажу другие светодиодные светильники для гостиной, подтверждённые каталогом.";
+      const generic = await runFollowup({
+        baseRequest: genericBase,
+        rawReasoning: genericReasoning,
+      });
+      assertEquals(
+        generic.primaryReasoningRequests,
+        1,
+        JSON.stringify(generic),
+      );
+      assert(
+        !generic.steps.some(({ step }) =>
+          step === "v3_unverified_rendered_selection_context_rejected"
+        ),
+        JSON.stringify(generic.steps),
+      );
+      const genericUnreadable = await runFollowup({
+        baseRequest: genericBase,
+        rawReasoning: genericReasoning,
+        failLogRead: true,
+      });
+      assertEquals(genericUnreadable.primaryReasoningRequests, 0);
+      assertEquals(genericUnreadable.catalogProductReads, 0);
+      assertEquals(blocks(genericUnreadable.events).length, 0);
+      const pendingFreeformUnreadable = await runFollowup({
+        baseRequest: genericBase,
+        followupMessage: "другие варианты",
+        pendingClarification: {
+          facet_key: "catalog_section",
+          slot_id: "offline-server-issued-slot",
+        },
+        failLogRead: true,
+      });
+      assertEquals(pendingFreeformUnreadable.modelRequests, 0);
+      assertEquals(pendingFreeformUnreadable.catalogRequests, 0);
+      assertEquals(blocks(pendingFreeformUnreadable.events).length, 0);
+      assert(
+        pendingFreeformUnreadable.steps.some(({ step }) =>
+          step === "v3_unverified_rendered_selection_context_rejected"
+        ),
+        JSON.stringify(pendingFreeformUnreadable),
+      );
+      for (
+        const changed of [
+          {
+            historyBaseRequest: "Покажи светодиодные светильники для спальни",
+          },
+          { interveningUserTurns: ["Подбери светильник для спальни"] },
+          { interveningUserTurns: ["Покажи только чёрные варианты"] },
+        ]
+      ) {
+        const unverified = await runFollowup({
+          baseRequest: genericBase,
+          rawReasoning: genericReasoning,
+          ...changed,
+        });
+        assertEquals(
+          unverified.primaryReasoningRequests,
+          0,
+          JSON.stringify(changed),
+        );
+        assertEquals(
+          unverified.catalogProductReads,
+          0,
+          JSON.stringify(changed),
+        );
+        assertEquals(
+          blocks(unverified.events).length,
+          0,
+          JSON.stringify(changed),
+        );
+      }
 
       // An additional physical requirement must not make a legitimate
       // server-rendered continuation fail provenance. Suitability itself
@@ -705,7 +794,7 @@ Deno.test({
         JSON.stringify(failedRead),
       );
       assert(
-        publicText(failedRead.events).includes("Повторите запрос"),
+        publicText(failedRead.events).includes("Повторите полный запрос"),
         JSON.stringify(failedRead),
       );
       assert(
@@ -778,7 +867,7 @@ Deno.test({
         assert(
           changed.steps.some(({ step, meta }) =>
             step === "v3_server_rendered_selection_base_checked" &&
-            meta?.matched === true
+            meta?.matched === false
           ),
           changedDestination,
         );
@@ -788,7 +877,7 @@ Deno.test({
         assert(
           changed.steps.some(({ step, meta }) =>
             step === "v3_unverified_rendered_selection_context_rejected" &&
-            meta?.base_matched === true
+            meta?.base_matched === false
           ),
           changedDestination,
         );
@@ -835,7 +924,7 @@ Deno.test({
       assert(
         revisedArea.steps.some(({ step, meta }) =>
           step === "v3_unverified_rendered_selection_context_rejected" &&
-          meta?.base_matched === true
+          meta?.base_matched === false
         ),
         JSON.stringify(revisedArea.steps),
       );

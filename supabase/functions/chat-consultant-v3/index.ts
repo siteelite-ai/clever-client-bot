@@ -213,7 +213,10 @@ import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
 } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
-import { resolveServerRenderedSelectionBase } from "../_shared/v3-tools/server-rendered-continuation.ts";
+import {
+  resolveServerRenderedSelectionProof,
+  type ServerRenderedSelectionProof,
+} from "../_shared/v3-tools/server-rendered-continuation.ts";
 import {
   advanceSelectionTarget,
   bootstrapSelectionTargetFromDiscovery,
@@ -8082,15 +8085,16 @@ export async function loadVerifiedCustomerMeasurementEvidence(
 }
 
 /** A browser-supplied follow-up suggests a scope but cannot certify that
- * the original request produced a completed product batch. Failed reads
- * keep the ordinary model correction path unchanged. */
-async function loadServerRenderedSelectionBase(
+ * the original request produced a completed product batch. Any failed proof
+ * is handled before model or catalog search in the dependent route. */
+async function loadServerRenderedSelectionProof(
   supabase: SupabaseClient,
   sessionId: string,
   currentLogId: string,
   browserBase: string,
+  currentFollowup: string,
   requestStartedAt: number,
-): Promise<string | null> {
+): Promise<ServerRenderedSelectionProof | null> {
   if (!browserBase || browserBase.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS) {
     return null;
   }
@@ -8131,10 +8135,11 @@ async function loadServerRenderedSelectionBase(
       sessionRead.error || boundaryRead.error ||
       !Array.isArray(sessionRead.data)
     ) return null;
-    return resolveServerRenderedSelectionBase(
+    return resolveServerRenderedSelectionProof(
       [...sessionRead.data, ...(boundaryRead.data ? [boundaryRead.data] : [])],
       sessionId,
       browserBase,
+      currentFollowup,
     );
   } catch {
     return null;
@@ -24772,6 +24777,47 @@ Deno.serve(async (req) => {
             }
 
             const priorHistory = stripCurrentUserEcho(history, userMessage);
+            const requestedAdditionalSelection =
+              isAdditionalProductSelectionFollowup(userMessage);
+            const browserAdditionalBase = requestedAdditionalSelection &&
+                extractRenderedProductUrls(priorHistory).length > 0
+              ? latestRenderedSelectionRequest(priorHistory)
+              : null;
+            const preflightAdditionalSelection =
+              requestedAdditionalSelection && browserAdditionalBase
+                ? await loadServerRenderedSelectionProof(
+                  supabase,
+                  sessionId,
+                  logId,
+                  browserAdditionalBase,
+                  userMessage,
+                  t0,
+                )
+                : null;
+            if (requestedAdditionalSelection) {
+              steps.push({
+                step: "v3_server_rendered_selection_base_checked",
+                ms: Date.now() - t0,
+                meta: { matched: Boolean(preflightAdditionalSelection) },
+              });
+            }
+            if (requestedAdditionalSelection &&
+              !preflightAdditionalSelection) {
+              // Prove a completed server-owned batch before any branch can
+              // spend a model/catalog call on browser-supplied history.
+              send({
+                type: "delta",
+                content:
+                  "Не могу однозначно продолжить прежний подбор. Повторите полный запрос — проверю товары заново.",
+              });
+              steps.push({
+                step: "v3_unverified_rendered_selection_context_rejected",
+                ms: Date.now() - t0,
+                meta: { base_matched: false },
+              });
+              productsCount = 0;
+              return;
+            }
             const pendingSlot = slots.pending_clarification;
             const pendingRecord =
               pendingSlot && typeof pendingSlot === "object" &&
@@ -25420,6 +25466,12 @@ Deno.serve(async (req) => {
                 settings.v3_jargon_axial_modifiers_enabled,
             };
             replacementEgressCache = cache;
+            const additionalProductSelectionFollowup =
+              requestedAdditionalSelection && !startsNewTask;
+            const verifiedAdditionalSelection =
+              additionalProductSelectionFollowup
+                ? preflightAdditionalSelection
+                : null;
 
             let recentProductEvidence = await loadRecentProductEvidence(
               supabase,
@@ -25486,25 +25538,20 @@ Deno.serve(async (req) => {
               recentProductEvidence.length > 0 &&
               isRecentProductPriceSelectionFollowup(userMessage) &&
               !isPureRecentPriceFollowup(userMessage);
-            const previouslyRenderedProductUrls = extractRenderedProductUrls(
-              effectiveHistory,
-            );
-            const additionalProductSelectionFollowup =
-              previouslyRenderedProductUrls.length > 0 &&
-              isAdditionalProductSelectionFollowup(userMessage);
-            const ellipticalBaseRequest = additionalProductSelectionFollowup ||
-                (recentProductEvidence.length > 0 &&
-                  (
-                    isEllipticalAttributeFollowup(userMessage) ||
-                    constrainedRecentPriceFollowup
-                  ))
+            const ellipticalAttributeFollowup =
+              recentProductEvidence.length > 0 &&
+              (isEllipticalAttributeFollowup(userMessage) ||
+                constrainedRecentPriceFollowup);
+            const ellipticalBaseRequest = additionalProductSelectionFollowup
+              ? verifiedAdditionalSelection?.baseRequest ?? null
+              : ellipticalAttributeFollowup
               ? latestRenderedSelectionRequest(effectiveHistory)
               : null;
             const additionalSelectionRequest =
               additionalProductSelectionFollowup &&
               Boolean(ellipticalBaseRequest);
             const priorShownProductUrls = additionalSelectionRequest
-              ? previouslyRenderedProductUrls
+              ? verifiedAdditionalSelection?.shownProductUrls ?? []
               : [];
             const ellipticalContinuation:
               | EllipticalSelectionContinuation
@@ -26663,31 +26710,14 @@ Deno.serve(async (req) => {
                 : scopedSelectionRequest.message;
               const needsServerAreaProof = additionalSelectionRequest &&
                 verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
-              const [customerMeasurementEvidence, verifiedRenderedBase] =
-                await Promise.all([
-                  verifiedCustomerMeasurementEvidence(),
-                  needsServerAreaProof && ellipticalBaseRequest
-                    ? loadServerRenderedSelectionBase(
-                      supabase,
-                      effectiveSessionId,
-                      logId,
-                      ellipticalBaseRequest,
-                      t0,
-                    )
-                    : Promise.resolve(null),
-                ]);
-              if (needsServerAreaProof) {
-                steps.push({
-                  step: "v3_server_rendered_selection_base_checked",
-                  ms: Date.now() - t0,
-                  meta: { matched: Boolean(verifiedRenderedBase) },
-                });
-              }
+              const customerMeasurementEvidence =
+                await verifiedCustomerMeasurementEvidence();
               const verifiedAreaContinuation = !needsServerAreaProof ||
                 verifiedRenderedDestinationContextUnchanged({
                   selectionRequest: combinedSelectionRequest,
                   baseRequest: ellipticalBaseRequest ?? "",
-                  serverVerifiedBaseRequest: verifiedRenderedBase ?? "",
+                  serverVerifiedBaseRequest:
+                    verifiedAdditionalSelection?.baseRequest ?? "",
                   serverVerifiedPriorQueriesNewestFirst:
                     customerMeasurementEvidence.priorQueriesNewestFirst,
                 });
@@ -26705,7 +26735,9 @@ Deno.serve(async (req) => {
                 steps.push({
                   step: "v3_unverified_rendered_selection_context_rejected",
                   ms: Date.now() - t0,
-                  meta: { base_matched: Boolean(verifiedRenderedBase) },
+                  meta: {
+                    base_matched: Boolean(verifiedAdditionalSelection),
+                  },
                 });
                 productsCount = 0;
                 return;
@@ -26734,7 +26766,7 @@ Deno.serve(async (req) => {
                 priorShownProductUrls,
                 null,
                 Boolean(replacementEgressRequest),
-                verifiedRenderedBase,
+                verifiedAdditionalSelection?.baseRequest ?? null,
                 customerMeasurementEvidence.priorQueriesNewestFirst,
               );
               productsCount = out.productsRendered;
