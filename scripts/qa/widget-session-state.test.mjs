@@ -260,9 +260,8 @@ test('restored assistant content cannot inject HTML or event handlers through ma
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__xss, undefined);
   assert.match(messages.textContent, /<img src=x onerror=/u);
-  const link = messages.querySelector('a[href^="https://example.com/"]');
-  assert.ok(link);
-  assert.equal(link.getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]'), null);
+  assert.match(messages.textContent, /\[ссылка\]\(https:\/\/example\.com\/" onmouseover="bad\)/u);
   assert.equal(
     messages.querySelector('a[href^="https://220volt.kz/"]')?.getAttribute('href'),
     'https://220volt.kz/catalog/item/?a=1&b=2',
@@ -286,14 +285,96 @@ test('markdown formatting preserves URL underscores and cannot promote URL conte
   const messages = dom.window.document.querySelector('#volt-widget-messages');
   const links = messages.querySelectorAll('a');
 
-  assert.equal(links.length, 3);
+  assert.equal(links.length, 2);
   assert.equal(links[0].getAttribute('href'), productUrl);
   assert.equal(links[0].querySelector('strong')?.textContent, 'Товар', 'link label markdown should remain formatted');
   assert.equal(links[1].getAttribute('href'), 'https://220volt.kz/catalog/product_model');
-  assert.equal(links[2].getAttribute('href'), suspiciousUrl);
-  assert.equal(links[2].getAttribute('onmouseover'), null);
+  assert.ok(messages.textContent.includes(`[ссылка](${suspiciousUrl})`), 'rejected link must stay visible');
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__xss, undefined);
+  dom.window.close();
+});
+
+test('assistant markdown only links to the canonical HTTPS storefront', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  const allowed = 'https://220volt.kz/catalog/item/?a=1&b=2';
+  const denied = [
+    'http://220volt.kz/catalog/item/',
+    'https://example.com/catalog/item/',
+    'https://220volt.kz.evil.example/catalog/item/',
+    'https://220volt.kz@evil.example/catalog/item/',
+    'https://evil.example@220volt.kz/catalog/item/',
+    'https://220volt.kz:443/catalog/item/',
+    'https://www.220volt.kz/catalog/item/',
+    'https://wa.me/77013029775',
+    'mailto:manager@220volt.kz',
+    'tel:+77001234567',
+    'viber://chat?number=77001234567',
+  ];
+  state.history[2].content = [
+    `- **[Настоящий товар](${allowed})**`,
+    ...denied.map((url, index) => `[Не доверять ${index + 1}](${url})`),
+    '[Выполнить](javascript:alert(1))',
+  ].join('\n');
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = messages.querySelectorAll('a');
+
+  assert.equal(links.length, 1, 'only an exact first-party HTTPS link may be navigable');
+  assert.equal(links[0].getAttribute('href'), allowed);
+  assert.equal(links[0].getAttribute('target'), '_blank');
+  assert.match(links[0].getAttribute('rel'), /\bnoopener\b/u);
+  assert.equal(links[0].textContent, 'Настоящий товар');
+  for (const [index, url] of denied.entries()) {
+    assert.ok(messages.textContent.includes(`[Не доверять ${index + 1}](${url})`), `rejected URL ${url} must remain visible`);
+  }
+  assert.match(messages.textContent, /\[Выполнить\]\(javascript:alert\(1\)\)/u);
+  dom.window.close();
+});
+
+test('streamed product cards use the same link policy while only server contacts retain verified actions', async () => {
+  const productUrl = 'https://220volt.kz/catalog/item/';
+  const productMarkdown = [
+    `- **[Товар](${productUrl})**`,
+    '- **[Поддельная карточка](https://220volt.kz.evil.example/catalog/item/)**',
+  ].join('\n');
+  const contactsMarkdown = [
+    '- [Телефон](tel:+77013029775)',
+    '- [Почта](mailto:intermag@220volt.kz)',
+    '- [Чужая почта](mailto:someone@example.com)',
+    '- [WhatsApp](https://wa.me/77013029775)',
+    '- [WhatsApp с параметрами](https://wa.me/77013029775?text=redirect)',
+    '- [Поддельный WhatsApp](https://wa.me.evil.example/77013029775)',
+    '- [WhatsApp с логином](https://attacker@wa.me/77013029775)',
+  ].join('\n');
+  const sse = [
+    { v3_event: { type: 'diagnostic', log_id: 'link-policy-test', phase: 'start' } },
+    { choices: [{ delta: { content: 'Контакты: [Телефон](tel:+77013029775)' } }] },
+    { v3_event: { type: 'products_block', markdown: productMarkdown, count: 1 } },
+    { v3_event: { type: 'contacts', html: contactsMarkdown } },
+    { v3_event: { type: 'diagnostic', log_id: 'link-policy-test', phase: 'complete', products_count: 1 } },
+  ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Покажи товар и контакты';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes('Чужая почта') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'streamed contact and product bubbles should complete');
+
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = [...messages.querySelectorAll('a')].map((link) => link.getAttribute('href'));
+  assert.deepEqual(links, [productUrl, 'tel:+77013029775', 'mailto:intermag@220volt.kz',
+    'https://wa.me/77013029775']);
+  assert.match(messages.textContent, /Контакты: \[Телефон\]\(tel:\+77013029775\)/u,
+    'model-authored phone link must stay inert');
+  assert.match(messages.textContent, /\[Поддельная карточка\]\(https:\/\/220volt\.kz\.evil\.example\/catalog\/item\/\)/u);
+  assert.match(messages.textContent, /\[Чужая почта\]\(mailto:someone@example\.com\)/u);
+  assert.match(messages.textContent, /\[WhatsApp с параметрами\]\(https:\/\/wa\.me\/77013029775\?text=redirect\)/u);
+  assert.match(messages.textContent, /\[Поддельный WhatsApp\]\(https:\/\/wa\.me\.evil\.example\/77013029775\)/u);
+  assert.match(messages.textContent, /\[WhatsApp с логином\]\(https:\/\/attacker@wa\.me\/77013029775\)/u);
   dom.window.close();
 });
 
@@ -577,7 +658,8 @@ test('customer text echoed by an exact-price response remains inert in streamed 
   const messages = dom.window.document.querySelector('#volt-widget-messages');
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__echoXss, undefined);
-  assert.equal(messages.querySelector('a[href^="https://example.com/"]')?.getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]'), null);
+  assert.match(messages.textContent, /\[ссылка\]\(https:\/\/example\.com\/" onmouseover="window\.__echoXss=2\)/u);
   assert.match(messages.textContent, /<img src=x onerror=/u);
   dom.window.close();
 });
