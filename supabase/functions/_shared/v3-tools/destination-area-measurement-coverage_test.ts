@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   type DestinationAreaMeasurementCoverageInput,
   verifiedDestinationAreaCoversSoleMeasurement,
+  verifiedRenderedDestinationContextUnchanged,
 } from "./destination-area-measurement-coverage.ts";
 
 const base =
@@ -14,6 +15,63 @@ const input: DestinationAreaMeasurementCoverageInput = {
   customerMeasurementEvidence: `${followup}\n${base}`,
   serverVerifiedPriorQueriesNewestFirst: [base],
 };
+
+Deno.test("rendered continuation provenance accepts an unchanged multi-criterion room request", () => {
+  const multi =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м², мощность от 20 Вт. Что подойдет?";
+  const reaffirmation = "Они точно подходят для освещения 30 м²?";
+  const selectionRequest = `${multi}\n${followup}`;
+  const verified = {
+    selectionRequest,
+    baseRequest: multi,
+    serverVerifiedBaseRequest: multi,
+    serverVerifiedPriorQueriesNewestFirst: [
+      "Чем отличаются эти варианты?",
+      reaffirmation,
+      multi,
+    ],
+  };
+  assertEquals(verifiedRenderedDestinationContextUnchanged(verified), true);
+  // Provenance is separate from the single-measurement optimization. A
+  // second user criterion still needs the ordinary independent card gate.
+  assertEquals(
+    verifiedDestinationAreaCoversSoleMeasurement({
+      ...verified,
+      customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+    }),
+    { covered: false, minimumAreaM2: null },
+  );
+  for (
+    const changed of [
+      "Они точно подходят для спальни 30 м²?",
+      "Они точно подходят для освещения 40 м²?",
+      "Покажи только чёрные варианты",
+      "Теперь нужен кабель",
+    ]
+  ) {
+    assertEquals(
+      verifiedRenderedDestinationContextUnchanged({
+        ...verified,
+        serverVerifiedPriorQueriesNewestFirst: [changed, multi],
+      }),
+      false,
+      changed,
+    );
+  }
+  for (
+    const forged of [
+      { ...verified, serverVerifiedBaseRequest: "" },
+      { ...verified, serverVerifiedPriorQueriesNewestFirst: [reaffirmation] },
+      {
+        ...verified,
+        selectionRequest: `${multi}\nА для спальни есть другие варианты?`,
+      },
+      { ...verified, baseRequest: multi.replace("30 м²", "40 м²") },
+    ]
+  ) {
+    assertEquals(verifiedRenderedDestinationContextUnchanged(forged), false);
+  }
+});
 
 Deno.test("a completed prior 25 m² room request covers only its repeated area obligation", () => {
   assertEquals(verifiedDestinationAreaCoversSoleMeasurement(input), {

@@ -209,7 +209,10 @@ import {
   INVALID_DERIVED_DECLARATION_CORRECTION,
   type RequiredProductMeasurementGap,
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
-import { verifiedDestinationAreaCoversSoleMeasurement } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
+import {
+  verifiedDestinationAreaCoversSoleMeasurement,
+  verifiedRenderedDestinationContextUnchanged,
+} from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
 import { resolveServerRenderedSelectionBase } from "../_shared/v3-tools/server-rendered-continuation.ts";
 import {
   advanceSelectionTarget,
@@ -26679,6 +26682,33 @@ Deno.serve(async (req) => {
                   ms: Date.now() - t0,
                   meta: { matched: Boolean(verifiedRenderedBase) },
                 });
+              }
+              const verifiedAreaContinuation = !needsServerAreaProof ||
+                verifiedRenderedDestinationContextUnchanged({
+                  selectionRequest: combinedSelectionRequest,
+                  baseRequest: ellipticalBaseRequest ?? "",
+                  serverVerifiedBaseRequest: verifiedRenderedBase ?? "",
+                  serverVerifiedPriorQueriesNewestFirst:
+                    customerMeasurementEvidence.priorQueriesNewestFirst,
+                });
+              if (needsServerAreaProof && !verifiedAreaContinuation) {
+                // A short dependent request must not turn a browser-supplied
+                // previous selection into a certified A-level criterion when
+                // the completed batch is missing or a later customer turn
+                // changed the destination/area. The same server-log proof is
+                // required by the fresh per-card gate in the expert loop.
+                send({
+                  type: "delta",
+                  content:
+                    "Не могу однозначно продолжить прежний подбор. Повторите запрос, указав помещение и площадь, — проверю товары заново.",
+                });
+                steps.push({
+                  step: "v3_unverified_rendered_selection_context_rejected",
+                  ms: Date.now() - t0,
+                  meta: { base_matched: Boolean(verifiedRenderedBase) },
+                });
+                productsCount = 0;
+                return;
               }
               const out = await runExpertLoop(
                 combinedSelectionRequest,

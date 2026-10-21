@@ -37,6 +37,27 @@ function normalizedIdentity(value: string): string {
     .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
 }
 
+function verifiedInterveningQueries(
+  serverVerifiedBaseRequest: string,
+  priorQueriesNewestFirst: readonly string[],
+): readonly string[] | null {
+  // Text compacted for the model cannot establish whether a later customer
+  // turn changed the target. Only the bounded completed server-log chain may
+  // authorize inheritance of the previously rendered request.
+  if (
+    !Array.isArray(priorQueriesNewestFirst) ||
+    priorQueriesNewestFirst.length === 0 ||
+    priorQueriesNewestFirst.length > 8 ||
+    priorQueriesNewestFirst.some((query) =>
+      typeof query !== "string" || !query.trim()
+    )
+  ) return null;
+  const baseIndex = priorQueriesNewestFirst.findIndex((query) =>
+    normalizedIdentity(query) === normalizedIdentity(serverVerifiedBaseRequest)
+  );
+  return baseIndex < 0 ? null : priorQueriesNewestFirst.slice(0, baseIndex);
+}
+
 function hasServerVerifiedAreaEvidence(
   evidence: string,
   followup: string,
@@ -48,21 +69,12 @@ function hasServerVerifiedAreaEvidence(
   // query. It cannot prove that a later customer turn did not change the
   // destination. Recheck every full server-log turn from the controlled card
   // batch through the current request, not just the surviving number.
-  if (
-    !Array.isArray(priorQueriesNewestFirst) ||
-    priorQueriesNewestFirst.length === 0 ||
-    priorQueriesNewestFirst.length > 8 ||
-    priorQueriesNewestFirst.some((query) =>
-      typeof query !== "string" || !query.trim()
-    )
-  ) return false;
-  const baseIndex = priorQueriesNewestFirst.findIndex((query) =>
-    normalizedIdentity(query) === normalizedIdentity(serverVerifiedBaseRequest)
+  const intervening = verifiedInterveningQueries(
+    serverVerifiedBaseRequest,
+    priorQueriesNewestFirst,
   );
-  if (baseIndex < 0) return false;
-  const intervening = priorQueriesNewestFirst.slice(0, baseIndex);
   if (
-    intervening.some((query) =>
+    !intervening || intervening.some((query) =>
       !isNeutralContinuation(query) &&
       !isPureAreaReaffirmation(query, minimumAreaM2)
     )
@@ -155,6 +167,47 @@ function containsOnlyRequiredArea(
   // previous turn. This optimization applies only to one unambiguous number.
   return physical.length === 1 && physical[0].unit === "м²" &&
     physical[0].value === minimumAreaM2;
+}
+
+/** Whether the rendered selection is still the current customer task.
+ * Unlike the sole-measurement optimization below, this accepts an original
+ * request with additional physical criteria. It proves only provenance and
+ * unchanged destination, never that any individual product is suitable. */
+export function verifiedRenderedDestinationContextUnchanged(
+  input: Pick<
+    DestinationAreaMeasurementCoverageInput,
+    | "selectionRequest"
+    | "baseRequest"
+    | "serverVerifiedBaseRequest"
+    | "serverVerifiedPriorQueriesNewestFirst"
+  >,
+): boolean {
+  const base = String(input.baseRequest ?? "");
+  const verifiedBase = String(input.serverVerifiedBaseRequest ?? "");
+  const selection = String(input.selectionRequest ?? "");
+  if (
+    !base || !verifiedBase || !selection.startsWith(`${base}\n`) ||
+    normalizedIdentity(base) !== normalizedIdentity(verifiedBase)
+  ) return false;
+  const followup = selection.slice(base.length + 1).trim();
+  if (!isAdditionalProductSelectionFollowup(followup)) return false;
+  const baseFit = verifyReplacementDestinationFit(verifiedBase, []);
+  const selectionFit = verifyReplacementDestinationFit(selection, []);
+  const area = baseFit.minimum_area_m2;
+  if (
+    !baseFit.required || !selectionFit.required || area === null ||
+    selectionFit.minimum_area_m2 !== area ||
+    normalizedIdentity(selectionFit.place ?? "") !==
+      normalizedIdentity(baseFit.place ?? "")
+  ) return false;
+  const intervening = verifiedInterveningQueries(
+    verifiedBase,
+    input.serverVerifiedPriorQueriesNewestFirst,
+  );
+  return intervening !== null &&
+    intervening.every((query) =>
+      isNeutralContinuation(query) || isPureAreaReaffirmation(query, area)
+    );
 }
 
 /**

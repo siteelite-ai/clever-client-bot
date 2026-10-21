@@ -111,12 +111,12 @@ function eventsFromSse(body: string): Event[] {
     .map((line) => JSON.parse(line.slice(6)) as Event);
 }
 
-function priorLog(): ServerLog {
+function priorLog(baseRequest = base): ServerLog {
   const id = "offline-completed-prior";
   return {
     id,
     session_id: sessionId,
-    user_query: base,
+    user_query: baseRequest,
     error: null,
     final_products_count: 1,
     created_at: new Date(Date.now() - 2_000).toISOString(),
@@ -145,10 +145,12 @@ interface Run {
 }
 
 async function runFollowup({
+  baseRequest = base,
   failLogRead = false,
   rawReasoning = areaOnlyReasoning,
   interveningUserTurns = [],
 }: {
+  baseRequest?: string;
   failLogRead?: boolean;
   rawReasoning?: string;
   /** Completed dependent turns between the rendered batch and this request. */
@@ -157,7 +159,7 @@ async function runFollowup({
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
-  const prior = priorLog();
+  const prior = priorLog(baseRequest);
   const priorRows = [
     ...interveningUserTurns.map((query, index): ServerLog => ({
       id: `offline-dependent-${index}`,
@@ -378,7 +380,7 @@ async function runFollowup({
             messageId: crypto.randomUUID(),
             sessionId,
             history: [
-              { role: "user", content: base },
+              { role: "user", content: baseRequest },
               { role: "assistant", content: previousCard },
               ...interveningUserTurns.flatMap((query) => [
                 { role: "user", content: query },
@@ -429,6 +431,73 @@ function publicText(events: Event[]): string {
   }).join("\n");
 }
 
+function hasEnforcedDestinationArea(
+  steps: Step[],
+  minimumAreaM2: number,
+): boolean {
+  // The area can be discharged either by the fresh per-card destination gate
+  // or by a server-certified A-level catalog facet that is actually applied
+  // to the search. A frozen criterion without the live filter is not proof.
+  if (
+    steps.some(({ step, meta }) =>
+      step === "v3_destination_area_card_proof_covers_measurement" &&
+      meta?.minimum_area_m2 === minimumAreaM2
+    )
+  ) return true;
+  const frozen = steps.some(({ step, meta }) =>
+    step === "v3_user_constraints_frozen" &&
+    Array.isArray(meta?.added) &&
+    meta.added.some((candidate: unknown) => {
+      const criterion = candidate as Record<string, unknown>;
+      return criterion.key === "Максимальная площадь освещения, м2" &&
+        criterion.op === "min" &&
+        criterion.value === String(minimumAreaM2) &&
+        criterion.unit === "м²" &&
+        criterion.level === "A" &&
+        criterion.evidence === "user_explicit";
+    })
+  );
+  const enforced = steps.some(({ step, meta }) =>
+    step === "v3_selection_criteria_plan_enforced" &&
+    Number(meta?.mandatory_count) >= 1 &&
+    Array.isArray(meta?.option_keys) &&
+    meta.option_keys.includes("lighting_area") &&
+    Array.isArray(meta?.conflicting_keys) &&
+    meta.conflicting_keys.length === 0
+  );
+  const filteredSearch = steps.some(({ step, meta }) => {
+    if (
+      step !== "v3_tool_call" || meta?.tool !== "search_catalog" ||
+      meta.ok !== true
+    ) return false;
+    const args = meta.args as
+      | { options?: { lighting_area?: unknown } }
+      | undefined;
+    const values = args?.options?.lighting_area;
+    return Array.isArray(values) && values.length > 0 &&
+      values.every((value: unknown) =>
+        typeof value === "string" &&
+        /^\d+(?:[.,]\d+)?\s*м²$/u.test(value) &&
+        Number.parseFloat(value.replace(",", ".")) >= minimumAreaM2
+      );
+  });
+  const gatedRecovery = steps.some(({ step, meta }) =>
+    step === "v3_measured_reasoning_terminal_recovery" &&
+    Number(meta?.rendered) > 0 &&
+    Array.isArray(meta?.criteria) &&
+    meta.criteria.some((candidate: unknown) => {
+      const criterion = candidate as Record<string, unknown>;
+      return criterion.key === "Максимальная площадь освещения, м2" &&
+        criterion.op === "min" &&
+        criterion.value === String(minimumAreaM2) &&
+        criterion.unit === "м²" &&
+        criterion.level === "A" &&
+        criterion.evidence === "user_explicit";
+    })
+  );
+  return frozen && ((enforced && filteredSearch) || gatedRecovery);
+}
+
 Deno.test({
   name:
     "room-area follow-up keeps primary reasoning and live card gates, with a fail-closed log read",
@@ -454,9 +523,14 @@ Deno.test({
         JSON.stringify(result.steps),
       );
       assert(
+        hasEnforcedDestinationArea(result.steps, 30),
+        JSON.stringify(result.steps),
+      );
+      assert(
         result.steps.some(({ step, meta }) =>
-          step === "v3_destination_area_card_proof_covers_measurement" &&
-          meta?.minimum_area_m2 === 30
+          step === "v3_selection_criteria_plan_enforced" &&
+          Array.isArray(meta?.option_keys) &&
+          meta.option_keys.includes("lighting_area")
         ),
         JSON.stringify(result.steps),
       );
@@ -474,6 +548,25 @@ Deno.test({
         JSON.stringify(result),
       );
 
+      // An additional physical requirement must not make a legitimate
+      // server-rendered continuation fail provenance. Suitability itself
+      // remains subject to the regular (stricter) catalog/card checks.
+      const multiCriterion = await runFollowup({
+        baseRequest:
+          "Хочу заменить люстру на светодиодный светильник в гостиной 30 м², мощность от 20 Вт. Что подойдет?",
+      });
+      assertEquals(
+        multiCriterion.primaryReasoningRequests,
+        1,
+        JSON.stringify(multiCriterion),
+      );
+      assert(
+        !multiCriterion.steps.some(({ step }) =>
+          step === "v3_unverified_rendered_selection_context_rejected"
+        ),
+        JSON.stringify(multiCriterion.steps),
+      );
+
       // The actual preview wording contains model-inferred illuminance and
       // lumens. Preserve its customer-owned destination and area, drop the
       // unsupported numeric premise, then prove every fresh card separately.
@@ -488,9 +581,13 @@ Deno.test({
       assertEquals(preview.correctionRequests, 0, JSON.stringify(preview));
       assert(preview.catalogProductReads >= 1, JSON.stringify(preview));
       assert(
+        hasEnforcedDestinationArea(preview.steps, 30),
+        JSON.stringify(preview.steps),
+      );
+      assert(
         preview.steps.some(({ step, meta }) =>
-          step === "v3_destination_area_card_proof_covers_measurement" &&
-          meta?.minimum_area_m2 === 30
+          step === "v3_measured_reasoning_terminal_recovery" &&
+          Number(meta?.rendered) === 1
         ),
         JSON.stringify(preview.steps),
       );
@@ -589,14 +686,38 @@ Deno.test({
       const failedRead = await runFollowup({ failLogRead: true });
       assertEquals(
         failedRead.primaryReasoningRequests,
-        1,
+        0,
         JSON.stringify(failedRead),
       );
-      assert(failedRead.correctionRequests >= 1, JSON.stringify(failedRead));
+      assertEquals(
+        failedRead.correctionRequests,
+        0,
+        JSON.stringify(failedRead),
+      );
+      assertEquals(
+        failedRead.catalogProductReads,
+        0,
+        JSON.stringify(failedRead),
+      );
+      assertEquals(
+        blocks(failedRead.events).length,
+        0,
+        JSON.stringify(failedRead),
+      );
+      assert(
+        publicText(failedRead.events).includes("Повторите запрос"),
+        JSON.stringify(failedRead),
+      );
       assert(
         failedRead.steps.some(({ step, meta }) =>
           step === "v3_server_rendered_selection_base_checked" &&
           meta?.matched === false
+        ),
+        JSON.stringify(failedRead.steps),
+      );
+      assert(
+        failedRead.steps.some(({ step }) =>
+          step === "v3_unverified_rendered_selection_context_rejected"
         ),
         JSON.stringify(failedRead.steps),
       );
@@ -621,10 +742,7 @@ Deno.test({
         JSON.stringify(fourTurn.steps),
       );
       assert(
-        fourTurn.steps.some(({ step, meta }) =>
-          step === "v3_destination_area_card_proof_covers_measurement" &&
-          meta?.minimum_area_m2 === 30
-        ),
+        hasEnforcedDestinationArea(fourTurn.steps, 30),
         JSON.stringify(fourTurn.steps),
       );
       const fourTurnBlocks = blocks(fourTurn.events);
@@ -656,7 +774,7 @@ Deno.test({
         const changed = await runFollowup({
           interveningUserTurns: [changedDestination, "Спасибо."],
         });
-        assertEquals(changed.primaryReasoningRequests, 1, changedDestination);
+        assertEquals(changed.primaryReasoningRequests, 0, changedDestination);
         assert(
           changed.steps.some(({ step, meta }) =>
             step === "v3_server_rendered_selection_base_checked" &&
@@ -664,8 +782,16 @@ Deno.test({
           ),
           changedDestination,
         );
-        assert(changed.correctionRequests >= 1, changedDestination);
+        assertEquals(changed.correctionRequests, 0, changedDestination);
+        assertEquals(changed.catalogProductReads, 0, changedDestination);
         assertEquals(blocks(changed.events).length, 0, changedDestination);
+        assert(
+          changed.steps.some(({ step, meta }) =>
+            step === "v3_unverified_rendered_selection_context_rejected" &&
+            meta?.base_matched === true
+          ),
+          changedDestination,
+        );
         assert(
           !changed.steps.some(({ step }) =>
             step === "v3_destination_area_card_proof_covers_measurement"
@@ -682,10 +808,19 @@ Deno.test({
       });
       assertEquals(
         revisedArea.primaryReasoningRequests,
-        1,
+        0,
         JSON.stringify(revisedArea),
       );
-      assert(revisedArea.correctionRequests >= 1, JSON.stringify(revisedArea));
+      assertEquals(
+        revisedArea.correctionRequests,
+        0,
+        JSON.stringify(revisedArea),
+      );
+      assertEquals(
+        revisedArea.catalogProductReads,
+        0,
+        JSON.stringify(revisedArea),
+      );
       assertEquals(
         blocks(revisedArea.events).length,
         0,
@@ -694,6 +829,13 @@ Deno.test({
       assert(
         !revisedArea.steps.some(({ step }) =>
           step === "v3_destination_area_card_proof_covers_measurement"
+        ),
+        JSON.stringify(revisedArea.steps),
+      );
+      assert(
+        revisedArea.steps.some(({ step, meta }) =>
+          step === "v3_unverified_rendered_selection_context_rejected" &&
+          meta?.base_matched === true
         ),
         JSON.stringify(revisedArea.steps),
       );
