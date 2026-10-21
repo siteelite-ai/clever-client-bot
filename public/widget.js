@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-c7310b01045d4d38';
+  var WIDGET_VERSION = 'widget-23a6d944053a770b';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
