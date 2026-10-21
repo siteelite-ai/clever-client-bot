@@ -2972,15 +2972,30 @@ export function resolveDerivedSelectionReasoning(
     const captionKey = String(
       sourceFacet?.caption || sourceFacet?.key || choice.facet,
     );
+    let selectedCustomerChoice = false;
     if (CUSTOMER_CHOSEN_DESIGN_FACET.test(`${machineKey} ${captionKey}`)) {
       // The model's `required_facet_values` and visible rationale cannot
       // invent a hard design preference. Reuse the schema-aware search guard
       // as the customer-evidence arbiter; it already distinguishes a room's
       // `30 квадратов` from an explicitly requested square product.
-      if (
-        !customerBackedDesignValues.has(`${machineKey}\u0000${choice.value}`) &&
-        !customerBackedDesignValues.has(`${captionKey}\u0000${choice.value}`)
-      ) {
+      const projectedCustomerChoice =
+        customerBackedDesignValues.has(`${machineKey}\u0000${choice.value}`) ||
+        customerBackedDesignValues.has(`${captionKey}\u0000${choice.value}`);
+      // The generic neighbouring-noun guard below cannot compare a Russian
+      // customer axis word with an English-only live key. Validate this exact
+      // live option against customer text before allowing that narrow bypass.
+      selectedCustomerChoice = sourceFacet?.key
+        ? guardSearchFilters(
+          { mode: "by_filter", options: { [sourceFacet.key]: [choice.value] } },
+          facets as SearchFacet[],
+          customerEvidence,
+          customerEvidence,
+          "",
+        ).user_backed.some(({ key, value }) =>
+          key === sourceFacet.key && value === choice.value
+        )
+        : false;
+      if (!projectedCustomerChoice && !selectedCustomerChoice) {
         if (declaredRequiredIds.has(choice.id)) unownedDesignChoices.push(choice);
         continue;
       }
@@ -3007,7 +3022,8 @@ export function resolveDerivedSelectionReasoning(
     );
     const customerOwned = customerOwnedRequiredIds.has(choice.id);
     if (
-      !customerOwned && customerQualifiesValueOutsideFacet(
+      !customerOwned && !selectedCustomerChoice &&
+      customerQualifiesValueOutsideFacet(
         choice,
         customerEvidence,
         productClass,

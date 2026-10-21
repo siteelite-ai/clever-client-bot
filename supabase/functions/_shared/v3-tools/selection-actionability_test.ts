@@ -3968,6 +3968,20 @@ Deno.test("English style and design axes remain customer-owned", () => {
       "Изделия",
     );
     assertEquals(explicit?.requiredFacetValues, [{ key, value: "лофт" }], key);
+
+    const naturalExplicit = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      key === "style"
+        ? "Нужно изделие в стиле лофт для гостиной 30 м²"
+        : "Нужно изделие с дизайном лофт для гостиной 30 м²",
+      "Изделия",
+    );
+    assertEquals(
+      naturalExplicit?.requiredFacetValues,
+      [{ key, value: "лофт" }],
+      key,
+    );
   }
 });
 
