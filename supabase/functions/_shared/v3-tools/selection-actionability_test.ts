@@ -3901,6 +3901,76 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   assertEquals(explicitMixed?.retrievalQuery, "квадрат");
 });
 
+Deno.test("English shape keys cannot bypass customer-owned design grounding", () => {
+  for (const facet of [
+    { key: "shape", caption: undefined },
+    { key: "appearance", caption: "Геометрия товара" },
+    { key: "form", caption: undefined },
+    { key: "forma", caption: undefined },
+  ]) {
+    const facets = [{
+      ...facet,
+      values: [{ value: "квадрат" }, { value: "круг" }],
+    }];
+    const label = facet.caption || facet.key;
+    const declaration = {
+      reasoning: `Для подбора проверяю ${label}: квадрат.`,
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    };
+    const inferred = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      "Нужно изделие для помещения 30 квадратов",
+      "Изделия",
+    );
+    assertEquals(inferred?.requiredFacetValues, [], facet.key);
+    assertEquals(inferred?.reasoningEvidence.includes("квадрат"), false, facet.key);
+
+    const explicit = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      "Нужно квадратное изделие для помещения 30 квадратов",
+      "Изделия",
+    );
+    assertEquals(explicit?.requiredFacetValues, [{
+      key: label,
+      value: "квадрат",
+    }], facet.key);
+  }
+});
+
+Deno.test("English style and design axes remain customer-owned", () => {
+  for (const key of ["style", "design"]) {
+    const facets = [{
+      key,
+      values: [{ value: "лофт" }, { value: "классика" }],
+    }];
+    const declaration = {
+      reasoning: `Для подбора проверяю ${key}: лофт.`,
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    };
+    const inferred = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      "Нужно изделие для гостиной 30 м²",
+      "Изделия",
+    );
+    assertEquals(inferred?.requiredFacetValues, [], key);
+
+    const explicit = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      `Нужно изделие ${key} лофт для гостиной 30 м²`,
+      "Изделия",
+    );
+    assertEquals(explicit?.requiredFacetValues, [{ key, value: "лофт" }], key);
+  }
+});
+
 Deno.test("a direct product-use qualifier remains customer-owned", () => {
   const facets = [{
     key: "purpose",

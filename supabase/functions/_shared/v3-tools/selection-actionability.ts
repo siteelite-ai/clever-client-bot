@@ -725,7 +725,7 @@ const CLASSIFICATION_FACET =
 // by room dimensions or an application. Their exact values can narrow the
 // result set only when grounded in the customer's own request.
 const CUSTOMER_CHOSEN_DESIGN_FACET =
-  /(?:^|[^\p{L}])(?:форм\p{L}*|стил\p{L}*|дизайн\p{L}*)(?:$|[^\p{L}])/iu;
+  /(?:^|[^\p{L}])(?:shape|style|design|appearance|form|forma|форм\p{L}*|стил\p{L}*|дизайн\p{L}*)(?:$|[^\p{L}])/iu;
 const IDENTITY_FACET =
   /(?:^|[^\p{L}])(?:brand|vendor|manufacturer|producer|trademark|model|series|collection|бренд|производител\p{L}*|торгов\p{L}*\s+марк\p{L}*|модел\p{L}*|сери\p{L}*|коллекц\p{L}*)(?:$|[^\p{L}])/iu;
 const BOOLEAN_FACET_VALUE =
@@ -2878,7 +2878,7 @@ export function resolveDerivedSelectionReasoning(
   const unownedDesignChoices: DerivedRequiredFacetChoice[] = [];
   const customerBackedDesignValues = facets.some((facet) =>
       CUSTOMER_CHOSEN_DESIGN_FACET.test(
-        String(facet.caption || facet.key || ""),
+        `${String(facet.key || "")} ${String(facet.caption || "")}`,
       )
     )
     ? new Set(
@@ -2972,7 +2972,7 @@ export function resolveDerivedSelectionReasoning(
     const captionKey = String(
       sourceFacet?.caption || sourceFacet?.key || choice.facet,
     );
-    if (CUSTOMER_CHOSEN_DESIGN_FACET.test(captionKey)) {
+    if (CUSTOMER_CHOSEN_DESIGN_FACET.test(`${machineKey} ${captionKey}`)) {
       // The model's `required_facet_values` and visible rationale cannot
       // invent a hard design preference. Reuse the schema-aware search guard
       // as the customer-evidence arbiter; it already distinguishes a room's
