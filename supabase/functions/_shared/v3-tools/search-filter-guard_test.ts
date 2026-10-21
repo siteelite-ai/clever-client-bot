@@ -677,7 +677,7 @@ Deno.test("a conjunction inside a compound value is not a one-letter technical c
   assertEquals(result.inferred, []);
 });
 
-Deno.test("filter guard distinguishes user-backed constraints from model guidance", () => {
+Deno.test("filter guard keeps requested identity but not model-only appearance", () => {
   const result = guardSearchFilters(
     {
       mode: "by_filter",
@@ -690,11 +690,14 @@ Deno.test("filter guard distinguishes user-backed constraints from model guidanc
     "Клиент просит Gauss. Для него я дополнительно ищу современный стиль.",
     "Нужен товар бренда Gauss.",
   );
-  assertEquals(result.kept, [
-    { key: "brand", value: "Gauss" },
-    { key: "style", value: "Современный" },
-  ]);
+  assertEquals(result.kept, [{ key: "brand", value: "Gauss" }]);
   assertEquals(result.user_backed, [{ key: "brand", value: "Gauss" }]);
+  assertEquals(result.args.options, { brand: ["Gauss"] });
+  assertEquals(result.dropped, [{
+    key: "style",
+    value: "Современный",
+    reason: "not_declared_in_reasoning",
+  }]);
 });
 
 Deno.test("filter guard does not drop a short code when proving a compound value", () => {
@@ -2001,6 +2004,137 @@ Deno.test("a measurement noun cannot silently become a categorical shape", () =>
     "",
   );
   assertEquals(explicit.args.options, { shape: ["квадрат"] });
+});
+
+Deno.test("model-only appearance cannot return through search prose or reasoning projection", () => {
+  const appearanceFacets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }, {
+    key: "style",
+    caption: "Стиль",
+    values: [{ value: "Современный" }, { value: "Классический" }],
+  }, {
+    key: "design",
+    caption: "Дизайн",
+    values: [{ value: "Минимализм" }, { value: "Лофт" }],
+  }, {
+    key: "mount",
+    caption: "Способ монтажа",
+    values: [{ value: "потолочный" }, { value: "подвесной" }],
+  }];
+  const user = "Хочу люстру в зал 30 квадратов. Что предложишь?";
+  const reasoning =
+    "Форма люстры: квадрат. Стиль: Современный. Дизайн: Минимализм. Способ монтажа: потолочный.";
+  const guarded = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        shape: ["квадрат"],
+        style: ["Современный"],
+        design: ["Минимализм"],
+        mount: ["потолочный"],
+      },
+    },
+    appearanceFacets,
+    reasoning,
+    user,
+    reasoning,
+  );
+  assertEquals(guarded.args.options, { mount: ["потолочный"] });
+  assertEquals(guarded.inferred, []);
+  assertEquals(
+    guarded.dropped.map(({ key }) => key).sort(),
+    ["design", "shape", "style"],
+  );
+  assertEquals(
+    projectExplicitReasoningFacetValues(appearanceFacets, reasoning, user).kept,
+    [{ key: "mount", value: "потолочный" }],
+  );
+});
+
+Deno.test("explicit customer shape, style and design remain selectable", () => {
+  const appearanceFacets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }, {
+    key: "style",
+    caption: "Стиль",
+    values: [{ value: "Современный" }, { value: "Классический" }],
+  }, {
+    key: "design",
+    caption: "Дизайн",
+    values: [{ value: "Минимализм" }, { value: "Лофт" }],
+  }];
+  const user =
+    "Нужна квадратная люстра в современном стиле, дизайн минимализм для зала 30 квадратов.";
+  const reasoning =
+    "Форма люстры: квадрат. Стиль: Современный. Дизайн: Минимализм.";
+  const expected = {
+    shape: ["квадрат"],
+    style: ["Современный"],
+    design: ["Минимализм"],
+  };
+  assertEquals(
+    guardSearchFilters(
+      { mode: "by_filter", options: expected },
+      appearanceFacets,
+      reasoning,
+      user,
+      reasoning,
+    ).args.options,
+    expected,
+  );
+  assertEquals(
+    guardSearchFilters(
+      { mode: "by_filter" },
+      appearanceFacets,
+      reasoning,
+      user,
+      reasoning,
+    ).args.options,
+    expected,
+  );
+  assertEquals(
+    projectExplicitReasoningFacetValues(appearanceFacets, reasoning, user).kept,
+    [
+      { key: "shape", value: "квадрат" },
+      { key: "style", value: "Современный" },
+      { key: "design", value: "Минимализм" },
+    ],
+  );
+});
+
+Deno.test("locally negated inflected appearance never becomes a positive filter", () => {
+  const shapeFacet = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }];
+  const reasoning = "Форма люстры: квадрат.";
+  for (
+    const user of [
+      "Нужна не квадратная люстра для зала.",
+      "Нужна люстра без квадратной формы.",
+    ]
+  ) {
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_filter", options: { shape: ["квадрат"] } },
+        shapeFacet,
+        reasoning,
+        user,
+        reasoning,
+      ).args.options,
+      undefined,
+    );
+    assertEquals(
+      projectExplicitReasoningFacetValues(shapeFacet, reasoning, user).kept,
+      [],
+    );
+  }
 });
 
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {

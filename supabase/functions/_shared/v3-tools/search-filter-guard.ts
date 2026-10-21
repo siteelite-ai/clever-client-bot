@@ -774,6 +774,48 @@ function facetValueAppearsOnlyAsMeasurementNoun(
     );
 }
 
+/**
+ * Shape, style and design are customer preferences, not engineering facts
+ * that the consultant can derive from a room or an application. Recognize
+ * the axis through live facet metadata, not through product-specific terms.
+ * Other facets (for example mounting or IP protection) retain their existing
+ * reasoning-based completion rules.
+ */
+function isAppearanceFacet(facet: SearchFacet): boolean {
+  return norm(`${facet.key} ${facet.caption ?? ""}`).split(" ").some((token) =>
+    /^(?:shape|style|design|appearance|form|forma|форм[аыуе]|формой|стил[ьяюеи]|стилем|дизайн[а-я]*|внешн[а-я]*)$/u
+      .test(token)
+  );
+}
+
+function customerOwnsAppearanceFacetValue(
+  facet: SearchFacet,
+  value: string,
+  userEvidence: string,
+): boolean {
+  if (!isAppearanceFacet(facet)) return true;
+  // `30 квадратов` describes area, not a square product. A second explicit
+  // occurrence such as `квадратная люстра` remains valid.
+  if (
+    facetValueAppearsOnlyAsMeasurementNoun(value, userEvidence) ||
+    !explicitlyAffirmedByUser(value, userEvidence)
+  ) return false;
+  // The generic negation check compares canonical tokens. For inflected
+  // appearance words (`не квадратная`, `без квадратной`) the canonical noun
+  // is only stem-equal, so check the same local token match before treating
+  // the customer's text as an affirmative choice.
+  const valueTokens = norm(value).split(" ").filter((token) =>
+    token.length >= 4
+  );
+  const userTokens = norm(userEvidence).split(" ").filter(Boolean);
+  return !userTokens.some((token, index) =>
+    (userTokens[index - 1] === "не" || userTokens[index - 1] === "без") &&
+    valueTokens.some((valueToken) =>
+      token === valueToken || tokensMatchByStem(token, valueToken)
+    )
+  );
+}
+
 function visualSingleLetter(value: string): string {
   const map: Record<string, string> = {
     а: "a",
@@ -1298,7 +1340,12 @@ export function projectExplicitReasoningFacetValues(
     if (isReplacementIdentityFacet(facet)) continue;
     const compoundCount = compoundCountFacetValue(facet, declaredReasoning);
     if (
-      compoundCount && !contradictedByUser(compoundCount.value, userEvidence)
+      compoundCount && !contradictedByUser(compoundCount.value, userEvidence) &&
+      customerOwnsAppearanceFacetValue(
+        facet,
+        compoundCount.value,
+        userEvidence,
+      )
     ) {
       const item = { key: facet.key, value: compoundCount.value };
       kept.push(item);
@@ -1316,6 +1363,11 @@ export function projectExplicitReasoningFacetValues(
     );
     if (
       labelledValue && !contradictedByUser(labelledValue.value, userEvidence) &&
+      customerOwnsAppearanceFacetValue(
+        facet,
+        labelledValue.value,
+        userEvidence,
+      ) &&
       (!isAbsenceOrUnknownFacetValue(labelledValue.value) ||
         customerOwnsAbsentFacetValue(
           facet,
@@ -1342,6 +1394,13 @@ export function projectExplicitReasoningFacetValues(
 
     const candidates = facet.values.filter((candidate) => {
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+        )
+      ) return false;
       if (
         isAbsenceOrUnknownFacetValue(candidate.value) &&
         !customerOwnsAbsentFacetValue(facet, candidate.value, userEvidence)
@@ -1766,6 +1825,14 @@ export function guardSearchFilters(
         });
         continue;
       }
+      if (!customerOwnsAppearanceFacetValue(facet, canonical, userEvidence)) {
+        dropped.push({
+          key,
+          value: canonical,
+          reason: "not_declared_in_reasoning",
+        });
+        continue;
+      }
       const identityFacet = isReplacementIdentityFacet(facet);
       const authoritativeIdentity = identityFacet &&
         (inferencePolicy.authoritativeFacetValues ?? []).some((item) =>
@@ -1937,6 +2004,13 @@ export function guardSearchFilters(
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+        )
+      ) return false;
+      if (
         numericFacetValueConflictsWithUserMeasurement(
           candidate.value,
           facet,
@@ -2016,6 +2090,13 @@ export function guardSearchFilters(
     const evidenced = facet.values.filter((candidate) => {
       const value = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+        )
+      ) return false;
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
