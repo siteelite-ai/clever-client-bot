@@ -150,6 +150,9 @@ import {
   buildSelectionSearchRecoveryPlan,
   buildSourceProvenCardinalityRecoveryPlan,
   buildUnqualifiedCategoryBrowseRecovery,
+  classifyTaxonomyOutageExactLookup,
+  isConfirmedTaxonomyOutageFailure,
+  shouldAttemptTaxonomyOutageExactLookup,
   filterUnqualifiedCategoryBrowseCandidates,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
@@ -168,6 +171,7 @@ import {
   TRANSIENT_CATALOG_FAILURE_NOTICE,
   transientCatalogFailureFinalization,
   unscopedSourceProvenCardinalityAttempt,
+  verifyTaxonomyOutageExactProduct,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
   buildDerivedSelectionPublicExplanation,
@@ -788,6 +792,14 @@ export function productMeasurementHttpRetryEnabled(
 }
 const PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED =
   productMeasurementHttpRetryEnabled(ADMISSION_SCOPE);
+
+/** Server-only preview opt-in. Default OFF preserves the existing catalog
+ * failure path until the exact-identity recovery is independently accepted. */
+export function taxonomyOutageExactLookupEnabled(
+  readEnv: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): boolean {
+  return readEnv("VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED") === "true";
+}
 
 /** One correction call is the legacy behavior. The second paid attempt is
  * reachable only for a measured-product gap on an explicitly opted-in lane. */
@@ -17656,6 +17668,157 @@ async function runExpertLoop(
           summary: `${tc.name}…`,
         });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (
+          taxonomyOutageExactLookupEnabled() &&
+          tc.name === "discover_category" && !result.ok &&
+          isTransientCatalogToolFailure(result)
+        ) {
+          // This early terminal path must close the tool_event started above;
+          // otherwise the widget can leave its progress indicator spinning.
+          const discoveryDuration = Date.now() - toolStart;
+          send({
+            type: "tool_event",
+            tool: tc.name,
+            phase: "result",
+            duration_ms: discoveryDuration,
+            summary: summariseToolResult(tc.name, result),
+          });
+          steps.push({
+            step: "v3_tool_call",
+            ms: now(),
+            meta: {
+              tool: tc.name,
+              ok: false,
+              error_code: result.error_code,
+              duration_ms: discoveryDuration,
+              args: summariseToolArgs(tc.name, runArgs),
+            },
+          });
+          // A failed taxonomy is not evidence of an empty category. Do not
+          // repeat discovery, infer facets, or let an unscoped model search
+          // nominate a sibling. The only exception is one literal customer
+          // identity lookup, admitted before any successful discovery and
+          // only when the complete request has no other unproved conditions.
+          const lookup = isConfirmedTaxonomyOutageFailure(result) &&
+              shouldAttemptTaxonomyOutageExactLookup({
+                intentMode,
+                replacementIntent,
+                successfulDiscoveries: selectionDiscoveries.length,
+                hasLastDiscovery: Boolean(lastDiscover),
+                catalogSearchAttempted,
+                productsRendered,
+                hasFreshSearch: Boolean(freshSearch),
+              })
+            ? classifyTaxonomyOutageExactLookup(userMessage)
+            : null;
+          let recoveredId: string | null = null;
+          if (lookup && now() < TURN_TIMEOUT_MS - 9_000) {
+            const lookupArgs = {
+              mode: lookup.mode,
+              ...(lookup.mode === "by_article"
+                ? { article: lookup.value }
+                : { query: lookup.value }),
+              per_page: 3,
+            };
+            const lookupStarted = Date.now();
+            send({
+              type: "tool_event",
+              tool: "search_catalog",
+              phase: "start",
+              summary: "Проверяю одну точную маркировку…",
+            });
+            const exactSearch = await executeSearchCatalog(
+              lookupArgs,
+              {
+                baseUrl: CATALOG_BASE_URL,
+                apiToken: ctx.catalogToken,
+                timeoutMs: 4_500,
+                signal: ctx.turnSignal,
+                singleRequest: true,
+              },
+              ctx.cache,
+            );
+            ctx.observeCatalogToolResult?.(exactSearch);
+            const lookupDuration = Date.now() - lookupStarted;
+            send({
+              type: "tool_event",
+              tool: "search_catalog",
+              phase: "result",
+              duration_ms: lookupDuration,
+              summary: summariseToolResult("search_catalog", exactSearch),
+            });
+            steps.push({
+              step: "v3_tool_call",
+              ms: now(),
+              meta: {
+                tool: "search_catalog",
+                ok: exactSearch.ok,
+                error_code: exactSearch.ok ? null : exactSearch.error_code,
+                duration_ms: lookupDuration,
+                args: { mode: lookup.mode, exact_identity: true },
+              },
+            });
+            if (exactSearch.ok && exactSearch.tool === "search_catalog") {
+              const full = ctx.cache.get(String(exactSearch.results[0]?.id));
+              if (
+                full &&
+                verifyTaxonomyOutageExactProduct(
+                  lookup,
+                  exactSearch,
+                  full,
+                )
+              ) {
+                const rendered = executeRenderProducts({
+                  product_ids: [full.id],
+                  total_available: 1,
+                }, ctx.cache);
+                if (rendered.ok && rendered.rendered_count === 1) {
+                  recoveredId = full.id;
+                  const caption =
+                    "Разделы каталога временно недоступны. Подтвердил только карточку товара с указанной вами точной маркировкой; подбор других вариантов сейчас не проверен.";
+                  send({ type: "delta", content: caption, origin: "server" });
+                  finalText += `${finalText ? "\n\n" : ""}${caption}`;
+                  send({
+                    type: "products_block",
+                    markdown: rendered.markdown,
+                    count: 1,
+                    total_available: 1,
+                  });
+                  productsRendered += 1;
+                  shownIds.add(full.id);
+                }
+              }
+            }
+            steps.push({
+              step: "v3_taxonomy_outage_exact_lookup",
+              ms: now(),
+              meta: {
+                mode: lookup.mode,
+                catalog_ok: exactSearch.ok,
+                recovered: Boolean(recoveredId),
+                candidate_coverage: exactSearch.ok &&
+                    exactSearch.tool === "search_catalog"
+                  ? exactSearch.candidate_coverage ?? "unknown"
+                  : "unknown",
+              },
+            });
+          }
+          if (recoveredId) {
+            steps.push({
+              step: "v3_turn_end",
+              ms: now(),
+              meta: { reason: "taxonomy_outage_exact_identity" },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+          steps.push({
+            step: "v3_taxonomy_outage_fail_closed",
+            ms: now(),
+            meta: { exact_lookup_admitted: Boolean(lookup) },
+          });
+          return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+        }
 
         if (
           tc.name === "search_catalog" &&

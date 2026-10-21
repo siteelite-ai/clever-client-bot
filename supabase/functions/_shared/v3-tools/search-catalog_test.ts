@@ -22,6 +22,47 @@ Deno.test("incomplete by-filter input exposes a structured recovery code", async
   assertEquals(result.error_code, "incomplete_filter");
 });
 
+Deno.test("server-only single-request identity lookup issues exactly one GET on 429 and empty compound query", async () => {
+  for (const status of [429, 200]) {
+    const urls: string[] = [];
+    const result = await executeSearchCatalog({
+      mode: "by_query", query: "ВВГнг 2х1.5", per_page: 3,
+    }, {
+      baseUrl: "https://catalog.test", apiToken: "test", singleRequest: true,
+      fetchImpl: (input) => {
+        urls.push(String(input));
+        return Promise.resolve(new Response(JSON.stringify({
+          data: { results: [], pagination: { total: 0 } },
+        }), { status, headers: { "content-type": "application/json" } }));
+      },
+    }, new Map());
+    assertEquals(urls.length, 1, `status ${status} must not retry or rewrite`);
+    assertEquals(new URL(urls[0]).searchParams.get("query"), "ВВГнг 2х1.5");
+    assertEquals(result.ok, status === 200);
+  }
+});
+
+Deno.test("single-request mode rejects category, facet and sorting fan-out before HTTP", async () => {
+  let calls = 0;
+  for (const extra of [
+    { category: "Кабели" }, { category_in: ["Кабели"] },
+    { options: { color: ["red"] } }, { sort_cheapest: true },
+    { page: 2 }, { per_page: 50 },
+  ]) {
+    const result = await executeSearchCatalog({
+      mode: "by_query", query: "ABC-12345", ...extra,
+    }, {
+      baseUrl: "https://catalog.test", apiToken: "test", singleRequest: true,
+      fetchImpl: () => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    }, new Map());
+    assertEquals(result.ok, false);
+  }
+  assertEquals(calls, 0);
+});
+
 Deno.test("catalog visibility policy fails closed only when the stable flag is present", () => {
   assertEquals(isRestrictedCatalogProduct({ options: [] }), false);
   assertEquals(isRestrictedCatalogProduct({

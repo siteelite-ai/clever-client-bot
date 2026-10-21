@@ -10,8 +10,10 @@ import {
   buildSelectionSearchRecoveryPlan,
   buildSourceProvenCardinalityRecoveryPlan,
   buildUnqualifiedCategoryBrowseRecovery,
+  classifyTaxonomyOutageExactLookup,
   filterUnqualifiedCategoryBrowseCandidates,
   filterSelectionRecoveryPool,
+  isConfirmedTaxonomyOutageFailure,
   isRecoverableSelectionSearchFailure,
   isRecoverableSelectionSearchShortfall,
   isRecoverableSparseBooleanProofShortfall,
@@ -20,6 +22,7 @@ import {
   rankReasoningSearchQueries,
   resolveSelectionSearchEvidence,
   shouldAppendCatalogEmpty,
+  shouldAttemptTaxonomyOutageExactLookup,
   shouldAttemptUnscopedSourceProvenCardinalityRecovery,
   shouldFinalizeMissingAnchorReplacement,
   shouldFinalizePendingSelection,
@@ -28,8 +31,9 @@ import {
   TRANSIENT_CATALOG_FAILURE_NOTICE,
   transientCatalogFailureFinalization,
   unscopedSourceProvenCardinalityAttempt,
+  verifyTaxonomyOutageExactProduct,
 } from "./selection-search-recovery.ts";
-import type { ProductRef } from "./types.ts";
+import type { ProductFull, ProductRef, SearchCatalogOk } from "./types.ts";
 import {
   type Criterion,
   resolveTerminalSelectionCriteria,
@@ -98,6 +102,138 @@ Deno.test("only retryable catalog-tool failures establish transient uncertainty"
     }),
     false,
   );
+});
+
+Deno.test("taxonomy-outage lookup admits one literal identity only, never a compound selection or hidden hard axis", () => {
+  assertEquals(classifyTaxonomyOutageExactLookup("найди светильник ABC-12345"), {
+    mode: "by_query",
+    value: "ABC-12345",
+    literalTitleWord: "светильник",
+  });
+  assertEquals(classifyTaxonomyOutageExactLookup("покажи артикул 929002070102"), {
+    mode: "by_article",
+    value: "929002070102",
+    literalTitleWord: null,
+  });
+  for (const query of [
+    "найди светильник ABC-12345 черный",
+    "найди светильник ABC-12345 диаметром 90 мм",
+    "найди кабель ВВГ 2*1,5 самый дешевый",
+    "найди ABC-12345 и DEF-67890",
+    "найди ABC-12345 до 1000 тенге",
+    "найди ABC-12345",
+    "покажи модель ABC-12345",
+  ]) {
+    assertEquals(classifyTaxonomyOutageExactLookup(query), null, query);
+  }
+});
+
+Deno.test("taxonomy outage recovery requires confirmed categories 5xx, not auth, missing endpoint, rate limit or unknown timeout", () => {
+  for (const status of [500, 502, 503, 504]) {
+    assertEquals(isConfirmedTaxonomyOutageFailure({
+      tool: "discover_category", ok: false, error_code: "transport_5xx",
+      message: `categories returned HTTP ${status}`,
+    }), true);
+  }
+  for (const status of [401, 403, 404, 429]) {
+    assertEquals(isConfirmedTaxonomyOutageFailure({
+      tool: "discover_category", ok: false, error_code: "transport_5xx",
+      message: `categories returned HTTP ${status}`,
+    }), false);
+  }
+  for (const message of ["categories/options returned HTTP 503", "fetch failed", "category fetch timed out"]) {
+    assertEquals(isConfirmedTaxonomyOutageFailure({
+      tool: "discover_category", ok: false, error_code: "transport_5xx", message,
+    }), false);
+  }
+  assertEquals(isConfirmedTaxonomyOutageFailure({
+    tool: "discover_category", ok: false, error_code: "catalog_timeout",
+    message: "category fetch timed out",
+  }), false);
+});
+
+Deno.test("taxonomy outage admission rejects any prior search, render or discovery in a mixed-order tool batch", () => {
+  const base = {
+    intentMode: "select", replacementIntent: false,
+    successfulDiscoveries: 0, hasLastDiscovery: false,
+    catalogSearchAttempted: false, productsRendered: 0,
+    hasFreshSearch: false,
+  };
+  assertEquals(shouldAttemptTaxonomyOutageExactLookup(base), true);
+  for (const override of [
+    { successfulDiscoveries: 1 }, { hasLastDiscovery: true },
+    { catalogSearchAttempted: true }, { productsRendered: 1 },
+    { hasFreshSearch: true }, { replacementIntent: true },
+  ]) {
+    assertEquals(shouldAttemptTaxonomyOutageExactLookup({ ...base, ...override }), false);
+  }
+});
+
+Deno.test("taxonomy-outage card needs complete unique exact identity, literal class and positive stock proof", () => {
+  const lookup = classifyTaxonomyOutageExactLookup("найди светильник ABC-12345")!;
+  const product: ProductFull = {
+    id: "1",
+    pagetitle: "Светильник ABC-12345",
+    article: null,
+    vendor: null,
+    price: 1354,
+    stock: "in_stock",
+    warehouse_evidence: "positive",
+    leaf_category: "Светильники",
+    warehouses: [{ city: "Караганда", qty: 2 }],
+    short_traits: [],
+    url: "https://220volt.kz/catalog/svetotexnika/svetilniki/item-1/",
+  };
+  const result: SearchCatalogOk = {
+    ok: true,
+    mode: "by_query",
+    total: 1,
+    results: [product],
+    candidate_coverage: "complete_query_window",
+  };
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, product), true);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, {
+    ...product,
+    pagetitle: "Розетка ABC-12345",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, {
+    ...product,
+    leaf_category: "Аксессуары",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, {
+    ...product,
+    pagetitle: "Светильник ABC-12345-PRO",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, {
+    ...product,
+    pagetitle: "Чехол для светильника ABC-12345",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, result, {
+    ...product,
+    warehouse_evidence: "missing",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, {
+    ...result,
+    total: 2,
+  }, product), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(lookup, {
+    ...result,
+    candidate_coverage: "partial",
+  }, product), false);
+  const articleLookup = classifyTaxonomyOutageExactLookup("покажи артикул 929002070102")!;
+  assertEquals(verifyTaxonomyOutageExactProduct(articleLookup, {
+    ...result, mode: "by_article",
+  }, {
+    ...product, article: "929-002070102",
+  }), true);
+  assertEquals(verifyTaxonomyOutageExactProduct(articleLookup, result, {
+    ...product, article: "929-002070102",
+  }), false);
+  assertEquals(verifyTaxonomyOutageExactProduct(articleLookup, {
+    ...result, mode: "by_article",
+  }, {
+    ...product, article: "CAT-929002070102",
+  }), false);
 });
 
 Deno.test("an early model final after catalog outage is suppressed before egress", () => {

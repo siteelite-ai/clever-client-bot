@@ -6,10 +6,14 @@ import {
   projectCriteriaFacetOptions,
 } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
-import type { ProductRef } from "./types.ts";
+import type { ProductFull, ProductRef, SearchCatalogOk } from "./types.ts";
 import type { ToolError, ToolName } from "./types.ts";
 import { extractBudgetCap } from "./budget-cap.ts";
 import { detectPriceDirection } from "./price-scope-policy.ts";
+import {
+  extractReplacementLookupKeys,
+  productContainsExactModelCode,
+} from "./replacement-preflight.ts";
 import {
   type DiscoveredCategoryScope,
   groundedCategoryRecoveryQueries,
@@ -905,6 +909,37 @@ export function isTransientCatalogToolFailure(result: {
       result.error_code === "jargon_unavailable");
 }
 
+/** Only a confirmed /categories 5xx permits the optional emergency lookup.
+ * Discovery's broad transport_5xx code also covers 401/403/404, and a
+ * timeout may originate from /options rather than taxonomy itself. */
+export function isConfirmedTaxonomyOutageFailure(result: {
+  tool: ToolName;
+  ok: boolean;
+  error_code?: ToolError["error_code"] | "category_not_found";
+  message?: string;
+}): boolean {
+  return result.tool === "discover_category" && !result.ok &&
+    result.error_code === "transport_5xx" &&
+    /^categories returned HTTP 5\d\d$/u.test(result.message ?? "");
+}
+
+/** A previous successful branch in the same model tool batch forbids a new
+ * one-card emergency answer, regardless of tool ordering. */
+export function shouldAttemptTaxonomyOutageExactLookup(input: {
+  intentMode: string;
+  replacementIntent: boolean;
+  successfulDiscoveries: number;
+  hasLastDiscovery: boolean;
+  catalogSearchAttempted: boolean;
+  productsRendered: number;
+  hasFreshSearch: boolean;
+}): boolean {
+  return input.intentMode === "select" && !input.replacementIntent &&
+    input.successfulDiscoveries === 0 && !input.hasLastDiscovery &&
+    !input.catalogSearchAttempted && input.productsRendered === 0 &&
+    !input.hasFreshSearch;
+}
+
 /** The failure remains relevant for this turn even after a later empty
  * lookup. Only a verified rendered card resolves it. Both model-final and
  * soft-deadline routes must use the same decision. */
@@ -917,6 +952,104 @@ export function shouldReportTransientCatalogFailure(
 
 export const TRANSIENT_CATALOG_FAILURE_NOTICE =
   "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.";
+
+/**
+ * A taxonomy outage cannot authorize a guessed category or a guessed facet.
+ * The sole bounded product lookup is reserved for a request that contains one
+ * customer-supplied SKU/model and no other unparsed requirements. A single
+ * preceding word is allowed only as literal title evidence, never as a
+ * fabricated taxonomy class. Measurements, price extremes, colours after the
+ * identity, negations and multi-axis requests deliberately stay fail-closed.
+ */
+export interface TaxonomyOutageExactLookup {
+  mode: "by_article" | "by_query";
+  value: string;
+  literalTitleWord: string | null;
+}
+
+export function classifyTaxonomyOutageExactLookup(
+  message: string,
+): TaxonomyOutageExactLookup | null {
+  const request = String(message ?? "").normalize("NFKC").trim()
+    .replace(/[?.!]+$/u, "").trim();
+  const command = /^(?:найди|покажи|проверь|ищу|нужен|нужна|есть\s+ли|мне\s+нужен|мне\s+нужна)\s+/iu
+    .exec(request);
+  if (!command) return null;
+  const parts = request.slice(command[0].length).split(/\s+/u);
+  if (parts.length < 1 || parts.length > 2) return null;
+  const token = parts[parts.length - 1]
+    .replace(/^[«"“”]+|[»"“”?.!]+$/gu, "");
+  const preceding = parts.length === 2 ? parts[0] : null;
+  if (
+    preceding &&
+    !/^[\p{L}]{3,40}$/u.test(preceding)
+  ) return null;
+  const literalTitleWord = preceding &&
+      !/^(?:товар|артикул|модель)$/iu.test(preceding)
+    ? preceding
+    : null;
+  const keys = extractReplacementLookupKeys(token);
+  if (keys.articles.length + keys.modelCodes.length !== 1) return null;
+  if (keys.articles.length === 1 && keys.articles[0] === token) {
+    return { mode: "by_article", value: token, literalTitleWord };
+  }
+  if (
+    keys.modelCodes.length === 1 &&
+    literalTitleWord &&
+    keys.modelCodes[0].toLocaleLowerCase("ru-RU") ===
+      token.toLocaleLowerCase("ru-RU") &&
+    token.length >= 6
+  ) {
+    return { mode: "by_query", value: token, literalTitleWord };
+  }
+  return null;
+}
+
+export function verifyTaxonomyOutageExactProduct(
+  lookup: TaxonomyOutageExactLookup,
+  search: SearchCatalogOk,
+  full: ProductFull | null,
+): full is ProductFull {
+  if (
+    search.mode !== lookup.mode || search.total !== 1 ||
+    search.candidate_coverage !== "complete_query_window" ||
+    search.results.length !== 1 || !full ||
+    search.results[0].id !== full.id ||
+    !Number.isFinite(full.price) || full.price <= 0 ||
+    full.warehouse_evidence !== "positive"
+  ) return false;
+  const rawArticle = String(full.article ?? "").trim();
+  const exactIdentity = lookup.mode === "by_article"
+    ? /^\d+(?:[ \u00a0-]\d+)*$/u.test(rawArticle) &&
+      rawArticle.replace(/[ \u00a0-]/gu, "") === lookup.value
+    : productContainsExactModelCode(full, lookup.value);
+  if (!exactIdentity) return false;
+  if (lookup.mode === "by_query") {
+    const parts = lookup.value.match(/[\p{L}\p{N}]+/gu) ?? [];
+    const literalPattern = new RegExp(
+      parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+        .join("[\\s._/–—−-]+"),
+      "iu",
+    );
+    const match = literalPattern.exec(full.pagetitle);
+    if (!match || /(?:^|[^\p{L}])для(?:$|[^\p{L}])/iu.test(
+      full.pagetitle.slice(0, match.index),
+    )) return false;
+  }
+  if (!lookup.literalTitleWord) return true;
+  const word = lookup.literalTitleWord.toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  const titleWords: string[] = full.pagetitle.toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").match(/[\p{L}]+/gu) ?? [];
+  // The card's own leaf is first-party classification evidence, although the
+  // failed /categories endpoint cannot supply a usable taxonomy graph. A
+  // literal class word must agree with both the title and that leaf; a title
+  // that merely mentions a different product class cannot certify a sibling.
+  const leafWords = lexicalWords(full.leaf_category ?? "");
+  return titleWords.includes(word) && leafWords.some((leafWord) =>
+    sameClassWord(word, leafWord)
+  );
+}
 
 export function transientCatalogFailureFinalization(
   route: "model_fragment" | "model_final" | "terminal",

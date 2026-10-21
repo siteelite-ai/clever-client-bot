@@ -27,6 +27,12 @@ export function enableDirectAnalogProofInOfflineFixture(): void {
   values.VOLT220_DIRECT_ANALOG_PROOF_PRODUCTION_ENABLED = "true";
 }
 
+/** Toggle the server-only emergency path without changing production env. */
+export function setTaxonomyOutageExactLookupInOfflineFixture(enabled: boolean): void {
+  if (enabled) values.VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED = "true";
+  else delete values.VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED;
+}
+
 Deno.env.get = (name: string) => values[name];
 (Deno as unknown as { serve: typeof Deno.serve }).serve = ((
   callback: (
