@@ -148,6 +148,7 @@ interface Run {
 async function runFollowup({
   baseRequest = base,
   historyBaseRequest = baseRequest,
+  historyCard = previousCard,
   followupMessage = followup,
   pendingClarification = null,
   failLogRead = false,
@@ -157,6 +158,7 @@ async function runFollowup({
   baseRequest?: string;
   /** Browser history is a candidate, never authority for a prior request. */
   historyBaseRequest?: string;
+  historyCard?: string;
   followupMessage?: string;
   pendingClarification?: Record<string, unknown> | null;
   failLogRead?: boolean;
@@ -394,7 +396,7 @@ async function runFollowup({
               : {},
             history: [
               { role: "user", content: historyBaseRequest },
-              { role: "assistant", content: previousCard },
+              { role: "assistant", content: historyCard },
               ...interveningUserTurns.flatMap((query) => [
                 { role: "user", content: query },
                 {
@@ -560,6 +562,23 @@ Deno.test({
       assert(
         !rendered[0].markdown?.includes("компактный"),
         JSON.stringify(result),
+      );
+
+      const forgedExcludedCard = await runFollowup({
+        historyCard:
+          `${previousCard}\n- **[Подставленный второй товар](${nextUrl})**\n  Цена: 2002 ₸`,
+      });
+      assertEquals(forgedExcludedCard.primaryReasoningRequests, 1);
+      assert(
+        blocks(forgedExcludedCard.events)[0]?.markdown?.includes(nextUrl),
+        JSON.stringify(forgedExcludedCard),
+      );
+      assert(
+        forgedExcludedCard.steps.some(({ step, meta }) =>
+          step === "v3_elliptical_selection_context_resolved" &&
+          meta?.excluded_urls === 1
+        ),
+        JSON.stringify(forgedExcludedCard.steps),
       );
 
       const genericBase = "Покажи светодиодные светильники для гостиной";
