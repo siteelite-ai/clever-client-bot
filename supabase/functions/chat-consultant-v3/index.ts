@@ -746,6 +746,7 @@ import {
   PREVIEW_QA_SECRET_ENV,
   PREVIEW_SECRET_ENV,
   PREVIEW_SECRET_HEADER,
+  readClosureTestSecret,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
 import {
   CATALOG_QA_SECRET_ENV,
@@ -791,6 +792,10 @@ const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
     __VOLT220_ADMISSION_SCOPE__?: "preview";
   }).__VOLT220_ADMISSION_SCOPE__,
 );
+const CLOSURE_TEST_MARKER =
+  (globalThis as typeof globalThis & {
+    __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
+  }).__VOLT220_CLOSURE_TEST_SCOPE__;
 const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
   ADMISSION_SCOPE,
 );
@@ -24951,6 +24956,9 @@ Deno.serve(async (req) => {
     suppliedPreviewSecret,
     Deno.env.get(PREVIEW_SECRET_ENV),
     Deno.env.get(PREVIEW_QA_SECRET_ENV),
+    readClosureTestSecret(
+      "access", ADMISSION_SCOPE, CLOSURE_TEST_MARKER, suppliedPreviewSecret,
+    ),
   )) {
     return new Response(JSON.stringify({ error: "preview_access_denied" }), {
       status: 403,
@@ -25011,6 +25019,10 @@ Deno.serve(async (req) => {
     if (!await previewSecretAuthorized(
       req.headers.get(CATALOG_QA_SECRET_HEADER),
       Deno.env.get(CATALOG_QA_SECRET_ENV),
+      readClosureTestSecret(
+        "catalog", ADMISSION_SCOPE, CLOSURE_TEST_MARKER,
+        req.headers.get(CATALOG_QA_SECRET_HEADER),
+      ),
     )) {
       return new Response(JSON.stringify({ error: "Not found" }), {
         status: 404,
@@ -25062,6 +25074,10 @@ Deno.serve(async (req) => {
     if (!await previewSecretAuthorized(
       req.headers.get(CATALOG_QA_SECRET_HEADER),
       Deno.env.get(CATALOG_QA_SECRET_ENV),
+      readClosureTestSecret(
+        "catalog", ADMISSION_SCOPE, CLOSURE_TEST_MARKER,
+        req.headers.get(CATALOG_QA_SECRET_HEADER),
+      ),
     )) {
       return new Response(JSON.stringify({ error: "Not found" }), {
         status: 404,
