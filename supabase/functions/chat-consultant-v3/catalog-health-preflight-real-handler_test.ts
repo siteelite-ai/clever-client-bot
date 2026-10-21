@@ -174,7 +174,9 @@ Deno.test("catalog QA uses current settings and emits sanitized two-route result
   }
 });
 
-Deno.test("catalog QA reports actual taxonomy 500 but does not spend a model request", async () => {
+// Deno's default resource sanitizer also guards against a background auth
+// refresh timer surviving this one-shot request.
+Deno.test("catalog QA reports taxonomy 500 without model calls or an auth refresh timer", async () => {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();

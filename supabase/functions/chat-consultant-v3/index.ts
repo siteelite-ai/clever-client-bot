@@ -23971,7 +23971,10 @@ Deno.serve(async (req) => {
     let result: CatalogHealthPreflightResult;
     try {
       const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-        auth: { persistSession: false },
+        // This one-shot, server-side health check never owns a user session.
+        // Supabase Auth may otherwise arm a background refresh timer even
+        // after this request has returned (and leak the serverless isolate).
+        auth: { persistSession: false, autoRefreshToken: false },
         global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
       });
       const settings = await loadSettings(supabase, AbortSignal.timeout(8_000));
