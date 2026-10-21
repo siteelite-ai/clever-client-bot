@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
-import { validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
+import { validCatalogLowestNContract, validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
 import { catalogPreflightRequired, runCatalogHealthPreflight } from './catalog-health-preflight.mjs';
 import { previewAuthHeaders, previewRedirectPolicy, redactPreviewSecret } from './preview-auth.mjs';
 
@@ -394,6 +394,9 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_previous_freeform_slot',
   'require_previous_quick_reply',
   'require_catalog_minimum',
+  'require_catalog_lowest_n',
+  'require_previous_batch_minimum',
+  'require_shape_facet_provenance',
   'require_confirmed_analogs',
   'require_relative_price_comparison',
   'require_result_cardinality',
@@ -540,6 +543,23 @@ export function validateExpectationObject(expect, location = 'expect') {
       !validCatalogMinimumContract(expect.require_catalog_minimum)) {
     throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
   }
+  if (expect.require_catalog_lowest_n !== undefined &&
+      !validCatalogLowestNContract(expect.require_catalog_lowest_n)) {
+    throw new Error(`${location}.require_catalog_lowest_n: requires exact N=2..20 and a bounded 220volt.kz category source, exact title prefix and comparable unit`);
+  }
+  if (expect.require_catalog_minimum && expect.require_catalog_lowest_n &&
+      ['source_url', 'title_prefix', 'unit'].some((key) =>
+        expect.require_catalog_minimum[key] !== expect.require_catalog_lowest_n[key])) {
+    throw new Error(`${location}: minimum and lowest-N contracts must use the same category source and scope`);
+  }
+  if (expect.require_previous_batch_minimum !== undefined &&
+      expect.require_previous_batch_minimum !== true) {
+    throw new Error(`${location}.require_previous_batch_minimum: opt in with true`);
+  }
+  if (expect.require_shape_facet_provenance !== undefined &&
+      expect.require_shape_facet_provenance !== true) {
+    throw new Error(`${location}.require_shape_facet_provenance: opt in with true`);
+  }
   if (expect.require_relative_price_comparison !== undefined) {
     const source = expect.require_relative_price_comparison;
     const at = `${location}.require_relative_price_comparison`;
@@ -629,6 +649,11 @@ export function validateExpectationObject(expect, location = 'expect') {
     }
   }
   expectationMinMax(expect, 'min_products', 'max_products', location);
+  if (expect.require_catalog_lowest_n &&
+      ((expect.min_products !== undefined && expect.min_products > expect.require_catalog_lowest_n.count) ||
+       (expect.max_products !== undefined && expect.max_products < expect.require_catalog_lowest_n.count))) {
+    throw new Error(`${location}.require_catalog_lowest_n: N conflicts with product-card bounds`);
+  }
   if (expect.require_every_product_exact_identifier !== undefined &&
       (typeof expect.require_every_product_exact_identifier !== 'string' ||
        !/^[\p{L}\p{N}][\p{L}\p{N}\s._/-]{3,79}$/u.test(expect.require_every_product_exact_identifier))) {
@@ -941,12 +966,14 @@ const plannedTurns = runPlan.reduce((total, item) => total + item.executions.len
 // Repetitions and related customer suites often return the same SKU URLs.
 // Store one bounded verification promise per canonical URL for the process.
 const productPageCache = new Map();
+const observedProductPages = new Map();
 
 export function parseSse(body) {
   let text = '';
   let textBeforeProducts = '';
   let productsMarkdown = '';
   let productsStarted = false;
+  let productsBlockSeen = false;
   let logId = null;
   let completed = false;
   let terminalDiagnosticSeen = false;
@@ -968,6 +995,7 @@ export function parseSse(body) {
     let parsed;
     try { parsed = JSON.parse(payload); } catch { continue; }
     const event = parsed.v3_event;
+    if (event?.type === 'products_block') productsBlockSeen = true;
     if (event?.type === 'products_block' && typeof event.markdown === 'string') {
       productsStarted = true;
       productsMarkdown += `${productsMarkdown ? '\n\n' : ''}${event.markdown}`;
@@ -1032,7 +1060,7 @@ export function parseSse(body) {
       cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, quickReplies, priceUnitEvidence, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, productsBlockSeen, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, quickReplies, priceUnitEvidence, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -1641,6 +1669,142 @@ export function productLinkEvidence(links = [], { verifiedPages = null, requireV
   return { uniqueCount, duplicates, invalid, unverified };
 }
 
+function exactLiveOffer(link, pages) {
+  const identity = productUrlIdentity(link?.url);
+  const page = identity && pages instanceof Map ? pages.get(identity) : null;
+  return Boolean(identity && page?.verified && page.identity === identity &&
+    (!page.canonicalUrl || sourceCanonicalIdentity(page.canonicalUrl) === identity) &&
+    page.ambiguousOffers !== true && Number.isFinite(link.price) && link.price > 0 &&
+    Number.isFinite(page.offerPrice) && link.price === page.offerPrice &&
+    /^https?:\/\/schema\.org\/InStock$/iu.test(page.availability ?? '') && link.stockLine);
+}
+
+/** Snapshot only the latest displayed batch; a partial newer batch invalidates an older one. */
+export function captureVerifiedProductBatch(response) {
+  const links = response?.links;
+  if (!Array.isArray(links) || links.length === 0) {
+    return { verified: false, reason: 'latest product batch has no parsed cards' };
+  }
+  if (!response.completed || !response.terminalDiagnosticSeen ||
+      response.serverProductsCount !== links.length || !response.logId) {
+    return { verified: false, reason: 'latest product batch is incomplete' };
+  }
+  const products = [];
+  const seen = new Set();
+  for (const link of links) {
+    const identity = productUrlIdentity(link.url);
+    if (!identity || seen.has(identity) || !exactLiveOffer(link, response.verifiedProductPages)) {
+      return { verified: false, reason: 'latest product batch has missing, duplicate or conflicting URL/offer proof' };
+    }
+    seen.add(identity);
+    products.push({ identity, price: link.price });
+  }
+  return { verified: true, products };
+}
+
+export function previousBatchMinimumFailures(response, batch) {
+  if (response?.conversationBoundary?.mode === 'new_task') {
+    return ['cheapest follow-up crossed a new-task boundary'];
+  }
+  if (!batch?.verified || !Array.isArray(batch.products) || batch.products.length === 0) {
+    return [`cheapest follow-up has no complete latest verified product batch: ${batch?.reason ?? 'missing batch'}`];
+  }
+  const lowest = Math.min(...batch.products.map((item) => item.price));
+  if (!Number.isFinite(lowest) || lowest <= 0 ||
+      batch.products.some((item) =>
+        productUrlIdentity(`https://${item.identity}/`) !== item.identity ||
+        !Number.isFinite(item.price) || item.price <= 0) ||
+      new Set(batch.products.map((item) => item.identity)).size !== batch.products.length) {
+    return ['cheapest follow-up has malformed previous price or URL proof'];
+  }
+  const winners = new Set(batch.products.filter((item) => item.price === lowest).map((item) => item.identity));
+  if (!Array.isArray(response.links) || response.links.length === 0) {
+    return ['cheapest follow-up has no selected product card'];
+  }
+  const failures = [];
+  const seen = new Set();
+  for (const link of response.links) {
+    const identity = productUrlIdentity(link.url);
+    if (!identity || seen.has(identity) || !winners.has(identity) || link.price !== lowest ||
+        !exactLiveOffer(link, response.verifiedProductPages)) {
+      failures.push(`cheapest follow-up is not an exact latest-batch minimum URL and offer: ${link.title ?? link.url}`);
+    }
+    if (identity) seen.add(identity);
+  }
+  return failures;
+}
+
+/** Area units are not evidence for a mandatory product-shape facet. */
+export function shapeFacetProvenanceFailures(selectionContract, userMessages = []) {
+  const criteria = selectionContract?.mandatory_criteria;
+  if (!Array.isArray(criteria)) return ['shape-facet provenance lacks machine-readable mandatory criteria'];
+  const customerText = Array.isArray(userMessages)
+    ? userMessages.filter((item) => typeof item === 'string').join(' ').normalize('NFKC')
+      .toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
+    : '';
+  const withoutAreaQuantities = customerText.replace(
+    /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:м\s*(?:²|2)(?![\p{L}\p{N}])|кв\.?\s*м\.?|квадрат\p{L}*(?:\s+метр\p{L}*)?)/giu,
+    ' ',
+  );
+  const customerWords = withoutAreaQuantities.match(/[\p{L}]{4,}/gu) ?? [];
+  const failures = [];
+  for (const criterion of criteria) {
+    if (!/форм|shape/iu.test(String(criterion?.key ?? ''))) continue;
+    const valueWords = String(criterion?.value ?? '').normalize('NFKC')
+      .toLocaleLowerCase('ru-RU').replaceAll('ё', 'е').match(/[\p{L}]{4,}/gu) ?? [];
+    if (!valueWords.length || !customerText ||
+        valueWords.some((value) => !customerWords.some((word) => word.startsWith(value.slice(0, 4))))) {
+      failures.push(`mandatory shape facet lacks customer evidence outside area quantities: ${criterion?.key ?? 'unknown'}`);
+    }
+  }
+  return failures;
+}
+
+/** Tied prices at the Nth rank are interchangeable, but displayed order is not. */
+export function catalogLowestNFailures(contract, response) {
+  if (!validCatalogLowestNContract(contract)) return ['invalid lowest-N catalog contract'];
+  const proof = response?.catalogMinimumProof;
+  if (!proof?.verified || proof.source_url !== contract.source_url ||
+      !Number.isSafeInteger(proof.listed_total) || proof.listed_total < contract.count ||
+      proof.covered_total !== proof.listed_total ||
+      !Number.isSafeInteger(proof.page_count) || proof.page_count < 1 || proof.page_count > 8 ||
+      !Array.isArray(proof.eligible_products) ||
+      proof.eligible_products.length !== proof.matching_available ||
+      proof.matching_available < contract.count) {
+    return [`lowest-N catalog coverage is incomplete or unverified: ${proof?.reason ?? 'missing complete source proof'}`];
+  }
+  const eligible = new Map();
+  const ids = new Set();
+  for (const item of proof.eligible_products) {
+    const identity = productUrlIdentity(item?.url);
+    if (!identity || eligible.has(identity) || !/^\d+$/u.test(item.id ?? '') || ids.has(item.id) ||
+        !Number.isFinite(item.price) || item.price <= 0 ||
+        String(item.unit ?? '').trim().toLocaleLowerCase('ru-RU').replace(/\.$/u, '') !==
+          contract.unit.toLocaleLowerCase('ru-RU').replace(/\.$/u, '')) {
+      return ['lowest-N catalog source has invalid or duplicate eligible product evidence'];
+    }
+    eligible.set(identity, item);
+    ids.add(item.id);
+  }
+  const orderedPrices = [...eligible.values()].map((item) => item.price).sort((a, b) => a - b);
+  if (proof.minimum_price !== orderedPrices[0] || !Array.isArray(response.links) ||
+      response.links.length !== contract.count) {
+    return [`lowest-N selection requires exactly ${contract.count} rendered cards and a consistent source minimum`];
+  }
+  const failures = [];
+  const selected = new Set();
+  for (const [rank, link] of response.links.entries()) {
+    const identity = productUrlIdentity(link.url);
+    const sourceItem = eligible.get(identity);
+    if (!sourceItem || selected.has(identity) || link.price !== sourceItem.price ||
+        link.price !== orderedPrices[rank] || !exactLiveOffer(link, response.verifiedProductPages)) {
+      failures.push(`rendered card at rank ${rank + 1} is not the catalog-proven lowest-N exact URL/offer`);
+    }
+    if (identity) selected.add(identity);
+  }
+  return failures;
+}
+
 function nameTokenRecall(displayed, source) {
   const words = (value) => String(value ?? '').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
     .match(/[\p{L}\p{N}]+/gu)?.filter((part) => part.length > 1) ?? [];
@@ -2089,6 +2253,8 @@ export function evaluate(expect = {}, response, {
   requireVerifiedPages = false,
   previousVerifiedSkus = new Set(),
   previousVerifiedProductUrls = new Set(),
+  previousVerifiedProductBatch = null,
+  userMessages = [],
   previousClarificationChoice = null,
   message = null,
   nowMs = Date.now(),
@@ -2096,6 +2262,7 @@ export function evaluate(expect = {}, response, {
   const failures = [];
   const requireSourceProof = Boolean(expect.require_confirmed_analogs || expect.require_relative_price_comparison || expect.require_every_product_page ||
     expect.require_higher_product_facet_caveat || expect.require_catalog_minimum ||
+    expect.require_catalog_lowest_n || expect.require_previous_batch_minimum ||
     expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
     verifiedPages: response.verifiedProductPages,
@@ -2374,6 +2541,15 @@ export function evaluate(expect = {}, response, {
         }
       }
     }
+  }
+  if (expect.require_previous_batch_minimum === true) {
+    failures.push(...previousBatchMinimumFailures(response, previousVerifiedProductBatch));
+  }
+  if (expect.require_catalog_lowest_n !== undefined) {
+    failures.push(...catalogLowestNFailures(expect.require_catalog_lowest_n, response));
+  }
+  if (expect.require_shape_facet_provenance === true) {
+    failures.push(...shapeFacetProvenanceFailures(response.selectionContract, userMessages));
   }
   if (Array.isArray(expect.require_product_title) && !includesAny(productTitles, expect.require_product_title)) {
     failures.push(`none of required product-title fragments found: ${expect.require_product_title.join(', ')}`);
@@ -2689,7 +2865,7 @@ export async function fetchAcceptanceTurn(payload, {
   }
 }
 
-async function runTurn({ message, expect, synthetic = false }, state) {
+async function runTurn({ message, expect, synthetic = false, trackVerifiedBatches = false }, state) {
   const startedAt = Date.now();
   const payload = {
     message,
@@ -2740,20 +2916,30 @@ async function runTurn({ message, expect, synthetic = false }, state) {
     Boolean(expect.require_higher_product_facet_caveat) ||
     Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
+    Boolean(expect.require_catalog_lowest_n) ||
+    Boolean(expect.require_previous_batch_minimum) || trackVerifiedBatches ||
     expect.require_new_product_skus === true || expect.require_previous_product_link === true;
   // Relative-price evidence must be fresh for this turn; a prior suite turn's
   // cached price could make a once-cheaper candidate look cheaper forever.
-  const productProofCache = expect.require_relative_price_comparison?.mode === 'exact'
+  const productProofCache = expect.require_relative_price_comparison?.mode === 'exact' || trackVerifiedBatches
     ? new Map() : productPageCache;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
     ? await verifyProductLinks(parsed.links, { cache: productProofCache })
     : null;
+  for (const [identity, proof] of parsed.verifiedProductPages ?? []) {
+    observedProductPages.set(identity, Promise.resolve(proof));
+  }
   parsed.relativePriceSourceProof = response.ok && expect.require_relative_price_comparison?.mode === 'exact'
     ? (await verifyProductLinks([{ url: expect.require_relative_price_comparison.product_url }],
       { cache: productProofCache })).get(productUrlIdentity(expect.require_relative_price_comparison.product_url))
     : null;
-  parsed.catalogMinimumProof = response.ok && expect.require_catalog_minimum
-    ? await verifyCatalogMinimum(expect.require_catalog_minimum.source_url, expect.require_catalog_minimum)
+  const categoryContract = expect.require_catalog_lowest_n ?? expect.require_catalog_minimum;
+  parsed.catalogMinimumProof = response.ok && categoryContract
+    ? await verifyCatalogMinimum(categoryContract.source_url, {
+        source_url: categoryContract.source_url,
+        title_prefix: categoryContract.title_prefix,
+        unit: categoryContract.unit,
+      })
     : null;
   const linkEvidence = productLinkEvidence(parsed.links, {
     verifiedPages: parsed.verifiedProductPages,
@@ -2764,6 +2950,12 @@ async function runTurn({ message, expect, synthetic = false }, state) {
         requireVerifiedPages: requiresLiveProductProof,
         previousVerifiedSkus: state.previousVerifiedSkus,
         previousVerifiedProductUrls: state.previousVerifiedProductUrls,
+        previousVerifiedProductBatch: state.previousVerifiedProductBatch,
+        userMessages: [
+          ...(parsed.conversationBoundary?.mode === 'new_task' ? [] :
+            state.history.filter((entry) => entry.role === 'user').map((entry) => entry.content)),
+          message,
+        ],
         previousClarificationChoice: state.previousClarificationChoice,
         message,
       })
@@ -2775,6 +2967,10 @@ async function runTurn({ message, expect, synthetic = false }, state) {
     state.dialogSlots = {};
     state.previousVerifiedSkus = new Set();
     state.previousVerifiedProductUrls = new Set();
+    state.previousVerifiedProductBatch = null;
+  }
+  if (parsed.productsBlockSeen || parsed.links.length) {
+    state.previousVerifiedProductBatch = captureVerifiedProductBatch(parsed);
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   const priorChoiceEvidence = state.previousClarificationChoice;
@@ -2890,12 +3086,17 @@ export async function main({ preflightFetchImpl = fetch, preflightEnv = process.
     const caseResult = { id: testCase.id, title: testCase.title, repeats: [] };
     for (const execution of executions) {
       for (let run = 1; run <= repeat; run++) {
+        const trackVerifiedBatches = testCase.turns.some((turn, index) =>
+          resolveExpectations(suite.default_expectations,
+            resolveExpectations(turn.expect, execution.expect_overrides?.[index] ?? {}))
+            .require_previous_batch_minimum === true);
         const state = {
           sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${execution.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
           history: [],
           dialogSlots: {},
           previousVerifiedSkus: new Set(),
           previousVerifiedProductUrls: new Set(),
+          previousVerifiedProductBatch: null,
           previousClarificationChoice: null,
         };
         const turns = [];
@@ -2910,6 +3111,7 @@ export async function main({ preflightFetchImpl = fetch, preflightEnv = process.
               suite.default_expectations,
               resolveExpectations(turn.expect, variantExpectation),
             ),
+            trackVerifiedBatches,
           }, state));
           // A failed prerequisite turn invalidates the meaning of later
           // dialogue turns. In focused runs this also avoids paid calls whose
@@ -2940,9 +3142,10 @@ export async function main({ preflightFetchImpl = fetch, preflightEnv = process.
     recorded_turns: actualTurns,
   };
   report.log_ids = [...new Set(report.cases.flatMap((item) => item.repeats.flatMap((run) => run.turns.map((turn) => turn.log_id).filter(Boolean))))];
-  const pageProofs = await Promise.all(productPageCache.values());
+  const pageProofInventory = new Map([...productPageCache, ...observedProductPages]);
+  const pageProofs = await Promise.all(pageProofInventory.values());
   report.product_page_verification = {
-    unique_urls_checked: productPageCache.size,
+    unique_urls_checked: pageProofInventory.size,
     verified: pageProofs.filter((item) => item.verified).length,
     unverified: pageProofs.filter((item) => !item.verified).length,
   };

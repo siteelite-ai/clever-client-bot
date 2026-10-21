@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source": "Prospective opt-in regression for customer chandelier follow-up; does not replace or modify the pinned V9 suite",
+  "default_expectations": { "max_duration_ms": 45000 },
+  "cases": [
+    {
+      "id": "prospective-area-is-not-shape",
+      "title": "Area quantity must not become a mandatory product-shape facet",
+      "repeat": 1,
+      "turns": [
+        { "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?", "expect": {} },
+        { "message": "Они точно подходят для освещения 30 квадратных метров?", "expect": {} },
+        { "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.", "expect": {} },
+        {
+          "message": "А есть другие варианты?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_shape_facet_provenance": true
+          }
+        }
+      ]
+    }
+  ]
+}
