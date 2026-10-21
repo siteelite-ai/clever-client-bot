@@ -941,6 +941,117 @@ Deno.test({
         );
       }
 
+      // The live facet stores a noun ("круг"), while the model may use an
+      // inflected adjective ("круглую") without declaring any facet ID. The
+      // customer asked only for room area, so neither the tool call nor the
+      // outbound catalog request may silently narrow to round chandeliers.
+      const roundShapeTerm =
+        /(?<![\p{L}\p{N}])круг(?:л[\p{L}]*)?(?![\p{L}\p{N}])/iu;
+      const modelOnlyRound = await runFollowup({
+        ...shared,
+        baseRequest: originalRequest,
+        rawReasoning:
+          `${areaOnlyReasoning} Для гостиной 30 квадратов подбираю круглую люстру.`,
+        retrievalQuery: "круглую люстру",
+        requiredFacetValues: [],
+        modelSearchOptions: { shape: ["круг"] },
+      });
+      assertEquals(modelOnlyRound.primaryReasoningRequests, 1);
+      assert(
+        hasEnforcedDestinationArea(modelOnlyRound.steps, 30),
+        JSON.stringify(modelOnlyRound.steps),
+      );
+      const roundSearches = modelOnlyRound.steps.filter(({ step, meta }) =>
+        step === "v3_tool_call" && meta?.tool === "search_catalog" &&
+        meta?.ok === true
+      );
+      assert(
+        roundSearches.length > 0 || modelOnlyRound.steps.some(({ step }) =>
+          step === "v3_terminal_visible_request_recovery"
+        ),
+        JSON.stringify(modelOnlyRound.steps),
+      );
+      for (const { meta } of roundSearches) {
+        const args = meta?.args as {
+          options?: Record<string, string[]>;
+          query?: string;
+        } | undefined;
+        assertEquals(args?.options?.shape, undefined, JSON.stringify(args));
+        assert(!roundShapeTerm.test(args?.query ?? ""), JSON.stringify(args));
+      }
+      assert(modelOnlyRound.catalogProductReads > 0);
+      for (const requestUrl of modelOnlyRound.catalogProductRequestUrls) {
+        const params = new URL(requestUrl, "https://fixture.catalog.invalid")
+          .searchParams;
+        assert(
+          ![...params.entries()].some(([key, value]) =>
+            /shape/iu.test(key) ||
+            ((key === "query" || key === "q" || key === "search") &&
+              roundShapeTerm.test(value))
+          ),
+          JSON.stringify([...params.entries()]),
+        );
+      }
+      const modelOnlyRoundCards = blocks(modelOnlyRound.events);
+      assertEquals(
+        modelOnlyRoundCards.length,
+        1,
+        JSON.stringify(modelOnlyRound.steps),
+      );
+      assert(modelOnlyRoundCards[0].markdown?.includes(nextUrl));
+      assert(
+        Array.isArray(modelOnlyRoundCards[0].selection_contract?.mandatory_criteria),
+        JSON.stringify(modelOnlyRoundCards[0].selection_contract),
+      );
+      assert(
+        !modelOnlyRoundCards[0].selection_contract?.mandatory_criteria?.some(
+          ({ key }) => key === "Форма люстры" || key === "shape",
+        ),
+        JSON.stringify(modelOnlyRoundCards[0].selection_contract),
+      );
+      assert(
+        !/(?:Форма люстры:\s*круг|кругл[\p{L}]*\s+люстр)/iu.test(
+          publicText(modelOnlyRound.events),
+        ),
+        publicText(modelOnlyRound.events),
+      );
+
+      // If the customer explicitly asked for a round chandelier, the same
+      // guard must preserve that shape while checking the room area and card.
+      const customerRound = await runFollowup({
+        ...shared,
+        baseRequest:
+          "Нужна круглая люстра для гостиной 30 квадратов. Что подойдет?",
+        interveningServerRows: [],
+        rawReasoning:
+          `${areaOnlyReasoning} Для гостиной 30 квадратов подбираю круглую люстру.`,
+        retrievalQuery: "круглую люстру",
+        requiredFacetValues: ["f2v1"],
+        modelSearchOptions: { shape: ["круг"] },
+      });
+      assertEquals(
+        customerRound.primaryReasoningRequests,
+        1,
+        JSON.stringify(customerRound.steps),
+      );
+      assert(
+        hasEnforcedDestinationArea(customerRound.steps, 30),
+        JSON.stringify(customerRound.steps),
+      );
+      const customerRoundCards = blocks(customerRound.events);
+      assertEquals(
+        customerRoundCards.length,
+        1,
+        JSON.stringify(customerRound.steps),
+      );
+      assert(customerRoundCards[0].markdown?.includes(nextUrl));
+      assert(
+        customerRoundCards[0].selection_contract?.mandatory_criteria?.some(
+          ({ key, value }) => key === "Форма люстры" && value === "круг",
+        ),
+        JSON.stringify(customerRoundCards[0].selection_contract),
+      );
+
       // A customer-owned appearance requirement must not be discarded by the
       // same guard. Only the new square card may satisfy this continuation.
       const explicitSquare = await runFollowup({

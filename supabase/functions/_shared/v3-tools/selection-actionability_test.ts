@@ -18,8 +18,9 @@ import {
   buildDerivedSelectionReasoningToolSchema,
   compileApplicationSuitabilityAlternatives,
   compileCustomerClassificationCriteria,
-  derivedReasoningPublicEgress,
+  demoteUnsupportedSystemTotalClaims,
   derivedMeasurementMayConstrainIndividualProducts,
+  derivedReasoningPublicEgress,
   hasActionableSelectionContract,
   hasCompetingMeasuredSelectionTiers,
   hasSelectionMeasurementContext,
@@ -28,28 +29,35 @@ import {
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reasoningComputesSystemTotalFromSpatialExtent,
-  demoteUnsupportedSystemTotalClaims,
   reconcileDerivedRequiredFacetSummary,
   resolveDerivedSelectionReasoning,
-  suppressDerivedReasoningEcho,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
   shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
+  suppressDerivedReasoningEcho,
   systemTotalReasoningDeclaresPerProductMeasurement,
 } from "./selection-actionability.ts";
 
 Deno.test("derived selection keeps malformed model planning private while explaining frozen criteria", () => {
   const rawPlan =
     "Клиент запросил двойные черные розетки Gallant. д. ). Сначала проверю фасеты, затем каталог.";
-  const declaration = resolveDerivedSelectionReasoning({
-    reasoning: rawPlan,
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-  }, [], "Нужны двойные черные розетки Gallant", "Розетки");
-  assertEquals(declaration?.reasoningEvidence.includes("Клиент запросил"), true);
+  const declaration = resolveDerivedSelectionReasoning(
+    {
+      reasoning: rawPlan,
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+    },
+    [],
+    "Нужны двойные черные розетки Gallant",
+    "Розетки",
+  );
+  assertEquals(
+    declaration?.reasoningEvidence.includes("Клиент запросил"),
+    true,
+  );
   assertEquals(declaration?.text, declaration?.reasoningEvidence);
   const publicExplanation = buildDerivedSelectionPublicExplanation({
     productClass: "Розетки",
@@ -89,7 +97,10 @@ Deno.test("derived selection keeps malformed model planning private while explai
   assertEquals(publicExplanation.includes("Количество разъёмов: 2"), true);
   assertEquals(publicExplanation.includes("Цвет: чёрный"), false);
   assertEquals(publicExplanation.includes("Модельная гипотеза"), false);
-  assertEquals(/(?:наш[её]л|подтвержден[а-я]*\s+товар)/iu.test(publicExplanation), false);
+  assertEquals(
+    /(?:наш[её]л|подтвержден[а-я]*\s+товар)/iu.test(publicExplanation),
+    false,
+  );
 });
 
 Deno.test("public explanation renders same-facet exact alternatives as one OR clause", () => {
@@ -240,7 +251,10 @@ Deno.test("echo guard keeps engineering evidence in the same sentence as a priva
     "Клиент запросил подбор, сначала проверю фасеты, для кабеля диаметром 10 мм внутренний диаметр трубки до усадки должен быть строго больше 10 мм, а после усадки меньше 10 мм.";
   const result = suppressDerivedReasoningEcho(oneSentence, oneSentence);
   assertEquals(result.suppressed, true);
-  assertEquals(/Клиент запросил|сначала проверю фасеты/iu.test(result.text), false);
+  assertEquals(
+    /Клиент запросил|сначала проверю фасеты/iu.test(result.text),
+    false,
+  );
   assertEquals(result.text.includes("диаметром 10 мм"), true);
   assertEquals(result.text.includes("строго больше 10 мм"), true);
   assertEquals(result.text.includes("после усадки меньше 10 мм"), true);
@@ -267,7 +281,10 @@ Deno.test("echo guard keeps engineering evidence in the same sentence as a priva
     noBoundary,
     noBoundary,
   );
-  assertEquals(noBoundaryResult.text.includes("должен быть больше 10 мм"), true);
+  assertEquals(
+    noBoundaryResult.text.includes("должен быть больше 10 мм"),
+    true,
+  );
   assertEquals(noBoundaryResult.text.includes("Клиент запросил"), false);
 });
 
@@ -283,13 +300,16 @@ Deno.test("private-plan-only final gets a neutral fallback without cards, not af
   assertEquals(empty.suppressed, true);
   assertEquals(empty.text.includes("Не смог подтвердить"), true);
   assertEquals(empty.text.includes("Клиент запросил"), false);
-  assertEquals(derivedReasoningPublicEgress({
-    candidate: draft,
-    privateReasoning: draft,
-    isFinalTurn: true,
-    catalogLookupCompleted: true,
-    productsRendered: 2,
-  }), { text: "", suppressed: true });
+  assertEquals(
+    derivedReasoningPublicEgress({
+      candidate: draft,
+      privateReasoning: draft,
+      isFinalTurn: true,
+      catalogLookupCompleted: true,
+      productsRendered: 2,
+    }),
+    { text: "", suppressed: true },
+  );
 });
 
 Deno.test("derived public explanation preserves strict paired bounds without model scratchpad", () => {
@@ -322,8 +342,14 @@ Deno.test("derived public explanation preserves strict paired bounds without mod
       afterCaption: "Внутренний диаметр после усадки, мм",
     },
   });
-  assertEquals(publicExplanation.includes("Внутренний диаметр до усадки, мм > 10 мм"), true);
-  assertEquals(publicExplanation.includes("Внутренний диаметр после усадки, мм < 10 мм"), true);
+  assertEquals(
+    publicExplanation.includes("Внутренний диаметр до усадки, мм > 10 мм"),
+    true,
+  );
+  assertEquals(
+    publicExplanation.includes("Внутренний диаметр после усадки, мм < 10 мм"),
+    true,
+  );
   assertEquals(publicExplanation.includes("≥ 10 мм"), false);
   assertEquals(publicExplanation.includes("≤ 10 мм"), false);
 });
@@ -337,7 +363,10 @@ Deno.test("public paired explanation states the verified cable sleeve clearance 
       unit: "мм",
       beforeCaption: "Внутренний диаметр до усадки, мм",
       afterCaption: "Внутренний диаметр после усадки, мм",
-      clearance: { before_facet_key: "before", minimum_before_ratio: { numerator: 6, denominator: 5 } },
+      clearance: {
+        before_facet_key: "before",
+        minimum_before_ratio: { numerator: 6, denominator: 5 },
+      },
     },
   });
   assertEquals(text.includes("≥ 1,2 × 12 мм (запас 20%)"), true);
@@ -353,7 +382,10 @@ Deno.test("derived pre-search explanation with no frozen criteria never promises
   });
   assertEquals(publicExplanation.includes("Сверяю заявленные условия"), true);
   assertEquals(publicExplanation.includes("Суммарную потребность"), true);
-  assertEquals(/(?:найден|подходят|прошли проверку)/iu.test(publicExplanation), false);
+  assertEquals(
+    /(?:найден|подходят|прошли проверку)/iu.test(publicExplanation),
+    false,
+  );
 });
 
 Deno.test("unspecified mixed-facet values in model reasoning never become mandatory", () => {
@@ -1034,8 +1066,18 @@ Deno.test("derived reasoning instructions distinguish paired strict fit from an 
 
 Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
   const facets = [
-    { key: "before", caption: "Внутренний диаметр до усадки, мм", unit: "мм", values: [] },
-    { key: "after", caption: "Внутренний диаметр после усадки, мм", unit: "мм", values: [] },
+    {
+      key: "before",
+      caption: "Внутренний диаметр до усадки, мм",
+      unit: "мм",
+      values: [],
+    },
+    {
+      key: "after",
+      caption: "Внутренний диаметр после усадки, мм",
+      unit: "мм",
+      values: [],
+    },
   ];
   const reference = { value: 12, unit: "мм", facetKeys: ["before", "after"] };
   const strict = buildDerivedSelectionReasoningMessages(
@@ -1046,7 +1088,12 @@ Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
   )[0].content;
   assertEquals(strict.includes("не менее 120% диаметра кабеля"), true);
   assertEquals(strict.includes("минимум 14,4 мм до усадки"), true);
-  assertEquals(strict.includes("Размер изделия до установки должен быть строго больше размера объекта"), false);
+  assertEquals(
+    strict.includes(
+      "Размер изделия до установки должен быть строго больше размера объекта",
+    ),
+    false,
+  );
   assertEquals(strict.includes("два строгих неравенства"), false);
   const unrelated = buildDerivedSelectionReasoningMessages(
     "подбери изделие для кабеля диаметром 12 мм",
@@ -1055,7 +1102,12 @@ Deno.test("derived prompt adds 20% only for live heat-shrink cable fit", () => {
     reference,
   )[0].content;
   assertEquals(unrelated.includes("не менее 120% диаметра кабеля"), false);
-  assertEquals(unrelated.includes("Размер изделия до установки должен быть строго больше размера объекта"), true);
+  assertEquals(
+    unrelated.includes(
+      "Размер изделия до установки должен быть строго больше размера объекта",
+    ),
+    true,
+  );
 });
 
 Deno.test("paired object size is not offered as an exact pre-search enum, while unrelated exact facets remain", () => {
@@ -2635,7 +2687,10 @@ Deno.test("a bare model-only aggregate is removed from visible reasoning without
     facets,
   );
   assertEquals(modelCount.includes("3 светильников"), true);
-  assertEquals(modelCount.includes("числовой ориентир пока не подтверждён"), false);
+  assertEquals(
+    modelCount.includes("числовой ориентир пока не подтверждён"),
+    false,
+  );
   const comparative = demoteUnsupportedSystemTotalClaims(
     "Для всей системы нужно не менее чем 24 000 лм.",
     customer,
@@ -2689,21 +2744,26 @@ Deno.test("ASCII square metres cannot ground a model-only linear total", () => {
   const safe = demoteUnsupportedSystemTotalClaims(reasoning, customer, facets);
   assertEquals(safe.includes("120 м."), false);
   assertEquals(safe.includes("числовой ориентир пока не подтверждён"), true);
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning,
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: [],
-    explicit_customer_classifications: [],
-  }, facets, customer);
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(resolved?.measurementScope, "system_total");
   assertEquals(resolved?.text.includes("120 м."), false);
 });
 
 Deno.test("square-metre abbreviation cannot ground a model-only voltage total", () => {
   const customer = "Нужна суммарная площадь не менее 120 кв. м.";
-  const reasoning = "Для всей системы нужно суммарное напряжение не менее 120 кВ.";
+  const reasoning =
+    "Для всей системы нужно суммарное напряжение не менее 120 кВ.";
   const facets = [{
     key: "voltage",
     caption: "Напряжение, кВ",
@@ -2724,18 +2784,27 @@ Deno.test("square-metre spellings keep a genuinely customer-owned aggregate", ()
   }];
   for (const spelling of ["120 м2", "120 кв. м", "120 м²"]) {
     const customer = `Нужна суммарная площадь не менее ${spelling}.`;
-    const reasoning = `Для всей системы нужна суммарная площадь не менее ${spelling}.`;
-    const safe = demoteUnsupportedSystemTotalClaims(reasoning, customer, facets);
+    const reasoning =
+      `Для всей системы нужна суммарная площадь не менее ${spelling}.`;
+    const safe = demoteUnsupportedSystemTotalClaims(
+      reasoning,
+      customer,
+      facets,
+    );
     assertEquals(safe.includes(spelling), true);
     assertEquals(safe.includes("числовой ориентир пока не подтверждён"), false);
-    const resolved = resolveDerivedSelectionReasoning({
-      reasoning,
-      measurement_scope: "per_product",
-      compatible_classifications: [],
-      excluded_classifications: [],
-      required_facet_values: [],
-      explicit_customer_classifications: [],
-    }, facets, customer);
+    const resolved = resolveDerivedSelectionReasoning(
+      {
+        reasoning,
+        measurement_scope: "per_product",
+        compatible_classifications: [],
+        excluded_classifications: [],
+        required_facet_values: [],
+        explicit_customer_classifications: [],
+      },
+      facets,
+      customer,
+    );
     assertEquals(resolved?.measurementScope, "system_total");
   }
 });
@@ -2767,38 +2836,48 @@ Deno.test("unsupported model-only card threshold is absent from visible reasonin
     values: [{ value: "IP44" }, { value: "IP65" }],
   }];
   const customer = "Нужен светильник для гостиной 25 м².";
-  const resolved = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной 25 м² нужен световой поток не менее 4000 лм из расчёта 160 лк и степень защиты IP44 обязательна.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для гостиной 25 м² нужен световой поток не менее 4000 лм из расчёта 160 лк и степень защиты IP44 обязательна.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f1v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(resolved?.text.includes("4000 лм"), false);
   assertEquals(resolved?.measurementEvidence.includes("4000 лм"), false);
   assertEquals(resolved?.text.includes("IP44"), true);
-  const ipFirst = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Для гостиной нужен IP44 и световой поток не менее 4000 лм.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
+  const ipFirst = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для гостиной нужен IP44 и световой поток не менее 4000 лм.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f1v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(ipFirst?.text.includes("4000 лм"), false);
   assertEquals(ipFirst?.text.includes("IP44"), true);
-  const inseparable = resolveDerivedSelectionReasoning({
-    reasoning:
-      "Нужен световой поток не менее 4000 лм с защитой IP44.",
-    measurement_scope: "per_product",
-    compatible_classifications: [],
-    excluded_classifications: [],
-    required_facet_values: ["f1v0"],
-    explicit_customer_classifications: [],
-  }, facets, customer);
+  const inseparable = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Нужен световой поток не менее 4000 лм с защитой IP44.",
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: ["f1v0"],
+      explicit_customer_classifications: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(inseparable, null);
 });
 
@@ -2820,7 +2899,8 @@ Deno.test("a customer-owned destination survives a separable model-only numeric 
     unit: "лм",
     values: [{ value: "1800" }, { value: "6000" }],
   }];
-  const customer = "Нужен светильник для гостиной площадью 30 м². Покажите варианты.";
+  const customer =
+    "Нужен светильник для гостиной площадью 30 м². Покажите варианты.";
   const args = {
     reasoning:
       "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм.",
@@ -2837,11 +2917,15 @@ Deno.test("a customer-owned destination survives a separable model-only numeric 
   assertEquals(safe?.text.includes("4500–6000 лм"), false);
   assertEquals(safe?.measurementEvidence.includes("30 м²"), true);
 
-  const customerLumens = resolveDerivedSelectionReasoning({
-    ...args,
-    reasoning:
-      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм и не менее 5000 лм по запросу клиента.",
-  }, facets, `${customer} Поток не менее 5000 лм.`);
+  const customerLumens = resolveDerivedSelectionReasoning(
+    {
+      ...args,
+      reasoning:
+        "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм и не менее 5000 лм по запросу клиента.",
+    },
+    facets,
+    `${customer} Поток не менее 5000 лм.`,
+  );
   assertEquals(customerLumens, null);
 
   const customerProtection = resolveDerivedSelectionReasoning({
@@ -2867,38 +2951,61 @@ Deno.test("a customer-owned destination survives a separable model-only numeric 
   }], `${customer} Нужна защита IP65.`);
   assertEquals(inseparableProtection, null);
 
-  const inventedArea = resolveDerivedSelectionReasoning(args, facets, "Нужен светильник для гостиной. Покажите варианты.");
-  assertEquals(inventedArea === null || !inventedArea.text.includes("30 м²"), true);
+  const inventedArea = resolveDerivedSelectionReasoning(
+    args,
+    facets,
+    "Нужен светильник для гостиной. Покажите варианты.",
+  );
+  assertEquals(
+    inventedArea === null || !inventedArea.text.includes("30 м²"),
+    true,
+  );
 
-  const perItemPremise = resolveDerivedSelectionReasoning({
-    ...args,
-    reasoning:
-      "Для гостиной площадью 30 м² при условии, что каждый светильник имеет не менее 5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
-    compatible_classifications: [],
-    required_facet_values: [],
-  }, facets, customer);
+  const perItemPremise = resolveDerivedSelectionReasoning(
+    {
+      ...args,
+      reasoning:
+        "Для гостиной площадью 30 м² при условии, что каждый светильник имеет не менее 5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
+      compatible_classifications: [],
+      required_facet_values: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(perItemPremise, null);
-  const symbolicPerItemPremise = resolveDerivedSelectionReasoning({
-    ...args,
-    reasoning:
-      "Для гостиной площадью 30 м² при условии, что каждый светильник имеет ≥5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
-    compatible_classifications: [],
-    required_facet_values: [],
-  }, facets, customer);
+  const symbolicPerItemPremise = resolveDerivedSelectionReasoning(
+    {
+      ...args,
+      reasoning:
+        "Для гостиной площадью 30 м² при условии, что каждый светильник имеет ≥5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
+      compatible_classifications: [],
+      required_facet_values: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(symbolicPerItemPremise, null);
-  const prefixedPerItemPremise = resolveDerivedSelectionReasoning({
-    ...args,
-    reasoning:
-      "Каждый светильник для гостиной площадью 30 м² при норме 150 лк должен выдавать не менее 5000 лм. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению.",
-    required_facet_values: [],
-  }, facets, customer);
+  const prefixedPerItemPremise = resolveDerivedSelectionReasoning(
+    {
+      ...args,
+      reasoning:
+        "Каждый светильник для гостиной площадью 30 м² при норме 150 лк должен выдавать не менее 5000 лм. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению.",
+      required_facet_values: [],
+    },
+    facets,
+    customer,
+  );
   assertEquals(prefixedPerItemPremise, null);
 
-  const customerPrice = resolveDerivedSelectionReasoning({
-    ...args,
-    reasoning:
-      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм, цена не более 4000 тенге.",
-  }, facets, `${customer} Цена не более 4000 тенге.`);
+  const customerPrice = resolveDerivedSelectionReasoning(
+    {
+      ...args,
+      reasoning:
+        "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм, цена не более 4000 тенге.",
+    },
+    facets,
+    `${customer} Цена не более 4000 тенге.`,
+  );
   assertEquals(customerPrice, null);
 });
 
@@ -2963,7 +3070,10 @@ Deno.test("a customer-owned card threshold remains visible after numeric authori
     values: [{ value: "1800" }, { value: "5000" }],
   }], "Нужен светильник для гостиной 25 м² с потоком не менее 4000 лм.");
   assertEquals(resolved?.text.includes("не менее 4000 лм"), true);
-  assertEquals(resolved?.measurementEvidence.includes("не менее 4000 лм"), true);
+  assertEquals(
+    resolved?.measurementEvidence.includes("не менее 4000 лм"),
+    true,
+  );
 });
 
 Deno.test("a model cannot bypass aggregate provenance by mislabelling a visible system total as per-product", () => {
@@ -3531,16 +3641,21 @@ Deno.test("a retrieval query is accepted only when it is already visible in reas
 
   // The design guard must not silently change an unrelated retrieval branch,
   // even when the existing classification cleanup rewrites visible prose.
-  const ordinary = resolveDerivedSelectionReasoning({
-    reasoning: "Подбираю накладные изделия для указанного применения.",
-    retrieval_query: "накладные изделия",
-    compatible_classifications: [],
-    excluded_classifications: [],
-  }, [{
-    key: "kind",
-    caption: "Класс применения",
-    values: [{ value: "подвесные изделия" }, { value: "накладные изделия" }],
-  }], "Нужны подвесные изделия", "Изделия");
+  const ordinary = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Подбираю накладные изделия для указанного применения.",
+      retrieval_query: "накладные изделия",
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    [{
+      key: "kind",
+      caption: "Класс применения",
+      values: [{ value: "подвесные изделия" }, { value: "накладные изделия" }],
+    }],
+    "Нужны подвесные изделия",
+    "Изделия",
+  );
   assertEquals(ordinary?.retrievalQuery, "накладные изделия");
 });
 
@@ -3802,11 +3917,13 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
     explicit_customer_classifications: [],
   };
 
-  for (const request of [
-    "Хочу поменять люстру в зале 30 квадратов",
-    "Хочу поменять люстру в зале 30 квадратных метров",
-    "Хочу поменять люстру в зале 30 квадратов. А есть другие варианты?",
-  ]) {
+  for (
+    const request of [
+      "Хочу поменять люстру в зале 30 квадратов",
+      "Хочу поменять люстру в зале 30 квадратных метров",
+      "Хочу поменять люстру в зале 30 квадратов. А есть другие варианты?",
+    ]
+  ) {
     const resolved = resolveDerivedSelectionReasoning(
       declaration,
       facets,
@@ -3814,15 +3931,25 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
       "Люстры",
     );
     assertEquals(resolved?.requiredFacetValues, [], request);
-    assertEquals(resolved?.reasoningEvidence.includes("квадрат"), false, request);
-    assertEquals(resolved?.measurementEvidence.includes("квадрат"), false, request);
+    assertEquals(
+      resolved?.reasoningEvidence.includes("квадрат"),
+      false,
+      request,
+    );
+    assertEquals(
+      resolved?.measurementEvidence.includes("квадрат"),
+      false,
+      request,
+    );
   }
 
-  for (const request of [
-    "Нужна квадратная люстра для зала 30 квадратов",
-    "Нужна люстра квадратной формы для зала 30 квадратов",
-    "Нужна форма квадрат для зала 30 квадратов",
-  ]) {
+  for (
+    const request of [
+      "Нужна квадратная люстра для зала 30 квадратов",
+      "Нужна люстра квадратной формы для зала 30 квадратов",
+      "Нужна форма квадрат для зала 30 квадратов",
+    ]
+  ) {
     const resolved = resolveDerivedSelectionReasoning(
       declaration,
       facets,
@@ -3836,15 +3963,20 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   }
 
   // Another functional, model-derived technical requirement remains eligible.
-  const technical = resolveDerivedSelectionReasoning({
-    ...declaration,
-    reasoning: "Для установки на улице требуется степень защиты IP65.",
-  }, [{
-    key: "ip",
-    caption: "Степень защиты IP",
-    type: "string",
-    values: [{ value: "IP65" }, { value: "IP44" }],
-  }], "Нужен прожектор для улицы площадью 30 квадратов", "Прожекторы");
+  const technical = resolveDerivedSelectionReasoning(
+    {
+      ...declaration,
+      reasoning: "Для установки на улице требуется степень защиты IP65.",
+    },
+    [{
+      key: "ip",
+      caption: "Степень защиты IP",
+      type: "string",
+      values: [{ value: "IP65" }, { value: "IP44" }],
+    }],
+    "Нужен прожектор для улицы площадью 30 квадратов",
+    "Прожекторы",
+  );
   assertEquals(technical?.requiredFacetValues, [{
     key: "Степень защиты IP",
     value: "IP65",
@@ -3859,12 +3991,18 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
     caption: "Степень защиты IP",
     values: [{ value: "IP65" }, { value: "IP44" }],
   }];
-  const mixed = resolveDerivedSelectionReasoning({
-    ...declaration,
-    reasoning: "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
-    required_facet_values: ["f0v0", "f1v0"],
-    retrieval_query: "квадрат",
-  }, mixedFacets, "Нужен прибор для улицы на участке 30 квадратов", "Изделия");
+  const mixed = resolveDerivedSelectionReasoning(
+    {
+      ...declaration,
+      reasoning:
+        "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
+      required_facet_values: ["f0v0", "f1v0"],
+      retrieval_query: "квадрат",
+    },
+    mixedFacets,
+    "Нужен прибор для улицы на участке 30 квадратов",
+    "Изделия",
+  );
   assertEquals(mixed?.requiredFacetValues, [{
     key: "Степень защиты IP",
     value: "IP65",
@@ -3873,11 +4011,16 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   assertEquals(mixed?.reasoningEvidence.includes("квадрат"), false);
   assertEquals(mixed?.retrievalQuery, null);
 
-  const separated = resolveDerivedSelectionReasoning({
-    ...declaration,
-    reasoning: "Для улицы нужна степень защиты IP65. Форма изделия: квадрат.",
-    required_facet_values: ["f0v0", "f1v0"],
-  }, mixedFacets, "Нужен прибор для улицы на участке 30 квадратов", "Изделия");
+  const separated = resolveDerivedSelectionReasoning(
+    {
+      ...declaration,
+      reasoning: "Для улицы нужна степень защиты IP65. Форма изделия: квадрат.",
+      required_facet_values: ["f0v0", "f1v0"],
+    },
+    mixedFacets,
+    "Нужен прибор для улицы на участке 30 квадратов",
+    "Изделия",
+  );
   assertEquals(separated?.requiredFacetValues, [{
     key: "Степень защиты IP",
     value: "IP65",
@@ -3885,12 +4028,18 @@ Deno.test("a model cannot turn room area into a required product shape", () => {
   assertEquals(separated?.reasoningEvidence.includes("IP65"), true);
   assertEquals(separated?.reasoningEvidence.includes("квадрат"), false);
 
-  const explicitMixed = resolveDerivedSelectionReasoning({
-    ...declaration,
-    reasoning: "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
-    required_facet_values: ["f0v0", "f1v0"],
-    retrieval_query: "квадрат",
-  }, mixedFacets, "Нужно квадратное изделие для улицы на участке 30 квадратов", "Изделия");
+  const explicitMixed = resolveDerivedSelectionReasoning(
+    {
+      ...declaration,
+      reasoning:
+        "Для улицы нужна степень защиты IP65 и форма изделия: квадрат.",
+      required_facet_values: ["f0v0", "f1v0"],
+      retrieval_query: "квадрат",
+    },
+    mixedFacets,
+    "Нужно квадратное изделие для улицы на участке 30 квадратов",
+    "Изделия",
+  );
   assertEquals(explicitMixed?.requiredFacetValues, [{
     key: "Форма изделия",
     value: "квадрат",
@@ -4011,13 +4160,603 @@ Deno.test("dropping model-only appearance keeps independent technical reasoning 
   assertEquals(resolved?.retrievalQuery, "IP65");
 });
 
-Deno.test("English shape keys cannot bypass customer-owned design grounding", () => {
-  for (const facet of [
-    { key: "shape", caption: undefined },
-    { key: "appearance", caption: "Геометрия товара" },
-    { key: "form", caption: undefined },
-    { key: "forma", caption: undefined },
+Deno.test("inflected model-only appearance is not a search preference", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "кольцо" }],
+  }];
+  const cases = [
+    { phrase: "круглую люстру", request: "круглая люстра", value: "круг" },
+    {
+      phrase: "кольцевую люстру",
+      request: "кольцевая люстра",
+      value: "кольцо",
+    },
+  ];
+  for (const { phrase, request, value } of cases) {
+    const model = {
+      reasoning: `Для зала 30 квадратов подбираю ${phrase}.`,
+      retrieval_query: phrase,
+      required_facet_values: [],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    };
+    const inferred = resolveDerivedSelectionReasoning(
+      model,
+      facets,
+      "Нужна люстра в зал 30 квадратов",
+      "Люстры",
+    );
+    assertEquals(inferred?.requiredFacetValues, [], phrase);
+    assertEquals(inferred?.reasoningEvidence.includes(phrase), false, phrase);
+    assertEquals(inferred?.measurementEvidence.includes(phrase), false, phrase);
+    assertEquals(inferred?.retrievalQuery, null, phrase);
+
+    const explicit = resolveDerivedSelectionReasoning(
+      model,
+      facets,
+      `Нужна ${request} в зал 30 квадратов`,
+      "Люстры",
+    );
+    assertEquals(explicit?.requiredFacetValues, [{
+      key: "Форма люстры",
+      value,
+    }], phrase);
+    assertEquals(explicit?.retrievalQuery, phrase, phrase);
+  }
+});
+
+Deno.test("appearance inflection does not swallow an unrelated room or technical condition", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "кольцо" }],
+  }, {
+    key: "ip",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }, { value: "IP44" }],
+  }];
+  const base = {
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const room = resolveDerivedSelectionReasoning(
+    {
+      ...base,
+      reasoning:
+        "Для круглого зала площадью 30 м² подбираю люстру без предпочтений по форме.",
+      retrieval_query: "люстру",
+    },
+    facets,
+    "Нужна люстра для круглого зала площадью 30 м²",
+    "Люстры",
+  );
+  assertEquals(room?.requiredFacetValues, []);
+  assertEquals(room?.reasoningEvidence.includes("круглого зала"), true);
+  assertEquals(room?.retrievalQuery, "люстру");
+
+  const roomToProduct = resolveDerivedSelectionReasoning(
+    {
+      ...base,
+      reasoning: "Для круглого зала площадью 30 м² подбираю круглую люстру.",
+      retrieval_query: "круглую люстру",
+    },
+    facets,
+    "Нужна люстра для круглого зала площадью 30 м²",
+    "Люстры",
+  );
+  assertEquals(roomToProduct?.requiredFacetValues, []);
+  assertEquals(
+    roomToProduct?.reasoningEvidence.includes("круглую люстру"),
+    false,
+  );
+  assertEquals(roomToProduct?.retrievalQuery, null);
+
+  const unrelated = resolveDerivedSelectionReasoning(
+    {
+      ...base,
+      reasoning: "Сначала рассматриваю круг задач и условия установки.",
+      retrieval_query: "условия установки",
+    },
+    facets,
+    "Нужна люстра с подходящими условиями установки",
+    "Люстры",
+  );
+  assertEquals(unrelated?.requiredFacetValues, []);
+  assertEquals(unrelated?.reasoningEvidence.includes("круг задач"), true);
+  assertEquals(unrelated?.retrievalQuery, "условия установки");
+
+  const technical = resolveDerivedSelectionReasoning(
+    {
+      ...base,
+      reasoning: "Для улицы нужна степень защиты IP65 и круглая люстра.",
+      retrieval_query: "IP65",
+    },
+    facets,
+    "Нужна люстра для улицы",
+    "Люстры",
+  );
+  assertEquals(technical?.requiredFacetValues, [{
+    key: "Степень защиты IP",
+    value: "IP65",
+  }]);
+  assertEquals(technical?.reasoningEvidence.includes("IP65"), true);
+  assertEquals(technical?.reasoningEvidence.includes("круглая люстра"), false);
+  assertEquals(
+    technical?.measurementEvidence.includes("круглая люстра"),
+    false,
+  );
+  assertEquals(technical?.retrievalQuery, "IP65");
+});
+
+Deno.test("a model-only style adjective is scrubbed without touching a requested style", () => {
+  const facets = [{
+    key: "style",
+    caption: "Стиль",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  }];
+  const declaration = {
+    reasoning: "Для гостиной подбираю лофтовый светильник.",
+    retrieval_query: "лофтовый светильник",
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const inferred = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужен светильник для гостиной",
+    "Светильники",
+  );
+  assertEquals(inferred?.reasoningEvidence.includes("лофтовый"), false);
+  assertEquals(inferred?.retrievalQuery, null);
+  const explicit = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужен лофтовый светильник для гостиной",
+    "Светильники",
+  );
+  assertEquals(explicit?.requiredFacetValues, [{
+    key: "Стиль",
+    value: "лофт",
+  }]);
+  assertEquals(explicit?.retrievalQuery, "лофтовый светильник");
+});
+
+Deno.test("a short customer design follow-up is owned, but another noun is not", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "кольцо" }],
+  }];
+  const declaration = {
+    reasoning: "Для гостиной подбираю круглую люстру.",
+    retrieval_query: "круглую люстру",
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  for (
+    const customer of ["А круглая есть?", "Хочу круглую", "Хочу круглую в зал"]
+  ) {
+    const resolved = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      customer,
+      "Люстры",
+    );
+    assertEquals(resolved?.requiredFacetValues, [{
+      key: "Форма люстры",
+      value: "круг",
+    }], customer);
+    assertEquals(resolved?.retrievalQuery, "круглую люстру", customer);
+  }
+  for (
+    const customer of [
+      "Нужна люстра для круглого зала площадью 30 м²",
+      "А круглая комната есть?",
+    ]
+  ) {
+    const resolved = resolveDerivedSelectionReasoning(
+      declaration,
+      facets,
+      customer,
+      "Люстры",
+    );
+    assertEquals(resolved?.requiredFacetValues, [], customer);
+    assertEquals(resolved?.retrievalQuery, null, customer);
+  }
+});
+
+Deno.test("a room's declared shape never becomes the selected product shape", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const declaration = {
+    reasoning: "Подбираю круглую люстру.",
+    retrieval_query: "круглую люстру",
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const unowned = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Форма зала круглая, нужна люстра",
+    "Люстры",
+  );
+  assertEquals(unowned?.requiredFacetValues, []);
+  assertEquals(unowned?.retrievalQuery, null);
+  assertEquals(unowned?.reasoningEvidence.includes("круглую люстру"), false);
+  assertEquals(unowned?.measurementEvidence.includes("круглую люстру"), false);
+
+  const owned = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Форма люстры круглая",
+    "Люстры",
+  );
+  assertEquals(owned?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "круг",
+  }]);
+  assertEquals(owned?.retrievalQuery, "круглую люстру");
+});
+
+Deno.test("appearance grammar binds a room modifier to the room, not the requested product", () => {
+  const shapeFacets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const shapeDeclaration = {
+    reasoning: "Подбираю круглую люстру.",
+    retrieval_query: "круглую люстру",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  for (const customer of [
+    "Зал круглый. Нужна люстра.",
+    "Зал в форме круга. Нужна люстра.",
+    "Нужна люстра для комнаты в форме круга",
+    "Нужна люстра в зал круглой формы",
+    "Не хочу люстру круглую",
+    "Не нужна мне люстра круглая",
+    "Круглая люстра не нужна",
   ]) {
+    const resolved = resolveDerivedSelectionReasoning(
+      shapeDeclaration,
+      shapeFacets,
+      customer,
+      "Люстры",
+    );
+    assertEquals(resolved?.requiredFacetValues, [], customer);
+    assertEquals(resolved?.retrievalQuery, null, customer);
+  }
+
+  const style = resolveDerivedSelectionReasoning({
+    ...shapeDeclaration,
+    reasoning: "Подбираю люстру в стиле лофт.",
+    retrieval_query: "люстру в стиле лофт",
+  }, [{
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  }], "Комната в стиле лофт. Нужна люстра.", "Люстры");
+  assertEquals(style?.requiredFacetValues, []);
+  assertEquals(style?.retrievalQuery, null);
+});
+
+Deno.test("a technical format facet is not mistaken for customer-chosen product form", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю бумагу формата A4.",
+    retrieval_query: "бумага формат A4",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  }, [{
+    key: "format",
+    caption: "Формат",
+    values: [{ value: "A4" }, { value: "A3" }],
+  }], "Нужна бумага формата A4.", "Бумага");
+  assertEquals(resolved?.requiredFacetValues, [{ key: "Формат", value: "A4" }]);
+});
+
+Deno.test("oval appearance is grounded only when the customer chose the oval product", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "овал" }, { value: "круг" }],
+  }];
+  const declaration = {
+    reasoning: "Подбираю овальную люстру.",
+    retrieval_query: "овальную люстру",
+    required_facet_values: [],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const unowned = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужна люстра для зала",
+    "Люстры",
+  );
+  assertEquals(unowned?.requiredFacetValues, []);
+  assertEquals(unowned?.retrievalQuery, null);
+  assertEquals(unowned?.reasoningEvidence.includes("овальную люстру"), false);
+  assertEquals(unowned?.measurementEvidence.includes("овальную люстру"), false);
+
+  const owned = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужна овальная люстра для зала",
+    "Люстры",
+  );
+  assertEquals(owned?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "овал",
+  }]);
+  assertEquals(owned?.retrievalQuery, "овальную люстру");
+});
+
+Deno.test("a customer's product synonym can own a live appearance facet", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма светильника",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const declaration = {
+    reasoning: "Подбираю круглую лампу.",
+    retrieval_query: "круглую лампу",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const owned = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    "Нужна круглая лампа в зал",
+    "Светильники",
+  );
+  assertEquals(owned?.requiredFacetValues, [{
+    key: "Форма светильника",
+    value: "круг",
+  }]);
+  assertEquals(owned?.retrievalQuery, "круглую лампу");
+
+  const withoutId = resolveDerivedSelectionReasoning(
+    { ...declaration, required_facet_values: [] },
+    facets,
+    "Нужна круглая лампа в зал",
+    "Светильники",
+  );
+  assertEquals(withoutId?.requiredFacetValues, [{
+    key: "Форма светильника",
+    value: "круг",
+  }]);
+  assertEquals(withoutId?.retrievalQuery, "круглую лампу");
+});
+
+Deno.test("an elliptical appearance follow-up may name the use room", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Подбираю круглую люстру.",
+      retrieval_query: "круглую люстру",
+      required_facet_values: [],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    facets,
+    "А круглая есть для зала?",
+    "Люстры",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "круг",
+  }]);
+  assertEquals(resolved?.retrievalQuery, "круглую люстру");
+});
+
+Deno.test("appearance ownership uses the current turn and verified base, not accumulated history", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const declaration = {
+    reasoning: "Подбираю круглую люстру.",
+    retrieval_query: "круглую люстру",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const customerHistory = "Нужна круглая люстра.\nНужна люстра для зала.";
+  const noActiveBase = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    customerHistory,
+    "Люстры",
+    null,
+    {
+      currentUserMessage: "Нужна люстра для зала",
+      trustedActiveProductTarget: "Люстры",
+    },
+  );
+  assertEquals(noActiveBase?.requiredFacetValues, []);
+  assertEquals(noActiveBase?.retrievalQuery, null);
+
+  const withVerifiedBase = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    customerHistory,
+    "Люстры",
+    null,
+    {
+      currentUserMessage: "А для зала?",
+      trustedBaseRequest: "Нужна круглая люстра",
+      trustedActiveProductTarget: "Люстры",
+    },
+  );
+  assertEquals(withVerifiedBase?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "круг",
+  }]);
+  assertEquals(withVerifiedBase?.retrievalQuery, "круглую люстру");
+
+  const ovalOverride = resolveDerivedSelectionReasoning(
+    {
+      ...declaration,
+      reasoning: "Подбираю овальную люстру.",
+      retrieval_query: "овальную люстру",
+      required_facet_values: ["f0v1"],
+    },
+    facets,
+    customerHistory,
+    "Люстры",
+    null,
+    {
+      currentUserMessage: "А овальную для зала?",
+      trustedBaseRequest: "Нужна круглая люстра",
+      trustedActiveProductTarget: "Люстры",
+    },
+  );
+  assertEquals(ovalOverride?.requiredFacetValues, [{
+    key: "Форма люстры",
+    value: "овал",
+  }]);
+  assertEquals(ovalOverride?.retrievalQuery, "овальную люстру");
+
+  const cancelled = resolveDerivedSelectionReasoning(
+    declaration,
+    facets,
+    customerHistory,
+    "Люстры",
+    null,
+    {
+      currentUserMessage: "Круглую больше не надо, покажи другую",
+      trustedBaseRequest: "Нужна круглая люстра",
+      trustedActiveProductTarget: "Люстры",
+    },
+  );
+  assertEquals(cancelled?.requiredFacetValues, []);
+  assertEquals(cancelled?.retrievalQuery, null);
+});
+
+Deno.test("appearance of the old product is not inherited by its replacement", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const request = "Сейчас у меня круглая люстра. Хочу заменить на другую.";
+  const mistakenDeclaration = {
+    reasoning: "Подбираю круглую люстру.",
+    retrieval_query: "круглую люстру",
+    required_facet_values: ["f0v0"],
+    compatible_classifications: [],
+    excluded_classifications: [],
+  };
+  const replacement = resolveDerivedSelectionReasoning(
+    mistakenDeclaration,
+    facets,
+    request,
+    "Люстры",
+    null,
+    { currentUserMessage: request, trustedActiveProductTarget: "Люстры" },
+  );
+  assertEquals(replacement?.requiredFacetValues, []);
+  assertEquals(replacement?.retrievalQuery, null);
+
+  for (
+    const customer of [
+      "У меня круглая люстра, нужна овальная взамен.",
+      "Старая люстра круглая, новая нужна овальная.",
+    ]
+  ) {
+    const oval = resolveDerivedSelectionReasoning(
+      {
+        ...mistakenDeclaration,
+        reasoning: "Подбираю овальную люстру вместо круглой.",
+        retrieval_query: "овальную люстру",
+        required_facet_values: ["f0v0", "f0v1"],
+      },
+      facets,
+      customer,
+      "Люстры",
+      null,
+      { currentUserMessage: customer, trustedActiveProductTarget: "Люстры" },
+    );
+    assertEquals(oval?.requiredFacetValues, [{ key: "Форма люстры", value: "овал" }]);
+    assertEquals(oval?.retrievalQuery, "овальную люстру");
+  }
+});
+
+Deno.test("a model name is not a shape and a replacement style belongs to the new product", () => {
+  const shape = [{
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  }];
+  const modelRequest = "Люстра Круговорот есть?";
+  const modelName = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Подбираю круглую люстру Круговорот.",
+      retrieval_query: "круглую люстру Круговорот",
+      required_facet_values: ["f0v0"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    shape,
+    modelRequest,
+    "Люстры",
+    null,
+    { currentUserMessage: modelRequest, trustedActiveProductTarget: "Люстры" },
+  );
+  assertEquals(modelName?.requiredFacetValues, []);
+
+  const styles = [{
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  }];
+  const styleRequest = "У меня лофтовая люстра, хочу классическую.";
+  const newStyle = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Подбираю классическую люстру.",
+      retrieval_query: "классическую люстру",
+      required_facet_values: ["f0v0", "f0v1"],
+      compatible_classifications: [],
+      excluded_classifications: [],
+    },
+    styles,
+    styleRequest,
+    "Люстры",
+    null,
+    { currentUserMessage: styleRequest, trustedActiveProductTarget: "Люстры" },
+  );
+  assertEquals(newStyle?.requiredFacetValues, [{ key: "Стиль люстры", value: "классика" }]);
+  assertEquals(newStyle?.retrievalQuery, "классическую люстру");
+});
+
+Deno.test("English shape keys cannot bypass customer-owned design grounding", () => {
+  for (
+    const facet of [
+      { key: "shape", caption: undefined },
+      { key: "appearance", caption: "Геометрия товара" },
+      { key: "form", caption: undefined },
+      { key: "forma", caption: undefined },
+    ]
+  ) {
     const facets = [{
       ...facet,
       values: [{ value: "квадрат" }, { value: "круг" }],
@@ -4036,7 +4775,11 @@ Deno.test("English shape keys cannot bypass customer-owned design grounding", ()
       "Изделия",
     );
     assertEquals(inferred?.requiredFacetValues, [], facet.key);
-    assertEquals(inferred?.reasoningEvidence.includes("квадрат"), false, facet.key);
+    assertEquals(
+      inferred?.reasoningEvidence.includes("квадрат"),
+      false,
+      facet.key,
+    );
 
     const explicit = resolveDerivedSelectionReasoning(
       declaration,

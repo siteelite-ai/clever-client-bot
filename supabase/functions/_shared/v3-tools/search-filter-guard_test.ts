@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  appearanceFacetClaimsFromText,
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
@@ -13,6 +14,8 @@ import {
   productMatchesExcludedReplacementIdentity,
   projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
+  resolveCustomerAppearanceFacetOwnership,
+  unownedAppearanceMentionsInText,
 } from "./search-filter-guard.ts";
 import { buildVisibleRequestContract } from "./visible-request-contract.ts";
 
@@ -212,34 +215,48 @@ Deno.test("white light does not become white housing through overlapping live co
     buildVisibleRequestContract(explicitHousing),
   );
   assertEquals(housingResult.kept.some(({ key }) => key === "body"), true);
-  assertEquals(housingResult.user_backed.some(({ key }) => key === "body"), true);
+  assertEquals(
+    housingResult.user_backed.some(({ key }) => key === "body"),
+    true,
+  );
 });
 
 Deno.test("large live facet vocabulary keeps empty evidence cheap and axis ownership exact", () => {
   // The production discovery response can expose hundreds of choices. Keep
   // this shape in regression coverage without a wall-clock threshold that
   // would make CI depend on machine speed.
-  const live = [{
-    key: "body",
-    caption: "Цвет корпуса",
-    values: [{ value: "белый" }, { value: "чёрный" }],
-  }, {
-    key: "emission",
-    caption: "Цвет свечения",
-    values: [{ value: "холодный белый" }, { value: "зелёный" }],
-  }, {
-    key: "protection",
-    caption: "Степень защиты",
-    values: [{ value: "IP65" }],
-  }, ...Array.from({ length: 36 }, (_, index) => ({
-    key: `noise_${index}`,
-    caption: `Параметр линии ${index}`,
-    values: Array.from({ length: index === 0 ? 35 : 16 }, (_, valueIndex) => ({
-      value: `Вариант ${valueIndex}`,
+  const live = [
+    {
+      key: "body",
+      caption: "Цвет корпуса",
+      values: [{ value: "белый" }, { value: "чёрный" }],
+    },
+    {
+      key: "emission",
+      caption: "Цвет свечения",
+      values: [{ value: "холодный белый" }, { value: "зелёный" }],
+    },
+    {
+      key: "protection",
+      caption: "Степень защиты",
+      values: [{ value: "IP65" }],
+    },
+    ...Array.from({ length: 36 }, (_, index) => ({
+      key: `noise_${index}`,
+      caption: `Параметр линии ${index}`,
+      values: Array.from(
+        { length: index === 0 ? 35 : 16 },
+        (_, valueIndex) => ({
+          value: `Вариант ${valueIndex}`,
+        }),
+      ),
     })),
-  }))];
+  ];
   assertEquals(live.length, 39);
-  assertEquals(live.reduce((total, facet) => total + facet.values.length, 0), 600);
+  assertEquals(
+    live.reduce((total, facet) => total + facet.values.length, 0),
+    600,
+  );
 
   const empty = guardSearchFilters({ mode: "by_filter" }, live, "", "", "");
   assertEquals(empty.kept, []);
@@ -267,7 +284,10 @@ Deno.test("large live facet vocabulary keeps empty evidence cheap and axis owner
     whiteHousing,
     buildVisibleRequestContract(whiteHousing),
   );
-  assertEquals(explicit.args.options, { body: ["белый"], protection: ["IP65"] });
+  assertEquals(explicit.args.options, {
+    body: ["белый"],
+    protection: ["IP65"],
+  });
 });
 
 Deno.test("filter guard removes a valid but unrequested catalog value", () => {
@@ -1084,18 +1104,30 @@ Deno.test("filter guard never infers generic boolean facet values", () => {
 Deno.test("model placeholder absence is not an exact search filter or prose projection", () => {
   const cases = [
     {
-      facet: { key: "length", caption: "Длина кабеля, м", values: [{ value: "нет" }, { value: "1" }, { value: "3" }] },
+      facet: {
+        key: "length",
+        caption: "Длина кабеля, м",
+        values: [{ value: "нет" }, { value: "1" }, { value: "3" }],
+      },
       reasoning: "Предложу варианты. Длина кабеля, м: нет.",
     },
     {
-      facet: { key: "mount", caption: "Способ монтажа", values: [{ value: "отсутствует" }, { value: "накладной" }] },
+      facet: {
+        key: "mount",
+        caption: "Способ монтажа",
+        values: [{ value: "отсутствует" }, { value: "накладной" }],
+      },
       reasoning: "Предложу варианты. Способ монтажа: отсутствует.",
     },
   ];
   for (const { facet, reasoning } of cases) {
     const absence = facet.values[0].value;
     assertEquals(
-      projectExplicitReasoningFacetValues([facet], reasoning, "Покажи несколько вариантов на выбор"),
+      projectExplicitReasoningFacetValues(
+        [facet],
+        reasoning,
+        "Покажи несколько вариантов на выбор",
+      ),
       { kept: [], user_backed: [] },
     );
     const guarded = guardSearchFilters(
@@ -2135,6 +2167,823 @@ Deno.test("locally negated inflected appearance never becomes a positive filter"
       [],
     );
   }
+});
+
+Deno.test("appearance provenance attaches inflected values to the product, not the room", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }, { value: "кольцо" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Форма зала круглая, нужна люстра.",
+      "Нужна люстра для круглого зала.",
+      "Нужна люстра в овальный зал.",
+      "Круг задач большой, нужна люстра.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet,
+        value: "круг",
+        currentUserMessage,
+      }),
+      false,
+      currentUserMessage,
+    );
+  }
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "овал",
+      currentUserMessage: "Подбери овальную люстру для зала.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Форма люстры круглая.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Нужна круглая лампа.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "кольцо",
+      currentUserMessage: "Нужна кольцевая люстра.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: {
+        ...facet,
+        values: [...facet.values, { value: "квадрат" }],
+      },
+      value: "квадрат",
+      currentUserMessage:
+        "Нужна люстра квадратной формы для зала 30 квадратов.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: {
+        key: "style",
+        caption: "Стиль",
+        values: [{ value: "лофт" }, { value: "классика" }],
+      },
+      value: "лофт",
+      currentUserMessage: "Нужен лофтовый светильник для гостиной.",
+    }),
+    true,
+  );
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      [{
+        key: "style",
+        caption: "Стиль",
+        values: [{ value: "лофт" }, { value: "классика" }],
+      }],
+      "Стиль: лофт.",
+      "Нужен лофтовый светильник для гостиной.",
+    ).kept,
+    [{ key: "style", value: "лофт" }],
+  );
+
+  const room = "Нужна люстра для круглого зала.";
+  const modelReasoning = "Подбираю круглую люстру. Форма люстры: круг.";
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { shape: ["круг"] } },
+    [facet],
+    modelReasoning,
+    `${room}\nРаньше искали круглую люстру.`,
+    modelReasoning,
+    [],
+    { currentUserMessage: room },
+  );
+  assertEquals(guarded.args.options, undefined);
+  assertEquals(guarded.user_backed, []);
+  assertEquals(
+    projectExplicitReasoningFacetValues([facet], modelReasoning, room, {
+      currentUserMessage: room,
+    }).kept,
+    [],
+  );
+});
+
+Deno.test("appearance provenance distinguishes a replaced product from the requested one", () => {
+  const shape = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  const style = {
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  };
+  for (
+    const [request, expected] of [
+      ["Сейчас у меня круглая люстра. Хочу заменить на другую.", []],
+      ["У меня круглая люстра, нужна овальная взамен.", ["овал"]],
+      ["Есть круглая люстра, хочу овальную.", ["овал"]],
+      ["Старая люстра круглая, новая нужна овальная.", ["овал"]],
+      ["Хочу заменить круглую люстру на овальную.", ["овал"]],
+      ["Старая люстра не круглая, новая нужна круглая.", ["круг"]],
+      ["Есть не круглая люстра, хочу круглую.", ["круг"]],
+    ] as Array<[string, string[]]>
+  ) {
+    const owned = shape.values.filter(({ value }) =>
+      resolveCustomerAppearanceFacetOwnership({
+        facet: shape,
+        value,
+        currentUserMessage: request,
+      })
+    ).map(({ value }) => value);
+    assertEquals(owned, expected, request);
+  }
+  const replacement = "У меня лофтовая люстра, хочу классическую.";
+  assertEquals(
+    style.values.filter(({ value }) =>
+      resolveCustomerAppearanceFacetOwnership({
+        facet: style,
+        value,
+        currentUserMessage: replacement,
+      })
+    ).map(({ value }) => value),
+    ["классика"],
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: style,
+      value: "классика",
+      currentUserMessage: "Хочу классическую люстру.",
+    }),
+    true,
+  );
+  assertEquals(
+    appearanceFacetClaimsFromText(
+      [shape],
+      "Подбираю овальную люстру вместо круглой.",
+      { trustedActiveProductTarget: "Люстры" },
+    ),
+    [{ key: "shape", value: "овал" }],
+  );
+});
+
+Deno.test("appearance morphology does not confuse a product name with a shape", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Хочу люстру «Круговорот».",
+      "Люстра Круговорот есть?",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet,
+        value: "круг",
+        currentUserMessage,
+      }),
+      false,
+      currentUserMessage,
+    );
+  }
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Хочу круглую люстру.",
+    }),
+    true,
+  );
+});
+
+Deno.test("appearance ellipsis requires server-verified active target and base provenance", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  const currentUserMessage = "А круглая есть для зала?";
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage,
+    }),
+    false,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage,
+      trustedActiveProductTarget: "Люстры",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "А подешевле?",
+      trustedBaseUserMessage: "Нужна круглая люстра.",
+    }),
+    false,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "А подешевле?",
+      trustedActiveProductTarget: "Люстры",
+      trustedBaseUserMessage: "Нужна круглая люстра.",
+    }),
+    true,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Нет, покажи овальную люстру.",
+      trustedActiveProductTarget: "Люстры",
+      trustedBaseUserMessage: "Нужна круглая люстра.",
+    }),
+    false,
+  );
+});
+
+Deno.test("replacing the active item does not inherit its old appearance", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  const base = {
+    facet,
+    value: "круг",
+    trustedActiveProductTarget: "Люстры",
+    trustedBaseUserMessage: "Нужна круглая люстра.",
+  };
+  for (
+    const currentUserMessage of [
+      "Хочу заменить круглую люстру на другую.",
+      "Сейчас у меня круглая люстра. Хочу заменить на другую.",
+      "Сейчас у меня круглая люстра. Хочу заменить на новую без предпочтения по форме.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        ...base,
+        currentUserMessage,
+      }),
+      false,
+      currentUserMessage,
+    );
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_filter", options: { shape: ["круг"] } },
+        [facet],
+        "Форма люстры: круг.",
+        currentUserMessage,
+        "",
+        [],
+        {
+          currentUserMessage,
+          trustedActiveProductTarget: base.trustedActiveProductTarget,
+          trustedBaseUserMessage: base.trustedBaseUserMessage,
+        },
+      ).args.options,
+      undefined,
+      currentUserMessage,
+    );
+    assertEquals(
+      unownedAppearanceMentionsInText(
+        [facet],
+        "круглую люстру",
+        {
+          currentUserMessage,
+          trustedActiveProductTarget: base.trustedActiveProductTarget,
+          trustedBaseUserMessage: base.trustedBaseUserMessage,
+        },
+      ),
+      [{ key: "shape", value: "круг" }],
+      currentUserMessage,
+    );
+  }
+  for (
+    const currentUserMessage of [
+      "Хочу заменить круглую люстру на другую круглую.",
+      "А подешевле?",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        ...base,
+        currentUserMessage,
+      }),
+      true,
+      currentUserMessage,
+    );
+  }
+  const styleFacet = {
+    key: "style",
+    caption: "Стиль светильника",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  };
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: styleFacet,
+      value: "лофт",
+      currentUserMessage: "Хочу заменить лофтовый светильник на другой.",
+      trustedActiveProductTarget: "Светильники",
+      trustedBaseUserMessage: "Нужен лофтовый светильник.",
+    }),
+    false,
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: styleFacet,
+      value: "лофт",
+      currentUserMessage: "А подешевле?",
+      trustedActiveProductTarget: "Светильники",
+      trustedBaseUserMessage: "Нужен лофтовый светильник.",
+    }),
+    true,
+  );
+});
+
+Deno.test("negation of a room complement does not withdraw the fixture's shape", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Нужна круглая люстра, но не для круглого зала.",
+      "Нужна круглая люстра не для круглого зала.",
+      "Не для круглого зала, но нужна круглая люстра.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet,
+        value: "круг",
+        currentUserMessage,
+        trustedActiveProductTarget: "Люстры",
+        trustedBaseUserMessage: "Нужна круглая люстра.",
+      }),
+      true,
+      currentUserMessage,
+    );
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_filter", options: { shape: ["круг"] } },
+        [facet],
+        "Форма люстры: круг.",
+        currentUserMessage,
+        "",
+        [],
+        {
+          currentUserMessage,
+          trustedActiveProductTarget: "Люстры",
+          trustedBaseUserMessage: "Нужна круглая люстра.",
+        },
+      ).args.options,
+      { shape: ["круг"] },
+      currentUserMessage,
+    );
+  }
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Нужна люстра, но не круглая.",
+      trustedActiveProductTarget: "Люстры",
+      trustedBaseUserMessage: "Нужна круглая люстра.",
+    }),
+    false,
+  );
+});
+
+Deno.test("trusted target cannot relabel a room's form or style as the product's", () => {
+  const shape = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  const style = {
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }, { value: "классика" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Зал круглый. Нужна люстра.",
+      "Зал в форме круга. Нужна люстра.",
+      "Нужна люстра для комнаты в форме круга.",
+      "Нужна люстра в зал круглой формы.",
+      "Форма зала должна быть круглая. Нужна люстра.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet: shape,
+        value: "круг",
+        currentUserMessage,
+        trustedActiveProductTarget: "Люстры",
+      }),
+      false,
+      currentUserMessage,
+    );
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_filter", options: { shape: ["круг"] } },
+        [shape],
+        "Форма люстры: круг.",
+        currentUserMessage,
+        "",
+        [],
+        {
+          currentUserMessage,
+          trustedActiveProductTarget: "Люстры",
+        },
+      ).args.options,
+      undefined,
+      currentUserMessage,
+    );
+  }
+  const roomStyle = "Комната в стиле лофт. Нужна люстра.";
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: style,
+      value: "лофт",
+      currentUserMessage: roomStyle,
+      trustedActiveProductTarget: "Люстры",
+    }),
+    false,
+  );
+  assertEquals(
+    guardSearchFilters(
+      { mode: "by_filter", options: { style: ["лофт"] } },
+      [style],
+      "Стиль люстры: лофт.",
+      roomStyle,
+      "",
+      [],
+      { currentUserMessage: roomStyle, trustedActiveProductTarget: "Люстры" },
+    ).args.options,
+    undefined,
+  );
+
+  for (
+    const currentUserMessage of [
+      "Нужна люстра в форме круга.",
+      "Нужна люстра круглой формы для зала.",
+      "А круглая есть для зала?",
+      "Дайте круглую для зала.",
+      "Форма должна быть круглая.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet: shape,
+        value: "круг",
+        currentUserMessage,
+        trustedActiveProductTarget: "Люстры",
+      }),
+      true,
+      currentUserMessage,
+    );
+  }
+});
+
+Deno.test("negative demand and current withdrawal cancel appearance including inherited shape", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Не хочу люстру круглую.",
+      "Не нужна мне люстра круглая.",
+      "Круглая люстра не нужна.",
+      "Только не круглую.",
+      "Любую, кроме круглой.",
+      "Круглую больше не надо.",
+      "Давайте без круглой формы.",
+      "Теперь нужна не круглая.",
+      "Не хочу круглую, покажи другую.",
+    ]
+  ) {
+    assertEquals(
+      resolveCustomerAppearanceFacetOwnership({
+        facet,
+        value: "круг",
+        currentUserMessage,
+        trustedActiveProductTarget: "Люстры",
+        trustedBaseUserMessage: "Нужна круглая люстра.",
+      }),
+      false,
+      currentUserMessage,
+    );
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_filter", options: { shape: ["круг"] } },
+        [facet],
+        "Форма люстры: круг.",
+        currentUserMessage,
+        "",
+        [],
+        {
+          currentUserMessage,
+          trustedActiveProductTarget: "Люстры",
+          trustedBaseUserMessage: "Нужна круглая люстра.",
+        },
+      ).args.options,
+      undefined,
+      currentUserMessage,
+    );
+  }
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value: "круг",
+      currentUserMessage: "Нужна круглая люстра не для зала.",
+    }),
+    true,
+  );
+});
+
+Deno.test("appearance negation is scoped to its local demand, not a contrasted request", () => {
+  const facet = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "овал" }],
+  };
+  for (
+    const currentUserMessage of [
+      "Не нужна круглая люстра и нужна овальная.",
+      "Не хочу круглую, а овальную хочу.",
+    ]
+  ) {
+    const owned = facet.values.filter(({ value }) =>
+      resolveCustomerAppearanceFacetOwnership({
+        facet,
+        value,
+        currentUserMessage,
+        trustedActiveProductTarget: "Люстры",
+      })
+    ).map(({ value }) => value);
+    assertEquals(owned, ["овал"], currentUserMessage);
+  }
+});
+
+Deno.test("raw query does not turn ambient appearance into a product constraint", () => {
+  const shape = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "квадрат" }],
+  };
+  const live = [shape];
+  const roomQueries = [
+    "Зал круглый. Нужна люстра.",
+    "Зал в форме круга. Нужна люстра.",
+    "Форма зала круглая, нужна люстра",
+    "Нужна люстра для комнаты в форме круга",
+    "Нужна люстра в зал круглой формы",
+  ];
+  for (const currentUserMessage of roomQueries) {
+    const scope = { currentUserMessage, trustedActiveProductTarget: "Люстры" };
+    assertEquals(
+      unownedAppearanceMentionsInText(live, currentUserMessage, scope),
+      [{ key: "shape", value: "круг" }],
+      currentUserMessage,
+    );
+    assertEquals(
+      guardSearchFilters(
+        { mode: "by_query", query: currentUserMessage },
+        live,
+        "",
+        currentUserMessage,
+        "",
+        [],
+        scope,
+      ).requiresBroadBrowse,
+      true,
+      currentUserMessage,
+    );
+    assertEquals(
+      unownedAppearanceMentionsInText(live, "круглая", scope),
+      [{ key: "shape", value: "круг" }],
+      `recovery token: ${currentUserMessage}`,
+    );
+  }
+
+  const owned = { currentUserMessage: "Нужна круглая люстра." };
+  assertEquals(
+    unownedAppearanceMentionsInText(live, "круглую люстру", owned),
+    [],
+  );
+  assertEquals(
+    guardSearchFilters(
+      { mode: "by_query", query: "круглую люстру" },
+      live,
+      "",
+      owned.currentUserMessage,
+      "",
+      [],
+      owned,
+    ).requiresBroadBrowse,
+    false,
+  );
+  assertEquals(
+    unownedAppearanceMentionsInText(live, "круг задач", {
+      currentUserMessage: "Нужна люстра",
+    }),
+    [],
+  );
+  assertEquals(
+    unownedAppearanceMentionsInText(live, "30 квадратов", {
+      currentUserMessage: "Зал 30 квадратов, нужна люстра",
+    }),
+    [],
+  );
+  assertEquals(
+    unownedAppearanceMentionsInText(live, "кукуруза Korn", {
+      currentUserMessage: "Нужна лампа кукуруза Korn",
+    }),
+    [],
+  );
+  const style = {
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }],
+  };
+  const ambientStyle = "Комната в стиле лофт. Нужна люстра.";
+  assertEquals(
+    unownedAppearanceMentionsInText([style], ambientStyle, {
+      currentUserMessage: ambientStyle,
+      trustedActiveProductTarget: "Люстры",
+    }),
+    [{ key: "style", value: "лофт" }],
+  );
+});
+
+Deno.test("explicit model appearance axis is a claim, not customer provenance", () => {
+  const shape = {
+    key: "shape",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  };
+  assertEquals(
+    appearanceFacetClaimsFromText(
+      [shape],
+      "Для подбора проверяю shape: квадрат",
+    ),
+    [{ key: "shape", value: "квадрат" }],
+  );
+  assertEquals(
+    appearanceFacetClaimsFromText([shape], "Форма зала: квадрат"),
+    [],
+  );
+  assertEquals(
+    resolveCustomerAppearanceFacetOwnership({
+      facet: shape,
+      value: "квадрат",
+      currentUserMessage: "Нужно изделие для помещения 30 квадратов",
+    }),
+    false,
+  );
+  const style = {
+    key: "style",
+    caption: "Стиль люстры",
+    values: [{ value: "лофт" }],
+  };
+  assertEquals(
+    appearanceFacetClaimsFromText([style], "Стиль: лофт"),
+    [{ key: "style", value: "лофт" }],
+  );
+  assertEquals(
+    appearanceFacetClaimsFromText([style], "Стиль комнаты: лофт"),
+    [],
+  );
+});
+
+Deno.test("by_query flags model-only appearance while preserving a valid query for caller fallback", () => {
+  const shape = {
+    key: "shape",
+    caption: "Форма люстры",
+    values: [{ value: "круг" }, { value: "кольцо" }],
+  };
+  const live = [shape, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }],
+  }];
+  assertEquals(
+    appearanceFacetClaimsFromText(live, "круглую люстру"),
+    [{ key: "shape", value: "круг" }],
+  );
+  assertEquals(appearanceFacetClaimsFromText(live, "круг задач"), []);
+  assertEquals(appearanceFacetClaimsFromText(live, "круглый зал"), []);
+  assertEquals(
+    appearanceFacetClaimsFromText(live, "круглую лампу", {
+      allowUnanchoredQueryAdjective: true,
+    }),
+    [{ key: "shape", value: "круг" }],
+  );
+  assertEquals(
+    appearanceFacetClaimsFromText(live, "круг задач", {
+      allowUnanchoredQueryAdjective: true,
+    }),
+    [],
+  );
+  assertEquals(appearanceFacetClaimsFromText(live, "кольцевую люстру"), [{
+    key: "shape",
+    value: "кольцо",
+  }]);
+
+  const query = { mode: "by_query", query: "круглую люстру IP65" };
+  const modelOnly = guardSearchFilters(
+    query,
+    live,
+    "Подбираю круглую люстру IP65.",
+    "Нужна люстра для зала.",
+    "",
+    [],
+    { currentUserMessage: "Нужна люстра для зала." },
+  );
+  assertEquals(modelOnly.args, query);
+  assertEquals(modelOnly.requiresBroadBrowse, true);
+  assertEquals(modelOnly.dropped, [{
+    key: "shape",
+    value: "круг",
+    reason: "not_declared_in_reasoning",
+  }]);
+
+  const alternateNoun = guardSearchFilters(
+    { mode: "by_query", query: "круглую лампу" },
+    live,
+    "Подбираю круглую лампу.",
+    "Нужна лампа.",
+    "",
+    [],
+    { currentUserMessage: "Нужна лампа." },
+  );
+  assertEquals(alternateNoun.requiresBroadBrowse, true);
+  assertEquals(
+    guardSearchFilters(
+      { mode: "by_query", query: "круглую лампу" },
+      live,
+      "Подбираю круглую лампу.",
+      "Нужна круглая лампа.",
+      "",
+      [],
+      { currentUserMessage: "Нужна круглая лампа." },
+    ).requiresBroadBrowse,
+    false,
+  );
+
+  const owned = guardSearchFilters(
+    query,
+    live,
+    "Подбираю круглую люстру IP65.",
+    "Нужна круглая люстра IP65.",
+    "",
+    [],
+    { currentUserMessage: "Нужна круглая люстра IP65." },
+  );
+  assertEquals(owned.requiresBroadBrowse, false);
+  assertEquals(owned.dropped, []);
+
+  const technical = guardSearchFilters(
+    { mode: "by_filter", options: { protection: ["IP65"] } },
+    live,
+    "Нужна люстра IP65.",
+    "Нужна люстра IP65.",
+    "",
+  );
+  assertEquals(technical.args.options, { protection: ["IP65"] });
+  assertEquals(technical.requiresBroadBrowse, false);
 });
 
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {

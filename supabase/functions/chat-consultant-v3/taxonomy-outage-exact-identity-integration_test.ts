@@ -17,6 +17,7 @@ type Case =
   | "exact"
   | "sibling"
   | "hard_size"
+  | "appearance"
   | "products_503"
   | "products_429"
   | "categories_429"
@@ -166,6 +167,8 @@ async function runCase(which: Case): Promise<{
     };
     const message = which === "hard_size"
       ? "найди светильник ABC-12345 диаметром 90 мм"
+      : which === "appearance"
+      ? "найди светильник ABC-12345 круглой формы"
       : "найди светильник ABC-12345";
     const response = await offlineHandler()(
       new Request(
@@ -205,6 +208,7 @@ for (
     "exact",
     "sibling",
     "hard_size",
+    "appearance",
     "products_503",
     "products_429",
     "categories_429",

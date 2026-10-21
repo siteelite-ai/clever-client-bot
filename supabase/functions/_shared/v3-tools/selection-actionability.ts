@@ -6,16 +6,18 @@ import {
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import {
-  type PairedFitClearance,
   equalsBeforeClearanceBoundary,
   minimumCompatibilityRelationCount,
+  type PairedFitClearance,
   pairedFitClearanceReasoningInstruction,
   reasoningNeedsCompatibilityRelations,
   resolveCableSleeveClearance,
 } from "./compatibility-contract.ts";
 import {
+  appearanceFacetClaimsFromText,
   guardSearchFilters,
   projectExplicitReasoningFacetValues,
+  resolveCustomerAppearanceFacetOwnership,
   type SearchFacet,
 } from "./search-filter-guard.ts";
 import {
@@ -389,8 +391,10 @@ function reasoningNamesHardSystemTotal(
       ) return false;
       return [...clause.matchAll(TOTAL_QUANTITY)].some((match) => {
         if (!units.has(canonicalMeasurementUnit(match[2]))) return false;
-        const before = clause.slice(Math.max(0, (match.index ?? 0) - 100),
-          match.index ?? 0).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+        const before = clause.slice(
+          Math.max(0, (match.index ?? 0) - 100),
+          match.index ?? 0,
+        ).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
         return HARD_TOTAL_PREFIX.test(before);
       });
     });
@@ -418,15 +422,21 @@ export function demoteUnsupportedSystemTotalClaims(
     ) return false;
     return [...normalizedSentence.matchAll(TOTAL_QUANTITY)].some(
       (match) => {
-        const value = Number(match[1].replace(/[ \u00a0\u202f]/gu, "")
-          .replace(",", "."));
+        const value = Number(
+          match[1].replace(/[ \u00a0\u202f]/gu, "")
+            .replace(",", "."),
+        );
         const unit = canonicalMeasurementUnit(match[2]);
         if (!Number.isFinite(value) || !liveMeasuredUnits.has(unit)) {
           return false;
         }
-        const before = normalizedSentence.slice(Math.max(0, (match.index ?? 0) - 100),
-          match.index ?? 0).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
-        const after = normalizedSentence.slice((match.index ?? 0) + match[0].length)
+        const before = normalizedSentence.slice(
+          Math.max(0, (match.index ?? 0) - 100),
+          match.index ?? 0,
+        ).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+        const after = normalizedSentence.slice(
+          (match.index ?? 0) + match[0].length,
+        )
           .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
         const hardMinimum = HARD_TOTAL_PREFIX.test(before) ||
           /^\s*(?:\(\s*)?(?:минимум|как\s+минимум)/iu.test(after);
@@ -454,9 +464,9 @@ export function demoteUnsupportedSystemTotalClaims(
     );
     if (safeClauses.length === 0) return [];
     const rest = safeClauses.join(" и ").replace(/^[,;\s]+/u, "").trim();
-    return [rest.replace(/^\p{Ll}/u, (initial) =>
-      initial.toLocaleUpperCase("ru-RU")
-    )];
+    return [
+      rest.replace(/^\p{Ll}/u, (initial) => initial.toLocaleUpperCase("ru-RU")),
+    ];
   });
   if (!removed) return reasoning;
   retained.push(
@@ -491,7 +501,9 @@ function scrubUnsupportedPerProductMeasuredClaims(
     facets.filter((facet) =>
       pairedObjectReference?.facetKeys.includes(String(facet.key ?? ""))
     ).flatMap((facet) =>
-      [facet.key, facet.caption].map((value) => normalizeKey(String(value ?? "")))
+      [facet.key, facet.caption].map((value) =>
+        normalizeKey(String(value ?? ""))
+      )
     ),
   );
   const beforeFacet = facets.find((facet) =>
@@ -546,7 +558,8 @@ function scrubUnsupportedPerProductMeasuredClaims(
         localPrefix.split(" ").some((word) => word.startsWith(stem))
       );
     const verifiedClearanceBound = clearance && pairedObjectReference &&
-      (beforeFacetNames.has(normalizeKey(claim.criterion.key)) || localBeforeFacet) &&
+      (beforeFacetNames.has(normalizeKey(claim.criterion.key)) ||
+        localBeforeFacet) &&
       claim.criterion.op === "min" &&
       claim.criterion.exclusive !== true &&
       canonicalMeasurementUnit(claim.criterion.unit ?? "") ===
@@ -604,7 +617,10 @@ function scrubUnsupportedPerProductMeasuredClaims(
       const index = sentence.start + (separator.index ?? 0);
       if (/^\s+при\s+$/iu.test(separator[0])) {
         const prefix = reasoning.slice(clauseStart, index);
-        const suffix = reasoning.slice(index + separator[0].length, sentence.end);
+        const suffix = reasoning.slice(
+          index + separator[0].length,
+          sentence.end,
+        );
         // "При" separates an application context from a numeric premise only
         // when the context repeats a customer's own physical measurement.
         // Never drop an independently requested quantity (including price)
@@ -657,8 +673,9 @@ function scrubUnsupportedPerProductMeasuredClaims(
         continue;
       }
       if (text.length < 6) continue;
-      const capitalized = text.replace(/^\p{Ll}/u, (initial) =>
-        initial.toLocaleUpperCase("ru-RU")
+      const capitalized = text.replace(
+        /^\p{Ll}/u,
+        (initial) => initial.toLocaleUpperCase("ru-RU"),
       );
       retained.push(
         /[.!?…]$/u.test(capitalized) ? capitalized : `${capitalized}.`,
@@ -725,7 +742,7 @@ const CLASSIFICATION_FACET =
 // by room dimensions or an application. Their exact values can narrow the
 // result set only when grounded in the customer's own request.
 const CUSTOMER_CHOSEN_DESIGN_FACET =
-  /(?:^|[^\p{L}])(?:shape|style|design|appearance|form|forma|форм\p{L}*|стил\p{L}*|дизайн\p{L}*)(?:$|[^\p{L}])/iu;
+  /(?:^|[^\p{L}])(?:shape|style|design|appearance|form|forma|форм(?:а|ы|у|е|ой)|стил\p{L}*|дизайн\p{L}*|внешн\p{L}*)(?:$|[^\p{L}])/iu;
 const IDENTITY_FACET =
   /(?:^|[^\p{L}])(?:brand|vendor|manufacturer|producer|trademark|model|series|collection|бренд|производител\p{L}*|торгов\p{L}*\s+марк\p{L}*|модел\p{L}*|сери\p{L}*|коллекц\p{L}*)(?:$|[^\p{L}])/iu;
 const BOOLEAN_FACET_VALUE =
@@ -1110,26 +1127,26 @@ function classificationLexicalTokens(value: string): string[] {
 function omitUnownedDesignClaims(
   reasoning: string,
   unownedChoices: readonly DerivedRequiredFacetChoice[],
+  facets: SearchFacet[],
+  trustedActiveProductTarget: string | null,
 ): string {
-  const unsupportedValueStems = unownedChoices.flatMap(({ value }) => {
-    const stems = classificationLexicalTokens(value).filter((stem) =>
-      /[a-zа-я]/iu.test(stem)
-    );
-    return stems.length > 0 ? [stems] : [];
-  });
-  if (unsupportedValueStems.length === 0) return reasoning;
+  if (unownedChoices.length === 0) return reasoning;
   const clauses = String(reasoning ?? "").split(
     /[.!?…;]+(?!\d)|,(?!\d)\s*|\s+(?:и|а\s+также|при\s+этом|но)\s+/iu,
   );
   const retained = clauses.map((clause) => clause.trim()).filter((clause) => {
     if (!clause) return false;
-    // `30 квадратов` is a unit, not a product-form assertion. Use the same
-    // dimension normalizer that protects numeric criteria elsewhere.
-    const stems = new Set(classificationLexicalTokens(
-      normalizeMeasurementText(clause),
-    ));
-    return !unsupportedValueStems.some((valueStems) =>
-      valueStems.every((stem) => stems.has(stem))
+    const claims = appearanceFacetClaimsFromText(facets, clause, {
+      trustedActiveProductTarget,
+    });
+    return !claims.some(({ key, value }) =>
+      unownedChoices.some((choice) =>
+        facets.some((facet) =>
+          facet.key === key &&
+          (facet.caption || facet.key) === choice.facet &&
+          value === choice.value
+        )
+      )
     );
   });
   if (retained.length === clauses.filter((clause) => clause.trim()).length) {
@@ -1823,11 +1840,16 @@ export function suppressDerivedReasoningEcho(
     });
     if (!removedInSentence) return [sentence.trim()];
     if (keptClauses.length === 0) return [];
-    const cleanedSentence = keptClauses.join(", ").replace(/^[\s,;:.!?—-]+/u, "")
+    const cleanedSentence = keptClauses.join(", ").replace(
+      /^[\s,;:.!?—-]+/u,
+      "",
+    )
       .replace(/\s{2,}/gu, " ").trim();
     return cleanedSentence
-      ? [cleanedSentence.replace(/^\p{Ll}/u, (char) =>
-        char.toLocaleUpperCase("ru"))]
+      ? [
+        cleanedSentence.replace(/^\p{Ll}/u, (char) =>
+          char.toLocaleUpperCase("ru")),
+      ]
       : [];
   });
   return suppressed
@@ -1991,8 +2013,18 @@ function pairedClearanceForRequest(
   return resolveCableSleeveClearance(
     customerEvidence,
     productClass,
-    { key: before.key ?? "", caption: before.caption ?? "", unit: before.unit ?? null, values: [] },
-    { key: after.key ?? "", caption: after.caption ?? "", unit: after.unit ?? null, values: [] },
+    {
+      key: before.key ?? "",
+      caption: before.caption ?? "",
+      unit: before.unit ?? null,
+      values: [],
+    },
+    {
+      key: after.key ?? "",
+      caption: after.caption ?? "",
+      unit: after.unit ?? null,
+      values: [],
+    },
   );
 }
 
@@ -2560,7 +2592,28 @@ export function resolveDerivedSelectionReasoning(
   customerEvidence = "",
   productClass = "",
   pairedObjectReference: PairedObjectReference | null = null,
+  appearanceScope: {
+    currentUserMessage?: string;
+    trustedBaseRequest?: string | null;
+    trustedActiveProductTarget?: string | null;
+  } = {},
 ): ResolvedDerivedSelectionReasoning | null {
+  // Aggregated customer history remains useful for measured engineering
+  // constraints, but it cannot establish a current shape/style preference.
+  // The caller supplies only the current turn and a server-verified base.
+  const appearanceCurrentUserMessage = appearanceScope.currentUserMessage ??
+    customerEvidence;
+  const appearanceTrustedTarget =
+    appearanceScope.trustedActiveProductTarget === undefined
+      ? productClass
+      : appearanceScope.trustedActiveProductTarget;
+  const appearanceFacets: SearchFacet[] = facets.map((facet) => ({
+    key: String(facet.key || facet.caption || ""),
+    caption: String(facet.caption || facet.key || ""),
+    values: (facet.values ?? []).flatMap(({ value }) =>
+      value == null ? [] : [{ value: String(value) }]
+    ),
+  }));
   const sourceReasoning = stripDerivedSchemaIds(
     visibleFacetText(String(args.reasoning ?? "")),
   ).slice(0, 1600);
@@ -2876,24 +2929,51 @@ export function resolveDerivedSelectionReasoning(
   const requiredFacetChoices: DerivedRequiredFacetChoice[] = [];
   const requiredFacetKeys = new Set<string>();
   const unownedDesignChoices: DerivedRequiredFacetChoice[] = [];
-  const customerBackedDesignValues = facets.some((facet) =>
-      CUSTOMER_CHOSEN_DESIGN_FACET.test(
-        `${String(facet.key || "")} ${String(facet.caption || "")}`,
-      )
-    )
-    ? new Set(
-      guardSearchFilters(
-        { mode: "by_filter" },
-        facets as SearchFacet[],
-        customerEvidence,
-        customerEvidence,
-        "",
-      ).user_backed.map(({ key, value }) => `${key}\u0000${value}`),
-    )
-    : new Set<string>();
-  const customerOwnedRequiredIds = new Set(
-    derivedRequiredFacetChoices(facets, customerEvidence).map(({ id }) => id),
+  const appearanceOwnedIds = new Set(
+    [...requiredById.values()]
+      .filter((choice) => {
+        const facet = appearanceFacets.find((candidate) =>
+          String(candidate.caption || candidate.key).trim() === choice.facet
+        );
+        return facet &&
+          CUSTOMER_CHOSEN_DESIGN_FACET.test(`${facet.key} ${facet.caption}`) &&
+          resolveCustomerAppearanceFacetOwnership({
+            facet,
+            value: choice.value,
+            currentUserMessage: appearanceCurrentUserMessage,
+            trustedBaseUserMessage: appearanceScope.trustedBaseRequest,
+            trustedActiveProductTarget: appearanceTrustedTarget,
+          });
+      })
+      .map(({ id }) => id),
   );
+  const modelAppearanceClaims = new Set(
+    [
+      ...appearanceFacetClaimsFromText(
+        appearanceFacets,
+        scopeConsistentReasoning,
+        { trustedActiveProductTarget: appearanceTrustedTarget },
+      ),
+      ...appearanceFacetClaimsFromText(
+        appearanceFacets,
+        rawRetrievalQuery,
+        { trustedActiveProductTarget: appearanceTrustedTarget },
+      ),
+    ].map(({ key, value }) => `${key}\u0000${value}`),
+  );
+  const customerOwnedRequiredIds = new Set(
+    derivedRequiredFacetChoices(facets, customerEvidence)
+      .filter((choice) => {
+        const facet = appearanceFacets.find((candidate) =>
+          String(candidate.caption || candidate.key).trim() === choice.facet
+        );
+        return !facet ||
+          !CUSTOMER_CHOSEN_DESIGN_FACET.test(`${facet.key} ${facet.caption}`) ||
+          appearanceOwnedIds.has(choice.id);
+      })
+      .map(({ id }) => id),
+  );
+  for (const id of appearanceOwnedIds) customerOwnedRequiredIds.add(id);
   const liveMeasuredFacets = facets.map((facet) => ({
     key: String(facet.key || facet.caption || ""),
     caption: String(facet.caption || facet.key || ""),
@@ -2929,11 +3009,8 @@ export function resolveDerivedSelectionReasoning(
   );
   // The visible explanation is a declaration too: the model may omit the
   // structured ID while still asserting a product shape/style in prose and
-  // reusing it as the retrieval query. Normalize area units first so a room's
-  // `30 квадратов` never counts as the product value `квадрат`.
-  const modelReasoningStems = new Set(classificationLexicalTokens(
-    normalizeMeasurementText(scopeConsistentReasoning),
-  ));
+  // reusing it as the retrieval query. Only product/facet-bound wording may
+  // claim a design value; a circular room is not a round chandelier.
   const customerOwnedFacets = new Map<string, Set<string>>();
   for (const choice of requiredById.values()) {
     if (!customerOwnedRequiredIds.has(choice.id)) continue;
@@ -2981,35 +3058,11 @@ export function resolveDerivedSelectionReasoning(
     );
     let selectedCustomerChoice = false;
     if (CUSTOMER_CHOSEN_DESIGN_FACET.test(`${machineKey} ${captionKey}`)) {
-      // The model's `required_facet_values` and visible rationale cannot
-      // invent a hard design preference. Reuse the schema-aware search guard
-      // as the customer-evidence arbiter; it already distinguishes a room's
-      // `30 квадратов` from an explicitly requested square product.
-      const projectedCustomerChoice =
-        customerBackedDesignValues.has(`${machineKey}\u0000${choice.value}`) ||
-        customerBackedDesignValues.has(`${captionKey}\u0000${choice.value}`);
-      // The generic neighbouring-noun guard below cannot compare a Russian
-      // customer axis word with an English-only live key. Validate this exact
-      // live option against customer text before allowing that narrow bypass.
-      selectedCustomerChoice = sourceFacet?.key
-        ? guardSearchFilters(
-          { mode: "by_filter", options: { [sourceFacet.key]: [choice.value] } },
-          facets as SearchFacet[],
-          customerEvidence,
-          customerEvidence,
-          "",
-        ).user_backed.some(({ key, value }) =>
-          key === sourceFacet.key && value === choice.value
-        )
-        : false;
-      if (!projectedCustomerChoice && !selectedCustomerChoice) {
-        const valueStems = classificationLexicalTokens(choice.value).filter(
-          (stem) => /[a-zа-я]/iu.test(stem),
-        );
+      selectedCustomerChoice = appearanceOwnedIds.has(choice.id);
+      if (!selectedCustomerChoice) {
         if (
           declaredRequiredIds.has(choice.id) ||
-          valueStems.length > 0 &&
-            valueStems.every((stem) => modelReasoningStems.has(stem))
+          modelAppearanceClaims.has(`${machineKey}\u0000${choice.value}`)
         ) unownedDesignChoices.push(choice);
         continue;
       }
@@ -3047,8 +3100,12 @@ export function resolveDerivedSelectionReasoning(
     // its facet. The same word can occur on several axes (`белый` корпус vs
     // `белый` свет); a value-only match is not enough to bind the wrong axis.
     const statedInVisibleReasoning = customerOwned
-      ? projectedChoiceVisible || literalChoiceVisible
-      : projectedChoiceVisible || facetContextVisible && literalChoiceVisible;
+      ? projectedChoiceVisible || literalChoiceVisible ||
+        selectedCustomerChoice &&
+          modelAppearanceClaims.has(`${machineKey}\u0000${choice.value}`)
+      : projectedChoiceVisible || facetContextVisible && literalChoiceVisible ||
+        selectedCustomerChoice &&
+          modelAppearanceClaims.has(`${machineKey}\u0000${choice.value}`);
     // Visible reasoning is the canonical declaration. The structured ID is
     // still useful as an audit signal, but a probabilistic serializer may omit
     // it after the model already made an exact, schema-projectable statement.
@@ -3187,6 +3244,8 @@ export function resolveDerivedSelectionReasoning(
   reasoning = omitUnownedDesignClaims(
     reasoning,
     unownedDesignChoices,
+    appearanceFacets,
+    appearanceTrustedTarget,
   );
 
   const normalizedFamilyFacetKeys = new Set(familyCompatibleFacetKeys);

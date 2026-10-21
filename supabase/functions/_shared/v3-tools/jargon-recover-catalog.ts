@@ -1,7 +1,7 @@
 // V3 tool: jargon_recover_catalog — direct lexical recovery + catalog validation.
 // Data-agnostic: candidates come from the LLM helper, every result is verified by /products.
 
-import { executeSearchCatalog, type CatalogClientDeps } from "./search-catalog.ts";
+import { executeSearchCatalog, type CatalogClientDeps, type SearchCatalogInput } from "./search-catalog.ts";
 import { tryJargonFallback } from "./jargon-fallback.ts";
 import type { JargonRecoverOk, ProductCache, ProductRef, ToolError } from "./types.ts";
 
@@ -28,6 +28,8 @@ export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
   openrouterApiKey: string;
   lovableApiKey?: string | null;
   lovableModel?: string;
+  /** Per-request authorization of every internal catalog probe, including model translations. */
+  authorizeCatalogSearch?: (input: SearchCatalogInput) => boolean;
   /** @deprecated A live discovered category is now always used as safe context. */
   categoryContextEnabled?: boolean;
   /**
@@ -336,6 +338,19 @@ export async function executeJargonRecoverCatalog(
   // duplicate catalog calls inside one proof context without conflating two
   // different claims.
   const attemptedCandidateContracts = new Set<string>();
+  const searchCatalogIfAuthorized = async (searchInput: SearchCatalogInput) => {
+    if (deps.authorizeCatalogSearch) {
+      // A failed or throwing provenance check must never reach the catalog.
+      try {
+        if (!deps.authorizeCatalogSearch(searchInput)) return null;
+      } catch {
+        // An authorization malfunction is not proof that the catalog is empty.
+        catalogAttemptFailed = true;
+        return null;
+      }
+    }
+    return await executeSearchCatalog(searchInput, deps, cache);
+  };
 
   type CandidateAttempt = {
     matched: { candidate: string; filtered: ProductRef[]; evidenceScore: number } | null;
@@ -394,7 +409,7 @@ export async function executeJargonRecoverCatalog(
         : input.category
           ? { category: input.category }
           : {};
-      const result = await executeSearchCatalog({
+      const result = await searchCatalogIfAuthorized({
         mode: "by_query",
         query: candidate,
         // The discovered category is a hard relevance boundary, not merely an
@@ -404,7 +419,8 @@ export async function executeJargonRecoverCatalog(
         min_price: input.min_price,
         max_price: input.max_price,
         per_page: perPage,
-      }, deps, cache);
+      });
+      if (!result) continue;
       if (!result.ok) {
         catalogAttemptFailed = true;
         continue;
@@ -427,14 +443,14 @@ export async function executeJargonRecoverCatalog(
       // admitted). Broad one-word candidates are still rejected by the title
       // proof above.
       if (result.results.length === 0 && liveCategoryNames.size > 0) {
-        const unscoped = await executeSearchCatalog({
+        const unscoped = await searchCatalogIfAuthorized({
           mode: "by_query",
           query: candidate,
           min_price: scopedInput.min_price,
           max_price: scopedInput.max_price,
           per_page: perPage,
-        }, deps, cache);
-        if (unscoped.ok) {
+        });
+        if (unscoped?.ok) {
           groundedResults = unscoped.results.filter((product) =>
             titleSupportsGroundedJargonQuery(product.pagetitle, candidate) &&
             (
@@ -444,7 +460,7 @@ export async function executeJargonRecoverCatalog(
               )
             )
           );
-        } else {
+        } else if (unscoped) {
           catalogAttemptFailed = true;
         }
       }
@@ -461,29 +477,29 @@ export async function executeJargonRecoverCatalog(
         .filter((modifier) => !normalizeCodeLike(candidate).includes(normalizeCodeLike(modifier)));
       if (filtered.length === 0 && structuralModifiers.length > 0) {
         const combinedQuery = [candidate, ...structuralModifiers].join(" ").replace(/\s+/gu, " ").trim();
-        const combined = await executeSearchCatalog({
+        const combined = await searchCatalogIfAuthorized({
           mode: "by_query",
           query: combinedQuery,
           ...categoryScope,
           min_price: input.min_price,
           max_price: input.max_price,
           per_page: perPage,
-        }, deps, cache);
-        let combinedGrounded = combined.ok
+        });
+        let combinedGrounded = combined?.ok
           ? combined.results.filter((product) =>
             titleSupportsGroundedJargonQuery(product.pagetitle, candidate)
           )
           : [];
-        if (!combined.ok) catalogAttemptFailed = true;
+        if (combined && !combined.ok) catalogAttemptFailed = true;
         if (combinedGrounded.length === 0 && liveCategoryNames.size > 0) {
-          const unscopedCombined = await executeSearchCatalog({
+          const unscopedCombined = await searchCatalogIfAuthorized({
             mode: "by_query",
             query: combinedQuery,
             min_price: input.min_price,
             max_price: input.max_price,
             per_page: perPage,
-          }, deps, cache);
-          if (unscopedCombined.ok) {
+          });
+          if (unscopedCombined?.ok) {
             combinedGrounded = unscopedCombined.results.filter((product) =>
               titleSupportsGroundedJargonQuery(product.pagetitle, candidate) &&
               (
@@ -493,7 +509,7 @@ export async function executeJargonRecoverCatalog(
                 )
               )
             );
-          } else {
+          } else if (unscopedCombined) {
             catalogAttemptFailed = true;
           }
         }
