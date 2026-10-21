@@ -382,6 +382,22 @@ Deno.test("competing product thresholds fail closed without affecting totals or 
   assertEquals(
     classifyRequiredProductMeasurementGap({
       ...base,
+      mandatoryMeasuredCriterionProjected: false,
+      competingThresholds: false,
+      independentCardProofCoversRequiredMeasurement: true,
+    }),
+    null,
+  );
+  assertEquals(
+    classifyRequiredProductMeasurementGap({
+      ...base,
+      independentCardProofCoversRequiredMeasurement: true,
+    }),
+    "competing_thresholds",
+  );
+  assertEquals(
+    classifyRequiredProductMeasurementGap({
+      ...base,
       measurementScope: "system_total",
     }),
     null,

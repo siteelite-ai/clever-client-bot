@@ -562,7 +562,20 @@ function scrubUnsupportedPerProductMeasuredClaims(
 
   const sentenceSeparator = /(?<=[.!?…;])(?<!кв\.)\s+/giu;
   const clauseSeparator =
-    /,\s*(?:(?:при\s+этом|а\s+также|кроме\s+того|но|и|а)\s+)|;\s*|\s+(?:(?:и|а\s+также|при\s+этом))\s+/giu;
+    /,\s*(?:(?:при\s+этом|а\s+также|кроме\s+того|но|и|а)\s+)|;\s*|\s+(?:(?:и|а\s+также|при\s+этом))\s+|\s+при\s+/giu;
+  const customerQuantities = extractClientQuantities(customerEvidence);
+  const containsCustomerQuantity = (
+    text: string,
+    physicalOnly: boolean,
+  ): boolean =>
+    extractClientQuantities(text).some(({ value, unit }) =>
+      (!physicalOnly || isPhysicalMeasurementUnit(unit)) &&
+      customerQuantities.some((customer) =>
+        customer.value === value && customer.unit === unit
+      )
+    );
+  const explicitPerItemCue =
+    /(?:^|[^\p{L}])(?:кажд\p{L}*|у\s+кажд\p{L}*|на\s+(?:один|одно|одну|одного)|по\s+одному)(?=$|[^\p{L}])/iu;
   const retained: string[] = [];
   let sentenceStart = 0;
   const sentenceSpans: Array<{ start: number; end: number }> = [];
@@ -589,6 +602,26 @@ function scrubUnsupportedPerProductMeasuredClaims(
     let clauseStart = sentence.start;
     for (const separator of sentenceText.matchAll(clauseSeparator)) {
       const index = sentence.start + (separator.index ?? 0);
+      if (/^\s+при\s+$/iu.test(separator[0])) {
+        const prefix = reasoning.slice(clauseStart, index);
+        const suffix = reasoning.slice(index + separator[0].length, sentence.end);
+        // "При" separates an application context from a numeric premise only
+        // when the context repeats a customer's own physical measurement.
+        // Never drop an independently requested quantity (including price)
+        // or an explicit per-item target on either side of "при": a cue in
+        // the prefix still binds a target in the suffix. A later live facet
+        // in the rejected premise is guarded below.
+        if (
+          !containsCustomerQuantity(prefix, true) ||
+          containsCustomerQuantity(suffix, false) ||
+          explicitPerItemCue.test(prefix) ||
+          explicitPerItemCue.test(suffix) ||
+          overlapping.some(({ end }) => end > clauseStart && end <= index) ||
+          !overlapping.some(({ end }) =>
+            end > index + separator[0].length && end <= sentence.end
+          )
+        ) continue;
+      }
       clauses.push({ start: clauseStart, end: index });
       clauseStart = index + separator[0].length;
     }

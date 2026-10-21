@@ -2802,6 +2802,106 @@ Deno.test("unsupported model-only card threshold is absent from visible reasonin
   assertEquals(inseparable, null);
 });
 
+Deno.test("a customer-owned destination survives a separable model-only numeric premise", () => {
+  const facets = [{
+    key: "destination",
+    caption: "Назначение",
+    values: [{ value: "Для гостиной" }, { value: "Для офиса" }],
+  }, {
+    key: "area",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "30" }, { value: "12" }],
+  }, {
+    key: "flux",
+    caption: "Световой поток, лм",
+    type: "number",
+    unit: "лм",
+    values: [{ value: "1800" }, { value: "6000" }],
+  }];
+  const customer = "Нужен светильник для гостиной площадью 30 м². Покажите варианты.";
+  const args = {
+    reasoning:
+      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм.",
+    measurement_scope: "per_product",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+    required_facet_values: ["f0v0", "f1v0"],
+    explicit_customer_classifications: [],
+  };
+  const safe = resolveDerivedSelectionReasoning(args, facets, customer);
+  assertEquals(safe !== null, true);
+  assertEquals(safe?.text.includes("гостиной площадью 30 м²"), true);
+  assertEquals(safe?.text.includes("150–200 лк"), false);
+  assertEquals(safe?.text.includes("4500–6000 лм"), false);
+  assertEquals(safe?.measurementEvidence.includes("30 м²"), true);
+
+  const customerLumens = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм и не менее 5000 лм по запросу клиента.",
+  }, facets, `${customer} Поток не менее 5000 лм.`);
+  assertEquals(customerLumens, null);
+
+  const customerProtection = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм и защита IP65 обязательна.",
+  }, [...facets, {
+    key: "protection",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }],
+  }], `${customer} Нужна защита IP65.`);
+  assertEquals(customerProtection?.text.includes("IP65"), true);
+  assertEquals(customerProtection?.text.includes("4500–6000 лм"), false);
+
+  const inseparableProtection = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм с защитой IP65.",
+  }, [...facets, {
+    key: "protection",
+    caption: "Степень защиты IP",
+    values: [{ value: "IP65" }],
+  }], `${customer} Нужна защита IP65.`);
+  assertEquals(inseparableProtection, null);
+
+  const inventedArea = resolveDerivedSelectionReasoning(args, facets, "Нужен светильник для гостиной. Покажите варианты.");
+  assertEquals(inventedArea === null || !inventedArea.text.includes("30 м²"), true);
+
+  const perItemPremise = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при условии, что каждый светильник имеет не менее 5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
+    compatible_classifications: [],
+    required_facet_values: [],
+  }, facets, customer);
+  assertEquals(perItemPremise, null);
+  const symbolicPerItemPremise = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при условии, что каждый светильник имеет ≥5500 лм, требуется подбор. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению. Проверяю другие варианты по этим двум проверяемым характеристикам.",
+    compatible_classifications: [],
+    required_facet_values: [],
+  }, facets, customer);
+  assertEquals(symbolicPerItemPremise, null);
+  const prefixedPerItemPremise = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Каждый светильник для гостиной площадью 30 м² при норме 150 лк должен выдавать не менее 5000 лм. Живая схема содержит характеристику „Максимальная площадь освещения, м2“ со значением 30, что соответствует помещению.",
+    required_facet_values: [],
+  }, facets, customer);
+  assertEquals(prefixedPerItemPremise, null);
+
+  const customerPrice = resolveDerivedSelectionReasoning({
+    ...args,
+    reasoning:
+      "Для гостиной площадью 30 м² при норме 150–200 лк требуется поток 4500–6000 лм, цена не более 4000 тенге.",
+  }, facets, `${customer} Цена не более 4000 тенге.`);
+  assertEquals(customerPrice, null);
+});
+
 Deno.test("system-total scope cannot expose a model-only minimum for each card", () => {
   const resolved = resolveDerivedSelectionReasoning({
     reasoning:

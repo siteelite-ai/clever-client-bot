@@ -202,6 +202,8 @@ import {
   INVALID_DERIVED_DECLARATION_CORRECTION,
   type RequiredProductMeasurementGap,
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
+import { verifiedDestinationAreaCoversSoleMeasurement } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
+import { resolveServerRenderedSelectionBase } from "../_shared/v3-tools/server-rendered-continuation.ts";
 import {
   advanceSelectionTarget,
   bootstrapSelectionTargetFromDiscovery,
@@ -8049,6 +8051,66 @@ export async function loadVerifiedCustomerMeasurementEvidence(
   }
 }
 
+/** A browser-supplied follow-up suggests a scope but cannot certify that
+ * the original request produced a completed product batch. Failed reads
+ * keep the ordinary model correction path unchanged. */
+async function loadServerRenderedSelectionBase(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  browserBase: string,
+  requestStartedAt: number,
+): Promise<string | null> {
+  if (!browserBase || browserBase.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS) {
+    return null;
+  }
+  try {
+    const createdAfter = activeSelectionScopeLookupCreatedAfter(requestStartedAt);
+    const createdBefore = new Date(requestStartedAt).toISOString();
+    const columns =
+      "id,session_id,user_query,error,final_products_count,response_events,created_at";
+    const [sessionRead, boundaryRead] = await runWithDeadline(
+      () => Promise.all([
+        supabase.from("chat_request_logs")
+          .select(columns)
+          .eq("session_id", sessionId)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .order("created_at", { ascending: false })
+          .limit(MEASUREMENT_EVIDENCE_LOG_LIMIT),
+        supabase.from("chat_request_logs")
+          .select(columns)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .filter(
+            "response_events",
+            "cs",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]),
+      MEASUREMENT_EVIDENCE_READ_TIMEOUT_MS,
+    );
+    if (
+      sessionRead.error || boundaryRead.error ||
+      !Array.isArray(sessionRead.data)
+    ) return null;
+    return resolveServerRenderedSelectionBase(
+      [...sessionRead.data, ...(boundaryRead.data ? [boundaryRead.data] : [])],
+      sessionId,
+      browserBase,
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function loadVerifiedBroadAssortmentChoice(
   supabase: SupabaseClient,
   sessionId: string,
@@ -8884,6 +8946,7 @@ async function runExpertLoop(
   preExcludedProductUrls: string[] = [],
   verifiedInitialDiscoveryLeaf: string | null = null,
   replacementEgressGuarded = false,
+  serverRenderedBaseRequest: string | null = null,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -8953,6 +9016,14 @@ async function runExpertLoop(
   let pendingDerivedSelectionMeasurementScope: string | null = null;
   const provisionalCustomerMeasurementScope =
     customerAggregateMeasurementScope(verifiedCustomerMeasurementEvidence);
+  const destinationAreaCoverage = verifiedDestinationAreaCoversSoleMeasurement({
+    selectionRequest: userMessage,
+    baseRequest: ellipticalContinuation?.baseUserMessage ?? "",
+    serverVerifiedBaseRequest: serverRenderedBaseRequest ?? "",
+    customerMeasurementEvidence: verifiedCustomerMeasurementEvidence,
+  });
+  let destinationAreaCoverageLogged = false;
+  let destinationAreaCoverageApplied = false;
   const cardMeasurementScope = () =>
     provisionalCustomerMeasurementScope ??
     pendingDerivedSelectionMeasurementScope ??
@@ -11647,7 +11718,7 @@ async function runExpertLoop(
                 lastDiscover?.facets ?? [],
               ).criteria.length > 0
               : false;
-            return classifyRequiredProductMeasurementGap({
+            const gapInput = {
               required: unresolvedProductMeasurementRequired,
               measurementScope,
               pairedFitProven,
@@ -11664,6 +11735,40 @@ async function runExpertLoop(
               competingThresholds: hasCompetingMeasuredSelectionTiers(
                 declaration.measurementEvidence,
               ) || recommendedExact.reason === "competing_values",
+            };
+            const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
+            if (uncoveredGap !== "unprojectable_criterion") return uncoveredGap;
+            // The independently verified original request and fresh per-card
+            // destination gate discharge only this customer area. The model
+            // need not repeat its unit after classification prose is cleaned;
+            // any other surviving physical number keeps the original repair.
+            const modelPhysicalMeasurements = extractClientQuantities(
+              `${declaration.reasoningEvidence}\n${declaration.measurementEvidence}`,
+            ).filter(({ unit }) => isPhysicalMeasurementUnit(unit));
+            const noConflictingModelMeasurement =
+              declaration.requiredFacetValues.length === 0 &&
+              modelPhysicalMeasurements.every(({ unit, value }) =>
+                unit === "м²" && value === destinationAreaCoverage.minimumAreaM2
+              );
+            if (!destinationAreaCoverage.covered ||
+              !noConflictingModelMeasurement) {
+              return uncoveredGap;
+            }
+            destinationAreaCoverageApplied = true;
+            if (!destinationAreaCoverageLogged) {
+              steps.push({
+                step: "v3_destination_area_card_proof_covers_measurement",
+                ms: now(),
+                meta: {
+                  minimum_area_m2: destinationAreaCoverage.minimumAreaM2,
+                  source: "server_rendered_base_and_fresh_card_gate",
+                },
+              });
+              destinationAreaCoverageLogged = true;
+            }
+            return classifyRequiredProductMeasurementGap({
+              ...gapInput,
+              independentCardProofCoversRequiredMeasurement: true,
             });
           };
           const missingRequiredProductMeasurement = () =>
@@ -21392,6 +21497,8 @@ async function runExpertLoop(
       split: PendingJargonAxisSplit,
     ): Promise<boolean> => {
       if (
+        // Partial split bypasses the common per-card destination-fit gate.
+        destinationAreaCoverageApplied ||
         !terminalDiscover || !terminalSelectionTarget ||
         split.modifiers.length === 0 ||
         terminalPairDecision.state !== "not_applicable"
@@ -26264,10 +26371,33 @@ Deno.serve(async (req) => {
                 );
               }
             } else {
+              const combinedSelectionRequest = additionalSelectionRequest
+                ? `${ellipticalBaseRequest}\n${userMessage}`
+                : scopedSelectionRequest.message;
+              const needsServerAreaProof = additionalSelectionRequest &&
+                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
+              const [customerMeasurementEvidence, verifiedRenderedBase] =
+                await Promise.all([
+                  verifiedCustomerMeasurementEvidence(),
+                  needsServerAreaProof && ellipticalBaseRequest
+                    ? loadServerRenderedSelectionBase(
+                      supabase,
+                      effectiveSessionId,
+                      logId,
+                      ellipticalBaseRequest,
+                      t0,
+                    )
+                    : Promise.resolve(null),
+                ]);
+              if (needsServerAreaProof) {
+                steps.push({
+                  step: "v3_server_rendered_selection_base_checked",
+                  ms: Date.now() - t0,
+                  meta: { matched: Boolean(verifiedRenderedBase) },
+                });
+              }
               const out = await runExpertLoop(
-                additionalSelectionRequest
-                  ? `${ellipticalBaseRequest}\n${userMessage}`
-                  : scopedSelectionRequest.message,
+                combinedSelectionRequest,
                 effectiveHistory,
                 effectiveSlots,
                 settings.openrouter_api_key!,
@@ -26282,7 +26412,7 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                await verifiedCustomerMeasurementEvidence(),
+                customerMeasurementEvidence,
                 recentProductEvidence,
                 [],
                 null,
@@ -26290,6 +26420,7 @@ Deno.serve(async (req) => {
                 priorShownProductUrls,
                 null,
                 Boolean(replacementEgressRequest),
+                verifiedRenderedBase,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

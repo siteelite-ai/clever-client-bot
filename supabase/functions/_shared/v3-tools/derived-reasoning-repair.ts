@@ -27,12 +27,15 @@ export function classifyRequiredProductMeasurementGap(input: {
   scalarProjectionAllowed: boolean;
   mandatoryMeasuredCriterionProjected: boolean;
   competingThresholds: boolean;
+  /** A separate, server-verified per-card gate covers the sole obligation. */
+  independentCardProofCoversRequiredMeasurement?: boolean;
 }): RequiredProductMeasurementGap | null {
   if (
     !input.required || input.measurementScope === "system_total" ||
     input.pairedFitProven
   ) return null;
   if (input.competingThresholds) return "competing_thresholds";
+  if (input.independentCardProofCoversRequiredMeasurement) return null;
   return input.scalarProjectionAllowed &&
       input.mandatoryMeasuredCriterionProjected
     ? null
