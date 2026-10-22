@@ -5,6 +5,26 @@ const GENERIC_FAILURES = [
   'произошла ошибка соединения',
 ];
 
+function validateResponseText(responseText, expectedProductPattern) {
+  if (!expectedProductPattern.test(responseText)) {
+    throw new Error('Expected product title is missing after the query');
+  }
+  for (const failure of GENERIC_FAILURES) {
+    if (responseText.toLocaleLowerCase('ru').includes(failure.toLocaleLowerCase('ru'))) {
+      throw new Error(`Generic failure is visible: ${failure}`);
+    }
+  }
+}
+
+function validateWidgetControls(snapshot) {
+  if (typeof snapshot !== 'string' || !snapshot.trim()) throw new Error('Widget snapshot is empty');
+  if (!/textbox "Напишите сообщение\.\.\." \[active\]/u.test(snapshot)) {
+    throw new Error('Widget input did not return to the active state');
+  }
+  if (!/button "Отправить"/u.test(snapshot)) throw new Error('Widget send button is missing');
+  if (!/button "Новый диалог"/u.test(snapshot)) throw new Error('Widget new-dialog control is missing');
+}
+
 export function validateWidgetSnapshot(snapshot, {
   query,
   expectedProductPattern = /\b(?:CORN|KORN)\b/iu,
@@ -14,20 +34,11 @@ export function validateWidgetSnapshot(snapshot, {
   const queryIndex = snapshot.lastIndexOf(query);
   if (queryIndex < 0) throw new Error('Submitted query is not visible in the widget');
   const turn = snapshot.slice(queryIndex);
-  if (!expectedProductPattern.test(turn)) throw new Error('Expected product title is missing after the query');
-  for (const failure of GENERIC_FAILURES) {
-    if (turn.toLocaleLowerCase('ru').includes(failure.toLocaleLowerCase('ru'))) {
-      throw new Error(`Generic failure is visible: ${failure}`);
-    }
-  }
+  validateResponseText(turn, expectedProductPattern);
   if (!/https:\/\/220volt\.kz\/catalog\/.+\//iu.test(turn)) {
     throw new Error('A deep 220volt.kz product link is missing');
   }
-  if (!/textbox "Напишите сообщение\.\.\." \[active\]/u.test(turn)) {
-    throw new Error('Widget input did not return to the active state');
-  }
-  if (!/button "Отправить"/u.test(turn)) throw new Error('Widget send button is missing');
-  if (!/button "Новый диалог"/u.test(snapshot)) throw new Error('Widget new-dialog control is missing');
+  validateWidgetControls(snapshot);
   return { queryIndex, turn };
 }
 
@@ -38,6 +49,19 @@ export function validateAssistantProse(messages, forbiddenPattern) {
     throw new Error(`Forbidden unsupported claim is visible in assistant prose: ${forbiddenPattern}`);
   }
   return prose;
+}
+
+export function selectSubmittedTurn(messages, query) {
+  if (!Array.isArray(messages)) throw new Error('Widget messages snapshot is invalid');
+  const lastUserIndex = messages.findLastIndex((message) => message.role === 'user');
+  if (lastUserIndex < 0 || messages[lastUserIndex].text?.trim() !== query.trim()) {
+    throw new Error('The latest widget user bubble does not contain the submitted query');
+  }
+  if (messages[lastUserIndex].preexisting) {
+    throw new Error('Widget did not append a new user bubble for the smoke query');
+  }
+  return messages.slice(lastUserIndex + 1).filter((message) =>
+    message.role === 'assistant' && !message.id?.includes('typing'));
 }
 
 export async function openWidgetIfNeeded(page, timeoutMs = 10_000) {
@@ -66,6 +90,12 @@ export async function runWidgetBrowserSmoke(tab, {
   if (await send.count() !== 1) throw new Error('Widget send button is ambiguous or missing');
   const newConversation = page.getByRole('button', { name: 'Новый диалог' });
   if (await newConversation.count() !== 1) throw new Error('Widget new-dialog control is ambiguous or missing');
+  // An old session may contain the same query. Mark its existing user bubbles
+  // in memory so a stale answer cannot satisfy this run after a no-op send.
+  const previousUserMarker = `volt-smoke-${Date.now()}-${Math.random()}`;
+  await page.locator('#volt-widget-messages > .volt-message.user').evaluateAll((elements, marker) => {
+    for (const element of elements) element.__voltSmokePreviousUser = marker;
+  }, previousUserMarker);
   await input.fill(query);
   await send.click();
 
@@ -76,14 +106,30 @@ export async function runWidgetBrowserSmoke(tab, {
   }
 
   const snapshot = await page.domSnapshot();
-  const validated = validateWidgetSnapshot(snapshot, {
-    query,
-    expectedProductPattern: expectedProductName,
-  });
-  const links = page.getByRole('link', { name: expectedProductName });
-  const linkCount = await links.count();
+  // The full snapshot is for controls only: an assistant can quote the query,
+  // so string-searching it cannot reliably identify the current answer.
+  validateWidgetControls(snapshot);
+  const messages = await page.locator('#volt-widget-messages > .volt-message').evaluateAll((elements, marker) =>
+    elements.map((element) => ({
+      role: element.classList.contains('user') ? 'user' : 'assistant',
+      id: element.id,
+      text: element.textContent?.trim() || '',
+      preexisting: element.__voltSmokePreviousUser === marker,
+      hasLink: Boolean(element.querySelector('a')),
+      links: Array.from(element.querySelectorAll('a[href]'), (link) => ({
+        name: link.getAttribute('aria-label') || link.textContent?.trim() || '',
+        href: link.getAttribute('href') || '',
+      })),
+    })), previousUserMarker
+  );
+  const responseMessages = selectSubmittedTurn(messages, query);
+  const responseText = responseMessages.map((message) => message.text).join('\n');
+  validateResponseText(responseText, expectedProductName);
+  const links = responseMessages.flatMap((message) => message.links || [])
+    .filter((link) => expectedProductName.test(link.name));
+  const linkCount = links.length;
   if (linkCount < 1) throw new Error('Expected product card link is not interactive');
-  const firstHref = await links.first().getAttribute('href');
+  const firstHref = links[0].href;
   if (!/^https:\/\/220volt\.kz\/catalog\/.+\/$/iu.test(firstHref ?? '')) {
     throw new Error(`Unexpected product href: ${firstHref ?? 'missing'}`);
   }
@@ -92,14 +138,10 @@ export async function runWidgetBrowserSmoke(tab, {
   }
   const staleTypingCount = await page.locator('#volt-typing-indicator, #volt-live-typing, #volt-products-typing').count();
   if (staleTypingCount > 0) throw new Error(`Widget kept ${staleTypingCount} stale typing indicator(s)`);
-  const assistantMessages = await page.locator('.volt-message.assistant').evaluateAll((elements) =>
-    elements
-      .filter((element) => !element.querySelector('a') && !element.id.includes('typing'))
-      .map((element) => element.textContent?.trim() || '')
+  const assistantProse = validateAssistantProse(
+    responseMessages.filter((message) => !message.hasLink).map((message) => message.text),
+    forbiddenAssistantPattern,
   );
-  // The first prose bubble is the static greeting, so only validate the
-  // response generated after the submitted smoke query.
-  const assistantProse = validateAssistantProse(assistantMessages.slice(1), forbiddenAssistantPattern);
   return {
     passed: true,
     query,
@@ -107,6 +149,6 @@ export async function runWidgetBrowserSmoke(tab, {
     productLinkCount: linkCount,
     firstHref,
     assistantProse,
-    turnSnapshot: validated.turn,
+    turnSnapshot: responseText,
   };
 }
