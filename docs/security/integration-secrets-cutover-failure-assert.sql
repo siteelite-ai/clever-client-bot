@@ -24,12 +24,12 @@ BEGIN
       WHERE id = '11111111-1111-4111-8111-111111111111';
 
     IF v_row.openrouter_api_key IS DISTINCT FROM
-         CASE WHEN v_case = 'required-legacy-missing' THEN NULL
-              ELSE 'ci-openrouter-placeholder' END
+         (CASE WHEN v_case = 'required-legacy-missing' THEN NULL
+               ELSE 'ci-openrouter-placeholder' END)
        OR v_row.volt220_api_token IS DISTINCT FROM 'ci-catalog-placeholder'
        OR v_row.google_api_key IS DISTINCT FROM
-         CASE WHEN v_case = 'optional-private-only' THEN NULL
-              ELSE 'ci-google-placeholder' END
+         (CASE WHEN v_case = 'optional-private-only' THEN NULL
+               ELSE 'ci-google-placeholder' END)
        OR v_row.ai_model IS DISTINCT FROM 'ci-model-before' THEN
       RAISE EXCEPTION 'Cutover failure test: original settings changed';
     END IF;
