@@ -7,6 +7,8 @@ const values: Record<string, string> = {
   SUPABASE_SERVICE_ROLE_KEY: "offline-service-role",
   CATALOG_API_BASE_URL: "https://fixture.catalog.invalid/api",
   CHAT_V3_ADMISSION_MODE: "off",
+  CHAT_V3_ADMISSION_LIMIT_PER_MINUTE: "10",
+  CHAT_V3_ADMISSION_LIMIT_IN_FLIGHT: "2",
   PUBLIC_API_ADMISSION_MODE: "off",
   PUBLIC_SUBJECT_ADMISSION_MODE: "off",
   PUBLIC_SUBJECT_PROOF_KID: "fixture-key",
@@ -33,6 +35,10 @@ Deno.env.get = (name: string) => values[name];
 
 export function setPublicAdmissionMode(mode: "off" | "enforce"): void {
   values.PUBLIC_API_ADMISSION_MODE = mode;
+}
+
+export function setChatV3AdmissionMode(mode: "off" | "observe" | "enforce"): void {
+  values.CHAT_V3_ADMISSION_MODE = mode;
 }
 
 export function setSubjectAdmissionMode(mode: "off" | "observe" | "enforce"): void {
