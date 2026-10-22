@@ -63,6 +63,16 @@ jobs:
       - name: Test widget loader contract
         run: node --test scripts/qa/widget-loader-contract.test.mjs
 
+      - name: Regenerate lockfile for reconciliation
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Preserve reconciled lockfile for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciled-package-lock
+          path: package-lock.json
+          retention-days: 1
+
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
