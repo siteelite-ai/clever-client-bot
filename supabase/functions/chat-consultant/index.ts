@@ -37,6 +37,12 @@ import {
   type PublicApiAdmissionResult,
   type PublicApiAdmissionRpc,
 } from '../_shared/public-api-admission.ts';
+import {
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+  type PublicSubjectAdmissionRpc,
+} from '../_shared/public-subject-admission.ts';
 import { MAX_REQUEST_BODY_READ_MS, readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
@@ -81,6 +87,17 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get('access-control-request-headers');
+  if (!requested?.split(',').some((header) =>
+    header.trim().toLowerCase() === 'x-volt-subject-proof'
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    'Access-Control-Allow-Headers': `${corsHeaders['Access-Control-Allow-Headers']}, x-volt-subject-proof`,
+  };
+}
 
 // The legacy endpoint still exists even though the current widget uses V3.
 // Keep its historical payload shape, but never buffer an unbounded request.
@@ -6338,6 +6355,7 @@ function storeCachedResolvedFiltersAsync(key: string, value: Omit<CachedResolved
 type LegacyAdmissionOptions = {
   // Injected only by route tests. Production callers use the server-owned RPC.
   rpc?: PublicApiAdmissionRpc;
+  subjectRpc?: PublicSubjectAdmissionRpc;
   readEnv?: (name: string) => string | undefined;
   acceptedWork?: (req: Request, body: any) => Promise<Response>;
   bodyReadTimeoutMs?: number;
@@ -6371,6 +6389,29 @@ function legacyAdmissionDenied(admission: PublicApiAdmissionResult): Response {
       ...corsHeaders,
       'Content-Type': 'application/json',
       ...(limited ? { 'Retry-After': String(admission.retryAfterSeconds || 60) } : {}),
+    },
+  });
+}
+
+function legacySubjectDenied(decision: {
+  reason: string;
+  retryAfterSeconds?: number | null;
+}): Response {
+  const limited = decision.reason === 'limit_exceeded';
+  const invalidProof = decision.reason === 'missing_proof' ||
+    decision.reason === 'invalid_proof';
+  return new Response(JSON.stringify({
+    error: limited
+      ? 'Слишком много запросов. Подождите минуту.'
+      : invalidProof
+      ? 'Не удалось подтвердить запрос. Обновите страницу и попробуйте ещё раз.'
+      : 'Сервис временно недоступен. Попробуйте позже.',
+  }), {
+    status: limited ? 429 : invalidProof ? 403 : 503,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      ...(limited ? { 'Retry-After': String(decision.retryAfterSeconds || 60) } : {}),
     },
   });
 }
@@ -6457,7 +6498,7 @@ export async function handleChatConsultant(
   admissionOptions: LegacyAdmissionOptions = {},
 ): Promise<Response> {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'method_not_allowed' }), {
@@ -6477,16 +6518,62 @@ export async function handleChatConsultant(
   // Shared, atomic budget for all public model/catalog routes. The default
   // `off` mode performs no RPC and keeps the historical request path intact.
   const admissionRpc = admissionOptions.rpc ?? legacyAdmissionRpc();
+  const subjectRpc = admissionOptions.subjectRpc ??
+    (admissionRpc as unknown as PublicSubjectAdmissionRpc);
+  const subjectVerification = await verifyPublicSubjectProof({
+    req,
+    readEnv: admissionOptions.readEnv,
+  });
+  if (subjectVerification.mode === 'observe' && subjectVerification.wouldReject) {
+    console.warn('[chat-consultant] subject proof would reject', {
+      reason: subjectVerification.reason,
+      failure: subjectVerification.failure,
+      would_reject: true,
+    });
+  }
+  if (!subjectVerification.allowed) return legacySubjectDenied(subjectVerification);
+  const subjectAdmission = await reservePublicSubjectAdmission({
+    verification: subjectVerification,
+    route: 'chat-consultant',
+    rpc: subjectRpc,
+    readEnv: admissionOptions.readEnv,
+  });
+  if (subjectAdmission.mode === 'observe') {
+    console.info('[chat-consultant] subject admission observed', {
+      reason: subjectAdmission.reason,
+      failure: subjectAdmission.failure,
+      would_reject: subjectAdmission.wouldReject,
+    });
+  }
+  const releaseSubjectAdmission = () => releasePublicSubjectAdmission({
+    reservation: subjectAdmission,
+    rpc: subjectRpc,
+  });
+  if (!subjectAdmission.allowed) {
+    await releaseSubjectAdmission();
+    return legacySubjectDenied(subjectAdmission);
+  }
   const admission = await reservePublicApiAdmission({
     route: 'chat-consultant',
     lanes: ['model', 'catalog'],
     rpc: admissionRpc,
     readEnv: admissionOptions.readEnv,
   });
-  const releaseAdmission = () => releasePublicApiAdmission({
-    reservation: admission,
-    rpc: admissionRpc,
-  });
+  const releaseAdmission = async () => {
+    // One failed ledger release must not prevent releasing the other.
+    const [global, subject] = await Promise.allSettled([
+      releasePublicApiAdmission({ reservation: admission, rpc: admissionRpc }),
+      releaseSubjectAdmission(),
+    ]);
+    if (global.status === 'rejected' ||
+      (global.status === 'fulfilled' && global.value.attempted && !global.value.released)) {
+      console.error('[chat-consultant] global admission release incomplete');
+    }
+    if (subject.status === 'rejected' ||
+      (subject.status === 'fulfilled' && subject.value.attempted && !subject.value.released)) {
+      console.error('[chat-consultant] subject admission release incomplete');
+    }
+  };
   if (!admission.allowed) {
     // A timed-out check may have committed a reservation before its result was
     // lost. Best-effort release is required even when this request is denied.
@@ -6510,7 +6597,7 @@ export async function handleChatConsultant(
         : _handleChatConsultantInner(req, parsed.body);
       let releaseAfterUpstream = releaseAdmission;
       let responsePromise = innerPromise;
-      if (admission.releaseRequired) {
+      if (admission.releaseRequired || subjectAdmission.releaseRequired) {
         let markReady!: (tracker: ReturnType<typeof trackLegacyUpstream> | null) => void;
         const trackerReady = new Promise<ReturnType<typeof trackLegacyUpstream> | null>(
           (resolve) => { markReady = resolve; },
@@ -6540,7 +6627,7 @@ export async function handleChatConsultant(
       }
       const wrapped = await wrapWithHeartbeat(responsePromise, { corsHeaders });
       const logged = wrapResponseForLogging(wrapped, logCtx);
-      return admission.releaseRequired
+      return admission.releaseRequired || subjectAdmission.releaseRequired
         ? wrapResponseForAdmissionRelease(logged, releaseAfterUpstream)
         : logged;
     } catch (e) {

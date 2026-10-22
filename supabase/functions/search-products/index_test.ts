@@ -53,6 +53,12 @@ Deno.test('search-products rejects unsupported methods before reading token or c
   const preflight = await handleRequest(new Request(endpoint, { method: 'OPTIONS' }), upstream.deps);
   assertEquals(preflight.status, 200);
   assertEquals(await preflight.text(), 'ok');
+  assertEquals(preflight.headers.get('access-control-allow-headers')?.includes('x-volt-subject-proof'), false);
+  const signedPreflight = await handleRequest(new Request(endpoint, {
+    method: 'OPTIONS',
+    headers: { 'Access-Control-Request-Headers': 'content-type, X-Volt-Subject-Proof' },
+  }), upstream.deps);
+  assertEquals(signedPreflight.headers.get('access-control-allow-headers')?.includes('x-volt-subject-proof'), true);
   upstream.assertUnused();
 });
 
@@ -541,4 +547,58 @@ Deno.test('multi-page category deadline aborts and drains every active page befo
   assertEquals(body.categories, []);
   assert(events.indexOf('release') > events.indexOf('page-2-settled'), 'release follows page 2 settlement');
   assert(events.indexOf('release') > events.indexOf('page-3-settled'), 'release follows page 3 settlement');
+});
+
+const SUBJECT_PROOF_ENV = {
+  PUBLIC_API_ADMISSION_MODE: 'off',
+  PUBLIC_SUBJECT_PROOF_KID: 'test-key',
+  PUBLIC_SUBJECT_PROOF_HMAC_KEY: btoa('a'.repeat(32)).replace(/=+$/u, ''),
+  PUBLIC_SUBJECT_LIMIT_PER_MINUTE: '5',
+  PUBLIC_SUBJECT_LIMIT_IN_FLIGHT: '2',
+};
+
+Deno.test('search-products subject enforcement blocks unsigned request before token/catalog access', async () => {
+  const upstream = forbiddenUpstream();
+  const response = await handleRequest(post({ action: 'search', query: 'кабель' }), {
+    ...upstream.deps,
+    publicAdmissionReadEnv: (name) => ({ ...SUBJECT_PROOF_ENV,
+      PUBLIC_SUBJECT_ADMISSION_MODE: 'enforce' } as Record<string, string>)[name],
+    publicAdmissionRpc: () => { throw new Error('global admission must not run'); },
+    subjectAdmissionRpc: () => { throw new Error('subject admission must not run without proof'); },
+  });
+  assertEquals(response.status, 403);
+  assert(Array.isArray((await response.json()).results), 'search error envelope remains intact');
+  upstream.assertUnused();
+});
+
+Deno.test('search-products subject observation preserves an unsigned catalog response', async () => {
+  let catalogCalls = 0;
+  const observed: unknown[][] = [];
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+  try {
+    console.warn = (...args) => { observed.push(args); };
+    console.info = (...args) => { observed.push(args); };
+    const response = await handleRequest(post({ action: 'search', query: 'кабель' }), {
+      publicAdmissionReadEnv: (name) => ({ ...SUBJECT_PROOF_ENV,
+        PUBLIC_SUBJECT_ADMISSION_MODE: 'observe' } as Record<string, string>)[name],
+      publicAdmissionRpc: () => { throw new Error('global admission is off'); },
+      subjectAdmissionRpc: () => { throw new Error('unsigned observe must not reserve'); },
+      getApiToken: async () => 'fixture-token',
+      fetch: async () => {
+        catalogCalls++;
+        return Response.json({ data: { results: [{ id: 17 }], pagination: { total: 1 } } });
+      },
+    });
+    assertEquals(response.status, 200);
+    assertEquals((await response.json()).results, [{ id: 17 }]);
+    assertEquals(catalogCalls, 1);
+    assertEquals(observed.some(([label, data]) =>
+      label === '[search-products] subject proof would reject' &&
+      (data as { reason?: string }).reason === 'missing_proof'
+    ), true);
+  } finally {
+    console.warn = originalWarn;
+    console.info = originalInfo;
+  }
 });

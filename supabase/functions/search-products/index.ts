@@ -9,12 +9,29 @@ import {
   reservePublicApiAdmission,
   type PublicApiAdmissionRpc,
 } from '../_shared/public-api-admission.ts';
+import {
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+  type PublicSubjectAdmissionRpc,
+} from '../_shared/public-subject-admission.ts';
 import { readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get('access-control-request-headers');
+  if (!requested?.split(',').some((header) =>
+    header.trim().toLowerCase() === 'x-volt-subject-proof'
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    'Access-Control-Allow-Headers': `${corsHeaders['Access-Control-Allow-Headers']}, x-volt-subject-proof`,
+  };
+}
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
 const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('search-products');
@@ -40,6 +57,7 @@ type RequestDeps = {
   fetch?: typeof fetch;
   publicAdmissionRpc?: PublicApiAdmissionRpc;
   publicAdmissionReadEnv?: (name: string) => string | undefined;
+  subjectAdmissionRpc?: PublicSubjectAdmissionRpc;
   catalogDeadlineMs?: number;
   bodyReadTimeoutMs?: number;
 };
@@ -137,6 +155,30 @@ function admissionErrorResponse(
   if (limited && admission.retryAfterSeconds) {
     headers['Retry-After'] = String(admission.retryAfterSeconds);
   }
+  if (action === 'category_facets') {
+    return jsonResponse({ error: message, category: null, options: [] }, status, headers);
+  }
+  if (action === 'list_categories') {
+    return jsonResponse({ error: message, categories: [], count: 0 }, status, headers);
+  }
+  return requestError(message, status, headers);
+}
+
+function subjectAdmissionErrorResponse(
+  action: unknown,
+  decision: { reason: string; retryAfterSeconds?: number | null },
+): Response {
+  const limited = decision.reason === 'limit_exceeded';
+  const invalidProof = decision.reason === 'missing_proof' ||
+    decision.reason === 'invalid_proof';
+  const status = limited ? 429 : invalidProof ? 403 : 503;
+  const message = limited
+    ? 'Too many requests. Please try again later.'
+    : invalidProof
+    ? 'Request could not be verified. Please refresh and try again.'
+    : 'Service temporarily unavailable.';
+  const headers: Record<string, string> = {};
+  if (limited) headers['Retry-After'] = String(decision.retryAfterSeconds || 60);
   if (action === 'category_facets') {
     return jsonResponse({ error: message, category: null, options: [] }, status, headers);
   }
@@ -488,7 +530,7 @@ export function resetCatalogCachesForTest(): void {
 export async function handleRequest(req: Request, deps: RequestDeps = {}): Promise<Response> {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== 'POST') {
     return requestError('Method not allowed', 405, { Allow: 'POST, OPTIONS' });
@@ -504,6 +546,39 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     if (validationError) return requestError(validationError);
     requestAction = body.action;
     const rpc = deps.publicAdmissionRpc ?? publicAdmissionRpc;
+    const subjectRpc = deps.subjectAdmissionRpc ??
+      (rpc as unknown as PublicSubjectAdmissionRpc);
+    const subjectVerification = await verifyPublicSubjectProof({
+      req,
+      readEnv: deps.publicAdmissionReadEnv,
+    });
+    if (subjectVerification.mode === 'observe' && subjectVerification.wouldReject) {
+      console.warn('[search-products] subject proof would reject', {
+        reason: subjectVerification.reason,
+        failure: subjectVerification.failure,
+        would_reject: true,
+      });
+    }
+    if (!subjectVerification.allowed) {
+      return subjectAdmissionErrorResponse(body.action, subjectVerification);
+    }
+    const subjectAdmission = await reservePublicSubjectAdmission({
+      verification: subjectVerification,
+      route: 'search-products',
+      rpc: subjectRpc,
+      readEnv: deps.publicAdmissionReadEnv,
+    });
+    if (subjectAdmission.mode === 'observe') {
+      console.info('[search-products] subject admission observed', {
+        reason: subjectAdmission.reason,
+        failure: subjectAdmission.failure,
+        would_reject: subjectAdmission.wouldReject,
+      });
+    }
+    if (!subjectAdmission.allowed) {
+      await releasePublicSubjectAdmission({ reservation: subjectAdmission, rpc: subjectRpc });
+      return subjectAdmissionErrorResponse(body.action, subjectAdmission);
+    }
     const admission = await reservePublicApiAdmission({
       route: 'search-products',
       lanes: ['catalog'],
@@ -624,12 +699,14 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     } finally {
       clearTimeout(deadlineTimer);
       req.signal.removeEventListener('abort', onRequestAbort);
-      if (admission.releaseRequired) {
-        try {
-          const release = await releasePublicApiAdmission({ reservation: admission, rpc });
-          if (!release.released) console.error('[search-products] admission release failed', release.failure);
-        } catch {
-          console.error('[search-products] admission release threw unexpectedly');
+      const releases = await Promise.allSettled([
+        releasePublicApiAdmission({ reservation: admission, rpc }),
+        releasePublicSubjectAdmission({ reservation: subjectAdmission, rpc: subjectRpc }),
+      ]);
+      for (const [index, outcome] of releases.entries()) {
+        if (outcome.status === 'rejected' ||
+          (outcome.status === 'fulfilled' && outcome.value.attempted && !outcome.value.released)) {
+          console.error(`[search-products] ${index === 0 ? 'global' : 'subject'} admission release incomplete`);
         }
       }
     }

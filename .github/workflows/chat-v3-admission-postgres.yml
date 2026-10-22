@@ -5,19 +5,25 @@ on:
     paths:
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/20261022120000_public_subject_admission.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
+      - 'docs/security/public-subject-admission-local-test.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
       - 'scripts/qa/test-public-api-admission-concurrency.sh'
+      - 'scripts/qa/test-public-subject-admission-concurrency.sh'
       - '.github/workflows/chat-v3-admission-postgres.yml'
   pull_request:
     paths:
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/20261022120000_public_subject_admission.sql'
       - 'docs/security/chat-v3-admission-guard-local-test.sql'
       - 'docs/security/chat-v3-admission-guard-ci-schema.sql'
+      - 'docs/security/public-subject-admission-local-test.sql'
       - 'scripts/qa/test-chat-v3-admission-concurrency.sh'
       - 'scripts/qa/test-public-api-admission-concurrency.sh'
+      - 'scripts/qa/test-public-subject-admission-concurrency.sh'
       - '.github/workflows/chat-v3-admission-postgres.yml'
 
 jobs:
@@ -56,6 +62,8 @@ jobs:
             -f supabase/migrations/20261009150000_chat_v3_admission_guard.sql
           psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
             -f supabase/migrations/20261020120000_public_api_admission.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261022120000_public_subject_admission.sql
 
       - name: Run transactional SQL behavior and privilege checks
         run: |
@@ -67,3 +75,9 @@ jobs:
 
       - name: Run cross-route public API admission races
         run: timeout 35s bash scripts/qa/test-public-api-admission-concurrency.sh
+
+      - name: Check cross-route trusted subject quotas and replay binding
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d admission_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/public-subject-admission-local-test.sql
+          timeout 35s bash scripts/qa/test-public-subject-admission-concurrency.sh
