@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   CLOSURE_PREFLIGHT_ENDPOINT,
+  CLOSURE_PREFLIGHT_TIMEOUT_MS,
   main,
 } from './preflight-only-closure.mjs';
 import { runTrustedChild } from './with-closure-qa-secrets.mjs';
@@ -28,6 +29,7 @@ function readyResponse() {
 }
 
 test('preflight-only child makes exactly one authenticated private catalog probe, not chat', async () => {
+  assert.equal(CLOSURE_PREFLIGHT_TIMEOUT_MS, 40_000);
   const requests = [];
   const summaries = [];
   const code = await main({

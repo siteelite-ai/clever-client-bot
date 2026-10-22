@@ -140,6 +140,62 @@ Deno.test("V2 category cache: complete nested taxonomy keeps sorted, deduplicate
   );
 });
 
+Deno.test("V2 category cache: missing or null children anywhere keep visible names per request, never the cache", async () => {
+  for (const location of ["root", "leaf"]) {
+    for (const absence of ["missing", "null"]) {
+      let incomplete = true;
+      await withCatalogFetch(
+        (page) => {
+          const leaf: Record<string, unknown> = categoryNode("Двойные розетки", 3, 1);
+          const root: Record<string, unknown> = categoryNode("Розетки", 1, 0, [leaf]);
+          if (incomplete) {
+            const target = location === "root" ? root : leaf;
+            if (absence === "missing") delete target.children;
+            else target.children = null;
+          }
+          return Response.json({ data: {
+            results: [page === 1 ? root : categoryNode("Кабель", 2)],
+            pagination: { page, per_page: 1, pages: 2, total: 2 },
+          } });
+        },
+        async (listCategories, calls) => {
+          const visible = location === "root"
+            ? ["Кабель", "Розетки"]
+            : ["Двойные розетки", "Кабель", "Розетки"];
+          assertEquals(await listCategories(), visible);
+          assertEquals(await listCategories(), visible);
+          assertEquals(calls, [1, 2, 1, 2]);
+          incomplete = false;
+          assertEquals(await listCategories(), ["Двойные розетки", "Кабель", "Розетки"]);
+          assertEquals(await listCategories(), ["Двойные розетки", "Кабель", "Розетки"]);
+          assertEquals(calls, [1, 2, 1, 2, 1, 2]);
+        },
+      );
+    }
+  }
+});
+
+Deno.test("V2 category cache: duplicate IDs across pages or descendants cannot poison cache", async () => {
+  for (const duplicate of ["page", "child"]) {
+    let malformed = true;
+    await withCatalogFetch(
+      (page) => Response.json({ data: {
+        results: [page === 1
+          ? categoryNode("Розетки", 1, 0, [categoryNode("Двойные розетки", malformed && duplicate === "child" ? 1 : 3, 1)])
+          : categoryNode("Кабель", malformed && duplicate === "page" ? 1 : 2)],
+        pagination: { page, per_page: 1, pages: 2, total: 2 },
+      } }),
+      async (listCategories, calls) => {
+        await assertRejects(listCategories, Error, "/categories duplicate category ID");
+        malformed = false;
+        assertEquals(await listCategories(), ["Двойные розетки", "Кабель", "Розетки"]);
+        assertEquals(await listCategories(), ["Двойные розетки", "Кабель", "Розетки"]);
+        assertEquals(calls, duplicate === "child" ? [1, 1, 2] : [1, 2, 1, 2]);
+      },
+    );
+  }
+});
+
 Deno.test("V2 category cache: incomplete nested node is never cached", async () => {
   let malformed = true;
   await withCatalogFetch(

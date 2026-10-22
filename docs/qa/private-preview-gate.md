@@ -39,11 +39,13 @@ node scripts/qa/with-closure-qa-secrets.mjs --project-ref=yngoixmvmxdfxokuafjp -
 This requires permission to create and remove two short-lived Edge Function
 secrets. The wrapper passes their values only to the trusted child, suppresses
 child output, and verifies deletion. The child makes one
-`catalog_health_preflight` request (categories, products, facets and exact
-article filter), then exits without a customer chat or OpenRouter call. A
-successful exit proves only this representative catalog gate; it does **not**
-prove full taxonomy coverage, the three required analogs or the remaining
-browser acceptance cases. Do not use the full `run-customer-acceptance.mjs`
+`catalog_health_preflight` request, which checks every root taxonomy page
+within bounded limits, plus a usable product, representative facets and an
+exact article filter. It then exits without a customer chat or OpenRouter
+call. A successful exit proves this bounded taxonomy and representative
+catalog gate; it does **not** prove every client's exact category, the three
+required analogs or the remaining browser acceptance cases. Do not use the
+full `run-customer-acceptance.mjs`
 example merely to check catalog health: it continues into paid chat turns.
 
 If the secret is absent, weak or invalid, both protected preview functions

@@ -236,7 +236,7 @@ Deno.test('list_categories bounds fan-out, coalesces cold requests and serves th
       peakActive = Math.max(peakActive, active);
       await new Promise((resolve) => setTimeout(resolve, 1));
       active--;
-      return Response.json({ data: { results: [{ id: page, pagetitle: `Категория ${page}`, alias: `category-${page}`, parent: 0 }], pagination: { page, per_page: 1, pages: 9, total: 9 } } });
+      return Response.json({ data: { results: [{ id: page, pagetitle: `Категория ${page}`, alias: `category-${page}`, parent: 0, children: [] }], pagination: { page, per_page: 1, pages: 9, total: 9 } } });
     },
   };
   const [first, second] = await Promise.all([
@@ -321,7 +321,7 @@ Deno.test('list_categories rejects nonempty truncated pages and pagination drift
         return Response.json({ data: {
           results: (shouldFail && failure.startsWith('short') ? titles.slice(0, 1) : titles)
             .map((pagetitle, index) => ({ id: (page - 1) * 2 + index + 1,
-              pagetitle, alias: `category-${(page - 1) * 2 + index + 1}`, parent: 0 })),
+              pagetitle, alias: `category-${(page - 1) * 2 + index + 1}`, parent: 0, children: [] })),
           pagination: {
             page,
             per_page: 2,
@@ -341,6 +341,82 @@ Deno.test('list_categories rejects nonempty truncated pages and pagination drift
     const beforeHit = calls;
     assertEquals((await (await handleRequest(post({ action: 'list_categories' }), deps)).json()).count, 4);
     assertEquals(calls, beforeHit);
+  }
+});
+
+Deno.test('list_categories retains visible names but never caches unproven children on any root page or leaf', async () => {
+  for (const location of ['root-page1', 'root-page2', 'leaf']) {
+    for (const absence of ['missing', 'null']) {
+      resetCatalogCachesForTest();
+      const calls: number[] = [];
+      let incomplete = true;
+      const deps = {
+        getApiToken: async () => 'catalog-test-token',
+        fetch: async (input: RequestInfo | URL) => {
+          const page = Number(new URL(String(input)).searchParams.get('page'));
+          calls.push(page);
+          const leaf: Record<string, unknown> = { id: 3, pagetitle: 'Двойные розетки', alias: 'double', parent: 1, children: [] };
+          const firstRoot: Record<string, unknown> = { id: 1, pagetitle: 'Розетки', alias: 'rozetki', parent: 0, children: [leaf] };
+          const secondRoot: Record<string, unknown> = { id: 2, pagetitle: 'Кабель', alias: 'cable', parent: 0, children: [] };
+          if (incomplete) {
+            const target = location === 'root-page2' ? secondRoot : location === 'leaf' ? leaf : firstRoot;
+            if (absence === 'missing') delete target.children;
+            else target.children = null;
+          }
+          return Response.json({ data: {
+            results: [page === 1 ? firstRoot : secondRoot],
+            pagination: { page, per_page: 1, pages: 2, total: 2 },
+          } });
+        },
+      };
+      const visible = location === 'root-page1'
+        ? ['Кабель', 'Розетки']
+        : ['Двойные розетки', 'Кабель', 'Розетки'];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await handleRequest(post({ action: 'list_categories' }), deps);
+        assertEquals(response.status, 200);
+        assertEquals((await response.json()).categories, visible);
+      }
+      assertEquals(calls, [1, 2, 1, 2]);
+      incomplete = false;
+      const recovered = await handleRequest(post({ action: 'list_categories' }), deps);
+      assertEquals((await recovered.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      const cached = await handleRequest(post({ action: 'list_categories' }), deps);
+      assertEquals((await cached.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      assertEquals(calls, [1, 2, 1, 2, 1, 2]);
+    }
+  }
+});
+
+Deno.test('list_categories rejects duplicate IDs across pages and descendants without poisoning cache', async () => {
+  for (const duplicate of ['page', 'child']) {
+    resetCatalogCachesForTest();
+    const calls: number[] = [];
+    let malformed = true;
+    const deps = {
+      getApiToken: async () => 'catalog-test-token',
+      fetch: async (input: RequestInfo | URL) => {
+        const page = Number(new URL(String(input)).searchParams.get('page'));
+        calls.push(page);
+        return Response.json({ data: {
+          results: [page === 1
+            ? { id: 1, pagetitle: 'Розетки', alias: 'rozetki', parent: 0,
+              children: [{ id: malformed && duplicate === 'child' ? 1 : 3,
+                pagetitle: 'Двойные розетки', alias: 'double', parent: 1, children: [] }] }
+            : { id: malformed && duplicate === 'page' ? 1 : 2,
+              pagetitle: 'Кабель', alias: 'cable', parent: 0, children: [] }],
+          pagination: { page, per_page: 1, pages: 2, total: 2 },
+        } });
+      },
+    };
+    const rejected = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals(rejected.status, 500);
+    malformed = false;
+    const recovered = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals((await recovered.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+    const cached = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals((await cached.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+    assertEquals(calls, duplicate === 'child' ? [1, 1, 2] : [1, 2, 1, 2]);
   }
 });
 

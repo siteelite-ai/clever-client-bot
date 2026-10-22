@@ -440,6 +440,8 @@ export async function getCategoriesCache(token: string, httpFetch: typeof fetch 
   try {
     const t0 = Date.now();
     const acc = new Set<string>();
+    const seenIds = new Set<number>();
+    let childrenComplete = true;
     let page = 1;
     let totalPages: number | null = null;
     let totalCategories: number | null = null;
@@ -486,8 +488,13 @@ export async function getCategoriesCache(token: string, httpFetch: typeof fetch 
             (node.children != null && !Array.isArray(node.children))) {
             throw new Error('Categories API returned malformed category nodes');
           }
+          if (seenIds.has(node.id)) {
+            throw new Error('Categories API returned duplicate category IDs');
+          }
+          seenIds.add(node.id);
           acc.add(node.pagetitle.trim());
-          if (Array.isArray(node.children) && node.children.length) walk(node.children);
+          if (!Array.isArray(node.children)) childrenComplete = false;
+          else if (node.children.length) walk(node.children);
         }
       };
       walk(data.results);
@@ -499,8 +506,10 @@ export async function getCategoriesCache(token: string, httpFetch: typeof fetch 
 
     const flat = Array.from(acc).sort();
     if (flat.length === 0) throw new Error('Categories API returned no categories');
-    chatCategoriesCache = { value: flat, ts: Date.now() };
-    console.log(`[CategoriesCache] MISS → fetched ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    // A missing/null children field may hide descendants even when root
+    // pagination is complete. Use visible titles now, but never retain them.
+    if (childrenComplete) chatCategoriesCache = { value: flat, ts: Date.now() };
+    console.log(`[CategoriesCache] MISS → fetched ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages}, cached=${childrenComplete})`);
     return flat;
   } catch (e) {
     if (chatCategoriesCache && Date.now() - chatCategoriesCache.ts < CHAT_CATEGORIES_TTL_MS + CHAT_CATEGORIES_STALE_GRACE_MS) {

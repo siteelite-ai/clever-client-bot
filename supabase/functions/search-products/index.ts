@@ -460,7 +460,13 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
 }
 
 // Recursively walk MsCategory tree, collect every `pagetitle` into the set.
-function collectPagetitles(nodes: unknown, acc: Set<string>, depth = 0): void {
+function collectPagetitles(
+  nodes: unknown,
+  acc: Set<string>,
+  seenIds: Set<number>,
+  coverage: { childrenComplete: boolean },
+  depth = 0,
+): void {
   if (!Array.isArray(nodes)) throw new Error('Category listing returned an incomplete response');
   if (depth > 10) throw new Error('Category tree exceeds supported depth');
   for (const node of nodes) {
@@ -471,9 +477,12 @@ function collectPagetitles(nodes: unknown, acc: Set<string>, depth = 0): void {
       (node.children != null && !Array.isArray(node.children))) {
       throw new Error('Category listing returned an incomplete response');
     }
+    if (seenIds.has(node.id)) throw new Error('Category listing returned duplicate category IDs');
+    seenIds.add(node.id);
     acc.add(node.pagetitle.trim());
     if (acc.size > MAX_CATEGORY_TITLES) throw new Error('Category listing exceeds safe limit');
-    if (Array.isArray(node.children) && node.children.length > 0) collectPagetitles(node.children, acc, depth + 1);
+    if (!Array.isArray(node.children)) coverage.childrenComplete = false;
+    else if (node.children.length > 0) collectPagetitles(node.children, acc, seenIds, coverage, depth + 1);
   }
 }
 
@@ -542,9 +551,11 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
     console.log('[Categories] cache MISS, fetching from /api/categories');
     const t0 = Date.now();
     const acc = new Set<string>();
+    const seenIds = new Set<number>();
+    const coverage = { childrenComplete: true };
 
     const first = await fetchCategoriesPage(token, 1, controller.signal, httpFetch);
-    collectPagetitles(first.results, acc);
+    collectPagetitles(first.results, acc, seenIds, coverage);
 
     if (first.pagination.pages > MAX_CATEGORIES_PAGES) {
       throw new Error('Category listing exceeds safe page limit');
@@ -567,7 +578,7 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
             result.value.pagination.total !== first.pagination.total) {
             throw new Error('Category listing changed during pagination');
           }
-          collectPagetitles(result.value.results, acc);
+          collectPagetitles(result.value.results, acc, seenIds, coverage);
         }
       }
     }
@@ -575,8 +586,14 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
     controller.signal.throwIfAborted();
     const flat = Array.from(acc).sort();
     if (flat.length === 0) throw new Error('Category listing returned no categories');
-    categoriesCache = { value: flat, ts: Date.now() };
-    console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    // Missing/null children leaves descendant coverage unproven: return the
+    // visible names for this call without freezing a partial taxonomy for 1h.
+    if (coverage.childrenComplete) {
+      categoriesCache = { value: flat, ts: Date.now() };
+      console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    } else {
+      console.log(`[Categories] uncached incomplete child coverage (${flat.length} visible pagetitles, pages=${totalPages})`);
+    }
     return flat;
   })();
   const shared = { controller, promise: load, waiters: 0 };

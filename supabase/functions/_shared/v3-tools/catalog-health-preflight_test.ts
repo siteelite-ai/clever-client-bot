@@ -50,6 +50,45 @@ function categoryPage(categories: unknown[]): Response {
   } } });
 }
 
+function pagedCategories(
+  categories: unknown[],
+  page: number,
+  pagination: Record<string, unknown> = {},
+): Response {
+  return json({ data: { results: categories, pagination: {
+    page, per_page: 1, pages: 2, total: 2, ...pagination,
+  } } });
+}
+
+async function checkCategoryPages(
+  pageResponse: (page: number) => Response | Promise<Response>,
+  timeoutMs?: number,
+) {
+  const pageCalls: number[] = [];
+  let dependentCalls = 0;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token", timeoutMs,
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) {
+        const page = Number(url.searchParams.get("page"));
+        pageCalls.push(page);
+        return await pageResponse(page);
+      }
+      if (url.pathname.endsWith("/products")) {
+        if (!url.searchParams.has("article")) {
+          return productPage([HEALTHY_PRODUCT]);
+        }
+        dependentCalls++;
+        return productPage([HEALTHY_PRODUCT]);
+      }
+      dependentCalls++;
+      return json(HEALTHY_FACETS);
+    }) as typeof fetch,
+  });
+  return { result, pageCalls, dependentCalls };
+}
+
 Deno.test("catalog QA payload and header are separate from browser chat", () => {
   assertEquals(CATALOG_QA_SECRET_ENV, "VOLT220_V3_CATALOG_QA_SECRET");
   assertEquals(CATALOG_QA_SECRET_HEADER, "x-catalog-qa-secret");
@@ -269,6 +308,106 @@ Deno.test("catalog QA does not mistake one category page for the full taxonomy",
     });
     assertEquals(calls, ["/api/categories", "/api/products"]);
   }
+});
+
+Deno.test("catalog QA reads every taxonomy page before choosing a live product leaf", async () => {
+  const { result, pageCalls, dependentCalls } = await checkCategoryPages((page) =>
+    page === 1
+      ? pagedCategories([{ id: 8, pagetitle: "Earlier root", children: [] }], 1)
+      : pagedCategories(HEALTHY_CATEGORIES, 2)
+  );
+  assertEquals(pageCalls, [1, 2]);
+  assertEquals(dependentCalls, 2);
+  assertEquals(result.status, "ready");
+  assertEquals(result.checks.categories, { status: "ok", http_status: 200 });
+  assert(!JSON.stringify(result).includes("Earlier root"));
+});
+
+Deno.test("catalog QA accepts an exact shorter final taxonomy page", async () => {
+  const { result, pageCalls, dependentCalls } = await checkCategoryPages((page) =>
+    page === 1
+      ? pagedCategories([
+        { id: 8, pagetitle: "Earlier root", children: [] },
+        { id: 9, pagetitle: "Another root", children: [] },
+      ], 1, { per_page: 2, pages: 2, total: 3 })
+      : pagedCategories(HEALTHY_CATEGORIES, 2, {
+        per_page: 2, pages: 2, total: 3,
+      })
+  );
+  assertEquals(pageCalls, [1, 2]);
+  assertEquals(dependentCalls, 2);
+  assertEquals(result.status, "ready");
+});
+
+Deno.test("catalog QA rejects missing, contradictory, or invalid later taxonomy pages", async () => {
+  const first = pagedCategories([{ id: 8, pagetitle: "Earlier root", children: [] }], 1);
+  for (const second of [
+    pagedCategories([], 2),
+    pagedCategories(HEALTHY_CATEGORIES, 1),
+    pagedCategories(HEALTHY_CATEGORIES, 2, { pages: 3 }),
+    pagedCategories(HEALTHY_CATEGORIES, 2, { total: 3 }),
+    pagedCategories(HEALTHY_CATEGORIES, 2, { per_page: 2 }),
+    pagedCategories(HEALTHY_CATEGORIES, 2, { pages: 3, total: 3 }),
+    pagedCategories(HEALTHY_CATEGORIES, 2, { per_page: 2, total: 3 }),
+    pagedCategories([{ id: 8, pagetitle: "Duplicate root", children: [] }], 2),
+    pagedCategories([{ id: 1, pagetitle: "Root", children: [{ id: 7, pagetitle: "Leaf" }] }], 2),
+    json({ data: { results: HEALTHY_CATEGORIES } }),
+  ]) {
+    const { result, pageCalls, dependentCalls } = await checkCategoryPages((page) =>
+      page === 1 ? first.clone() : second.clone()
+    );
+    assertEquals(pageCalls, [1, 2]);
+    assertEquals(dependentCalls, 0);
+    assertEquals(result.status, "unavailable");
+    assertEquals(result.classification, "schema_error");
+    assertEquals(result.checks.categories.http_status, 200);
+  }
+  const missing = await checkCategoryPages((page) =>
+    page === 1 ? first.clone() : json({ private_error: "do not return" }, 404)
+  );
+  assertEquals(missing.pageCalls, [1, 2]);
+  assertEquals(missing.dependentCalls, 0);
+  assertEquals(missing.result.classification, "route");
+  assertEquals(missing.result.checks.categories.http_status, 404);
+  assert(!JSON.stringify(missing.result).includes("private_error"));
+  const shortFirst = await checkCategoryPages(() => pagedCategories([], 1));
+  assertEquals(shortFirst.pageCalls, [1]);
+  assertEquals(shortFirst.dependentCalls, 0);
+  assertEquals(shortFirst.result.classification, "schema_error");
+});
+
+Deno.test("catalog QA rejects a reported taxonomy larger than the page or node cap", async () => {
+  for (const pagination of [
+    { page: 1, per_page: 1, pages: 65, total: 65 },
+    { page: 1, per_page: 200, pages: 61, total: 12_001 },
+  ]) {
+    const { result, pageCalls, dependentCalls } = await checkCategoryPages(() =>
+      json({ data: { results: [{ id: 8, pagetitle: "Root", children: [] }], pagination } })
+    );
+    assertEquals(pageCalls, [1]);
+    assertEquals(dependentCalls, 0);
+    assertEquals(result.classification, "schema_error");
+  }
+  const oversizedChildren = Array.from({ length: 12_000 }, (_, index) => ({
+    id: index + 2, pagetitle: `Leaf ${index}`, children: [],
+  }));
+  const oversized = await checkCategoryPages(() =>
+    categoryPage([{ id: 1, pagetitle: "Root", children: oversizedChildren }])
+  );
+  assertEquals(oversized.pageCalls, [1]);
+  assertEquals(oversized.dependentCalls, 0);
+  assertEquals(oversized.result.classification, "schema_error");
+});
+
+Deno.test("catalog QA bounds the whole category crawl when a later page stalls", async () => {
+  const first = pagedCategories([{ id: 8, pagetitle: "Earlier root", children: [] }], 1);
+  const { result, pageCalls, dependentCalls } = await checkCategoryPages((page) =>
+    page === 1 ? first.clone() : new Promise<Response>(() => {}),
+  10);
+  assertEquals(pageCalls, [1, 2]);
+  assertEquals(dependentCalls, 0);
+  assertEquals(result.classification, "transport");
+  assertEquals(result.checks.categories.http_status, null);
 });
 
 Deno.test("catalog QA classifies bounded transport failure", async () => {

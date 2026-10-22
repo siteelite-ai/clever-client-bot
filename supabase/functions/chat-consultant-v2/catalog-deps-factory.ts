@@ -77,6 +77,8 @@ async function fetchCategoriesLive(
     return _categoriesCache.value;
   }
   const acc = new Set<string>();
+  const seenIds = new Set<number>();
+  let childrenComplete = true;
   let visitedNodes = 0;
   let page = 1;
   let totalPages = 1;
@@ -157,8 +159,13 @@ async function fetchCategoriesLive(
           (n.children != null && !Array.isArray(n.children))) {
           throw new Error(`/categories incomplete node on page ${page}`);
         }
+        if (seenIds.has(n.id)) {
+          throw new Error(`/categories duplicate category ID on page ${page}`);
+        }
+        seenIds.add(n.id);
         acc.add(n.pagetitle.trim());
-        if (Array.isArray(n.children) && n.children.length) {
+        if (!Array.isArray(n.children)) childrenComplete = false;
+        else if (n.children.length) {
           walk(n.children, depth + 1);
         }
       }
@@ -174,7 +181,7 @@ async function fetchCategoriesLive(
   }
   // Never cache a failed or truncated traversal: only a fully verified list
   // may be reused by the resolver for the next 15 minutes.
-  _categoriesCache = { value: flat, ts: Date.now() };
+  if (childrenComplete) _categoriesCache = { value: flat, ts: Date.now() };
   return flat;
 }
 

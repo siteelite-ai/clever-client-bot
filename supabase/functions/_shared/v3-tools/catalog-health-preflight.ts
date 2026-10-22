@@ -35,6 +35,9 @@ export type CatalogHealthPreflightResult = {
 };
 
 const CHECK_TIMEOUT_MS = 8_000;
+const CATEGORY_DEADLINE_MS = 10_000;
+const CATEGORY_PAGE_SIZE = 200;
+const MAX_CATEGORY_PAGES = 64;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_TAXONOMY_NODES = 12_000;
 const MAX_CATEGORY_TITLE_CHARS = 160;
@@ -43,7 +46,7 @@ type EndpointResult = { check: CheckResult; results?: unknown[] };
 type Leaf = { id: number; pagetitle: string };
 type ProductIdentity = { id: number; article: string };
 
-/** A single request proves completeness only when the upstream says page 1 is the entire window. */
+/** An exact article filter must fit in one page; taxonomy has its own full-tree walker. */
 function isCompleteFirstPage(data: unknown, results: unknown[]): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   const pagination = (data as { pagination?: unknown }).pagination;
@@ -65,6 +68,145 @@ function cleanCategoryTitle(value: unknown): string | null {
     /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(title)
   ) return null;
   return title;
+}
+
+type CategoryPagination = {
+  page: number;
+  pages: number;
+  per_page: number;
+  total: number;
+};
+
+/** Fail closed on pagination drift, missing rows, or metadata inconsistent with the requested page. */
+function readCategoryPage(
+  json: unknown,
+  requestedPage: number,
+  firstPage?: CategoryPagination,
+): { results: unknown[]; pagination: CategoryPagination } | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const envelope = json as Record<string, unknown>;
+  if (envelope.success === false) return null;
+  const data = envelope.data ?? envelope;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const body = data as Record<string, unknown>;
+  const results = body.results;
+  const rawPagination = body.pagination;
+  if (!Array.isArray(results) || !rawPagination ||
+    typeof rawPagination !== "object" || Array.isArray(rawPagination)) return null;
+  const page = rawPagination as Record<string, unknown>;
+  if (page.page !== requestedPage || !Number.isSafeInteger(page.pages) ||
+    Number(page.pages) < 1 || Number(page.pages) > MAX_CATEGORY_PAGES ||
+    !Number.isSafeInteger(page.per_page) || Number(page.per_page) < 1 ||
+    Number(page.per_page) > CATEGORY_PAGE_SIZE ||
+    !Number.isSafeInteger(page.total) || Number(page.total) < 1 ||
+    Number(page.total) > MAX_TAXONOMY_NODES) return null;
+  const pagination = page as CategoryPagination;
+  if (pagination.pages !== Math.ceil(pagination.total / pagination.per_page) ||
+    (firstPage && (pagination.pages !== firstPage.pages ||
+      pagination.per_page !== firstPage.per_page ||
+      pagination.total !== firstPage.total))) return null;
+  const expectedLength = Math.min(
+    pagination.per_page,
+    pagination.total - (requestedPage - 1) * pagination.per_page,
+  );
+  if (expectedLength < 1 || results.length !== expectedLength) return null;
+  return { results, pagination };
+}
+
+/** Validate the actual complete tree, including nested IDs and explicit child arrays. */
+function scanCategoryNodes(
+  roots: unknown[],
+  seenIds: Set<number>,
+): boolean {
+  const stack = [...roots];
+  while (stack.length > 0) {
+    if (seenIds.size >= MAX_TAXONOMY_NODES) return false;
+    const raw = stack.pop();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const node = raw as Record<string, unknown>;
+    if (!Number.isSafeInteger(node.id) || Number(node.id) <= 0 ||
+      seenIds.has(Number(node.id)) ||
+      !cleanCategoryTitle(node.pagetitle) || !Array.isArray(node.children)) {
+      return false;
+    }
+    seenIds.add(Number(node.id));
+    for (const child of node.children) stack.push(child);
+  }
+  return true;
+}
+
+/** Fetch every root page under one deadline; partial taxonomy is never ready. */
+async function checkCategories(deps: CatalogClientDeps): Promise<EndpointResult> {
+  const controller = new AbortController();
+  const timeoutMs = Math.min(
+    deps.timeoutMs ?? CATEGORY_DEADLINE_MS,
+    CATEGORY_DEADLINE_MS,
+  );
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let httpStatus: number | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new Error("catalog taxonomy deadline"));
+    }, Math.max(1, timeoutMs));
+  });
+  try {
+    return await Promise.race([
+      (async (): Promise<EndpointResult> => {
+        const roots: unknown[] = [];
+        const seenIds = new Set<number>();
+        let firstPage: CategoryPagination | undefined;
+        for (let page = 1; page <= (firstPage?.pages ?? 1); page++) {
+          const url = `${deps.baseUrl}/categories?parent=0&depth=10&per_page=${CATEGORY_PAGE_SIZE}&page=${page}`;
+          httpStatus = null;
+          const response = await (deps.fetchImpl ?? fetch)(url, {
+            method: "GET",
+            redirect: "error",
+            headers: {
+              Authorization: `Bearer ${deps.apiToken}`,
+              "Content-Type": "application/json",
+            },
+            signal: controller.signal,
+          });
+          httpStatus = response.status;
+          if (!response.ok) {
+            return { check: {
+              status: "unavailable",
+              http_status: response.status,
+              classification: classifyCatalogHealthHttpStatus(response.status),
+            } };
+          }
+          const decoded = readCategoryPage(
+            await readBoundedJson(response), page, firstPage,
+          );
+          if (!decoded || !scanCategoryNodes(decoded.results, seenIds)) {
+            return { check: {
+              status: "unavailable", http_status: response.status,
+              classification: "schema_error",
+            } };
+          }
+          firstPage ??= decoded.pagination;
+          roots.push(...decoded.results);
+        }
+        return {
+          check: { status: "ok", http_status: httpStatus },
+          results: roots,
+        };
+      })(),
+      timeout,
+    ]);
+  } catch {
+    return { check: {
+      status: "unavailable",
+      http_status: httpStatus,
+      classification: httpStatus === null || controller.signal.aborted
+        ? "transport"
+        : "schema_error",
+    } };
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    controller.abort();
+  }
 }
 
 /** Use an explicit live leaf, preferring the immediate parent of a usable product. */
@@ -187,7 +329,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 }
 
 async function checkEndpoint(
-  name: CheckName,
+  name: Exclude<CheckName, "categories">,
   deps: CatalogClientDeps,
   leaf?: Leaf,
   identity?: ProductIdentity,
@@ -198,9 +340,7 @@ async function checkEndpoint(
       status: "unavailable", http_status: null, classification: "schema_error",
     } };
   }
-  const params = name === "categories"
-    ? "parent=0&depth=10&per_page=200&page=1"
-    : name === "products"
+  const params = name === "products"
     ? "per_page=20&page=1&min_price=1"
     : name === "article_filter"
     ? new URLSearchParams({ article: identity?.article ?? "", per_page: "50", page: "1" }).toString()
@@ -319,24 +459,13 @@ async function checkEndpoint(
         }
         // Discovery accepts either envelope; search_catalog specifically
         // consumes data.results, so the products check follows that adapter.
-        const data = name === "categories"
-          ? envelope?.data ?? envelope
-          : envelope?.data;
+        const data = envelope?.data;
         const results = data && typeof data === "object" && !Array.isArray(data)
           ? (data as { results?: unknown }).results
           : null;
-        const validCategories = Array.isArray(results) &&
-          results.length > 0 &&
-          isCompleteFirstPage(data, results) &&
-          results.every((root) =>
-            root && typeof root === "object" && !Array.isArray(root) &&
-            typeof root.id === "number" &&
-            typeof root.pagetitle === "string" && root.pagetitle.trim()
-          );
         const validProducts = Array.isArray(results) &&
           hasUsableProduct(results);
-        if (envelope?.success === false ||
-          (name === "categories" ? !validCategories : !validProducts)) {
+        if (envelope?.success === false || !validProducts) {
           return { check: {
             status: "unavailable",
             http_status: response.status,
@@ -377,7 +506,7 @@ export async function runCatalogHealthPreflight(
   // The first two checks are independent. Facets and exact article follow
   // only after usable baseline data, with bounded read-only calls in parallel.
   const [categoryResult, productResult] = await Promise.all([
-    checkEndpoint("categories", deps),
+    checkCategories(deps),
     checkEndpoint("products", deps),
   ]);
   const categories = categoryResult.check;

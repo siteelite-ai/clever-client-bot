@@ -66,7 +66,7 @@ Deno.test('legacy category cache rejects truncated nonempty pages and changing t
       return Response.json({ success: true, data: {
         results: (shouldFail && failure.startsWith('short') ? titles.slice(0, 1) : titles)
           .map((pagetitle, index) => ({ id: (page - 1) * 2 + index + 1,
-            pagetitle, alias: `category-${(page - 1) * 2 + index + 1}`, parent: 0 })),
+            pagetitle, alias: `category-${(page - 1) * 2 + index + 1}`, parent: 0, children: [] })),
         pagination: {
           page, per_page: 2,
           pages: shouldFail && failure === 'changed-total' ? 3 : 2,
@@ -81,6 +81,65 @@ Deno.test('legacy category cache rejects truncated nonempty pages and changing t
     const beforeHit = calls;
     await getCategoriesCache('test-token', httpFetch);
     assertEquals(calls, beforeHit);
+  }
+});
+
+Deno.test('legacy category cache uses visible names but does not cache unproven children across root pages', async () => {
+  for (const location of ['root', 'leaf']) {
+    for (const absence of ['missing', 'null']) {
+      resetLegacyCatalogCachesForTest();
+      const calls: number[] = [];
+      let incomplete = true;
+      const httpFetch = (async (input: RequestInfo | URL) => {
+        const page = Number(new URL(String(input)).searchParams.get('page'));
+        calls.push(page);
+        const leaf: Record<string, unknown> = { id: 3, pagetitle: 'Двойные розетки', alias: 'double', parent: 1, children: [] };
+        const root: Record<string, unknown> = { id: 1, pagetitle: 'Розетки', alias: 'rozetki', parent: 0, children: [leaf] };
+        if (incomplete) {
+          const target = location === 'root' ? root : leaf;
+          if (absence === 'missing') delete target.children;
+          else target.children = null;
+        }
+        return Response.json({ data: {
+          results: [page === 1 ? root : { id: 2, pagetitle: 'Кабель', alias: 'cable', parent: 0, children: [] }],
+          pagination: { page, per_page: 1, pages: 2, total: 2 },
+        } });
+      }) as typeof fetch;
+      const visible = location === 'root' ? ['Кабель', 'Розетки'] : ['Двойные розетки', 'Кабель', 'Розетки'];
+      assertEquals(await getCategoriesCache('test-token', httpFetch), visible);
+      assertEquals(await getCategoriesCache('test-token', httpFetch), visible);
+      assertEquals(calls, [1, 2, 1, 2]);
+      incomplete = false;
+      assertEquals(await getCategoriesCache('test-token', httpFetch), ['Двойные розетки', 'Кабель', 'Розетки']);
+      assertEquals(await getCategoriesCache('test-token', httpFetch), ['Двойные розетки', 'Кабель', 'Розетки']);
+      assertEquals(calls, [1, 2, 1, 2, 1, 2]);
+    }
+  }
+});
+
+Deno.test('legacy category cache rejects duplicate IDs across root pages or descendants', async () => {
+  for (const duplicate of ['page', 'child']) {
+    resetLegacyCatalogCachesForTest();
+    const calls: number[] = [];
+    let malformed = true;
+    const httpFetch = (async (input: RequestInfo | URL) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      calls.push(page);
+      const child = { id: malformed && duplicate === 'child' ? 1 : 3,
+        pagetitle: 'Двойные розетки', alias: 'double', parent: 1, children: [] };
+      return Response.json({ data: {
+        results: [page === 1
+          ? { id: 1, pagetitle: 'Розетки', alias: 'rozetki', parent: 0, children: [child] }
+          : { id: malformed && duplicate === 'page' ? 1 : 2,
+            pagetitle: 'Кабель', alias: 'cable', parent: 0, children: [] }],
+        pagination: { page, per_page: 1, pages: 2, total: 2 },
+      } });
+    }) as typeof fetch;
+    assertEquals(await getCategoriesCache('test-token', httpFetch), []);
+    malformed = false;
+    assertEquals(await getCategoriesCache('test-token', httpFetch), ['Двойные розетки', 'Кабель', 'Розетки']);
+    assertEquals(await getCategoriesCache('test-token', httpFetch), ['Двойные розетки', 'Кабель', 'Розетки']);
+    assertEquals(calls, duplicate === 'child' ? [1, 1, 2] : [1, 2, 1, 2]);
   }
 });
 

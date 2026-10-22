@@ -12,6 +12,9 @@ import { previewAuthHeaders } from './preview-auth.mjs';
 
 export const CLOSURE_PREFLIGHT_ENDPOINT =
   'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview';
+// Edge settings load, the complete bounded taxonomy crawl, then parallel
+// representative facets/article checks all run inside this one private call.
+export const CLOSURE_PREFLIGHT_TIMEOUT_MS = 40_000;
 
 const secretPattern = /^[A-Za-z0-9_-]{32,256}$/;
 const publicJwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -82,6 +85,7 @@ export async function main({
     previewHeaders,
     env,
     fetchImpl,
+    timeoutMs: CLOSURE_PREFLIGHT_TIMEOUT_MS,
   });
   emit(safeSummary(result));
   return result.ok ? 0 : 1;
