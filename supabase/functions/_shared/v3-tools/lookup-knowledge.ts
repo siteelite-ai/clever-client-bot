@@ -4,6 +4,11 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import type { LookupKnowledgeOk, ToolError } from "./types.ts";
+import {
+  IntegrationSecretConfigurationError,
+  resolveIntegrationSecret,
+  type IntegrationSecretMode,
+} from "../integration-secrets.ts";
 
 export interface LookupKnowledgeInput {
   query: string;
@@ -30,15 +35,32 @@ function snippetOf(content: string, maxLen = 320): string {
 async function generateQueryEmbedding(
   query: string,
   supabase: SupabaseClient,
+  resolvedKey: string,
+  secretMode: IntegrationSecretMode,
 ): Promise<number[] | null> {
   try {
-    const { data: settings } = await supabase
-      .from("app_settings")
-      .select("openrouter_api_key")
-      .limit(1)
-      .single();
-
-    const apiKey = (settings as { openrouter_api_key?: string } | null)?.openrouter_api_key;
+    let apiKey: string | null;
+    if (secretMode === "private-required") {
+      // The orchestrator already resolved this key from the private store.
+      // Never independently read the old app_settings row in this mode.
+      apiKey = resolvedKey;
+      if (!apiKey) throw new IntegrationSecretConfigurationError();
+    } else {
+      // Preserve the original FTS fallback when app_settings has no key, even
+      // if the orchestrator itself used an environment fallback for the model.
+      const { data: settings } = await supabase
+        .from("app_settings")
+        .select("openrouter_api_key")
+        .limit(1)
+        .single();
+      apiKey = await resolveIntegrationSecret(
+        supabase,
+        "openrouter_api_key",
+        secretMode,
+        () => (settings as { openrouter_api_key?: string } | null)?.openrouter_api_key ?? null,
+        (event) => console.info("[integration-secret-shadow]", event),
+      );
+    }
     if (!apiKey) {
       console.warn("[lookup_knowledge] No OpenRouter API key — FTS-only fallback");
       return null;
@@ -59,8 +81,7 @@ async function generateQueryEmbedding(
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      console.warn(`[lookup_knowledge] Embedding API ${response.status}: ${errText.slice(0, 200)}`);
+      console.warn(`[lookup_knowledge] Embedding API ${response.status}`);
       return null;
     }
 
@@ -71,7 +92,8 @@ async function generateQueryEmbedding(
     }
     return null;
   } catch (e) {
-    console.warn("[lookup_knowledge] Embedding generation failed:", (e as Error).message);
+    if (secretMode === "private-required" && e instanceof IntegrationSecretConfigurationError) throw e;
+    console.warn("[lookup_knowledge] Embedding generation failed", e instanceof Error ? e.name : "unknown");
     return null;
   }
 }
@@ -79,6 +101,8 @@ async function generateQueryEmbedding(
 export async function executeLookupKnowledge(
   input: LookupKnowledgeInput,
   supabase: SupabaseClient,
+  openrouterApiKey: string,
+  secretMode: IntegrationSecretMode,
 ): Promise<(LookupKnowledgeOk & { tool: "lookup_knowledge" }) | (ToolError & { tool: "lookup_knowledge" })> {
   const q = (input.query ?? "").trim();
   if (!q) {
@@ -89,7 +113,7 @@ export async function executeLookupKnowledge(
   try {
     // Generate query embedding for hybrid (FTS + vector) search.
     // Returns null on failure; RPC then runs FTS-only path.
-    const queryEmbedding = await generateQueryEmbedding(q, supabase);
+    const queryEmbedding = await generateQueryEmbedding(q, supabase, openrouterApiKey, secretMode);
     console.log(`[lookup_knowledge] query="${q}" embedding=${queryEmbedding ? "yes" : "no"}`);
 
     // 1) Chunk-level RPC (preferred — focused snippets).

@@ -1,6 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from '../_shared/integration-secrets.ts';
+import {
   releasePublicApiAdmission,
   reservePublicApiAdmission,
   type PublicApiAdmissionRpc,
@@ -13,6 +17,7 @@ const corsHeaders = {
 };
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('search-products');
 const VOLT220_CATEGORIES_URL = 'https://220volt.kz/api/categories';
 const VOLT220_CATEGORY_OPTIONS_URL = 'https://220volt.kz/api/categories/options';
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -325,10 +330,21 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  
+  let supabase: ReturnType<typeof createClient> | null = null;
   if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
     try {
-      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    } catch {
+      if (INTEGRATION_SECRETS_MODE === 'private-required') {
+        // The resolver below will emit a sanitized configuration error.
+      } else {
+        console.log('[API Token] DB read failed, falling back to env var');
+      }
+    }
+  }
+  let legacyDbToken: string | null = null;
+  if (supabase && INTEGRATION_SECRETS_MODE !== 'private-required') {
+    try {
       const { data } = await supabase
         .from('app_settings')
         .select('volt220_api_token')
@@ -336,17 +352,25 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
         .abortSignal(signal)
         .single();
       signal.throwIfAborted();
-      if (data?.volt220_api_token) return data.volt220_api_token;
+      const settingsRow = data as unknown as { volt220_api_token?: string | null } | null;
+      if (settingsRow?.volt220_api_token) legacyDbToken = settingsRow.volt220_api_token;
     } catch (e) {
       signal.throwIfAborted();
       console.log('[API Token] DB read failed, falling back to env var');
     }
   }
-  
   signal.throwIfAborted();
-  const envToken = Deno.env.get('VOLT220_API_TOKEN');
-  if (!envToken) throw new Error('VOLT220_API_TOKEN is not configured');
-  return envToken;
+  const token = await resolveIntegrationSecret(
+    supabase,
+    'volt220_api_token',
+    INTEGRATION_SECRETS_MODE,
+    () => legacyDbToken || Deno.env.get('VOLT220_API_TOKEN') || null,
+    (event) => console.info('[integration-secret-shadow]', event),
+    signal,
+  );
+  signal.throwIfAborted();
+  if (!token) throw new Error('VOLT220_API_TOKEN is not configured');
+  return token;
 }
 
 // Recursively walk MsCategory tree, collect every `pagetitle` into the set.

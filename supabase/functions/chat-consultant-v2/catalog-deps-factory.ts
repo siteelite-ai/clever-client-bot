@@ -22,6 +22,10 @@
  */
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
+import {
+  resolveIntegrationSecret,
+  type IntegrationSecretMode,
+} from "../_shared/integration-secrets.ts";
 import type { ResolverDeps } from "./category-resolver.ts";
 import { createProductionExpansionDeps } from "./query-expansion.ts";
 import type { ExpansionDeps } from "./query-expansion.ts";
@@ -178,16 +182,23 @@ interface AppSettingsForCatalog {
 export async function loadCatalogAppSettings(
   // deno-lint-ignore no-explicit-any
   supabase: any,
+  mode: IntegrationSecretMode = "legacy",
 ): Promise<AppSettingsForCatalog> {
   const { data, error } = await supabase
     .from("app_settings")
-    .select("volt220_api_token, resolver_thresholds_json, query_first_enabled, soft_suggest_enabled")
+    .select(`${mode === "private-required" ? "" : "volt220_api_token, "}resolver_thresholds_json, query_first_enabled, soft_suggest_enabled`)
     .limit(1)
     .single();
   if (error) {
     throw new Error(`app_settings read for catalog: ${error.message}`);
   }
-  const token = data?.volt220_api_token as string | undefined;
+  const token = await resolveIntegrationSecret(
+    supabase,
+    "volt220_api_token",
+    mode,
+    () => data?.volt220_api_token as string | undefined ?? null,
+    (event) => console.info("[integration-secret-shadow]", event),
+  );
   if (!token) {
     throw new Error("volt220_api_token not configured in app_settings");
   }

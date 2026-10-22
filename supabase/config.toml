@@ -27,3 +27,6 @@ verify_jwt = false
 
 [functions.knowledge-process]
 verify_jwt = true
+
+[functions.admin-integration-secrets]
+verify_jwt = true

@@ -9,20 +9,37 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { saveSettingsWithBaseline, type SettingsSecrets } from '@/lib/settingsSave';
+import { saveSettingsWithBaseline, type SettingsNonSecrets, type SettingsSecrets } from '@/lib/settingsSave';
+import {
+  appSettingsSelect,
+  canPingSavedCustomModel,
+  canStartPrivatePing,
+  parsePrivatePingOutcome,
+  parsePrivateSecretConfiguration,
+  privateSettingsUpdate,
+  type PrivatePingOutcome,
+  type PrivateSecretConfiguration,
+  type PrivateSecretKey,
+} from '@/lib/privateIntegrationSecrets';
+
+// The existing plaintext-backed screen remains the default until the backend
+// private store, access controls, and a preview cutover have been verified.
+const PRIVATE_SECRET_UI = import.meta.env.VITE_PRIVATE_INTEGRATION_SECRETS === 'true';
+const SECRET_ENDPOINT = 'admin-integration-secrets';
 
 type PipelineVersion = 'v1' | 'v2' | 'v3';
 
 interface AppSettings {
   id: string;
-  volt220_api_token: string | null;
-  openrouter_api_key: string | null;
-  google_api_key: string | null;
+  volt220_api_token?: string | null;
+  openrouter_api_key?: string | null;
+  google_api_key?: string | null;
   ai_provider: string;
   ai_model: string;
   classifier_provider: string;
   classifier_model: string;
-  updated_at: string;
+  classifier_prompt?: string | null;
+  active_pipeline?: string;
 }
 
 type AIProvider = 'openrouter';
@@ -72,12 +89,99 @@ function saveCustomModels(models: CuratedModel[]) {
   localStorage.setItem(CUSTOM_MODELS_KEY, JSON.stringify(models));
 }
 
+interface PrivateSecretFieldProps {
+  id: string;
+  label: string;
+  keyName: PrivateSecretKey;
+  configured: boolean | null;
+  busy: boolean;
+  hint?: string;
+  onReplace: (key: PrivateSecretKey, value: string) => Promise<boolean>;
+  onClear: (key: PrivateSecretKey, label: string) => Promise<void>;
+}
+
+function PrivateSecretField({
+  id, label, keyName, configured, busy, hint, onReplace, onClear,
+}: PrivateSecretFieldProps) {
+  const [draft, setDraft] = useState('');
+  const [showDraft, setShowDraft] = useState(false);
+  const unavailable = configured === null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor={id}>{label}</Label>
+        <Badge variant={configured ? 'secondary' : 'outline'}>
+          {unavailable ? 'Статус недоступен' : configured ? 'Настроен' : 'Не настроен'}
+        </Badge>
+      </div>
+      <div className="relative">
+        <Input
+          id={id}
+          type={showDraft ? 'text' : 'password'}
+          autoComplete="off"
+          placeholder="Новый ключ"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={unavailable || busy}
+          className="input-focus pr-10"
+        />
+        <button
+          type="button"
+          onClick={() => setShowDraft(!showDraft)}
+          disabled={unavailable || busy}
+          aria-label={showDraft ? 'Скрыть новый ключ' : 'Показать новый ключ'}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {showDraft ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {hint || 'Существующий ключ не отображается. Введите новый, чтобы заменить его.'}
+      </p>
+      <div className="flex gap-2 flex-wrap">
+        <Button
+          size="sm"
+          disabled={unavailable || busy || !draft.trim()}
+          onClick={async () => {
+            if (await onReplace(keyName, draft)) {
+              setDraft('');
+              setShowDraft(false);
+            }
+          }}
+        >
+          {busy && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+          Заменить ключ
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={unavailable || busy || !configured}
+          onClick={() => onClear(keyName, label)}
+        >
+          Очистить ключ
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
   const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const savedSecrets = useRef<SettingsSecrets | null>(null);
+  const [privateConfigured, setPrivateConfigured] = useState<PrivateSecretConfiguration | null>(null);
+  const [privateStatusLoading, setPrivateStatusLoading] = useState(false);
+  const [privateSecretBusy, setPrivateSecretBusy] = useState<PrivateSecretKey | null>(null);
+  const [savedAiModel, setSavedAiModel] = useState<string | null>(null);
+  const [savedClassifierModel, setSavedClassifierModel] = useState<string | null>(null);
+  const [privatePingBusy, setPrivatePingBusy] = useState(false);
+  const [privatePingCooldownUntil, setPrivatePingCooldownUntil] = useState(0);
+  const [privatePingClock, setPrivatePingClock] = useState(Date.now);
+  const privatePingCooldownRef = useRef(0);
+  const privatePingInFlight = useRef(false);
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
   const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
@@ -101,10 +205,17 @@ export default function Settings() {
   // Saved separately from the big "Save settings" so admins can flip back fast.
   const [activePipeline, setActivePipeline] = useState<PipelineVersion>('v1');
   const [pipelineSaving, setPipelineSaving] = useState(false);
+  const privatePingSecondsLeft = Math.max(0, Math.ceil((privatePingCooldownUntil - privatePingClock) / 1000));
 
   useEffect(() => {
     fetchSettings();
   }, []);
+
+  useEffect(() => {
+    if (!PRIVATE_SECRET_UI || privatePingSecondsLeft === 0) return;
+    const timer = window.setTimeout(() => setPrivatePingClock(Date.now()), 1000);
+    return () => window.clearTimeout(timer);
+  }, [privatePingCooldownUntil, privatePingSecondsLeft]);
 
   const handleProviderChange = (provider: AIProvider) => {
     setAiProvider(provider);
@@ -116,31 +227,156 @@ export default function Settings() {
     }
   };
 
+  const fetchPrivateSecretConfiguration = async () => {
+    setPrivateStatusLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke(SECRET_ENDPOINT, { method: 'GET' });
+      if (error) throw error;
+      setPrivateConfigured(parsePrivateSecretConfiguration(data));
+    } catch {
+      // Never fall back to reading app_settings secret columns after a private
+      // endpoint error. The controls remain unavailable until a successful GET.
+      setPrivateConfigured(null);
+      toast.error('Не удалось проверить статус ключей. Попробуйте обновить его');
+    } finally {
+      setPrivateStatusLoading(false);
+    }
+  };
+
+  const replacePrivateSecret = async (key: PrivateSecretKey, value: string): Promise<boolean> => {
+    if (!privateConfigured || privateSecretBusy || !value.trim()) return false;
+    setPrivateSecretBusy(key);
+    try {
+      const { data, error } = await supabase.functions.invoke(SECRET_ENDPOINT, {
+        method: 'PUT',
+        body: { key, value: value.trim() },
+      });
+      if (error) throw error;
+      setPrivateConfigured(parsePrivateSecretConfiguration(data));
+      setPingResults({});
+      toast.success('Ключ заменён');
+      return true;
+    } catch {
+      toast.error('Не удалось заменить ключ. Проверьте доступ и попробуйте снова');
+      return false;
+    } finally {
+      setPrivateSecretBusy(null);
+    }
+  };
+
+  const clearPrivateSecret = async (key: PrivateSecretKey, label: string): Promise<void> => {
+    if (!privateConfigured?.[key] || privateSecretBusy) return;
+    if (!window.confirm(`Очистить ${label}? Связанные функции перестанут работать до добавления нового ключа.`)) return;
+    setPrivateSecretBusy(key);
+    try {
+      const { data, error } = await supabase.functions.invoke(SECRET_ENDPOINT, {
+        method: 'DELETE',
+        body: { key },
+      });
+      if (error) throw error;
+      setPrivateConfigured(parsePrivateSecretConfiguration(data));
+      setPingResults({});
+      toast.success('Ключ очищен');
+    } catch {
+      toast.error('Не удалось очистить ключ. Попробуйте снова');
+    } finally {
+      setPrivateSecretBusy(null);
+    }
+  };
+
+  const startPrivatePingCooldown = () => {
+    const now = Date.now();
+    const until = now + 30_000;
+    privatePingCooldownRef.current = until;
+    setPrivatePingClock(now);
+    setPrivatePingCooldownUntil(until);
+  };
+
+  const pingPrivateModel = async (modelId: string): Promise<PrivatePingOutcome> => {
+    if (!privateConfigured?.openrouter_api_key) return 'not_configured';
+    // State updates render asynchronously, so refs also guard fast double-clicks.
+    if (!canStartPrivatePing(Date.now(), privatePingCooldownRef.current, privatePingInFlight.current)) {
+      return 'rate_limited';
+    }
+    privatePingInFlight.current = true;
+    setPrivatePingBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke(SECRET_ENDPOINT, {
+        method: 'POST',
+        body: { action: 'ping', model: modelId },
+      });
+      const context = error && typeof error === 'object' && 'context' in error
+        ? error.context : null;
+      const httpStatus = context && typeof context === 'object' && 'status' in context &&
+        typeof context.status === 'number' ? context.status : error ? null : 200;
+      const outcome = parsePrivatePingOutcome(error ? null : data, httpStatus);
+      // A failed transport can still have reached the paid provider. A 400 or
+      // missing key cannot, so only those two outcomes avoid the cooldown.
+      if (outcome !== 'not_configured' && outcome !== 'not_saved') startPrivatePingCooldown();
+      return outcome;
+    } catch {
+      startPrivatePingCooldown();
+      return 'error';
+    } finally {
+      privatePingInFlight.current = false;
+      setPrivatePingBusy(false);
+    }
+  };
+
+  const showPrivatePingOutcome = (resultKey: string, outcome: PrivatePingOutcome) => {
+    if (outcome === 'rate_limited' || outcome === 'not_saved' || outcome === 'not_configured') {
+      setPingResults(prev => {
+        const next = { ...prev };
+        delete next[resultKey];
+        return next;
+      });
+      if (outcome === 'rate_limited') {
+        toast.info('Проверка временно ограничена. Повторите через 30 секунд');
+      } else if (outcome === 'not_saved') {
+        toast.info('Сначала сохраните модель и проверьте её ID');
+      } else {
+        toast.error('Сначала настройте ключ OpenRouter');
+      }
+      return;
+    }
+    setPingResults(prev => ({ ...prev, [resultKey]: outcome === 'ok' ? 'ok' : 'error' }));
+  };
+
   const fetchSettings = async () => {
     try {
       const { data, error } = await supabase
         .from('app_settings')
-        .select('*')
+        .select(appSettingsSelect(PRIVATE_SECRET_UI))
         .limit(1)
         .single();
 
       if (error) throw error;
 
       if (data) {
-        const d = data as any;
-        setSettings(d as AppSettings);
-        setApiToken(d.volt220_api_token || '');
-        setOpenrouterKey(d.openrouter_api_key || '');
-        setGoogleApiKey(d.google_api_key || '');
-        savedSecrets.current = {
-          volt220_api_token: d.volt220_api_token || null,
-          openrouter_api_key: d.openrouter_api_key || null,
-          google_api_key: d.google_api_key || null,
-        };
+        const d = data as unknown as AppSettings;
+        setSettings(d);
+        if (PRIVATE_SECRET_UI) {
+          setApiToken('');
+          setOpenrouterKey('');
+          setGoogleApiKey('');
+          savedSecrets.current = null;
+          await fetchPrivateSecretConfiguration();
+        } else {
+          setApiToken(d.volt220_api_token || '');
+          setOpenrouterKey(d.openrouter_api_key || '');
+          setGoogleApiKey(d.google_api_key || '');
+          savedSecrets.current = {
+            volt220_api_token: d.volt220_api_token || null,
+            openrouter_api_key: d.openrouter_api_key || null,
+            google_api_key: d.google_api_key || null,
+          };
+        }
         setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
+        setSavedAiModel(d.ai_model || null);
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
         setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
+        setSavedClassifierModel(d.classifier_model || null);
         setClassifierPrompt(d.classifier_prompt || '');
         setActivePipeline((d.active_pipeline === 'v3' ? 'v3' : d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
       }
@@ -153,32 +389,41 @@ export default function Settings() {
   };
 
   const handleSave = async () => {
-    if (!settings?.id || !savedSecrets.current) return;
+    if (!settings?.id || (!PRIVATE_SECRET_UI && !savedSecrets.current)) return;
     setSaving(true);
 
     try {
-      savedSecrets.current = await saveSettingsWithBaseline(
-        savedSecrets.current,
-        {
-          volt220_api_token: apiToken,
-          openrouter_api_key: openrouterKey,
-          google_api_key: googleApiKey,
-        },
-        {
-          ai_provider: aiProvider,
-          ai_model: selectedModel,
-          classifier_provider: classifierProvider,
-          classifier_model: classifierModel,
-        },
-        async (update) => {
-          const { error } = await supabase
-            .from('app_settings')
-            .update(update as any)
-            .eq('id', settings.id);
-          if (error) throw error;
-        },
-      );
-      toast.success('Настройки сохранены');
+      const nonSecrets = {
+        ai_provider: aiProvider,
+        ai_model: selectedModel,
+        classifier_provider: classifierProvider,
+        classifier_model: classifierModel,
+      };
+      const persist = async (update: SettingsNonSecrets) => {
+        const { error } = await supabase
+          .from('app_settings')
+          .update(update)
+          .eq('id', settings.id);
+        if (error) throw error;
+      };
+      if (PRIVATE_SECRET_UI) {
+        await persist(privateSettingsUpdate(nonSecrets));
+        setSavedAiModel(selectedModel);
+        setSavedClassifierModel(classifierModel);
+        toast.success('Настройки моделей сохранены');
+      } else if (savedSecrets.current) {
+        savedSecrets.current = await saveSettingsWithBaseline(
+          savedSecrets.current,
+          {
+            volt220_api_token: apiToken,
+            openrouter_api_key: openrouterKey,
+            google_api_key: googleApiKey,
+          },
+          nonSecrets,
+          persist,
+        );
+        toast.success('Настройки сохранены');
+      }
     } catch (error) {
       console.error('Error saving settings:', error);
       toast.error('Не удалось сохранить настройки');
@@ -196,7 +441,7 @@ export default function Settings() {
     try {
       const { error } = await supabase
         .from('app_settings')
-        .update({ active_pipeline: next } as any)
+        .update({ active_pipeline: next })
         .eq('id', settings.id);
       if (error) throw error;
       setActivePipeline(next);
@@ -223,7 +468,7 @@ export default function Settings() {
     try {
       const { error } = await supabase
         .from('app_settings')
-        .update({ classifier_prompt: classifierPrompt.trim() || null } as any)
+        .update({ classifier_prompt: classifierPrompt.trim() || null })
         .eq('id', settings.id);
       if (error) throw error;
       toast.success(classifierPrompt.trim() ? 'Промпт классификатора сохранён' : 'Промпт сброшен на встроенный по умолчанию');
@@ -237,6 +482,13 @@ export default function Settings() {
 
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
+    if (PRIVATE_SECRET_UI) {
+      if (!privateConfigured?.openrouter_api_key) return;
+      setPingResults(prev => ({ ...prev, [modelId]: 'loading' }));
+      showPrivatePingOutcome(modelId, await pingPrivateModel(modelId));
+      return;
+    }
+
     if (!openrouterKey) {
       toast.error('Введите API ключ OpenRouter для тестирования');
       return;
@@ -283,6 +535,9 @@ export default function Settings() {
 
   // Ping all OpenRouter models
   const pingAllModels = async () => {
+    // The private endpoint deliberately enforces a per-admin cooldown and only
+    // accepts curated models. Never turn "check all" into a paid request burst.
+    if (PRIVATE_SECRET_UI) return;
     if (!openrouterKey) {
       toast.error('Введите API ключ OpenRouter для тестирования');
       return;
@@ -302,6 +557,11 @@ export default function Settings() {
   // Ping a classifier model (Google direct or OpenRouter)
   const pingClassifierModel = async (modelId: string, _provider: string) => {
     setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'loading' }));
+
+    if (PRIVATE_SECRET_UI) {
+      showPrivatePingOutcome(`clf:${modelId}`, await pingPrivateModel(modelId));
+      return;
+    }
 
     try {
       const controller = new AbortController();
@@ -375,6 +635,10 @@ export default function Settings() {
   const filteredModels = allModels.filter(m => m.aiProvider === 'openrouter');
 
   const currentModel = allModels.find(m => m.id === selectedModel);
+  const canPingModels = PRIVATE_SECRET_UI
+    ? privateConfigured?.openrouter_api_key === true
+    : Boolean(openrouterKey);
+  const privatePingAvailable = canPingModels && !privatePingBusy && privatePingSecondsLeft === 0;
 
   if (loading) {
     return (
@@ -511,7 +775,17 @@ export default function Settings() {
               <h3 className="text-lg font-semibold">API каталога 220volt</h3>
             </div>
 
-            <div className="space-y-2">
+            {PRIVATE_SECRET_UI ? (
+              <PrivateSecretField
+                id="privateApiToken"
+                label="API токен каталога"
+                keyName="volt220_api_token"
+                configured={privateConfigured?.volt220_api_token ?? null}
+                busy={privateSecretBusy !== null || privateStatusLoading}
+                onReplace={replacePrivateSecret}
+                onClear={clearPrivateSecret}
+              />
+            ) : <div className="space-y-2">
               <Label htmlFor="apiToken">API токен</Label>
               <div className="relative">
                 <Input
@@ -533,7 +807,7 @@ export default function Settings() {
               <p className="text-xs text-muted-foreground">
                 Токен для доступа к API каталога товаров 220volt.kz
               </p>
-            </div>
+            </div>}
           </div>
 
 
@@ -545,7 +819,39 @@ export default function Settings() {
             </div>
 
             {/* OpenRouter API Key */}
-            <div className="space-y-2">
+            {PRIVATE_SECRET_UI ? (
+              <>
+                <PrivateSecretField
+                  id="privateOpenrouterKey"
+                  label="API ключ OpenRouter"
+                  keyName="openrouter_api_key"
+                  configured={privateConfigured?.openrouter_api_key ?? null}
+                  busy={privateSecretBusy !== null || privateStatusLoading}
+                  onReplace={replacePrivateSecret}
+                  onClear={clearPrivateSecret}
+                />
+                <PrivateSecretField
+                  id="privateGoogleApiKey"
+                  label="API ключ Google"
+                  keyName="google_api_key"
+                  configured={privateConfigured?.google_api_key ?? null}
+                  busy={privateSecretBusy !== null || privateStatusLoading}
+                  onReplace={replacePrivateSecret}
+                  onClear={clearPrivateSecret}
+                />
+                {privateConfigured === null && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchPrivateSecretConfiguration}
+                    disabled={privateStatusLoading}
+                  >
+                    {privateStatusLoading && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+                    Обновить статус ключей
+                  </Button>
+                )}
+              </>
+            ) : <div className="space-y-2">
               <Label htmlFor="openrouterKey">API ключ OpenRouter</Label>
               <div className="relative">
                 <Input
@@ -575,18 +881,29 @@ export default function Settings() {
                   ⚠️ Без ключа OpenRouter AI-консультант и эмбеддинги не будут работать.
                 </p>
               )}
-            </div>
+            </div>}
+
+            {PRIVATE_SECRET_UI && privateConfigured?.openrouter_api_key === false && (
+              <p className="text-xs text-destructive">
+                Без ключа OpenRouter AI-консультант и эмбеддинги не будут работать
+              </p>
+            )}
+            {PRIVATE_SECRET_UI && privatePingSecondsLeft > 0 && (
+              <p className="text-xs text-muted-foreground" role="status">
+                Следующая проверка модели доступна через {privatePingSecondsLeft} с
+              </p>
+            )}
 
             {/* Model Filter + Ping All */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label>Модель AI</Label>
-                {aiProvider === 'openrouter' && (
+                {aiProvider === 'openrouter' && !PRIVATE_SECRET_UI && (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={pingAllModels}
-                    disabled={pingAllLoading || !openrouterKey}
+                    disabled={pingAllLoading || !canPingModels}
                     className="text-xs"
                   >
                     {pingAllLoading ? (
@@ -637,14 +954,26 @@ export default function Settings() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{model.description}</p>
                     <p className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">{model.id}</p>
+                    {PRIVATE_SECRET_UI && model.custom &&
+                      !canPingSavedCustomModel(model.id, true, savedAiModel, savedClassifierModel) && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Чтобы проверить свою модель, выберите её и сохраните настройки
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {aiProvider === 'openrouter' && (
                       <button
                         type="button"
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingModel(model.id); }}
+                        disabled={PRIVATE_SECRET_UI && (
+                          !privatePingAvailable ||
+                          !canPingSavedCustomModel(model.id, Boolean(model.custom), savedAiModel, savedClassifierModel)
+                        )}
                         className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                        title="Проверить доступность"
+                        title={PRIVATE_SECRET_UI && model.custom &&
+                          !canPingSavedCustomModel(model.id, true, savedAiModel, savedClassifierModel)
+                          ? 'Сначала сохраните модель' : 'Проверить доступность'}
                       >
                         <Wifi className="w-3.5 h-3.5" />
                       </button>
@@ -790,6 +1119,7 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingClassifierModel(m.id, m.forProvider); }}
+                            disabled={PRIVATE_SECRET_UI && !privatePingAvailable}
                             className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-auto"
                             title="Проверить доступность"
                           >
@@ -850,7 +1180,7 @@ export default function Settings() {
             ) : (
               <Save className="w-4 h-4 mr-2" />
             )}
-            Сохранить настройки
+            {PRIVATE_SECRET_UI ? 'Сохранить настройки моделей' : 'Сохранить настройки'}
           </Button>
         </div>
       </div>

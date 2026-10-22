@@ -16,6 +16,11 @@ import {
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import {
+  integrationSecretBundleForV3,
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from "../_shared/integration-secrets.ts";
+import {
   resolveVisibleSystemTotalRequirement,
   verifySystemTotalCapacityPlan,
 } from "../_shared/v3-tools/system-total-capacity.ts";
@@ -799,6 +804,12 @@ const CLOSURE_TEST_MARKER =
   (globalThis as typeof globalThis & {
     __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
   }).__VOLT220_CLOSURE_TEST_SCOPE__;
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle(
+  integrationSecretBundleForV3(
+    DEPLOYMENT_VARIANT,
+    CLOSURE_TEST_MARKER === "closure_preview",
+  ),
+);
 const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
   ADMISSION_SCOPE,
 );
@@ -1037,13 +1048,16 @@ async function loadSettings(
   supabase: SupabaseClient,
   signal: AbortSignal,
 ): Promise<AppSettings> {
+  const legacySecretColumns: string = INTEGRATION_SECRETS_MODE === "private-required"
+    ? ""
+    : "openrouter_api_key, volt220_api_token, ";
+  const settingsProjection: string =
+    `${legacySecretColumns}classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled`;
   const read = await readSettingsRowWithRetry(
     (attemptSignal) =>
       supabase
         .from("app_settings")
-        .select(
-          "openrouter_api_key, volt220_api_token, classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled",
-        )
+        .select(settingsProjection)
         .limit(1)
         .abortSignal(attemptSignal)
         .single(),
@@ -1059,11 +1073,34 @@ async function loadSettings(
     v3_jargon_axial_modifiers_enabled?: boolean;
     v3_criteria_gate_enabled?: boolean;
   } | null;
+  const onShadowComparison = (event: {
+    key: string;
+    privateReadOk: boolean;
+    privatePresent: boolean;
+    legacyPresent: boolean;
+    fingerprintMatch: boolean | null;
+  }) => console.info("[integration-secret-shadow]", event);
+  const [openrouterKey, catalogToken] = await Promise.all([
+    resolveIntegrationSecret(
+      supabase,
+      "openrouter_api_key",
+      INTEGRATION_SECRETS_MODE,
+      () => row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
+      onShadowComparison,
+      signal,
+    ),
+    resolveIntegrationSecret(
+      supabase,
+      "volt220_api_token",
+      INTEGRATION_SECRETS_MODE,
+      () => row?.volt220_api_token ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      onShadowComparison,
+      signal,
+    ),
+  ]);
   return {
-    openrouter_api_key: row?.openrouter_api_key ??
-      Deno.env.get("OPENROUTER_API_KEY") ?? null,
-    volt220_api_token: row?.volt220_api_token ??
-      Deno.env.get("VOLT220_API_TOKEN") ?? null,
+    openrouter_api_key: openrouterKey,
+    volt220_api_token: catalogToken,
     classifier_model: row?.classifier_model?.trim() ||
       "google/gemini-2.5-flash",
     v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
@@ -1176,6 +1213,8 @@ async function runTool(
     return executeLookupKnowledge(
       args as unknown as LookupKnowledgeInput,
       ctx.supabase,
+      ctx.openrouterKey,
+      INTEGRATION_SECRETS_MODE,
     );
   }
   if (name === "lookup_contacts") {

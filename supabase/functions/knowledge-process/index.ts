@@ -1,6 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authorizeKnowledgeUser, bearerToken } from "./authorization.ts";
+import {
+  requestOpenRouterEmbedding,
+  requestPdfCompletion,
+} from './provider-transport.ts';
+import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from '../_shared/integration-secrets.ts';
+
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('knowledge-process');
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,13 +31,24 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
   console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
   const truncated = text.substring(0, 8000);
 
-  const { data: settings } = await supabase
-    .from('app_settings')
-    .select('openrouter_api_key')
-    .limit(1)
-    .single();
+  let legacyKey: string | null = null;
+  if (INTEGRATION_SECRETS_MODE !== 'private-required') {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('openrouter_api_key')
+      .limit(1)
+      .single();
+    legacyKey = settings?.openrouter_api_key ?? null;
+  }
+  const openrouterKey = await resolveIntegrationSecret(
+    supabase,
+    'openrouter_api_key',
+    INTEGRATION_SECRETS_MODE,
+    () => legacyKey,
+    (event) => console.info('[integration-secret-shadow]', event),
+  );
 
-  if (!settings?.openrouter_api_key) {
+  if (!openrouterKey) {
     throw new Error('OpenRouter API ключ не настроен. Добавьте его в Настройках.');
   }
 
@@ -37,32 +58,19 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
   ];
 
   for (const model of embeddingModels) {
-    try {
-      console.log(`[Embedding] Trying OpenRouter model: ${model}`);
-      const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${settings.openrouter_api_key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          input: truncated,
-          dimensions: 768,
-        }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const embedding = data.data?.[0]?.embedding;
-        if (embedding && embedding.length > 0) {
-          console.log(`[Embedding] Generated ${embedding.length}-dim embedding via OpenRouter (${model})`);
-          return embedding;
-        }
-      }
-      const errorText = await response.text();
-      console.warn(`[Embedding] OpenRouter ${model} error ${response.status}: ${errorText}`);
-    } catch (error) {
-      console.warn(`[Embedding] OpenRouter ${model} network error:`, error);
+    console.log(`[Embedding] Trying OpenRouter model: ${model}`);
+    const embedding = await requestOpenRouterEmbedding(
+      model,
+      truncated,
+      openrouterKey,
+      (failure) => {
+        const status = 'status' in failure ? ` HTTP ${failure.status}` : '';
+        console.warn(`[Embedding] OpenRouter ${model} ${failure.kind}${status}`);
+      },
+    );
+    if (embedding) {
+      console.log(`[Embedding] Generated ${embedding.length}-dim embedding via OpenRouter (${model})`);
+      return embedding;
     }
   }
 
@@ -248,44 +256,10 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
 // Extract text from PDF using AI
 async function extractPdfText(base64Content: string, apiKey: string): Promise<{ title: string; content: string }> {
   console.log(`[PDF] Extracting text from PDF (${base64Content.length} base64 chars)...`);
-  
-  // Use Gemini's vision capabilities to read PDF
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'Извлеки весь текст из этого PDF документа. Верни структурированный текст с сохранением заголовков и параграфов. В начале укажи заголовок документа если он есть.'
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:application/pdf;base64,${base64Content}`
-              }
-            }
-          ]
-        }
-      ],
-    }),
+  const content = await requestPdfCompletion(base64Content, apiKey, (failure) => {
+    const status = 'status' in failure ? ` HTTP ${failure.status}` : '';
+    console.error(`[PDF] Gateway ${failure.kind}${status}`);
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[PDF] API error: ${response.status}`, errorText);
-    throw new Error(`Ошибка обработки PDF: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
   
   // Try to extract title from first line
   const lines = content.split('\n').filter((l: string) => l.trim());

@@ -9,10 +9,13 @@ on:
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/knowledge-process/**'
+      - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/*integration_secrets*.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
@@ -22,6 +25,7 @@ on:
       - 'src/pages/Settings.tsx'
       - 'src/lib/settingsSave.ts'
       - 'src/lib/settingsSave.test.ts'
+      - 'src/lib/privateIntegrationSecrets.ts'
       - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
@@ -35,10 +39,13 @@ on:
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/knowledge-process/**'
+      - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/*integration_secrets*.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
@@ -48,6 +55,7 @@ on:
       - 'src/pages/Settings.tsx'
       - 'src/lib/settingsSave.ts'
       - 'src/lib/settingsSave.test.ts'
+      - 'src/lib/privateIntegrationSecrets.ts'
       - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
@@ -91,6 +99,9 @@ jobs:
       - name: Type-check catalog proxy
         run: deno check supabase/functions/search-products/index.ts
 
+      - name: Type-check secret administration and knowledge processing
+        run: deno check supabase/functions/admin-integration-secrets/index.ts supabase/functions/knowledge-process/index.ts
+
       - name: Type-check widget
         run: deno check public/widget.js
 
@@ -102,6 +113,15 @@ jobs:
 
       - name: Test admin settings secret update boundary
         run: ./node_modules/.bin/vitest run --config vitest.settings.config.ts
+
+      - name: Test admin integration secret API boundary
+        run: deno test supabase/functions/admin-integration-secrets/handler_test.ts
+
+      - name: Test knowledge embedding secret-safe diagnostics
+        run: deno test supabase/functions/knowledge-process/provider-transport_test.ts
+
+      - name: Test server-side integration secret mode and fail-closed boundary
+        run: deno test supabase/functions/_shared/integration-secrets_test.ts
 
       - name: Verify pinned release inventory
         run: node scripts/qa/build-release-ledger.mjs --check

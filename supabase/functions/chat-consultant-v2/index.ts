@@ -26,6 +26,10 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from "../_shared/integration-secrets.ts";
 
 import type {
   ChatHistoryMessage,
@@ -71,6 +75,8 @@ import {
   type PublicApiAdmissionResult,
   type PublicApiAdmissionRpc,
 } from "../_shared/public-api-admission.ts";
+
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle("chat-consultant-v2");
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -413,18 +419,25 @@ export async function handleChatConsultantV2(
         // ── Подготавливаем ClassifierDeps (для S2) ──────────────────────
         const supabase = getAdminClient();
 
-        const { data: settingsData, error: settingsErr } = await supabase
-          .from("app_settings")
-          .select("openrouter_api_key")
-          .limit(1)
-          .single();
-        if (settingsErr) {
-          throw new Error(`app_settings read: ${settingsErr.message}`);
+        let legacyOpenRouterKey: string | undefined;
+        if (INTEGRATION_SECRETS_MODE !== "private-required") {
+          const { data: settingsData, error: settingsErr } = await supabase
+            .from("app_settings")
+            .select("openrouter_api_key")
+            .limit(1)
+            .single();
+          if (settingsErr) {
+            throw new Error(`app_settings read: ${settingsErr.message}`);
+          }
+          legacyOpenRouterKey = settingsData?.openrouter_api_key as string | undefined;
         }
-        const openRouterKey =
-          (settingsData?.openrouter_api_key as string | undefined) ||
-          Deno.env.get("OPENROUTER_API_KEY") ||
-          "";
+        const openRouterKey = await resolveIntegrationSecret(
+          supabase,
+          "openrouter_api_key",
+          INTEGRATION_SECRETS_MODE,
+          () => legacyOpenRouterKey || Deno.env.get("OPENROUTER_API_KEY") || "",
+          (event) => console.info("[integration-secret-shadow]", event),
+        );
         if (!openRouterKey) {
           throw new Error("openrouter_api_key not configured");
         }
@@ -548,7 +561,7 @@ export async function handleChatConsultantV2(
           const prevStreak = (mutableNextState.slot_state ?? DEFAULT_SLOT_STATE).soft404_streak;
 
           // Загружаем catalog-специфичные настройки (volt220 token + thresholds).
-          const catalogSettings = await loadCatalogAppSettings(supabase);
+          const catalogSettings = await loadCatalogAppSettings(supabase, INTEGRATION_SECRETS_MODE);
           const catalogDeps = createCatalogProductionDeps({
             // deno-lint-ignore no-explicit-any
             supabase: supabase as any,
