@@ -1,10 +1,110 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import test from 'node:test';
 
 import { V9_MATRIX_MANIFESTS, buildReleaseLedgerV9 } from './build-release-ledger-v9.mjs';
 import { validateReleaseEvidenceV9 } from './validate-release-evidence-v9.mjs';
 
 const ENDPOINT = 'https://example.test/functions/v1/chat-consultant-closure-preview';
+const NOW = Date.parse('2026-10-20T17:00:00.000Z');
+const directAnalogSuiteBytes = fs.readFileSync(new URL('./dn027b-direct-analogs-prospective-v1.json', import.meta.url));
+const directAnalogSuite = JSON.parse(directAnalogSuiteBytes);
+const directAnalogCase = directAnalogSuite.cases[0];
+const directAnalogContract = directAnalogCase.turns[0].expect.require_confirmed_analogs;
+
+function syntheticDirectAnalogReport() {
+  const products = [1, 2, 3].map((number) => ({
+    title: `Встраиваемый тестовый светильник ${number}`,
+    url: `https://220volt.kz/catalog/svetotexnika/svetilniki/confirmed-direct-${number}/`,
+    price: 1000 + number,
+    stockLine: 'Астана (2 шт)',
+  }));
+  const productIdentityEvidence = products.map((product, index) => ({
+    identity: `220volt.kz/catalog/svetotexnika/svetilniki/confirmed-direct-${index + 1}`,
+    verified: true,
+    sku: `DIRECT-${index + 1}`,
+    name: product.title,
+    offerPrice: product.price,
+    availability: 'https://schema.org/InStock',
+    canonicalUrl: product.url,
+    facets: { 'Продается только в групповой упаковке': 'Нет' },
+  }));
+  const axes = (index) => directAnalogContract.required_axes.map((rule) => ({
+    key: rule.key,
+    value: rule.op === 'eq' ? rule.value : rule.op === 'covers'
+      ? { min: rule.value, max: rule.value } : (rule.min + rule.max) / 2,
+    evidence: {
+      kind: 'approved_manufacturer_fact',
+      source_url: `https://manufacturer.example/documents/direct-${index}.pdf`,
+      approved_at: '2026-10-01T00:00:00.000Z',
+      valid_until: '2027-10-01T00:00:00.000Z',
+    },
+  }));
+  const turn = {
+    message: directAnalogCase.turns[0].message,
+    synthetic_scenario: false,
+    status: 200,
+    duration_ms: 1200,
+    passed: true,
+    completed: true,
+    diagnostic_error: null,
+    text: '',
+    tool_events: [],
+    failures: [],
+    log_id: 'prospective-direct-log-1',
+    product_identity_mode: 'live_jsonld_product_sku',
+    products_count: 3,
+    unique_products_count: 3,
+    products,
+    product_identity_evidence: productIdentityEvidence,
+    selection_contract: {
+      direct_analog_proof: {
+        schema_version: 1,
+        status: 'confirmed_direct',
+        source_product_url: directAnalogContract.source_product_url,
+        candidates: products.map((product, index) => ({
+          product_url: product.url,
+          sku: productIdentityEvidence[index].sku,
+          verdict: 'confirmed_direct',
+          axes: axes(index + 1),
+        })),
+      },
+    },
+  };
+  return {
+    suite_file: 'dn027b-direct-analogs-prospective-v1.json',
+    suite_version: 1,
+    suite_sha256: createHash('sha256').update(directAnalogSuiteBytes).digest('hex'),
+    variations_file: null,
+    variations_sha256: null,
+    started_at: '2026-10-20T16:12:00.000Z',
+    finished_at: '2026-10-20T16:13:00.000Z',
+    endpoint: ENDPOINT,
+    strict_full_suite: false,
+    strict_inventory: null,
+    selected_count: 1,
+    requested_repetitions: { [directAnalogCase.id]: 1 },
+    catalog_preflight: { ok: true, status: 'ready', http_status: 200 },
+    product_page_verification: { unique_urls_checked: 3, verified: 3, unverified: 0 },
+    completeness: {
+      complete: true,
+      planned_cases: 1,
+      recorded_cases: 1,
+      planned_runs: 1,
+      recorded_runs: 1,
+      planned_turns: 1,
+      recorded_turns: 1,
+    },
+    cases: [{
+      id: directAnalogCase.id,
+      passed: true,
+      repeats: [{ variant: 'base', run: 1, passed: true, turns: [turn] }],
+    }],
+    log_ids: [turn.log_id],
+    passed: true,
+  };
+}
 
 function syntheticVerifiedAnalogs() {
   const products = [1, 2, 3].map((number) => ({
@@ -126,7 +226,63 @@ test('complete synthetic V9 four-suite evidence passes exact 190-run/280-turn ga
   assert.equal(result.coverage.matched_turns, 280);
   assert.equal(result.coverage.unique_log_ids, 280);
   assert.equal(result.release_readiness, 'NOT_ASSESSED');
+  assert.equal(result.release_evidence_gate.status, 'NO_GO');
+  assert.equal(result.release_evidence_gate.manufacturer_document_review, 'NOT_ASSESSED');
+  assert.equal(result.release_evidence_gate.runtime_version_binding, 'operator_assertion_only');
+  assert.equal(result.release_evidence_gate.dn027b_direct_analogs.status, 'FAIL');
+  assert.deepEqual(result.release_evidence_gate.dn027b_direct_analogs.failures,
+    [{ code: 'dn027b_prospective_report_missing' }]);
   assert(!JSON.stringify(result).includes('SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY'));
+});
+
+test('three V9 product cards cannot turn an unrelated-stocked-card prospective report into release evidence', () => {
+  const evidence = syntheticCompleteEvidence();
+  evidence.dn027bProspectiveReport = syntheticDirectAnalogReport();
+  const prospectiveTurn = evidence.dn027bProspectiveReport.cases[0].repeats[0].turns[0];
+  prospectiveTurn.selection_contract = null;
+  const result = validateReleaseEvidenceV9({ ...evidence, nowMs: NOW });
+  assert.equal(result.verdict, 'PASS'); // The immutable V9 matrix verdict keeps its original scope.
+  assert.equal(result.release_readiness, 'NOT_ASSESSED');
+  assert.equal(result.release_evidence_gate.status, 'NO_GO');
+  assert.deepEqual(result.release_evidence_gate.dn027b_direct_analogs.failures,
+    [{ code: 'dn027b_prospective_direct_analogue_certificate_invalid' }]);
+  assert(!JSON.stringify(result).includes('SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY'));
+});
+
+test('separate complete prospective report with three typed direct certificates passes evidence gate only', () => {
+  const evidence = syntheticCompleteEvidence();
+  evidence.dn027bProspectiveReport = syntheticDirectAnalogReport();
+  const result = validateReleaseEvidenceV9({ ...evidence, nowMs: NOW });
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.release_evidence_gate.status, 'PASS', JSON.stringify(result.release_evidence_gate));
+  assert.equal(result.release_evidence_gate.dn027b_direct_analogs.status, 'PASS');
+  assert.equal(result.release_evidence_gate.manufacturer_document_review, 'NOT_ASSESSED');
+  assert.equal(result.release_evidence_gate.runtime_version_binding, 'operator_assertion_only');
+  assert.equal(result.release_readiness, 'NOT_ASSESSED');
+});
+
+test('prospective proof is bound to candidate preview, fresh SKU pages, seller and manufacturer facts', () => {
+  const mutations = [
+    (report) => { report.endpoint = 'https://other.test/functions/v1/chat-consultant-closure-preview'; },
+    (report) => { report.candidate_commit_sha = 'a'.repeat(40); },
+    (report) => { report.preview_function_version = 'candidate-v9'; },
+    (report) => { report.finished_at = '2026-10-19T16:13:00.000Z'; },
+    (report) => { report.cases[0].repeats[0].turns[0].product_identity_evidence[2].canonicalUrl =
+      'https://220volt.kz/catalog/svetotexnika/svetilniki/other/'; },
+    (report) => { report.cases[0].repeats[0].turns[0].product_identity_evidence[2]
+      .facets['Продается только в групповой упаковке'] = 'Да'; },
+    (report) => { report.cases[0].repeats[0].turns[0].selection_contract
+      .direct_analog_proof.candidates[2].axes.find((axis) => axis.key === 'mounting_cutout_mm').value =
+      { min: 100, max: 110 }; },
+  ];
+  for (const mutate of mutations) {
+    const evidence = syntheticCompleteEvidence();
+    evidence.dn027bProspectiveReport = syntheticDirectAnalogReport();
+    mutate(evidence.dn027bProspectiveReport);
+    const result = validateReleaseEvidenceV9({ ...evidence, nowMs: NOW });
+    assert.equal(result.verdict, 'PASS');
+    assert.equal(result.release_evidence_gate.status, 'NO_GO');
+  }
 });
 
 test('current all-NOT_RUN V9 inventory by itself is not completion evidence', () => {

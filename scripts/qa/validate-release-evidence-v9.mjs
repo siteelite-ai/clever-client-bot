@@ -1,25 +1,37 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { MATRIX_MANIFESTS, serializeReleaseLedger } from './build-release-ledger.mjs';
 import { V9_MATRIX_MANIFESTS, buildReleaseLedgerV9 } from './build-release-ledger-v9.mjs';
+import { evaluate } from './run-customer-acceptance.mjs';
 import { parseCliArgs, validateReleaseEvidence } from './validate-release-evidence.mjs';
 
 // Read-only V9 full-matrix gate. Run after deploying a pinned preview candidate:
 // node scripts/qa/validate-release-evidence-v9.mjs \
 //   --attestation=deployment-assertion.json \
 //   --report=customer-v9.json --report=audit-v9.json \
-//   --report=notion-v9.json --report=cardinality-v9.json
+//   --report=notion-v9.json --report=cardinality-v9.json \
+//   --dn027b-report=dn027b-direct-analogs-prospective.json
 // All four reports must be strict full-suite runs with a successful catalog
 // preflight. The attestation is an operator assertion, not cryptographic proof.
 // This gate assesses the V9 matrix evidence only; it does not authorize deploy.
-// V9's original DN027B min_products=3 oracle does not prove that three SKUs are
-// direct technical replacements. Even a V9 PASS requires the separate prospective
-// DN027B contract and live SKU/stock/fit check tracked by GitHub issue #124.
+// V9's original DN027B min_products=3 oracle does not prove direct replacements.
+// The V9 verdict remains matrix-only. CLI success additionally requires a fresh,
+// exact prospective report with server proof + independently fetched live pages.
+// The server's approved_manufacturer_fact metadata is NOT independent inspection
+// of the manufacturer document's actual contents. The runner does not emit a
+// deployed commit/version fingerprint: preview identity is an operator assertion.
+// Neither result by itself assesses every production-release prerequisite.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const inventoryFile = path.join(root, 'docs/qa/release-inventory-v9-20261020.json');
+const directAnalogContractFile = path.join(root, 'scripts/qa/dn027b-direct-analogs-prospective-v1.json');
+const directAnalogContractSha256 = 'd3de1cce662a96b3a1c330593b450dd217b940bbb8b281d6f1d76c4c7c19b9d3';
+const directAnalogSuiteFile = path.basename(directAnalogContractFile);
+const directAnalogCaseId = 'prospective-dn027b-confirmed-direct-analogs';
+const directAnalogMaxAgeMs = 24 * 60 * 60 * 1000;
 const expectedCounts = Object.freeze({
   reports: V9_MATRIX_MANIFESTS.length,
   runs: V9_MATRIX_MANIFESTS.reduce((count, manifest) => count + manifest.runCount, 0),
@@ -31,11 +43,25 @@ const isRecord = (value) => value !== null && typeof value === 'object' && !Arra
 const nonEmpty = (value) => typeof value === 'string' && value.trim().length > 0;
 const MAX_DISPLAYED_FAILURES = 20;
 
+function releaseEvidenceGate(matrixVerdict, directAnalogFailures) {
+  return {
+    status: matrixVerdict === 'PASS' && directAnalogFailures.length === 0 ? 'PASS' : 'NO_GO',
+    scope: 'v9_matrix_plus_dn027b_direct_analogs_evidence_only_not_deployment_approval',
+    manufacturer_document_review: 'NOT_ASSESSED',
+    runtime_version_binding: 'operator_assertion_only',
+    dn027b_direct_analogs: {
+      status: directAnalogFailures.length === 0 ? 'PASS' : 'FAIL',
+      failures: directAnalogFailures.map((code) => ({ code })),
+    },
+  };
+}
+
 function failed(code, location = null) {
   return {
     verdict: 'FAIL',
     verdict_scope: 'strict_v9_matrix_evidence_only',
     release_readiness: 'NOT_ASSESSED',
+    release_evidence_gate: releaseEvidenceGate('FAIL', ['dn027b_prospective_report_not_validated']),
     attestation_basis: 'operator_assertion_not_cryptographic_proof',
     candidate_commit_sha: null,
     preview_function_version: null,
@@ -55,6 +81,141 @@ function failed(code, location = null) {
     failures: [location ? { code, location } : { code }],
     omitted_failure_count: 0,
   };
+}
+
+function utcTimestamp(value) {
+  if (typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function directAnalogContract() {
+  try {
+    const bytes = fs.readFileSync(directAnalogContractFile);
+    if (createHash('sha256').update(bytes).digest('hex') !== directAnalogContractSha256) return null;
+    const suite = JSON.parse(bytes.toString('utf8'));
+    if (suite.schema_version !== 1 || suite.cases?.length !== 1 ||
+      suite.cases[0]?.id !== directAnalogCaseId || suite.cases[0]?.repeat !== 1 ||
+      suite.cases[0]?.turns?.length !== 1 ||
+      suite.cases[0].turns[0]?.expect?.min_products !== 3 ||
+      suite.cases[0].turns[0]?.expect?.require_confirmed_analogs?.minimum !== 3) return null;
+    return suite.cases[0];
+  } catch {
+    return null;
+  }
+}
+
+// The prospective acceptance runner emits this report through --report-file.
+// It cannot use --strict-full-suite (the prospective contract is deliberately
+// outside the immutable V9 manifests), so validate its complete one-case shape
+// and re-check the typed direct_analog_proof against exact live-page SKU proof.
+function directAnalogProspectiveFailures(report, attestation, v9Reports, nowMs) {
+  const contractCase = directAnalogContract();
+  if (!contractCase) return ['dn027b_prospective_contract_unavailable_or_changed'];
+  if (!isRecord(report)) return ['dn027b_prospective_report_missing'];
+  const startedAt = utcTimestamp(report.started_at);
+  const finishedAt = utcTimestamp(report.finished_at);
+  const deployedAt = utcTimestamp(attestation?.deployment_observed_at);
+  if (report.suite_file !== directAnalogSuiteFile ||
+    report.suite_sha256 !== directAnalogContractSha256 || report.suite_version !== 1 ||
+    report.variations_file !== null || report.variations_sha256 !== null ||
+    report.strict_full_suite !== false || report.strict_inventory !== null ||
+    report.endpoint !== attestation?.preview_endpoint ||
+    // The runner has no deployed-bytes attestation. Reject hand-added fields
+    // rather than implying that matching strings prove the runtime version.
+    Object.hasOwn(report, 'candidate_commit_sha') ||
+    Object.hasOwn(report, 'preview_function_version') ||
+    startedAt === null || finishedAt === null || deployedAt === null ||
+    startedAt < deployedAt || finishedAt < startedAt || finishedAt > nowMs ||
+    nowMs - finishedAt > directAnalogMaxAgeMs ||
+    Object.hasOwn(report, 'status') || Object.hasOwn(report, 'infrastructure_status') ||
+    Object.hasOwn(report, 'reason') ||
+    report.catalog_preflight?.ok !== true || report.catalog_preflight?.status !== 'ready' ||
+    report.catalog_preflight?.http_status !== 200 || report.passed !== true ||
+    report.selected_count !== 1 ||
+    !isRecord(report.requested_repetitions) ||
+    Object.keys(report.requested_repetitions).length !== 1 ||
+    report.requested_repetitions[directAnalogCaseId] !== 1 ||
+    report.completeness?.complete !== true ||
+    ['planned_cases', 'recorded_cases', 'planned_runs', 'recorded_runs', 'planned_turns', 'recorded_turns']
+      .some((key) => report.completeness[key] !== 1) ||
+    !Array.isArray(report.cases) || report.cases.length !== 1 ||
+    report.cases[0]?.id !== directAnalogCaseId || report.cases[0]?.passed !== true ||
+    !Array.isArray(report.cases[0].repeats) || report.cases[0].repeats.length !== 1) {
+    return ['dn027b_prospective_report_incomplete_or_stale'];
+  }
+  const run = report.cases[0].repeats[0];
+  const turn = run?.turns?.[0];
+  const priorLogs = new Set(v9Reports.flatMap((v9Report) => v9Report?.log_ids ?? []));
+  if (run.variant !== 'base' || run.run !== 1 || run.passed !== true ||
+    !Array.isArray(run.turns) || run.turns.length !== 1 ||
+    turn?.message !== contractCase.turns[0].message || turn.synthetic_scenario !== false ||
+    turn.status !== 200 || turn.passed !== true || turn.completed !== true ||
+    turn.diagnostic_error !== null || !Array.isArray(turn.failures) || turn.failures.length !== 0 ||
+    typeof turn.text !== 'string' || !Array.isArray(turn.tool_events) ||
+    !nonEmpty(turn.log_id) || priorLogs.has(turn.log_id) ||
+    !Array.isArray(report.log_ids) || report.log_ids.length !== 1 ||
+    report.log_ids[0] !== turn.log_id ||
+    turn.product_identity_mode !== 'live_jsonld_product_sku' ||
+    !Number.isSafeInteger(turn.duration_ms) || turn.duration_ms < 0 ||
+    turn.duration_ms > 45_000 ||
+    !Array.isArray(turn.products) || turn.products.length < 3 || turn.products.length > 5 ||
+    turn.products_count !== turn.products.length ||
+    turn.unique_products_count !== turn.products.length ||
+    !Array.isArray(turn.product_identity_evidence) ||
+    turn.product_identity_evidence.length !== turn.products.length ||
+    !Number.isSafeInteger(report.product_page_verification?.verified) ||
+    report.product_page_verification.verified < turn.products.length ||
+    report.product_page_verification?.unverified !== 0 ||
+    !Number.isSafeInteger(report.product_page_verification?.unique_urls_checked) ||
+    report.product_page_verification.unique_urls_checked < turn.products.length ||
+    report.product_page_verification.verified + report.product_page_verification.unverified !==
+      report.product_page_verification.unique_urls_checked) {
+    return ['dn027b_prospective_turn_or_live_page_proof_incomplete'];
+  }
+  const cardIdentities = turn.products.map((product) => catalogProductIdentity(product?.url));
+  const pages = new Map();
+  const skus = new Set();
+  for (const proof of turn.product_identity_evidence) {
+    if (!isRecord(proof) || !nonEmpty(proof.identity) || pages.has(proof.identity) ||
+      proof.verified !== true || !nonEmpty(proof.sku) || skus.has(proof.sku) ||
+      !nonEmpty(proof.name) ||
+      sourceCanonicalIdentity(proof.canonicalUrl) !== proof.identity ||
+      !Number.isFinite(proof.offerPrice) || proof.offerPrice <= 0 ||
+      !/^https?:\/\/schema\.org\/InStock$/iu.test(proof.availability ?? '')) {
+      return ['dn027b_prospective_live_page_identity_invalid'];
+    }
+    pages.set(proof.identity, proof);
+    skus.add(proof.sku);
+  }
+  if (cardIdentities.some((identity) => !identity || !pages.has(identity)) ||
+    new Set(cardIdentities).size !== cardIdentities.length ||
+    turn.products.some((product) => !nonEmpty(product?.title) || !nonEmpty(product?.stockLine) ||
+      !Number.isFinite(product?.price))) {
+    return ['dn027b_prospective_cards_not_bound_to_live_pages'];
+  }
+  const response = {
+    text: turn.text,
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    links: turn.products,
+    verifiedProductPages: pages,
+    selectionContract: turn.selection_contract,
+    completed: turn.completed,
+    terminalDiagnosticSeen: true, // The report's validated log_id comes from the terminal event.
+    logId: turn.log_id,
+    diagnosticError: turn.diagnostic_error,
+    serverProductsCount: turn.products_count,
+    durationMs: turn.duration_ms,
+    toolEvents: turn.tool_events,
+  };
+  if (evaluate(contractCase.turns[0].expect, response,
+    { nowMs, requireVerifiedPages: true }).length > 0 ||
+    turn.products.some((product) => /DN027B/iu.test(product.title))) {
+    return ['dn027b_prospective_direct_analogue_certificate_invalid'];
+  }
+  return [];
 }
 
 function dn027bOracleIntact(inventory) {
@@ -209,8 +370,8 @@ function adaptReportsToSharedGate(reports) {
   });
 }
 
-/** Validate loaded V9 JSON without network calls or response-text output. */
-export function validateReleaseEvidenceV9({ inventory, reports, attestation }) {
+/** Validate loaded V9 and separate prospective JSON without network calls or response-text output. */
+export function validateReleaseEvidenceV9({ inventory, reports, attestation, dn027bProspectiveReport = null, nowMs = Date.now() }) {
   let canonical;
   try {
     canonical = buildReleaseLedgerV9(); // Verifies all five pinned source-file SHA256 values.
@@ -252,10 +413,13 @@ export function validateReleaseEvidenceV9({ inventory, reports, attestation }) {
   const evidenceFailures = dn027bReportFailures(reports);
   const failureCount = summary.failure_count + evidenceFailures.length;
   const failures = [...summary.failures, ...evidenceFailures].slice(0, MAX_DISPLAYED_FAILURES);
+  const verdict = failureCount === 0 ? summary.verdict : 'FAIL';
+  const prospectiveFailures = directAnalogProspectiveFailures(dn027bProspectiveReport, attestation, reports, nowMs);
   return {
     ...summary,
-    verdict: failureCount === 0 ? summary.verdict : 'FAIL',
+    verdict,
     verdict_scope: 'strict_v9_matrix_evidence_only',
+    release_evidence_gate: releaseEvidenceGate(verdict, prospectiveFailures),
     failure_count: failureCount,
     failures,
     omitted_failure_count: Math.max(0, failureCount - failures.length),
@@ -265,7 +429,11 @@ export function validateReleaseEvidenceV9({ inventory, reports, attestation }) {
 export function runCli(argv = process.argv.slice(2)) {
   let summary;
   try {
-    const { attestationFile, reportFiles } = parseCliArgs(argv);
+    const prospectiveArgs = argv.filter((arg) => arg.startsWith('--dn027b-report='));
+    if (prospectiveArgs.length !== 1 || !prospectiveArgs[0].slice('--dn027b-report='.length).trim()) {
+      throw new Error('one --dn027b-report=FILE is required');
+    }
+    const { attestationFile, reportFiles } = parseCliArgs(argv.filter((arg) => !arg.startsWith('--dn027b-report=')));
     if (argv.includes('--require-catalog-preflight')) {
       throw new Error('V9 catalog preflight is mandatory; this option is not needed');
     }
@@ -276,13 +444,15 @@ export function runCli(argv = process.argv.slice(2)) {
           inventory: JSON.parse(inventoryBytes),
           reports: reportFiles.map((filename) => JSON.parse(fs.readFileSync(path.resolve(filename), 'utf8'))),
           attestation: JSON.parse(fs.readFileSync(path.resolve(attestationFile), 'utf8')),
+          dn027bProspectiveReport: JSON.parse(fs.readFileSync(
+            path.resolve(prospectiveArgs[0].slice('--dn027b-report='.length)), 'utf8')),
         })
       : failed('inventory_not_current_pinned_v9_matrix');
   } catch {
     summary = failed('invalid_arguments_or_unreadable_json');
   }
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
-  return summary.verdict === 'PASS' ? 0 : 1;
+  return summary.release_evidence_gate.status === 'PASS' ? 0 : 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
