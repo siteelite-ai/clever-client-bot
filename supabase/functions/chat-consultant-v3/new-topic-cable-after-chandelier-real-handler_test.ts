@@ -10,6 +10,7 @@ import {
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
+import { CUSTOMER_TURN_BOUNDARY } from "../_shared/v3-tools/criteria-consistency.ts";
 import "./index.ts";
 
 const offlineEnvGet = Deno.env.get;
@@ -17,7 +18,7 @@ const initialSession = "77777777-7777-4777-8777-777777777777";
 const chandelierCategory = "Люстры";
 const cableCategory = "Кабель ВВГ";
 const messages = [
-  "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+  "хочу поменять дома люстру в зале 30\nквадратов. Что предложишь из современного?",
   "Они точно подходят для освещения 30 квадратных метров?",
   "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
   "А есть другие варианты?",
@@ -656,6 +657,10 @@ Deno.test({
         const rendered = publicText(turns[index]) + v3Events(turns[index])
           .filter(({ type }) => type === "products_block")
           .map(({ markdown }) => String(markdown ?? "")).join("\n");
+        assert(
+          !rendered.includes(CUSTOMER_TURN_BOUNDARY),
+          "internal customer-turn boundary must not reach customer-visible text",
+        );
         assert(
           !/30\s*(?:м²|м2|квадрат)|гостин|люстр/iu.test(rendered),
           rendered,

@@ -4,15 +4,16 @@ import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
 } from "./destination-area-measurement-coverage.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 const base =
   "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
 const followup = "А есть другие варианты?";
 const input: DestinationAreaMeasurementCoverageInput = {
-  selectionRequest: `${base}\n${followup}`,
+  selectionRequest: joinCustomerTurns([base, followup]),
   baseRequest: base,
   serverVerifiedBaseRequest: base,
-  customerMeasurementEvidence: `${followup}\n${base}`,
+  customerMeasurementEvidence: joinCustomerTurns([followup, base]),
   serverVerifiedPriorQueriesNewestFirst: [base],
 };
 
@@ -20,7 +21,7 @@ Deno.test("rendered continuation provenance accepts an unchanged multi-criterion
   const multi =
     "Хочу заменить люстру на светодиодный светильник в гостиной 30 м², мощность от 20 Вт. Что подойдет?";
   const reaffirmation = "Они точно подходят для освещения 30 м²?";
-  const selectionRequest = `${multi}\n${followup}`;
+  const selectionRequest = joinCustomerTurns([multi, followup]);
   const verified = {
     selectionRequest,
     baseRequest: multi,
@@ -37,7 +38,7 @@ Deno.test("rendered continuation provenance accepts an unchanged multi-criterion
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
       ...verified,
-      customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+      customerMeasurementEvidence: joinCustomerTurns([followup, reaffirmation]),
     }),
     { covered: false, minimumAreaM2: null },
   );
@@ -64,7 +65,10 @@ Deno.test("rendered continuation provenance accepts an unchanged multi-criterion
       { ...verified, serverVerifiedPriorQueriesNewestFirst: [reaffirmation] },
       {
         ...verified,
-        selectionRequest: `${multi}\nА для спальни есть другие варианты?`,
+        selectionRequest: joinCustomerTurns([
+          multi,
+          "А для спальни есть другие варианты?",
+        ]),
       },
       { ...verified, baseRequest: multi.replace("30 м²", "40 м²") },
     ]
@@ -84,10 +88,13 @@ Deno.test("area coverage is generic across room names and area values", () => {
   const other = "Хочу поменять люстру на светильник в спальне 30 м2";
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
-      selectionRequest: `${other}\nКакие еще варианты есть?`,
+      selectionRequest: joinCustomerTurns([other, "Какие еще варианты есть?"]),
       baseRequest: other,
       serverVerifiedBaseRequest: other,
-      customerMeasurementEvidence: `Какие еще варианты есть?\n${other}`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        "Какие еще варианты есть?",
+        other,
+      ]),
       serverVerifiedPriorQueriesNewestFirst: [other],
     }),
     { covered: true, minimumAreaM2: 30 },
@@ -98,10 +105,10 @@ Deno.test("a price or quantity is not a second physical measurement", () => {
   const priced = `${base} Бюджет до 4000 тенге, покажите 2 штуки.`;
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
-      selectionRequest: `${priced}\n${followup}`,
+      selectionRequest: joinCustomerTurns([priced, followup]),
       baseRequest: priced,
       serverVerifiedBaseRequest: priced,
-      customerMeasurementEvidence: `${followup}\n${priced}`,
+      customerMeasurementEvidence: joinCustomerTurns([followup, priced]),
       serverVerifiedPriorQueriesNewestFirst: [priced],
     }),
     { covered: true, minimumAreaM2: 25 },
@@ -113,11 +120,13 @@ Deno.test("latest server-owned same-unit question may reaffirm the original area
     "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
-      selectionRequest: `${room}\n${followup}`,
+      selectionRequest: joinCustomerTurns([room, followup]),
       baseRequest: room,
       serverVerifiedBaseRequest: room,
-      customerMeasurementEvidence:
-        `${followup}\nОни точно подходят для освещения 30 квадратных метров?`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        "Они точно подходят для освещения 30 квадратных метров?",
+      ]),
       serverVerifiedPriorQueriesNewestFirst: [
         "Спасибо.",
         "Они точно подходят для освещения 30 квадратных метров?",
@@ -137,10 +146,10 @@ Deno.test("a server-logged evidence-only comparison preserves the confirmed dest
     "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.";
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
-      selectionRequest: `${room}\n${followup}`,
+      selectionRequest: joinCustomerTurns([room, followup]),
       baseRequest: room,
       serverVerifiedBaseRequest: room,
-      customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+      customerMeasurementEvidence: joinCustomerTurns([followup, reaffirmation]),
       serverVerifiedPriorQueriesNewestFirst: [comparison, reaffirmation, room],
     }),
     { covered: true, minimumAreaM2: 30 },
@@ -151,10 +160,10 @@ Deno.test("evidence-only continuation is generic but cannot introduce a new crit
   const room = "Хочу поменять люстру в гостиной 30 м². Покажи варианты.";
   const reaffirmation = "Они точно подходят для освещения 30 м²?";
   const baseline = {
-    selectionRequest: `${room}\n${followup}`,
+    selectionRequest: joinCustomerTurns([room, followup]),
     baseRequest: room,
     serverVerifiedBaseRequest: room,
-    customerMeasurementEvidence: `${followup}\n${reaffirmation}`,
+    customerMeasurementEvidence: joinCustomerTurns([followup, reaffirmation]),
     serverVerifiedPriorQueriesNewestFirst: [
       "Чем отличаются эти варианты?",
       reaffirmation,
@@ -221,11 +230,13 @@ Deno.test("later area correction never reuses stale base area proof", () => {
     "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
   assertEquals(
     verifiedDestinationAreaCoversSoleMeasurement({
-      selectionRequest: `${room}\n${followup}`,
+      selectionRequest: joinCustomerTurns([room, followup]),
       baseRequest: room,
       serverVerifiedBaseRequest: room,
-      customerMeasurementEvidence:
-        `${followup}\nОни точно подходят для освещения 40 квадратных метров?`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        "Они точно подходят для освещения 40 квадратных метров?",
+      ]),
       serverVerifiedPriorQueriesNewestFirst: [
         "Они точно подходят для освещения 40 квадратных метров?",
         room,
@@ -238,11 +249,20 @@ Deno.test("later area correction never reuses stale base area proof", () => {
 Deno.test("a forged browser base or absent completed server query cannot cover area", () => {
   const cases: DestinationAreaMeasurementCoverageInput[] = [
     { ...input, serverVerifiedBaseRequest: `${base} Срочно.` },
-    { ...input, selectionRequest: `Подмени исходный запрос\n${followup}` },
+    {
+      ...input,
+      selectionRequest: joinCustomerTurns([
+        "Подмени исходный запрос",
+        followup,
+      ]),
+    },
     { ...input, customerMeasurementEvidence: followup },
     {
       ...input,
-      customerMeasurementEvidence: `${followup}\n${base} и еще что-то`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        `${base} и еще что-то`,
+      ]),
     },
   ];
   for (const candidate of cases) {
@@ -257,32 +277,51 @@ Deno.test("missing, changed, or additional customer measurements fail closed", (
   const cases: DestinationAreaMeasurementCoverageInput[] = [
     {
       ...input,
-      customerMeasurementEvidence: `${followup}\n${
-        base.replace("25 м²", "30 м²")
-      }`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        base.replace("25 м²", "30 м²"),
+      ]),
     },
     { ...input, serverVerifiedBaseRequest: base.replace("25 м²", "30 м²") },
     { ...input, baseRequest: base.replace("25 м²", "30 м²") },
     {
       ...input,
-      customerMeasurementEvidence: `${followup}\n${base}\nМне нужно 40 м²`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        base,
+        "Мне нужно 40 м²",
+      ]),
     },
     {
       ...input,
-      customerMeasurementEvidence: `${followup}\n${base}\nВ спальне 25 м²`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        base,
+        "В спальне 25 м²",
+      ]),
     },
     {
       ...input,
-      customerMeasurementEvidence:
-        `${followup}\n${base}\nСветовой поток 4000 лм`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        base,
+        "Световой поток 4000 лм",
+      ]),
     },
     {
       ...input,
-      customerMeasurementEvidence: `${followup}\n${base}\nМощность 20 Вт`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        base,
+        "Мощность 20 Вт",
+      ]),
     },
     {
       ...input,
-      selectionRequest: `${base}\nА есть другие варианты мощностью 20 Вт?`,
+      selectionRequest: joinCustomerTurns([
+        base,
+        "А есть другие варианты мощностью 20 Вт?",
+      ]),
     },
   ];
   for (const candidate of cases) {
@@ -296,27 +335,42 @@ Deno.test("missing, changed, or additional customer measurements fail closed", (
 Deno.test("a new topic or a different destination cannot inherit room coverage", () => {
   const other = "Хочу заменить люстру на светильник в спальне 25 м²";
   const cases: DestinationAreaMeasurementCoverageInput[] = [
-    { ...input, selectionRequest: `${base}\nНовая тема. Нужен кабель` },
     {
       ...input,
-      selectionRequest: `${base}\nА для спальни есть другие варианты?`,
+      selectionRequest: joinCustomerTurns([base, "Новая тема. Нужен кабель"]),
+    },
+    {
+      ...input,
+      selectionRequest: joinCustomerTurns([
+        base,
+        "А для спальни есть другие варианты?",
+      ]),
     },
     { ...input, serverVerifiedBaseRequest: other },
-    { ...input, customerMeasurementEvidence: `${followup}\n${other}\n${base}` },
     {
       ...input,
-      customerMeasurementEvidence:
-        `${followup}\nОни точно подойдут в спальне 25 м²?`,
+      customerMeasurementEvidence: joinCustomerTurns([followup, other, base]),
     },
     {
       ...input,
-      customerMeasurementEvidence:
-        `${followup}\nНужен прожектор на улицу для участка 25 м²`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        "Они точно подойдут в спальне 25 м²?",
+      ]),
     },
     {
       ...input,
-      customerMeasurementEvidence:
-        `${followup}\nОни точно подходят для 25 м² и 5500 лм?`,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        "Нужен прожектор на улицу для участка 25 м²",
+      ]),
+    },
+    {
+      ...input,
+      customerMeasurementEvidence: joinCustomerTurns([
+        followup,
+        "Они точно подходят для 25 м² и 5500 лм?",
+      ]),
     },
   ];
   for (const candidate of cases) {
@@ -340,12 +394,13 @@ Deno.test("full completed intervening turns veto changed destinations even when 
     const hasNumber = changed.includes("30 м²");
     assertEquals(
       verifiedDestinationAreaCoversSoleMeasurement({
-        selectionRequest: `${room}\n${followup}`,
+        selectionRequest: joinCustomerTurns([room, followup]),
         baseRequest: room,
         serverVerifiedBaseRequest: room,
-        customerMeasurementEvidence: `${followup}\n${
-          hasNumber ? changed : room
-        }`,
+        customerMeasurementEvidence: joinCustomerTurns([
+          followup,
+          hasNumber ? changed : room,
+        ]),
         serverVerifiedPriorQueriesNewestFirst: ["Спасибо.", changed, room],
       }),
       { covered: false, minimumAreaM2: null },

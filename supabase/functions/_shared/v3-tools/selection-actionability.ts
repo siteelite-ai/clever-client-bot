@@ -2,6 +2,7 @@ import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import {
   extractClientQuantities,
   isPhysicalMeasurementUnit,
+  joinMeasurementEvidenceSegments,
   normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
@@ -3533,9 +3534,13 @@ export function shouldProjectDerivedScalarMeasurement(
     measurementScope === "system_total" &&
     !systemTotalReasoningDeclaresPerProductMeasurement(reasoningText)
   ) return false;
-  const evidence = `${String(userMessage ?? "")}\n${
-    String(reasoningText ?? "")
-  }`;
+  // Customer wording and model reasoning are independent evidence fields.
+  // A plain newline would let a trailing customer number borrow a leading
+  // model word as its unit while both fields may contain valid multiline units.
+  const evidence = joinMeasurementEvidenceSegments([
+    String(userMessage ?? ""),
+    String(reasoningText ?? ""),
+  ]);
   return minimumCompatibilityRelationCount(evidence) < 2 &&
     !reasoningNeedsCompatibilityRelations(evidence);
 }

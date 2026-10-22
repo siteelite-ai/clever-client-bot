@@ -36,6 +36,24 @@ export interface CriterionViolation {
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 
+// A line break is allowed inside one customer message (`16\nА`, `25\nкв. м`).
+// When the server joins separate customer turns, a non-whitespace boundary
+// must prevent a trailing number in one turn from borrowing the first word of
+// the next as its unit. Keep this marker in the joined evidence rather than
+// teaching every measurement parser to guess where a turn ended.
+export const CUSTOMER_TURN_BOUNDARY = "\n\n---\n\n";
+
+/** Preserve line breaks within one field while blocking measurements across independent fields. */
+export function joinMeasurementEvidenceSegments(
+  segments: readonly string[],
+): string {
+  return segments.join(CUSTOMER_TURN_BOUNDARY);
+}
+
+export function joinCustomerTurns(turns: readonly string[]): string {
+  return joinMeasurementEvidenceSegments(turns);
+}
+
 export function normalizeUnit(raw: string): string {
   return String(raw ?? "")
     .toLowerCase()
@@ -68,16 +86,16 @@ export function normalizeMeasurementText(raw: string): string {
     // Consume the whole written unit. Otherwise a later number+unit parser
     // can mistake `120 кв. мм` for `120 кВ` or `120 м^2` for `120 м`.
     .replace(
-      /(\d+(?:[.,]\d+)?)[^\S\r\n]*кв\.?[^\S\r\n]*(мм|см|дм|м|mm|cm|dm|m)(?![\p{L}\p{N}])/giu,
+      /(\d+(?:[.,]\d+)?)\s*кв\.?\s*(мм|см|дм|м|mm|cm|dm|m)(?![\p{L}\p{N}])/giu,
       (_match, value: string, unit: string) => `${value} ${unit}²`,
     )
     .replace(
-      /(\d+(?:[.,]\d+)?)[^\S\r\n]*(мм|см|дм|м|mm|cm|dm|m)[^\S\r\n]*(?:\^|\*\*)[^\S\r\n]*([23])(?!\d)/giu,
+      /(\d+(?:[.,]\d+)?)\s*(мм|см|дм|м|mm|cm|dm|m)\s*(?:\^|\*\*)\s*([23])(?!\d)/giu,
       (_match, value: string, unit: string, exponent: string) =>
         `${value} ${unit}${exponent === "2" ? "²" : "³"}`,
     )
     .replace(
-      /(\d+(?:[.,]\d+)?)[^\S\r\n]*(?:квадрат(?:а|ов)?|квадратн(?:ый|ая|ое|ые|ых|ого|ому|ыми)?[^\S\r\n]+метр(?:а|ов|е|у|ы)?|кв\.?[^\S\r\n]*м(?:етр(?:а|ов|е|у|ы)?)?)(?![a-zа-я])/giu,
+      /(\d+(?:[.,]\d+)?)\s*(?:квадрат(?:а|ов)?|квадратн(?:ый|ая|ое|ые|ых|ого|ому|ыми)?\s+метр(?:а|ов|е|у|ы)?|кв\.?\s*м(?:етр(?:а|ов|е|у|ы)?)?)(?![a-zа-я])/giu,
       "$1 м²",
     );
 }
@@ -94,12 +112,9 @@ export function extractClientQuantities(text: string): ClientQuantity[] {
   // A number embedded in a product/model identifier is not a measurement:
   // `Acti9 C16` must not become `9 C`, just as `IP65` is not `65` of an
   // arbitrary unit. An explicit quantity still works (`C16, ток 16 А`).
-  // A newline can separate two customer turns when a continuation is combined
-  // with its verified base request. Do not read the first word of the next
-  // turn as a unit of a trailing model/size number (for example, `3×1,5\nА
-  // есть другие варианты?` must not become `1,5 А`). Horizontal spacing still
-  // permits ordinary `16 А` and `16 А` measurements.
-  const re = new RegExp(String.raw`(?<![a-zа-я0-9])(${NUM})[^\S\r\n]*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
+  // A newline or Unicode line separator inside one customer turn is ordinary
+  // spacing. Distinct server-composed turns carry CUSTOMER_TURN_BOUNDARY.
+  const re = new RegExp(String.raw`(?<![a-zа-я0-9])(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     const value = Number(m[1].replace(",", "."));

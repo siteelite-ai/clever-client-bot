@@ -53,6 +53,38 @@ function product(id: string, traits: string[]): ProductRef {
   };
 }
 
+Deno.test("measurement units cannot be assembled across model/customer roles", () => {
+  const criterion: Criterion = {
+    key: "Номинальный ток, А",
+    op: "eq",
+    value: 1.5,
+    level: "A",
+    evidence: "model_assumption",
+  };
+  const customer = "А есть другие варианты?";
+  // The model's final 1,5 and customer's opening А belong to different
+  // messages. They must not become a fictitious 1,5 А physical measurement.
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [criterion],
+      "Ищу модель 1,5",
+      customer,
+      "per_product",
+    ).criteria,
+    [criterion],
+  );
+  // Within a single model message, the line break is ordinary spacing.
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [criterion],
+      "Ищу модель 1,5\nА",
+      customer,
+      "per_product",
+    ).removed,
+    [criterion],
+  );
+});
+
 Deno.test("one visible recommended measurement projects to one exact live facet", () => {
   const projected = projectSingleRecommendedMeasuredCriterion(
     "Расчетная нагрузка составляет 3 кВт. Рекомендуется изделие с площадью поверхности 20 см².",

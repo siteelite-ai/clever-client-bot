@@ -100,10 +100,13 @@ import {
 } from "../_shared/v3-tools/final-card-facet-gate.ts";
 import { setActiveCatalogFacetSchema } from "../_shared/v3-tools/catalog-facet-proof-ledger.ts";
 import {
+  CUSTOMER_TURN_BOUNDARY,
   correctCriteria,
   extractClientQuantities,
   findUnderstatedCriteria,
   isPhysicalMeasurementUnit,
+  joinCustomerTurns,
+  joinMeasurementEvidenceSegments,
 } from "../_shared/v3-tools/criteria-consistency.ts";
 import {
   alignCriteriaImportanceWithReasoning,
@@ -8188,6 +8191,17 @@ interface VerifiedCustomerMeasurementEvidence {
   priorQueriesNewestFirst: string[];
 }
 
+/** Model fields are separate evidence sources, not adjacent words in one sentence. */
+export function composeModelDeclarationMeasurementEvidence(
+  reasoningEvidence: string,
+  measurementEvidence: string,
+): string {
+  return joinMeasurementEvidenceSegments([
+    reasoningEvidence,
+    measurementEvidence,
+  ]);
+}
+
 const MEASUREMENT_EVIDENCE_LOG_LIMIT = 8;
 const MEASUREMENT_EVIDENCE_READ_TIMEOUT_MS = 1_800;
 const MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS = 3_000;
@@ -8216,7 +8230,8 @@ export function composeVerifiedCustomerMeasurementEvidence(
     const query = String(raw ?? "").trim();
     if (
       !query || query.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS ||
-      length + query.length + 1 > MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS
+      length + query.length + CUSTOMER_TURN_BOUNDARY.length >
+        MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS
     ) continue;
     const units = physicalCustomerUnits(query);
     if (units.size === 0 || [...units].some((unit) => seenUnits.has(unit))) {
@@ -8224,10 +8239,10 @@ export function composeVerifiedCustomerMeasurementEvidence(
     }
     pieces.push(query);
     sourceCount++;
-    length += query.length + 1;
+    length += query.length + CUSTOMER_TURN_BOUNDARY.length;
     for (const unit of units) seenUnits.add(unit);
   }
-  return { text: pieces.join("\n"), sourceCount };
+  return { text: joinCustomerTurns(pieces), sourceCount };
 }
 
 /** Logs are the only authority for a prior turn: browser history and slots
@@ -10673,6 +10688,15 @@ async function runExpertLoop(
   );
   const replacementIntent = Boolean(replacementSourceMessage);
   const replacementEvidenceMessage = replacementSourceMessage ?? userMessage;
+  // Use turn-aware customer history for the facet/measurement guard. A trailing
+  // number in a prior turn must not borrow the first unit-like word of this
+  // turn, while line breaks inside either message remain meaningful.
+  const recentCustomerTurnEvidence = joinCustomerTurns([
+    ...history.filter((message) => message.role === "user").slice(-6).map((
+      message,
+    ) => message.content),
+    userMessage,
+  ]);
   const priorReplacementReasoning = replacementIntent
     ? extractPriorAssistantProse(history.slice(-8), 4)
     : "";
@@ -11650,9 +11674,9 @@ async function runExpertLoop(
       (trustedAppearanceBaseRequest
         ? extractBudgetCap(trustedAppearanceBaseRequest)
         : null);
-    const customerFloorText = `${rawCurrentUserMessage}\n${
-      trustedAppearanceBaseRequest ?? ""
-    }`;
+    const customerFloorText = trustedAppearanceBaseRequest
+      ? joinCustomerTurns([rawCurrentUserMessage, trustedAppearanceBaseRequest])
+      : rawCurrentUserMessage;
     const customerPriceFloors = [...customerFloorText.matchAll(
       /(?:^|[^\p{L}])(?:от|не\s+дешевле|не\s+ниже)\s*([\d\s\u00a0]{1,12})\s*(?:тенге|тг|₸)(?=$|[^\p{L}])/giu,
     )].map((match) => Number(match[1].replace(/\s+/gu, "")))
@@ -12624,9 +12648,11 @@ async function runExpertLoop(
             // destination gate discharge only this customer area. The model
             // need not repeat its unit after classification prose is cleaned;
             // any other surviving physical number keeps the original repair.
-            const modelPhysicalMeasurements = extractClientQuantities(
-              `${declaration.reasoningEvidence}\n${declaration.measurementEvidence}`,
-            ).filter(({ unit }) => isPhysicalMeasurementUnit(unit));
+            const modelPhysicalMeasurements = [
+              declaration.reasoningEvidence,
+              declaration.measurementEvidence,
+            ].flatMap(extractClientQuantities)
+              .filter(({ unit }) => isPhysicalMeasurementUnit(unit));
             const noConflictingModelMeasurement =
               declaration.requiredFacetValues.length === 0 &&
               modelPhysicalMeasurements.every(({ unit, value }) =>
@@ -13020,13 +13046,16 @@ async function runExpertLoop(
             pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
               : declaration.measurementEvidence;
+          const separatedDeclarationEvidence =
+            composeModelDeclarationMeasurementEvidence(
+              visibleDeclarationText,
+              measurementDeclarationEvidence,
+            );
           pendingDerivedSelectionMeasurementEvidence =
             measurementDeclarationEvidence;
           pendingDerivedSelectionMeasurementScope =
             effectiveDeclaredMeasurementScope;
-          reconcileSelectionMeasurementScope(
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
-          );
+          reconcileSelectionMeasurementScope(separatedDeclarationEvidence);
           // Keep the complete validated declaration in the agent context and
           // all search gates. The public explanation is composed separately
           // from frozen criteria below; the function call remains consumed.
@@ -13235,7 +13264,7 @@ async function runExpertLoop(
           );
           const derivedExactFacetCriteria = scopeCardCriteria(
             derivedExactImportance.criteria,
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+            separatedDeclarationEvidence,
           ).criteria;
           if (derivedExactImportance.demoted.length > 0) {
             steps.push({
@@ -13304,7 +13333,7 @@ async function runExpertLoop(
           ]);
           const scopedDerivedMandatory = filterPerProductMeasuredCriteria(
             proposedDerivedMandatoryCriteria,
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+            separatedDeclarationEvidence,
             verifiedCustomerMeasurementEvidence,
             effectiveDeclaredMeasurementScope,
             lastDiscover?.facets ?? [],
@@ -15118,15 +15147,17 @@ async function runExpertLoop(
         // declared in the consultant's reasoning survive; invented filters and
         // values explicitly negated by the customer are removed.
         if (tc.name === "search_catalog" && lastDiscover) {
-          const userEvidence = `${
-            history.filter((message) => message.role === "user").slice(-6).map((
-              message,
-            ) => message.content).join("\n")
-          }\n${userMessage}`;
-          const declaredReasoning =
-            `${userEvidence}\n${priorReplacementReasoning}\n${
-              initialSelectionDiscoveryNoun ?? ""
-            }\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const userEvidence = recentCustomerTurnEvidence;
+          // guardSearchFilters also parses physical units from this evidence;
+          // independent model fields must not lend one another a unit.
+          const declaredReasoning = joinMeasurementEvidenceSegments([
+            userEvidence,
+            priorReplacementReasoning,
+            initialSelectionDiscoveryNoun ?? "",
+            firstAssistantText,
+            assistantReasoning,
+            resp.text,
+          ].filter(Boolean));
           reconcileSelectionMeasurementScope(declaredReasoning);
           const guarded = guardSearchFilters(
             tc.args as Record<string, unknown>,
@@ -27520,8 +27551,10 @@ Deno.serve(async (req) => {
                     entity: verifiedFreeformChoice.entity,
                     leaf: verifiedFreeformChoice.leaf,
                     original_request: freeformCandidate.original_request,
-                    effective_request:
-                      `${freeformCandidate.original_request}\nУточнение клиента по исходному запросу: раздел каталога «${verifiedFreeformChoice.leaf}». Текущие критерии клиента: ${userMessage}`,
+                    effective_request: joinCustomerTurns([
+                      freeformCandidate.original_request,
+                      `Уточнение клиента по исходному запросу: раздел каталога «${verifiedFreeformChoice.leaf}». Текущие критерии клиента: ${userMessage}`,
+                    ]),
                     slot_id: verifiedFreeformChoice.slot_id,
                     issued_slot: verifiedFreeformChoice.issued_slot,
                   }
@@ -27677,7 +27710,7 @@ Deno.serve(async (req) => {
               });
               const out = await runExpertLoop(
                 additionalSelectionRequest
-                  ? `${ellipticalBaseRequest}\n${userMessage}`
+                  ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
                   : isShortAttributeSelectionFollowup(userMessage)
                   ? `${scopedSelectionRequest.message} ${sameSectionScope.leaf}`
                   : scopedSelectionRequest.message,
@@ -28325,7 +28358,7 @@ Deno.serve(async (req) => {
               }
             } else {
               const combinedSelectionRequest = additionalSelectionRequest
-                ? `${ellipticalBaseRequest}\n${userMessage}`
+                ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
                 : scopedSelectionRequest.message;
               const needsServerAreaProof = additionalSelectionRequest &&
                 verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
