@@ -6,11 +6,17 @@
  * full electrical or installation compatibility.
  */
 
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
+
 export type ReplacementDimensionRole =
   | "mounting_cutout_mm"
   | "outer_diameter_mm";
 
 export interface ReplacementDimensionInput {
+  /** Exact live catalogue identity, required before attached facts are used. */
+  id?: string;
+  article?: string | null;
+  url?: string;
   /** Sanitised catalogue `content`, already bounded by the product mapper. */
   description_excerpt?: string | null;
   /** Catalogue option projections, each in `caption: value` form. */
@@ -18,20 +24,40 @@ export interface ReplacementDimensionInput {
   /** Optional paired option projections from the internal product cache. */
   facet_values?: Record<string, string[]>;
   facet_captions?: Record<string, string>;
+  /** Internal, validated attachment; never projected into public product data. */
+  verified_manufacturer_facts?: VerifiedManufacturerFacts;
+}
+
+export interface ReplacementDimensionRange {
+  /** Inclusive round mounting-cutout bounds, in millimetres. */
+  min_mm: number;
+  max_mm: number;
+}
+
+export interface ReplacementManufacturerProvenance {
+  source_url: string;
+  document_version: string;
+  document_page: number | null;
+  verified_at: string;
 }
 
 export interface ReplacementDimensionEvidence {
   role: ReplacementDimensionRole;
-  mm: number;
-  origin: "content" | "option";
+  /** Null for a manufacturer range: never substitute an endpoint for an exact size. */
+  mm: number | null;
+  range_mm?: ReplacementDimensionRange;
+  origin: "content" | "option" | "manufacturer";
   label: string;
-  /** Bounded, human-auditable catalogue fragment; never a generated claim. */
+  /** Bounded, human-auditable fragment; never a generated claim. */
   fragment: string;
+  provenance?: ReplacementManufacturerProvenance;
 }
 
 export interface ReplacementDimensionValue {
   status: "known" | "missing" | "conflicting";
+  /** Exact value only; null for missing, conflicting, or range evidence. */
   mm: number | null;
+  range_mm?: ReplacementDimensionRange;
   evidence: ReplacementDimensionEvidence[];
 }
 
@@ -168,7 +194,9 @@ function roleValue(
   evidence: ReplacementDimensionEvidence[],
 ): ReplacementDimensionValue {
   const matches = evidence.filter((item) => item.role === role);
-  const distinct = [...new Set(matches.map((item) => item.mm))];
+  const distinct = [
+    ...new Set(matches.flatMap((item) => item.mm === null ? [] : [item.mm])),
+  ];
   return {
     status: distinct.length === 0
       ? "missing"
@@ -180,9 +208,109 @@ function roleValue(
   };
 }
 
+function manufacturerEvidence(
+  product: ReplacementDimensionInput,
+  nowMs: number,
+): ReplacementDimensionEvidence[] {
+  const facts = product.verified_manufacturer_facts;
+  // The validator binds the approved row to the full catalogue product. This
+  // second guard prevents accidental reuse after a cache/product substitution.
+  // Facts can remain attached to a request cache after their approval window
+  // expires, so the final evidence boundary must also recheck validity instead
+  // of relying only on the earlier hydration-time validation.
+  const validUntilMs = facts
+    ? Date.parse(facts.provenance.valid_until)
+    : Number.NaN;
+  if (
+    !facts || !product.id || !product.article || !product.url ||
+    !Number.isFinite(nowMs) || !Number.isFinite(validUntilMs) ||
+    validUntilMs <= nowMs ||
+    facts.binding.product_id !== product.id ||
+    facts.binding.article !== product.article ||
+    facts.binding.catalog_url !== product.url
+  ) return [];
+  const provenance: ReplacementManufacturerProvenance = {
+    source_url: facts.provenance.source_url.slice(0, 1_000),
+    document_version: facts.provenance.document_version.slice(0, 80),
+    document_page: facts.provenance.document_page,
+    verified_at: facts.provenance.verified_at.slice(0, 40),
+  };
+  const found: ReplacementDimensionEvidence[] = [];
+  const cutout = facts.technical.cutout;
+  if (
+    cutout?.shape === "round" &&
+    Number.isFinite(cutout.min_mm) && Number.isFinite(cutout.max_mm) &&
+    cutout.min_mm > 0 && cutout.min_mm <= cutout.max_mm &&
+    cutout.max_mm <= 10_000 &&
+    (cutout.kind === "range"
+      ? cutout.min_mm < cutout.max_mm
+      : cutout.kind === "exact" && cutout.min_mm === cutout.max_mm)
+  ) {
+    const range = cutout.kind === "range"
+      ? { min_mm: cutout.min_mm, max_mm: cutout.max_mm }
+      : undefined;
+    found.push({
+      role: "mounting_cutout_mm",
+      mm: range ? null : cutout.min_mm,
+      ...range ? { range_mm: range } : {},
+      origin: "manufacturer",
+      label: "round mounting cut-out",
+      fragment: range
+        ? `round cut-out ${range.min_mm}–${range.max_mm} mm`
+        : `round cut-out ${cutout.min_mm} mm`,
+      provenance,
+    });
+  }
+  const outer = facts.technical.outer_diameter_mm;
+  if (
+    typeof outer === "number" && Number.isFinite(outer) && outer > 0 &&
+    outer <= 10_000
+  ) {
+    found.push({
+      role: "outer_diameter_mm",
+      mm: outer,
+      origin: "manufacturer",
+      label: "outer diameter",
+      fragment: `outer diameter ${outer} mm`,
+      provenance,
+    });
+  }
+  return found;
+}
+
+function mergeManufacturerValue(
+  catalog: ReplacementDimensionValue,
+  manufacturer: ReplacementDimensionEvidence | undefined,
+): ReplacementDimensionValue {
+  if (!manufacturer) return catalog;
+  const evidence = [...catalog.evidence, manufacturer];
+  if (catalog.status === "conflicting") {
+    return { status: "conflicting", mm: null, evidence };
+  }
+  if (catalog.status === "missing") {
+    return {
+      status: "known",
+      mm: manufacturer.mm,
+      ...manufacturer.range_mm ? { range_mm: manufacturer.range_mm } : {},
+      evidence,
+    };
+  }
+  const bounds = manufacturer.range_mm ?? {
+    min_mm: manufacturer.mm!,
+    max_mm: manufacturer.mm!,
+  };
+  // A labelled catalogue exact value may narrow an approved manufacturer
+  // range. A contradictory catalogue value must not be silently overridden.
+  return catalog.mm !== null && catalog.mm >= bounds.min_mm &&
+      catalog.mm <= bounds.max_mm
+    ? { status: "known", mm: catalog.mm, evidence }
+    : { status: "conflicting", mm: null, evidence };
+}
+
 /** Parse only labelled catalogue text/options; product title and SKU are absent. */
 export function extractReplacementDimensions(
   product: ReplacementDimensionInput,
+  now: Date = new Date(),
 ): ReplacementDimensions {
   const evidence: ReplacementDimensionEvidence[] = [];
   if (typeof product.description_excerpt === "string") {
@@ -208,10 +336,25 @@ export function extractReplacementDimensions(
       if (parsed) evidence.push(parsed);
     }
   }
+  const manufacturer = manufacturerEvidence(product, now.getTime());
   return {
-    mounting_cutout_mm: roleValue("mounting_cutout_mm", evidence),
-    outer_diameter_mm: roleValue("outer_diameter_mm", evidence),
+    mounting_cutout_mm: mergeManufacturerValue(
+      roleValue("mounting_cutout_mm", evidence),
+      manufacturer.find((item) => item.role === "mounting_cutout_mm"),
+    ),
+    outer_diameter_mm: mergeManufacturerValue(
+      roleValue("outer_diameter_mm", evidence),
+      manufacturer.find((item) => item.role === "outer_diameter_mm"),
+    ),
   };
+}
+
+export function replacementDimensionBounds(
+  value: ReplacementDimensionValue,
+): ReplacementDimensionRange | null {
+  if (value.status !== "known") return null;
+  return value.range_mm ??
+    (value.mm === null ? null : { min_mm: value.mm, max_mm: value.mm });
 }
 
 function check(
@@ -219,14 +362,25 @@ function check(
   source: ReplacementDimensionValue,
   candidate: ReplacementDimensionValue,
 ): ReplacementDimensionCheck {
+  const sourceBounds = replacementDimensionBounds(source);
+  const candidateBounds = replacementDimensionBounds(candidate);
   return {
-    status: source.mm === null || candidate.mm === null
+    status: !sourceBounds || !candidateBounds
       ? "unknown"
-      : source.mm === candidate.mm
+      : sourceBounds.min_mm === sourceBounds.max_mm &&
+          candidateBounds.min_mm <= sourceBounds.min_mm &&
+          candidateBounds.max_mm >= sourceBounds.max_mm
       ? "match"
       : role === "mounting_cutout_mm"
-      ? "mismatch"
-      : "different",
+      ? sourceBounds.max_mm < candidateBounds.min_mm ||
+          candidateBounds.max_mm < sourceBounds.min_mm ||
+          sourceBounds.min_mm === sourceBounds.max_mm
+        ? "mismatch"
+        : "unknown"
+      : sourceBounds.max_mm < candidateBounds.min_mm ||
+          candidateBounds.max_mm < sourceBounds.min_mm
+      ? "different"
+      : "unknown",
     source,
     candidate,
   };
@@ -241,9 +395,10 @@ function check(
 export function evaluateReplacementDimensionalEvidence(
   source: ReplacementDimensionInput,
   candidate: ReplacementDimensionInput,
+  now: Date = new Date(),
 ): ReplacementDimensionalAssessment {
-  const sourceDimensions = extractReplacementDimensions(source);
-  const candidateDimensions = extractReplacementDimensions(candidate);
+  const sourceDimensions = extractReplacementDimensions(source, now);
+  const candidateDimensions = extractReplacementDimensions(candidate, now);
   const cutout = check(
     "mounting_cutout_mm",
     sourceDimensions.mounting_cutout_mm,

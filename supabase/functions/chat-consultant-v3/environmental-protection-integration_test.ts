@@ -28,12 +28,18 @@ Deno.test("a certified live IP range is known before deciding whether to repair 
     "const needsEnvironmentalProtectionRetry =",
     repairGuard,
   );
-  const repairCall = position(
-    "structuredReasoning = await callOpenRouter(",
+  const correctionAttempt = position(
+    "const correctionAttempt = (timeoutMs: number) =>",
     repairDecision,
   );
+  const repairCall = position("return callOpenRouter(", correctionAttempt);
+  const repairAssignment = position(
+    "structuredReasoning = await runProductMeasurementCorrection({",
+    repairCall,
+  );
   assert(range < repairGuard && repairGuard < repairDecision);
-  assert(repairDecision < repairCall);
+  assert(repairDecision < correctionAttempt && correctionAttempt < repairCall);
+  assert(repairCall < repairAssignment);
 
   // A range is the *only* new exception: the existing obligation checker
   // still owns ambiguous/no-live-facet cases and customer-exact IP requests.

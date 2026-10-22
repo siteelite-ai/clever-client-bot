@@ -14,6 +14,7 @@ import {
   titleSupportsGroundedJargonQuery,
 } from "./jargon-recover-catalog.ts";
 import type { ProductCache, ProductRef } from "./types.ts";
+import type { SearchCatalogInput } from "./search-catalog.ts";
 
 Deno.test("a jargon translation cannot collapse into an independent modifier", () => {
   assertEquals(
@@ -277,6 +278,151 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(helperPrompt.includes("Категория каталога: «Лампы»"), true);
   assertEquals(helperPrompt.includes("только граница безопасности"), true);
   assertEquals(helperPrompt.includes("Не повторяй категорию"), true);
+});
+
+Deno.test("model-invented appearance cannot reach catalog, while an authorized CORN translation still works", async () => {
+  const authorized: string[] = [];
+  const catalogQueries: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["круглая люстра", "CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query") ?? "";
+    catalogQueries.push(query);
+    if (query.includes("кругл")) throw new Error("unowned appearance reached the catalog");
+    const results = query === "CORN"
+      ? [{
+        id: 24780,
+        pagetitle: "Лампа LED CORN капсула 5Вт G4",
+        price: 476,
+        url: "https://220volt.kz/catalog/svetotexnika/lampyi/24780/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({ query: "кукуруза", category: "Лампы" }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+    authorizeCatalogSearch: (search) => {
+      authorized.push(search.query ?? "");
+      return !String(search.query ?? "").includes("кругл");
+    },
+  }, new Map());
+
+  assertEquals(authorized.includes("круглая люстра"), true);
+  assertEquals(catalogQueries.some((query) => query.includes("кругл")), false);
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+  assertEquals(result.ok ? result.results[0]?.id : null, "24780");
+});
+
+Deno.test("a throwing catalog authorizer fails closed without pretending the catalog is empty", async () => {
+  let catalogCalls = 0;
+  const result = await executeJargonRecoverCatalog({ query: "C16", literal_only: true }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl: async () => {
+      catalogCalls += 1;
+      throw new Error("an authorization failure reached the catalog");
+    },
+    authorizeCatalogSearch: () => {
+      throw new Error("provenance check failed");
+    },
+  }, new Map());
+
+  assertEquals(catalogCalls, 0);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error_code, "jargon_unavailable");
+});
+
+Deno.test("every scoped, unscoped, and technical-modifier jargon probe is authorized before catalog I/O", async () => {
+  const probeKey = (input: SearchCatalogInput): string =>
+    `${input.query ?? ""}|${input.category_in?.join(",") ?? input.category ?? ""}`;
+  const expectedProbes = [
+    "CORN|Светодиодные лампы",
+    "CORN|",
+    "CORN E27|Светодиодные лампы",
+    "CORN E27|",
+  ];
+  const run = async (deniedProbe?: string) => {
+    const authorized: string[] = [];
+    const fetched: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["CORN"] }) } }] } }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      const parsed = new URL(url);
+      const key = `${parsed.searchParams.get("query") ?? ""}|${parsed.searchParams.get("category") ?? ""}`;
+      fetched.push(key);
+      if (key === deniedProbe) throw new Error("an unauthorized catalog probe was sent");
+      const results = key === "CORN|"
+        ? [{
+          id: 24780,
+          pagetitle: "Лампа LED CORN капсула 5Вт G4",
+          price: 476,
+          url: "https://220volt.kz/catalog/svetotexnika/lampyi/24780/",
+          category: { pagetitle: "Лампы" },
+          options: [],
+        }]
+        : key === "CORN E27|"
+        ? [{
+          id: 24781,
+          pagetitle: "Лампа LED CORN 8Вт E27",
+          price: 600,
+          url: "https://220volt.kz/catalog/svetotexnika/lampyi/24781/",
+          category: { pagetitle: "Лампы" },
+          options: [],
+        }]
+        : [];
+      return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const result = await executeJargonRecoverCatalog({
+      query: "кукуруза",
+      category: "Лампы",
+      category_in: ["Светодиодные лампы"],
+      modifiers: ["E27"],
+    }, {
+      baseUrl: "https://catalog.test/api",
+      apiToken: "catalog-token",
+      openrouterApiKey: "router-token",
+      fetchImpl,
+      authorizeCatalogSearch: (search) => {
+        const key = probeKey(search);
+        authorized.push(key);
+        return key !== deniedProbe;
+      },
+    }, new Map());
+    return { authorized, fetched, result };
+  };
+
+  const normal = await run();
+  for (const probe of expectedProbes) {
+    assertEquals(normal.authorized.includes(probe), true);
+    assertEquals(normal.fetched.includes(probe), true);
+  }
+  assertEquals(normal.result.ok ? normal.result.results[0]?.id : null, "24781");
+  for (const deniedProbe of expectedProbes) {
+    const denied = await run(deniedProbe);
+    assertEquals(denied.authorized.includes(deniedProbe), true);
+    assertEquals(denied.fetched.includes(deniedProbe), false);
+  }
 });
 
 Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {

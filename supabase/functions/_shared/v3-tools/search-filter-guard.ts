@@ -55,6 +55,8 @@ export interface DroppedSearchFilter {
 
 export interface SearchFilterGuardResult {
   args: Record<string, unknown>;
+  /** A model-owned by_query appearance claim needs a verified broad browse. */
+  requiresBroadBrowse: boolean;
   kept: Array<{ key: string; value: string }>;
   user_backed: Array<{ key: string; value: string }>;
   inferred: Array<{ key: string; value: string }>;
@@ -75,6 +77,12 @@ export interface SearchFilterInferencePolicy {
   allowProseOnlyFacetInference?: boolean;
   /** Values already proved from the customer's request before model reasoning. */
   authoritativeFacetValues?: FacetValueEvidence[];
+  /** The current customer turn, never the accumulated conversation history. */
+  currentUserMessage?: string;
+  /** Product target established by server state, not args.category or model prose. */
+  trustedActiveProductTarget?: string | null;
+  /** Previously confirmed customer request, only when it is the active selection. */
+  trustedBaseUserMessage?: string | null;
 }
 
 export interface FacetValueEvidence {
@@ -774,6 +782,747 @@ function facetValueAppearsOnlyAsMeasurementNoun(
     );
 }
 
+/**
+ * Shape, style and design are customer preferences, not engineering facts
+ * that the consultant can derive from a room or an application. Recognize
+ * the axis through live facet metadata, not through product-specific terms.
+ * Other facets (for example mounting or IP protection) retain their existing
+ * reasoning-based completion rules.
+ */
+function isAppearanceFacet(facet: SearchFacet): boolean {
+  return norm(`${facet.key} ${facet.caption ?? ""}`).split(" ").some((token) =>
+    /^(?:shape|style|design|appearance|form|forma|форм[аыуе]|формой|стил[ьяюеи]|стилем|дизайн[а-я]*|внешн[а-я]*)$/u
+      .test(token)
+  );
+}
+
+export interface AppearanceEvidenceScope {
+  /** Never supply merged customer history here. */
+  currentUserMessage: string;
+  /** Only a target already established by the server may resolve ellipsis. */
+  trustedActiveProductTarget?: string | null;
+  /** An active, server-confirmed base request; arbitrary history is not proof. */
+  trustedBaseUserMessage?: string | null;
+}
+
+export interface CustomerAppearanceFacetInput extends AppearanceEvidenceScope {
+  facet: SearchFacet;
+  value: string;
+}
+
+const APPEARANCE_AXIS_WORD =
+  /^(?:shape|style|design|appearance|form|forma|форм(?:а|ы|е|у|ой|ою|ам|ами|ах)?|стил(?:ь|я|ю|ем|е|и|ей|ями|ях)?|дизайн\p{L}*|внешн\p{L}*)$/u;
+const REQUEST_WORD =
+  /^(?:нуж\p{L}*|ищ\p{L}*|хоч\p{L}*|найд\p{L}*|подбер\p{L}*|подбира\p{L}*|подобра\p{L}*|покаж\p{L}*|показы\p{L}*|предлож\p{L}*|дай|дайте|давайте|looking|want|need|find|show)$/u;
+const RELATION_PREPOSITION =
+  /^(?:для|в|во|на|под|над|к|ко|у|с|со|из|около|возле|при|вместо|for|in|to|with)$/u;
+const ELLIPTICAL_FOLLOWER =
+  /^(?:есть|бывает|найдется|найдутся|имеется|будет|будут|ли|же|а|или|для|в|на|под|пожалуйста|please|available)$/u;
+const ELLIPTICAL_PREFIX =
+  /^(?:а|ну|так|тогда|именно|только|пожалуйста|мне|у|вас|есть|ли|же|можно|давайте|please)$/u;
+const NEGATIVE_DEMAND =
+  /^(?:надо|подход\p{L}*|устраива\p{L}*|интересу\p{L}*)$/u;
+const SOURCE_PRODUCT_QUALIFIER =
+  /^(?:стар\p{L}*|прежн\p{L}*|нынешн\p{L}*|текущ\p{L}*|имеющ\p{L}*|установлен\p{L}*)$/u;
+const REPLACEMENT_FOLLOWER = /^(?:взамен|вместо|друг\p{L}*)$/u;
+const REPLACEMENT_VERB = /^(?:замен\p{L}*|поменя\p{L}*)$/u;
+const AXIS_PREDICATE_WORD =
+  /^(?:должн\p{L}*|обязательн\p{L}*|нужн\p{L}*|быть|будет|пусть|хоч\p{L}*)$/u;
+
+function appearanceWordMatches(left: string, right: string): boolean {
+  if (left === right) return true;
+  const leftStem = stemRu(left);
+  const rightStem = stemRu(right);
+  if (leftStem.length >= 3 && leftStem === rightStem) return true;
+  // Generic facet evidence tolerates shared prefixes, but appearance values
+  // cannot: a catalog shape `круг` must not match a model name `Круговорот`.
+  // A distinct stem is accepted only as a derived adjective (`овал` →
+  // `овальная`, `классика` → `классическая`).
+  const isAdjective = (word: string) =>
+    RU_ADJECTIVE_SUFFIXES.some((suffix) => word.endsWith(suffix));
+  const derivesAdjective = (noun: string, adjective: string) => {
+    if (!isAdjective(adjective)) return false;
+    const nounStem = stemRu(noun);
+    const adjectiveStem = stemRu(adjective);
+    if (nounStem.length < 4) return false;
+    const possibleStems = ["л", "н", "ов", "ев", "ск"]
+      .map((suffix) => `${nounStem}${suffix}`);
+    if (nounStem.endsWith("л")) possibleStems.push(`${nounStem}ьн`);
+    // The productive -ика → -ическая transition is morphological, not a
+    // hard-coded style name.
+    if (noun.endsWith("ика") && noun.length >= 7) {
+      possibleStems.push(`${noun.slice(0, -3)}ическ`);
+    }
+    return possibleStems.includes(adjectiveStem);
+  };
+  return derivesAdjective(left, right) || derivesAdjective(right, left);
+}
+
+function appearanceClauses(text: string): string[][] {
+  return String(text ?? "")
+    .split(/[\n.!?;,]+/u)
+    .map((clause) => norm(clause).split(" ").filter(Boolean))
+    .flatMap((tokens) => {
+      const clauses: string[][] = [];
+      let start = 0;
+      for (let index = 1; index < tokens.length; index++) {
+        if (
+          !["и", "а", "но"].includes(tokens[index]) ||
+          !(
+            REQUEST_WORD.test(tokens[index + 1] ?? "") ||
+            (tokens[index + 1] === "не" &&
+              REQUEST_WORD.test(tokens[index + 2] ?? ""))
+          )
+        ) continue;
+        clauses.push(tokens.slice(start, index));
+        start = index + 1;
+      }
+      clauses.push(tokens.slice(start));
+      return clauses.filter((part) => part.length > 0);
+    });
+}
+
+function appearanceTargetWords(facet: SearchFacet): string[] {
+  return norm(facet.caption ?? "")
+    .split(" ")
+    .filter((token) => token.length >= 4 && !APPEARANCE_AXIS_WORD.test(token));
+}
+
+function appearanceValueAt(
+  tokens: string[],
+  start: number,
+  valueTokens: string[],
+): boolean {
+  return valueTokens.length > 0 &&
+    valueTokens.every((valueToken, offset) =>
+      tokens[start + offset] !== undefined &&
+      appearanceWordMatches(valueToken, tokens[start + offset])
+    );
+}
+
+function isAppearanceRequestTarget(
+  tokens: string[],
+  targetWords: string[],
+): boolean {
+  return tokens.some((token, index) =>
+    targetWords.some((target) => appearanceWordMatches(target, token)) &&
+    tokens.slice(Math.max(0, index - 5), index).some((previous) =>
+      REQUEST_WORD.test(previous)
+    )
+  );
+}
+
+function appearanceRequestObject(tokens: string[]): string | null {
+  const requestIndex = tokens.findIndex((token) => REQUEST_WORD.test(token));
+  if (requestIndex < 0) return null;
+  const boundary = tokens.findIndex((token, index) =>
+    index > requestIndex && RELATION_PREPOSITION.test(token)
+  );
+  const objectPhrase = tokens.slice(
+    requestIndex + 1,
+    boundary < 0 ? undefined : boundary,
+  );
+  return objectPhrase.filter((token) =>
+    token.length >= 3 && !APPEARANCE_AXIS_WORD.test(token) &&
+    !RU_ADJECTIVE_SUFFIXES.some((suffix) => token.endsWith(suffix)) &&
+    !REQUEST_WORD.test(token) && token !== "мне" && token !== "именно"
+  ).at(-1) ?? null;
+}
+
+function appearanceValueIsCancelledInText(
+  facet: SearchFacet,
+  value: string,
+  text: string,
+): boolean {
+  const valueTokens = norm(value).split(" ").filter(Boolean);
+  const targetWords = appearanceTargetWords(facet);
+  const clauses = appearanceClauses(text);
+  return clauses.some((tokens, clauseIndex) =>
+    tokens.some((token, index) => {
+      if (!appearanceValueAt(tokens, index, valueTokens)) return false;
+      const valueEnd = index + valueTokens.length;
+      const hasLaterRequest = tokens.slice(valueEnd).some((candidate) =>
+        REQUEST_WORD.test(candidate)
+      ) || clauses.slice(clauseIndex + 1).some((laterClause) =>
+        laterClause.some((candidate) =>
+          REQUEST_WORD.test(candidate)
+        )
+      );
+      if (
+        appearanceValueDescribesSource(
+          tokens,
+          index,
+          valueEnd,
+          targetWords,
+          hasLaterRequest,
+        )
+      ) return false;
+      // «Не для круглого зала» negates an application/complement, not the
+      // appearance of the product requested in another clause. Match the
+      // adjective's local referent before treating nearby «не» as withdrawal.
+      const referent = tokens[valueEnd] ?? "";
+      if (
+        RELATION_PREPOSITION.test(tokens[index - 1] ?? "") &&
+        referent && !APPEARANCE_AXIS_WORD.test(referent) &&
+        !targetWords.some((target) =>
+          appearanceWordMatches(target, referent)
+        )
+      ) return false;
+      if (
+        tokens.slice(Math.max(0, index - 2), index).some((previous) =>
+          previous === "не" || previous === "без" ||
+          previous === "кроме" || previous === "исключая"
+        )
+      ) {
+        return true;
+      }
+      // Negation of the demand can precede or follow the product phrase:
+      // «не хочу люстру круглую», «круглая люстра не нужна».
+      return tokens.some((candidate, candidateIndex) =>
+        tokens[candidateIndex - 1] === "не" &&
+        (REQUEST_WORD.test(candidate) || NEGATIVE_DEMAND.test(candidate))
+      );
+    })
+  );
+}
+
+function appearanceReferentIsProduct(
+  referent: string,
+  targetWords: string[],
+  requestObject: string | null,
+  trustedActiveProductTarget: string | null,
+): boolean {
+  const trustedWords = norm(trustedActiveProductTarget ?? "")
+    .split(" ").filter((token) => token.length >= 4);
+  return [
+    ...targetWords,
+    ...trustedWords,
+    ...(requestObject ? [requestObject] : []),
+  ]
+    .some((target) => appearanceWordMatches(target, referent));
+}
+
+function nearestAppearanceReferent(
+  tokens: string[],
+  before: number,
+): string | null {
+  for (let index = before - 1; index >= 0; index--) {
+    const token = tokens[index];
+    if (
+      RELATION_PREPOSITION.test(token) ||
+      APPEARANCE_AXIS_WORD.test(token) ||
+      REQUEST_WORD.test(token) ||
+      ELLIPTICAL_PREFIX.test(token) ||
+      token === "не" || token === "без" ||
+      RU_ADJECTIVE_SUFFIXES.some((suffix) => token.endsWith(suffix))
+    ) continue;
+    return token;
+  }
+  return null;
+}
+
+/** A user's description of the existing item is not a desired appearance.
+ * Role is determined by request grammar (possession, old/current qualifiers,
+ * and the source object of "replace X with Y"), not by fixture vocabulary. */
+function appearanceValueDescribesSource(
+  tokens: string[],
+  valueIndex: number,
+  valueEnd: number,
+  targetWords: string[],
+  hasLaterRequest = false,
+): boolean {
+  const before = tokens.slice(0, valueIndex);
+  const requestIndex = before.findLastIndex((token) =>
+    REQUEST_WORD.test(token)
+  );
+  const possessionIndex = before.findLastIndex((token, index) =>
+    token === "у" && tokens[index + 1] === "меня" ||
+    /^(?:мо[йяеию]|моего|моей|моими)$/u.test(token)
+  );
+  if (possessionIndex >= 0 && requestIndex < possessionIndex) return true;
+  // «Есть круглая люстра, хочу овальную»: a declarative inventory phrase
+  // before a new request describes the current item. A standalone
+  // availability question («Есть круглая люстра?») remains a target request.
+  if (
+    hasLaterRequest && requestIndex < 0 &&
+    before.includes("есть")
+  ) return true;
+
+  const replacementIndex = before.findLastIndex((token) =>
+    REPLACEMENT_VERB.test(token)
+  );
+  if (
+    replacementIndex >= 0 &&
+    !before.slice(replacementIndex + 1).includes("на")
+  ) return true;
+
+  const nearbySourceQualifier = before.slice(Math.max(0, valueIndex - 4))
+    .some((token) => SOURCE_PRODUCT_QUALIFIER.test(token));
+  if (!nearbySourceQualifier) return false;
+  return tokens.slice(Math.max(0, valueIndex - 3), valueEnd + 2)
+    .some((token) =>
+      targetWords.some((target) => appearanceWordMatches(target, token))
+    );
+}
+
+/**
+ * Prove the *referent* of a live appearance value in one text source. Word
+ * stems alone are insufficient: «круглый зал» and «форма зала круглая» do
+ * not select a round chandelier. We use local grammar and the live facet's
+ * product noun, never an enumerated product or appearance-value dictionary.
+ */
+function appearanceClaimInText(
+  facet: SearchFacet,
+  value: string,
+  text: string,
+  trustedActiveProductTarget: string | null = null,
+  allowUnanchoredQueryAdjective = false,
+): boolean {
+  if (!isAppearanceFacet(facet)) return false;
+  const valueTokens = norm(value).split(" ").filter(Boolean);
+  const targetWords = appearanceTargetWords(facet);
+  const clauses = appearanceClauses(text);
+  const hasTrustedTarget = Boolean(trustedActiveProductTarget?.trim());
+  const hasMentionedProductTarget = clauses.some((tokens) =>
+    tokens.some((token) =>
+      targetWords.some((target) => appearanceWordMatches(target, token))
+    )
+  );
+
+  for (const [clauseIndex, tokens] of clauses.entries()) {
+    const priorOrCurrentRequest = clauses.slice(0, clauseIndex + 1).some(
+      (candidate) => candidate.some((token) => REQUEST_WORD.test(token)),
+    );
+    const currentTurnHasTarget = clauses.slice(0, clauseIndex + 1).some(
+      (candidate) => isAppearanceRequestTarget(candidate, targetWords),
+    );
+    const requestObject = appearanceRequestObject(tokens);
+    const negatedDemand = tokens.some((token, index) =>
+      tokens[index - 1] === "не" &&
+      (REQUEST_WORD.test(token) || NEGATIVE_DEMAND.test(token))
+    );
+    for (let index = 0; index < tokens.length; index++) {
+      if (!appearanceValueAt(tokens, index, valueTokens)) continue;
+      const end = index + valueTokens.length;
+      if (negatedDemand) continue;
+      const hasLaterRequest = tokens.slice(end).some((token) =>
+        REQUEST_WORD.test(token)
+      ) || clauses.slice(clauseIndex + 1).some((laterClause) =>
+        laterClause.some((token) => REQUEST_WORD.test(token))
+      );
+      if (
+        appearanceValueDescribesSource(
+          tokens,
+          index,
+          end,
+          targetWords,
+          hasLaterRequest,
+        )
+      ) {
+        continue;
+      }
+      if (
+        tokens.slice(Math.max(0, index - 2), index).some((token) =>
+          token === "не" || token === "без" || token === "кроме"
+        )
+      ) continue;
+      // Measurements such as «30 квадратов» are not a square fixture.
+      if (index > 0 && /^\d+(?:[.,]\d+)?$/u.test(tokens[index - 1])) {
+        continue;
+      }
+
+      const axisBefore = tokens.slice(Math.max(0, index - 3), index)
+        .findLastIndex((token) => APPEARANCE_AXIS_WORD.test(token));
+      if (axisBefore !== -1) {
+        const axisIndex = Math.max(0, index - 3) + axisBefore;
+        const subject = tokens.slice(axisIndex + 1, index)
+          .filter((token) =>
+            !RELATION_PREPOSITION.test(token) &&
+            !AXIS_PREDICATE_WORD.test(token)
+          );
+        // In «форма зала круглая» the noun between axis and value owns the
+        // adjective. A different current request elsewhere cannot override it.
+        if (subject.length > 0) {
+          if (
+            subject.every((token) =>
+              appearanceReferentIsProduct(
+                token,
+                targetWords,
+                requestObject,
+                trustedActiveProductTarget,
+              )
+            )
+          ) return true;
+          continue;
+        }
+        const referent = nearestAppearanceReferent(tokens, axisIndex);
+        if (referent) {
+          if (
+            appearanceReferentIsProduct(
+              referent,
+              targetWords,
+              requestObject,
+              trustedActiveProductTarget,
+            )
+          ) return true;
+          continue;
+        }
+        if (
+          tokens.slice(0, axisIndex).some((token) =>
+            REQUEST_WORD.test(token)
+          ) ||
+          currentTurnHasTarget || priorOrCurrentRequest || hasTrustedTarget
+        ) return true;
+        continue;
+      }
+
+      const axisAfter = tokens.slice(end, end + 3)
+        .findIndex((token) => APPEARANCE_AXIS_WORD.test(token));
+      if (axisAfter !== -1) {
+        const axisIndex = end + axisAfter;
+        // A noun immediately following the axis owns it («форма зала»).
+        // A preposition starts an application complement instead («форма
+        // для зала»), so it cannot relabel the preceding product adjective.
+        const subject = RELATION_PREPOSITION.test(tokens[axisIndex + 1] ?? "")
+          ? []
+          : tokens.slice(axisIndex + 1, axisIndex + 3);
+        if (
+          subject.length > 0 &&
+          !subject.every((token) =>
+            appearanceReferentIsProduct(
+              token,
+              targetWords,
+              requestObject,
+              trustedActiveProductTarget,
+            )
+          ) &&
+          !ELLIPTICAL_FOLLOWER.test(subject[0])
+        ) continue;
+        const referent = nearestAppearanceReferent(tokens, index);
+        if (referent) {
+          if (
+            appearanceReferentIsProduct(
+              referent,
+              targetWords,
+              requestObject,
+              trustedActiveProductTarget,
+            )
+          ) return true;
+          continue;
+        }
+        if (
+          tokens.slice(0, index).some((token) => REQUEST_WORD.test(token)) ||
+          currentTurnHasTarget || priorOrCurrentRequest || hasTrustedTarget
+        ) return true;
+        continue;
+      }
+
+      // Directly modified live product noun: «круглую люстру», not «люстру
+      // для круглого зала». A relation preposition before the value indicates
+      // the latter kind of complement, even when the noun happens to match.
+      const preceding = tokens[index - 1] ?? "";
+      const next = tokens[end] ?? "";
+      const directTarget = targetWords.some((target) =>
+        appearanceWordMatches(target, preceding) ||
+        appearanceWordMatches(target, next)
+      );
+      if (directTarget && !RELATION_PREPOSITION.test(preceding)) return true;
+
+      // The requested product can use a different noun from the live category
+      // («круглая лампа» under «Светильники»). The noun immediately after the
+      // adjective is the direct object only in a request clause, not after
+      // «для/в/с» and not in an arbitrary phrase like «круг задач».
+      const nearbyRequest = tokens.slice(Math.max(0, index - 2), index)
+        .some((token) => REQUEST_WORD.test(token));
+      if (
+        nearbyRequest && !RELATION_PREPOSITION.test(preceding) &&
+        next.length >= 3 && !ELLIPTICAL_FOLLOWER.test(next) &&
+        !RELATION_PREPOSITION.test(next)
+      ) return true;
+
+      // The requested replacement can omit a repeated product noun after an
+      // explicit source mention: «старая люстра круглая, новая нужна
+      // овальная» / «у меня лофтовая люстра, хочу классическую». This is
+      // customer-owned only when the product target is grounded elsewhere in
+      // the same turn or by trusted server state.
+      const replacementTarget = preceding === "на" &&
+        tokens.slice(0, index).some((token) => REPLACEMENT_VERB.test(token));
+      if (
+        (hasMentionedProductTarget || hasTrustedTarget) &&
+        (tokens.slice(0, index).some((token) => REQUEST_WORD.test(token)) ||
+          replacementTarget) &&
+        (!RELATION_PREPOSITION.test(preceding) || replacementTarget) &&
+        (!next || ELLIPTICAL_FOLLOWER.test(next) ||
+          REPLACEMENT_FOLLOWER.test(next))
+      ) return true;
+
+      // Postposed demand after an elliptical adjective, e.g. «а овальную
+      // хочу», is a choice only when the product target is already grounded.
+      if (
+        (hasMentionedProductTarget || hasTrustedTarget) &&
+        tokens.slice(0, index).every((token) =>
+          ELLIPTICAL_PREFIX.test(token)
+        ) &&
+        REQUEST_WORD.test(next)
+      ) return true;
+
+      // Search-query fragments often omit the request verb. When checking a
+      // model-originated query, an inflected appearance adjective attached to
+      // an arbitrary noun is a *possible* product narrowing even if that noun
+      // differs from the catalog class («круглую лампу» / «светильники»).
+      // This deliberately broadens uncertain queries instead of silently
+      // accepting them; it is never used to prove a customer-owned filter.
+      if (
+        allowUnanchoredQueryAdjective &&
+        RU_ADJECTIVE_SUFFIXES.some((suffix) =>
+          tokens[index].endsWith(suffix)
+        ) &&
+        next.length >= 3 && !ELLIPTICAL_FOLLOWER.test(next) &&
+        !RELATION_PREPOSITION.test(next) &&
+        !RELATION_PREPOSITION.test(preceding)
+      ) return true;
+
+      // «А круглая есть?» is only a product constraint when the server has
+      // retained a proven active selection target. Mere chat history or a
+      // model-supplied category cannot create that target.
+      if (
+        hasTrustedTarget &&
+        (!next || ELLIPTICAL_FOLLOWER.test(next)) &&
+        tokens.slice(0, index).every((token) =>
+          ELLIPTICAL_PREFIX.test(token) || REQUEST_WORD.test(token)
+        )
+      ) return true;
+    }
+  }
+  return false;
+}
+
+/** A new replacement starts a new product selection, so a shape/style owned
+ * by the old item cannot silently transfer from the confirmed base request.
+ * Inspect the source-object role, not a list of product names or facet values. */
+function appearanceReplacesActiveProduct(
+  text: string,
+  facet: SearchFacet,
+  trustedActiveProductTarget: string,
+): boolean {
+  const targetWords = [
+    ...appearanceTargetWords(facet),
+    ...norm(trustedActiveProductTarget).split(" ").filter((word) =>
+      word.length >= 4
+    ),
+  ];
+  return appearanceClauses(text).some((tokens) =>
+    tokens.some((token, index) => {
+      if (!REPLACEMENT_VERB.test(token)) return false;
+      const after = tokens.slice(index + 1);
+      const newItemIndex = after.indexOf("на");
+      const source = newItemIndex < 0 ? after : after.slice(0, newItemIndex);
+      const relationIndex = source.findIndex((word) =>
+        RELATION_PREPOSITION.test(word)
+      );
+      if (
+        source.some((word, sourceIndex) =>
+          (relationIndex < 0 || sourceIndex < relationIndex) &&
+          targetWords.some((target) => appearanceWordMatches(target, word))
+        )
+      ) return true;
+      // «Хочу заменить на другую» elides the old object. A server-confirmed
+      // active target, not free-form chat history, resolves that ellipsis.
+      return newItemIndex === 0 && Boolean(after[1]);
+    })
+  );
+}
+
+/**
+ * Pure customer provenance decision. `currentUserMessage` must be the latest
+ * user turn, not model reasoning and not concatenated conversation history.
+ * For a non-appearance facet this helper is intentionally inapplicable.
+ */
+export function resolveCustomerAppearanceFacetOwnership(
+  input: CustomerAppearanceFacetInput,
+): boolean {
+  // A current-turn withdrawal defeats both current positive-looking words
+  // and a previously confirmed base request. Canonical catalog nouns must be
+  // matched morphologically here («круг» → «не круглую»).
+  if (
+    appearanceValueIsCancelledInText(
+      input.facet,
+      input.value,
+      input.currentUserMessage,
+    )
+  ) {
+    return false;
+  }
+  if (
+    appearanceClaimInText(
+      input.facet,
+      input.value,
+      input.currentUserMessage,
+      input.trustedActiveProductTarget,
+    )
+  ) return true;
+  if (
+    !input.trustedActiveProductTarget?.trim() ||
+    !input.trustedBaseUserMessage?.trim()
+  ) return false;
+  // A new, explicit shape/style/design choice replaces the inherited one.
+  if (
+    input.facet.values.some(({ value }) =>
+      value !== input.value && appearanceClaimInText(
+        input.facet,
+        value,
+        input.currentUserMessage,
+        input.trustedActiveProductTarget,
+      )
+    )
+  ) return false;
+  if (
+    appearanceReplacesActiveProduct(
+      input.currentUserMessage,
+      input.facet,
+      input.trustedActiveProductTarget,
+    )
+  ) return false;
+  return appearanceClaimInText(
+    input.facet,
+    input.value,
+    input.trustedBaseUserMessage,
+    input.trustedActiveProductTarget,
+  ) && !contradictedByUser(input.value, input.currentUserMessage);
+}
+
+/** A structured model declaration (`shape: квадрат`) is a claim even when
+ * preceding prose has no product noun. It never establishes customer ownership.
+ * A room axis (`Форма зала: квадрат`) is not the live facet axis. */
+function explicitAppearanceAxisDeclaration(
+  facet: SearchFacet,
+  value: string,
+  text: string,
+): boolean {
+  const liveAxisWords = norm(`${facet.key} ${facet.caption ?? ""}`)
+    .split(" ").filter((token) => APPEARANCE_AXIS_WORD.test(token));
+  if (liveAxisWords.length === 0) return false;
+  const valueTokens = norm(value).split(" ").filter(Boolean);
+  const declarations = String(text ?? "").toLowerCase().matchAll(
+    /([\p{L}\d_-]+)\s*[:=]\s*([\p{L}\d_-]+(?:\s+[\p{L}\d_-]+)*)/gu,
+  );
+  for (const [, axis, declaredValue] of declarations) {
+    if (!liveAxisWords.includes(norm(axis))) continue;
+    if (appearanceValueAt(norm(declaredValue).split(" "), 0, valueTokens)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Live-schema appearance claims in arbitrary model prose or a search query. */
+export function appearanceFacetClaimsFromText(
+  facets: SearchFacet[],
+  text: string,
+  options: {
+    trustedActiveProductTarget?: string | null;
+    /** Conservative model-query suspicion; never proves user provenance. */
+    allowUnanchoredQueryAdjective?: boolean;
+  } = {},
+): FacetValueEvidence[] {
+  return facets.filter(isAppearanceFacet).flatMap((facet) =>
+    facet.values.flatMap(({ value }) =>
+      (explicitAppearanceAxisDeclaration(facet, value, text) ||
+          appearanceClaimInText(
+            facet,
+            value,
+            text,
+            options.trustedActiveProductTarget,
+            options.allowUnanchoredQueryAdjective,
+          ))
+        ? [{ key: facet.key, value }]
+        : []
+    )
+  );
+}
+
+function appearanceValueMentionedInText(
+  facet: SearchFacet,
+  value: string,
+  text: string,
+): boolean {
+  if (!isAppearanceFacet(facet)) return false;
+  const valueTokens = norm(value).split(" ").filter(Boolean);
+  return appearanceClauses(text).some((tokens) =>
+    tokens.some((token, index) => {
+      if (!appearanceValueAt(tokens, index, valueTokens)) return false;
+      // A number followed by «квадратов» is area, not a shape term.
+      if (index > 0 && /^\d+(?:[.,]\d+)?$/u.test(tokens[index - 1])) {
+        return false;
+      }
+      // A bare recovery token is ambiguous and must not become a narrow
+      // search unless the customer owns the product appearance elsewhere.
+      if (tokens.length === valueTokens.length) return true;
+      if (
+        tokens.slice(Math.max(0, index - 3), index + valueTokens.length + 3)
+          .some((nearby) => APPEARANCE_AXIS_WORD.test(nearby))
+      ) return true;
+      // An adjective explicitly modifies some noun, possibly a room. Even
+      // then the raw full-text query can accidentally narrow catalog search.
+      return RU_ADJECTIVE_SUFFIXES.some((suffix) => token.endsWith(suffix));
+    })
+  );
+}
+
+/**
+ * Query-safety signal, not a new customer constraint. Covers model-created
+ * product modifiers and ambient room modifiers copied into raw text search.
+ * The caller should broad-browse a verified category instead of executing a
+ * narrow query when any unowned live appearance value is returned.
+ */
+export function unownedAppearanceMentionsInText(
+  facets: SearchFacet[],
+  text: string,
+  scope: AppearanceEvidenceScope,
+): FacetValueEvidence[] {
+  return facets.filter(isAppearanceFacet).flatMap((facet) =>
+    facet.values.flatMap(({ value }) =>
+      (appearanceValueMentionedInText(facet, value, text) ||
+          appearanceClaimInText(
+            facet,
+            value,
+            text,
+            scope.trustedActiveProductTarget,
+            true,
+          )) &&
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          value,
+          scope.currentUserMessage,
+          scope,
+        )
+        ? [{ key: facet.key, value }]
+        : []
+    )
+  );
+}
+
+function customerOwnsAppearanceFacetValue(
+  facet: SearchFacet,
+  value: string,
+  userEvidence: string,
+  scope?: Partial<AppearanceEvidenceScope>,
+): boolean {
+  if (!isAppearanceFacet(facet)) return true;
+  const currentUserMessage = scope?.currentUserMessage ?? userEvidence;
+  if (
+    facetValueAppearsOnlyAsMeasurementNoun(value, currentUserMessage) ||
+    contradictedByUser(value, currentUserMessage)
+  ) return false;
+  return resolveCustomerAppearanceFacetOwnership({
+    facet,
+    value,
+    currentUserMessage,
+    trustedActiveProductTarget: scope?.trustedActiveProductTarget,
+    trustedBaseUserMessage: scope?.trustedBaseUserMessage,
+  });
+}
+
 function visualSingleLetter(value: string): string {
   const map: Record<string, string> = {
     а: "a",
@@ -1289,6 +2038,7 @@ export function projectExplicitReasoningFacetValues(
   facets: SearchFacet[],
   declaredReasoning: string,
   userEvidence: string,
+  appearanceScope?: Partial<AppearanceEvidenceScope>,
 ): ReasoningFacetProjection {
   const reasoning = ` ${norm(declaredReasoning)} `;
   const kept: ReasoningFacetProjection["kept"] = [];
@@ -1298,7 +2048,13 @@ export function projectExplicitReasoningFacetValues(
     if (isReplacementIdentityFacet(facet)) continue;
     const compoundCount = compoundCountFacetValue(facet, declaredReasoning);
     if (
-      compoundCount && !contradictedByUser(compoundCount.value, userEvidence)
+      compoundCount && !contradictedByUser(compoundCount.value, userEvidence) &&
+      customerOwnsAppearanceFacetValue(
+        facet,
+        compoundCount.value,
+        userEvidence,
+        appearanceScope,
+      )
     ) {
       const item = { key: facet.key, value: compoundCount.value };
       kept.push(item);
@@ -1316,6 +2072,12 @@ export function projectExplicitReasoningFacetValues(
     );
     if (
       labelledValue && !contradictedByUser(labelledValue.value, userEvidence) &&
+      customerOwnsAppearanceFacetValue(
+        facet,
+        labelledValue.value,
+        userEvidence,
+        appearanceScope,
+      ) &&
       (!isAbsenceOrUnknownFacetValue(labelledValue.value) ||
         customerOwnsAbsentFacetValue(
           facet,
@@ -1342,6 +2104,14 @@ export function projectExplicitReasoningFacetValues(
 
     const candidates = facet.values.filter((candidate) => {
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+          appearanceScope,
+        )
+      ) return false;
       if (
         isAbsenceOrUnknownFacetValue(candidate.value) &&
         !customerOwnsAbsentFacetValue(facet, candidate.value, userEvidence)
@@ -1638,9 +2408,39 @@ export function guardSearchFilters(
   explicitVisibleRequirements: ExplicitVisibleRequirement[] = [],
   inferencePolicy: SearchFilterInferencePolicy = {},
 ): SearchFilterGuardResult {
+  const appearanceScope: AppearanceEvidenceScope = {
+    currentUserMessage: inferencePolicy.currentUserMessage ?? userEvidence,
+    trustedActiveProductTarget: inferencePolicy.trustedActiveProductTarget,
+    trustedBaseUserMessage: inferencePolicy.trustedBaseUserMessage,
+  };
+  if (args.mode === "by_query") {
+    const query = typeof args.query === "string" ? args.query : "";
+    const unowned = unownedAppearanceMentionsInText(
+      facets,
+      query,
+      appearanceScope,
+    );
+    return {
+      // Do not rewrite a model-owned narrow query into an invalid empty
+      // request or trust its category. The caller must honor this flag and
+      // substitute a server-verified broad category browse before I/O.
+      args,
+      requiresBroadBrowse: unowned.length > 0,
+      kept: [],
+      user_backed: [],
+      inferred: [],
+      subsumed: [],
+      dropped: unowned.map(({ key, value }) => ({
+        key,
+        value,
+        reason: "not_declared_in_reasoning" as const,
+      })),
+    };
+  }
   if (args.mode !== "by_filter") {
     return {
       args,
+      requiresBroadBrowse: false,
       kept: [],
       user_backed: [],
       inferred: [],
@@ -1759,6 +2559,21 @@ export function guardSearchFilters(
         continue;
       }
       if (facetValueAppearsOnlyAsMeasurementNoun(canonical, userEvidence)) {
+        dropped.push({
+          key,
+          value: canonical,
+          reason: "not_declared_in_reasoning",
+        });
+        continue;
+      }
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          canonical,
+          userEvidence,
+          appearanceScope,
+        )
+      ) {
         dropped.push({
           key,
           value: canonical,
@@ -1937,6 +2752,14 @@ export function guardSearchFilters(
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+          appearanceScope,
+        )
+      ) return false;
+      if (
         numericFacetValueConflictsWithUserMeasurement(
           candidate.value,
           facet,
@@ -2016,6 +2839,14 @@ export function guardSearchFilters(
     const evidenced = facet.values.filter((candidate) => {
       const value = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+          appearanceScope,
+        )
+      ) return false;
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
@@ -2194,6 +3025,7 @@ export function guardSearchFilters(
   else delete nextArgs.options;
   return {
     args: nextArgs,
+    requiresBroadBrowse: false,
     kept,
     user_backed: userBacked,
     inferred,

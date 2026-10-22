@@ -42,7 +42,8 @@ test('proves minimum from all complete public-category cards, not from sort orde
   ]);
   const proof = catalogMinimumFromHtml(html, source, contract);
   assert.deepEqual({ ...proof, eligible_products: undefined }, {
-    source_url: source, listed_total: 6, matching_available: 4,
+    source_url: source, listed_total: 6, covered_total: 6, page_count: 1,
+    matching_available: 4,
     eligible_products: undefined,
     excluded_out_of_stock: 1, excluded_other_units: 1,
     minimum_price: 100,

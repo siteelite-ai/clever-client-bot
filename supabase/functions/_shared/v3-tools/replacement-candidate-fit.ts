@@ -1,9 +1,13 @@
 import {
   extractReplacementDimensions,
+  replacementDimensionBounds,
   type ReplacementDimensionEvidence,
   type ReplacementDimensionValue,
+  type ReplacementManufacturerProvenance,
 } from "./replacement-provisional-evidence.ts";
+import { normalizeProductUrl } from "./search-catalog.ts";
 import type { ProductFull } from "./types.ts";
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
 
 /**
  * Evidence-led triage for a replacement candidate, not a certificate of
@@ -28,10 +32,16 @@ export type ReplacementFitAxis =
   | "ip_grade";
 
 export interface ReplacementFitEvidence {
-  origin: "catalog_field" | "catalog_option" | "catalog_content" | "customer";
+  origin:
+    | "catalog_field"
+    | "catalog_option"
+    | "catalog_content"
+    | "customer"
+    | "manufacturer";
   field: string;
   value: string | number;
   fragment?: string;
+  provenance?: ReplacementManufacturerProvenance;
 }
 
 export interface ReplacementFitCheck {
@@ -87,8 +97,15 @@ function evidence(
   field: string,
   value: string | number,
   fragment?: string,
+  provenance?: ReplacementManufacturerProvenance,
 ): ReplacementFitEvidence {
-  return { origin, field, value, ...fragment ? { fragment } : {} };
+  return {
+    origin,
+    field,
+    value,
+    ...fragment ? { fragment } : {},
+    ...provenance ? { provenance } : {},
+  };
 }
 
 function check(
@@ -501,12 +518,24 @@ function dimensionsEvidence(
 ): ReplacementFitEvidence[] {
   return value.evidence.map((item: ReplacementDimensionEvidence) =>
     evidence(
-      item.origin === "content" ? "catalog_content" : "catalog_option",
+      item.origin === "manufacturer"
+        ? "manufacturer"
+        : item.origin === "content"
+        ? "catalog_content"
+        : "catalog_option",
       item.label,
-      item.mm,
+      item.mm ?? `${item.range_mm!.min_mm}–${item.range_mm!.max_mm} mm`,
       item.fragment,
+      item.provenance,
     )
   );
+}
+
+function validCustomerCutout(
+  value: number | null | undefined,
+): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 &&
+    value <= 10_000;
 }
 
 function cutoutCheck(
@@ -517,8 +546,7 @@ function cutoutCheck(
   const original = extractReplacementDimensions(source).mounting_cutout_mm;
   const proposed = extractReplacementDimensions(candidate).mounting_cutout_mm;
   const declared = context.customer_cutout_mm;
-  const customerKnown = typeof declared === "number" &&
-    Number.isFinite(declared) && declared > 0 && declared <= 10_000;
+  const customerKnown = validCustomerCutout(declared);
   const sourceEvidence = [
     ...dimensionsEvidence(original),
     ...customerKnown
@@ -534,7 +562,12 @@ function cutoutCheck(
       candidateEvidence,
     );
   }
-  if (customerKnown && original.mm !== null && original.mm !== declared) {
+  const sourceBounds = replacementDimensionBounds(original);
+  const candidateBounds = replacementDimensionBounds(proposed);
+  if (
+    customerKnown && sourceBounds &&
+    (declared < sourceBounds.min_mm || declared > sourceBounds.max_mm)
+  ) {
     return check(
       "unknown",
       "customer_and_source_cutout_conflict",
@@ -543,15 +576,30 @@ function cutoutCheck(
     );
   }
   const expected = customerKnown ? declared : original.mm;
-  if (expected === null || proposed.mm === null) {
+  if (
+    expected === null && sourceBounds && candidateBounds &&
+    (sourceBounds.max_mm < candidateBounds.min_mm ||
+      candidateBounds.max_mm < sourceBounds.min_mm)
+  ) {
     return check(
-      "unknown",
-      "mounting_cutout_unverified",
+      "mismatch",
+      "mounting_cutout_ranges_disjoint",
       sourceEvidence,
       candidateEvidence,
     );
   }
-  return expected === proposed.mm
+  if (expected === null || !candidateBounds) {
+    return check(
+      "unknown",
+      expected === null && sourceBounds
+        ? "source_cutout_range_requires_actual_opening"
+        : "mounting_cutout_unverified",
+      sourceEvidence,
+      candidateEvidence,
+    );
+  }
+  return expected >= candidateBounds.min_mm &&
+      expected <= candidateBounds.max_mm
     ? check(
       "match",
       "mounting_cutout_matches",
@@ -570,18 +618,22 @@ function outerCheck(
   source: ProductFull,
   candidate: ProductFull,
   verifiedCutout: ReplacementFitCheck,
+  context: ReplacementFitContext,
 ): ReplacementFitCheck {
-  const original = extractReplacementDimensions(source).outer_diameter_mm;
+  const sourceDimensions = extractReplacementDimensions(source);
+  const original = sourceDimensions.outer_diameter_mm;
   const candidateDimensions = extractReplacementDimensions(candidate);
   const proposed = candidateDimensions.outer_diameter_mm;
   const sourceEvidence = dimensionsEvidence(original);
   const candidateEvidence = dimensionsEvidence(proposed);
+  const verifiedOpening = validCustomerCutout(context.customer_cutout_mm)
+    ? context.customer_cutout_mm
+    : sourceDimensions.mounting_cutout_mm.mm;
   // A bezel that is no larger than the verified opening cannot cover it. This
   // is a physical mismatch, not merely a cosmetic difference in outer size.
   if (
     verifiedCutout.status === "match" && proposed.mm !== null &&
-    candidateDimensions.mounting_cutout_mm.mm !== null &&
-    proposed.mm <= candidateDimensions.mounting_cutout_mm.mm
+    verifiedOpening !== null && proposed.mm <= verifiedOpening
   ) {
     return check(
       "mismatch",
@@ -705,6 +757,91 @@ function voltageTextConflicts(
     .map(({ evidence }) => evidence);
 }
 
+function boundManufacturerSupply(product: ProductFull): {
+  range: VoltageRange;
+  provenance: ReplacementManufacturerProvenance;
+} | null {
+  const facts: VerifiedManufacturerFacts | undefined =
+    product.verified_manufacturer_facts;
+  const range = facts?.technical.supply_v;
+  const expiry = Date.parse(facts?.provenance.valid_until ?? "");
+  if (
+    !facts || !range || facts.binding.product_id !== product.id ||
+    facts.binding.article !== product.article ||
+    facts.binding.catalog_url !== normalizeProductUrl(product.url) ||
+    !facts.provenance.approved_by ||
+    !Number.isFinite(expiry) || expiry <= Date.now() ||
+    !Number.isFinite(range.min) || !Number.isFinite(range.max) ||
+    range.min <= 0 || range.min > range.max || range.max > 10_000
+  ) return null;
+  return {
+    range,
+    provenance: {
+      source_url: facts.provenance.source_url,
+      document_version: facts.provenance.document_version,
+      document_page: facts.provenance.document_page,
+      verified_at: facts.provenance.verified_at,
+    },
+  };
+}
+
+function rangeContained(inner: VoltageRange, outer: VoltageRange): boolean {
+  return inner.min >= outer.min && inner.max <= outer.max;
+}
+
+function supplyEvidence(
+  proof: NonNullable<ReturnType<typeof boundManufacturerSupply>>,
+): ReplacementFitEvidence {
+  return evidence(
+    "manufacturer", "supply_v", `${proof.range.min}–${proof.range.max} В`,
+    undefined, proof.provenance,
+  );
+}
+
+const SUPPLY_STATEMENT =
+  /(?:входное\s+напряжение|номинальное\s+напряжение|напряжение(?:\s+питания)?)(?:,\s*(?:в|v))?\s*[:=–—]\s*([^.;!?]{1,100})/giu;
+
+/** A partial regex token inside a slash-list or prose is not voltage proof. */
+function supplyStatementAmbiguous(product: ProductFull): boolean {
+  const title = normalized(product.pagetitle ?? "").slice(0, 300);
+  if (/\d{1,4}\s*\/\s*\d{1,4}\s*(?:в|v)/u.test(title)) return true;
+  const content = normalized(product.description_excerpt ?? "").slice(0, 1_200);
+  for (const statement of content.matchAll(SUPPLY_STATEMENT)) {
+    const before = content.slice(Math.max(0, (statement.index ?? 0) - 24), statement.index ?? 0);
+    if (/(?:выходное|вторичное)\s*$/u.test(before)) continue;
+    const raw = statement[1].trim();
+    // Frequency following a single unambiguous mains voltage is metadata,
+    // not a second voltage. Other trailing text or slash-lists remain unknown.
+    const withoutFrequency = raw.replace(
+      /\s*[,;]?\s*(?:50|60)(?:\s*[/-]\s*(?:50|60))?\s*(?:гц|hz)$/u,
+      "",
+    ).trim();
+    if (!voltageRange(withoutFrequency)) return true;
+  }
+  return false;
+}
+
+function manufacturerSupplyConflicts(
+  product: ProductFull,
+  option: VerifiedOption | null,
+  proof: NonNullable<ReturnType<typeof boundManufacturerSupply>>,
+): ReplacementFitEvidence[] {
+  const parsedOption = option ? voltageRange(option.value) : null;
+  const claims = voltageTextClaims(product);
+  if (!parsedOption || supplyStatementAmbiguous(product)) {
+    return [
+      ...option?.evidence ?? [],
+      ...claims.map((claim) => claim.evidence),
+      supplyEvidence(proof),
+    ];
+  }
+  return [
+    ...!rangeContained(parsedOption, proof.range) ? option!.evidence : [],
+    ...claims.filter(({ value }) => !rangeContained(value, proof.range))
+      .map(({ evidence }) => evidence),
+  ];
+}
+
 function voltageCheck(
   source: ProductFull,
   candidate: ProductFull,
@@ -713,6 +850,38 @@ function voltageCheck(
   const right = pairedCatalogOption(candidate, VOLTAGE_CAPTION);
   const sourceRange = left && voltageRange(left.value);
   const candidateRange = right && voltageRange(right.value);
+  const sourceManufacturer = boundManufacturerSupply(source);
+  const candidateManufacturer = boundManufacturerSupply(candidate);
+  const manufacturerSourceConflicts = sourceManufacturer
+    ? manufacturerSupplyConflicts(source, left, sourceManufacturer)
+    : [];
+  const manufacturerCandidateConflicts = candidateManufacturer
+    ? manufacturerSupplyConflicts(candidate, right, candidateManufacturer)
+    : [];
+  if (manufacturerSourceConflicts.length || manufacturerCandidateConflicts.length) {
+    return check(
+      "unknown",
+      manufacturerSourceConflicts.length
+        ? "source_manufacturer_voltage_evidence_conflicts"
+        : "candidate_manufacturer_voltage_evidence_conflicts",
+      [...left?.evidence ?? [], ...manufacturerSourceConflicts,
+        ...(sourceManufacturer ? [supplyEvidence(sourceManufacturer)] : [])],
+      [...right?.evidence ?? [], ...manufacturerCandidateConflicts,
+        ...(candidateManufacturer ? [supplyEvidence(candidateManufacturer)] : [])],
+    );
+  }
+  if (sourceManufacturer && candidateManufacturer) {
+    const sourceProof = sourceManufacturer.range;
+    const candidateProof = candidateManufacturer.range;
+    const sourceEvidence = [...left?.evidence ?? [], supplyEvidence(sourceManufacturer)];
+    const candidateEvidence = [...right?.evidence ?? [], supplyEvidence(candidateManufacturer)];
+    if (candidateProof.max < sourceProof.min || candidateProof.min > sourceProof.max) {
+      return check("mismatch", "manufacturer_voltage_ranges_disjoint", sourceEvidence, candidateEvidence);
+    }
+    return rangeContained(sourceProof, candidateProof)
+      ? check("match", "manufacturer_candidate_voltage_covers_source", sourceEvidence, candidateEvidence)
+      : check("different", "manufacturer_voltage_overlap_requires_supply_check", sourceEvidence, candidateEvidence);
+  }
   const sourceConflicts = voltageTextConflicts(source, sourceRange);
   const candidateConflicts = voltageTextConflicts(candidate, candidateRange);
   if (sourceConflicts.length || candidateConflicts.length) {
@@ -975,7 +1144,7 @@ export function evaluateReplacementCandidateFit(
     stock_and_price: availability,
     mounting_kind: mountCheck(source, candidate),
     mounting_cutout_mm: mountingCutout,
-    outer_diameter_mm: outerCheck(source, candidate, mountingCutout),
+    outer_diameter_mm: outerCheck(source, candidate, mountingCutout, context),
     lamp_interface: lampInterfaceCheck(source, candidate),
     voltage_v: voltageCheck(source, candidate),
     ip_grade: ipCheck(source, candidate),

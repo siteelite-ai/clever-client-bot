@@ -7,9 +7,51 @@
 export const PREVIEW_SECRET_ENV = "VOLT220_V3_PREVIEW_SECRET";
 export const PREVIEW_QA_SECRET_ENV = "VOLT220_V3_QA_SECRET";
 export const PREVIEW_SECRET_HEADER = "x-volt-preview-secret";
+export const CLOSURE_TEST_ACCESS_ENV_PREFIX = "V3_CLOSURE_ACCESS_";
+export const CLOSURE_TEST_CATALOG_ENV_PREFIX = "V3_CLOSURE_CATALOG_";
+
+/** A project-wide env value cannot opt production or ordinary preview into
+ * temporary closure QA admission. The marker comes only from its bootstrap. */
+export function closureTestScopeEnabled(
+  admissionScope: unknown,
+  closureMarker: unknown,
+): boolean {
+  return admissionScope === "preview" && closureMarker === "closure_preview";
+}
 
 const PREVIEW_SECRET_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
+const CLOSURE_TEST_SECRET_PATTERN =
+  /^(\d{10}_[a-f0-9]{32})_[A-Za-z0-9_-]{64}$/;
+const CLOSURE_TEST_MAX_AGE_SECONDS = 20 * 60;
+const CLOSURE_TEST_MAX_FUTURE_SECONDS = 120;
 const encoder = new TextEncoder();
+
+/** Resolve one short-lived, per-run QA secret. Neither an arbitrary header nor
+ * project-wide environment variables can opt a non-closure deployment in.
+ * Invalid/stale values return before any dynamic environment lookup. */
+export function readClosureTestSecret(
+  kind: "access" | "catalog",
+  admissionScope: unknown,
+  closureMarker: unknown,
+  provided: string | null,
+  readEnv: (name: string) => string | undefined = (name) => Deno.env.get(name),
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): string | undefined {
+  if (!closureTestScopeEnabled(admissionScope, closureMarker) ||
+    typeof provided !== "string" ||
+    !Number.isSafeInteger(nowSeconds)) return undefined;
+  const match = CLOSURE_TEST_SECRET_PATTERN.exec(provided);
+  if (!match) return undefined;
+  const issuedSeconds = Number(match[1].slice(0, 10));
+  if (issuedSeconds > nowSeconds + CLOSURE_TEST_MAX_FUTURE_SECONDS ||
+    nowSeconds - issuedSeconds > CLOSURE_TEST_MAX_AGE_SECONDS) {
+    return undefined;
+  }
+  const prefix = kind === "access"
+    ? CLOSURE_TEST_ACCESS_ENV_PREFIX
+    : CLOSURE_TEST_CATALOG_ENV_PREFIX;
+  return readEnv(`${prefix}${match[1]}`);
+}
 
 function validSecret(value: string | null | undefined): value is string {
   return typeof value === "string" && PREVIEW_SECRET_PATTERN.test(value);
@@ -25,12 +67,16 @@ export async function previewSecretAuthorized(
   provided: string | null,
   configured: string | null | undefined,
   configuredQa?: string | null,
+  configuredClosure?: string | null,
 ): Promise<boolean> {
   // A missing or accidentally weak deployment secret must always fail closed.
-  // The optional QA secret is independent: an invalid value cannot weaken the
-  // existing preview secret, and a valid one does not require the old secret.
+  // Optional QA/closure secrets are independent: invalid values cannot weaken
+  // existing preview credentials. The caller must pass closure credentials
+  // only when its isolate-local closure marker is present.
   if (!validSecret(provided)) return false;
-  const validConfigured = [configured, configuredQa].filter(validSecret);
+  const validConfigured = [configured, configuredQa, configuredClosure].filter(
+    validSecret,
+  );
   if (validConfigured.length === 0) return false;
 
   try {

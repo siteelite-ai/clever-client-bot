@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-122fff82608d4689';
+  var WIDGET_VERSION = 'widget-23a6d944053a770b';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -108,7 +108,29 @@
     }
   }
   function newSessionId() {
-    return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    var secureCrypto = window.crypto;
+    if (secureCrypto && typeof secureCrypto.randomUUID === 'function') {
+      try {
+        var uuid = secureCrypto.randomUUID();
+        if (typeof uuid === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uuid)) {
+          return 'session_' + uuid;
+        }
+      } catch(e) {
+        // Some browsers expose randomUUID but block it outside a secure context.
+        // getRandomValues remains available there and is still cryptographic.
+      }
+    }
+    if (secureCrypto && typeof secureCrypto.getRandomValues === 'function') {
+      var bytes = new Uint8Array(16);
+      secureCrypto.getRandomValues(bytes);
+      return 'session_' + Array.prototype.map.call(bytes, function(byte) {
+        return byte.toString(16).padStart(2, '0');
+      }).join('');
+    }
+    // A session ID can retrieve server-side conversation state. Never silently
+    // replace the secure source with Math.random or a timestamp.
+    throw new Error('Secure session ID generation is unavailable');
   }
   function isValidSessionId(value) {
     return typeof value === 'string' && value.length > 0 && value.length <= 128 &&
@@ -1302,20 +1324,49 @@
     return text.replace(/\\([()\[\]_*~`\\])/g, '$1');
   }
 
+  // Model-authored links are untrusted even when their labels look like
+  // product cards. Keep navigation on the exact canonical storefront only.
+  function isTrustedMarkdownHref(value, trustedContacts) {
+    var href = unescapeMarkdownPunctuation(value);
+    if (/[\u0000-\u0020\u007f\\]/.test(href)) return false;
+    // These actions are emitted only by the server's contacts side-effect.
+    // Assistant prose, product cards and saved history cannot opt into them.
+    if (trustedContacts && (/^tel:\+7\d{10}$/.test(href) ||
+      /^mailto:[a-z0-9._%+-]+@220volt\.kz$/i.test(href))) return true;
+    // The contacts tool also emits an official WhatsApp action. Its exact
+    // numeric wa.me route is the only third-party navigation we permit, and
+    // only in that server-owned event (never in model-authored Markdown).
+    if (trustedContacts && /^https:\/\/wa\.me\/7\d{10}$/.test(href)) return true;
+    var authority = /^https:\/\/([^/?#]+)/.exec(href);
+    if (!authority || authority[1] !== '220volt.kz') return false;
+    try {
+      var parsed = new URL(href);
+      return parsed.protocol === 'https:' && parsed.hostname === '220volt.kz' &&
+        parsed.origin === 'https://220volt.kz' && !parsed.username && !parsed.password && !parsed.port;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Parse markdown-like formatting (only for assistant messages, input is pre-escaped)
-  function formatMessage(text) {
+  function formatMessage(text, trustedContacts) {
     // First escape ALL HTML to prevent XSS
     let result = escapeHtml(text);
     var linkUrls = [];
+    var blockedLinks = [];
     
     // Now safely apply markdown formatting on escaped text
-    // Handle links [text](url) - validate URL protocol (http, https, tel, mailto, viber).
+    // Handle links [text](url). Unsupported targets remain visible, never clickable.
     // Keep URL attributes inert until all other Markdown substitutions finish:
     // otherwise __ in a URL can become <strong> inside the generated href.
     result = result.replace(/\[([^\]]+)\]\(((https?:\/\/|tel:|mailto:|viber:\/\/)[^)]+)\)/g, function(match, text, url) {
-      var isExternal = url.startsWith('http');
+      if (!isTrustedMarkdownHref(url, trustedContacts)) {
+        var blockedIndex = blockedLinks.push(match) - 1;
+        return '<!--voltblockedlink:' + blockedIndex + '-->';
+      }
       var index = linkUrls.push(url) - 1;
-      return '<a href="<!--volturl:' + index + '-->"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
+      return '<a href="<!--volturl:' + index + '-->"' +
+        (url.startsWith('https://') ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
     });
     
     // Handle bold **text**
@@ -1370,24 +1421,27 @@
     result = result.replace(/<!--volturl:(\d+)-->/g, function(match, index) {
       return escapeQuotedAttribute(unescapeMarkdownPunctuation(linkUrls[Number(index)]));
     });
+    result = result.replace(/<!--voltblockedlink:(\d+)-->/g, function(match, index) {
+      return blockedLinks[Number(index)];
+    });
     
     return result;
   }
 
-  function createMessageElement(content, role) {
+  function createMessageElement(content, role, trustedContacts) {
     const msg = document.createElement('div');
     msg.className = `volt-message ${role}`;
     if (role === 'user') {
       msg.textContent = content;
     } else {
-      msg.innerHTML = formatMessage(content);
+      msg.innerHTML = formatMessage(content, trustedContacts);
     }
     return msg;
   }
 
   // Add message to chat (returns the DOM element)
-  function addMessage(content, role) {
-    const msg = createMessageElement(content, role);
+  function addMessage(content, role, trustedContacts) {
+    const msg = createMessageElement(content, role, trustedContacts);
     messagesContainer.appendChild(msg);
     if (role === 'user') {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -2344,7 +2398,7 @@
       }
 
       if (result.contacts) {
-        addMessage(result.contacts, 'assistant');
+        addMessage(result.contacts, 'assistant', true);
       }
       var diagnosticTarget = (productsMsg && productsMsg.parentNode) ? productsMsg : (hasContent ? assistantMsg : null);
       if (result.partial && !hasContent) {

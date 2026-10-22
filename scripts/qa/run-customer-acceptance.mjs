@@ -4,7 +4,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
-import { validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
+import { validCatalogLowestNContract, validCatalogMinimumContract, verifyCatalogMinimum } from './catalog-minimum-proof.mjs';
+import { catalogPreflightRequired, runCatalogHealthPreflight } from './catalog-health-preflight.mjs';
 import { previewAuthHeaders, previewRedirectPolicy, redactPreviewSecret } from './preview-auth.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -393,6 +394,11 @@ const SUPPORTED_EXPECTATION_KEYS = new Set([
   'require_previous_freeform_slot',
   'require_previous_quick_reply',
   'require_catalog_minimum',
+  'require_catalog_lowest_n',
+  'require_previous_batch_minimum',
+  'require_shape_facet_provenance',
+  'require_confirmed_analogs',
+  'require_relative_price_comparison',
   'require_result_cardinality',
   'require_selection_criteria_evidence',
   'require_selection_criteria_exact',
@@ -537,7 +543,117 @@ export function validateExpectationObject(expect, location = 'expect') {
       !validCatalogMinimumContract(expect.require_catalog_minimum)) {
     throw new Error(`${location}.require_catalog_minimum: requires a bounded 220volt.kz category source, exact title prefix and comparable unit`);
   }
+  if (expect.require_catalog_lowest_n !== undefined &&
+      !validCatalogLowestNContract(expect.require_catalog_lowest_n)) {
+    throw new Error(`${location}.require_catalog_lowest_n: requires exact N=2..20 and a bounded 220volt.kz category source, exact title prefix and comparable unit`);
+  }
+  if (expect.require_catalog_minimum && expect.require_catalog_lowest_n &&
+      ['source_url', 'title_prefix', 'unit'].some((key) =>
+        expect.require_catalog_minimum[key] !== expect.require_catalog_lowest_n[key])) {
+    throw new Error(`${location}: minimum and lowest-N contracts must use the same category source and scope`);
+  }
+  if (expect.require_previous_batch_minimum !== undefined &&
+      expect.require_previous_batch_minimum !== true) {
+    throw new Error(`${location}.require_previous_batch_minimum: opt in with true`);
+  }
+  if (expect.require_shape_facet_provenance !== undefined &&
+      expect.require_shape_facet_provenance !== true) {
+    throw new Error(`${location}.require_shape_facet_provenance: opt in with true`);
+  }
+  if (expect.require_relative_price_comparison !== undefined) {
+    const source = expect.require_relative_price_comparison;
+    const at = `${location}.require_relative_price_comparison`;
+    expectationKeys(source, new Set(['mode', 'product_url', 'sku']), at);
+    if (source.mode === 'ambiguous') {
+      if (Object.hasOwn(source, 'product_url') || Object.hasOwn(source, 'sku') ||
+          (expect.min_products ?? 0) > 0) {
+        throw new Error(`${at}: ambiguous source cannot assert an exact SKU or require product cards`);
+      }
+    } else if (source.mode === 'exact') {
+      if (!sourceCanonicalIdentity(source.product_url) ||
+          typeof source.sku !== 'string' || source.sku !== source.sku.trim() ||
+          !/^[\p{L}\p{N}][\p{L}\p{N}._/-]{0,79}$/u.test(source.sku) ||
+          expect.max_products === 0) {
+        throw new Error(`${at}: exact source requires one canonical product URL, bounded SKU and candidate cards`);
+      }
+      const structuralFacets = expect.require_every_product_page?.facets;
+      if (!Array.isArray(structuralFacets) ||
+          structuralFacets.filter((facet) => Array.isArray(facet?.exact_any) && facet.exact_any.length === 1).length < 2 ||
+          new Set(structuralFacets.map((facet) => normalizeSellerGroupFacetText(facet?.name))).size !== structuralFacets.length ||
+          !validProductPageRules(expect.require_every_product_page)) {
+        throw new Error(`${at}: exact cheaper analogs require at least two distinct single-value structural facets for both source and candidates`);
+      }
+      const analog = expect.require_confirmed_analogs;
+      if (!analog || !Number.isSafeInteger(analog.minimum) || analog.minimum < 1 ||
+          analog.required_commerce?.sold_singly !== true ||
+          !Array.isArray(analog.required_axes) || analog.required_axes.length < 3 ||
+          !analog.required_axes.some((axis) => axis?.op === 'eq' &&
+            /(?:^|_)(?:kind|type|class|form|category)(?:$|_)/u.test(axis.key ?? ''))) {
+        throw new Error(`${at}: exact cheaper analogs require a confirmed-direct-analog certificate with product type and mandatory technical axes`);
+      }
+      if (productUrlIdentity(analog.source_product_url) !== productUrlIdentity(source.product_url)) {
+        throw new Error(`${at}: relative-price source URL disagrees with direct-analog comparator source URL`);
+      }
+    } else {
+      throw new Error(`${at}.mode: must be exact or ambiguous`);
+    }
+  }
+  if (expect.require_confirmed_analogs !== undefined) {
+    const contract = expect.require_confirmed_analogs;
+    const at = `${location}.require_confirmed_analogs`;
+    expectationKeys(contract, new Set(['minimum', 'source_product_url', 'required_axes', 'required_commerce']), at);
+    expectationInteger(contract.minimum, `${at}.minimum`, 1);
+    if (!productUrlIdentity(contract.source_product_url)) {
+      throw new Error(`${at}.source_product_url: requires a 220volt.kz product URL`);
+    }
+    if (contract.required_commerce !== undefined) {
+      expectationKeys(contract.required_commerce, new Set(['sold_singly']), `${at}.required_commerce`);
+      if (contract.required_commerce.sold_singly !== true) {
+        throw new Error(`${at}.required_commerce: sold_singly must be true`);
+      }
+    }
+    if (!Array.isArray(contract.required_axes) || contract.required_axes.length < 2 ||
+        contract.required_axes.length > 32) {
+      throw new Error(`${at}.required_axes: requires 2–32 distinct technical axes`);
+    }
+    const axes = new Set();
+    for (const [index, rule] of contract.required_axes.entries()) {
+      const axisAt = `${at}.required_axes[${index}]`;
+      expectationKeys(rule, new Set(['key', 'op', 'value', 'min', 'max']), axisAt);
+      if (typeof rule.key !== 'string' || !/^[a-z][a-z0-9_]{1,63}$/u.test(rule.key) || axes.has(rule.key)) {
+        throw new Error(`${axisAt}.key: requires a unique bounded technical axis`);
+      }
+      axes.add(rule.key);
+      if (rule.op === 'eq') {
+        if (Object.hasOwn(rule, 'min') || Object.hasOwn(rule, 'max') ||
+            !['string', 'number', 'boolean'].includes(typeof rule.value) ||
+            (typeof rule.value === 'string' && (!rule.value.trim() || rule.value.length > 80)) ||
+            (typeof rule.value === 'number' && !Number.isFinite(rule.value))) {
+          throw new Error(`${axisAt}: eq requires one bounded scalar value`);
+        }
+      } else if (rule.op === 'covers') {
+        if (!Number.isFinite(rule.value) || Object.hasOwn(rule, 'min') || Object.hasOwn(rule, 'max')) {
+          throw new Error(`${axisAt}: covers requires one finite numeric target`);
+        }
+      } else if (rule.op === 'between') {
+        if (Object.hasOwn(rule, 'value') || !Number.isFinite(rule.min) ||
+            !Number.isFinite(rule.max) || rule.min > rule.max) {
+          throw new Error(`${axisAt}: between requires an ordered finite numeric interval`);
+        }
+      } else {
+        throw new Error(`${axisAt}.op: must be eq, covers or between`);
+      }
+    }
+    if (expect.min_products !== undefined && contract.minimum < expect.min_products) {
+      throw new Error(`${at}.minimum: cannot weaken min_products`);
+    }
+  }
   expectationMinMax(expect, 'min_products', 'max_products', location);
+  if (expect.require_catalog_lowest_n &&
+      ((expect.min_products !== undefined && expect.min_products > expect.require_catalog_lowest_n.count) ||
+       (expect.max_products !== undefined && expect.max_products < expect.require_catalog_lowest_n.count))) {
+    throw new Error(`${location}.require_catalog_lowest_n: N conflicts with product-card bounds`);
+  }
   if (expect.require_every_product_exact_identifier !== undefined &&
       (typeof expect.require_every_product_exact_identifier !== 'string' ||
        !/^[\p{L}\p{N}][\p{L}\p{N}\s._/-]{3,79}$/u.test(expect.require_every_product_exact_identifier))) {
@@ -850,12 +966,14 @@ const plannedTurns = runPlan.reduce((total, item) => total + item.executions.len
 // Repetitions and related customer suites often return the same SKU URLs.
 // Store one bounded verification promise per canonical URL for the process.
 const productPageCache = new Map();
+const observedProductPages = new Map();
 
 export function parseSse(body) {
   let text = '';
   let textBeforeProducts = '';
   let productsMarkdown = '';
   let productsStarted = false;
+  let productsBlockSeen = false;
   let logId = null;
   let completed = false;
   let terminalDiagnosticSeen = false;
@@ -877,6 +995,7 @@ export function parseSse(body) {
     let parsed;
     try { parsed = JSON.parse(payload); } catch { continue; }
     const event = parsed.v3_event;
+    if (event?.type === 'products_block') productsBlockSeen = true;
     if (event?.type === 'products_block' && typeof event.markdown === 'string') {
       productsStarted = true;
       productsMarkdown += `${productsMarkdown ? '\n\n' : ''}${event.markdown}`;
@@ -941,7 +1060,7 @@ export function parseSse(body) {
       cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, quickReplies, priceUnitEvidence, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, productsBlockSeen, links, logId, completed, terminalDiagnosticSeen, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, quickReplies, priceUnitEvidence, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -1308,35 +1427,51 @@ function verifiedProductKey(proof, identity) {
   return proof.sku ?? noSkuProductKey(identity);
 }
 
+function normalizeSellerGroupFacetText(value) {
+  return String(value).normalize('NFKC').toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е').replace(/\s+/gu, ' ').replace(/[:.\s]+$/gu, '').trim();
+}
+
 export function productProofFromHtml(html, requestedIdentity) {
   if (typeof html !== 'string' || !requestedIdentity) return null;
   const dom = new JSDOM(html);
   try {
     const document = dom.window.document;
+    const matchingProducts = [];
     for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
       let parsed;
       try { parsed = JSON.parse(script.textContent ?? ''); } catch { continue; }
       for (const product of productNodes(parsed)) {
+        if (productUrlIdentity(product['@id']) === requestedIdentity) {
+          matchingProducts.push(product);
+        }
+      }
+    }
+    for (const product of matchingProducts) {
+        if (typeof product.name !== 'string' || product.name.trim().length < 3) continue;
         const sku = typeof product.sku === 'number' && Number.isFinite(product.sku)
           ? String(product.sku)
           : product.sku;
-        if (
-          productUrlIdentity(product['@id']) !== requestedIdentity ||
-          typeof product.name !== 'string' || product.name.trim().length < 3
-        ) continue;
         // These are the product's own detail fields, not the category's
         // ItemList or related-product carousel. A facet may be inaccurate,
         // so a requested motion trigger can demand independent prose proof.
         const facets = {};
+        let sellerGroupOnlyFacetCount = 0;
+        let saleUnitFacetCount = 0;
         for (const item of document.querySelectorAll('.product__tab-description-item')) {
           const label = item.querySelector('.product__description-title')?.textContent?.replace(/:\s*$/u, '').trim();
           const value = item.querySelector('.product__tab-description-text')?.textContent?.replace(/\s+/gu, ' ').trim();
+          if (label && normalizeSellerGroupFacetText(label) === 'продается только в групповой упаковке') {
+            sellerGroupOnlyFacetCount++;
+          }
+          if (label && sameSourceLabel(label, 'Единица измерения')) saleUnitFacetCount++;
           if (label && value) facets[label] = value;
         }
         const description = document
           .querySelector('.product-item__tab-content[data-tab-content="description"]')
           ?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
         const offers = Array.isArray(product.offers) ? product.offers : [product.offers];
+        const ambiguousOffers = offers.length !== 1 || matchingProducts.length !== 1;
         const offer = offers.find((entry) => entry && typeof entry === 'object' &&
           entry.priceCurrency === 'KZT' && Number.isFinite(Number(entry.price)) && Number(entry.price) > 0);
         const canonicalUrl = document.querySelector('link[rel~="canonical"][href]')?.getAttribute('href') ?? '';
@@ -1361,15 +1496,20 @@ export function productProofFromHtml(html, requestedIdentity) {
             sku: null, identityMode: 'jsonld_no_sku_canonical_name_price_stock', canonicalUrl,
             name: product.name.trim(), facets, description,
             offerPrice: Number(offer.price), availability: offer.availability,
+            ...(ambiguousOffers ? { ambiguousOffers: true } : {}),
+            ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
+            ...(saleUnitFacetCount > 1 ? { duplicateSaleUnitFacet: true } : {}),
           };
         }
         return {
           sku: sku.trim(), name: product.name.trim(), facets, description,
           offerPrice: offer ? Number(offer.price) : null,
           availability: typeof offer?.availability === 'string' ? offer.availability : null,
+          ...(ambiguousOffers ? { ambiguousOffers: true } : {}),
+          ...(sellerGroupOnlyFacetCount > 1 ? { duplicateSellerGroupOnlyFacet: true } : {}),
+          ...(saleUnitFacetCount > 1 ? { duplicateSaleUnitFacet: true } : {}),
           ...(canonicalMatches && sourceIdMatchesCanonical ? { canonicalUrl } : {}),
         };
-      }
     }
     return null;
   } finally {
@@ -1529,6 +1669,142 @@ export function productLinkEvidence(links = [], { verifiedPages = null, requireV
   return { uniqueCount, duplicates, invalid, unverified };
 }
 
+function exactLiveOffer(link, pages) {
+  const identity = productUrlIdentity(link?.url);
+  const page = identity && pages instanceof Map ? pages.get(identity) : null;
+  return Boolean(identity && page?.verified && page.identity === identity &&
+    (!page.canonicalUrl || sourceCanonicalIdentity(page.canonicalUrl) === identity) &&
+    page.ambiguousOffers !== true && Number.isFinite(link.price) && link.price > 0 &&
+    Number.isFinite(page.offerPrice) && link.price === page.offerPrice &&
+    /^https?:\/\/schema\.org\/InStock$/iu.test(page.availability ?? '') && link.stockLine);
+}
+
+/** Snapshot only the latest displayed batch; a partial newer batch invalidates an older one. */
+export function captureVerifiedProductBatch(response) {
+  const links = response?.links;
+  if (!Array.isArray(links) || links.length === 0) {
+    return { verified: false, reason: 'latest product batch has no parsed cards' };
+  }
+  if (!response.completed || !response.terminalDiagnosticSeen ||
+      response.serverProductsCount !== links.length || !response.logId) {
+    return { verified: false, reason: 'latest product batch is incomplete' };
+  }
+  const products = [];
+  const seen = new Set();
+  for (const link of links) {
+    const identity = productUrlIdentity(link.url);
+    if (!identity || seen.has(identity) || !exactLiveOffer(link, response.verifiedProductPages)) {
+      return { verified: false, reason: 'latest product batch has missing, duplicate or conflicting URL/offer proof' };
+    }
+    seen.add(identity);
+    products.push({ identity, price: link.price });
+  }
+  return { verified: true, products };
+}
+
+export function previousBatchMinimumFailures(response, batch) {
+  if (response?.conversationBoundary?.mode === 'new_task') {
+    return ['cheapest follow-up crossed a new-task boundary'];
+  }
+  if (!batch?.verified || !Array.isArray(batch.products) || batch.products.length === 0) {
+    return [`cheapest follow-up has no complete latest verified product batch: ${batch?.reason ?? 'missing batch'}`];
+  }
+  const lowest = Math.min(...batch.products.map((item) => item.price));
+  if (!Number.isFinite(lowest) || lowest <= 0 ||
+      batch.products.some((item) =>
+        productUrlIdentity(`https://${item.identity}/`) !== item.identity ||
+        !Number.isFinite(item.price) || item.price <= 0) ||
+      new Set(batch.products.map((item) => item.identity)).size !== batch.products.length) {
+    return ['cheapest follow-up has malformed previous price or URL proof'];
+  }
+  const winners = new Set(batch.products.filter((item) => item.price === lowest).map((item) => item.identity));
+  if (!Array.isArray(response.links) || response.links.length === 0) {
+    return ['cheapest follow-up has no selected product card'];
+  }
+  const failures = [];
+  const seen = new Set();
+  for (const link of response.links) {
+    const identity = productUrlIdentity(link.url);
+    if (!identity || seen.has(identity) || !winners.has(identity) || link.price !== lowest ||
+        !exactLiveOffer(link, response.verifiedProductPages)) {
+      failures.push(`cheapest follow-up is not an exact latest-batch minimum URL and offer: ${link.title ?? link.url}`);
+    }
+    if (identity) seen.add(identity);
+  }
+  return failures;
+}
+
+/** Area units are not evidence for a mandatory product-shape facet. */
+export function shapeFacetProvenanceFailures(selectionContract, userMessages = []) {
+  const criteria = selectionContract?.mandatory_criteria;
+  if (!Array.isArray(criteria)) return ['shape-facet provenance lacks machine-readable mandatory criteria'];
+  const customerText = Array.isArray(userMessages)
+    ? userMessages.filter((item) => typeof item === 'string').join(' ').normalize('NFKC')
+      .toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
+    : '';
+  const withoutAreaQuantities = customerText.replace(
+    /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:м\s*(?:²|2)(?![\p{L}\p{N}])|кв\.?\s*м\.?|квадрат\p{L}*(?:\s+метр\p{L}*)?)/giu,
+    ' ',
+  );
+  const customerWords = withoutAreaQuantities.match(/[\p{L}]{4,}/gu) ?? [];
+  const failures = [];
+  for (const criterion of criteria) {
+    if (!/форм|shape/iu.test(String(criterion?.key ?? ''))) continue;
+    const valueWords = String(criterion?.value ?? '').normalize('NFKC')
+      .toLocaleLowerCase('ru-RU').replaceAll('ё', 'е').match(/[\p{L}]{4,}/gu) ?? [];
+    if (!valueWords.length || !customerText ||
+        valueWords.some((value) => !customerWords.some((word) => word.startsWith(value.slice(0, 4))))) {
+      failures.push(`mandatory shape facet lacks customer evidence outside area quantities: ${criterion?.key ?? 'unknown'}`);
+    }
+  }
+  return failures;
+}
+
+/** Tied prices at the Nth rank are interchangeable, but displayed order is not. */
+export function catalogLowestNFailures(contract, response) {
+  if (!validCatalogLowestNContract(contract)) return ['invalid lowest-N catalog contract'];
+  const proof = response?.catalogMinimumProof;
+  if (!proof?.verified || proof.source_url !== contract.source_url ||
+      !Number.isSafeInteger(proof.listed_total) || proof.listed_total < contract.count ||
+      proof.covered_total !== proof.listed_total ||
+      !Number.isSafeInteger(proof.page_count) || proof.page_count < 1 || proof.page_count > 8 ||
+      !Array.isArray(proof.eligible_products) ||
+      proof.eligible_products.length !== proof.matching_available ||
+      proof.matching_available < contract.count) {
+    return [`lowest-N catalog coverage is incomplete or unverified: ${proof?.reason ?? 'missing complete source proof'}`];
+  }
+  const eligible = new Map();
+  const ids = new Set();
+  for (const item of proof.eligible_products) {
+    const identity = productUrlIdentity(item?.url);
+    if (!identity || eligible.has(identity) || !/^\d+$/u.test(item.id ?? '') || ids.has(item.id) ||
+        !Number.isFinite(item.price) || item.price <= 0 ||
+        String(item.unit ?? '').trim().toLocaleLowerCase('ru-RU').replace(/\.$/u, '') !==
+          contract.unit.toLocaleLowerCase('ru-RU').replace(/\.$/u, '')) {
+      return ['lowest-N catalog source has invalid or duplicate eligible product evidence'];
+    }
+    eligible.set(identity, item);
+    ids.add(item.id);
+  }
+  const orderedPrices = [...eligible.values()].map((item) => item.price).sort((a, b) => a - b);
+  if (proof.minimum_price !== orderedPrices[0] || !Array.isArray(response.links) ||
+      response.links.length !== contract.count) {
+    return [`lowest-N selection requires exactly ${contract.count} rendered cards and a consistent source minimum`];
+  }
+  const failures = [];
+  const selected = new Set();
+  for (const [rank, link] of response.links.entries()) {
+    const identity = productUrlIdentity(link.url);
+    const sourceItem = eligible.get(identity);
+    if (!sourceItem || selected.has(identity) || link.price !== sourceItem.price ||
+        link.price !== orderedPrices[rank] || !exactLiveOffer(link, response.verifiedProductPages)) {
+      failures.push(`rendered card at rank ${rank + 1} is not the catalog-proven lowest-N exact URL/offer`);
+    }
+    if (identity) selected.add(identity);
+  }
+  return failures;
+}
+
 function nameTokenRecall(displayed, source) {
   const words = (value) => String(value ?? '').toLocaleLowerCase('ru-RU').replaceAll('ё', 'е')
     .match(/[\p{L}\p{N}]+/gu)?.filter((part) => part.length > 1) ?? [];
@@ -1652,6 +1928,115 @@ function quotedPricePerPieceFailures(response) {
   return failures;
 }
 
+const ATOMIC_PRICE_UNITS = new Map([
+  ['шт', 'шт'], ['штука', 'шт'], ['штуки', 'шт'], ['штук', 'шт'],
+  ['м', 'м'], ['метр', 'м'], ['метра', 'м'], ['метров', 'м'],
+  ['м²', 'м²'], ['кг', 'кг'], ['килограмм', 'кг'], ['килограмма', 'кг'],
+  ['л', 'л'], ['литр', 'л'], ['литра', 'л'],
+]);
+
+function comparableSaleUnit(page) {
+  const facets = page?.facets;
+  if (page?.duplicateSaleUnitFacet || !facets || typeof facets !== 'object' || Array.isArray(facets) ||
+      !verifiedSellerSingleSale(page)) return null;
+  const units = Object.entries(facets).filter(([name]) => sameSourceLabel(name, 'Единица измерения'));
+  if (units.length !== 1) return null;
+  // Pack, kit, composite or unknown units are not an atomic price basis.
+  // Never infer their conversion from a card title or a product's group size.
+  return ATOMIC_PRICE_UNITS.get(normalizeCatalogUnit(units[0][1])) ?? null;
+}
+
+// A relative price is only meaningful against an independently identified
+// catalog item. The assistant's own prose, card price or tool summary cannot
+// establish the source SKU or its price. Both sides must be fetched from live
+// Product pages, and the exact source identity is pinned by the test author.
+export function relativePriceComparisonFailures(contract, response, compatibilityRules = null,
+  analogContract = null, nowMs = Date.now()) {
+  if (contract.mode === 'ambiguous') {
+    const failures = [];
+    if ((response.links ?? []).length) {
+      failures.push('ambiguous source cannot support relative-price product cards');
+    }
+    const text = String(response.text ?? '');
+    if (String(response.productsMarkdown ?? '').trim()) {
+      failures.push('ambiguous source cannot support a products block');
+    }
+    if (/(?:дешевле|деш[её]в\p{L}*|выгоднее|(?:цен\p{L}*|стоимост\p{L}*)[\s\S]{0,30}(?:ниже|меньше)|(?:ниже|меньше)[\s\S]{0,30}(?:цен\p{L}*|стоимост\p{L}*))/iu.test(text) ||
+        /(?:экономи\p{L}*|сэконом\p{L}*|\d[\d\s.,]*\s*(?:₸|тенге|тг\.?|KZT))/iu.test(text) ||
+        /https?:\/\/(?:www\.)?220volt\.kz\/catalog\//iu.test(`${text}\n${response.productsMarkdown ?? ''}`)) {
+      failures.push('ambiguous source cannot support a cheaper-than-source claim');
+    }
+    if (!/(?:уточн\p{L}*|пришл\p{L}*|назов\p{L}*|укаж\p{L}*|нуж\p{L}*|не\s+могу\s+сравн\p{L}*)[\s\S]{0,160}(?:артикул|sku|ссылк\p{L}*|код\s+товара|точн\p{L}*\s+модел\p{L}*)/iu.test(text)) {
+      failures.push('ambiguous source requires an honest request for exact source identity');
+    }
+    return failures;
+  }
+  const failures = [];
+  if (!validProductPageRules(compatibilityRules) ||
+      !Array.isArray(compatibilityRules.facets) ||
+      compatibilityRules.facets.filter((facet) => Array.isArray(facet?.exact_any) && facet.exact_any.length === 1).length < 2) {
+    return ['relative price lacks structural source-and-candidate compatibility rules'];
+  }
+  if (!analogContract ||
+      productUrlIdentity(analogContract.source_product_url) !== productUrlIdentity(contract.product_url) ||
+      confirmedAnalogFailures(analogContract, response, { nowMs }).length) {
+    return ['relative price lacks a source-bound confirmed-direct-analog certificate for every candidate'];
+  }
+  const sourceIdentity = productUrlIdentity(contract.product_url);
+  const source = response.relativePriceSourceProof;
+  if (!sourceIdentity || source?.verified !== true || source.identity !== sourceIdentity ||
+      productUrlIdentity(source.canonicalUrl) !== sourceIdentity || source.sku !== contract.sku ||
+      source.ambiguousOffers === true || !/\/InStock$/iu.test(source.availability ?? '') ||
+      !Number.isFinite(source.offerPrice) || source.offerPrice <= 0) {
+    return ['relative price lacks independently verified exact source SKU and price'];
+  }
+  const sourceCompatibilityFailures = productPageRuleFailures(compatibilityRules, source);
+  if (sourceCompatibilityFailures.length) {
+    return ['relative-price source product does not meet shared structural compatibility rules',
+      ...sourceCompatibilityFailures];
+  }
+  // A certificate for candidates alone does not prove that the source has
+  // those same technical properties. Bind approved facts to its exact live
+  // SKU as well; otherwise a socket could be certified against a breaker URL
+  // using only shared brand/color storefront facets.
+  const sourceCertificate = response.selectionContract?.direct_analog_proof?.source;
+  if (productUrlIdentity(sourceCertificate?.product_url) !== sourceIdentity ||
+      sourceCertificate?.sku !== source.sku || !Array.isArray(sourceCertificate.axes) ||
+      sourceCertificate.axes.length !== new Set(sourceCertificate.axes.map((axis) => axis?.key)).size ||
+      !Array.isArray(analogContract.required_axes) ||
+      analogContract.required_axes.some((rule) => {
+        const axis = sourceCertificate.axes.find((entry) => entry?.key === rule.key);
+        return !approvedAnalogAxis(axis, nowMs) || !analogAxisMatches(rule, axis);
+      })) {
+    return ['relative price lacks approved manufacturer facts for the exact source SKU and required axes'];
+  }
+  const sourceUnit = comparableSaleUnit(source);
+  if (!sourceUnit) {
+    return ['relative price lacks independently comparable source sale unit'];
+  }
+  if (!(response.links ?? []).length) {
+    return ['relative price requires at least one candidate card'];
+  }
+  for (const link of response.links) {
+    const identity = productUrlIdentity(link.url);
+    const candidate = response.verifiedProductPages?.get(identity);
+    if (!identity || identity === sourceIdentity || candidate?.verified !== true ||
+        candidate.identity !== identity || !candidate.sku || candidate.sku === source.sku ||
+        productUrlIdentity(candidate.canonicalUrl) !== identity ||
+        candidate.ambiguousOffers === true || !/\/InStock$/iu.test(candidate.availability ?? '') ||
+        !Number.isFinite(candidate.offerPrice) || candidate.offerPrice <= 0 ||
+        !Number.isFinite(link.price) || Math.abs(link.price - candidate.offerPrice) > 0.51 ||
+        candidate.offerPrice >= source.offerPrice) {
+      failures.push(`candidate is not independently proven cheaper than source SKU ${source.sku}: ${link.url}`);
+    } else if (comparableSaleUnit(candidate) !== sourceUnit) {
+      failures.push(`candidate sale unit is not independently comparable to source SKU ${source.sku}: ${link.url}`);
+    } else if (productPageRuleFailures(compatibilityRules, candidate).length) {
+      failures.push(`candidate is not structurally compatible with source SKU ${source.sku}: ${link.url}`);
+    }
+  }
+  return failures;
+}
+
 function isSseRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -1752,16 +2137,132 @@ function renderedStockUnitFailures(links, expectedUnit) {
   return failures;
 }
 
+function approvedAnalogAxis(axis, nowMs) {
+  const evidence = axis?.evidence;
+  if (evidence?.kind !== 'approved_manufacturer_fact' ||
+      typeof evidence.source_url !== 'string' ||
+      !/^https:\/\/[^\s@/]+\//u.test(evidence.source_url)) return false;
+  let source;
+  try { source = new URL(evidence.source_url); } catch { return false; }
+  if (source.protocol !== 'https:' || source.username || source.password ||
+      source.hash || source.port || !source.hostname.includes('.')) return false;
+  const approved = Date.parse(evidence.approved_at);
+  const validUntil = Date.parse(evidence.valid_until);
+  return Number.isFinite(approved) && Number.isFinite(validUntil) &&
+    approved <= nowMs && nowMs < validUntil && approved < validUntil;
+}
+
+function analogAxisMatches(rule, axis) {
+  const value = axis?.value;
+  if (rule.op === 'eq') return value === rule.value;
+  if (rule.op === 'between') return typeof value === 'number' && Number.isFinite(value) &&
+    value >= rule.min && value <= rule.max;
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Number.isFinite(value.min) && Number.isFinite(value.max) && value.min <= value.max &&
+    value.min <= rule.value && rule.value <= value.max;
+}
+
+function verifiedSellerSingleSale(page) {
+  // Packaging quantity is a manufacturer/logistics property, not the seller's
+  // minimum order. Use only the independently fetched, exact live product page.
+  const facets = page?.facets;
+  if (page?.duplicateSellerGroupOnlyFacet || !facets ||
+      typeof facets !== 'object' || Array.isArray(facets)) return false;
+  const groupOnly = Object.entries(facets).filter(([key]) =>
+    normalizeSellerGroupFacetText(key) === 'продается только в групповой упаковке');
+  // Missing, duplicated or contradictory seller statements cannot pass.
+  return groupOnly.length === 1 && normalizeSellerGroupFacetText(groupOnly[0][1]) === 'нет';
+}
+
+// A selection contract is emitted by the server in products_block, not parsed
+// from assistant prose. The exact rendered product must also have an
+// independently fetched, current catalog Product page with matching SKU,
+// price and stock. A provisional shortlist or a model-authored claim cannot
+// satisfy the direct-analogue acceptance gate.
+export function confirmedAnalogFailures(contract, response, { nowMs = Date.now() } = {}) {
+  const failures = [];
+  const proof = response.selectionContract?.direct_analog_proof;
+  const sourceIdentity = productUrlIdentity(contract.source_product_url);
+  if (proof?.schema_version !== 1 || proof?.status !== 'confirmed_direct' ||
+      productUrlIdentity(proof.source_product_url) !== sourceIdentity ||
+      !Array.isArray(proof.candidates)) {
+    return ['confirmed direct-analog server proof is missing or not bound to the source product'];
+  }
+  const proofByIdentity = new Map();
+  for (const candidate of proof.candidates) {
+    const identity = productUrlIdentity(candidate?.product_url);
+    if (!identity || proofByIdentity.has(identity)) {
+      failures.push('direct-analog server proof has invalid or duplicate product identity');
+      continue;
+    }
+    proofByIdentity.set(identity, candidate);
+  }
+  const seenSkus = new Set();
+  const seenUrls = new Set();
+  let confirmed = 0;
+  for (const link of response.links ?? []) {
+    const identity = productUrlIdentity(link.url);
+    const page = response.verifiedProductPages?.get(identity);
+    const candidate = proofByIdentity.get(identity);
+    const label = page?.sku ?? identity ?? '(invalid URL)';
+    if (!identity || identity === sourceIdentity || seenUrls.has(identity) ||
+        !page?.verified || typeof page.sku !== 'string' || !page.sku.trim() ||
+        seenSkus.has(page.sku) || !candidate || candidate.sku !== page.sku ||
+        candidate.verdict !== 'confirmed_direct' ||
+        !Array.isArray(candidate.axes) || !/\/InStock$/iu.test(page.availability ?? '') ||
+        !Number.isFinite(page.offerPrice) || page.offerPrice <= 0 ||
+        !Number.isFinite(link.price) || Math.abs(link.price - page.offerPrice) > 0.51) {
+      failures.push(`rendered product ${label} lacks exact live-SKU-bound direct-analog proof`);
+      continue;
+    }
+    seenUrls.add(identity);
+    seenSkus.add(page.sku);
+    const axes = new Map();
+    for (const axis of candidate.axes) {
+      if (typeof axis?.key !== 'string' || axes.has(axis.key)) {
+        failures.push(`direct-analog proof for ${label} has invalid or duplicate technical axis`);
+        continue;
+      }
+      axes.set(axis.key, axis);
+    }
+    let compatible = true;
+    for (const rule of contract.required_axes) {
+      const axis = axes.get(rule.key);
+      if (!approvedAnalogAxis(axis, nowMs) || !analogAxisMatches(rule, axis)) {
+        failures.push(`product ${label} has no current approved compatible proof for ${rule.key}`);
+        compatible = false;
+      }
+    }
+    if (contract.required_commerce?.sold_singly && !verifiedSellerSingleSale(page)) {
+      failures.push(`product ${label} has no exact live-page proof that it is sold singly`);
+      compatible = false;
+    }
+    if (compatible) confirmed++;
+  }
+  if (proofByIdentity.size !== (response.links ?? []).length ||
+      [...proofByIdentity.keys()].some((identity) => !seenUrls.has(identity))) {
+    failures.push('direct-analog server proof does not match exactly the displayed cards');
+  }
+  if (confirmed < contract.minimum) {
+    failures.push(`confirmed direct analogs ${confirmed} < ${contract.minimum}`);
+  }
+  return failures;
+}
+
 export function evaluate(expect = {}, response, {
   requireVerifiedPages = false,
   previousVerifiedSkus = new Set(),
   previousVerifiedProductUrls = new Set(),
+  previousVerifiedProductBatch = null,
+  userMessages = [],
   previousClarificationChoice = null,
   message = null,
+  nowMs = Date.now(),
 } = {}) {
   const failures = [];
-  const requireSourceProof = Boolean(expect.require_every_product_page ||
+  const requireSourceProof = Boolean(expect.require_confirmed_analogs || expect.require_relative_price_comparison || expect.require_every_product_page ||
     expect.require_higher_product_facet_caveat || expect.require_catalog_minimum ||
+    expect.require_catalog_lowest_n || expect.require_previous_batch_minimum ||
     expect.require_axis_exact_or_split);
   const linkEvidence = productLinkEvidence(response.links, {
     verifiedPages: response.verifiedProductPages,
@@ -1922,6 +2423,13 @@ export function evaluate(expect = {}, response, {
   if (Number.isFinite(expect.min_products) && linkEvidence.uniqueCount < expect.min_products) {
     failures.push(`products ${linkEvidence.uniqueCount} < ${expect.min_products}`);
   }
+  if (expect.require_confirmed_analogs) {
+    failures.push(...confirmedAnalogFailures(expect.require_confirmed_analogs, response, { nowMs }));
+  }
+  if (expect.require_relative_price_comparison) {
+    failures.push(...relativePriceComparisonFailures(expect.require_relative_price_comparison,
+      response, expect.require_every_product_page, expect.require_confirmed_analogs, nowMs));
+  }
   if (Number.isFinite(expect.max_products) && linkEvidence.uniqueCount > expect.max_products) {
     failures.push(`products ${linkEvidence.uniqueCount} > ${expect.max_products}`);
   }
@@ -2033,6 +2541,15 @@ export function evaluate(expect = {}, response, {
         }
       }
     }
+  }
+  if (expect.require_previous_batch_minimum === true) {
+    failures.push(...previousBatchMinimumFailures(response, previousVerifiedProductBatch));
+  }
+  if (expect.require_catalog_lowest_n !== undefined) {
+    failures.push(...catalogLowestNFailures(expect.require_catalog_lowest_n, response));
+  }
+  if (expect.require_shape_facet_provenance === true) {
+    failures.push(...shapeFacetProvenanceFailures(response.selectionContract, userMessages));
   }
   if (Array.isArray(expect.require_product_title) && !includesAny(productTitles, expect.require_product_title)) {
     failures.push(`none of required product-title fragments found: ${expect.require_product_title.join(', ')}`);
@@ -2348,7 +2865,7 @@ export async function fetchAcceptanceTurn(payload, {
   }
 }
 
-async function runTurn({ message, expect, synthetic = false }, state) {
+async function runTurn({ message, expect, synthetic = false, trackVerifiedBatches = false }, state) {
   const startedAt = Date.now();
   const payload = {
     message,
@@ -2393,16 +2910,36 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   const { response, raw, attempts } = fetched;
   const parsed = parseSse(raw);
   parsed.durationMs = Date.now() - startedAt;
-  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_every_product_page) ||
+  const requiresLiveProductProof = strictFullSuite || Boolean(expect.require_confirmed_analogs) ||
+    Boolean(expect.require_relative_price_comparison) ||
+    Boolean(expect.require_every_product_page) ||
     Boolean(expect.require_higher_product_facet_caveat) ||
     Boolean(expect.require_axis_exact_or_split) ||
     Boolean(expect.require_catalog_minimum) ||
+    Boolean(expect.require_catalog_lowest_n) ||
+    Boolean(expect.require_previous_batch_minimum) || trackVerifiedBatches ||
     expect.require_new_product_skus === true || expect.require_previous_product_link === true;
+  // Relative-price evidence must be fresh for this turn; a prior suite turn's
+  // cached price could make a once-cheaper candidate look cheaper forever.
+  const productProofCache = expect.require_relative_price_comparison?.mode === 'exact' || trackVerifiedBatches
+    ? new Map() : productPageCache;
   parsed.verifiedProductPages = response.ok && requiresLiveProductProof
-    ? await verifyProductLinks(parsed.links, { cache: productPageCache })
+    ? await verifyProductLinks(parsed.links, { cache: productProofCache })
     : null;
-  parsed.catalogMinimumProof = response.ok && expect.require_catalog_minimum
-    ? await verifyCatalogMinimum(expect.require_catalog_minimum.source_url, expect.require_catalog_minimum)
+  for (const [identity, proof] of parsed.verifiedProductPages ?? []) {
+    observedProductPages.set(identity, Promise.resolve(proof));
+  }
+  parsed.relativePriceSourceProof = response.ok && expect.require_relative_price_comparison?.mode === 'exact'
+    ? (await verifyProductLinks([{ url: expect.require_relative_price_comparison.product_url }],
+      { cache: productProofCache })).get(productUrlIdentity(expect.require_relative_price_comparison.product_url))
+    : null;
+  const categoryContract = expect.require_catalog_lowest_n ?? expect.require_catalog_minimum;
+  parsed.catalogMinimumProof = response.ok && categoryContract
+    ? await verifyCatalogMinimum(categoryContract.source_url, {
+        source_url: categoryContract.source_url,
+        title_prefix: categoryContract.title_prefix,
+        unit: categoryContract.unit,
+      })
     : null;
   const linkEvidence = productLinkEvidence(parsed.links, {
     verifiedPages: parsed.verifiedProductPages,
@@ -2413,6 +2950,12 @@ async function runTurn({ message, expect, synthetic = false }, state) {
         requireVerifiedPages: requiresLiveProductProof,
         previousVerifiedSkus: state.previousVerifiedSkus,
         previousVerifiedProductUrls: state.previousVerifiedProductUrls,
+        previousVerifiedProductBatch: state.previousVerifiedProductBatch,
+        userMessages: [
+          ...(parsed.conversationBoundary?.mode === 'new_task' ? [] :
+            state.history.filter((entry) => entry.role === 'user').map((entry) => entry.content)),
+          message,
+        ],
         previousClarificationChoice: state.previousClarificationChoice,
         message,
       })
@@ -2424,6 +2967,10 @@ async function runTurn({ message, expect, synthetic = false }, state) {
     state.dialogSlots = {};
     state.previousVerifiedSkus = new Set();
     state.previousVerifiedProductUrls = new Set();
+    state.previousVerifiedProductBatch = null;
+  }
+  if (parsed.productsBlockSeen || parsed.links.length) {
+    state.previousVerifiedProductBatch = captureVerifiedProductBatch(parsed);
   }
   if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   const priorChoiceEvidence = state.previousClarificationChoice;
@@ -2457,6 +3004,9 @@ async function runTurn({ message, expect, synthetic = false }, state) {
         }))
       : [],
     catalog_minimum_evidence: parsed.catalogMinimumProof,
+    ...(expect.require_relative_price_comparison
+      ? { relative_price_source_evidence: parsed.relativePriceSourceProof }
+      : {}),
     products: parsed.links,
     text: parsed.text,
     completed: parsed.completed,
@@ -2470,7 +3020,7 @@ async function runTurn({ message, expect, synthetic = false }, state) {
   };
 }
 
-export async function main() {
+export async function main({ preflightFetchImpl = fetch, preflightEnv = process.env, emit = console.log } = {}) {
   const report = {
     suite_file: path.basename(casesPath),
     suite_version: suite.schema_version,
@@ -2489,16 +3039,64 @@ export async function main() {
     cases: [],
   };
 
+  // A catalog outage is not evidence of a customer-facing selection defect.
+  // The private probe runs before the first paid chat turn, including focused
+  // remote runs; a strict suite also requires it when pointed at localhost.
+  const preflight = catalogPreflightRequired(endpoint, strictFullSuite)
+    ? await runCatalogHealthPreflight({
+        endpoint,
+        anonKey: apiKey,
+        previewHeaders: privatePreviewHeaders,
+        env: preflightEnv,
+        fetchImpl: preflightFetchImpl,
+      })
+    : { ok: true, status: 'skipped_local' };
+  report.catalog_preflight = preflight;
+  if (!preflight.ok) {
+    // Preserve the pinned inventory/plan but record zero customer runs: the
+    // suite is NOT_RUN, never a customer FAIL or a misleading partial PASS.
+    delete report.endpoint;
+    report.status = 'not_run';
+    report.reason = 'infrastructure_unavailable';
+    report.infrastructure_status = 'infrastructure_unavailable';
+    report.selected_case_ids = selected.map((item) => item.id);
+    report.finished_at = new Date().toISOString();
+    report.completeness = {
+      complete: false,
+      planned_cases: selected.length,
+      recorded_cases: 0,
+      planned_runs: plannedRuns,
+      recorded_runs: 0,
+      planned_turns: plannedTurns,
+      recorded_turns: 0,
+    };
+    report.log_ids = [];
+    report.product_page_verification = { unique_urls_checked: 0, verified: 0, unverified: 0 };
+    report.passed = false;
+    if (reportFile) {
+      fs.mkdirSync(path.dirname(reportFile), { recursive: true });
+      fs.writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+    }
+    emit(JSON.stringify(report, null, 2));
+    process.exitCode = 1;
+    return report;
+  }
+
   for (const { testCase, repeat, executions } of runPlan) {
     const caseResult = { id: testCase.id, title: testCase.title, repeats: [] };
     for (const execution of executions) {
       for (let run = 1; run <= repeat; run++) {
+        const trackVerifiedBatches = testCase.turns.some((turn, index) =>
+          resolveExpectations(suite.default_expectations,
+            resolveExpectations(turn.expect, execution.expect_overrides?.[index] ?? {}))
+            .require_previous_batch_minimum === true);
         const state = {
           sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${execution.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
           history: [],
           dialogSlots: {},
           previousVerifiedSkus: new Set(),
           previousVerifiedProductUrls: new Set(),
+          previousVerifiedProductBatch: null,
           previousClarificationChoice: null,
         };
         const turns = [];
@@ -2513,6 +3111,7 @@ export async function main() {
               suite.default_expectations,
               resolveExpectations(turn.expect, variantExpectation),
             ),
+            trackVerifiedBatches,
           }, state));
           // A failed prerequisite turn invalidates the meaning of later
           // dialogue turns. In focused runs this also avoids paid calls whose
@@ -2543,9 +3142,10 @@ export async function main() {
     recorded_turns: actualTurns,
   };
   report.log_ids = [...new Set(report.cases.flatMap((item) => item.repeats.flatMap((run) => run.turns.map((turn) => turn.log_id).filter(Boolean))))];
-  const pageProofs = await Promise.all(productPageCache.values());
+  const pageProofInventory = new Map([...productPageCache, ...observedProductPages]);
+  const pageProofs = await Promise.all(pageProofInventory.values());
   report.product_page_verification = {
-    unique_urls_checked: productPageCache.size,
+    unique_urls_checked: pageProofInventory.size,
     verified: pageProofs.filter((item) => item.verified).length,
     unverified: pageProofs.filter((item) => !item.verified).length,
   };
@@ -2606,8 +3206,9 @@ export async function main() {
         repeats: testCase.repeats.filter((repeat) => !repeat.passed),
       }));
   }
-  console.log(JSON.stringify(output, null, 2));
+  emit(JSON.stringify(output, null, 2));
   if (!report.passed) process.exitCode = 1;
+  return report;
 }
 
 /** A misspelled CLI option must never silently launch the production default. */

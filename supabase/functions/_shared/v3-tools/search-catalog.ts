@@ -137,6 +137,9 @@ export interface CatalogClientDeps {
   timeoutMs?: number;
   /** Optional turn-level deadline for bounded recovery searches. */
   signal?: AbortSignal;
+  /** Server-only exact-identity outage mode: one physical GET, no retry,
+   * compound rewrite, pagination, sorting or category/facet fan-out. */
+  singleRequest?: boolean;
 }
 
 export interface SearchCatalogInput {
@@ -773,6 +776,33 @@ export async function executeSearchCatalog(
     }
   } else if (input.mode !== "by_article" && input.mode !== "by_pagetitle" && input.mode !== "by_query") {
     return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
+  }
+
+  if (deps.singleRequest) {
+    // Rechecking an already rendered card may need a wider *single page* to
+    // disambiguate duplicate titles. The caller must still prove its exact
+    // URL before using the result; this path never paginates, retries or
+    // broadens the query.
+    const oneTitlePage = input.mode === "by_pagetitle" &&
+      (input.per_page === undefined ||
+        (Number.isSafeInteger(input.per_page) && input.per_page >= 1 &&
+          input.per_page <= 50));
+    if (
+      (input.mode !== "by_article" && input.mode !== "by_query" && !oneTitlePage) ||
+      input.category || input.category_in?.length || input.options ||
+      input.min_price !== undefined || input.max_price !== undefined ||
+      input.sort_cheapest || input.sort_expensive ||
+      (input.page !== undefined && input.page !== 1) ||
+      (!oneTitlePage && input.per_page !== undefined && input.per_page > 3)
+    ) {
+      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "single-request mode requires one unscoped exact identity lookup" };
+    }
+    // Call the HTTP primitive directly. The ordinary wrapper may retry 429,
+    // rewrite a compound query or page/fan out even with one tool invocation.
+    const result = await singleSearch(input, deps, cache);
+    return result.ok
+      ? { tool: "search_catalog", ok: true, mode: input.mode, total: result.total, results: result.results, candidate_coverage: result.candidate_coverage }
+      : { tool: "search_catalog", ok: false, error_code: result.error_code, message: result.message };
   }
 
   // Нормализуем category_in: убираем дубли с input.category и между собой.

@@ -2,10 +2,12 @@ import {
   type Criterion,
   extendSelectionCriteriaPlan,
 } from "./criteria-gate.ts";
-import { evaluateReplacementCandidateFit } from "./replacement-candidate-fit.ts";
-import { extractReplacementDimensions } from "./replacement-provisional-evidence.ts";
 import {
-  evaluateStructuralReplacementCandidate,
+  extractReplacementDimensions,
+  replacementDimensionBounds,
+} from "./replacement-provisional-evidence.ts";
+import {
+  adjudicateVerifiedStructuralCandidate,
   isProvisionalReplacementDifferenceRole,
   type StructuralReplacementFit,
   type StructuralReplacementProfile,
@@ -75,13 +77,16 @@ export function guardedStructuralSelectionContract(input: {
   }
   const sourceCutout = extractReplacementDimensions(profile.source)
     .mounting_cutout_mm;
+  const sourceCutoutBounds = replacementDimensionBounds(sourceCutout);
   const expectedCutout = customerCutoutMm ?? sourceCutout.mm;
   if (
     !Number.isFinite(expectedCutout) || expectedCutout === null ||
     expectedCutout <= 0 || expectedCutout > 10_000 ||
     sourceCutout.status === "conflicting" ||
-    (customerCutoutMm !== null && sourceCutout.mm !== null &&
-      sourceCutout.mm !== customerCutoutMm) ||
+    (customerCutoutMm !== null && sourceCutout.status === "known" &&
+      (!sourceCutoutBounds ||
+        customerCutoutMm < sourceCutoutBounds.min_mm ||
+        customerCutoutMm > sourceCutoutBounds.max_mm)) ||
     (budgetCap !== null && (!Number.isFinite(budgetCap) || budgetCap <= 0))
   ) return null;
 
@@ -93,25 +98,22 @@ export function guardedStructuralSelectionContract(input: {
     if (seen.has(candidate.id)) return null;
     seen.add(candidate.id);
     if (budgetCap !== null && candidate.price > budgetCap) return null;
-    const structural = evaluateStructuralReplacementCandidate(
-      profile,
-      candidate,
-      {
-        dimensionPolicy: "verified_mounting_cutout",
-        customerCutoutMm,
-      },
+    const proof = adjudicateVerifiedStructuralCandidate(
+      profile, candidate, customerCutoutMm,
     );
-    if (!structural.ok) return null;
-    const fit = evaluateReplacementCandidateFit(profile.source, candidate, {
-      customer_cutout_mm: customerCutoutMm,
-    });
+    if (!proof.ok) return null;
+    const candidateCutout = extractReplacementDimensions(candidate)
+      .mounting_cutout_mm;
+    const candidateSupportsExpected = candidateCutout.status === "known" &&
+      (candidateCutout.mm === expectedCutout ||
+        (candidateCutout.range_mm !== undefined &&
+          candidateCutout.range_mm.min_mm <= expectedCutout &&
+          candidateCutout.range_mm.max_mm >= expectedCutout));
     if (
-      fit.status !== "provisional_candidate" ||
-      fit.checks.mounting_cutout_mm.status !== "match" ||
-      extractReplacementDimensions(candidate).mounting_cutout_mm.mm !==
-        expectedCutout
+      proof.fit.checks.mounting_cutout_mm.status !== "match" ||
+      !candidateSupportsExpected
     ) return null;
-    perCandidateEvidence.push(structural.evidence);
+    perCandidateEvidence.push(proof.evidence);
   }
 
   const commonObligations = profile.obligations.filter((obligation) =>
@@ -129,7 +131,22 @@ export function guardedStructuralSelectionContract(input: {
       ).length
   ) return null;
 
-  const criteria: Criterion[] = commonObligations.map((obligation) => ({
+  // The admission proof may bridge semantically equal but different raw
+  // options (for example 220/230 V or an approved opaque socket). Do not
+  // publish the source's raw equality as if every card carried that option.
+  // These obligations remain mandatory in the proof above, but only literal
+  // shared values become source-derived public criteria.
+  const publishableObligations = commonObligations.filter((obligation) =>
+    perCandidateEvidence.every((evidence) =>
+      evidence.some((item) =>
+        item.role === obligation.role &&
+        item.caption === obligation.caption &&
+        item.candidate === item.source &&
+        (obligation.op !== "eq" || item.source === obligation.value)
+      )
+    )
+  );
+  const criteria: Criterion[] = publishableObligations.map((obligation) => ({
     key: obligation.caption,
     op: obligation.op,
     value: obligation.value,

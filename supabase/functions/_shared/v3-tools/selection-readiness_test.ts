@@ -13,6 +13,7 @@ import {
   verifiedReadinessReplayInput,
 } from "./selection-readiness.ts";
 import { executeProposeClarification } from "./propose-clarification.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 const cases = [
   [
@@ -104,7 +105,43 @@ Deno.test("selection readiness evidence never treats assistant prompts as custom
       },
       { role: "user", content: "7 кВт, стационарно на улице" },
     ]),
-    "Мне нужен кабель для насоса\n7 кВт, стационарно на улице",
+    joinCustomerTurns([
+      "Мне нужен кабель для насоса",
+      "7 кВт, стационарно на улице",
+    ]),
+  );
+});
+
+Deno.test("readiness does not borrow an area unit from a later customer turn", () => {
+  const current = "М2. Нужен прожектор на улицу, высота установки 4 м";
+  const history = selectionReadinessEvidenceFromHistory([
+    { role: "user", content: "Площадь 25" },
+  ]);
+  assertEquals(
+    selectReadinessClarification(current, history)?.facet_key,
+    "illuminated_area",
+  );
+});
+
+Deno.test("readiness accepts an area split over lines within one customer turn", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен прожектор на улицу, высота установки 4 м. Площадь 25\nм²",
+    ),
+    null,
+  );
+});
+
+Deno.test("readiness isolates cross-turn amperes but accepts same-turn multiline amperes", () => {
+  const current =
+    "А. Мне нужен кабель для насоса, линия 35 м, 380 В, стационарно на улице";
+  assertEquals(
+    selectReadinessClarification(current, "Ток 7")?.facet_key,
+    "selection_requirement_0",
+  );
+  assertEquals(
+    selectReadinessClarification(`Ток 7\n${current}`),
+    null,
   );
 });
 
@@ -307,8 +344,10 @@ Deno.test("free-form clarification answer retains the original selection request
     },
   );
   assertEquals(resolved, {
-    message:
-      `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
+    message: joinCustomerTurns([
+      original,
+      "Уточнение клиента: Площадь около 120 м², высота установки 4 м",
+    ]),
     scoped: true,
   });
 });
@@ -587,8 +626,10 @@ Deno.test("catalog clarification preserves its server-proven category for a ters
       slots,
     ),
     {
-      message:
-        `${original}\nУточнение клиента: Однополюсный, покажи варианты из каталога`,
+      message: joinCustomerTurns([
+        original,
+        "Уточнение клиента: Однополюсный, покажи варианты из каталога",
+      ]),
       category: "Автоматические выключатели",
     },
   );

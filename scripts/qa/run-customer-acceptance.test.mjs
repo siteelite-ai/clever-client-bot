@@ -4,11 +4,15 @@ import test from 'node:test';
 
 import {
   ACCEPTANCE_TURN_TIMEOUT_MS, DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn,
-  parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
-  resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
+  main, parseSse, productProofFromHtml, productUrlIdentity, resolveCaseExecutions,
+  relativePriceComparisonFailures, resolveEndpoint, resolveExpectations, selectCaseExecutions, validateStrictFullSuite,
   validateCliArgs, validateExpectationObject, validateExpectationSuite,
   verifyProductLinks, verifyProductPage, visibleInternalTextFailures,
 } from './run-customer-acceptance.mjs';
+import {
+  CATALOG_QA_SECRET_ENV, CATALOG_QA_SECRET_HEADER, catalogPreflightRequired,
+  runCatalogHealthPreflight, trustedCatalogPreflightEndpoint,
+} from './catalog-health-preflight.mjs';
 
 const acceptanceBytes = fs.readFileSync(new URL('./customer-acceptance-cases.json', import.meta.url));
 const septemberBytes = fs.readFileSync(new URL('./customer-audit-20260921-cases.json', import.meta.url));
@@ -19,6 +23,7 @@ const notionV3Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v3.json
 const notionV4Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v4.json', import.meta.url));
 const notionV5Bytes = fs.readFileSync(new URL('./notion-legacy-bug-cases-v5.json', import.meta.url));
 const cardinalityBytes = fs.readFileSync(new URL('./systemic-cardinality-cases.json', import.meta.url));
+const relativePriceBytes = fs.readFileSync(new URL('./relative-price-comparison-prospective.json', import.meta.url));
 const acceptanceSuite = JSON.parse(acceptanceBytes.toString('utf8'));
 const septemberSuite = JSON.parse(septemberBytes.toString('utf8'));
 const septemberVariations = JSON.parse(septemberVariationBytes.toString('utf8'));
@@ -28,7 +33,194 @@ const notionV3Suite = JSON.parse(notionV3Bytes.toString('utf8'));
 const notionV4Suite = JSON.parse(notionV4Bytes.toString('utf8'));
 const notionV5Suite = JSON.parse(notionV5Bytes.toString('utf8'));
 const cardinalitySuite = JSON.parse(cardinalityBytes.toString('utf8'));
+const relativePriceSuite = JSON.parse(relativePriceBytes.toString('utf8'));
 const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https://example.supabase.co/functions/v1/preview'];
+const catalogQaSecret = 's'.repeat(32);
+
+test('remote and strict acceptance require a private catalog probe before paid turns', () => {
+  assert.equal(catalogPreflightRequired(DEFAULT_ENDPOINT), true);
+  assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3'), false);
+  assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3', true), true);
+  assert.equal(trustedCatalogPreflightEndpoint(DEFAULT_ENDPOINT), true);
+  for (const untrusted of [
+    'https://attacker.example/functions/v1/chat-consultant-v3',
+    'https://attacker@yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3',
+    `${DEFAULT_ENDPOINT}?next=https://attacker.example`,
+    'http://localhost:54321/functions/v1/unrelated-function',
+  ]) assert.equal(trustedCatalogPreflightEndpoint(untrusted), false);
+});
+
+test('catalog preflight sends only the private probe and requires all three healthy API paths', async () => {
+  const previewHeader = { 'x-volt-preview-secret': 'p'.repeat(32) };
+  const previewEndpoint = `${DEFAULT_ENDPOINT}-preview`;
+  const requests = [];
+  const result = await runCatalogHealthPreflight({
+    endpoint: previewEndpoint,
+    anonKey: 'public-test-key',
+    previewHeaders: previewHeader,
+    env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return new Response(JSON.stringify({ ok: true, status: 'ready', checks: {
+        categories: { status: 'ok', http_status: 200 },
+        products: { status: 'ok', http_status: 200 },
+        facets: { status: 'ok', http_status: 200 },
+      } }), { status: 200 });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, previewEndpoint);
+  assert.equal(requests[0].init.method, 'POST');
+  assert.equal(requests[0].init.redirect, 'error');
+  assert.deepEqual(JSON.parse(requests[0].init.body), { type: 'catalog_health_preflight' });
+  assert.equal(requests[0].init.headers[CATALOG_QA_SECRET_HEADER], catalogQaSecret);
+  assert.equal(requests[0].init.headers['x-volt-preview-secret'], previewHeader['x-volt-preview-secret']);
+  assert.equal(requests[0].init.headers.apikey, 'public-test-key');
+});
+
+test('catalog preflight fails closed on outages and malformed success without reflecting secrets or response bodies', async () => {
+  const malicious = `private:${catalogQaSecret} https://attacker.example/private`;
+  for (const [status, body, classification] of [
+    [503, JSON.stringify({ ok: false, status: 'unavailable', classification: 'upstream', error: malicious }), 'upstream'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { products: { status: 'ok', http_status: 200 } }, error: malicious }), 'schema_error'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { categories: { status: 'ok', http_status: 200 }, products: { status: 'ok', http_status: 200 } } }), 'schema_error'],
+    [200, JSON.stringify({ ok: true, status: 'ready', checks: { categories: { status: 'ok', http_status: 200 }, products: { status: 'ok', http_status: 200 }, facets: { status: 'unavailable', http_status: 503 } } }), 'schema_error'],
+    [404, JSON.stringify({ error: malicious }), 'route'],
+  ]) {
+    const result = await runCatalogHealthPreflight({
+      endpoint: DEFAULT_ENDPOINT,
+      anonKey: 'public-test-key',
+      env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      fetchImpl: async () => new Response(body, { status }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.classification, classification);
+    assert.equal(JSON.stringify(result).includes(catalogQaSecret), false);
+    assert.equal(JSON.stringify(result).includes('attacker.example'), false);
+  }
+  const oversized = await runCatalogHealthPreflight({
+    endpoint: DEFAULT_ENDPOINT,
+    anonKey: 'public-test-key',
+    env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+    fetchImpl: async () => new Response('x'.repeat(4_097), { status: 200 }),
+  });
+  assert.equal(oversized.classification, 'schema_error');
+});
+
+test('catalog QA secret is never sent to an untrusted host and a hung probe has a deadline', async () => {
+  let requests = 0;
+  const env = { [CATALOG_QA_SECRET_ENV]: catalogQaSecret };
+  const denied = await runCatalogHealthPreflight({
+    endpoint: 'https://attacker.example/functions/v1/chat-consultant-v3',
+    anonKey: 'public-test-key', env,
+    fetchImpl: async () => { requests++; throw new Error('unexpected request'); },
+  });
+  assert.equal(denied.classification, 'config');
+  assert.equal(requests, 0);
+
+  let signal;
+  const timeout = await runCatalogHealthPreflight({
+    endpoint: DEFAULT_ENDPOINT,
+    anonKey: 'public-test-key', env, timeoutMs: 20,
+    fetchImpl: async (_url, init) => {
+      requests++;
+      signal = init.signal;
+      return await new Promise(() => {});
+    },
+  });
+  assert.equal(timeout.classification, 'transport');
+  assert.equal(requests, 1);
+  assert.equal(signal.aborted, true);
+});
+
+test('missing catalog secret stops acceptance before both probe and paid chat calls', async () => {
+  let requests = 0;
+  const oldExitCode = process.exitCode;
+  try {
+    const report = await main({
+      preflightEnv: {},
+      preflightFetchImpl: async () => { requests++; throw new Error('must not fetch'); },
+      emit: () => {},
+    });
+    assert.equal(requests, 0);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.reason, 'infrastructure_unavailable');
+    assert.equal(report.infrastructure_status, 'infrastructure_unavailable');
+    assert.equal(report.selected_case_ids.length, report.selected_count);
+    assert.match(report.suite_sha256, /^[a-f0-9]{64}$/u);
+    assert.equal(report.catalog_preflight.classification, 'config');
+    assert.equal(report.completeness.recorded_runs, 0);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+    assert.equal(report.passed, false);
+    assert.equal('endpoint' in report, false);
+  } finally {
+    process.exitCode = oldExitCode;
+  }
+});
+
+test('catalog outage marks the whole run not_run, without scoring customer cases or spending turns', async () => {
+  let requests = 0;
+  const oldExitCode = process.exitCode;
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('paid chat fetch must not happen'); };
+  try {
+    const report = await main({
+      preflightEnv: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      preflightFetchImpl: async (_url, init) => {
+        requests++;
+        assert.deepEqual(JSON.parse(init.body), { type: 'catalog_health_preflight' });
+        return new Response(JSON.stringify({ ok: false, status: 'unavailable', classification: 'upstream' }), { status: 503 });
+      },
+      emit: () => {},
+    });
+    assert.equal(requests, 1);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.reason, 'infrastructure_unavailable');
+    assert.equal(report.infrastructure_status, 'infrastructure_unavailable');
+    assert.equal(report.catalog_preflight.classification, 'upstream');
+    assert.equal(report.completeness.recorded_runs, 0);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+    assert.deepEqual(report.log_ids, []);
+    assert.equal(report.passed, false);
+  } finally {
+    globalThis.fetch = oldFetch;
+    process.exitCode = oldExitCode;
+  }
+});
+
+test('the pinned strict full suite also emits NOT_RUN with zero turns when the private probe is unavailable', async () => {
+  const oldArgv = process.argv;
+  const oldExitCode = process.exitCode;
+  process.argv = [
+    oldArgv[0], oldArgv[1], '--strict-full-suite', `--endpoint=${DEFAULT_ENDPOINT}`,
+  ];
+  try {
+    const strictRunner = await import(`./run-customer-acceptance.mjs?catalog-preflight-strict=${Date.now()}`);
+    let calls = 0;
+    const report = await strictRunner.main({
+      preflightEnv: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+      preflightFetchImpl: async () => {
+        calls++;
+        return new Response(JSON.stringify({ ok: false, status: 'unavailable', classification: 'rate_limit' }), { status: 503 });
+      },
+      emit: () => {},
+    });
+    assert.equal(calls, 1);
+    assert.equal(report.strict_full_suite, true);
+    assert(report.strict_inventory);
+    assert.equal(report.status, 'not_run');
+    assert.equal(report.completeness.planned_runs, 81);
+    assert.equal(report.completeness.planned_turns, 126);
+    assert.equal(report.completeness.recorded_turns, 0);
+    assert.deepEqual(report.cases, []);
+  } finally {
+    process.argv = oldArgv;
+    process.exitCode = oldExitCode;
+  }
+});
 
 test('all pinned VVG cheapest cases require an independent complete-category minimum', () => {
   const cases = [
@@ -81,6 +273,233 @@ test('catalog-minimum acceptance rejects a plausible but non-cheapest exact cabl
   } }).some((failure) => failure.includes('no valid winner')));
   assert(evaluate(criterion, { ...reply(items[0]), verifiedProductPages: new Map() })
     .some((failure) => failure.includes('unverified product page')));
+});
+
+test('prospective relative-price contract refuses to compare an ambiguous source', () => {
+  assert.doesNotThrow(() => validateExpectationSuite(relativePriceSuite));
+  const scenario = relativePriceSuite.cases[0];
+  assert.equal(scenario.turns[0].expect.require_relative_price_comparison.mode, 'ambiguous');
+  const base = {
+    text: 'Уточните артикул исходного автомата, чтобы сравнить цены.',
+    links: [], productsMarkdown: '', completed: true, terminalDiagnosticSeen: true,
+    logId: 'test-log', serverProductsCount: 0, diagnosticError: null,
+    verifiedProductPages: new Map(),
+  };
+  assert.deepEqual(evaluate(scenario.turns[0].expect, base), []);
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, text: 'Эти модели дешевле исходной. Уточните артикул.',
+  }).some((failure) => failure.includes('cheaper-than-source claim')));
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, text: 'Уточните артикул. Экономия составит 900 ₸.',
+  }).some((failure) => failure.includes('cheaper-than-source claim')));
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, productsMarkdown: 'Розетка по сниженной цене',
+  }).some((failure) => failure.includes('products block')));
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, text: 'Вот вариант: https://220volt.kz/catalog/electrical/breakers/other/',
+  }).some((failure) => failure.includes('cheaper-than-source claim')));
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, text: 'Вот вариант.',
+  }).some((failure) => failure.includes('honest request')));
+  assert(relativePriceComparisonFailures({ mode: 'ambiguous' }, {
+    ...base, links: [{ url: 'https://220volt.kz/catalog/electrical/breakers/other/' }],
+  }).some((failure) => failure.includes('product cards')));
+  for (const contract of [
+    { mode: 'ambiguous', sku: '123' },
+    { mode: 'exact', product_url: 'https://evil.example/catalog/electrical/breakers/source/', sku: '123' },
+    { mode: 'exact', product_url: 'https://220volt.kz/catalog/electrical/breakers/source/' },
+    { mode: 'exact', product_url: 'https://220volt.kz/catalog/electrical/breakers/source/?utm=1', sku: '123' },
+    { mode: 'exact', product_url: 'https://220volt.kz/catalog/electrical/breakers/source/', sku: '123', allow_guess: true },
+  ]) {
+    assert.throws(() => validateExpectationObject({ require_relative_price_comparison: contract }),
+      /require_relative_price_comparison/u);
+  }
+  assert.throws(() => validateExpectationObject({ min_products: 1,
+    require_relative_price_comparison: { mode: 'ambiguous' } }), /ambiguous source/u);
+});
+
+test('exact relative-price contract requires independent source SKU/price and cheaper live candidate', () => {
+  const sourceUrl = 'https://220volt.kz/catalog/electrical/breakers/source-100/';
+  const candidateUrl = 'https://220volt.kz/catalog/electrical/breakers/candidate-90/';
+  const sourceIdentity = productUrlIdentity(sourceUrl);
+  const candidateIdentity = productUrlIdentity(candidateUrl);
+  const analogAxes = [
+    { key: 'product_kind', op: 'eq', value: 'circuit_breaker' },
+    { key: 'pole_count', op: 'eq', value: 1 },
+    { key: 'rated_current_a', op: 'eq', value: 16 },
+    { key: 'trip_curve', op: 'eq', value: 'C' },
+  ];
+  const criterion = { require_relative_price_comparison: {
+    mode: 'exact', product_url: sourceUrl, sku: 'SOURCE-100',
+  }, require_every_product_page: { facets: [
+    { name: 'Количество полюсов', exact_any: ['1'] },
+    { name: 'Номинальный ток', exact_any: ['16'] },
+    { name: 'Характеристика срабатывания', exact_any: ['C'] },
+  ] }, require_confirmed_analogs: {
+    minimum: 1, source_product_url: sourceUrl,
+    required_commerce: { sold_singly: true }, required_axes: analogAxes,
+  } };
+  assert.doesNotThrow(() => validateExpectationObject(criterion));
+  const sourceProof = { verified: true, identity: sourceIdentity, canonicalUrl: sourceUrl,
+    sku: 'SOURCE-100', offerPrice: 1000,
+    availability: 'https://schema.org/InStock',
+    facets: { 'Единица измерения': 'шт', 'Продается только в групповой упаковке': 'Нет',
+      'Количество полюсов': '1', 'Номинальный ток': '16', 'Характеристика срабатывания': 'C' } };
+  const candidateProof = { verified: true, identity: candidateIdentity, canonicalUrl: candidateUrl,
+    sku: 'CANDIDATE-90', name: 'Автомат C16 IEK', offerPrice: 900,
+    facets: { 'Единица измерения': 'шт', 'Продается только в групповой упаковке': 'Нет',
+      'Количество полюсов': '1', 'Номинальный ток': '16', 'Характеристика срабатывания': 'C' },
+    availability: 'https://schema.org/InStock' };
+  const base = {
+    text: 'Вот вариант с меньшей ценой.', productsMarkdown: '', completed: true,
+    terminalDiagnosticSeen: true, logId: 'test-log', serverProductsCount: 1,
+    diagnosticError: null,
+    links: [{ url: candidateUrl, title: candidateProof.name, price: 900,
+      stockLine: 'Караганда (1 шт)' }],
+    verifiedProductPages: new Map([[candidateIdentity, candidateProof]]),
+    relativePriceSourceProof: sourceProof,
+    selectionContract: { direct_analog_proof: {
+      schema_version: 1, status: 'confirmed_direct', source_product_url: sourceUrl,
+      source: { product_url: sourceUrl, sku: sourceProof.sku,
+        axes: analogAxes.map((axis) => ({ key: axis.key, value: axis.value, evidence: {
+          kind: 'approved_manufacturer_fact', source_url: 'https://manufacturer.example/source.pdf',
+          approved_at: '2026-10-01T00:00:00Z', valid_until: '2027-10-01T00:00:00Z',
+        } })) },
+      candidates: [{ product_url: candidateUrl, sku: candidateProof.sku, verdict: 'confirmed_direct',
+        axes: analogAxes.map((axis) => ({ key: axis.key, value: axis.value, evidence: {
+          kind: 'approved_manufacturer_fact', source_url: 'https://manufacturer.example/fixture.pdf',
+          approved_at: '2026-10-01T00:00:00Z', valid_until: '2027-10-01T00:00:00Z',
+        } })) }],
+    } },
+  };
+  assert.deepEqual(evaluate(criterion, base), []);
+  for (const invalidSource of [
+    null,
+    { ...base.selectionContract.direct_analog_proof.source, sku: 'WRONG-SKU' },
+    { ...base.selectionContract.direct_analog_proof.source, product_url: candidateUrl },
+    { ...base.selectionContract.direct_analog_proof.source,
+      axes: base.selectionContract.direct_analog_proof.source.axes.map((axis) =>
+        axis.key === 'product_kind' ? { ...axis, value: 'socket' } : axis) },
+  ]) {
+    assert(evaluate(criterion, { ...base, selectionContract: { direct_analog_proof: {
+      ...base.selectionContract.direct_analog_proof, source: invalidSource,
+    } } }).some((failure) => failure.includes('exact source SKU and required axes')));
+  }
+  for (const source of [
+    null,
+    { ...sourceProof, sku: 'WRONG-SKU' },
+    { ...sourceProof, offerPrice: null },
+    { ...sourceProof, canonicalUrl: candidateUrl },
+    { ...sourceProof, verified: false },
+    { ...sourceProof, ambiguousOffers: true },
+    { ...sourceProof, availability: 'https://schema.org/OutOfStock' },
+  ]) {
+    assert(evaluate(criterion, { ...base, relativePriceSourceProof: source })
+      .some((failure) => failure.includes('exact source SKU and price')));
+  }
+  for (const changed of [
+    { ...candidateProof, offerPrice: 1000 },
+    { ...candidateProof, offerPrice: 1200 },
+    { ...candidateProof, sku: sourceProof.sku },
+    { ...candidateProof, canonicalUrl: sourceUrl },
+    { ...candidateProof, verified: false },
+    { ...candidateProof, ambiguousOffers: true },
+    { ...candidateProof, availability: 'https://schema.org/OutOfStock' },
+  ]) {
+    assert(evaluate(criterion, {
+      ...base, verifiedProductPages: new Map([[candidateIdentity, changed]]),
+    }).some((failure) => /not independently proven cheaper|confirmed-direct-analog certificate/u.test(failure)));
+  }
+  assert(evaluate(criterion, { ...base, links: [] })
+    .some((failure) => /at least one candidate|confirmed-direct-analog certificate/u.test(failure)));
+  assert(evaluate(criterion, { ...base, links: [{ ...base.links[0], price: 800 }] })
+    .some((failure) => /not independently proven cheaper|confirmed-direct-analog certificate/u.test(failure)));
+  assert.throws(() => validateExpectationObject({ require_relative_price_comparison: criterion.require_relative_price_comparison }),
+    /structural facets/u);
+  assert.throws(() => validateExpectationObject({ ...criterion, require_every_product_page: {
+    facets: [{ name: 'Количество полюсов', exact_any: ['1', '2'] },
+      { name: 'Номинальный ток', exact_any: ['16', '25'] }],
+  } }), /single-value structural facets/u);
+  assert.throws(() => validateExpectationObject({ ...criterion, require_confirmed_analogs: {
+    ...criterion.require_confirmed_analogs, source_product_url: candidateUrl,
+  } }), /comparator source URL/u);
+  assert.throws(() => validateExpectationObject({ ...criterion, require_confirmed_analogs: undefined }),
+    /confirmed-direct-analog certificate/u);
+  assert.throws(() => validateExpectationObject({ ...criterion, require_confirmed_analogs: {
+    ...criterion.require_confirmed_analogs,
+    required_axes: [{ key: 'brand', op: 'eq', value: 'Schneider' },
+      { key: 'color', op: 'eq', value: 'white' }],
+  } }), /product type and mandatory technical axes/u);
+  assert(evaluate(criterion, { ...base, selectionContract: null })
+    .some((failure) => failure.includes('confirmed-direct-analog certificate')));
+  assert(evaluate(criterion, { ...base, relativePriceSourceProof: {
+    ...sourceProof, facets: { ...sourceProof.facets, 'Количество полюсов': '2' },
+  } }).some((failure) => failure.includes('source product does not meet')));
+  assert(evaluate(criterion, { ...base, verifiedProductPages: new Map([[candidateIdentity, {
+    ...candidateProof, name: 'Розетка двойная электрическая',
+    facets: { ...candidateProof.facets, 'Количество полюсов': undefined },
+  }]]) }).some((failure) => failure.includes('not structurally compatible')));
+  for (const facets of [
+    { 'Продается только в групповой упаковке': 'Нет' },
+    { 'Единица измерения': 'уп', 'Продается только в групповой упаковке': 'Нет' },
+    { 'Единица измерения': 'шт', 'Продается только в групповой упаковке': 'Да' },
+    { 'Единица измерения': 'компл.', 'Продается только в групповой упаковке': 'Нет' },
+    { 'Единица измерения': 'кор.', 'Продается только в групповой упаковке': 'Нет' },
+    { 'Единица измерения': 'шт/уп', 'Продается только в групповой упаковке': 'Нет' },
+    { 'Единица измерения': 'упаковка (10 шт)', 'Продается только в групповой упаковке': 'Нет' },
+  ]) {
+    const structuralFacets = Object.fromEntries(Object.entries(sourceProof.facets)
+      .filter(([name]) => !['Единица измерения', 'Продается только в групповой упаковке'].includes(name)));
+    const testedFacets = { ...structuralFacets, ...facets };
+    assert(evaluate(criterion, { ...base, relativePriceSourceProof: { ...sourceProof, facets: testedFacets } })
+      .some((failure) => failure.includes('source sale unit')));
+    assert(evaluate(criterion, {
+      ...base, verifiedProductPages: new Map([[candidateIdentity, { ...candidateProof, facets: testedFacets }]]),
+    }).some((failure) => /candidate sale unit|confirmed-direct-analog certificate/u.test(failure)));
+  }
+  assert(evaluate(criterion, {
+    ...base, verifiedProductPages: new Map([[candidateIdentity, {
+      ...candidateProof,
+      facets: { ...candidateProof.facets, 'Единица измерения': 'м' },
+    }]]),
+  }).some((failure) => failure.includes('candidate sale unit')));
+
+  const sourceHtml = (offers) => `<link rel="canonical" href="${sourceUrl}">
+    <script type="application/ld+json">${JSON.stringify({ '@type': 'Product', '@id': sourceUrl,
+      name: 'Автомат C16 Schneider', sku: sourceProof.sku, offers })}</script>
+    ${Object.entries(sourceProof.facets).map(([name, value]) => `<div class="product__tab-description-item">
+      <span class="product__description-title">${name}:</span><span class="product__tab-description-text">${value}</span></div>`).join('')}`;
+  const multiOfferSource = productProofFromHtml(sourceHtml([
+    { '@type': 'Offer', price: 1000, priceCurrency: 'KZT', availability: 'https://schema.org/OutOfStock' },
+    { '@type': 'Offer', price: 700, priceCurrency: 'KZT', availability: 'https://schema.org/InStock' },
+  ]), sourceIdentity);
+  assert.equal(multiOfferSource?.ambiguousOffers, true);
+  assert(evaluate(criterion, { ...base, relativePriceSourceProof: {
+    ...multiOfferSource, identity: sourceIdentity, verified: true,
+  } }).some((failure) => failure.includes('exact source SKU and price')));
+  assert(evaluate(criterion, { ...base, verifiedProductPages: new Map([[candidateIdentity, {
+    ...candidateProof, ambiguousOffers: true,
+  }]]) }).some((failure) => /not independently proven cheaper|confirmed-direct-analog certificate/u.test(failure)));
+  const oneOffer = [{ '@type': 'Offer', price: 1000, priceCurrency: 'KZT',
+    availability: 'https://schema.org/InStock' }];
+  const conflictingProduct = `<script type="application/ld+json">${JSON.stringify({
+    '@type': 'Product', '@id': sourceUrl, name: 'Автомат C16 Schneider', sku: sourceProof.sku,
+    offers: { '@type': 'Offer', price: 700, priceCurrency: 'KZT',
+      availability: 'https://schema.org/InStock' },
+  })}</script>`;
+  const conflictingNodeProof = productProofFromHtml(sourceHtml(oneOffer) + conflictingProduct, sourceIdentity);
+  assert.equal(conflictingNodeProof?.ambiguousOffers, true);
+  assert(evaluate(criterion, { ...base, relativePriceSourceProof: {
+    ...conflictingNodeProof, identity: sourceIdentity, verified: true,
+  } }).some((failure) => failure.includes('exact source SKU and price')));
+  const conflictingUnitHtml = sourceHtml(oneOffer) + `<div class="product__tab-description-item">
+    <span class="product__description-title">Единица измерения:</span>
+    <span class="product__tab-description-text">уп</span></div>`;
+  const conflictingUnitProof = productProofFromHtml(conflictingUnitHtml, sourceIdentity);
+  assert.equal(conflictingUnitProof?.duplicateSaleUnitFacet, true);
+  assert(evaluate(criterion, { ...base, relativePriceSourceProof: {
+    ...conflictingUnitProof, identity: sourceIdentity, verified: true,
+  } }).some((failure) => failure.includes('source sale unit')));
 });
 
 test('strict household motion scenarios keep source proof and disclose a shortfall below three cards', () => {

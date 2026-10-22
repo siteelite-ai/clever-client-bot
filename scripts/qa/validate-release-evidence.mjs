@@ -8,6 +8,7 @@ import { MATRIX_MANIFESTS, buildReleaseLedger, serializeReleaseLedger } from './
 // Read-only CLI:
 // node scripts/qa/validate-release-evidence.mjs \
 //   --attestation=deployment-assertion.json \
+//   --require-catalog-preflight \
 //   --report=first-strict.json --report=second-strict.json \
 //   --report=third-strict.json --report=fourth-strict.json
 // The attestation JSON must have candidate_commit_sha (full 40-hex Git SHA),
@@ -65,7 +66,7 @@ function summaryWithFailures(failures, coverage, attestation) {
 }
 
 /** Validate already-loaded JSON. This function performs no I/O and never exposes response text. */
-export function validateReleaseEvidence({ inventory, reports, attestation }) {
+export function validateReleaseEvidence({ inventory, reports, attestation, requireCatalogPreflight = false }) {
   const failures = [];
   const fail = (code, location = null) => failures.push(location ? { code, location } : { code });
   const coverage = {
@@ -172,6 +173,18 @@ export function validateReleaseEvidence({ inventory, reports, attestation }) {
     if (!isRecord(report)) {
       fail('report_invalid', reportLocation);
       continue;
+    }
+    // New release candidates must prove that the real, authenticated catalog
+    // was reachable before the first paid chat turn. Historical V9 evidence
+    // remains valid without this opt-in gate. The runner stores only this
+    // sanitized outcome; the underlying two-check response is never logged.
+    if (requireCatalogPreflight && (!isRecord(report.catalog_preflight) ||
+      report.catalog_preflight.ok !== true || report.catalog_preflight.status !== 'ready' ||
+      report.catalog_preflight.http_status !== 200 ||
+      !Number.isSafeInteger(report.catalog_preflight.duration_ms) ||
+      report.catalog_preflight.duration_ms < 0 ||
+      Object.keys(report.catalog_preflight).length !== 4)) {
+      fail('catalog_preflight_not_ready', reportLocation);
     }
     const manifest = manifests.get(report.suite_file);
     if (!manifest) {
@@ -370,18 +383,22 @@ export function validateReleaseEvidence({ inventory, reports, attestation }) {
 export function parseCliArgs(argv = process.argv.slice(2)) {
   let attestationFile = null;
   const reportFiles = [];
+  let requireCatalogPreflight = false;
   for (const arg of argv) {
     if (arg.startsWith('--attestation=') && arg.slice('--attestation='.length).trim()) {
       if (attestationFile !== null) throw new Error('duplicate --attestation');
       attestationFile = arg.slice('--attestation='.length);
     } else if (arg.startsWith('--report=') && arg.slice('--report='.length).trim()) {
       reportFiles.push(arg.slice('--report='.length));
+    } else if (arg === '--require-catalog-preflight') {
+      if (requireCatalogPreflight) throw new Error('duplicate --require-catalog-preflight');
+      requireCatalogPreflight = true;
     } else {
       throw new Error('unknown or incomplete argument');
     }
   }
   if (attestationFile === null) throw new Error('--attestation is required');
-  return { attestationFile, reportFiles };
+  return { attestationFile, reportFiles, requireCatalogPreflight };
 }
 
 function readJson(filename) {
@@ -394,14 +411,14 @@ function cliFailure(code) {
     expected_runs: EXPECTED_COUNTS.runs, recorded_runs: 0, matched_runs: 0, passing_runs: 0,
     expected_turns: EXPECTED_COUNTS.turns, recorded_turns: 0, matched_turns: 0, unique_log_ids: 0,
   }, null);
-  summary.usage = 'node scripts/qa/validate-release-evidence.mjs --attestation=FILE --report=FILE --report=FILE --report=FILE --report=FILE';
+  summary.usage = 'node scripts/qa/validate-release-evidence.mjs --attestation=FILE [--require-catalog-preflight] --report=FILE --report=FILE --report=FILE --report=FILE';
   return summary;
 }
 
 export function runCli(argv = process.argv.slice(2)) {
   let summary;
   try {
-    const { attestationFile, reportFiles } = parseCliArgs(argv);
+    const { attestationFile, reportFiles, requireCatalogPreflight } = parseCliArgs(argv);
     const inventoryBytes = fs.readFileSync(inventoryFile, 'utf8');
     if (inventoryBytes !== serializeReleaseLedger(buildReleaseLedger())) {
       summary = cliFailure('inventory_not_current_pinned_matrix');
@@ -410,6 +427,7 @@ export function runCli(argv = process.argv.slice(2)) {
         inventory: JSON.parse(inventoryBytes),
         reports: reportFiles.map(readJson),
         attestation: readJson(attestationFile),
+        requireCatalogPreflight,
       });
     }
   } catch {

@@ -3,3 +3,16 @@
 (globalThis as typeof globalThis & {
   __VOLT220_ADMISSION_SCOPE__?: "preview";
 }).__VOLT220_ADMISSION_SCOPE__ = "preview";
+
+// Temporary QA credentials are accepted only by this closed entrypoint. This
+// marker is deliberately separate from the optional provider-retry marker.
+(globalThis as typeof globalThis & {
+  __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
+}).__VOLT220_CLOSURE_TEST_SCOPE__ = "closure_preview";
+
+// Only this closed QA wrapper may opt the recoverable derived-reasoning retry
+// into an independent provider. The production and ordinary preview wrappers
+// do not set this isolate-local marker, regardless of project-wide env values.
+(globalThis as typeof globalThis & {
+  __VOLT220_DERIVED_REASONING_RETRY_SCOPE__?: "closure_preview";
+}).__VOLT220_DERIVED_REASONING_RETRY_SCOPE__ = "closure_preview";

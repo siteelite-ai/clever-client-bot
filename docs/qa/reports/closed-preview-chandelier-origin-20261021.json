@@ -1,0 +1,228 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T21:07:53.691Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-chandelier-30m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-chandelier-30m2_base_1792530473694_1",
+          "turns": [
+            {
+              "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 8405,
+              "network_attempts": 1,
+              "log_id": "aac3cd2e-e61a-45c7-ba4b-245b67e36ad6",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: transport_5xx",
+                  "duration_ms": 481
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: transport_5xx",
+                  "duration_ms": 86
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 3"
+              ]
+            },
+            {
+              "message": "Они точно подходят для освещения 30 квадратных метров?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 5159,
+              "network_attempts": 1,
+              "log_id": "a447aba5-2400-45fc-a4e1-8495655aaadf",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "В текущей теме я не показал подтверждённые товары, поэтому не могу сравнить их цены или характеристики. Повторите подбор — проверю варианты заново.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "assistant text misses one or more required groups: [30 м², 30 м2, 30 квадрат] [по каталог, в карточк, заявлен] [площадь освещения, максимальная площадь]"
+              ]
+            },
+            {
+              "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1672,
+              "network_attempts": 1,
+              "log_id": "075deebd-43a5-4ece-9b0c-70f18750fd01",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для ответа на ваш вопрос мне нужно знать, о каких вариантах и характеристиках идет речь. Пожалуйста, уточните, что именно вы сравниваете.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "terminal_followup",
+                "options_count": 0
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "А есть другие варианты?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6216,
+              "network_attempts": 1,
+              "log_id": "0fcb1861-f91c-4ca1-9469-421fd99cb773",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: transport_5xx",
+                  "duration_ms": 496
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: category_not_found",
+                  "duration_ms": 5
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 1"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-20T21:08:15.159Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 4,
+    "recorded_turns": 4
+  },
+  "log_ids": [
+    "aac3cd2e-e61a-45c7-ba4b-245b67e36ad6",
+    "a447aba5-2400-45fc-a4e1-8495655aaadf",
+    "075deebd-43a5-4ece-9b0c-70f18750fd01",
+    "0fcb1861-f91c-4ca1-9469-421fd99cb773"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

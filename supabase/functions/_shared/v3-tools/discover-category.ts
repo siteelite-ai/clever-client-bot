@@ -38,6 +38,8 @@ interface CategoriesCache {
   byId: Map<number, CategoryNode>; // для обхода поддерева (родитель → дети)
   byPagetitle: Map<string, number>; // pagetitle (нормализованный) → id
   isLeaf: Map<string, boolean>; // нормализованный pagetitle → лист ли (childrenIds.length === 0)
+  identityCounts: Map<string, number>; // до дедупликации: неоднозначное имя не доказывает лист
+  explicitEmptyChildrenIds: Set<number>; // только явно пустой массив детей доказывает лист
   ts: number;
 }
 
@@ -725,6 +727,7 @@ function collectCategories(
     flat: CategoryCandidate[];
     byId: Map<number, CategoryNode>;
     byPagetitle: Map<string, number>;
+    explicitEmptyChildrenIds: Set<number>;
   },
 ): void {
   if (!Array.isArray(nodes)) return;
@@ -738,6 +741,9 @@ function collectCategories(
       const children = Array.isArray(node.children)
         ? node.children as Array<Record<string, unknown>>
         : [];
+      if (Array.isArray(node.children) && children.length === 0) {
+        acc.explicitEmptyChildrenIds.add(id);
+      }
       const childrenIds = children
         .map((c) => (typeof c.id === "number" ? c.id : null))
         .filter((x): x is number => x !== null);
@@ -773,6 +779,7 @@ async function fetchCategories(
     flat: [] as CategoryCandidate[],
     byId: new Map<number, CategoryNode>(),
     byPagetitle: new Map<string, number>(),
+    explicitEmptyChildrenIds: new Set<number>(),
   };
   collectCategories(first.results, null, acc);
 
@@ -799,6 +806,11 @@ async function fetchCategories(
     new Map(acc.flat.map((c) => [c.pagetitle, c])).values(),
   )
     .sort((a, b) => a.pagetitle.localeCompare(b.pagetitle));
+  const identityCounts = new Map<string, number>();
+  for (const candidate of acc.flat) {
+    const key = normalize(candidate.pagetitle);
+    identityCounts.set(key, (identityCounts.get(key) ?? 0) + 1);
+  }
   // Build isLeaf map: листом считается узел без детей в дереве /categories.
   const isLeaf = new Map<string, boolean>();
   for (const node of acc.byId.values()) {
@@ -809,6 +821,8 @@ async function fetchCategories(
     byId: acc.byId,
     byPagetitle: acc.byPagetitle,
     isLeaf,
+    identityCounts,
+    explicitEmptyChildrenIds: acc.explicitEmptyChildrenIds,
     ts: Date.now(),
   };
   return categoriesCache;
@@ -1409,6 +1423,93 @@ function resolveLeafCategories(
     return [{ id: 0, pagetitle: resolvedPagetitle }];
   }
   return leaves;
+}
+
+export type ExactCatalogLeafVerification =
+  | {
+    ok: true;
+    category: { pagetitle: string };
+    leaf_categories: [LeafCategory];
+    resolution_method: "exact";
+  }
+  | {
+    ok: false;
+    error_code: "category_not_found";
+    reason: "absent" | "ambiguous" | "not_leaf";
+    message: string;
+  }
+  | {
+    ok: false;
+    error_code: Exclude<DiscoverCategoryErr["error_code"], "category_not_found">;
+    message: string;
+  };
+
+/**
+ * Verify a customer's bare category answer against the same catalog taxonomy
+ * used by discovery. An exact leaf identity needs neither facet options nor a
+ * model decision. A missing, duplicate, or parent title is not proof of a
+ * leaf; transport failures remain retryable errors, never empty inventory.
+ */
+export async function verifyExactCatalogLeaf(
+  noun: string,
+  deps: DiscoverCategoryDeps,
+): Promise<ExactCatalogLeafVerification> {
+  const key = normalize(String(noun ?? ""));
+  if (!key) {
+    return {
+      ok: false,
+      error_code: "bad_input",
+      message: "category title required",
+    };
+  }
+  try {
+    const taxonomy = await fetchCategories(deps);
+    const matching = [...taxonomy.byId.values()].filter((node) =>
+      normalize(node.pagetitle) === key
+    );
+    const count = taxonomy.identityCounts.get(key) ?? 0;
+    if (
+      count !== 1 || matching.length !== 1 ||
+      !Number.isSafeInteger(matching[0]?.id) || matching[0].id <= 0 ||
+      matching[0].childrenIds.length !== 0 ||
+      !taxonomy.explicitEmptyChildrenIds.has(matching[0].id)
+    ) {
+      return {
+        ok: false,
+        error_code: "category_not_found",
+        reason: count === 0 && matching.length === 0
+          ? "absent"
+          : count > 1 || matching.length > 1
+          ? "ambiguous"
+          : "not_leaf",
+        message: `no unambiguous exact leaf for "${noun}"`,
+      };
+    }
+    const leaf = { id: matching[0].id, pagetitle: matching[0].pagetitle };
+    return {
+      ok: true,
+      category: { pagetitle: leaf.pagetitle },
+      leaf_categories: [leaf],
+      resolution_method: "exact",
+    };
+  } catch (error) {
+    if (error instanceof DiscoveryUpstreamError) {
+      return {
+        ok: false,
+        // A taxonomy transport failure can never prove an absent title.
+        error_code: error.errorCode === "category_not_found"
+          ? "transport_5xx"
+          : error.errorCode,
+        message: error.message,
+      };
+    }
+    const isAbort = (error as { name?: string })?.name === "AbortError";
+    return {
+      ok: false,
+      error_code: isAbort ? "catalog_timeout" : "transport_5xx",
+      message: (error as Error)?.message ?? "taxonomy fetch failed",
+    };
+  }
 }
 
 export async function executeDiscoverCategory(

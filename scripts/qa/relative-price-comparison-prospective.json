@@ -1,0 +1,21 @@
+{
+  "source": "Prospective acceptance only: a product family and electrical parameters do not identify one priced source SKU. Keep the historical BT-924 suite unchanged until the source product has an exact customer-confirmed SKU and live catalog price.",
+  "default_expectations": {
+    "conversation_boundary": "new_task"
+  },
+  "cases": [
+    {
+      "id": "prospective-acti9-cheaper-source-ambiguous",
+      "title": "Request exact source SKU before claiming any Acti9 replacement is cheaper",
+      "turns": [
+        {
+          "message": "Подбери более дешевые аналоги автомата Schneider Electric Acti9 1P 16A C",
+          "expect": {
+            "max_products": 0,
+            "require_relative_price_comparison": { "mode": "ambiguous" }
+          }
+        }
+      ]
+    }
+  ]
+}

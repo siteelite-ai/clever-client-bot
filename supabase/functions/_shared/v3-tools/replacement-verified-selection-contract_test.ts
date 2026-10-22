@@ -3,13 +3,17 @@ import {
   assertNotEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { Facet } from "./discover-category.ts";
-import { resolveStructuralReplacementProfile } from "./replacement-structural-proof.ts";
+import {
+  adjudicateVerifiedStructuralCandidate,
+  resolveStructuralReplacementProfile,
+} from "./replacement-structural-proof.ts";
 import {
   guardedStructuralSelectionContract,
   hasVerifiedRecessedStructuralMount,
 } from "./replacement-verified-selection-contract.ts";
 import type { ResultCardinalityContract } from "./result-cardinality.ts";
 import type { ProductFull } from "./types.ts";
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
 
 const traits = [
   ["kind", "Вид светильника", "даунлайт"],
@@ -82,6 +86,44 @@ const requested: ResultCardinalityContract = {
   mode: "alternatives",
   explicit: true,
 };
+
+function withApprovedRoundCutout(
+  candidate: ProductFull,
+  min: number,
+  max: number,
+): ProductFull {
+  const facts: VerifiedManufacturerFacts = {
+    binding: {
+      product_id: candidate.id,
+      article: candidate.article!,
+      catalog_url: candidate.url,
+    },
+    provenance: {
+      source_url: "https://manufacturer.example/specification.html",
+      document_version: "rev-1",
+      document_page: null,
+      verified_at: "2026-10-18T12:00:00.000Z",
+      valid_until: "2026-11-18T12:00:00.000Z",
+      approved_at: "2026-10-19T12:00:00.000Z",
+      approved_by: "reviewer-1",
+    },
+    technical: {
+      cutout: {
+        shape: "round",
+        kind: min === max ? "exact" : "range",
+        min_mm: min,
+        max_mm: max,
+      },
+      outer_diameter_mm: 113,
+      color_temperature_k: null,
+      integrated_led: null,
+      socket: null,
+      driver: null,
+      supply_v: null,
+    },
+  };
+  return { ...candidate, verified_manufacturer_facts: facts };
+}
 
 Deno.test("guarded contract is common verified source/candidate proof, not a generic-diameter promise", () => {
   const sourceProfile = profile();
@@ -236,6 +278,159 @@ Deno.test("source-labelled cut-out alone can support a derived contract", () => 
       profile: sourceProfile,
       candidates: [candidate],
       customerCutoutMm: 80,
+      budgetCap: null,
+      requested,
+    }),
+    null,
+  );
+});
+
+Deno.test("approved inclusive cut-out range supports the exact opening, not a different one", () => {
+  const sourceProfile = profile();
+  const ranged = withApprovedRoundCutout(product("ranged", { diameter: "12" }), 90, 110);
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [ranged],
+      customerCutoutMm: 90,
+      budgetCap: null,
+      requested,
+    })?.visible_requirements[0].value,
+    90,
+  );
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [ranged],
+      customerCutoutMm: 89,
+      budgetCap: null,
+      requested,
+    }),
+    null,
+  );
+});
+
+Deno.test("approved opaque socket uses the same guarded proof in shortlist and final contract", () => {
+  const liveFacets = facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values,
+      ...facet.key === "live_kind" ? [{ value: "точечные светильники", products_count: 1 }] : [],
+      ...facet.key === "live_socket" ? [{ value: "прочее", products_count: 1 }] : [],
+      ...facet.key === "live_voltage" ? [{ value: "230", products_count: 1 }] : [],
+    ],
+  }));
+  const approved = (item: ProductFull) => {
+    const bound = withApprovedRoundCutout(item, 90, 90);
+    bound.verified_manufacturer_facts!.technical.integrated_led = true;
+    bound.verified_manufacturer_facts!.technical.fixture_form = "downlight";
+    bound.verified_manufacturer_facts!.technical.socket = { kind: "none" };
+    bound.verified_manufacturer_facts!.technical.supply_v = {
+      min: 220,
+      max: 240,
+    };
+    return bound;
+  };
+  const source = approved(product("source"));
+  const resolved = resolveStructuralReplacementProfile(source, liveFacets);
+  assertEquals(resolved.status, "ready");
+  if (resolved.status !== "ready") throw new Error("profile not ready");
+  const candidate = approved(product("opaque", {
+    kind: "точечные светильники",
+    socket: "прочее",
+    voltage: "230",
+  }));
+  const proof = adjudicateVerifiedStructuralCandidate(
+    resolved.profile, candidate, 90,
+  );
+  assertEquals(proof.ok, true);
+  assertEquals(proof.fit.status, "insufficient_evidence");
+  assertEquals(proof.fit.checks.lamp_interface.reason, "lamp_interface_unverified");
+  const contract = guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [candidate],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  });
+  assertNotEquals(contract, null);
+  assertEquals(contract?.mandatory_criteria.some(({ key }) =>
+    key === "Вид светильника" || key === "Тип цоколя" ||
+    key === "Напряжение, В"
+  ), false);
+  assertEquals(contract?.mandatory_criteria.some(({ key }) =>
+    key === "Способ монтажа"
+  ), true);
+  // Every source-facet criterion published for this card must be literally
+  // true of its corroborated live value. Semantic bridges remain in the
+  // private admission proof, not falsely represented as raw equality.
+  for (const criterion of contract?.mandatory_criteria ?? []) {
+    if (criterion.key === "Монтажное отверстие") {
+      assertEquals(criterion.value, 90);
+      continue;
+    }
+    const match = traits.find(([, caption]) => caption === criterion.key);
+    if (!match) throw new Error(`unmapped criterion: ${criterion.key}`);
+    const raw = candidate.facet_values?.[`live_${match[0]}`]?.[0];
+    if (criterion.op === "eq") {
+      assertEquals(raw, criterion.value, criterion.key);
+    } else if (criterion.op === "min") {
+      assertEquals(Number(raw) >= Number(criterion.value), true, criterion.key);
+    } else if (criterion.op === "range") {
+      const [min, max] = criterion.value as [number, number];
+      assertEquals(Number(raw) >= min && Number(raw) <= max, true, criterion.key);
+    } else {
+      throw new Error(`unexpected criterion operator: ${criterion.op}`);
+    }
+  }
+
+  const noFacts = product("opaque-no-facts", {
+    socket: "прочее",
+    voltage: "230",
+  }, { description_excerpt: "Монтажное отверстие: 90 мм" });
+  assertEquals(adjudicateVerifiedStructuralCandidate(
+    resolved.profile, noFacts, 90,
+  ).ok, false);
+  assertEquals(guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [noFacts],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  }), null);
+  const namedSocket = approved(product("named-socket", {
+    socket: "прочее",
+    voltage: "230",
+  }, { pagetitle: "Светильник LED GU10" }));
+  assertEquals(adjudicateVerifiedStructuralCandidate(
+    resolved.profile, namedSocket, 90,
+  ).ok, false);
+  assertEquals(guardedStructuralSelectionContract({
+    profile: resolved.profile,
+    candidates: [namedSocket],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  }), null);
+});
+
+Deno.test("a customer opening outside an approved source range cannot enter the final contract", () => {
+  const sourceProfile = profile(withApprovedRoundCutout(product("source"), 90, 110));
+  const candidate = withApprovedRoundCutout(product("candidate"), 90, 110);
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [candidate],
+      customerCutoutMm: 90,
+      budgetCap: null,
+      requested,
+    })?.visible_requirements[0].value,
+    90,
+  );
+  assertEquals(
+    guardedStructuralSelectionContract({
+      profile: sourceProfile,
+      candidates: [candidate],
+      customerCutoutMm: 120,
       budgetCap: null,
       requested,
     }),

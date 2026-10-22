@@ -66,6 +66,13 @@ Deno.test("catalog price extreme keeps budget and absolute order as separate con
   });
   equal(detectPriceDirection("розетка до 5000 ₸"), null);
   equal(detectPriceDirection("не самый дешёвый кабель"), null);
+  equal(detectPriceDirection("Не бюджетный из этих вариантов"), null);
+  equal(detectPriceDirection("Не самый бюджетный из этих вариантов"), null);
+  equal(detectPriceDirection("Бюджетный из этих вариантов не нужен"), null);
+  equal(detectPriceDirection("Не бюджетный, а премиум из этих вариантов"), {
+    kind: "superlative",
+    direction: "more_expensive",
+  });
   equal(detectPriceDirection("дешевле этой модели"), {
     kind: "comparative",
     direction: "cheaper",

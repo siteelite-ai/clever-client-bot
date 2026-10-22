@@ -1,5 +1,7 @@
 // V3 shared types — minimal, data-agnostic.
 
+import type { VerifiedManufacturerFacts } from "./verified-manufacturer-facts.ts";
+
 export interface ProductRef {
   id: string;
   pagetitle: string;
@@ -32,6 +34,12 @@ export interface ProductRef {
 
 export interface ProductFull extends ProductRef {
   url: string;
+  /**
+   * Internal, service-role-loaded and validated manufacturer evidence for this
+   * exact catalogue product. Never project it into ProductRef, model-visible
+   * traits, or catalogue description text.
+   */
+  verified_manufacturer_facts?: VerifiedManufacturerFacts;
   /**
    * Internal provenance of the raw catalog warehouse payload. The public
    * ProductRef keeps its existing availability contract; this distinction
@@ -66,7 +74,11 @@ export type ToolName =
 /** Side-channel SSE events tools may want the orchestrator to emit. */
 export type ToolSideEffect =
   | { type: "contacts"; html: string }
-  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string }
+  | {
+    type: "quick_replies";
+    replies: Array<{ value: string; label: string }>;
+    facet_key: string;
+  }
   | { type: "slot_update"; slots: Record<string, unknown> };
 
 export interface ToolError {
@@ -123,7 +135,6 @@ export interface DiscoverCategoryOk {
   resolution_method?: "exact" | "live_taxonomy" | "live_facet_schema" | "model";
   side_effects?: ToolSideEffect[];
 }
-
 
 export interface JargonRecoverOk {
   ok: true;
@@ -216,7 +227,11 @@ export type ToolResult =
   | (LookupKnowledgeOk & { tool: "lookup_knowledge" } & WithSideEffects)
   | (LookupContactsOk & { tool: "lookup_contacts" } & WithSideEffects)
   | (RenderProductsOk & { tool: "render_products" } & WithSideEffects)
-  | (ProposeClarificationOk & { tool: "propose_clarification" } & WithSideEffects)
+  | (
+    & ProposeClarificationOk
+    & { tool: "propose_clarification" }
+    & WithSideEffects
+  )
   | (EscalateOk & { tool: "escalate_to_manager" } & WithSideEffects)
   | (NoteStateOk & { tool: "note_state" } & WithSideEffects)
   | (ToolError & { tool: ToolName } & WithSideEffects);
