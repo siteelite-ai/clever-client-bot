@@ -45,7 +45,39 @@ secret; verify deletion or rotation separately. Keep it out of shell history,
 chat, issue comments, screenshots, and the repository. The runner
 reads the public `anon` JWT from `public/widget.js`; it rejects a non-anon JWT.
 
-After securely placing the matching QA secret in the process environment:
+For a one-run server-side setup, use the wrapper below. It reads the existing
+Supabase Management PAT from `SUPABASE_ACCESS_TOKEN` or the Supabase CLI's
+local access-token file, checks that `VOLT220_ROUTE_QA_SECRET` is absent,
+creates a fresh credential, invokes only this fixed 15-probe runner, then
+deletes that exact name and independently verifies its absence. Before DELETE,
+it compares the Management GET `value` (a SHA-256 hex digest, **not** the raw
+secret) with the SHA-256 of its own freshly generated value. If the digest is
+absent or differs, it does not delete the name and reports uncertain ownership.
+An explicit POST 4xx similarly triggers only a read-only absence check, never
+a DELETE. The PAT never reaches the runner. Neither secret values nor the runner's raw output are
+printed; on success, the wrapper prints only a bounded, strictly validated
+JSON matrix of 15 names/statuses plus `secret_cleanup: "verified"`. A
+pre-existing route secret is a hard stop and is not removed.
+
+```sh
+node scripts/qa/with-route-qa-secret.mjs --project-ref=yngoixmvmxdfxokuafjp
+```
+
+Do not run this wrapper concurrently with another administrator changing the
+same project secret. Supabase's Management secrets API has no conditional
+create; its GET-before-POST preflight cannot eliminate a remote writer's
+race between those calls. A timed-out POST is also uncertain: the wrapper
+checks again at 2, 5, and 15 seconds, deleting a late appearance **only if its
+digest proves ownership**, and exits with a manual-inspection warning rather
+than claiming success. SIGKILL,
+machine failure, a still later server write, or another writer racing between
+the ownership GET and DELETE can bypass these guarantees: the API has no
+conditional delete. In such a case inspect the Management secrets list and
+coordinate with the project owner before manually deleting **only**
+`VOLT220_ROUTE_QA_SECRET`; do not delete if ownership remains unknown.
+
+Alternatively, after securely placing the matching QA secret in the process
+environment yourself:
 
 ```sh
 node scripts/qa/run-route-closure-smoke.mjs --project-ref=yngoixmvmxdfxokuafjp
@@ -61,6 +93,7 @@ Offline regression:
 
 ```sh
 node --test scripts/qa/run-route-closure-smoke.test.mjs
+node --test scripts/qa/with-route-qa-secret.test.mjs
 ```
 
 This check does not verify that the exact deployed source matches a PR, that
