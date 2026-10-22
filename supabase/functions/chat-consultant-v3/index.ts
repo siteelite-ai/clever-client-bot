@@ -26499,12 +26499,68 @@ Deno.serve(async (req) => {
               productsCount = 0;
               return;
             }
+            const pendingSlot = slots.pending_clarification;
+            const pendingRecord =
+              pendingSlot && typeof pendingSlot === "object" &&
+                !Array.isArray(pendingSlot)
+                ? pendingSlot as Record<string, unknown>
+                : null;
+            const pendingScope = pendingRecord?.scope;
+            const clientSelectionReadinessScope = Boolean(
+              pendingScope && typeof pendingScope === "object" &&
+              !Array.isArray(pendingScope) &&
+              (pendingScope as Record<string, unknown>).kind ===
+                "selection_readiness"
+            );
+            const clientReplacementCutoutScope =
+              VERIFIED_MANUFACTURER_FACTS_ENABLED && Boolean(
+                pendingScope && typeof pendingScope === "object" &&
+                  !Array.isArray(pendingScope) &&
+                  (pendingScope as Record<string, unknown>).kind ===
+                    "replacement_mounting_cutout"
+              );
             const requestedAdditionalSelection =
               isAdditionalProductSelectionFollowup(userMessage);
-            const renderedReferenceRequested = requestedAdditionalSelection ||
-              isEvidenceOnlyFollowup(userMessage) ||
-              isRecentProductShowFollowup(userMessage) ||
+            const requestedEvidence = isEvidenceOnlyFollowup(userMessage);
+            const requestedShow = isRecentProductShowFollowup(userMessage);
+            const requestedPriceSelection =
               isRecentProductPriceSelectionFollowup(userMessage);
+            // A bare "show/proceed" after an outstanding question is not a
+            // reference to a rendered batch. Verify the immediately previous
+            // server-issued slot before giving it precedence; browser slots
+            // and forged history alone must never bypass the card-proof guard.
+            const pendingProgressRequest =
+              isUnansweredReadinessProgressRequest(userMessage) &&
+              !requestedAdditionalSelection && !requestedEvidence &&
+              !requestedPriceSelection &&
+              !/(?:^|[^\p{L}])(?:их|эти|те)(?:$|[^\p{L}])/iu.test(
+                userMessage,
+              );
+            const pendingReadinessPreflight =
+              pendingProgressRequest && clientSelectionReadinessScope
+                ? await loadVerifiedSelectionReadinessPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : null;
+            const pendingCutoutPreflight =
+              pendingProgressRequest && clientReplacementCutoutScope
+                ? await loadVerifiedReplacementCutoutPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : null;
+            const verifiedPendingQuestionProgress = Boolean(
+              pendingReadinessPreflight?.slot || pendingCutoutPreflight?.slot,
+            );
+            const renderedReferenceRequested =
+              !verifiedPendingQuestionProgress &&
+              (requestedAdditionalSelection || requestedEvidence ||
+                requestedShow || requestedPriceSelection);
             const browserHasRenderedCard =
               extractRenderedProductUrls(priorHistory).length > 0;
             const browserRenderedBase = renderedReferenceRequested &&
@@ -26554,13 +26610,6 @@ Deno.serve(async (req) => {
               productsCount = 0;
               return;
             }
-            const pendingSlot = slots.pending_clarification;
-            const pendingRecord =
-              pendingSlot && typeof pendingSlot === "object" &&
-                !Array.isArray(pendingSlot)
-                ? pendingSlot as Record<string, unknown>
-                : null;
-            const pendingScope = pendingRecord?.scope;
             const clientCatalogClarification = Boolean(
               pendingRecord?.facet_key === "catalog_section" ||
                 (pendingScope && typeof pendingScope === "object" &&
@@ -26646,27 +26695,15 @@ Deno.serve(async (req) => {
                 },
               });
             }
-            const clientSelectionReadinessScope = Boolean(
-              pendingScope && typeof pendingScope === "object" &&
-                !Array.isArray(pendingScope) &&
-                (pendingScope as Record<string, unknown>).kind ===
-                  "selection_readiness",
-            );
-            const clientReplacementCutoutScope =
-              VERIFIED_MANUFACTURER_FACTS_ENABLED && Boolean(
-                pendingScope && typeof pendingScope === "object" &&
-                  !Array.isArray(pendingScope) &&
-                  (pendingScope as Record<string, unknown>).kind ===
-                    "replacement_mounting_cutout",
-              );
-            const verifiedCutoutState = clientReplacementCutoutScope
-              ? await loadVerifiedReplacementCutoutPending(
-                supabase,
-                sessionId,
-                logId,
-                slots,
-              )
-              : { slot: null, lookupFailed: false };
+            const verifiedCutoutState = pendingCutoutPreflight ??
+              (clientReplacementCutoutScope
+                ? await loadVerifiedReplacementCutoutPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : { slot: null, lookupFailed: false });
             const verifiedCutoutMm = parseReplacementCutoutReply(
               userMessage,
               verifiedCutoutState.slot,
@@ -26693,14 +26730,15 @@ Deno.serve(async (req) => {
               });
               return;
             }
-            const verifiedReadinessState = clientSelectionReadinessScope
-              ? await loadVerifiedSelectionReadinessPending(
-                supabase,
-                sessionId,
-                logId,
-                slots,
-              )
-              : { slot: null, lookupFailed: false };
+            const verifiedReadinessState = pendingReadinessPreflight ??
+              (clientSelectionReadinessScope
+                ? await loadVerifiedSelectionReadinessPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : { slot: null, lookupFailed: false });
             const readinessSlots = clientSelectionReadinessScope
               ? {
                 ...slots,
