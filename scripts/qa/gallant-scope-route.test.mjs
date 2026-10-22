@@ -175,7 +175,7 @@ test('generic freeform assortment fallback verifies a live leaf, keeps compound 
 
   const decision = between(
     'const freeformCandidate = verifiedBroadChoiceState.freeformCandidate;',
-    'const clientSelectionReadinessScope =',
+    'const matchedVerifiedBroadSelection = Boolean(',
   );
   assert.match(decision, /verifyServerIssuedBroadAssortmentFreeformLeaf\(/);
   assert.match(decision, /verifyExactCatalogLeaf\(leaf, deps\)/,
