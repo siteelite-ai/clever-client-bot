@@ -67,8 +67,16 @@ jobs:
     name: deno check edge functions
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact change commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Setup Deno
         uses: denoland/setup-deno@v1
@@ -81,8 +89,8 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Install test dependencies
-        run: npm install --ignore-scripts --package-lock=false --no-audit --no-fund
+      - name: Install locked test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Type-check chat-consultant
         run: deno check supabase/functions/chat-consultant/index.ts
@@ -134,3 +142,9 @@ jobs:
 
       - name: Test legacy and catalog request boundaries and shared admission
         run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/admission_test.ts supabase/functions/chat-consultant/replacement-traits_test.ts supabase/functions/chat-consultant-v2/admission_test.ts supabase/functions/chat-consultant-v2/request-guard_test.ts supabase/functions/search-products/index_test.ts supabase/functions/_shared/public-api-admission_test.ts
+
+      - name: Test legacy taxonomy cache completeness
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/catalog-cache_test.ts supabase/functions/chat-consultant-v2/catalog-deps-factory_test.ts
+
+      - name: Test shared catalog evidence and V2 failure recovery
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/_shared/catalog-evidence_test.ts supabase/functions/chat-consultant-v2/catalog/api-client_test.ts supabase/functions/chat-consultant-v2/catalog/facet-cache_test.ts supabase/functions/chat-consultant-v2/catalog/facet-matcher_test.ts supabase/functions/chat-consultant-v2/catalog-assembler-evidence_test.ts

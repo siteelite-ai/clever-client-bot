@@ -2,8 +2,9 @@
  * Exact customer category health still needs the separate private route probe. */
 export const CATALOG_QA_SECRET_ENV = 'VOLT220_V3_CATALOG_QA_SECRET';
 export const CATALOG_QA_SECRET_HEADER = 'x-catalog-qa-secret';
-// Settings load (8 s), parallel base routes (8 s), then one validated live
-// facet route (8 s). Keep one bounded outer deadline above their maximum.
+// Settings load (8 s), parallel base routes (8 s), then validated live
+// facet and exact-article routes in parallel (8 s). Keep one bounded outer
+// deadline above their maximum.
 export const CATALOG_PREFLIGHT_TIMEOUT_MS = 28_000;
 
 const projectOrigin = 'https://yngoixmvmxdfxokuafjp.supabase.co';
@@ -139,9 +140,9 @@ export async function runCatalogHealthPreflight({
     try { body = JSON.parse(raw); } catch { return result(false, 'schema_error', status); }
     if (status === 200 && body?.ok === true && body.status === 'ready' &&
       body.checks?.categories?.status === 'ok' && body.checks?.products?.status === 'ok' &&
-      body.checks?.facets?.status === 'ok' &&
+      body.checks?.facets?.status === 'ok' && body.checks?.article_filter?.status === 'ok' &&
       body.checks.categories.http_status === 200 && body.checks.products.http_status === 200 &&
-      body.checks.facets.http_status === 200) {
+      body.checks.facets.http_status === 200 && body.checks.article_filter.http_status === 200) {
       return result(true, null, status);
     }
     const serverClassification = body?.classification;

@@ -26,7 +26,7 @@ function stubApiClient(result: CategoryOptionsResult): ApiClientDeps {
   return {
     baseUrl: 'https://test.local/api',
     apiToken: 't',
-    fetch: async () => {
+    fetch: async (url) => {
       if (result.status === 'timeout') {
         throw new DOMException('timed out', 'AbortError');
       }
@@ -40,7 +40,10 @@ function stubApiClient(result: CategoryOptionsResult): ApiClientDeps {
         data: {
           data: {
             options: result.options,
-            category: { total_products: result.totalProducts },
+            category: {
+              pagetitle: new URL(String(url)).searchParams.get('pagetitle'),
+              total_products: result.totalProducts,
+            },
           },
         },
       });

@@ -442,6 +442,29 @@ export function compileMeasuredReasoningSearchContract(
     facets,
     scope,
   );
+  // A customer's direct capacity minimum remains binding even if a model
+  // correction merely recommends one equal-valued tier without restating the
+  // operator. This is proved from the customer and one live service axis.
+  const directCustomerCapacity = scope.measurementScope === "system_total"
+    ? []
+    : projectLiteralMeasuredCriteria(
+      [],
+      scope.customerText ?? "",
+      scope.customerText ?? "",
+      facets,
+    ).added.filter((criterion) =>
+      criterion.op === "min" &&
+      facets.some((facet) =>
+        normalizeEvidence(facet.caption || facet.key) ===
+          normalizeEvidence(criterion.key) &&
+        customerOwnsDirectionalServiceCapacityMinimum(
+          scope.customerText ?? "",
+          Number(criterion.value),
+          canonicalMeasurementUnit(criterion.unit ?? ""),
+          facet,
+        )
+      )
+    );
   const scopedUserBacked = filterPerProductMeasuredCriteria(
     userBackedCriteria,
     reasoningText,
@@ -485,11 +508,20 @@ export function compileMeasuredReasoningSearchContract(
       !customerOwnsSameMaximum(criterion)
     ),
   );
-  const projectedCriteria = projected.criteria.filter((criterion) =>
-    !weakDerivedMaxima.has(criterion)
+  const appendUnrepresentedCustomerCapacity = (items: Criterion[]) => [
+    ...items,
+    ...directCustomerCapacity.filter((customerCriterion) =>
+      !items.some((candidate) =>
+        candidate.op === customerCriterion.op &&
+        criteriaIdentityMatches(candidate, customerCriterion)
+      )
+    ),
+  ];
+  const projectedCriteria = appendUnrepresentedCustomerCapacity(
+    projected.criteria.filter((criterion) => !weakDerivedMaxima.has(criterion)),
   );
-  const projectedAdded = projected.added.filter((criterion) =>
-    !weakDerivedMaxima.has(criterion)
+  const projectedAdded = appendUnrepresentedCustomerCapacity(
+    projected.added.filter((criterion) => !weakDerivedMaxima.has(criterion)),
   );
   const classificationMarker =
     /(?:категор\p{L}*|класс\p{L}*|вид\p{L}*|назначен\p{L}*|применен\p{L}*|исполнен\p{L}*)/iu;
@@ -1209,6 +1241,71 @@ function customerOwnsLocalApplicationExtent(
   return false;
 }
 
+/** A customer may state the *product's* minimum service capacity directly,
+ * without repeating the size of a room/site: `with coverage area >= X`.
+ * The physical unit and the complete service axis must both match one live
+ * facet. A room's area, a package area and a same-unit different service axis
+ * are not interchangeable with the product capacity. */
+function customerOwnsDirectionalServiceCapacityMinimum(
+  customerText: string,
+  value: number,
+  unit: string,
+  facet: MeasurementFacet,
+): boolean {
+  if (
+    !/^(?:м²|м³)$/u.test(unit) ||
+    !hasLiveServiceCapacityRole(facet, unit, "min")
+  ) return false;
+  const axisStems = [
+    ...new Set(
+      measurementAxisStems(facet.caption || facet.key).filter((stem) =>
+        !/^(?:макси|мини|maxim|minim)$/u.test(stem)
+      ),
+    ),
+  ];
+  if (axisStems.length === 0) return false;
+  const source = normalizeMeasurementText(customerText);
+  const quantity = new RegExp(
+    String.raw`(?<![a-zа-я0-9])${
+      String(value).replace(".", "[.,]")
+    }\s*(${UNIT})(?![a-zа-я0-9])`,
+    "giu",
+  );
+  for (const match of source.matchAll(quantity)) {
+    if (canonicalMeasurementUnit(match[1]) !== unit) continue;
+    const index = match.index ?? 0;
+    const boundary = Math.max(
+      source.lastIndexOf(".", index),
+      source.lastIndexOf("?", index),
+      source.lastIndexOf("!", index),
+      source.lastIndexOf(";", index),
+      source.lastIndexOf("\n", index),
+      source.lastIndexOf(", ", index),
+    );
+    const before = source.slice(Math.max(0, boundary + 1), index);
+    const direction = customerMeasurementOperator(before, [value]);
+    if (direction.op !== "min" || direction.exclusive) continue;
+    const local = normalizeEvidence(before);
+    if (
+      hasAggregateMeasurementMarker(local) ||
+      isDistributedAggregateMeasurement(local)
+    ) continue;
+    const localStems = new Set(measurementAxisStems(local));
+    if (!axisStems.every((stem) => localStems.has(stem))) continue;
+    // A named site after the capacity axis makes the ownership ambiguous:
+    // `coverage area of the room >= X` is not a catalog product requirement.
+    const lastAxis = Math.max(
+      ...axisStems.map((stem) => local.lastIndexOf(stem)),
+    );
+    if (
+      /(?:комнат|помещен|гостин|двор|участ|территор|зал\b|офис|объект|site|room)/iu
+        .test(local.slice(lastAxis + 5))
+    ) continue;
+    return true;
+  }
+  return false;
+}
+
 /** An explicit customer product maximum retains its prior literal contract.
  * For site extents, keep the existing reasoning-backed path and add a narrow
  * server-owned certificate when the model has not yet explained the fit. Both
@@ -1278,6 +1375,14 @@ function customerVerifiedCapacityRelation(
       customerText,
       value,
       measurement.unit,
+    ) &&
+    !matchedFacets.some((facet) =>
+      customerOwnsDirectionalServiceCapacityMinimum(
+        customerText,
+        value,
+        measurement.unit,
+        facet,
+      )
     )
   ) return false;
   const capacityFacets = facets.filter((facet) =>
@@ -1288,7 +1393,10 @@ function customerVerifiedCapacityRelation(
   if (
     capacityFacets.length !== 1 ||
     !isLiveServiceCapacityFacet(
-      capacityFacets[0], measurement.unit, criterion.op, value,
+      capacityFacets[0],
+      measurement.unit,
+      criterion.op,
+      value,
     )
   ) return false;
   const capacity = capacityFacets[0];
@@ -2451,7 +2559,10 @@ export function projectLiteralMeasuredCriteria(
   }));
   const added: Criterion[] = [];
   const matched: Criterion[] = [];
-  const bounds = collapseBounds(extractReasoningBounds(reasoningText));
+  const bounds = collapseBounds([
+    ...extractReasoningBounds(reasoningText),
+    ...extractReasoningBounds(customerText),
+  ]);
   // A range endpoint is not a second, exact customer requirement. Extract
   // literal equalities only from text outside customer-authored intervals;
   // the range projector above owns both endpoints. An independently stated
@@ -2465,11 +2576,25 @@ export function projectLiteralMeasuredCriteria(
   for (const quantity of quantities) {
     const unit = canonicalMeasurementUnit(quantity.unit);
     if (!unit) continue;
+    const directServiceCapacities = /^(?:м²|м³)$/u.test(unit)
+      ? (facets ?? []).filter((facet) =>
+        customerOwnsDirectionalServiceCapacityMinimum(
+          customerText,
+          quantity.value,
+          unit,
+          facet,
+        )
+      )
+      : [];
+    // A customer's `>= X` is not a literal `= X`. Let the verified service
+    // capacity relation below own this bound, but never let a generic same-
+    // unit scalar or one of two competing service axes claim it.
+    if (directServiceCapacities.length > 1) continue;
     if (
       bounds.some((bound) =>
         canonicalMeasurementUnit(bound.unit) === unit &&
         bound.value === quantity.value
-      )
+      ) && directServiceCapacities.length === 0
     ) continue;
 
     // An application-site extent is a threshold on the item's service
@@ -2477,8 +2602,10 @@ export function projectLiteralMeasuredCriteria(
     // For a 27 m² room, a live maximum-capacity tier of 30 m² is enough, but
     // the criterion remains the *customer's 27*, not a fabricated 30 or a
     // model-computed output. Two applicable service axes are ambiguous.
-    const serviceCapacities = /^(?:м²|м³)$/u.test(unit) &&
-        customerOwnsLocalApplicationExtent(customerText, quantity.value, unit)
+    const serviceCapacities = directServiceCapacities.length === 1
+      ? directServiceCapacities.map((facet) => ({ facet, op: "min" as const }))
+      : /^(?:м²|м³)$/u.test(unit) &&
+          customerOwnsLocalApplicationExtent(customerText, quantity.value, unit)
       ? (facets ?? []).flatMap((facet) =>
         hasLiveServiceCapacityRole(facet, unit, "min")
           ? [{ facet, op: "min" as const }]
@@ -2788,15 +2915,21 @@ export function certifiedCustomerApplicationCapacityOptions(
     ) return false;
     const value = Number(String(criterion.value).replace(",", "."));
     const unit = canonicalMeasurementUnit(criterion.unit ?? "");
-    if (
-      !Number.isFinite(value) || !/^(?:м²|м³)$/u.test(unit) ||
-      !customerOwnsLocalApplicationExtent(customerText, value, unit)
-    ) return false;
+    if (!Number.isFinite(value) || !/^(?:м²|м³)$/u.test(unit)) return false;
     const capacityFacets = liveFacets.filter((facet) =>
       hasLiveServiceCapacityRole(facet, unit, "min")
     );
     if (capacityFacets.length !== 1) return false;
     const facet = capacityFacets[0];
+    if (
+      !customerOwnsLocalApplicationExtent(customerText, value, unit) &&
+      !customerOwnsDirectionalServiceCapacityMinimum(
+        customerText,
+        value,
+        unit,
+        facet,
+      )
+    ) return false;
     if (!isLiveServiceCapacityFacet(facet, unit, "min", value)) return false;
     if (
       ![facet.key, facet.caption].some((label) =>

@@ -13,6 +13,7 @@ import {
 const secret = "catalog_qa_fixture_secret_0123456789abcdef";
 const healthyProduct = {
   id: 1,
+  article: "FIX-1",
   pagetitle: "Fixture product",
   price: 100,
   url: "https://220volt.kz/catalog/test/fixtures/product/",
@@ -100,7 +101,7 @@ Deno.test("catalog QA rejects disabled, missing and wrong secrets before DB or c
   }
 });
 
-Deno.test("catalog QA uses current settings and emits sanitized three-route result without AI calls", async () => {
+Deno.test("catalog QA uses current settings and emits sanitized four-check result without AI calls", async () => {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -135,15 +136,21 @@ Deno.test("catalog QA uses current settings and emits sanitized three-route resu
           "parent=0&depth=10&per_page=200&page=1",
         );
         return json({
-          data: { results: [{ id: 1, pagetitle: "Root", children: [] }] },
+          data: {
+            results: [{ id: 1, pagetitle: "Root", children: [] }],
+            pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+          },
         });
       }
       if (url.pathname === "/api/products") {
-        assertEquals(
-          url.searchParams.toString(),
-          "per_page=20&page=1&min_price=1",
-        );
-        return json({ data: { results: [healthyProduct] } });
+        assertEquals(url.searchParams.toString(), url.searchParams.has("article")
+          ? "article=FIX-1&per_page=50&page=1"
+          : "per_page=20&page=1&min_price=1");
+        return json({ data: {
+          results: [healthyProduct], pagination: {
+            page: 1, per_page: Number(url.searchParams.get("per_page")), pages: 1, total: 1,
+          },
+        } });
       }
       if (url.pathname === "/api/categories/options") {
         assertEquals(url.searchParams.get("pagetitle"), "Root");
@@ -168,12 +175,13 @@ Deno.test("catalog QA uses current settings and emits sanitized three-route resu
         categories: { status: "ok", http_status: 200 },
         products: { status: "ok", http_status: 200 },
         facets: { status: "ok", http_status: 200 },
+        article_filter: { status: "ok", http_status: 200 },
       },
     });
     assert(!body.includes("private-") && !body.includes("fixture."));
     assertEquals(
       routes.filter((route) => route.startsWith("GET /api/")).length,
-      3,
+      4,
     );
   } finally {
     for (const id of intervals) clearInterval(id);
@@ -193,10 +201,17 @@ Deno.test("catalog QA reports facets 503 after healthy base routes, without AI o
       return json({ volt220_api_token: "private-catalog-do-not-expose" });
     }
     if (url.pathname === "/api/categories") {
-      return json({ data: { results: [{ id: 1, pagetitle: "Root", children: [] }] } });
+      return json({ data: {
+        results: [{ id: 1, pagetitle: "Root", children: [] }],
+        pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+      } });
     }
     if (url.pathname === "/api/products") {
-      return json({ data: { results: [healthyProduct] } });
+      return json({ data: {
+        results: [healthyProduct], pagination: {
+          page: 1, per_page: Number(url.searchParams.get("per_page")), pages: 1, total: 1,
+        },
+      } });
     }
     if (url.pathname === "/api/categories/options") {
       return json({ secret_body: "not-public" }, 503);
@@ -214,7 +229,7 @@ Deno.test("catalog QA reports facets 503 after healthy base routes, without AI o
     assertEquals(parsed.checks.facets.http_status, 503);
     assertEquals(routes, [
       "/rest/v1/app_settings", "/api/categories", "/api/products",
-      "/api/categories/options",
+      "/api/categories/options", "/api/products",
     ]);
     for (const privateValue of ["private-catalog", "secret_body", "Root"]) {
       assert(!body.includes(privateValue));

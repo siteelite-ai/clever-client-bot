@@ -40,13 +40,20 @@ unrelated Worker or a widget-only header cannot close the direct bypass.
    Use independent secrets for the address pseudonym and proof signature.
    Keep the signing key only in trusted Worker and Edge secret stores.
 3. The proxy must **remove any incoming browser proof header and replace it**
-   with a fresh Worker-signed proof on proxied public requests. For direct
-   fallback, the updated widget may obtain a short-lived proof from a
-   dedicated same-Worker issuance endpoint, then send it to Supabase. That
-   endpoint must return no raw address, use `Cache-Control: no-store`, exact
-   allowed CORS origins, no credentials, and no public signing secret. A
-   bearer proof can be shared within its brief lifetime; the per-subject
-   database bucket and global cap remain necessary.
+   with a fresh trusted proof on proxied public requests. The widget's direct
+   Supabase fallback also activates when the Worker origin has a DNS, TLS, or
+   connection failure. A proof issuer on that **same Worker alone cannot
+   preserve the fallback**: a cold browser tab cannot fetch a proof when the
+   Worker is unreachable, and a previously fetched proof expires within 60
+   seconds. Before enforcement, provide a separately reachable, trusted
+   issuance/attestation path that can establish the same server-owned subject
+   without browser-owned identity headers, or explicitly redesign and accept
+   the loss of that availability path. An unauthenticated Supabase endpoint
+   signing arbitrary browser claims is not a trusted issuer. Any direct issuer
+   must return no raw address, use `Cache-Control: no-store`, exact allowed
+   CORS origins, no credentials, and no public signing secret. A bearer proof
+   can be shared within its brief lifetime; the per-subject database bucket
+   and global cap remain necessary.
 4. The four Edge functions verify signature, key ID, audience, exact shape,
    time bounds, and token length before any catalog/model work. The proof
    verifier never reads naked IP/session headers. A single atomic SQL bucket
@@ -67,17 +74,21 @@ unrelated Worker or a widget-only header cannot close the direct bypass.
    Worker code and secret ownership, then run disposable SQL privilege/race,
    expiry, cancellation, and cross-route tests. OFF must preserve legacy
    request and SSE behavior byte-for-byte where relevant.
-2. Deploy the compatible Worker path first with proof issuance/injection,
-   without Edge enforcement. Verify the Worker overwrites a forged incoming
-   proof and that both direct and proxy use the same pseudonym for one client.
+2. Deploy the compatible Worker path first with proof injection, without Edge
+   enforcement. Establish and test an independent trusted direct-path proof
+   source before relying on one for fallback. Verify the Worker overwrites a
+   forged incoming proof and that both direct and proxy use the same
+   pseudonym for one client.
 3. Publish compatible embed-widget **and Lovable dashboard ChatWidget**
    versions that obtain a proof for direct calls, or route the dashboard
    through the protected proxy. Enumerate other direct public-function
-   consumers before enforcement. Exercise connection timeout, SSE resume,
-   expired proof, old cached tabs, and unavailable issuance endpoint. Do not
-   remove the currently working direct fallback before this behavior is
-   proved. The proof issuer's CORS allowlist must include the intended embed
-   and dashboard origins, without using `*` or credentials.
+   consumers before enforcement. Exercise a **cold tab with Worker DNS/TLS or
+   connection failure**, connection timeout, SSE resume, expired proof, old
+   cached tabs, and unavailable issuance endpoint. A warm cached proof is not
+   proof of cold-start fallback. Do not remove the currently working direct
+   fallback before this behavior is proved. The proof issuer's CORS allowlist
+   must include the intended embed and dashboard origins, without using `*` or
+   credentials.
 4. Move the Edge gate to `observe` on all four public routes. Check actual
    successful model/catalog traffic, rejection projections, SQL failures,
    in-flight peaks, two NAT-like clients, retry/replay, and OpenRouter spend.

@@ -1718,6 +1718,173 @@ Deno.test("customer site area certifies one live service capacity without model 
   );
 });
 
+Deno.test("customer minimum for a product's service capacity stays directional across reasoning, facets and cards", () => {
+  const facet = {
+    key: "coverage_area",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "25" }, { value: "50" }, { value: "75" }],
+  };
+  const customer = "Покажи другие приборы с площадью освещения не менее 50 м²";
+  const reasoning =
+    "Рекомендуется прибор с максимальной площадью освещения 50 м².";
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    customer,
+    reasoning,
+    [facet],
+  );
+  assertEquals(projected.added, [{
+    key: facet.caption,
+    op: "min",
+    value: "50",
+    unit: "м²",
+    level: "A",
+  }]);
+  assertEquals(projected.matched, projected.added);
+  assertEquals(
+    projectLiteralMeasuredCriteria(
+      [{
+        key: facet.caption,
+        op: "eq",
+        value: "50",
+        unit: "м²",
+        level: "A",
+      }],
+      customer,
+      reasoning,
+      [facet],
+    ).criteria,
+    projected.added,
+  );
+  const scoped = filterPerProductMeasuredCriteria(
+    projected.added,
+    reasoning,
+    customer,
+    "per_product",
+    [facet],
+  );
+  assertEquals(scoped.criteria, projected.added);
+  const contract = compileMeasuredReasoningSearchContract(
+    [],
+    reasoning,
+    [],
+    [facet],
+    {
+      measurementScope: "per_product",
+      customerText: customer,
+    },
+  );
+  assertEquals(contract.mandatory_criteria, projected.added);
+  assertEquals(contract.options, { coverage_area: ["50", "75"] });
+  const frozen = projected.added.map((criterion) => ({
+    ...criterion,
+    evidence: "user_explicit" as const,
+  }));
+  assertEquals(
+    certifiedCustomerApplicationCapacityOptions(
+      frozen,
+      customer,
+      [facet],
+    ),
+    { coverage_area: ["50", "75"] },
+  );
+  assertEquals(
+    applyCriteriaGate([
+      product("too-small", [`${facet.caption}: 25`]),
+      product("fits", [`${facet.caption}: 50`]),
+      product("more-capacity", [`${facet.caption}: 75`]),
+      product("unproved", []),
+    ], scoped.criteria).passed_ids,
+    ["fits", "more-capacity"],
+  );
+  // The consultant's exact recommendation cannot turn the customer's
+  // inclusive minimum into an equality that drops higher-capacity choices.
+  assertEquals(
+    filterPerProductMeasuredCriteria(
+      [{
+        ...projected.added[0],
+        op: "eq",
+      }],
+      reasoning,
+      customer,
+      "per_product",
+      [facet],
+    ).criteria,
+    [],
+  );
+});
+
+Deno.test("a direct service minimum needs customer direction, matching axis/unit and one verified live facet", () => {
+  const facet = {
+    key: "lighting_capacity",
+    caption: "Максимальная площадь освещения, м²",
+    type: "number",
+    unit: "м²",
+    values: [{ value: "25" }, { value: "50" }, { value: "75" }],
+  };
+  const projected = (customer: string, facets = [facet], reasoning = customer) =>
+    projectLiteralMeasuredCriteria([], customer, reasoning, facets).added;
+  for (
+    const customer of [
+      "Для комнаты площадью не менее 50 м² нужны приборы",
+      "Покажи приборы с площадью освещения не более 50 м²",
+      "Покажи приборы с площадью освещения больше 50 м²",
+      "Покажи приборы с площадью обогрева не менее 50 м²",
+      "Покажи приборы с площадью освещения не менее 50 м³",
+    ]
+  ) {
+    assertEquals(projected(customer), [], customer);
+    assertEquals(projected(customer, [facet], "Рекомендую вариант 50 м²."), [], customer);
+  }
+  assertEquals(
+    projected(
+      "Покажи приборы с площадью освещения не менее 50 м²",
+      [{ ...facet, caption: "Максимальная площадь упаковки, м²" }],
+    ),
+    [],
+  );
+  assertEquals(
+    projected(
+      "Покажи приборы с площадью освещения не менее 50 м²",
+      [{ ...facet, values: [{ value: "25" }] }],
+    ),
+    [],
+  );
+  assertEquals(
+    projected(
+      "Покажи приборы с площадью освещения не менее 50 м²",
+      [facet, { ...facet, key: "second_lighting_capacity" }],
+    ),
+    [],
+  );
+});
+
+Deno.test("direct minimum service capacity applies to another live service axis and ASCII area units", () => {
+  const facet = {
+    key: "heating_area",
+    caption: "Максимальная площадь обогрева, м2",
+    type: "number",
+    unit: null,
+    values: [{ value: "25" }, { value: "35" }, { value: "45" }],
+  };
+  const customer = "Подбери обогреватели с площадью обогрева не менее 30 м2";
+  const projected = projectLiteralMeasuredCriteria(
+    [], customer, customer, [facet],
+  );
+  assertEquals(projected.added, [{
+    key: facet.caption,
+    op: "min",
+    value: "30",
+    unit: "м²",
+    level: "A",
+  }]);
+  assertEquals(projectCriteriaFacetOptions(projected.added, [facet]).options, {
+    heating_area: ["35", "45"],
+  });
+});
+
 Deno.test("capacity certificate rejects unrelated, ambiguous and unproved facets", () => {
   const customer = "Нужен прибор для комнаты площадью 30 м²";
   const facet = {

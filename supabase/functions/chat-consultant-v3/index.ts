@@ -26331,35 +26331,6 @@ Deno.serve(async (req) => {
         // returned above and never spend a second admission reservation.
         // With the default `off` mode this makes no database call and leaves
         // the current production pipeline untouched.
-        admission = await checkChatV3AdmissionWithDeadline(
-          logId,
-          (name, args) => supabase.rpc(name, args),
-          ADMISSION_RPC_TIMEOUT_MS,
-          ADMISSION_SCOPE,
-        );
-        steps.push({
-          step: "v3_admission_checked",
-          ms: Date.now() - t0,
-          meta: {
-            mode: admission.mode,
-            allowed: admission.allowed,
-            reason: admission.reason,
-            would_reject: admission.wouldReject,
-            limit_reason: admission.limitReason,
-            failure: admission.failure,
-          },
-        });
-        if (!admission.allowed) {
-          errorMsg = `admission_${admission.reason}`;
-          publicDiagnosticError = admissionDiagnosticError(admission);
-          send({
-            type: "delta",
-            content: admission.reason === "limit_exceeded"
-              ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
-              : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
-          });
-          return;
-        }
         if (ADMISSION_SCOPE === "production" && subjectVerification) {
           subjectAdmission = await reservePublicSubjectAdmission({
             verification: subjectVerification,
@@ -26393,6 +26364,37 @@ Deno.serve(async (req) => {
             });
             return;
           }
+        }
+        // A rejected subject must not spend the legacy global V3 budget.
+        // The subject guard above is inert while its default mode is off.
+        admission = await checkChatV3AdmissionWithDeadline(
+          logId,
+          (name, args) => supabase.rpc(name, args),
+          ADMISSION_RPC_TIMEOUT_MS,
+          ADMISSION_SCOPE,
+        );
+        steps.push({
+          step: "v3_admission_checked",
+          ms: Date.now() - t0,
+          meta: {
+            mode: admission.mode,
+            allowed: admission.allowed,
+            reason: admission.reason,
+            would_reject: admission.wouldReject,
+            limit_reason: admission.limitReason,
+            failure: admission.failure,
+          },
+        });
+        if (!admission.allowed) {
+          errorMsg = `admission_${admission.reason}`;
+          publicDiagnosticError = admissionDiagnosticError(admission);
+          send({
+            type: "delta",
+            content: admission.reason === "limit_exceeded"
+              ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+              : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+          });
+          return;
         }
         // This separate, cross-route guard shares model/catalog budgets with
         // v1, v2 and search-products. It is off by default, and only the

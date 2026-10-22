@@ -8,6 +8,7 @@ import {
 import {
   offlineAdmissionHandler,
   restoreAdmissionFixture,
+  setChatV3AdmissionMode,
   setPublicAdmissionMode,
   setSubjectAdmissionMode,
 } from "./public-api-admission-integration-fixture.ts";
@@ -226,6 +227,141 @@ Deno.test({
     assert(result.text.includes("request_conflict"));
     assert(result.text.includes('"log_id":null'));
     assertEquals(result.paths.length, 1);
+  },
+});
+
+Deno.test({
+  name: "v3 subject denial never spends the legacy global admission budget",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    setPublicAdmissionMode("off");
+    setSubjectAdmissionMode("enforce");
+    setChatV3AdmissionMode("enforce");
+    const originalFetch = globalThis.fetch;
+    const restoreIntervals = captureFixtureIntervals();
+    const paths: string[] = [];
+    try {
+      globalThis.fetch = async (input, init) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+        paths.push(`${request.method} ${url.pathname}`);
+        assertEquals(url.origin, "https://fixture.supabase.invalid");
+        if (url.pathname === "/rest/v1/chat_request_logs" && request.method === "POST") {
+          return json({ id: "offline-denied-log" }, 201);
+        }
+        if (url.pathname === "/rest/v1/chat_request_logs" && request.method === "PATCH") {
+          return new Response(null, { status: 204 });
+        }
+        if (url.pathname === "/rest/v1/rpc/reserve_public_subject_admission") {
+          return json({
+            allowed: false, mode: "enforce", reason: "limit_exceeded", replayed: false,
+            would_reject: true, retry_after_seconds: 30,
+          });
+        }
+        throw new Error(`Unexpected fixture request: ${request.method} ${url.pathname}`);
+      };
+      const response = await offlineAdmissionHandler()(post(await proof(SUBJECT_A), false));
+      assertEquals(response.status, 200);
+      const text = await response.text();
+      assert(text.includes("data: [DONE]"));
+      assert(text.includes("rate_limited"));
+      assert(paths.some((path) => path.includes("reserve_public_subject_admission")));
+      assertFalse(paths.some((path) => path.includes("check_chat_v3_admission")));
+      assertFalse(paths.some((path) => path.includes("reserve_public_api_admission")));
+      assertFalse(paths.some((path) => path.includes("/rest/v1/app_settings")));
+    } finally {
+      restoreIntervals();
+      globalThis.fetch = originalFetch;
+      setChatV3AdmissionMode("off");
+      setSubjectAdmissionMode("off");
+    }
+  },
+});
+
+Deno.test({
+  name: "v3 global denial releases an admitted subject before terminal SSE",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    setPublicAdmissionMode("off");
+    setSubjectAdmissionMode("enforce");
+    setChatV3AdmissionMode("enforce");
+    const originalFetch = globalThis.fetch;
+    const restoreIntervals = captureFixtureIntervals();
+    const paths: string[] = [];
+    let releaseStarted!: () => void;
+    const releaseStartedPromise = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    let continueRelease!: () => void;
+    const releaseGate = new Promise<void>((resolve) => {
+      continueRelease = resolve;
+    });
+    let releaseCompleted = false;
+    try {
+      globalThis.fetch = async (input, init) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const url = new URL(request.url);
+        paths.push(`${request.method} ${url.pathname}`);
+        assertEquals(url.origin, "https://fixture.supabase.invalid");
+        if (url.pathname === "/rest/v1/chat_request_logs" && request.method === "POST") {
+          return json({ id: "offline-global-denied-log" }, 201);
+        }
+        if (url.pathname === "/rest/v1/chat_request_logs" && request.method === "PATCH") {
+          return new Response(null, { status: 204 });
+        }
+        if (url.pathname === "/rest/v1/rpc/reserve_public_subject_admission") {
+          return json({
+            allowed: true, mode: "enforce", reason: "admitted", replayed: false,
+            would_reject: false, retry_after_seconds: null,
+          });
+        }
+        if (url.pathname === "/rest/v1/rpc/check_chat_v3_admission") {
+          return json({
+            allowed: false, mode: "enforce", reason: "limit_exceeded", replayed: false,
+            would_reject: true, limit_reason: "minute_limit", retry_after_seconds: 30,
+          });
+        }
+        if (url.pathname === "/rest/v1/rpc/release_public_subject_admission") {
+          releaseStarted();
+          await releaseGate;
+          releaseCompleted = true;
+          return json(true);
+        }
+        throw new Error(`Unexpected fixture request: ${request.method} ${url.pathname}`);
+      };
+      const response = await offlineAdmissionHandler()(post(await proof(SUBJECT_A), false));
+      assertEquals(response.status, 200);
+      let streamedText = "";
+      const consume = (async () => {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          streamedText += decoder.decode(next.value, { stream: true });
+        }
+      })();
+      await releaseStartedPromise;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      assertFalse(streamedText.includes("data: [DONE]"));
+      continueRelease();
+      await consume;
+      assert(releaseCompleted);
+      assert(streamedText.includes("data: [DONE]"));
+      assert(streamedText.includes("rate_limited"));
+      assert(paths.some((path) => path.includes("reserve_public_subject_admission")));
+      assert(paths.some((path) => path.includes("check_chat_v3_admission")));
+      assertEquals(paths.filter((path) => path.includes("release_public_subject_admission")).length, 1);
+      assertFalse(paths.some((path) => path.includes("release_chat_v3_admission")));
+      assertFalse(paths.some((path) => path.includes("reserve_public_api_admission")));
+      assertFalse(paths.some((path) => path.includes("/rest/v1/app_settings")));
+    } finally {
+      continueRelease();
+      restoreIntervals();
+      globalThis.fetch = originalFetch;
+      setChatV3AdmissionMode("off");
+      setSubjectAdmissionMode("off");
+    }
   },
 });
 
