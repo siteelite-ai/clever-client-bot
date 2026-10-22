@@ -21,6 +21,13 @@ Deno.test('legacy chat preserves CORS preflight and rejects unsupported methods 
   const preflight = await handleChatConsultant(new Request(URL, { method: 'OPTIONS' }));
   assertEquals(preflight.status, 200);
   assertEquals(preflight.headers.get('access-control-allow-origin'), '*');
+  assertEquals(preflight.headers.get('access-control-allow-headers')?.includes('x-volt-subject-proof'), false);
+
+  const signedPreflight = await handleChatConsultant(new Request(URL, {
+    method: 'OPTIONS',
+    headers: { 'Access-Control-Request-Headers': 'content-type, X-Volt-Subject-Proof' },
+  }));
+  assertEquals(signedPreflight.headers.get('access-control-allow-headers')?.includes('x-volt-subject-proof'), true);
 
   const get = await handleChatConsultant(new Request(URL, { method: 'GET' }));
   assertEquals(get.status, 405);
@@ -299,4 +306,57 @@ Deno.test('legacy heartbeat cancellation while pipeline is pending cannot releas
   sourceController.close();
   await canceling;
   assertEquals(releaseCalls, 1);
+});
+
+const SUBJECT_PROOF_ENV = {
+  PUBLIC_API_ADMISSION_MODE: 'off',
+  PUBLIC_SUBJECT_PROOF_KID: 'test-key',
+  PUBLIC_SUBJECT_PROOF_HMAC_KEY: btoa('a'.repeat(32)).replace(/=+$/u, ''),
+  PUBLIC_SUBJECT_LIMIT_PER_MINUTE: '5',
+  PUBLIC_SUBJECT_LIMIT_IN_FLIGHT: '2',
+};
+
+Deno.test('legacy subject enforcement rejects missing proof before global admission or paid work', async () => {
+  let paidCalls = 0;
+  const response = await handleChatConsultant(validPost(), {
+    readEnv: readEnv({ ...SUBJECT_PROOF_ENV, PUBLIC_SUBJECT_ADMISSION_MODE: 'enforce' }),
+    rpc: () => { throw new Error('global admission must not run'); },
+    subjectRpc: () => { throw new Error('subject admission must not run without proof'); },
+    acceptedWork: async () => { paidCalls++; throw new Error('paid work must not run'); },
+  });
+  assertEquals(response.status, 403);
+  assertEquals(response.headers.get('content-type'), 'application/json');
+  assertEquals(paidCalls, 0);
+});
+
+Deno.test('legacy subject observation does not block an unsigned request', async () => {
+  let paidCalls = 0;
+  const observed: unknown[][] = [];
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+  try {
+    console.warn = (...args) => { observed.push(args); };
+    console.info = (...args) => { observed.push(args); };
+    const response = await handleChatConsultant(validPost(), {
+      readEnv: readEnv({ ...SUBJECT_PROOF_ENV, PUBLIC_SUBJECT_ADMISSION_MODE: 'observe' }),
+      rpc: () => { throw new Error('global admission is off'); },
+      subjectRpc: () => { throw new Error('unsigned observe must not reserve'); },
+      acceptedWork: async () => {
+        paidCalls++;
+        return new Response(JSON.stringify({ content: 'Есть варианты.' }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    assertEquals(response.status, 200);
+    assertEquals(await response.json(), { content: 'Есть варианты.' });
+    assertEquals(paidCalls, 1);
+    assertEquals(observed.some(([label, data]) =>
+      label === '[chat-consultant] subject proof would reject' &&
+      (data as { reason?: string }).reason === 'missing_proof'
+    ), true);
+  } finally {
+    console.warn = originalWarn;
+    console.info = originalInfo;
+  }
 });

@@ -8,6 +8,11 @@ const values: Record<string, string> = {
   CATALOG_API_BASE_URL: "https://fixture.catalog.invalid/api",
   CHAT_V3_ADMISSION_MODE: "off",
   PUBLIC_API_ADMISSION_MODE: "off",
+  PUBLIC_SUBJECT_ADMISSION_MODE: "off",
+  PUBLIC_SUBJECT_PROOF_KID: "fixture-key",
+  PUBLIC_SUBJECT_PROOF_HMAC_KEY: btoa("a".repeat(32)).replace(/=+$/u, ""),
+  PUBLIC_SUBJECT_LIMIT_PER_MINUTE: "5",
+  PUBLIC_SUBJECT_LIMIT_IN_FLIGHT: "2",
   PUBLIC_API_MODEL_LIMIT_PER_MINUTE: "2",
   PUBLIC_API_MODEL_LIMIT_IN_FLIGHT: "1",
   PUBLIC_API_CATALOG_LIMIT_PER_MINUTE: "3",
@@ -28,6 +33,10 @@ Deno.env.get = (name: string) => values[name];
 
 export function setPublicAdmissionMode(mode: "off" | "enforce"): void {
   values.PUBLIC_API_ADMISSION_MODE = mode;
+}
+
+export function setSubjectAdmissionMode(mode: "off" | "observe" | "enforce"): void {
+  values.PUBLIC_SUBJECT_ADMISSION_MODE = mode;
 }
 
 export function offlineAdmissionHandler(): (request: Request) => Promise<Response> {

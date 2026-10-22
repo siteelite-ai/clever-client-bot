@@ -750,6 +750,13 @@ import {
   releasePublicApiAdmission,
 } from "../_shared/public-api-admission.ts";
 import {
+  type PublicSubjectAdmissionResult,
+  type PublicSubjectProofResult,
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+} from "../_shared/public-subject-admission.ts";
+import {
   previewSecretAuthorized,
   PREVIEW_QA_SECRET_ENV,
   PREVIEW_SECRET_ENV,
@@ -785,6 +792,17 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get("access-control-request-headers");
+  if (!requested?.split(",").some((header) =>
+    header.trim().toLowerCase() === "x-volt-subject-proof"
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    "Access-Control-Allow-Headers": `${corsHeaders["Access-Control-Allow-Headers"]}, x-volt-subject-proof`,
+  };
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1026,6 +1044,43 @@ function encodeSse(ev: SseEvent): Uint8Array {
   return new TextEncoder().encode(
     `data: ${JSON.stringify({ v3_event: ev })}\n\n`,
   );
+}
+
+function v3SubjectDenied(decision: {
+  reason: string;
+  retryAfterSeconds?: number | null;
+}): Response {
+  const limited = decision.reason === "limit_exceeded";
+  const invalidProof = decision.reason === "missing_proof" ||
+    decision.reason === "invalid_proof";
+  const error = limited ? "rate_limited" : invalidProof
+    ? "access_denied"
+    : "request_unavailable";
+  const content = limited
+    ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+    : invalidProof
+    ? "Не удалось подтвердить запрос. Обновите страницу и попробуйте ещё раз."
+    : "Не удалось безопасно запустить запрос. Повторите попытку позже.";
+  const encoder = new TextDecoder();
+  const body = ([
+    { type: "delta", content, origin: "server" },
+    {
+      type: "diagnostic", log_id: null, phase: "complete",
+      products_count: 0, error,
+    },
+    { type: "done" },
+  ] satisfies SseEvent[]).map((event) => encoder.decode(encodeSse(event))).join("");
+  return new Response(body, {
+    status: limited ? 429 : invalidProof ? 403 : 503,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Pipeline": "v3",
+      ...(limited ? { "Retry-After": String(decision.retryAfterSeconds || 60) } : {}),
+    },
+  });
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
@@ -9121,6 +9176,7 @@ interface ReplayLogRow {
   id: string;
   session_id: string | null;
   user_query: string | null;
+  public_subject_hash?: string | null;
   error: string | null;
   response_events: unknown;
 }
@@ -9135,13 +9191,16 @@ async function readReplayLog(
   supabase: SupabaseClient,
   messageId: string,
   timeoutMs = 3_000,
+  requireSubjectBinding = false,
 ): Promise<ReplayLogRow | null> {
   try {
     const { data, error } = await runWithDeadline(
       () =>
         supabase
           .from("chat_request_logs")
-          .select("id,session_id,user_query,error,response_events")
+          .select(requireSubjectBinding
+            ? "id,session_id,user_query,public_subject_hash,error,response_events"
+            : "id,session_id,user_query,error,response_events")
           .eq("message_id", messageId)
           .maybeSingle(),
       timeoutMs,
@@ -9164,10 +9223,11 @@ async function claimTurnLogStart(
   userQuery: string,
   initialSteps: StepLog[],
   resumeOnly: boolean,
+  subjectHash: string | null = null,
 ): Promise<TurnClaim> {
   try {
     if (resumeOnly) {
-      const existing = await readReplayLog(supabase, messageId);
+      const existing = await readReplayLog(supabase, messageId, 3_000, !!subjectHash);
       return existing
         ? { kind: "existing", row: existing }
         : { kind: "missing" };
@@ -9177,6 +9237,10 @@ async function claimTurnLogStart(
       .insert({
         session_id: sessionId,
         message_id: messageId,
+        // The column is referenced only for a verified proof. OFF and unsigned
+        // observe retain their original database contract; rollout applies the
+        // migration before turning on signed observation.
+        ...(subjectHash ? { public_subject_hash: subjectHash } : {}),
         user_query: userQuery,
         pipeline: "v3",
         branch: "v3_expert",
@@ -9190,7 +9254,7 @@ async function claimTurnLogStart(
       .select("id")
       .single();
     if (error && error.code === "23505") {
-      const existing = await readReplayLog(supabase, messageId);
+      const existing = await readReplayLog(supabase, messageId, 3_000, !!subjectHash);
       return existing
         ? { kind: "existing", row: existing }
         : { kind: "unavailable" };
@@ -25464,7 +25528,7 @@ async function runExpertLoop(
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== "POST") {
     return new Response("Method not allowed", {
@@ -25663,6 +25727,17 @@ Deno.serve(async (req) => {
   }
 
   const body = validation.value;
+  // A replay is a data read, not only a free request. Verify the trusted
+  // ingress proof before looking up the messageId so a different subject
+  // cannot replay another browser's persisted answer. Preview has its own
+  // secret gate and never consumes public subject capacity.
+  const subjectVerification: PublicSubjectProofResult | null =
+    ADMISSION_SCOPE === "production"
+      ? await verifyPublicSubjectProof({ req })
+      : null;
+  if (subjectVerification && !subjectVerification.allowed) {
+    return v3SubjectDenied(subjectVerification);
+  }
   const userMessage = body.message;
   const requestLookupKeys = extractReplacementLookupKeys(userMessage);
   const requestResultCardinality = resolveResultCardinality(userMessage, {
@@ -25680,7 +25755,9 @@ Deno.serve(async (req) => {
   // planning, or rendering before that independent verification.
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
+    // One-shot service-role requests own no user session. Disable Supabase
+    // Auth's background refresh timer, including on replay-only requests.
+    auth: { persistSession: false, autoRefreshToken: false },
     // Bound every database HTTP request centrally, including cache and log
     // writes. Guarded fact reads also use their per-query abortSignal.
     global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
@@ -26052,6 +26129,7 @@ Deno.serve(async (req) => {
             userMessage,
             [...steps],
             body.resumeOnly,
+            subjectVerification?.subjectHash ?? null,
           ),
         6_000,
       ).catch((error): TurnClaim => {
@@ -26089,6 +26167,38 @@ Deno.serve(async (req) => {
       }
 
       if (claim.kind === "existing") {
+        if (subjectVerification?.mode === "enforce" &&
+          (!subjectVerification.subjectHash ||
+            claim.row.public_subject_hash !== subjectVerification.subjectHash)) {
+          // Older unbound rows are not grandfathered into enforced replay.
+          // Session and message IDs are browser controlled, not identity.
+          send({
+            type: "delta",
+            content: "Не удалось безопасно восстановить запрос. Отправьте сообщение ещё раз.",
+          });
+          send({
+            type: "diagnostic", log_id: null, phase: "complete",
+            products_count: 0, error: "request_conflict",
+          });
+          clearInterval(keepAliveTimer);
+          send({ type: "done" });
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+        if (subjectVerification?.mode === "observe") {
+          if (!subjectVerification.subjectHash) {
+            console.warn("[v3] subject replay would reject", {
+              reason: subjectVerification.reason,
+            });
+          } else if (
+            claim.row.public_subject_hash !== subjectVerification.subjectHash
+          ) {
+            // Telemetry only: observe must not break an existing replay.
+            console.warn("[v3] subject replay would reject", {
+              reason: "subject_mismatch",
+            });
+          }
+        }
         if (
           claim.row.session_id !== sessionId ||
           claim.row.user_query !== userMessage
@@ -26193,6 +26303,7 @@ Deno.serve(async (req) => {
       let logFinalized = false;
       let admission: ChatV3AdmissionResult | null = null;
       let publicAdmission: PublicApiAdmissionResult | null = null;
+      let subjectAdmission: PublicSubjectAdmissionResult | null = null;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
         if (logFinalized) return;
@@ -26248,6 +26359,40 @@ Deno.serve(async (req) => {
               : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
           });
           return;
+        }
+        if (ADMISSION_SCOPE === "production" && subjectVerification) {
+          subjectAdmission = await reservePublicSubjectAdmission({
+            verification: subjectVerification,
+            route: "chat-consultant-v3",
+            rpc: (name, args) => supabase.rpc(name, args),
+            timeoutMs: ADMISSION_RPC_TIMEOUT_MS,
+          });
+          if (subjectAdmission.mode !== "off") {
+            steps.push({
+              step: "public_subject_admission_checked",
+              ms: Date.now() - t0,
+              meta: {
+                mode: subjectAdmission.mode,
+                allowed: subjectAdmission.allowed,
+                reason: subjectAdmission.reason,
+                would_reject: subjectAdmission.wouldReject,
+                failure: subjectAdmission.failure,
+              },
+            });
+          }
+          if (!subjectAdmission.allowed) {
+            errorMsg = `subject_admission_${subjectAdmission.reason}`;
+            publicDiagnosticError = subjectAdmission.reason === "limit_exceeded"
+              ? "rate_limited"
+              : "request_unavailable";
+            send({
+              type: "delta",
+              content: subjectAdmission.reason === "limit_exceeded"
+                ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+                : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+            });
+            return;
+          }
         }
         // This separate, cross-route guard shares model/catalog budgets with
         // v1, v2 and search-products. It is off by default, and only the
@@ -28504,7 +28649,8 @@ Deno.serve(async (req) => {
             Date.now() - t0,
             RESPONSE_TARGET_MS,
             TERMINAL_LOG_RESERVE_MS +
-              (admission.releaseRequired || publicAdmission?.releaseRequired
+              (admission.releaseRequired || publicAdmission?.releaseRequired ||
+                  subjectAdmission?.releaseRequired
                 ? ADMISSION_RPC_TIMEOUT_MS
                 : 0),
             MAX_ACCEPTED_WORK_MS,
@@ -28636,7 +28782,21 @@ Deno.serve(async (req) => {
             }
           })());
         }
-        // Both independent ledgers are released before closing SSE. Running
+        if (subjectAdmission) {
+          const checkedSubjectAdmission = subjectAdmission;
+          releaseJobs.push((async () => {
+            const released = await releasePublicSubjectAdmission({
+              reservation: checkedSubjectAdmission,
+              rpc: (name, args) => supabase.rpc(name, args),
+            });
+            if (released.failure) {
+              console.error("[v3] subject reservation release incomplete", {
+                failure: released.failure,
+              });
+            }
+          })());
+        }
+        // All independent ledgers are released before closing SSE. Running
         // these bounded releases together preserves the existing terminal
         // response deadline instead of serially adding another DB timeout.
         await Promise.allSettled(releaseJobs);
