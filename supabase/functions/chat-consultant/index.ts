@@ -2,6 +2,11 @@
 // build-marker: layer1-confidence-gate-2026-04-28T09:00Z (single-flight + SWR + key-only mode + parallel buckets)
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  IntegrationSecretConfigurationError,
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from '../_shared/integration-secrets.ts';
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DEFAULT_CLASSIFIER_PROMPT } from "../_shared/classifier-prompt.ts";
 import {
@@ -61,6 +66,8 @@ import {
   isBlacklistedFacetKey,
 } from '../_shared/facet-blacklist.ts';
 import { selectCompatAxes } from './compat-axes.ts';
+
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('chat-consultant');
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
@@ -682,10 +689,12 @@ interface CachedSettings {
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
+  const integrationSecretsMode = INTEGRATION_SECRETS_MODE;
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    if (integrationSecretsMode === 'private-required') throw new IntegrationSecretConfigurationError();
     console.log('[Settings] Supabase not configured, using env vars');
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
@@ -709,11 +718,12 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled, expert_interpretation_enabled')
+      .select(`${integrationSecretsMode === 'private-required' ? '' : 'volt220_api_token, openrouter_api_key, google_api_key, '}ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled, expert_interpretation_enabled`)
       .limit(1)
       .single();
 
     if (error || !data) {
+      if (integrationSecretsMode === 'private-required') throw new IntegrationSecretConfigurationError();
       console.error('[Settings] Error reading settings:', error);
       return {
         volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
@@ -753,11 +763,39 @@ async function getAppSettings(): Promise<CachedSettings> {
       console.log(`[Settings] V1 c5_clarify_broad_enabled=true — underspecified-broad queries will trigger clarify branch`);
     }
 
-    // Fallback to env vars if DB values are empty
+    const onShadowComparison = (event: {
+      key: string;
+      privateReadOk: boolean;
+      privatePresent: boolean;
+      legacyPresent: boolean;
+      fingerprintMatch: boolean | null;
+    }) => console.info('[integration-secret-shadow]', event);
+    const [catalogToken, openrouterKey, googleKey] = await Promise.all([
+      resolveIntegrationSecret(
+        supabase, 'volt220_api_token', integrationSecretsMode,
+        () => data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
+        onShadowComparison,
+      ),
+      resolveIntegrationSecret(
+        supabase, 'openrouter_api_key', integrationSecretsMode,
+        () => data.openrouter_api_key || null,
+        onShadowComparison,
+      ),
+      resolveIntegrationSecret(
+        supabase, 'google_api_key', integrationSecretsMode,
+        () => data.google_api_key || null,
+        onShadowComparison,
+        undefined,
+        true,
+      ),
+    ]);
+
+    // Legacy still uses precisely the same DB→env fallback; private mode never
+    // reads those columns or invokes their fallback callbacks.
     return {
-      volt220_api_token: data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
-      openrouter_api_key: data.openrouter_api_key || null,
-      google_api_key: data.google_api_key || null,
+      volt220_api_token: catalogToken,
+      openrouter_api_key: openrouterKey,
+      google_api_key: googleKey,
       ai_provider: data.ai_provider || 'openrouter',
       classifier_prompt: (data as { classifier_prompt?: string | null }).classifier_prompt || null,
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
@@ -771,6 +809,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       expert_interpretation_enabled: ei,
     };
   } catch (e) {
+    if (integrationSecretsMode === 'private-required') throw new IntegrationSecretConfigurationError();
     console.error('[Settings] Failed to load settings:', e);
       return {
         volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
@@ -7199,7 +7238,8 @@ async function _handleChatConsultantInner(req: Request, body: any): Promise<Resp
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
 
         // SHADOW: expert-first параллельно с classifier. Никак не влияет на маршрут.
-        const shadowKey = appSettings.openrouter_api_key || Deno.env.get('OPENROUTER_API_KEY') || '';
+        const shadowKey = appSettings.openrouter_api_key ||
+          (INTEGRATION_SECRETS_MODE === 'private-required' ? '' : Deno.env.get('OPENROUTER_API_KEY') || '');
         const shadowPromise = (EXPERT_FIRST_SHADOW_ENABLED && shadowKey)
           ? expertFirstJudgment({
               originalQuery: userMessage,

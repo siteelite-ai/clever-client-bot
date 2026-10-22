@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { authorizeKnowledgeUser, bearerToken } from "./authorization.ts";
+import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from '../_shared/integration-secrets.ts';
+
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('knowledge-process');
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,13 +27,24 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
   console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
   const truncated = text.substring(0, 8000);
 
-  const { data: settings } = await supabase
-    .from('app_settings')
-    .select('openrouter_api_key')
-    .limit(1)
-    .single();
+  let legacyKey: string | null = null;
+  if (INTEGRATION_SECRETS_MODE !== 'private-required') {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('openrouter_api_key')
+      .limit(1)
+      .single();
+    legacyKey = settings?.openrouter_api_key ?? null;
+  }
+  const openrouterKey = await resolveIntegrationSecret(
+    supabase,
+    'openrouter_api_key',
+    INTEGRATION_SECRETS_MODE,
+    () => legacyKey,
+    (event) => console.info('[integration-secret-shadow]', event),
+  );
 
-  if (!settings?.openrouter_api_key) {
+  if (!openrouterKey) {
     throw new Error('OpenRouter API ключ не настроен. Добавьте его в Настройках.');
   }
 
@@ -42,7 +59,7 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
       const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${settings.openrouter_api_key}`,
+          'Authorization': `Bearer ${openrouterKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
