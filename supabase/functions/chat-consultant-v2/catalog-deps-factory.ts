@@ -26,11 +26,17 @@ import {
   resolveIntegrationSecret,
   type IntegrationSecretMode,
 } from "../_shared/integration-secrets.ts";
-import type { ResolverDeps } from "./category-resolver.ts";
+import { CATEGORY_LIST_VISIBLE_ONLY, type ResolverDeps } from "./category-resolver.ts";
+import {
+  assessCategoryPage,
+  combineCategoryPages,
+  type CategoryPageEvidence,
+} from "../_shared/catalog-evidence.ts";
 import { createProductionExpansionDeps } from "./query-expansion.ts";
 import type { ExpansionDeps } from "./query-expansion.ts";
 import { createProductionFacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { FacetMatcherDeps } from "./catalog/facet-matcher.ts";
+import { isVerifiedCategoryOptionsResult } from "./catalog/facet-cache.ts";
 import type { FacetMatcherLLMDeps } from "./catalog/facet-matcher-llm.ts";
 import type { SSearchDeps } from "./s-search.ts";
 import type { SPriceDeps } from "./s-price.ts";
@@ -63,8 +69,39 @@ import {
 // ─── Categories live cache (module-level, TTL 15 min) ───────────────────────
 
 let _categoriesCache: { value: string[]; ts: number } | null = null;
+const CATEGORIES_STALE_GRACE_MS = 2 * 60 * 60 * 1000;
 const MAX_CATEGORY_NODES = 12_000;
 const MAX_CATEGORY_DEPTH = 10;
+
+/** Exact UTF-8 identity survives cache.hashKey's punctuation-stripping normalizer. */
+export async function exactFacetCacheRawKey(pagetitle: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256", new TextEncoder().encode(pagetitle),
+  );
+  const hex = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `catalog-evidence-v2-${hex}`;
+}
+
+async function facetCacheGetOrCompute<T>(
+  namespace: string,
+  rawKey: string,
+  ttlSec: number,
+  compute: () => Promise<T>,
+): Promise<{ value: T; cacheHit: boolean }> {
+  if (namespace !== "facets") return getOrCompute(namespace, rawKey, ttlSec, compute);
+  // Scoped key revision avoids the existing one-hour cache entries written by
+  // the old unconditional helper after HTTP 502 or malformed HTTP 200.
+  return getOrCompute(
+    namespace,
+    await exactFacetCacheRawKey(rawKey),
+    ttlSec,
+    compute,
+    "ru-KZ",
+    (value) => isVerifiedCategoryOptionsResult(value, rawKey),
+  );
+}
 
 async function fetchCategoriesLive(
   baseUrl: string,
@@ -76,113 +113,72 @@ async function fetchCategoriesLive(
   ) {
     return _categoriesCache.value;
   }
-  const acc = new Set<string>();
-  const seenIds = new Set<number>();
-  let childrenComplete = true;
-  let visitedNodes = 0;
-  let page = 1;
-  let totalPages = 1;
-  let expectedPagination: { pages: number; perPage: number; total: number } | null = null;
-  do {
-    const params = new URLSearchParams({
-      parent: "0",
-      depth: "10",
-      per_page: "200",
-      page: String(page),
-    });
-    const url = `${baseUrl}/categories?${params}`;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${apiToken}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(RESOLVER_HTTP_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(
-        `[catalog-deps] /categories HTTP ${res.status} on page ${page}, aborting`,
-      );
-      throw new Error(`/categories HTTP ${res.status} on page ${page}`);
-    }
-    // deno-lint-ignore no-explicit-any
-    const raw: any = await res.json();
-    // An explicitly present but null data envelope is broken, not a signal
-    // to reinterpret sibling fields as a valid root-level catalog payload.
-    const data = raw && typeof raw === "object" && "data" in raw
-      ? raw.data
-      : raw;
-    const pagination = data?.pagination;
-    if ((raw && typeof raw === "object" && "success" in raw && raw.success !== true) ||
-      (data && typeof data === "object" && "success" in data && data.success !== true)) {
-      throw new Error(`/categories unsuccessful response on page ${page}`);
-    }
-    if (
-      !Array.isArray(data?.results) ||
-      !Number.isSafeInteger(pagination?.page) || pagination.page !== page ||
-      !Number.isSafeInteger(pagination?.per_page) || pagination.per_page < 1 ||
-      pagination.per_page > 200 ||
-      !Number.isSafeInteger(pagination?.pages) || pagination.pages < 1 ||
-      pagination.pages > 10 ||
-      !Number.isSafeInteger(pagination?.total) || pagination.total < 0 ||
-      pagination.pages !== Math.max(1, Math.ceil(pagination.total / pagination.per_page)) ||
-      (expectedPagination !== null &&
-        (pagination.pages !== expectedPagination.pages ||
-          pagination.per_page !== expectedPagination.perPage ||
-          pagination.total !== expectedPagination.total))
-    ) {
-      throw new Error(`/categories incomplete pagination on page ${page}`);
-    }
-    const expectedLength = Math.min(
-      pagination.per_page,
-      Math.max(0, pagination.total - (page - 1) * pagination.per_page),
-    );
-    if (data.results.length !== expectedLength) {
-      throw new Error(`/categories incomplete results on page ${page}`);
-    }
-    expectedPagination ??= {
-      pages: pagination.pages,
-      perPage: pagination.per_page,
-      total: pagination.total,
-    };
-    // deno-lint-ignore no-explicit-any
-    const walk = (nodes: any[], depth = 0) => {
-      if (depth > MAX_CATEGORY_DEPTH) {
-        throw new Error(`/categories tree exceeds requested depth on page ${page}`);
+  try {
+    const pageEvidence: CategoryPageEvidence[] = [];
+    let totalPages = 1;
+    for (let page = 1; page <= totalPages; page++) {
+      const params = new URLSearchParams({
+        parent: "0", depth: "10", per_page: "200", page: String(page),
+      });
+      const url = `${baseUrl}/categories?${params}`;
+      const request = () => fetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiToken}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(RESOLVER_HTTP_TIMEOUT_MS),
+      });
+      let res = await request();
+      // Only this taxonomy endpoint gets one bounded retry for transient 502.
+      // Product-search retry/latency policy remains unchanged.
+      if (res.status === 502) res = await request();
+      if (!res.ok) throw new Error(`/categories HTTP ${res.status} on page ${page}`);
+      const raw: unknown = await res.json();
+      const evidence = assessCategoryPage(raw, page, res.status, {
+        maxPages: 10, maxPerPage: 200,
+        maxDepth: MAX_CATEGORY_DEPTH, maxNodes: MAX_CATEGORY_NODES,
+      });
+      if (evidence.state === "unavailable") {
+        const reason = evidence.reason === "invalid_envelope" ? "unsuccessful response"
+          : evidence.reason === "duplicate_id" ? "duplicate category ID"
+          : evidence.reason === "invalid_category" ? "incomplete node"
+          : evidence.reason === "invalid_pagination" ? "incomplete pagination"
+          : evidence.reason;
+        throw new Error(`/categories ${reason} on page ${page}`);
       }
-      for (const n of nodes) {
-        if (++visitedNodes > MAX_CATEGORY_NODES) {
-          throw new Error("/categories tree exceeds safe node limit");
-        }
-        if (!n || !Number.isSafeInteger(n.id) || n.id <= 0 ||
-          typeof n.pagetitle !== "string" || !n.pagetitle.trim() ||
-          (n.children != null && !Array.isArray(n.children))) {
-          throw new Error(`/categories incomplete node on page ${page}`);
-        }
-        if (seenIds.has(n.id)) {
-          throw new Error(`/categories duplicate category ID on page ${page}`);
-        }
-        seenIds.add(n.id);
-        acc.add(n.pagetitle.trim());
-        if (!Array.isArray(n.children)) childrenComplete = false;
-        else if (n.children.length) {
-          walk(n.children, depth + 1);
-        }
-      }
-    };
-    walk(data.results);
-    totalPages = pagination.pages;
-    page++;
-  } while (page <= totalPages);
+      pageEvidence.push(evidence);
+      totalPages = evidence.pagination.pages;
+    }
 
-  const flat = Array.from(acc).sort();
-  if (flat.length === 0) {
-    throw new Error("/categories returned no categories");
+    const combined = combineCategoryPages(pageEvidence, {
+      maxNames: 10_000, maxNodes: MAX_CATEGORY_NODES,
+    });
+    if (combined.state === "unavailable") {
+      if (combined.reason === "duplicate_id") {
+        throw new Error("/categories duplicate category ID across pages");
+      }
+      throw new Error(`/categories unverified: ${combined.reason}`);
+    }
+    if (combined.state === "complete") {
+      _categoriesCache = { value: combined.names, ts: Date.now() };
+    } else {
+      // The resolver may select a positively observed name, but cannot use
+      // missing names as evidence of absence. This array is never cached.
+      Object.defineProperty(combined.names, CATEGORY_LIST_VISIBLE_ONLY, {
+        value: true,
+      });
+    }
+    return combined.names;
+  } catch (error) {
+    // A recent, previously complete taxonomy is safer than declaring an empty
+    // catalog during a temporary 502. Never serve a partial list as stale.
+    if (_categoriesCache && Date.now() - _categoriesCache.ts < CATEGORIES_STALE_GRACE_MS) {
+      console.warn("[catalog-deps] serving verified stale taxonomy after live failure");
+      return _categoriesCache.value;
+    }
+    throw error;
   }
-  // Never cache a failed or truncated traversal: only a fully verified list
-  // may be reused by the resolver for the next 15 minutes.
-  if (childrenComplete) _categoriesCache = { value: flat, ts: Date.now() };
-  return flat;
 }
 
 /** Тестовый сброс (не для прода). */
@@ -339,12 +335,7 @@ export function createCatalogProductionDeps(
 
   const facets = createProductionFacetMatcherDeps({
     apiClient,
-    cacheGetOrCompute: <T>(
-      namespace: string,
-      rawKey: string,
-      ttlSec: number,
-      compute: () => Promise<T>,
-    ) => getOrCompute(namespace, rawKey, ttlSec, compute),
+    cacheGetOrCompute: facetCacheGetOrCompute,
     facetsTtlSec: TTL.facets,
   });
 
@@ -352,12 +343,7 @@ export function createCatalogProductionDeps(
   // и OpenRouter (Gemini Flash) для маппинга трейтов на schema.values[].
   const facetsLLM: FacetMatcherLLMDeps = {
     apiClient,
-    cacheGetOrCompute: <T>(
-      namespace: string,
-      rawKey: string,
-      ttlSec: number,
-      compute: () => Promise<T>,
-    ) => getOrCompute(namespace, rawKey, ttlSec, compute),
+    cacheGetOrCompute: facetCacheGetOrCompute,
     facetsTtlSec: TTL.facets,
     callLLM: (params) => facetMatcherCallLLM(params, cfg.openRouterKey, resolverModel),
     llmMaxRetries: 1, // §28: retry 1 раз

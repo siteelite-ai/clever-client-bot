@@ -16,6 +16,14 @@ import {
   type PublicSubjectAdmissionRpc,
 } from '../_shared/public-subject-admission.ts';
 import { readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
+import {
+  assessCategoryFacets,
+  assessCategoryPage,
+  combineCategoryPages,
+  type CategoryEvidence,
+  type CategoryPageEvidence,
+  type FacetEvidence,
+} from '../_shared/catalog-evidence.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -42,7 +50,6 @@ const MAX_PAGE = 1000;
 const MAX_PER_PAGE = 200;
 const MAX_CATEGORIES_PAGES = 50;
 const MAX_CATEGORIES_CONCURRENCY = 4;
-const MAX_CATEGORY_TITLES = 10_000;
 const MAX_FACETS_CACHE_ENTRIES = 128;
 const MAX_FACETS_IN_FLIGHT = 32;
 const CATEGORIES_FETCH_TIMEOUT_MS = 20_000;
@@ -278,41 +285,6 @@ const FACETS_TTL_MS = 60 * 60 * 1000;
 const facetsCache: Map<string, { value: any; ts: number }> = new Map();
 const facetsInFlight: Map<string, SharedLoad<{ category: any; options: any[] }>> = new Map();
 
-function catalogObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function catalogData(raw: unknown, label: string): Record<string, unknown> {
-  if (!catalogObject(raw) || raw.success === false) throw new Error(`${label} returned an invalid response`);
-  let data: unknown = raw;
-  // Both catalog endpoints may wrap their payload in one or two data envelopes.
-  for (let level = 0; level < 2 && catalogObject(data) && 'data' in data; level++) {
-    if (data.success === false) throw new Error(`${label} returned an invalid response`);
-    data = data.data;
-  }
-  if (!catalogObject(data) || data.success === false) throw new Error(`${label} returned an invalid response`);
-  return data;
-}
-
-function validFacetOption(option: unknown): boolean {
-  if (!catalogObject(option) || typeof option.key !== 'string' || !option.key.trim() ||
-    !Array.isArray(option.values)) return false;
-  if ((option.caption_ru != null && typeof option.caption_ru !== 'string') ||
-    (option.caption_kz != null && typeof option.caption_kz !== 'string')) return false;
-  return option.values.every((value: unknown) => {
-    if (!catalogObject(value)) return false;
-    const ru = value.value_ru ?? value.value;
-    const kz = value.value_kz;
-    const validRu = typeof ru === 'string' || (typeof ru === 'number' && Number.isFinite(ru));
-    const validKz = kz == null || typeof kz === 'string';
-    const usable = (typeof ru === 'string' && !!ru.trim()) || typeof ru === 'number' ||
-      (typeof kz === 'string' && !!kz.trim());
-    const count = value.products_count;
-    return (ru == null || validRu) && validKz && usable &&
-      (count == null || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0));
-  });
-}
-
 function storeFacetsCache(key: string, value: { category: any; options: any[] }): void {
   const now = Date.now();
   for (const [cachedKey, entry] of facetsCache) {
@@ -358,32 +330,23 @@ async function fetchCategoryFacets(
 
     const upstream = childTimeoutSignal(controller.signal, 15_000);
     try {
-      const res = await httpFetch(url, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        signal: upstream.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Facets API ${res.status}: ${errText.slice(0, 200)}`);
+      let evidence: FacetEvidence = { state: 'unavailable', reason: 'http_error' };
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const res = await httpFetch(url, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          signal: upstream.signal,
+        });
+        if (res.status === 502 && attempt === 1) continue;
+        evidence = assessCategoryFacets(res.ok ? await res.json() : null, opts, res.status);
+        break;
       }
-      const data = catalogData(await res.json(), 'Facets API');
-      const category = data.category;
-      const options = data.options;
-      const totalProducts = catalogObject(category) ? category.total_products : null;
-      if (!catalogObject(category) || !Array.isArray(options) ||
-        typeof totalProducts !== 'number' || !Number.isSafeInteger(totalProducts) || totalProducts < 0 ||
-        (category.id == null && (typeof category.pagetitle !== 'string' || !category.pagetitle.trim())) ||
-        (opts.categoryId != null && String(category.id) !== String(opts.categoryId)) ||
-        (opts.pagetitle != null && (typeof category.pagetitle !== 'string' ||
-          category.pagetitle.trim() !== opts.pagetitle.trim())) ||
-        (totalProducts > 0 && !options.some((option) => Array.isArray(option?.values) && option.values.length > 0)) ||
-        options.some((option) => !validFacetOption(option))) {
-        throw new Error('Facets API returned an incomplete response');
+      if (evidence.state !== 'verified') {
+        throw new Error(`Facets API evidence unavailable: ${evidence.reason}`);
       }
       const value = {
-        category,
-        options,
+        category: evidence.category,
+        options: evidence.options,
       };
       controller.signal.throwIfAborted();
       storeFacetsCache(cacheKey, value);
@@ -409,8 +372,7 @@ async function fetchCategoryFacets(
 // =============================================================================
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
 let categoriesCache: { value: string[]; ts: number } | null = null;
-let categoriesInFlight: SharedLoad<string[]> | null = null;
-let categoriesLoggedRawOnce = false;
+let categoriesInFlight: SharedLoad<Exclude<CategoryEvidence, { state: 'unavailable' }>> | null = null;
 
 async function getApiToken(signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
@@ -459,39 +421,7 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
   return token;
 }
 
-// Recursively walk MsCategory tree, collect every `pagetitle` into the set.
-function collectPagetitles(
-  nodes: unknown,
-  acc: Set<string>,
-  seenIds: Set<number>,
-  coverage: { childrenComplete: boolean },
-  depth = 0,
-): void {
-  if (!Array.isArray(nodes)) throw new Error('Category listing returned an incomplete response');
-  if (depth > 10) throw new Error('Category tree exceeds supported depth');
-  for (const node of nodes) {
-    if (!catalogObject(node) || typeof node.id !== 'number' || !Number.isSafeInteger(node.id) || node.id < 0 ||
-      typeof node.pagetitle !== 'string' || !node.pagetitle.trim() ||
-      typeof node.alias !== 'string' ||
-      typeof node.parent !== 'number' || !Number.isSafeInteger(node.parent) || node.parent < 0 ||
-      (node.children != null && !Array.isArray(node.children))) {
-      throw new Error('Category listing returned an incomplete response');
-    }
-    if (seenIds.has(node.id)) throw new Error('Category listing returned duplicate category IDs');
-    seenIds.add(node.id);
-    acc.add(node.pagetitle.trim());
-    if (acc.size > MAX_CATEGORY_TITLES) throw new Error('Category listing exceeds safe limit');
-    if (!Array.isArray(node.children)) coverage.childrenComplete = false;
-    else if (node.children.length > 0) collectPagetitles(node.children, acc, seenIds, coverage, depth + 1);
-  }
-}
-
-type CategoryPage = {
-  results: unknown[];
-  pagination: { page: number; perPage: number; pages: number; total: number };
-};
-
-async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<CategoryPage> {
+async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<CategoryPageEvidence> {
   const params = new URLSearchParams({
     parent: '0',
     depth: '10',
@@ -500,69 +430,58 @@ async function fetchCategoriesPage(token: string, page: number, signal: AbortSig
   });
   const upstream = childTimeoutSignal(signal, CATEGORIES_FETCH_TIMEOUT_MS);
   try {
-    const res = await httpFetch(`${VOLT220_CATEGORIES_URL}?${params}`, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      signal: upstream.signal,
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Categories API ${res.status}: ${errText.slice(0, 200)}`);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const res = await httpFetch(`${VOLT220_CATEGORIES_URL}?${params}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        signal: upstream.signal,
+      });
+      if (res.status === 502 && attempt === 1) continue;
+      const evidence = assessCategoryPage(res.ok ? await res.json() : null, page, res.status, {
+        maxPages: MAX_CATEGORIES_PAGES,
+        maxPerPage: 200,
+      });
+      signal.throwIfAborted();
+      if (evidence.state === 'unavailable') {
+        throw new Error(evidence.reason === 'invalid_pagination'
+          ? 'Category listing exceeds safe page limit or has invalid pagination'
+          : `Category listing evidence unavailable on page ${page}: ${evidence.reason}`);
+      }
+      return evidence;
     }
-    const raw = await res.json();
-    signal.throwIfAborted();
-    if (!categoriesLoggedRawOnce) {
-      categoriesLoggedRawOnce = true;
-      console.log(`[Categories] Raw page ${page} sample: ${JSON.stringify(raw).slice(0, 600)}`);
-    }
-    const data = catalogData(raw, 'Categories API');
-    const pagination = data.pagination;
-    const pageNumber = catalogObject(pagination) ? pagination.page : null;
-    const perPage = catalogObject(pagination) ? pagination.per_page : null;
-    const pages = catalogObject(pagination) ? pagination.pages : null;
-    const total = catalogObject(pagination) ? pagination.total : null;
-    if (!Array.isArray(data.results) || typeof pageNumber !== 'number' ||
-      typeof perPage !== 'number' || typeof pages !== 'number' || typeof total !== 'number' ||
-      !Number.isSafeInteger(pageNumber) || pageNumber !== page ||
-      !Number.isSafeInteger(perPage) || perPage < 1 || perPage > 200 ||
-      !Number.isSafeInteger(pages) || pages < 1 ||
-      !Number.isSafeInteger(total) || total < 0 ||
-      pages !== Math.max(1, Math.ceil(total / perPage)) ||
-      data.results.length !== Math.min(perPage, Math.max(0, total - (page - 1) * perPage))) {
-      throw new Error('Categories API returned an incomplete response');
-    }
-    return { results: data.results, pagination: { page: pageNumber, perPage, pages, total } };
+    throw new Error(`Category listing evidence unavailable on page ${page}: http_error`);
   } finally {
     upstream.cleanup();
   }
 }
 
-async function listCategories(token: string, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<string[]> {
+async function listCategories(
+  token: string,
+  signal: AbortSignal,
+  httpFetch: typeof fetch = fetch,
+): Promise<Exclude<CategoryEvidence, { state: 'unavailable' }>> {
   signal.throwIfAborted();
   // Cache hit
   if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) {
     console.log(`[Categories] cache HIT (${categoriesCache.value.length} items, age=${Math.round((Date.now() - categoriesCache.ts) / 1000)}s)`);
-    return categoriesCache.value;
+    return { state: 'complete', names: categoriesCache.value };
   }
   if (categoriesInFlight) return awaitSharedLoad(categoriesInFlight, signal);
 
   const controller = new AbortController();
-  const load = (async (): Promise<string[]> => {
+  const load = (async (): Promise<Exclude<CategoryEvidence, { state: 'unavailable' }>> => {
     console.log('[Categories] cache MISS, fetching from /api/categories');
     const t0 = Date.now();
-    const acc = new Set<string>();
-    const seenIds = new Set<number>();
-    const coverage = { childrenComplete: true };
-
+    const pages: CategoryPageEvidence[] = [];
     const first = await fetchCategoriesPage(token, 1, controller.signal, httpFetch);
-    collectPagetitles(first.results, acc, seenIds, coverage);
-
+    if (first.state === 'unavailable') throw new Error(`Category listing evidence unavailable: ${first.reason}`);
+    pages.push(first);
     if (first.pagination.pages > MAX_CATEGORIES_PAGES) {
       throw new Error('Category listing exceeds safe page limit');
     }
     const totalPages = first.pagination.pages;
     for (let start = 2; start <= totalPages; start += MAX_CATEGORIES_CONCURRENCY) {
-      const pending: Promise<CategoryPage>[] = [];
+      const pending: Promise<CategoryPageEvidence>[] = [];
       for (let page = start; page < Math.min(start + MAX_CATEGORIES_CONCURRENCY, totalPages + 1); page++) {
         pending.push(fetchCategoriesPage(token, page, controller.signal, httpFetch));
       }
@@ -573,28 +492,25 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
       if (failed?.status === 'rejected') throw failed.reason;
       for (const result of batch) {
         if (result.status === 'fulfilled') {
-          if (result.value.pagination.pages !== totalPages ||
-            result.value.pagination.perPage !== first.pagination.perPage ||
-            result.value.pagination.total !== first.pagination.total) {
-            throw new Error('Category listing changed during pagination');
-          }
-          collectPagetitles(result.value.results, acc, seenIds, coverage);
+          pages.push(result.value);
         }
       }
     }
 
     controller.signal.throwIfAborted();
-    const flat = Array.from(acc).sort();
-    if (flat.length === 0) throw new Error('Category listing returned no categories');
+    const evidence = combineCategoryPages(pages);
+    if (evidence.state === 'unavailable') {
+      throw new Error(`Category listing evidence unavailable: ${evidence.reason}`);
+    }
     // Missing/null children leaves descendant coverage unproven: return the
     // visible names for this call without freezing a partial taxonomy for 1h.
-    if (coverage.childrenComplete) {
-      categoriesCache = { value: flat, ts: Date.now() };
-      console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    if (evidence.state === 'complete') {
+      categoriesCache = { value: evidence.names, ts: Date.now() };
+      console.log(`[Categories] cache STORED ${evidence.names.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
     } else {
-      console.log(`[Categories] uncached incomplete child coverage (${flat.length} visible pagetitles, pages=${totalPages})`);
+      console.log(`[Categories] uncached incomplete child coverage (${evidence.names.length} visible pagetitles, pages=${totalPages})`);
     }
-    return flat;
+    return evidence;
   })();
   const shared = { controller, promise: load, waiters: 0 };
   categoriesInFlight = shared;
@@ -692,9 +608,14 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     // ===== Branch: list categories (flat array of pagetitle) =====
     if (body && body.action === 'list_categories') {
       const apiToken = await readApiToken(controller.signal);
-      const categories = await listCategories(apiToken, controller.signal, httpFetch);
+      const evidence = await listCategories(apiToken, controller.signal, httpFetch);
       return new Response(
-        JSON.stringify({ categories, count: categories.length }),
+        JSON.stringify({
+          categories: evidence.names,
+          count: evidence.names.length,
+          coverage: evidence.state,
+          count_is_complete: evidence.state === 'complete',
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

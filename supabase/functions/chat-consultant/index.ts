@@ -45,6 +45,12 @@ import {
 } from '../_shared/public-subject-admission.ts';
 import { MAX_REQUEST_BODY_READ_MS, readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
+import {
+  assessCategoryFacets,
+  assessCategoryPage,
+  combineCategoryPages,
+  type CategoryPageEvidence,
+} from '../_shared/catalog-evidence.ts';
 import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
 import { interpretRequirement, type ExpertOption } from '../_shared/expert-interpretation.ts';
 import { expertFirstJudgment } from '../_shared/expert-first.ts';
@@ -87,6 +93,35 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
+
+// A catalog outage is not an empty search result. Keep the final answer
+// deterministic in both wire formats, so a model or bucket fallback cannot
+// turn missing upstream evidence into "товаров нет".
+export function shouldEmitCatalogUnavailableResponse(intent: string, productCount: number, degraded: boolean): boolean {
+  return degraded && productCount === 0 && (intent === 'catalog' || intent === 'brands');
+}
+
+export function buildCatalogUnavailableResponse(streaming: boolean, slotUpdate?: unknown): Response {
+  const content = 'Каталог сейчас временно недоступен — не могу достоверно проверить товары, наличие и цены. Повторите запрос позже или уточните у менеджера.';
+  if (!streaming) {
+    return new Response(JSON.stringify({ content, ...(slotUpdate ? { slot_update: slotUpdate } : {}) }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  const events = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`,
+    ...(slotUpdate ? [`data: ${JSON.stringify({ slot_update: slotUpdate })}\n\n`] : []),
+    'data: [DONE]\n\n',
+  ];
+  return new Response(events.join(''), {
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
 
 function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
   const requested = req.headers.get('access-control-request-headers');
@@ -433,85 +468,59 @@ const CHAT_CATEGORIES_STALE_GRACE_MS = 60 * 60 * 1000;
 const CHAT_CATEGORIES_MAX_PAGES = 10;
 let chatCategoriesCache: { value: string[]; ts: number } | null = null;
 
-export async function getCategoriesCache(token: string, httpFetch: typeof fetch = fetch): Promise<string[]> {
+export async function getCategoriesCache(
+  token: string,
+  httpFetch: typeof fetch = fetch,
+  onIncompleteCoverage: (reason: string) => void = markCatalogError,
+): Promise<string[]> {
   if (chatCategoriesCache && Date.now() - chatCategoriesCache.ts < CHAT_CATEGORIES_TTL_MS) {
     return chatCategoriesCache.value;
   }
   try {
     const t0 = Date.now();
-    const acc = new Set<string>();
-    const seenIds = new Set<number>();
-    let childrenComplete = true;
+    const pages: CategoryPageEvidence[] = [];
     let page = 1;
-    let totalPages: number | null = null;
-    let totalCategories: number | null = null;
-    let responsePerPage: number | null = null;
+    let totalPages = 1;
     do {
       const params = new URLSearchParams({ parent: '0', depth: '10', per_page: '200', page: String(page) });
-      const res = await httpFetch(`https://220volt.kz/api/categories?${params}`, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) {
-        throw new Error(`Categories API HTTP ${res.status} on page ${page}`);
+      let evidence: CategoryPageEvidence = { state: 'unavailable', reason: 'http_error' };
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const res = await httpFetch(`https://220volt.kz/api/categories?${params}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        // One bounded retry for a transient gateway failure; never retry a
+        // malformed 200 or turn an upstream error into an empty catalog.
+        if (res.status === 502 && attempt === 1) continue;
+        evidence = assessCategoryPage(res.ok ? await res.json() : null, page, res.status, {
+          maxPages: CHAT_CATEGORIES_MAX_PAGES,
+          maxPerPage: 200,
+        });
+        break;
       }
-      const raw = await res.json();
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.success === false) {
-        throw new Error(`Categories API returned an invalid response on page ${page}`);
+      if (evidence.state === 'unavailable') {
+        throw new Error(`Categories API evidence unavailable on page ${page}: ${evidence.reason}`);
       }
-      const data = Object.prototype.hasOwnProperty.call(raw, 'data') ? raw.data : raw;
-      const pageNumber = data?.pagination?.page;
-      const perPage = data?.pagination?.per_page;
-      const pages = data?.pagination?.pages;
-      const total = data?.pagination?.total;
-      if (data?.success === false || !Array.isArray(data?.results) ||
-        typeof pageNumber !== 'number' || typeof perPage !== 'number' ||
-        typeof pages !== 'number' || typeof total !== 'number' ||
-        !Number.isSafeInteger(pageNumber) || pageNumber !== page ||
-        !Number.isSafeInteger(perPage) || perPage < 1 || perPage > 200 ||
-        !Number.isSafeInteger(pages) || pages < 1 || pages > CHAT_CATEGORIES_MAX_PAGES ||
-        !Number.isSafeInteger(total) || total < 0 ||
-        pages !== Math.max(1, Math.ceil(total / perPage)) ||
-        data.results.length !== Math.min(perPage, Math.max(0, total - (page - 1) * perPage)) ||
-        (totalPages !== null && (pages !== totalPages || total !== totalCategories || perPage !== responsePerPage))) {
-        throw new Error(`Categories API returned an incomplete response on page ${page}`);
-      }
-      const walk = (nodes: unknown) => {
-        if (!Array.isArray(nodes)) throw new Error('Categories API returned malformed category nodes');
-        for (const n of nodes) {
-          const node = n as { id?: unknown; pagetitle?: unknown; alias?: unknown; parent?: unknown; children?: unknown } | null;
-          if (!node || typeof node !== 'object' || Array.isArray(node) ||
-            typeof node.id !== 'number' || !Number.isSafeInteger(node.id) || node.id < 0 ||
-            typeof node.pagetitle !== 'string' || !node.pagetitle.trim() ||
-            typeof node.alias !== 'string' ||
-            typeof node.parent !== 'number' || !Number.isSafeInteger(node.parent) || node.parent < 0 ||
-            (node.children != null && !Array.isArray(node.children))) {
-            throw new Error('Categories API returned malformed category nodes');
-          }
-          if (seenIds.has(node.id)) {
-            throw new Error('Categories API returned duplicate category IDs');
-          }
-          seenIds.add(node.id);
-          acc.add(node.pagetitle.trim());
-          if (!Array.isArray(node.children)) childrenComplete = false;
-          else if (node.children.length) walk(node.children);
-        }
-      };
-      walk(data.results);
-      totalPages = pages;
-      totalCategories = total;
-      responsePerPage = perPage;
+      pages.push(evidence);
+      if (page === 1) totalPages = evidence.pagination.pages;
       page++;
     } while (page <= totalPages);
 
-    const flat = Array.from(acc).sort();
-    if (flat.length === 0) throw new Error('Categories API returned no categories');
+    const complete = combineCategoryPages(pages);
+    if (complete.state === 'unavailable') {
+      throw new Error(`Categories API evidence unavailable: ${complete.reason}`);
+    }
     // A missing/null children field may hide descendants even when root
     // pagination is complete. Use visible titles now, but never retain them.
-    if (childrenComplete) chatCategoriesCache = { value: flat, ts: Date.now() };
-    console.log(`[CategoriesCache] MISS → fetched ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages}, cached=${childrenComplete})`);
-    return flat;
+    if (complete.state === 'complete') chatCategoriesCache = { value: complete.names, ts: Date.now() };
+    else onIncompleteCoverage('CategoriesCache:visible_only_child_coverage');
+    console.log(`[CategoriesCache] MISS → fetched ${complete.names.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages}, evidence=${complete.state})`);
+    return complete.names;
   } catch (e) {
+    // An empty taxonomy here means upstream evidence was unavailable, not
+    // that the store has no matching categories. The request-level guard below
+    // prevents a fallback search from claiming a verified absence.
+    markCatalogError(`CategoriesCache:${(e as Error).message}`);
     if (chatCategoriesCache && Date.now() - chatCategoriesCache.ts < CHAT_CATEGORIES_TTL_MS + CHAT_CATEGORIES_STALE_GRACE_MS) {
       console.log(`[CategoriesCache] refresh failed: ${(e as Error).message} — serving recent verified list`);
       return chatCategoriesCache.value;
@@ -2344,31 +2353,6 @@ export async function getCategoryOptionsSchema(
   return await fetchPromise;
 }
 
-// Catalog options can legitimately carry numeric value_ru (live API), but objects
-// must never be stringified into "[object Object]" and stored as verified facets.
-function validFullFacetOption(option: unknown): boolean {
-  if (!option || typeof option !== 'object' || Array.isArray(option)) return false;
-  const opt = option as Record<string, unknown>;
-  if (typeof opt.key !== 'string' || !opt.key.trim() || !Array.isArray(opt.values)) return false;
-  if ((opt.caption_ru != null && typeof opt.caption_ru !== 'string') ||
-    (opt.caption_kz != null && typeof opt.caption_kz !== 'string') ||
-    (opt.caption != null && typeof opt.caption !== 'string')) return false;
-  return opt.values.every((value: unknown) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const entry = value as Record<string, unknown>;
-    const ru = entry.value_ru ?? entry.value;
-    const kz = entry.value_kz;
-    const count = entry.products_count;
-    const ruValid = ru == null || typeof ru === 'string' ||
-      (typeof ru === 'number' && Number.isFinite(ru));
-    const kzValid = kz == null || typeof kz === 'string';
-    const usable = (typeof ru === 'string' && !!ru.trim()) || typeof ru === 'number' ||
-      (typeof kz === 'string' && !!kz.trim());
-    return ruValid && kzValid && usable &&
-      (count == null || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0));
-  });
-}
-
 // Actual fetch implementation. Always called under single-flight protection from the
 // public wrapper above — never call directly from feature code.
 async function _doFetchCategoryOptionsSchema(
@@ -2389,6 +2373,9 @@ async function _doFetchCategoryOptionsSchema(
         headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
+      if (res.status === 502 && attemptNo === 1) {
+        throw new Error('Facets API gateway 502');
+      }
       return res;
     } finally {
       clearTimeout(timeoutId);
@@ -2409,8 +2396,8 @@ async function _doFetchCategoryOptionsSchema(
     } catch (e) {
       lastError = e;
       const isAbort = (e as any)?.name === 'AbortError' || /aborted|abort/i.test((e as Error).message);
-      if (attempt === 1 && isAbort) {
-        console.log(`[CategoryOptionsSchema] attempt=1 aborted cat="${categoryPagetitle}" took=${Date.now() - t0}ms → retrying once`);
+      if (attempt === 1 && (isAbort || (e as Error).message === 'Facets API gateway 502')) {
+        console.log(`[CategoryOptionsSchema] attempt=1 transient_failure cat="${categoryPagetitle}" took=${Date.now() - t0}ms → retrying once`);
         await new Promise(r => setTimeout(r, 300));
         continue;
       }
@@ -2426,29 +2413,17 @@ async function _doFetchCategoryOptionsSchema(
 
   try {
     if (!res.ok) {
+      markIfCatalogHttpError('CategoryOptionsSchema', res.status);
       console.log(`[CategoryOptionsSchema] /categories/options HTTP ${res.status} for "${categoryPagetitle}" → falling back to legacy sampling`);
       return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken, httpFetch);
     }
 
-    const raw = await res.json();
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.success === false) {
-      throw new Error('Facets API returned an invalid response');
+    const evidence = assessCategoryFacets(await res.json(), { pagetitle: categoryPagetitle }, res.status);
+    if (evidence.state !== 'verified') {
+      throw new Error(`Facets API evidence unavailable: ${evidence.reason}`);
     }
-    let data = Object.prototype.hasOwnProperty.call(raw, 'data') ? raw.data : raw;
-    if (data?.success === false) throw new Error('Facets API returned an invalid response');
-    if (data && typeof data === 'object' && 'data' in data && !('options' in data)) data = (data as any).data;
-    const totalProducts: number = data?.category?.total_products;
-    if (!data || typeof data !== 'object' || Array.isArray(data) ||
-      data.success === false ||
-      !data.category || typeof data.category !== 'object' || Array.isArray(data.category) ||
-      typeof data.category.pagetitle !== 'string' ||
-      data.category.pagetitle.trim() !== categoryPagetitle.trim() ||
-      !Array.isArray(data.options) || typeof totalProducts !== 'number' ||
-      !Number.isSafeInteger(totalProducts) || totalProducts < 0 ||
-      data.options.some((opt: unknown) => !validFullFacetOption(opt))) {
-      throw new Error('Facets API returned an incomplete response');
-    }
-    const optionsArr: any[] = data.options;
+    const { totalProducts } = evidence;
+    const optionsArr = evidence.options;
 
     if (optionsArr.length === 0) {
       console.log(`[CategoryOptionsSchema] /categories/options returned EMPTY options for "${categoryPagetitle}" (total_products=${totalProducts}) → falling back to legacy sampling`);
@@ -2497,6 +2472,7 @@ async function _doFetchCategoryOptionsSchema(
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe, confidence=full)`);
     return { schema, productCount: totalProducts, cacheHit: false, confidence: 'full', source: 'facets-api' };
   } catch (e) {
+    markIfCatalogError('CategoryOptionsSchema', e);
     console.log(`[CategoryOptionsSchema] /categories/options parse error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken, httpFetch);
   }
@@ -2630,16 +2606,13 @@ async function getCategoryOptionsSchemaLegacy(
       return { schema, productCount: totalProducts, cacheHit: false, confidence: 'empty', source: 'legacy-sampling' };
     }
     dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
-    // CONFIDENCE=PARTIAL — legacy sampling sees ≤1000 products. For categories with
-    // 2000+ items (Розетки = 2078) values are guaranteed to be a subset of reality.
-    // Resolver layer must NOT trust this for value validation.
-    if (sampleComplete) {
-      categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts, confidence: 'partial', source: 'legacy-sampling' });
-    }
+    // CONFIDENCE=PARTIAL — sampling is useful for this request only. Even a
+    // coherent sample is not the verified category-wide facets contract, so
+    // never retain it across requests or claim that absent values are absent.
     const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
     const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
     console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling confidence=partial keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
-    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, ${sampleComplete ? 'cached 30m' : 'sample truncated; NOT cached'}, post-dedupe, confidence=partial)`);
+    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, ${sampleComplete ? 'complete sample; NOT cached' : 'sample truncated; NOT cached'}, post-dedupe, confidence=partial)`);
     return { schema, productCount: totalProducts, cacheHit: false, confidence: 'partial', source: 'legacy-sampling' };
   } catch (e) {
     console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema (confidence=empty)`);
@@ -12933,6 +12906,13 @@ ${productInstructions}`;
     // Теперь правило: foundProducts>0 && !compute && intent='catalog' → ВСЕГДА детерминистично.
     // Replacement и similar-ветки имеют свои composer'ы и сюда не доходят.
     const isCatalogIntent = extractedIntent.intent === 'catalog' || extractedIntent.intent === 'brands';
+    if (shouldEmitCatalogUnavailableResponse(extractedIntent.intent, foundProducts.length, isCatalogDegraded(reqId))) {
+      console.warn(`[Chat req=${reqId}] Verified catalog absence unavailable: ${getCatalogDegradedReasons(reqId).join(', ')}`);
+      logSetProductsCount(0);
+      logAddStep({ step: 'final-catalog-unavailable', meta: { reasons: getCatalogDegradedReasons(reqId) } });
+      persistSlotsAsync(conversationId, dialogSlots);
+      return buildCatalogUnavailableResponse(useStreaming, slotsUpdated ? dialogSlots : undefined);
+    }
     const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||

@@ -82,6 +82,8 @@ export interface ResolverResult {
   source: "llm" | "slot" | "skip" | "error";
   ms: number;                        // длительность работы резолвера
   error?: string;                    // сообщение, если source=error
+  /** A partial live taxonomy can prove observed names, never missing names. */
+  catalogEvidence?: "visible_only";
 }
 
 export interface ResolverDeps {
@@ -96,6 +98,10 @@ export interface ResolverDeps {
   // Логирование прогресса (trace).
   log: (event: string, data?: Record<string, unknown>) => void;
 }
+
+/** Non-enumerable marker on a live list whose visible nodes are valid but
+ * whose child traversal is not proven complete. Never persist such a list. */
+export const CATEGORY_LIST_VISIBLE_ONLY = Symbol("catalog_category_visible_only");
 
 // --------------------------------------------------------------------------
 // LLM-промпт. Жёстко data-agnostic: НИ ОДНОГО реального названия категории
@@ -256,8 +262,28 @@ export async function resolveCategory(
       error: "empty_categories_list",
     };
   }
+  const visibleOnly = Boolean(
+    (categories as string[] & { [CATEGORY_LIST_VISIBLE_ONLY]?: boolean })[
+      CATEGORY_LIST_VISIBLE_ONLY
+    ],
+  );
 
-  const thresholds = await deps.getThresholds();
+  let thresholds: { category_high: number; category_low: number };
+  try {
+    thresholds = await deps.getThresholds();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      status: "unresolved",
+      pagetitle: null,
+      candidates: [],
+      confidence: 0,
+      source: "error",
+      ms: Date.now() - t0,
+      error: `thresholds: ${msg}`,
+      ...(visibleOnly ? { catalogEvidence: "visible_only" as const } : {}),
+    };
+  }
   const validSet = new Set(categories);
 
   let llmText = "";
@@ -288,6 +314,7 @@ export async function resolveCategory(
       source: "error",
       ms: Date.now() - t0,
       error: `llm: ${msg}`,
+      ...(visibleOnly ? { catalogEvidence: "visible_only" as const } : {}),
     };
   }
 
@@ -296,6 +323,22 @@ export async function resolveCategory(
   parseMs = Date.now() - tParseStart;
   const top = candidates[0];
   const conf = top?.confidence ?? 0;
+
+  // Positive names observed in an incomplete tree may be selected, but the
+  // absence of a candidate is not evidence that no such catalog branch exists.
+  if (visibleOnly && !top) {
+    deps.log("category_resolver.incomplete_list_no_match", { traceId });
+    return {
+      status: "unresolved",
+      pagetitle: null,
+      candidates: [],
+      confidence: 0,
+      source: "error",
+      ms: Date.now() - t0,
+      error: "incomplete_categories_list",
+      catalogEvidence: "visible_only",
+    };
+  }
 
   let status: ResolverStatus;
   let pagetitle: string | null = null;
@@ -348,7 +391,11 @@ export async function resolveCategory(
     pagetitle,
     candidates: returnCandidates,
     confidence: conf,
-    source: "llm",
+    source: visibleOnly && status === "unresolved" ? "error" : "llm",
     ms: totalMs,
+    ...(visibleOnly && status === "unresolved"
+      ? { error: "incomplete_categories_list" }
+      : {}),
+    ...(visibleOnly ? { catalogEvidence: "visible_only" as const } : {}),
   };
 }

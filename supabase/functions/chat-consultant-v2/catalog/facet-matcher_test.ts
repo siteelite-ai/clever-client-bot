@@ -40,14 +40,15 @@ function stubApiClient(result: CategoryOptionsResult, fetchCounter: { n: number 
   // Подсовываем fetch, который не используется (cache stub перехватывает),
   // но api-client требует его наличия. На случай если cache miss → реальный
   // fetch будет вызван — мы возвращаем готовый JSON.
-  const fakeFetch: typeof fetch = async (_url, _init) => {
+  const fakeFetch: typeof fetch = async (url, _init) => {
     fetchCounter.n++;
+    const pagetitle = new URL(String(url)).searchParams.get('pagetitle');
     // Эмулируем double-wrapping (Q2): { data: { data: { options, category } } }
     const body = JSON.stringify({
       data: {
         data: {
           options: result.options,
-          category: { total_products: result.totalProducts },
+          category: { pagetitle, total_products: result.totalProducts },
         },
       },
     });
@@ -408,4 +409,81 @@ Deno.test('Bootstrap: empty live + bootstrapOptions → bootstrap путь ра�
   assertEquals(r.status, 'ok');
   assertEquals(r.source, 'bootstrap');
   assertEquals(r.optionFilters, { vendor: ['Acme'] });
+});
+
+// A failed or unverified facet response must not become the next request's
+// cached "category has no facets" (or a seemingly valid facet dictionary).
+// The cache stub deliberately stores everything: the matcher/cache contract
+// has to prevent admitting the bad value, not rely on a friendly mock.
+Deno.test('Facet evidence: HTTP 502 is unavailable and does not poison the next request', async () => {
+  __resetCatalogBreakerForTests();
+  let calls = 0;
+  const fetchMock: typeof fetch = async () => {
+    calls++;
+    if (calls <= 2) return new Response('upstream down', { status: 502 });
+    return Response.json({
+      data: {
+        options: [{ key: 'finish', caption_ru: 'Отделка', values: [{ value_ru: 'Матовая' }] }],
+        category: { pagetitle: 'synthetic-category', total_products: 3 },
+      },
+    });
+  };
+  const apiClient: ApiClientDeps = {
+    baseUrl: 'https://test.local/api', apiToken: 'test-token', fetch: fetchMock,
+  };
+  const cache = makeCacheStub();
+  const deps: FacetMatcherDeps = { apiClient, cacheGetOrCompute: cache.cacheGetOrCompute };
+
+  const failed = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(failed.status, 'category_unavailable');
+  assertEquals(failed.source, 'unavailable');
+
+  const recovered = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(recovered.status, 'ok');
+  assertEquals(recovered.source, 'live');
+  assertEquals(recovered.optionFilters, { finish: ['Матовая'] });
+  assertEquals(calls, 3, 'one bounded retry, then a fresh later request');
+
+  const cached = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(cached.status, 'ok');
+  assertEquals(cached.source, 'cache');
+  assertEquals(calls, 3, 'only the verified recovery may be cached');
+});
+
+Deno.test('Facet evidence: HTTP 200 success:false with options is unavailable, not cacheable', async () => {
+  __resetCatalogBreakerForTests();
+  let calls = 0;
+  const fetchMock: typeof fetch = async () => {
+    calls++;
+    return Response.json(calls === 1
+      ? {
+        success: false,
+        data: {
+          options: [{ key: 'finish', values: [{ value_ru: 'Матовая' }] }],
+          category: { pagetitle: 'synthetic-category', total_products: 3 },
+        },
+      }
+      : {
+        data: {
+          options: [{ key: 'finish', values: [{ value_ru: 'Матовая' }] }],
+          category: { pagetitle: 'synthetic-category', total_products: 3 },
+        },
+      });
+  };
+  const apiClient: ApiClientDeps = {
+    baseUrl: 'https://test.local/api', apiToken: 'test-token', fetch: fetchMock,
+  };
+  const cache = makeCacheStub();
+  const deps: FacetMatcherDeps = { apiClient, cacheGetOrCompute: cache.cacheGetOrCompute };
+
+  const rejected = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(rejected.status, 'category_unavailable');
+  assertEquals(rejected.source, 'unavailable');
+  assertEquals(rejected.optionFilters, {});
+
+  const recovered = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(recovered.status, 'ok');
+  assertEquals(recovered.source, 'live');
+  assertEquals(recovered.optionFilters, { finish: ['Матовая'] });
+  assertEquals(calls, 2);
 });

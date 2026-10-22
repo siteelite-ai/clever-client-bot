@@ -23,7 +23,7 @@ import {
   type ApiClientDeps,
   type RawProduct,
 } from "./api-client.ts";
-import { __resetCatalogBreakerForTests } from "./circuit-breaker.ts";
+import { __resetCatalogBreakerForTests, getCatalogBreaker } from "./circuit-breaker.ts";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -284,7 +284,7 @@ Deno.test("getCategoryOptions: ok — обычная обёртка { data: { op
     return jsonResponse({
       data: {
         options: [{ key: "k1", caption_ru: "K1", values: [{ value_ru: "v1" }] }],
-        category: { total_products: 42 },
+        category: { pagetitle: "test-cat", total_products: 42 },
       },
     });
   });
@@ -300,7 +300,7 @@ Deno.test("getCategoryOptions: Q2 — double-wrap { data: { data: { options, cat
   const f = makeFetch(() => jsonResponse({
     data: { data: {
       options: [{ key: "k1", values: [{ value_ru: "v1" }] }],
-      category: { total_products: 7 },
+      category: { pagetitle: "cat", total_products: 7 },
     } },
   }));
   const r = await getCategoryOptions("cat", deps(f));
@@ -312,7 +312,7 @@ Deno.test("getCategoryOptions: Q2 — double-wrap { data: { data: { options, cat
 Deno.test("getCategoryOptions: empty — options=[]", async () => {
   __resetCatalogBreakerForTests();
   const f = makeFetch(() => jsonResponse({
-    data: { options: [], category: { total_products: 0 } },
+    data: { options: [], category: { pagetitle: "cat", total_products: 0 } },
   }));
   const r = await getCategoryOptions("cat", deps(f));
   assertEquals(r.status, "empty");
@@ -333,7 +333,7 @@ Deno.test("getCategoryOptions: retry on timeout, второй ответ ok", as
       });
     }
     return Promise.resolve(jsonResponse({
-      data: { options: [{ key: "k", values: [{ value_ru: "v" }] }], category: { total_products: 1 } },
+      data: { options: [{ key: "k", values: [{ value_ru: "v" }] }], category: { pagetitle: "cat", total_products: 1 } },
     }));
   });
   const r = await getCategoryOptions("cat", deps(f, { timeoutMs: { categoryOptions: 30 } }));
@@ -348,6 +348,94 @@ Deno.test("getCategoryOptions: http_error 500", async () => {
   assertEquals(r.status, "http_error");
   assertEquals(r.httpStatus, 500);
 });
+
+// A 2xx transport response is not evidence that the category/facet payload
+// belongs to the requested category or is even a successful catalog response.
+// All fixtures below are synthetic and intentionally contain tempting data.
+Deno.test("getCategoryOptions: HTTP 502 with plausible body stays unavailable", async () => {
+  __resetCatalogBreakerForTests();
+  const f = makeFetch(() => jsonResponse({
+    data: {
+      options: [{ key: "finish", values: [{ value_ru: "matte" }] }],
+      category: { pagetitle: "synthetic-category", total_products: 3 },
+    },
+  }, 502));
+  const r = await getCategoryOptions("synthetic-category", deps(f));
+  assertEquals(r.status, "http_error");
+  assertEquals(r.httpStatus, 502);
+  assertEquals(r.options, []);
+});
+
+Deno.test("facet 502 bounded retry counts one logical failure and keeps product search available", async () => {
+  __resetCatalogBreakerForTests();
+  let facetCalls = 0;
+  const facetFetch = makeFetch(() => {
+    facetCalls++;
+    return new Response("bad gateway", { status: 502 });
+  });
+  for (let i = 0; i < 3; i++) {
+    const result = await getCategoryOptions("synthetic-category", deps(facetFetch));
+    assertEquals(result.status, "http_error");
+  }
+  assertEquals(facetCalls, 6, "one retry per facet request");
+  assertEquals(getCatalogBreaker().snapshot().recentFailures, 3);
+  let productCalls = 0;
+  const productFetch = makeFetch(() => {
+    productCalls++;
+    return jsonResponse({ data: { results: [], pagination: { total: 0 } } });
+  });
+  const product = await searchProducts({ query: "synthetic" }, deps(productFetch));
+  assertEquals(product.status, "empty");
+  assertEquals(productCalls, 1, "facet retry must not open healthy product route");
+  __resetCatalogBreakerForTests();
+});
+
+for (const [name, body] of [
+  ["top-level success:false", {
+    success: false,
+    data: {
+      options: [{ key: "finish", values: [{ value_ru: "matte" }] }],
+      category: { pagetitle: "synthetic-category", total_products: 3 },
+    },
+  }],
+  ["nested success:false", {
+    data: {
+      success: false,
+      options: [{ key: "finish", values: [{ value_ru: "matte" }] }],
+      category: { pagetitle: "synthetic-category", total_products: 3 },
+    },
+  }],
+  ["missing options", {
+    data: { category: { pagetitle: "synthetic-category", total_products: 3 } },
+  }],
+  ["non-array options", {
+    data: {
+      options: { finish: ["matte"] },
+      category: { pagetitle: "synthetic-category", total_products: 3 },
+    },
+  }],
+  ["malformed option entry", {
+    data: {
+      options: [{ key: "finish", values: "matte" }],
+      category: { pagetitle: "synthetic-category", total_products: 3 },
+    },
+  }],
+  ["different category", {
+    data: {
+      options: [{ key: "finish", values: [{ value_ru: "matte" }] }],
+      category: { pagetitle: "another-category", total_products: 3 },
+    },
+  }],
+] as const) {
+  Deno.test(`getCategoryOptions: HTTP 200 ${name} is not verified or empty`, async () => {
+    __resetCatalogBreakerForTests();
+    const f = makeFetch(() => jsonResponse(body));
+    const r = await getCategoryOptions("synthetic-category", deps(f));
+    assert(r.status !== "ok" && r.status !== "empty",
+      `${name}: malformed response must not become verified or valid zero facets (${r.status})`);
+    assertEquals(r.options, []);
+  });
+}
 
 // ─── unwrapDouble unit ──────────────────────────────────────────────────────
 

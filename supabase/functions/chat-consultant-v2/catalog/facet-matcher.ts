@@ -24,8 +24,8 @@ import {
   type CategoryOptionsResult,
   type RawOption,
   type RawOptionValue,
-  getCategoryOptions,
 } from './api-client.ts';
+import { loadCategoryFacets } from './facet-cache.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -240,22 +240,11 @@ export async function matchFacets(
   })}`);
 
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
-  let facetsResult: CategoryOptionsResult;
-  let source: 'cache' | 'live' | 'unavailable' = 'live';
-  try {
-    const cached = await deps.cacheGetOrCompute<CategoryOptionsResult>(
-      'facets',
-      pagetitle,
-      ttl,
-      () => getCategoryOptions(pagetitle, deps.apiClient),
-    );
-    facetsResult = cached.value;
-    source = cached.cacheHit ? 'cache' : 'live';
-  } catch (_e) {
-    // Кэш-ошибки не должны валить пайплайн — defensive.
-    source = 'unavailable';
-    facetsResult = await getCategoryOptions(pagetitle, deps.apiClient);
-  }
+  const loaded = await loadCategoryFacets(
+    pagetitle, ttl, deps.apiClient, deps.cacheGetOrCompute,
+  );
+  const facetsResult: CategoryOptionsResult = loaded.value;
+  const source = loaded.source;
 
   // ── 2. Обработка статуса API. ───────────────────────────────────────────
   // §4.10.1: при transport-failure пробуем bootstrap (per-item options из probe).

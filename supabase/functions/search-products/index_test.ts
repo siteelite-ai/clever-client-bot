@@ -44,6 +44,48 @@ function forbiddenUpstream() {
   };
 }
 
+Deno.test('search taxonomy retries one 502 before serving and caching verified complete names', async () => {
+  resetCatalogCachesForTest();
+  let calls = 0;
+  const deps = {
+    getApiToken: async () => 'catalog-test-token',
+    fetch: async () => {
+      calls++;
+      if (calls === 1) return new Response('gateway unavailable', { status: 502 });
+      return Response.json({ data: {
+        results: [{ id: 1, pagetitle: 'Кабель', alias: 'kabel', parent: 0, children: [] }],
+        pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+      } });
+    },
+  };
+  const first = await handleRequest(post({ action: 'list_categories' }), deps);
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).categories, ['Кабель']);
+  assertEquals((await (await handleRequest(post({ action: 'list_categories' }), deps)).json()).categories, ['Кабель']);
+  assertEquals(calls, 2);
+});
+
+Deno.test('search facets retry one 502 then cache only verified category options', async () => {
+  resetCatalogCachesForTest();
+  let calls = 0;
+  const deps = {
+    getApiToken: async () => 'catalog-test-token',
+    fetch: async () => {
+      calls++;
+      if (calls === 1) return new Response('gateway unavailable', { status: 502 });
+      return Response.json({ data: {
+        category: { id: 742, total_products: 1 },
+        options: [{ key: 'diameter', values: [{ value_ru: '10 мм' }] }],
+      } });
+    },
+  };
+  const first = await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps);
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).options[0].key, 'diameter');
+  assertEquals((await (await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps)).json()).cacheHit, true);
+  assertEquals(calls, 2);
+});
+
 Deno.test('search-products rejects unsupported methods before reading token or catalog', async () => {
   const upstream = forbiddenUpstream();
   const get = await handleRequest(new Request(endpoint), upstream.deps);
@@ -175,6 +217,7 @@ Deno.test('search-products still accepts the original POST body without an actio
 });
 
 Deno.test('search-products preserves legacy by_sku, category facets and category listing', async () => {
+  resetCatalogCachesForTest();
   const urls: URL[] = [];
   const deps = {
     getApiToken: async () => 'catalog-test-token',
@@ -375,14 +418,24 @@ Deno.test('list_categories retains visible names but never caches unproven child
       for (let attempt = 0; attempt < 2; attempt++) {
         const response = await handleRequest(post({ action: 'list_categories' }), deps);
         assertEquals(response.status, 200);
-        assertEquals((await response.json()).categories, visible);
+        const listing = await response.json();
+        assertEquals(listing.categories, visible);
+        assertEquals(listing.count, visible.length);
+        assertEquals(listing.coverage, 'visible_only');
+        assertEquals(listing.count_is_complete, false);
       }
       assertEquals(calls, [1, 2, 1, 2]);
       incomplete = false;
       const recovered = await handleRequest(post({ action: 'list_categories' }), deps);
-      assertEquals((await recovered.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      const completeListing = await recovered.json();
+      assertEquals(completeListing.categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      assertEquals(completeListing.coverage, 'complete');
+      assertEquals(completeListing.count_is_complete, true);
       const cached = await handleRequest(post({ action: 'list_categories' }), deps);
-      assertEquals((await cached.json()).categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      const cachedListing = await cached.json();
+      assertEquals(cachedListing.categories, ['Двойные розетки', 'Кабель', 'Розетки']);
+      assertEquals(cachedListing.coverage, 'complete');
+      assertEquals(cachedListing.count_is_complete, true);
       assertEquals(calls, [1, 2, 1, 2, 1, 2]);
     }
   }

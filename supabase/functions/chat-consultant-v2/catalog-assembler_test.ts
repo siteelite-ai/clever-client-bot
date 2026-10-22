@@ -114,7 +114,13 @@ function mockApiClient(
       );
     }
     // options
-    const inner = { options: r.options, category: { total_products: r.totalProducts ?? 0 } };
+    const inner = {
+      options: r.options,
+      category: {
+        pagetitle: u.searchParams.get("pagetitle"),
+        total_products: r.totalProducts ?? (r.options.length > 0 ? 1 : 0),
+      },
+    };
     const wrapped = r.doubleWrap
       ? { data: { data: inner } }     // Q2: double
       : { data: inner };               // single

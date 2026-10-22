@@ -157,3 +157,6 @@ jobs:
 
       - name: Test legacy taxonomy cache completeness
         run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/catalog-cache_test.ts supabase/functions/chat-consultant-v2/catalog-deps-factory_test.ts
+
+      - name: Test shared catalog evidence and V2 failure recovery
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/_shared/catalog-evidence_test.ts supabase/functions/chat-consultant-v2/catalog/api-client_test.ts supabase/functions/chat-consultant-v2/catalog/facet-cache_test.ts supabase/functions/chat-consultant-v2/catalog/facet-matcher_test.ts supabase/functions/chat-consultant-v2/catalog-assembler-evidence_test.ts

@@ -6,6 +6,7 @@ import {
   _resetCategoriesCache,
   createCatalogProductionDeps,
 } from "./catalog-deps-factory.ts";
+import { resolveCategory } from "./category-resolver.ts";
 
 function categoryNode(
   pagetitle: string,
@@ -68,7 +69,7 @@ Deno.test("V2 category cache: first-page HTTP failure is not cached", async () =
       fail = false;
       assertEquals(await listCategories(), ["Розетки"]);
       assertEquals(await listCategories(), ["Розетки"]);
-      assertEquals(calls, [1, 1]);
+      assertEquals(calls, [1, 1, 1]); // bounded retry for first 502
     },
   );
 });
@@ -86,7 +87,7 @@ Deno.test("V2 category cache: later-page HTTP failure cannot cache a partial tre
       failPageTwo = false;
       assertEquals(await listCategories(), ["Розетки", "Светильники"]);
       assertEquals(await listCategories(), ["Розетки", "Светильники"]);
-      assertEquals(calls, [1, 2, 1, 2]);
+      assertEquals(calls, [1, 2, 2, 1, 2]); // bounded retry on page 2
     },
   );
 });
@@ -100,7 +101,7 @@ Deno.test("V2 category cache: malformed successful page is not treated as a comp
       ? categoryPage([], 2, 1, 2)
       : categoryPage(["Светильники"], 2, 1, 2),
     async (listCategories, calls) => {
-      await assertRejects(listCategories, Error, "/categories incomplete results on page 2");
+      await assertRejects(listCategories, Error, "/categories incomplete pagination on page 2");
       truncated = false;
       assertEquals(await listCategories(), ["Розетки", "Светильники"]);
       assertEquals(calls, [1, 2, 1, 2]);
@@ -136,6 +137,66 @@ Deno.test("V2 category cache: complete nested taxonomy keeps sorted, deduplicate
       assertEquals(await listCategories(), ["Двойные розетки", "Розетки", "Светильники"]);
       assertEquals(await listCategories(), ["Двойные розетки", "Розетки", "Светильники"]);
       assertEquals(calls, [1]);
+    },
+  );
+});
+
+Deno.test("V2 category cache: only previously complete taxonomy may bridge an expired-hot 502", async () => {
+  const realNow = Date.now;
+  let clock = realNow();
+  let unavailable = false;
+  Date.now = () => clock;
+  try {
+    await withCatalogFetch(
+      () => unavailable
+        ? new Response("bad gateway", { status: 502 })
+        : categoryPage(["Розетки"], 1, 1, 1),
+      async (listCategories, calls) => {
+        assertEquals(await listCategories(), ["Розетки"]);
+        unavailable = true;
+        clock += 16 * 60 * 1000; // HOT 15 minutes expired
+        assertEquals(await listCategories(), ["Розетки"]);
+        assertEquals(calls, [1, 1, 1]); // exactly one 502 retry
+        clock += 2 * 60 * 60 * 1000; // stale grace expired
+        await assertRejects(listCategories, Error, "/categories HTTP 502");
+        assertEquals(calls, [1, 1, 1, 1, 1]);
+      },
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+Deno.test("V2 visible-only taxonomy permits observed positives but not absence claims", async () => {
+  await withCatalogFetch(
+    () => Response.json({
+      data: {
+        results: [{ id: 1, pagetitle: "Розетки", alias: "rozetki", parent: 0 }],
+        pagination: { page: 1, per_page: 1, pages: 1, total: 1 },
+      },
+    }),
+    async (listCategories, calls) => {
+      const base = {
+        listCategories,
+        getThresholds: async () => ({ category_high: 0.8, category_low: 0.5 }),
+        log: () => {},
+      };
+      const input = { query: "товар", intent: "catalog" as const, traceId: "synthetic" };
+      const positive = await resolveCategory(input, {
+        ...base,
+        callLLM: async () => ({
+          text: '{"candidates":[{"pagetitle":"Розетки","confidence":0.9}]}',
+          model: "mock",
+        }),
+      });
+      assertEquals(positive.status, "resolved");
+      const absent = await resolveCategory(input, {
+        ...base,
+        callLLM: async () => ({ text: '{"candidates":[]}', model: "mock" }),
+      });
+      assertEquals(absent.source, "error");
+      assertEquals(absent.error, "incomplete_categories_list");
+      assertEquals(calls, [1, 1], "partial observations must not be cached");
     },
   );
 });
@@ -291,7 +352,7 @@ Deno.test("V2 category cache: explicit null data envelope cannot use sibling res
       })
       : categoryPage(["Розетки"], 1, 1, 1),
     async (listCategories, calls) => {
-      await assertRejects(listCategories, Error, "/categories incomplete pagination on page 1");
+      await assertRejects(listCategories, Error, "/categories unsuccessful response on page 1");
       malformed = false;
       assertEquals(await listCategories(), ["Розетки"]);
       assertEquals(calls, [1, 1]);
@@ -315,7 +376,7 @@ Deno.test("V2 category cache: over-deep tree is rejected without caching", async
       })
       : categoryPage(["Розетки"], 1, 1, 1),
     async (listCategories, calls) => {
-      await assertRejects(listCategories, Error, "/categories tree exceeds requested depth on page 1");
+      await assertRejects(listCategories, Error, "/categories incomplete node on page 1");
       tooDeep = false;
       assertEquals(await listCategories(), ["Розетки"]);
       assertEquals(calls, [1, 1]);
