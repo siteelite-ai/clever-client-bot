@@ -115,7 +115,16 @@ async function runCase(which: Case): Promise<{
         paths.push(`${request.method} ${url.pathname}${url.search}`);
         if (url.pathname === "/api/categories") {
           if (which === "category_not_found") {
-            return json({ data: { results: [], pagination: { total: 0 } } });
+            return json({
+              data: {
+                results: [{
+                  id: 999,
+                  pagetitle: "Другая категория",
+                  children: [],
+                }],
+                pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+              },
+            });
           }
           if (which === "categories_timeout") {
             throw new DOMException("category fetch timed out", "AbortError");
