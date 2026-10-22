@@ -10476,6 +10476,19 @@ async function runExpertLoop(
   let freshSearch:
     | { tool: string; ids: string[]; total: number; mode?: string }
     | null = null;
+  // A model-owned category-only search can exhaust the remote decision step
+  // before render_products. Preserve only its FIRST source-proven pool, bound
+  // to the exact live discovery and executed category, not a later retry.
+  let modelOwnedFilteredPool: {
+    ids: string[];
+    total: number;
+    discovery: DiscoverCategoryOk;
+    category: string;
+    target: string;
+    criteria: Criterion[];
+    exclusions: Criterion[];
+    budget: number | null;
+  } | null = null;
   // First non-empty semantic search in an ordinary selection turn. Unlike
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
@@ -14791,6 +14804,18 @@ async function runExpertLoop(
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
         let unownedAppearanceBrowseUnavailable = false;
+        // Save the ORIGINAL model scope before category guards may rewrite it.
+        // A corrected request does not prove the model searched that scope.
+        const originalModelCategoryOnlyScope =
+          tc.name === "search_catalog" && !serverCompiledGroundedSearch &&
+            (resp.provider === "openrouter" || resp.provider === "lovable") &&
+            tc.args.mode === "by_filter" &&
+            typeof tc.args.category === "string" &&
+            Object.keys(tc.args).every((key) =>
+              key === "mode" || key === "category" || key === "per_page"
+            )
+            ? tc.args.category
+            : null;
 
         // Category-neutral cardinality contract: preserve the model's chosen
         // IDs, then fill from the same materialized search pool. The expanded
@@ -19879,6 +19904,66 @@ async function runExpertLoop(
             );
           };
           let eligible = eligiblePool(result.results);
+          // Snapshot the initial model result before optional recovery can
+          // pull cards from a broader or unscoped search.
+          if (
+            !modelOwnedFilteredPool && originalModelCategoryOnlyScope &&
+            selectedSearchRecoveryAttempt === null &&
+            runArgs.mode === "by_filter" &&
+            runArgs.category === originalModelCategoryOnlyScope &&
+            Object.keys(runArgs).every((key) =>
+              key === "mode" || key === "category" || key === "per_page" ||
+              key === "max_price"
+            ) &&
+            (runArgs.max_price === undefined ||
+              (sourceProofBudget !== null &&
+                Number(runArgs.max_price) === sourceProofBudget)) &&
+            lastDiscover &&
+            selectionDiscoveries.at(-1) === lastDiscover &&
+            resultCardinality.explicit && resultCardinality.target > 1 &&
+            eligible.length > 0 &&
+            !transientCatalogFailureSeen && !catalogPriceExtreme &&
+            !namedSeriesToken && !requiredCatalogAlias &&
+            !declaredAliasQuery && !explicitCompoundMarking &&
+            !semanticCompoundEvidenceRequired &&
+            directProductLookup.articles.length === 0 &&
+            directProductLookup.modelCodes.length === 0 &&
+            activeCompatibilityRelations.length === 0 &&
+            !hasSelectionMeasurementContext(userMessage) &&
+            !reasoningNeedsCompatibilityRelations(
+              `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+            ) &&
+            (
+              originalModelCategoryOnlyScope ===
+                lastDiscover.category.pagetitle ||
+              lastDiscover.leaf_categories.some(({ pagetitle }) =>
+                pagetitle === originalModelCategoryOnlyScope
+              )
+            )
+          ) {
+            const target = activeSelectionTarget;
+            if (target) {
+              modelOwnedFilteredPool = {
+                ids: [...new Set(eligible.map(({ id }) => String(id)))],
+                total: result.total,
+                discovery: lastDiscover,
+                category: originalModelCategoryOnlyScope,
+                target,
+                criteria: structuredClone(sourceProofCriteria),
+                exclusions: structuredClone(derivedExcludedClassificationCriteria),
+                budget: sourceProofBudget,
+              };
+              steps.push({
+                step: "v3_model_owned_filtered_pool_preserved",
+                ms: now(),
+                meta: {
+                  category: originalModelCategoryOnlyScope,
+                  eligible: eligible.length,
+                  minimum: resultCardinality.minimum,
+                },
+              });
+            }
+          }
           const shortfallPlan = buildSourceProvenCardinalityRecoveryPlan({
             search_args: runArgs,
             customer_message: userMessage,
@@ -24533,6 +24618,159 @@ async function runExpertLoop(
           rejected: gate.rejected,
         },
       });
+    }
+
+    // A proven model-owned category filter can outlive the remote-step budget
+    // even when the terminal lexical ranker cannot repeat a colloquial noun.
+    // Do not widen taxonomy or override stricter terminal routes above.
+    const filteredPool = modelOwnedFilteredPool;
+    if (
+      productsRendered === 0 && deadlineFinalizeBreak &&
+      agentPhase === "terminal_after_search" &&
+      filteredPool && !terminalDiscover &&
+      lastDiscover === filteredPool.discovery &&
+      selectionDiscoveries.at(-1) === filteredPool.discovery &&
+      terminalSelectionTarget === filteredPool.target &&
+      terminalPairDecision.state === "not_applicable" &&
+      !transientCatalogFailureSeen && !catalogPriceExtreme &&
+      !replacementIntent && !seriesTurnRequiresGrounding &&
+      !namedSeriesToken && !terminalAliasRequirement &&
+      !semanticCompoundEvidenceRequired && !explicitCompoundMarking &&
+      !broadAssortmentRequest && intentMode === "select" &&
+      resultCardinality.explicit && resultCardinality.target > 1 &&
+      activeCompatibilityRelations.length === 0 &&
+      !hasSelectionMeasurementContext(userMessage) &&
+      !reasoningNeedsCompatibilityRelations(terminalReasoningEvidence)
+    ) {
+      const permittedLeaves = new Set(
+        filteredPool.category === filteredPool.discovery.category.pagetitle
+          ? filteredPool.discovery.leaf_categories.map(({ pagetitle }) =>
+            pagetitle
+          )
+          : [filteredPool.category],
+      );
+      if (permittedLeaves.size === 0) {
+        permittedLeaves.add(filteredPool.discovery.category.pagetitle);
+      }
+      const scopedProducts = filteredPool.ids
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull =>
+          Boolean(
+            product && product.price > 0 &&
+              typeof product.leaf_category === "string" &&
+              permittedLeaves.has(product.leaf_category),
+          )
+        );
+      const provenProducts = preferCustomerClassPool(
+        sourceProvenSelectionPool(
+          scopedProducts,
+          filteredPool.criteria,
+          filteredPool.budget,
+          filteredPool.exclusions,
+        ),
+      );
+      const targetReport = verifiedApplicationSelectionContract
+        ? verifySelectionTargetWithExactLiveCategoryContract({
+          target: filteredPool.target,
+          products: provenProducts,
+          live_category: filteredPool.discovery.category.pagetitle,
+          mandatory_criteria: verifiedApplicationSelectionContract.criteria,
+          criteria_passed_ids: applyCriteriaGate(
+            provenProducts,
+            verifiedApplicationSelectionContract.criteria,
+          ).passed_ids,
+          contract_complete: true,
+        })
+        : verifySelectionTargetWithVisibleTitle(
+          filteredPool.target,
+          provenProducts,
+        );
+      const targetPassed = new Set(targetReport.passed_ids);
+      const provenIds = provenProducts.map(({ id }) => id)
+        .filter((id) => targetPassed.has(id));
+      const previousAppearanceDiscovery = appearanceCatalogDiscoveryOverride;
+      appearanceCatalogDiscoveryOverride = filteredPool.discovery;
+      try {
+        const visibleIds = guardVisibleCardinality(provenIds, {
+          productClass: filteredPool.target,
+          taxonomyClass: filteredPool.discovery.category.pagetitle,
+        }).ids;
+        const safeIds = finalizeTerminalRenderIds(
+          terminalPairedSafeIds(
+            visibleIds,
+            "model_owned_filtered_terminal",
+          ),
+        );
+        if (safeIds.length > 0) {
+          const frozenRenderCriteria: Criterion[] = [
+            ...filteredPool.criteria,
+            ...(filteredPool.budget !== null
+              ? [{
+                key: "Цена",
+                op: "max" as const,
+                value: filteredPool.budget,
+                level: "A" as const,
+                evidence: "user_explicit" as const,
+              }]
+              : []),
+          ];
+          const rendered = await runTool("render_products", {
+            product_ids: safeIds,
+            criteria: frozenRenderCriteria,
+            total_available: filteredPool.total,
+          }, ctx);
+          if (rendered.ok && rendered.tool === "render_products") {
+            // executeRenderProducts formats cards but does not evaluate its
+            // criteria argument. Only a successful render may attach the
+            // already-enforced contract to the products_block SSE wrapper.
+            freezeSelectionCriteria(frozenRenderCriteria, "render_alignment");
+            announceResultCardinalityShortfall(
+              rendered.rendered_count,
+              "model_owned_filtered_terminal",
+            );
+            for (const id of safeIds) shownIds.add(id);
+            send({
+              type: "products_block",
+              markdown: rendered.markdown,
+              count: rendered.rendered_count,
+              total_available: filteredPool.total,
+            });
+            productsRendered += rendered.rendered_count;
+            steps.push({
+              step: "v3_model_owned_filtered_terminal_render",
+              ms: now(),
+              meta: {
+                category: filteredPool.category,
+                preserved: filteredPool.ids.length,
+                proven: provenProducts.length,
+                rendered: rendered.rendered_count,
+              },
+            });
+            steps.push({
+              step: "v3_turn_end",
+              ms: now(),
+              meta: {
+                reason: "model_owned_filtered_terminal_render",
+                step_count: MAX_STEPS,
+              },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+        }
+        steps.push({
+          step: "v3_model_owned_filtered_terminal_skipped",
+          ms: now(),
+          meta: {
+            preserved: filteredPool.ids.length,
+            scoped: scopedProducts.length,
+            proven: provenProducts.length,
+            visible: visibleIds.length,
+            safe: safeIds.length,
+          },
+        });
+      } finally {
+        appearanceCatalogDiscoveryOverride = previousAppearanceDiscovery;
+      }
     }
 
     // A compact model search can contain candidates that satisfy different
