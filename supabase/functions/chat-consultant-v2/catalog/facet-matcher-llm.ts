@@ -87,6 +87,8 @@ export interface FacetMatcherLLMResult {
   /** facet → alias-keys (для optionAliases в searchProducts; совместимость с §3.1). */
   optionAliases: Record<string, string[]>;
   source: 'cache' | 'live' | 'bootstrap' | 'unavailable';
+  /** Исходный статус /categories/options, до возможного bootstrap. */
+  facetSchemaStatus?: CategoryOptionsResult['status'];
   ms: number;
   /** Краткий слепок схемы, переданной LLM (для логов/отладки). */
   schemaDigest: { facets_count: number; total_values: number };
@@ -409,6 +411,7 @@ export async function matchFacetsWithLLM(
     input.pagetitle, ttl, deps.apiClient, deps.cacheGetOrCompute,
   );
   let facetsResult: CategoryOptionsResult = loaded.value;
+  const facetSchemaStatus = facetsResult.status;
   let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = loaded.source;
 
   if (
@@ -431,6 +434,7 @@ export async function matchFacetsWithLLM(
       mode: 'category_unavailable',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source: 'unavailable',
+      facetSchemaStatus,
       ms: Date.now() - t0,
     };
     }
@@ -442,6 +446,7 @@ export async function matchFacetsWithLLM(
       mode: 'no_facets',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source,
+      facetSchemaStatus,
       ms: Date.now() - t0,
     };
   }
@@ -568,6 +573,7 @@ export async function matchFacetsWithLLM(
       mode: 'llm_failed',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source,
+      facetSchemaStatus,
       ms: Date.now() - t0,
       schemaDigest: { facets_count: facets.length, total_values: totalValues },
       llmModel,
@@ -666,6 +672,7 @@ export async function matchFacetsWithLLM(
     facetCaptions,
     optionAliases,
     source,
+    facetSchemaStatus,
     ms: Date.now() - t0,
     schemaDigest: { facets_count: facets.length, total_values: totalValues },
     llmModel,

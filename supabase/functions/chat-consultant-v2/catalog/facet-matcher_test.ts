@@ -189,6 +189,42 @@ Deno.test('Test 7: API status=empty → no_facets', async () => {
   assertEquals(r.unmatchedModifiers, ['что-то']);
 });
 
+Deno.test('Facet evidence: positive category with no facet values is searchable and never cached as empty', async () => {
+  __resetCatalogBreakerForTests();
+  let calls = 0;
+  const apiClient: ApiClientDeps = {
+    baseUrl: 'https://test.local/api',
+    apiToken: 'test-token',
+    fetch: async () => {
+      calls++;
+      return Response.json({ data: {
+        category: { pagetitle: 'synthetic-category', total_products: 7 },
+        options: calls === 1 ? [] : [
+          { key: 'finish', values: [{ value_ru: 'Матовая' }] },
+        ],
+      } });
+    },
+  };
+  const cache = makeCacheStub();
+  const deps: FacetMatcherDeps = { apiClient, cacheGetOrCompute: cache.cacheGetOrCompute };
+
+  const degraded = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(degraded.status, 'no_facets');
+  assertEquals(degraded.source, 'unavailable');
+  assertEquals(degraded.optionFilters, {});
+  assertEquals(degraded.unmatchedModifiers, ['матовая']);
+
+  const recovered = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(recovered.status, 'ok');
+  assertEquals(recovered.optionFilters, { finish: ['Матовая'] });
+  assertEquals(recovered.source, 'live');
+  assertEquals(calls, 2, 'degraded facets must not poison the next request');
+
+  const cached = await matchFacets('synthetic-category', ['матовая'], deps);
+  assertEquals(cached.source, 'cache');
+  assertEquals(calls, 2);
+});
+
 Deno.test('Test 8: API status=timeout → category_unavailable', async () => {
   // fakeFetch, который реально аборится → api-client вернёт status='timeout'.
   const abortingFetch: typeof fetch = (_url, init) => {
@@ -408,6 +444,25 @@ Deno.test('Bootstrap: empty live + bootstrapOptions → bootstrap путь ра�
   );
   assertEquals(r.status, 'ok');
   assertEquals(r.source, 'bootstrap');
+  assertEquals(r.optionFilters, { vendor: ['Acme'] });
+});
+
+Deno.test('Bootstrap: positive category without facet values uses probe evidence', async () => {
+  __resetCatalogBreakerForTests();
+  const degraded: CategoryOptionsResult = {
+    status: 'facets_unavailable', options: [], totalProducts: 5, ms: 1,
+  };
+  const bootstrap: RawOption[] = [
+    { key: 'vendor', caption_ru: 'Бренд', values: [{ value_ru: 'Acme', count: 2 }] },
+  ];
+  const r = await matchFacets(
+    'cat', ['acme'],
+    { apiClient: stubApiClient(degraded, { n: 0 }), cacheGetOrCompute: makeCacheStub().cacheGetOrCompute },
+    bootstrap,
+  );
+  assertEquals(r.status, 'ok');
+  assertEquals(r.source, 'bootstrap');
+  assertEquals(r.facetSchemaStatus, 'facets_unavailable');
   assertEquals(r.optionFilters, { vendor: ['Acme'] });
 });
 

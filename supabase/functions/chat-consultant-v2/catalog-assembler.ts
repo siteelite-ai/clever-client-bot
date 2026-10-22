@@ -174,6 +174,7 @@ export type AssemblerStage =
   | "parallel_probe"
   | "query_expansion"
   | "facet_matcher"
+  | "constraint_evidence_gate"
   | "category_noun_extractor"
   | "soft_suggest"
   | "s_search"
@@ -346,6 +347,31 @@ function collectModifiers(intent: Intent): string[] {
     out.push(t);
   }
   return out;
+}
+
+/**
+ * A product card is not evidence for a required trait merely because the
+ * category matches or one word appears in its title. The new positive-total
+ * but value-empty facet response is explicitly degraded, so it cannot prove
+ * modifiers. Existing transport/bootstrap recovery is preserved: its matched
+ * critical modifiers remain usable, while unmatched critical traits are held.
+ */
+function unverifiedConstraintReason(
+  intent: Intent,
+  facetMatch: FacetMatchResult,
+): "facet_values_unavailable" | "critical_modifier_unmatched" | null {
+  const modifiers = collectModifiers(intent);
+  if (modifiers.length === 0) return null;
+  if (facetMatch.facetSchemaStatus === "facets_unavailable") {
+    return "facet_values_unavailable";
+  }
+  const norm = (value: string) => value.trim().toLocaleLowerCase();
+  const matched = new Set(facetMatch.matchedModifiers.map(norm));
+  const critical = intent.critical_modifiers ?? [];
+  return critical.some((modifier) =>
+    typeof modifier === "string" && !!modifier.trim() &&
+    !matched.has(norm(modifier))
+  ) ? "critical_modifier_unmatched" : null;
 }
 
 // ─── Main entry ─────────────────────────────────────────────────────────────
@@ -725,6 +751,7 @@ export async function assembleCatalog(
         matchedModifiers: matchedTraits,
         unmatchedModifiers: unmatchedTraits,
         source: llmResult.source,
+        facetSchemaStatus: llmResult.facetSchemaStatus,
         ms: llmResult.ms,
       };
     } else {
@@ -802,6 +829,63 @@ export async function assembleCatalog(
       llm_unresolved: llmFacetUnresolvedCount,
     },
   });
+
+  // A degraded facet schema can still support an unconstrained category
+  // browse, but not a promise that cards satisfy explicit characteristics.
+  // Stop both catalog and price paths before broad query/soft fallback can
+  // silently turn unverified modifiers into seemingly matching products.
+  const constraintReason = unverifiedConstraintReason(input.intent, facetMatch);
+  if (constraintReason) {
+    trace.stages.push({
+      stage: "constraint_evidence_gate",
+      ms: 0,
+      meta: {
+        status: "held",
+        reason: constraintReason,
+        modifiers_count: collectModifiers(input.intent).length,
+        facet_source: facetMatch.source,
+        facet_schema_status: facetMatch.facetSchemaStatus ?? null,
+      },
+    });
+    if (input.route === "S_PRICE") {
+      const outcome: SPriceOutcome = {
+        status: "constraints_unverified",
+        products: [],
+        totalCount: 0, // selection was intentionally not attempted
+        clarifySlot: null,
+        zeroPriceLeak: 0,
+        autoNarrowingAttempts: 0,
+        branch: null,
+        errorMessage: "facet_constraints_unverified",
+        ms: 0,
+      };
+      return {
+        composerOutcome: { kind: "price", outcome },
+        ood: false,
+        trace,
+        resolvedPagetitle: resolver.pagetitle,
+        disallowCrosssell: true,
+      };
+    }
+    const outcome: SearchOutcome = {
+      status: "constraints_unverified",
+      products: [],
+      totalFromApi: 0, // selection was intentionally not attempted
+      zeroPriceFiltered: 0,
+      postFilterDropped: 0,
+      attempts: [],
+      softFallbackContext: null,
+      errorMessage: "facet_constraints_unverified",
+      ms: 0,
+    };
+    return {
+      composerOutcome: { kind: "search", outcome },
+      ood: false,
+      trace,
+      resolvedPagetitle: resolver.pagetitle,
+      disallowCrosssell: true,
+    };
+  }
 
   // ── §4.10.2 Sanitization ─────────────────────────────────────────────────
   // Если фасет-схема недоступна (category_unavailable) И bootstrap не спас —

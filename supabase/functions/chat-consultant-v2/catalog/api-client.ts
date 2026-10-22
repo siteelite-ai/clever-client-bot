@@ -150,9 +150,9 @@ export interface RawOption {
 }
 
 export interface CategoryOptionsResult {
-  status: 'ok' | 'empty' | 'http_error' | 'timeout' | 'network_error' | 'upstream_unavailable';
+  status: 'ok' | 'empty' | 'facets_unavailable' | 'http_error' | 'timeout' | 'network_error' | 'upstream_unavailable';
   options: RawOption[];
-  totalProducts: number;     // category.total_products из API (может быть 0 при degraded)
+  totalProducts: number;     // category.total_products из API; у facets_unavailable положительное подтверждённое значение
   /** Verified identity from the upstream category, required for cache hits. */
   categoryPagetitle?: string;
   ms: number;
@@ -538,6 +538,20 @@ export async function getCategoryOptions(
   // envelope, category identity and facet values before any caller can cache
   // this result or infer that the category has no facets.
   const evidence = assessCategoryFacets(raw, { pagetitle }, res.status);
+  if (evidence.state === 'category_only') {
+    // A value-empty facet response still proves that this exact category has
+    // products. Do not turn it into a catalog outage or an empty category;
+    // the matchers may use a probe-derived schema, or search without facets.
+    // facet-cache intentionally does not cache this degraded schema.
+    return {
+      status: 'facets_unavailable',
+      options: [],
+      totalProducts: evidence.totalProducts,
+      categoryPagetitle: pagetitle,
+      ms: Date.now() - t0,
+      httpStatus: res.status,
+    };
+  }
   if (evidence.state !== 'verified') {
     return {
       status: 'http_error',
@@ -555,11 +569,10 @@ export async function getCategoryOptions(
   const totalProducts = evidence.totalProducts;
 
   if (optionsArr.length === 0) {
-    // A verified empty category is a real zero. If the response had facets but
-    // policy filtering removed them, this is still only "no usable facets",
-    // never a claim that the category itself is empty.
+    // A positive total with all facets removed by policy is not an empty
+    // category. It also must not be cached as a reusable empty facet schema.
     return {
-      status: 'empty',
+      status: totalProducts > 0 ? 'facets_unavailable' : 'empty',
       options: [],
       totalProducts,
       categoryPagetitle: pagetitle,

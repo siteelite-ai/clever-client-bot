@@ -264,25 +264,17 @@ Deno.test("catalog evidence: facet errors, malformed wrappers and fake emptiness
       reason: "invalid_envelope",
     },
   );
-  assertEquals(
-    assessCategoryFacets(facet({ id: 7, total_products: 5 }, []), {
-      categoryId: 7,
-    }),
-    {
-      state: "unavailable",
-      reason: "invalid_facets",
-    },
-  );
-  assertEquals(
-    assessCategoryFacets(
-      facet({ id: 7, total_products: 5 }, [{ key: "brand", values: [] }]),
+  for (const options of [[], [{ key: "brand", values: [] }]]) {
+    const evidence = assessCategoryFacets(
+      facet({ id: 7, total_products: 5 }, options),
       { categoryId: 7 },
-    ),
-    {
-      state: "unavailable",
-      reason: "invalid_facets",
-    },
-  );
+    );
+    assertEquals(evidence.state, "category_only");
+    if (evidence.state === "category_only") {
+      assertEquals(evidence.totalProducts, 5);
+      assertEquals(evidence.reason, "invalid_facets");
+    }
+  }
   assertEquals(
     assessCategoryFacets(facet({ id: 7, total_products: null }, []), {
       categoryId: 7,

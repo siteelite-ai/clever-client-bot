@@ -166,6 +166,52 @@ Deno.test("Swagger-valid category without children is unavailable until child co
   }
 });
 
+Deno.test("depth-10 taxonomy boundary cannot be cached as a complete leaf", async () => {
+  resetDiscoverCategoryCacheForTest();
+  try {
+    const nodeAtDepth = (depth: number): Record<string, unknown> => ({
+      id: 94_000 + depth,
+      pagetitle: `Уровень ${depth}`,
+      children: depth === 10 ? [] : [nodeAtDepth(depth + 1)],
+    });
+    let taxonomyLoads = 0;
+    const fetchImpl = ((input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/categories")) {
+        throw new Error(
+          `truncated taxonomy must not reach another route: ${url}`,
+        );
+      }
+      taxonomyLoads++;
+      return Promise.resolve(Response.json({
+        data: {
+          results: [nodeAtDepth(0)],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        },
+      }));
+    }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await executeDiscoverCategory(
+        { noun: "Уровень 10" },
+        {
+          baseUrl: "https://catalog.example.test",
+          apiToken: "test-token",
+          fetchImpl,
+        },
+      );
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+    }
+    assertEquals(
+      taxonomyLoads,
+      2,
+      "depth-limit responses must never enter the one-hour cache",
+    );
+  } finally {
+    resetDiscoverCategoryCacheForTest();
+  }
+});
+
 Deno.test("ordinary discovery rejects an incomplete later taxonomy page without caching it", async () => {
   const firstRows = Array.from({ length: 200 }, (_, index) => ({
     id: 92_000 + index,

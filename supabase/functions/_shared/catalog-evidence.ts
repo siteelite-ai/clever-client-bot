@@ -255,6 +255,15 @@ export type CatalogFacetOption = Record<string, unknown> & {
 export type FacetEvidence =
   | Unavailable
   | {
+    /** The exact category and its positive product count are verified, but
+     * the response provides no facet values. This cannot prove that products
+     * or requested product attributes are absent. */
+    state: "category_only";
+    reason: "invalid_facets";
+    category: CatalogFacetCategory;
+    totalProducts: number;
+  }
+  | {
     state: "verified";
     category: CatalogFacetCategory;
     options: CatalogFacetOption[];
@@ -320,14 +329,19 @@ export function assessCategoryFacets(
   ) {
     return { state: "unavailable", reason: "category_mismatch" };
   }
-  if (
-    data.options.some((option: unknown) => !validFacetOption(option)) ||
-    (data.category.total_products > 0 &&
-      !data.options.some((option: CatalogFacetOption) =>
-        option.values.length > 0
-      ))
-  ) {
+  if (data.options.some((option: unknown) => !validFacetOption(option))) {
     return { state: "unavailable", reason: "invalid_facets" };
+  }
+  if (
+    data.category.total_products > 0 &&
+    !data.options.some((option: CatalogFacetOption) => option.values.length > 0)
+  ) {
+    return {
+      state: "category_only",
+      reason: "invalid_facets",
+      category: data.category as CatalogFacetCategory,
+      totalProducts: data.category.total_products,
+    };
   }
   return {
     state: "verified",

@@ -319,6 +319,32 @@ Deno.test("getCategoryOptions: empty — options=[]", async () => {
   assertEquals(r.options.length, 0);
 });
 
+Deno.test("getCategoryOptions: products exist but facet values are absent", async () => {
+  for (const options of [[], [{ key: "brand", values: [] }]]) {
+    __resetCatalogBreakerForTests();
+    const f = makeFetch(() => jsonResponse({
+      data: { options, category: { pagetitle: "cat", total_products: 7 } },
+    }));
+    const r = await getCategoryOptions("cat", deps(f));
+    assertEquals(r.status, "facets_unavailable");
+    assertEquals(r.options, []);
+    assertEquals(r.totalProducts, 7);
+    assertEquals(r.categoryPagetitle, "cat");
+  }
+});
+
+Deno.test("getCategoryOptions: only blacklisted facet keys are non-cacheable, not zero products", async () => {
+  __resetCatalogBreakerForTests();
+  const f = makeFetch(() => jsonResponse({ data: {
+    options: [{ key: "fayl", values: [{ value_ru: "image.png" }] }],
+    category: { pagetitle: "cat", total_products: 7 },
+  } }));
+  const r = await getCategoryOptions("cat", deps(f));
+  assertEquals(r.status, "facets_unavailable");
+  assertEquals(r.options, []);
+  assertEquals(r.totalProducts, 7);
+});
+
 Deno.test("getCategoryOptions: retry on timeout, второй ответ ok", async () => {
   __resetCatalogBreakerForTests();
   let callIndex = 0;

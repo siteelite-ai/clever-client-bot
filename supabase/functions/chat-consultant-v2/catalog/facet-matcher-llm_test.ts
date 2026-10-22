@@ -213,6 +213,21 @@ Deno.test('LLM-9: schema empty → mode=no_facets, все трейты unresolve
   assertEquals(r.unresolved.length, 1);
 });
 
+Deno.test('LLM-9b: positive category with no values cannot authorize a facet match', async () => {
+  const facets: CategoryOptionsResult = {
+    status: 'facets_unavailable', options: [], totalProducts: 7, ms: 1,
+  };
+  const r = await matchFacetsWithLLM(
+    { pagetitle: 'cat', traits: ['черный'], user_query_raw: 'черный' },
+    deps({ api: facets, llmReply: 'not-json' }),
+  );
+  assertEquals(r.mode, 'no_facets');
+  assertEquals(r.source, 'unavailable');
+  assertEquals(r.facetSchemaStatus, 'facets_unavailable');
+  assertEquals(r.optionFilters, {});
+  assertEquals(r.unresolved.map((item) => item.trait), ['черный']);
+});
+
 Deno.test('LLM-10: alias collapse — ASCII canonical key выигрывает', async () => {
   const facets = makeOptions([
     { key: 'color', caption_ru: 'Цвет', values: [{ value_ru: 'Синий' }] },
@@ -282,6 +297,7 @@ Deno.test('LLM-13: transport-failure /categories/options → используе�
   );
   assertEquals(r.mode, 'ok');
   assertEquals(r.source, 'bootstrap');
+  assertEquals(r.facetSchemaStatus, 'timeout');
   assertEquals(r.optionFilters, { color: ['Белый'], count: ['2'] });
   assertEquals(r.unresolved, []);
 });

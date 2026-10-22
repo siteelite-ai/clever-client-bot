@@ -142,6 +142,7 @@ Deno.test("Test 1: первая форма даёт ≥1 → ok, остальн�
         { text: "тест", form: "as_is_ru" },
         { text: "test", form: "en_translation" },
       ]),
+      intent: intent({ search_modifiers: ["тест"] }),
     }),
     { apiClient: m.deps },
   );
@@ -150,6 +151,7 @@ Deno.test("Test 1: первая форма даёт ≥1 → ok, остальн�
   assertEquals(r.attempts.length, 1);
   assertEquals(r.winningForm, "as_is_ru");
   assertEquals(m.calls.length, 1);
+  assertEquals(m.calls[0].params.get("query"), "тест");
 });
 
 Deno.test("Test 2: as_is_ru=0, lexicon_canonical=≥1 → ok, attempts=2", async () => {
@@ -165,12 +167,14 @@ Deno.test("Test 2: as_is_ru=0, lexicon_canonical=≥1 → ok, attempts=2", async
         { text: "тест", form: "as_is_ru" },
         { text: "канонический", form: "lexicon_canonical" },
       ]),
+      intent: intent({ search_modifiers: ["тест"] }),
     }),
     { apiClient: m.deps },
   );
   assertEquals(r.status, "ok");
   assertEquals(r.attempts.length, 2);
   assertEquals(r.winningForm, "lexicon_canonical");
+  assertEquals(m.calls.map((call) => call.params.get("query")), ["тест", "канонический"]);
 });
 
 Deno.test("Test 3: en_translation выручает после двух 0", async () => {
@@ -186,12 +190,14 @@ Deno.test("Test 3: en_translation выручает после двух 0", async
         { text: "канон", form: "lexicon_canonical" },
         { text: "english query", form: "en_translation" },
       ]),
+      intent: intent({ search_modifiers: ["тест"] }),
     }),
     { apiClient: m.deps },
   );
   assertEquals(r.status, "ok");
   assertEquals(r.winningForm, "en_translation");
   assertEquals(r.attempts.length, 3);
+  assertEquals(m.calls.map((call) => call.params.get("query")), ["тест", "канон", "english query"]);
 });
 
 Deno.test("Test 4: word-boundary отбрасывает substring (лак ≠ лакокрасочный)", async () => {
@@ -203,6 +209,7 @@ Deno.test("Test 4: word-boundary отбрасывает substring (лак ≠ л
   const r = await runSearch(
     input({
       expansion: expansion([{ text: "лак", form: "as_is_ru" }]),
+      intent: intent({ search_modifiers: ["лак"] }),
     }),
     { apiClient: m.deps },
   );
@@ -216,7 +223,10 @@ Deno.test("Test 5: точный word-match проходит", async () => {
     results: [makeProduct(5, "лак для пола")],
   }));
   const r = await runSearch(
-    input({ expansion: expansion([{ text: "лак", form: "as_is_ru" }]) }),
+    input({
+      expansion: expansion([{ text: "лак", form: "as_is_ru" }]),
+      intent: intent({ search_modifiers: ["лак"] }),
+    }),
     { apiClient: m.deps },
   );
   assertEquals(r.status, "ok");
@@ -231,7 +241,10 @@ Deno.test("Test 6: word-boundary с не-ASCII (русское слово)", asy
     ],
   }));
   const r = await runSearch(
-    input({ expansion: expansion([{ text: "выключатель", form: "as_is_ru" }]) }),
+    input({
+      expansion: expansion([{ text: "выключатель", form: "as_is_ru" }]),
+      intent: intent({ search_modifiers: ["выключатель"] }),
+    }),
     { apiClient: m.deps },
   );
   assertEquals(r.status, "ok");
@@ -270,6 +283,7 @@ Deno.test("Test 8: все формы=0 + нет фасетов → empty, softFa
         { text: "несуществующее", form: "as_is_ru" },
         { text: "nonexistent", form: "en_translation" },
       ]),
+      intent: intent({ search_modifiers: ["несуществующее"] }),
     }),
     { apiClient: m.deps },
   );
