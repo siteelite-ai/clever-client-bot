@@ -1,15 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
   AttestationError,
   MANAGEMENT_URL,
   PREVIEW_SLUGS,
   PUBLIC_SLUGS,
   PROJECT_REF,
+  localRuntimeUnchanged,
   parseManifest,
   readManifest,
   verifyPreviewBundles,
 } from './verify-preview-bundles.mjs';
+
+const execFileAsync = promisify(execFile);
+const TEST_PATH = 'supabase/functions/chat-consultant-v3/appearance-provenance-real-handler_test.ts';
+const RUNTIME_PATH = 'supabase/functions/chat-consultant-v3/index.ts';
+
+async function git(root, ...args) {
+  const { stdout } = await execFileAsync('git', args, { cwd: root });
+  return stdout.trim();
+}
+
+async function withRepo(run) {
+  const root = await mkdtemp(join(tmpdir(), 'volt-attestation-'));
+  try {
+    await git(root, 'init', '-q');
+    await mkdir(join(root, 'public'), { recursive: true });
+    await mkdir(join(root, 'supabase/functions/chat-consultant-v3'), { recursive: true });
+    await writeFile(join(root, 'public/widget.js'), 'var WIDGET_VERSION = \'widget-0123456789abcdef\';\n');
+    await writeFile(join(root, RUNTIME_PATH), 'export const handler = true;\n');
+    await writeFile(join(root, TEST_PATH), 'Deno.test("baseline", () => {});\n');
+    await git(root, 'add', '.');
+    await git(root, '-c', 'user.name=QA Test', '-c', 'user.email=qa@example.invalid',
+      'commit', '-qm', 'baseline');
+    const source = await git(root, 'rev-parse', 'HEAD');
+    await run({ root, source });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 const SOURCE_SHA = 'a'.repeat(40);
 const HEAD_SHA = 'b'.repeat(40);
@@ -192,4 +226,86 @@ test('oversized, malformed, duplicate and missing metadata fail closed', async (
   })), { code: 'MANAGEMENT_DUPLICATE_FUNCTION' });
   const absent = await verifyPreviewBundles(manifest, options(remote.slice(1)));
   assert.deepEqual(absent.failures, [{ code: 'PREVIEW_NOT_ACTIVE', slug: PREVIEW_SLUGS[0] }]);
+});
+
+test('committed ordinary Deno test changes are QA-only, even after the runtime pin', async () => {
+  await withRepo(async ({ root, source }) => {
+    await writeFile(join(root, TEST_PATH), 'Deno.test("regression", () => {});\n');
+    await writeFile(join(root, 'supabase/functions/chat-consultant-v3/new-regression_test.ts'),
+      'Deno.test("new", () => {});\n');
+    await git(root, 'add', '.');
+    await git(root, '-c', 'user.name=QA Test', '-c', 'user.email=qa@example.invalid',
+      'commit', '-qm', 'test-only change');
+    const head = await git(root, 'rev-parse', 'HEAD');
+    assert.equal(await localRuntimeUnchanged(source, head, { root }), true);
+  });
+});
+
+test('only ordinary test-file edits may be staged or untracked locally', async () => {
+  await withRepo(async ({ root, source }) => {
+    await writeFile(join(root, TEST_PATH), 'Deno.test("working tree", () => {});\n');
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), true);
+    await git(root, 'add', TEST_PATH);
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), true);
+    await writeFile(join(root, 'supabase/functions/chat-consultant-v3/new-local_test.ts'),
+      'Deno.test("untracked", () => {});\n');
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), true);
+  });
+});
+
+test('committed runtime or config drift is rejected despite adjacent test changes', async () => {
+  for (const changedPath of [RUNTIME_PATH, 'public/widget.js', 'public/embed.js', 'public/new-loader.js',
+    'public/widget-version.json', 'supabase/config.toml',
+    'supabase/functions/chat-consultant-v3/config.toml']) {
+    await withRepo(async ({ root, source }) => {
+      await writeFile(join(root, TEST_PATH), 'Deno.test("new", () => {});\n');
+      await writeFile(join(root, changedPath), 'runtime change\n');
+      await git(root, 'add', '.');
+      await git(root, '-c', 'user.name=QA Test', '-c', 'user.email=qa@example.invalid',
+        'commit', '-qm', 'mixed runtime change');
+      const head = await git(root, 'rev-parse', 'HEAD');
+      assert.equal(await localRuntimeUnchanged(source, head, { root }), false, changedPath);
+    });
+  }
+});
+
+test('working-tree and staged runtime or unknown files cannot bypass the gate', async () => {
+  for (const changedPath of [RUNTIME_PATH, 'public/widget.js', 'public/embed.js', 'public/new-loader.js',
+    'supabase/config.toml',
+    'supabase/functions/chat-consultant-v3/config.toml',
+    'supabase/functions/chat-consultant-v3/unknown.ts']) {
+    for (const stage of [false, true]) {
+      await withRepo(async ({ root, source }) => {
+        await writeFile(join(root, changedPath), 'local runtime change\n');
+        if (stage) await git(root, 'add', changedPath);
+        assert.equal(await localRuntimeUnchanged(source, source, { root }), false,
+          `${stage ? 'staged' : 'working tree'} ${changedPath}`);
+      });
+    }
+  }
+});
+
+test('test-looking renames, symlinks and malformed filenames fail closed', async () => {
+  await withRepo(async ({ root, source }) => {
+    await rename(join(root, RUNTIME_PATH),
+      join(root, 'supabase/functions/chat-consultant-v3/renamed-runtime_test.ts'));
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), false);
+    await git(root, 'add', '.');
+    await git(root, '-c', 'user.name=QA Test', '-c', 'user.email=qa@example.invalid',
+      'commit', '-qm', 'rename runtime to test-looking file');
+    const head = await git(root, 'rev-parse', 'HEAD');
+    assert.equal(await localRuntimeUnchanged(source, head, { root }), false);
+  });
+  await withRepo(async ({ root, source }) => {
+    const path = 'supabase/functions/chat-consultant-v3/link_test.ts';
+    await symlink('index.ts', join(root, path));
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), false);
+    await git(root, 'add', path);
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), false);
+  });
+  await withRepo(async ({ root, source }) => {
+    await writeFile(join(root, 'supabase/functions/chat-consultant-v3/odd\nname_test.ts'),
+      'Deno.test("odd", () => {});\n');
+    assert.equal(await localRuntimeUnchanged(source, source, { root }), false);
+  });
 });

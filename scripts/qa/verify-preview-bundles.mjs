@@ -18,7 +18,7 @@ import { execFile } from 'node:child_process';
 import { readFile, lstat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import process from 'node:process';
-import { promisify } from 'node:util';
+import { promisify, TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
@@ -44,6 +44,15 @@ const MANIFEST_ARG = /^docs\/qa\/[A-Za-z0-9][A-Za-z0-9._-]*\.json$/;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+// Adding a new function/root requires a deliberate attestation policy review.
+const QA_TEST_ROOTS = new Set([
+  ...PREVIEW_SLUGS, ...PUBLIC_SLUGS,
+  'chat-consultant-beta-search', 'chat-consultant-v3-preview',
+  'knowledge-process', 'admin-integration-secrets', 'admin-users',
+  'widget-config', '_shared',
+]);
+const RUNTIME_PATHS = ['--', 'public', 'supabase/functions', 'supabase/config.toml'];
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export class AttestationError extends Error {
   constructor(code) {
@@ -140,10 +149,10 @@ export async function localGitHead() {
   fail('LOCAL_GIT_HEAD_UNAVAILABLE');
 }
 
-async function gitExitCode(args) {
+async function gitExitCode(args, root = REPO_ROOT) {
   try {
     await execFileAsync('git', args, {
-      cwd: REPO_ROOT, timeout: 5_000, maxBuffer: 16 * 1024,
+      cwd: root, timeout: 5_000, maxBuffer: 16 * 1024,
     });
     return 0;
   } catch (error) {
@@ -152,24 +161,104 @@ async function gitExitCode(args) {
   }
 }
 
-/** The pinned commit must be an ancestor and runtime files must be unchanged. */
-export async function localRuntimeUnchanged(sourceCommit, head) {
-  if (!GIT_SHA.test(sourceCommit) || !GIT_SHA.test(head)) {
+async function gitBytes(args, root) {
+  try {
+    const { stdout } = await execFileAsync('git', args, {
+      cwd: root, timeout: 5_000, maxBuffer: 128 * 1024, encoding: 'buffer',
+    });
+    if (!Buffer.isBuffer(stdout)) fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
+    return stdout;
+  } catch (error) {
+    if (error instanceof AttestationError) throw error;
     fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
   }
-  const paths = ['--', 'public/widget.js', 'supabase/functions'];
-  if (await gitExitCode(['merge-base', '--is-ancestor', sourceCommit, head]) !== 0 ||
-    await gitExitCode(['diff', '--quiet', sourceCommit, head, ...paths]) !== 0) {
-    return false;
-  }
+}
+
+/** Git's -z format is unquoted: never split paths on whitespace/newlines. */
+function nulFields(bytes) {
+  if (bytes.length === 0) return [];
+  if (bytes[bytes.length - 1] !== 0) fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
   try {
-    const { stdout } = await execFileAsync('git', [
-      'status', '--porcelain=v1', '--untracked-files=all', ...paths,
-    ], { cwd: REPO_ROOT, timeout: 5_000, maxBuffer: 16 * 1024 });
-    return stdout.trim() === '';
+    return UTF8.decode(bytes.subarray(0, -1)).split('\0');
   } catch {
     fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
   }
+}
+
+function qaTestPath(path) {
+  const parts = path.split('/');
+  return parts.length >= 4 && parts[0] === 'supabase' && parts[1] === 'functions' &&
+    QA_TEST_ROOTS.has(parts[2]) &&
+    parts.slice(3, -1).every((part) => /^[A-Za-z0-9_-]+$/.test(part)) &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*_test\.ts$/.test(parts.at(-1));
+}
+
+async function regularWorkingFile(path, root) {
+  try {
+    let current = root;
+    const parts = path.split('/');
+    for (const part of parts.slice(0, -1)) {
+      current = join(current, part);
+      const stats = await lstat(current);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) return false;
+    }
+    const stats = await lstat(join(current, parts.at(-1)));
+    return stats.isFile() && !stats.isSymbolicLink() && (stats.mode & 0o111) === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function regularGitBlob(path, ref, root) {
+  const fields = nulFields(await gitBytes(
+    ref === ':index'
+      ? ['ls-files', '--stage', '-z', '--', path]
+      : ['ls-tree', '-z', ref, '--', path], root,
+  ));
+  if (fields.length !== 1) return false;
+  const expected = ref === ':index'
+    ? /^100644 [a-f0-9]{40} 0\t(.+)$/
+    : /^100644 blob [a-f0-9]{40}\t(.+)$/;
+  return expected.exec(fields[0])?.[1] === path;
+}
+
+/**
+ * The pinned commit must be an ancestor. Only ordinary Deno *_test.ts files
+ * under known function roots may differ; all runtime/config/unknown changes,
+ * including staged, untracked, ignored and symlink changes, fail closed.
+ */
+export async function localRuntimeUnchanged(sourceCommit, head, { root = REPO_ROOT } = {}) {
+  if (!GIT_SHA.test(sourceCommit) || !GIT_SHA.test(head)) {
+    fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
+  }
+  if (await gitExitCode(['merge-base', '--is-ancestor', sourceCommit, head], root) !== 0) return false;
+
+  const committed = nulFields(await gitBytes([
+    'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z',
+    sourceCommit, head, ...RUNTIME_PATHS,
+  ], root));
+  if (committed.length % 2 !== 0) fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
+  for (let i = 0; i < committed.length; i += 2) {
+    const [status, path] = committed.slice(i, i + 2);
+    if (!['A', 'M'].includes(status) || !qaTestPath(path) ||
+      !await regularGitBlob(path, head, root)) return false;
+  }
+
+  const dirty = nulFields(await gitBytes([
+    'status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all',
+    '--ignored', ...RUNTIME_PATHS,
+  ], root));
+  for (const record of dirty) {
+    if (record.length < 5 || record[2] !== ' ') fail('LOCAL_RUNTIME_DIFF_UNAVAILABLE');
+    const status = record.slice(0, 2);
+    const path = record.slice(3);
+    // --no-renames keeps both halves of a rename visible; no runtime source
+    // may be hidden by renaming it to a test-looking pathname.
+    if (!/^(?:\?\?|[ MA][ MA])$/.test(status) || status === '  ' ||
+      !qaTestPath(path) || !await regularWorkingFile(path, root) ||
+      (status !== '??' && !await regularGitBlob(path, ':index', root))) return false;
+  }
+  return true;
 }
 
 export async function localWidgetVersion() {
