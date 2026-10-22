@@ -4,11 +4,14 @@ on:
   push:
     paths:
       - 'supabase/functions/chat-consultant/**'
+      - 'supabase/functions/chat-consultant-closure-preview/**'
       - 'supabase/functions/chat-consultant-v2/**'
+      - 'supabase/functions/chat-consultant-v2-closure-preview/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/search-products-closure-preview/**'
       - 'supabase/functions/knowledge-process/**'
       - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
@@ -34,11 +37,14 @@ on:
   pull_request:
     paths:
       - 'supabase/functions/chat-consultant/**'
+      - 'supabase/functions/chat-consultant-closure-preview/**'
       - 'supabase/functions/chat-consultant-v2/**'
+      - 'supabase/functions/chat-consultant-v2-closure-preview/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/search-products-closure-preview/**'
       - 'supabase/functions/knowledge-process/**'
       - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
@@ -107,6 +113,9 @@ jobs:
       - name: Type-check catalog proxy
         run: deno check supabase/functions/search-products/index.ts
 
+      - name: Type-check isolated legacy and catalog QA closures
+        run: deno check supabase/functions/chat-consultant-closure-preview/index.ts supabase/functions/chat-consultant-v2-closure-preview/index.ts supabase/functions/search-products-closure-preview/index.ts
+
       - name: Type-check secret administration and knowledge processing
         run: deno check supabase/functions/admin-integration-secrets/index.ts supabase/functions/knowledge-process/index.ts
 
@@ -130,6 +139,9 @@ jobs:
 
       - name: Test server-side integration secret mode and fail-closed boundary
         run: deno test supabase/functions/_shared/integration-secrets_test.ts
+
+      - name: Test isolated route QA admission
+        run: deno test supabase/functions/_shared/route-qa-gate_test.ts
 
       - name: Verify pinned release inventory
         run: node scripts/qa/build-release-ledger.mjs --check
