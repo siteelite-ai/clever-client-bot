@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw, GitBranch, AlertTriangle } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { saveSettingsWithBaseline, type SettingsSecrets } from '@/lib/settingsSave';
 
 type PipelineVersion = 'v1' | 'v2' | 'v3';
 
@@ -76,6 +77,7 @@ export default function Settings() {
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
   const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
+  const savedSecrets = useRef<SettingsSecrets | null>(null);
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
   const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
@@ -130,6 +132,11 @@ export default function Settings() {
         setApiToken(d.volt220_api_token || '');
         setOpenrouterKey(d.openrouter_api_key || '');
         setGoogleApiKey(d.google_api_key || '');
+        savedSecrets.current = {
+          volt220_api_token: d.volt220_api_token || null,
+          openrouter_api_key: d.openrouter_api_key || null,
+          google_api_key: d.google_api_key || null,
+        };
         setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
@@ -146,24 +153,31 @@ export default function Settings() {
   };
 
   const handleSave = async () => {
-    if (!settings?.id) return;
+    if (!settings?.id || !savedSecrets.current) return;
     setSaving(true);
 
     try {
-      const { error } = await supabase
-        .from('app_settings')
-        .update({
-          volt220_api_token: apiToken || null,
-          openrouter_api_key: openrouterKey || null,
-          google_api_key: googleApiKey || null,
+      savedSecrets.current = await saveSettingsWithBaseline(
+        savedSecrets.current,
+        {
+          volt220_api_token: apiToken,
+          openrouter_api_key: openrouterKey,
+          google_api_key: googleApiKey,
+        },
+        {
           ai_provider: aiProvider,
           ai_model: selectedModel,
           classifier_provider: classifierProvider,
           classifier_model: classifierModel,
-        } as any)
-        .eq('id', settings.id);
-
-      if (error) throw error;
+        },
+        async (update) => {
+          const { error } = await supabase
+            .from('app_settings')
+            .update(update as any)
+            .eq('id', settings.id);
+          if (error) throw error;
+        },
+      );
       toast.success('Настройки сохранены');
     } catch (error) {
       console.error('Error saving settings:', error);
