@@ -202,7 +202,7 @@ Deno.test("admin secrets: only saved custom model may use bounded server ping", 
     customDeps,
     allowedOrigins,
   );
-  assert(allowed.status === 200 && calls.pings === 1, "saved custom model was blocked");
+  assert(allowed.status === 200 && Number(calls.pings) === 1, "saved custom model was blocked");
   assert(calls.modelChecks === 2 && calls.claims === 1, "model/cost guards were bypassed");
   assert(!(await allowed.text()).includes("private-openrouter-token"), "custom ping leaked secret");
 });
