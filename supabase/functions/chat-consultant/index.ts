@@ -743,14 +743,15 @@ async function getAppSettings(): Promise<CachedSettings> {
         expert_interpretation_enabled: false,
       };
     }
+    const settingsData = data as unknown as Partial<CachedSettings>;
 
     // §22 spec: V1 — observability-only (см. mem://features/query-first-branch).
     // Полная имплементация Branch A/B живёт в V2. Здесь только лог-эхо состояния флагов.
-    const qf = (data as { query_first_enabled?: boolean }).query_first_enabled === true;
-    const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
-    const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
-    const c5 = (data as { c5_clarify_broad_enabled?: boolean }).c5_clarify_broad_enabled === true;
-    const ei = (data as { expert_interpretation_enabled?: boolean }).expert_interpretation_enabled === true;
+    const qf = settingsData.query_first_enabled === true;
+    const ss = settingsData.soft_suggest_enabled === true;
+    const cb = settingsData.compare_branch_enabled === true;
+    const c5 = settingsData.c5_clarify_broad_enabled === true;
+    const ei = settingsData.expert_interpretation_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
     }
@@ -774,17 +775,17 @@ async function getAppSettings(): Promise<CachedSettings> {
     const [catalogToken, openrouterKey, googleKey] = await Promise.all([
       resolveIntegrationSecret(
         supabase, 'volt220_api_token', integrationSecretsMode,
-        () => data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
+        () => settingsData.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
         onShadowComparison,
       ),
       resolveIntegrationSecret(
         supabase, 'openrouter_api_key', integrationSecretsMode,
-        () => data.openrouter_api_key || null,
+        () => settingsData.openrouter_api_key || null,
         onShadowComparison,
       ),
       resolveIntegrationSecret(
         supabase, 'google_api_key', integrationSecretsMode,
-        () => data.google_api_key || null,
+        () => settingsData.google_api_key || null,
         onShadowComparison,
         undefined,
         true,
@@ -797,12 +798,12 @@ async function getAppSettings(): Promise<CachedSettings> {
       volt220_api_token: catalogToken,
       openrouter_api_key: openrouterKey,
       google_api_key: googleKey,
-      ai_provider: data.ai_provider || 'openrouter',
-      classifier_prompt: (data as { classifier_prompt?: string | null }).classifier_prompt || null,
-      ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
-      system_prompt: data.system_prompt || null,
-      classifier_provider: data.classifier_provider || 'auto',
-      classifier_model: data.classifier_model || 'google/gemini-2.5-flash',
+      ai_provider: settingsData.ai_provider || 'openrouter',
+      classifier_prompt: settingsData.classifier_prompt || null,
+      ai_model: settingsData.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
+      system_prompt: settingsData.system_prompt || null,
+      classifier_provider: settingsData.classifier_provider || 'auto',
+      classifier_model: settingsData.classifier_model || 'google/gemini-2.5-flash',
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,

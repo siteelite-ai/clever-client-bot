@@ -1045,16 +1045,16 @@ async function loadSettings(
   supabase: SupabaseClient,
   signal: AbortSignal,
 ): Promise<AppSettings> {
-  const legacySecretColumns = INTEGRATION_SECRETS_MODE === "private-required"
+  const legacySecretColumns: string = INTEGRATION_SECRETS_MODE === "private-required"
     ? ""
     : "openrouter_api_key, volt220_api_token, ";
+  const settingsProjection: string =
+    `${legacySecretColumns}classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled`;
   const read = await readSettingsRowWithRetry(
     (attemptSignal) =>
       supabase
         .from("app_settings")
-        .select(
-          `${legacySecretColumns}classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled`,
-        )
+        .select(settingsProjection)
         .limit(1)
         .abortSignal(attemptSignal)
         .single(),
