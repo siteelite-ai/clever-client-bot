@@ -6,7 +6,10 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
-import { executeDiscoverCategory } from "../_shared/v3-tools/discover-category.ts";
+import {
+  executeDiscoverCategory,
+  resetDiscoverCategoryCacheForTest,
+} from "../_shared/v3-tools/discover-category.ts";
 import {
   offlineHandler,
   restoreOfflineModuleSetup,
@@ -65,6 +68,7 @@ interface CaseResult {
   catalogProductUrls: string[];
   catalogProductReadsAfterOptions: boolean[];
   directModelSearchCalls: number;
+  modelDiscoveryCalls: number;
   jargonModelCalls: number;
   steps: Array<{ step?: string; meta?: Record<string, unknown> }>;
   publicEvents: Array<Record<string, unknown>>;
@@ -84,6 +88,7 @@ interface CaseOptions {
   modelArticle?: string;
   liveAppearanceCategory?: boolean;
   appearanceOnlyFacets?: boolean;
+  includeAreaFacet?: boolean;
   modelMinPrice?: number;
   taxonomyUnavailable?: boolean;
   jargonCandidates?: string[];
@@ -92,6 +97,8 @@ interface CaseOptions {
   fixtureLeaves?: string[];
   catalogOnlyQueryToken?: string;
   forceFreshTaxonomy?: boolean;
+  /** The first unresolved options lookup reaches model-owned rediscovery. */
+  transientOptionsUnavailable?: boolean;
 }
 
 async function runCase(
@@ -110,6 +117,7 @@ async function runCase(
   let steps: CaseResult["steps"] = [];
   let modelCalls = 0;
   let directModelSearchCalls = 0;
+  let modelDiscoveryCalls = 0;
   let jargonModelCalls = 0;
   const categoryName = options.categoryName ?? category;
   const leaves = options.fixtureLeaves ?? [
@@ -207,6 +215,11 @@ async function runCase(
           });
         }
         if (url.pathname === "/api/categories/options") {
+          if (
+            options.transientOptionsUnavailable && modelDiscoveryCalls === 0
+          ) {
+            return json({ error: "temporarily missing category" }, 404);
+          }
           if (options.taxonomyUnavailable) {
             return json({ error: "offline" }, 503);
           }
@@ -245,6 +258,15 @@ async function runCase(
                       })),
                     },
                   ]
+                  : []),
+                ...(options.includeAreaFacet
+                  ? [{
+                    key: "lighting_area",
+                    caption_ru: "Максимальная площадь освещения, м2",
+                    type: "number",
+                    unit: "м²",
+                    values: [{ value_ru: "35 м²", products_count: 2 }],
+                  }]
                   : []),
               ],
             },
@@ -313,7 +335,9 @@ async function runCase(
                   function: {
                     name: "declare_selection_reasoning",
                     arguments: JSON.stringify({
-                      reasoning: options.directModelSearch
+                      reasoning: options.includeAreaFacet
+                        ? "Для гостиной 30 м² проверяю максимальную площадь освещения каждого светильника: не менее 30 м². Ищу люстры по каталогу."
+                        : options.directModelSearch
                         ? "Подбираю люстры по запросу клиента и проверяю наличие."
                         : `Подбираю ${modelQuery} для гостиной.`,
                       retrieval_query: options.directModelSearch
@@ -324,6 +348,28 @@ async function runCase(
                       excluded_classifications: [],
                       required_facet_values: [],
                       explicit_customer_classifications: [],
+                    }),
+                  },
+                }],
+              },
+            }],
+          });
+        }
+        if (body.tool_choice?.function?.name === "discover_category") {
+          modelDiscoveryCalls++;
+          return json({
+            choices: [{
+              finish_reason: "tool_calls",
+              message: {
+                content: modelPublicText,
+                tool_calls: [{
+                  id: `appearance-rediscovery-${modelCalls}`,
+                  type: "function",
+                  function: {
+                    name: "discover_category",
+                    arguments: JSON.stringify({
+                      noun: categoryName,
+                      semantic_query: userMessage,
                     }),
                   },
                 }],
@@ -376,8 +422,7 @@ async function runCase(
                       category: options.modelCategory ?? categoryName,
                       ...(options.modelAnchorLeafCategory
                         ? {
-                          anchor_leaf_category:
-                            options.modelAnchorLeafCategory,
+                          anchor_leaf_category: options.modelAnchorLeafCategory,
                         }
                         : {}),
                       ...(options.modelOptions
@@ -404,6 +449,9 @@ async function runCase(
       }
       throw new Error(`Unexpected outbound request: ${request.method} ${url}`);
     };
+    if (options.transientOptionsUnavailable) {
+      resetDiscoverCategoryCacheForTest();
+    }
     if (options.forceFreshTaxonomy) {
       const seeded = await executeDiscoverCategory(
         { noun: categoryName },
@@ -447,6 +495,7 @@ async function runCase(
       catalogProductUrls,
       catalogProductReadsAfterOptions,
       directModelSearchCalls,
+      modelDiscoveryCalls,
       jargonModelCalls,
       steps,
       publicEvents,
@@ -1092,6 +1141,76 @@ Deno.test({
       shouldDeferAppearanceProseBeforeDiscovery("select", true, false),
       false,
     );
+  },
+});
+
+Deno.test({
+  name:
+    "temporary discovery miss keeps model-owned room-area shape prose out of pre-discovery SSE",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const result = await runCase(
+        "Нужна люстра для гостиной 30 квадратов. Покажи варианты.",
+        "люстра",
+        "Для гостиной 30 квадратов подбираю квадратную люстру. Проверяю каталог.",
+        {
+          directModelSearch: true,
+          freshSession: true,
+          transientOptionsUnavailable: true,
+          includeAreaFacet: true,
+          fixtureProducts: [round, oval].map((product) => ({
+            ...product,
+            options: [
+              ...product.options,
+              {
+                key: "lighting_area",
+                caption_ru: "Максимальная площадь освещения, м2",
+                value_ru: "35 м²",
+              },
+            ],
+          })),
+        },
+      );
+      assertEquals(result.modelDiscoveryCalls, 1, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_unverified_appearance_public_text_deferred" &&
+          meta?.source === "taxonomy_pending"
+        ),
+        JSON.stringify(result.steps),
+      );
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_agent_phase_transition" &&
+          meta?.from === "rediscover_after_failed_discovery" &&
+          meta?.to === "search_after_discovery"
+        ),
+        JSON.stringify(result.steps),
+      );
+      assert(
+        result.catalogProductUrls.length > 0 &&
+          result.catalogProductReadsAfterOptions.every(Boolean),
+        JSON.stringify(result),
+      );
+      assert(
+        result.catalogProductUrls.every((rawUrl) =>
+          !/квадрат/iu.test(new URL(rawUrl).searchParams.toString())
+        ),
+        JSON.stringify(result.catalogProductUrls),
+      );
+      assert(
+        result.publicEvents.every((event) =>
+          !/квадратн[а-я]*\s+люстр|форма\s+люстры\s*:\s*квадрат/iu.test(
+            JSON.stringify(event),
+          )
+        ),
+        JSON.stringify(result.publicEvents),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+      resetDiscoverCategoryCacheForTest();
+    }
   },
 });
 
