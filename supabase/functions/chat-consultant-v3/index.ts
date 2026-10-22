@@ -22643,7 +22643,7 @@ async function runExpertLoop(
         contract_complete: true,
       });
     };
-    const terminalFinalizationRequired = shouldFinalizePendingSelection({
+    const terminalPendingSelectionState = {
       products_rendered: productsRendered,
       intent_mode: intentMode,
       has_discovery: Boolean(terminalDiscover),
@@ -22658,7 +22658,10 @@ async function runExpertLoop(
       compatibility_required: reasoningNeedsCompatibilityRelations(
         terminalReasoningEvidence,
       ),
-    });
+    };
+    const terminalFinalizationRequired = shouldFinalizePendingSelection(
+      terminalPendingSelectionState,
+    );
 
     const attemptTerminalJargonRecovery = async (source: string): Promise<
       | {
@@ -24363,11 +24366,118 @@ async function runExpertLoop(
       }
     }
 
+    const safeAdditionalSelectionTerminalScope = Boolean(
+      serverRenderedBaseRequest && terminalDiscover &&
+        terminalSelectionTarget && preExcludedProductUrlSet.size > 0 &&
+        !catalogPriceExtreme && !semanticCompoundEvidenceRequired &&
+        !explicitCompoundMarking && !namedSeriesToken &&
+        !broadAssortmentRequest &&
+        terminalPairDecision.state === "not_applicable" &&
+        activeCompatibilityRelations.length === 0,
+    );
+    let terminalGroundedSearchRecovered = false;
     if (
       productsRendered === 0 && !terminalAliasRequirement &&
       !semanticBackedSearch && !replacementIntent && intentMode === "select" &&
       !seriesTurnRequiresGrounding
     ) {
+      // A server-certified "more options" turn can browse its exact live leaf
+      // without depending on inflected title search. Only this verified scope
+      // may use a category-only pool; every result is still rechecked by the
+      // ordinary target, criteria, destination, budget and prior-URL gates.
+      const groundedLeafNames = terminalDiscover && terminalSelectionTarget &&
+          safeAdditionalSelectionTerminalScope
+        ? terminalDiscover.leaf_categories.map(({ pagetitle }) => pagetitle)
+          .filter((pagetitle) =>
+            terminalGroundedTargets.some((target) =>
+              normalizeForMatch(target) === normalizeForMatch(pagetitle)
+            )
+          ).slice(0, 3)
+        : [];
+      if (terminalDiscover && terminalSelectionTarget &&
+          groundedLeafNames.length > 0) {
+        const recovered = await runTool("search_catalog", {
+          mode: "by_filter",
+          category_in: groundedLeafNames,
+          per_page: 50,
+        }, ctx);
+        if (recovered.ok && recovered.tool === "search_catalog") {
+          const categoryProducts = filterProductsByGroundedCategoryTargets(
+            recovered.results.map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(product)),
+            terminalGroundedTargets,
+            terminalDiscover.category.pagetitle,
+            terminalCategoryEvidence,
+          );
+          const categoryIds = categoryProducts.map((product) => product.id);
+          const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+            scopeCardCriteria(
+              userBackedSearchCriteria,
+              terminalReasoningEvidence,
+            ).criteria,
+            latestRenderCriteria,
+            userBackedSearchCriteria,
+            Boolean(namedSeriesToken),
+          ), terminalReasoningEvidence).criteria;
+          const gate = gateWithLiteralCompoundEvidence(
+            projectPairedTitleEvidence(
+              categoryProducts,
+              activeCompatibilityRelations,
+            ),
+            terminalCriteria,
+          ).report;
+          const targetIds = new Set(verifyTerminalSelectionTarget(
+            terminalSelectionTarget,
+            categoryProducts,
+          ).passed_ids);
+          const eligibleIds = guardVisibleCardinality(categoryIds.filter((id) =>
+            gate.passed_ids.includes(id)
+          )).ids.filter((id) => targetIds.has(id));
+          const budgetIds = filterProductIdsByBudgetCap(
+            eligibleIds,
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids;
+          const renderableIds = finalizeTerminalRenderIds(
+            terminalPairedSafeIds(budgetIds, "category_preacceptance"),
+          );
+          // Only a pool with an actually renderable card may displace lexical
+          // recovery. A broad category page whose cards all fail the frozen
+          // contract is not evidence that no narrower search can succeed.
+          if (renderableIds.length > 0) {
+            semanticBackedSearch = {
+              ids: categoryIds,
+              total: recovered.total,
+              criteria: userBackedSearchCriteria.map((criterion) => ({
+                ...criterion,
+              })),
+              label: groundedLeafNames.join(", "),
+              evidenceStrength: 0,
+            };
+            terminalGroundedSearchRecovered = true;
+            steps.push({
+              step: "v3_grounded_category_search_recovery",
+              ms: now(),
+              meta: {
+                source: "server_verified_additional_selection",
+                categories: groundedLeafNames,
+                candidates: categoryIds.length,
+                total: recovered.total,
+              },
+            });
+          } else if (recovered.results.length > 0) {
+            steps.push({
+              step: "v3_verified_additional_category_pool_rejected",
+              ms: now(),
+              meta: {
+                catalog_candidates: recovered.results.length,
+                grounded_candidates: categoryIds.length,
+                renderable_candidates: 0,
+              },
+            });
+          }
+        }
+      }
       const evidence =
         `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(
@@ -24391,7 +24501,9 @@ async function runExpertLoop(
           requireTitleEvidence: true,
           source: "token" as const,
         }));
-      for (const candidate of [...categoryQueries, ...tokenQueries]) {
+      for (const candidate of semanticBackedSearch
+        ? []
+        : [...categoryQueries, ...tokenQueries]) {
         const query = candidate.query;
         const recovered = await runTool("search_catalog", {
           mode: "by_query",
@@ -24409,6 +24521,72 @@ async function runExpertLoop(
           )
           .map((product) => String(product.id));
         if (ids.length === 0) continue;
+        if (safeAdditionalSelectionTerminalScope) {
+          // For a server-verified "more options" turn, a title hit is not yet
+          // an eligible card. A non-empty but over-budget (or otherwise
+          // rejected) first page must not suppress a later grounded query.
+          // Other selection routes retain their existing first-hit behavior.
+          const candidateProducts = ids.map((id) => ctx.cache.get(id))
+            .filter((product): product is ProductFull => Boolean(product));
+          const groundedProducts = terminalDiscover &&
+              terminalGroundedTargets.length > 0
+            ? filterProductsByGroundedCategoryTargets(
+              candidateProducts,
+              terminalGroundedTargets,
+              terminalDiscover.category.pagetitle,
+              terminalCategoryEvidence,
+            )
+            : [];
+          const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+            scopeCardCriteria(
+              userBackedSearchCriteria,
+              terminalReasoningEvidence,
+            ).criteria,
+            latestRenderCriteria,
+            userBackedSearchCriteria,
+            Boolean(namedSeriesToken),
+          ), terminalReasoningEvidence).criteria;
+          const gate = gateWithLiteralCompoundEvidence(
+            projectPairedTitleEvidence(
+              groundedProducts,
+              activeCompatibilityRelations,
+            ),
+            terminalCriteria,
+          ).report;
+          const groundedIds = new Set(groundedProducts.map((product) =>
+            product.id
+          ));
+          const targetIds = new Set(verifyTerminalSelectionTarget(
+            terminalSelectionTarget ?? "",
+            groundedProducts,
+          ).passed_ids);
+          const eligibleIds = guardVisibleCardinality(ids.filter((id) =>
+            gate.passed_ids.includes(id)
+          )).ids.filter((id) =>
+            groundedIds.has(id) && targetIds.has(id)
+          );
+          const budgetIds = filterProductIdsByBudgetCap(
+            eligibleIds,
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids;
+          const renderableIds = finalizeTerminalRenderIds(
+            terminalPairedSafeIds(budgetIds, "lexical_preacceptance"),
+          );
+          if (renderableIds.length === 0) {
+            steps.push({
+              step: "v3_verified_additional_lexical_pool_rejected",
+              ms: now(),
+              meta: {
+                source: candidate.source,
+                candidates: ids.length,
+                grounded_candidates: groundedProducts.length,
+                renderable_candidates: 0,
+              },
+            });
+            continue;
+          }
+        }
         semanticBackedSearch = {
           ids,
           total: recovered.total,
@@ -24418,6 +24596,10 @@ async function runExpertLoop(
           label: query,
           evidenceStrength: explicitCompoundMarking ? 2 : 0,
         };
+        // Recompute a previously false pending gate only for a continuation
+        // certified by server-side rendered history. Initial/jargon turns keep
+        // their existing eligibility even when a late lexical query succeeds.
+        terminalGroundedSearchRecovered = safeAdditionalSelectionTerminalScope;
         steps.push({
           step: "v3_grounded_category_search_recovery",
           ms: now(),
@@ -24432,6 +24614,16 @@ async function runExpertLoop(
       }
     }
 
+    // The initial pending-selection decision predates this last catalog
+    // lookup. Reconsider only a source-proven terminal pool; specialist-mode
+    // exclusions remain in the same gate, and card guards remain unchanged.
+    const terminalSemanticFinalizationRequired =
+      terminalFinalizationRequired ||
+      (terminalGroundedSearchRecovered && shouldFinalizePendingSelection({
+        ...terminalPendingSelectionState,
+        has_search_attempt: true,
+      }));
+
     // Ordinary selections can end after a successful semantic search without
     // the model issuing render_products. Recover the FIRST non-empty pool,
     // never a later broad retry, and run the same evidence gate again.
@@ -24442,7 +24634,7 @@ async function runExpertLoop(
       !terminalAliasRequirement &&
       semanticBackedSearch &&
       terminalSelectionTarget &&
-      terminalFinalizationRequired &&
+      terminalSemanticFinalizationRequired &&
       !replacementIntent &&
       intentMode === "select" &&
       (
