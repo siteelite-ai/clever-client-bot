@@ -45,6 +45,11 @@ interface CategoriesCache {
 
 let categoriesCache: CategoriesCache | null = null;
 
+/** Isolate mocked taxonomies between tests; never called by the live handler. */
+export function resetDiscoverCategoryCacheForTest(): void {
+  categoriesCache = null;
+}
+
 export interface DiscoverCategoryInput {
   noun: string; // тип товара из запроса; НЕ обязан быть точным pagetitle каталога
   semantic_query?: string; // полный запрос клиента, если есть — помогает резолверу выбрать ветку
@@ -771,10 +776,10 @@ async function fetchCategories(
   const deadline = Date.now() +
     (deps.timeoutMs ?? DISCOVERY_REQUEST_TIMEOUT_MS);
   const first = await fetchCategoriesPage(fetchImpl, deps, 1, deadline);
-  const complete = deps.forceFreshTaxonomy === true;
-  const expectedPagination = complete
-    ? requireCompleteTaxonomyPage(first, 1)
-    : null;
+  // Both ordinary and price-only discovery need a complete taxonomy. A
+  // successful HTTP response with missing or partial pagination is not proof
+  // that a category is absent, and must never populate the one-hour cache.
+  const expectedPagination = requireCompleteTaxonomyPage(first, 1);
   const acc = {
     flat: [] as CategoryCandidate[],
     byId: new Map<number, CategoryNode>(),
@@ -783,23 +788,27 @@ async function fetchCategories(
   };
   collectCategories(first.results, null, acc);
 
-  const pages = expectedPagination?.pages ??
-    Math.max(1, Number(first.pagination?.pages) || 1);
+  const pages = expectedPagination.pages;
   for (let page = 2; page <= pages; page++) {
     const next = await fetchCategoriesPage(fetchImpl, deps, page, deadline);
-    if (expectedPagination) {
-      requireCompleteTaxonomyPage(next, page, expectedPagination);
-    }
+    requireCompleteTaxonomyPage(next, page, expectedPagination);
     collectCategories(next.results, null, acc);
   }
-  if (complete) {
-    if (
-      acc.byId.size !== acc.flat.length ||
+  // A complete but empty taxonomy is not a healthy 220volt catalogue. Never
+  // turn a transient empty HTTP 200 into an hour of category_not_found.
+  if (acc.flat.length === 0) {
+    throw new Error("category taxonomy is empty");
+  }
+  // IDs must be unique across all pages and descendants. Different branches
+  // may legitimately reuse a title; ordinary discovery already tracks that
+  // ambiguity, while complete-price proof retains its stricter identity gate.
+  if (
+    acc.byId.size !== acc.flat.length ||
+    (deps.forceFreshTaxonomy &&
       new Set(acc.flat.map((node) => normalize(node.pagetitle))).size !==
-        acc.flat.length
-    ) {
-      throw new Error("category taxonomy has duplicate or invalid identities");
-    }
+        acc.flat.length)
+  ) {
+    throw new Error("category taxonomy has duplicate or invalid identities");
   }
 
   const flatDeduped = Array.from(
@@ -868,9 +877,19 @@ function requireCompleteTaxonomyPage(
       if (
         !Number.isSafeInteger(node.id) || !(Number(node.id) > 0) ||
         typeof node.pagetitle !== "string" || !node.pagetitle.trim() ||
-        !Array.isArray(node.children) || depth >= REQUESTED_TAXONOMY_DEPTH
+        depth >= REQUESTED_TAXONOMY_DEPTH
       ) {
         throw new Error("category taxonomy node is incomplete");
+      }
+      // The generic Swagger resource makes `children` optional. That is a
+      // valid resource shape, but not enough evidence for this depth=10 tree:
+      // a missing array cannot distinguish a leaf from an omitted subtree.
+      // Do not turn that unknown subtree into a cached leaf or "not found".
+      if (node.children === undefined) {
+        throw new Error("category taxonomy child coverage is unproven");
+      }
+      if (!Array.isArray(node.children)) {
+        throw new Error("category taxonomy children are invalid");
       }
       validateNodes(node.children, depth + 1);
     }
@@ -1004,18 +1023,28 @@ async function fetchCategoriesPage(
           res.status,
         );
       }
-      const raw = await res.json() as {
-        data?: CategoryPage;
-        results?: unknown[];
-        pagination?: CategoryPage["pagination"];
-      };
-      const data = raw.data ?? raw;
-      if (deps.forceFreshTaxonomy && !Array.isArray(data.results)) {
+      const parsed = await res.json() as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("category taxonomy response is invalid");
+      }
+      const raw = parsed as Record<string, unknown>;
+      const nested = "data" in raw ? raw.data : raw;
+      if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+        throw new Error("category taxonomy data is invalid");
+      }
+      const data = nested as Record<string, unknown>;
+      if (
+        ("success" in raw && raw.success !== true) ||
+        ("success" in data && data.success !== true)
+      ) {
+        throw new Error("category taxonomy response reports failure");
+      }
+      if (!Array.isArray(data.results)) {
         throw new Error("category taxonomy response has no results array");
       }
       return {
-        results: Array.isArray(data.results) ? data.results : [],
-        pagination: data.pagination,
+        results: data.results,
+        pagination: data.pagination as CategoryPage["pagination"],
       };
     },
   );

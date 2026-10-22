@@ -183,10 +183,10 @@ Deno.test('search-products preserves legacy by_sku, category facets and category
       assert(init?.signal instanceof AbortSignal, `${url.pathname} must receive a cancellation signal`);
       urls.push(url);
       if (url.pathname.endsWith('/options')) {
-        return Response.json({ data: { category: { id: 742 }, options: [{ key: 'brand' }] } });
+        return Response.json({ data: { category: { id: 742, total_products: 1 }, options: [{ key: 'brand', values: [{ value_ru: 'IEK' }] }] } });
       }
       if (url.pathname.endsWith('/categories')) {
-        return Response.json({ data: { results: [{ pagetitle: 'Розетки', children: [] }], pagination: { pages: 1 } } });
+        return Response.json({ data: { results: [{ id: 1, pagetitle: 'Розетки', alias: 'rozetki', parent: 0, children: [] }], pagination: { page: 1, per_page: 200, pages: 1, total: 1 } } });
       }
       return Response.json({ data: { results: [{ article: 'A-123' }], pagination: { total: 1 } } });
     },
@@ -200,7 +200,7 @@ Deno.test('search-products preserves legacy by_sku, category facets and category
   const facets = await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps);
   assertEquals(facets.status, 200);
   assertEquals(urls[1].pathname, '/api/categories/742/options');
-  assertEquals((await facets.json()).options, [{ key: 'brand' }]);
+  assertEquals((await facets.json()).options, [{ key: 'brand', values: [{ value_ru: 'IEK' }] }]);
 
   const categories = await handleRequest(post({ action: 'list_categories' }), deps);
   assertEquals(categories.status, 200);
@@ -214,7 +214,7 @@ Deno.test('list_categories rejects implausible upstream page counts without retu
     getApiToken: async () => 'catalog-test-token',
     fetch: async () => {
       calls++;
-      return Response.json({ data: { results: [{ pagetitle: 'Светильники' }], pagination: { pages: 1_000_000 } } });
+      return Response.json({ data: { results: [{ id: 1, pagetitle: 'Светильники', alias: 'svetilniki', parent: 0 }], pagination: { page: 1, per_page: 1, pages: 1_000_000, total: 1_000_000 } } });
     },
   });
   assertEquals(response.status, 500);
@@ -236,7 +236,7 @@ Deno.test('list_categories bounds fan-out, coalesces cold requests and serves th
       peakActive = Math.max(peakActive, active);
       await new Promise((resolve) => setTimeout(resolve, 1));
       active--;
-      return Response.json({ data: { results: [{ pagetitle: `Категория ${page}` }], pagination: { pages: 9 } } });
+      return Response.json({ data: { results: [{ id: page, pagetitle: `Категория ${page}`, alias: `category-${page}`, parent: 0 }], pagination: { page, per_page: 1, pages: 9, total: 9 } } });
     },
   };
   const [first, second] = await Promise.all([
@@ -255,6 +255,95 @@ Deno.test('list_categories bounds fan-out, coalesces cold requests and serves th
   assertEquals(calls.length, 9);
 });
 
+Deno.test('list_categories never caches failed or malformed page 1/page N as a partial catalog', async () => {
+  for (const failure of ['page1-http', 'page1-success-false', 'page1-malformed', 'page1-null-data', 'page1-missing-id', 'page1-missing-alias', 'page2-http', 'page2-success-false', 'page2-malformed', 'page2-invalid-parent']) {
+    resetCatalogCachesForTest();
+    let failedOnce = false;
+    const calls: number[] = [];
+    const deps = {
+      getApiToken: async () => 'catalog-test-token',
+      fetch: async (input: RequestInfo | URL) => {
+        const page = Number(new URL(String(input)).searchParams.get('page'));
+        calls.push(page);
+        const failPage = failure.startsWith('page1') ? 1 : 2;
+        if (!failedOnce && page === failPage) {
+          failedOnce = true;
+          if (failure.endsWith('http')) return new Response('unavailable', { status: 503 });
+          if (failure.endsWith('success-false')) {
+            return Response.json({ success: false, data: { results: [], pagination: { page, per_page: 1, pages: 2, total: 2 } } });
+          }
+          if (failure.endsWith('null-data')) {
+            return Response.json({ success: true, data: null, results: [{ pagetitle: 'Ложная категория' }], pagination: { page, per_page: 1, pages: 2, total: 2 } });
+          }
+          if (failure.endsWith('missing-id') || failure.endsWith('missing-alias') || failure.endsWith('invalid-parent')) {
+            return Response.json({ success: true, data: {
+              results: [{ ...(failure.endsWith('missing-id') ? {} : { id: page }),
+                pagetitle: `Категория ${page}`,
+                ...(failure.endsWith('missing-alias') ? {} : { alias: `category-${page}` }),
+                parent: failure.endsWith('invalid-parent') ? null : 0 }],
+              pagination: { page, per_page: 1, pages: 2, total: 2 },
+            } });
+          }
+          return Response.json({ success: true, data: { results: null, pagination: { page, per_page: 1, pages: 2, total: 2 } } });
+        }
+        return Response.json({ success: true, data: {
+          results: [{ id: page, pagetitle: `Категория ${page}`, alias: `category-${page}`, parent: 0, children: [] }],
+          pagination: { page, per_page: 1, pages: 2, total: 2 },
+        } });
+      },
+    };
+    const first = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals(first.status, 500);
+    assert((await first.json()).error, `${failure} must surface an error`);
+    const recovered = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals(recovered.status, 200);
+    assertEquals((await recovered.json()).categories, ['Категория 1', 'Категория 2']);
+    const beforeCacheHit = calls.length;
+    const cached = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals((await cached.json()).categories, ['Категория 1', 'Категория 2']);
+    assertEquals(calls.length, beforeCacheHit);
+  }
+});
+
+Deno.test('list_categories rejects nonempty truncated pages and pagination drift before caching', async () => {
+  for (const failure of ['short-page1', 'short-page2', 'changed-total']) {
+    resetCatalogCachesForTest();
+    let failedOnce = false;
+    let calls = 0;
+    const deps = {
+      getApiToken: async () => 'catalog-test-token',
+      fetch: async (input: RequestInfo | URL) => {
+        const page = Number(new URL(String(input)).searchParams.get('page'));
+        calls++;
+        const shouldFail = !failedOnce && (failure === 'short-page1' ? page === 1 : page === 2);
+        if (shouldFail) failedOnce = true;
+        const titles = page === 1 ? ['Категория 1', 'Категория 2'] : ['Категория 3', 'Категория 4'];
+        return Response.json({ data: {
+          results: (shouldFail && failure.startsWith('short') ? titles.slice(0, 1) : titles)
+            .map((pagetitle, index) => ({ id: (page - 1) * 2 + index + 1,
+              pagetitle, alias: `category-${(page - 1) * 2 + index + 1}`, parent: 0 })),
+          pagination: {
+            page,
+            per_page: 2,
+            pages: shouldFail && failure === 'changed-total' ? 3 : 2,
+            total: shouldFail && failure === 'changed-total' ? 5 : 4,
+          },
+        } });
+      },
+    };
+    const failed = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals(failed.status, 500);
+    const recovered = await handleRequest(post({ action: 'list_categories' }), deps);
+    assertEquals(recovered.status, 200);
+    assertEquals((await recovered.json()).categories, [
+      'Категория 1', 'Категория 2', 'Категория 3', 'Категория 4',
+    ]);
+    const beforeHit = calls;
+    assertEquals((await (await handleRequest(post({ action: 'list_categories' }), deps)).json()).count, 4);
+    assertEquals(calls, beforeHit);
+  }
+});
+
 Deno.test('category_facets coalesces duplicate misses and bounds its LRU cache', async () => {
   resetCatalogCachesForTest();
   const calls = new Map<number, number>();
@@ -264,7 +353,7 @@ Deno.test('category_facets coalesces duplicate misses and bounds its LRU cache',
       const categoryId = Number(new URL(String(input)).pathname.split('/').at(-2));
       calls.set(categoryId, (calls.get(categoryId) || 0) + 1);
       await new Promise((resolve) => setTimeout(resolve, 1));
-      return Response.json({ data: { category: { id: categoryId }, options: [] } });
+      return Response.json({ data: { category: { id: categoryId, total_products: 0 }, options: [] } });
     },
   };
   const requestFor = (categoryId: number) => handleRequest(post({ action: 'category_facets', categoryId }), deps);
@@ -285,16 +374,103 @@ Deno.test('category_facets coalesces duplicate misses and bounds its LRU cache',
   assertEquals(calls.get(10_002), 2);
 });
 
+Deno.test('category_facets does not cache malformed HTTP 200 or success:false as empty facets', async () => {
+  for (const malformed of [
+    { success: false, data: { category: { id: 742, total_products: 1 }, options: [] } },
+    { success: true, data: { category: null, options: [] } },
+    { success: true, data: { category: { id: 742, total_products: 1 }, options: null } },
+    { success: true, data: { category: { id: 742, total_products: 1 }, options: [{ key: 'brand' }] } },
+    { success: true, data: { category: { id: 742, total_products: 10 }, options: [{ key: 'color', values: [] }] } },
+    { success: true, data: { category: { id: 742, total_products: 10 }, options: [{ key: 'color', values: [] }, { key: 'brand', values: [] }] } },
+    { success: true, data: { category: { id: 742, total_products: null }, options: [] } },
+    { success: true, data: null, category: { id: 742, total_products: 1 }, options: [{ key: 'brand', values: [] }] },
+    { success: true, data: { category: { id: 742, total_products: 1 }, options: [{ key: 'brand', values: [{ value_ru: { x: 1 } }] }] } },
+    { success: true, data: { category: { id: 742, total_products: 1 }, options: [{ key: 'brand', values: [{ value_ru: 'IEK', value_kz: { x: 1 } }] }] } },
+    { success: true, data: { category: { id: 742, total_products: 1 }, options: [
+      { key: 'brand', values: [{ value_ru: 'IEK' }] },
+      { key: 'size', values: [{ value_ru: { x: 1 } }] },
+    ] } },
+  ]) {
+    resetCatalogCachesForTest();
+    let calls = 0;
+    const deps = {
+      getApiToken: async () => 'catalog-test-token',
+      fetch: async () => {
+        calls++;
+        return Response.json(calls === 1 ? malformed : {
+          success: true,
+          data: { category: { id: 742, total_products: 1 }, options: [{ key: 'brand', values: [{ value_ru: 'IEK' }] }] },
+        });
+      },
+    };
+    const first = await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps);
+    assertEquals(first.status, 502);
+    const recovered = await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps);
+    assertEquals(recovered.status, 200);
+    assertEquals((await recovered.json()).options, [{ key: 'brand', values: [{ value_ru: 'IEK' }] }]);
+    const cached = await handleRequest(post({ action: 'category_facets', categoryId: 742 }), deps);
+    assertEquals((await cached.json()).cacheHit, true);
+    assertEquals(calls, 2);
+  }
+});
+
+Deno.test('category_facets accepts numeric catalog option values and nullable translations', async () => {
+  resetCatalogCachesForTest();
+  let calls = 0;
+  const deps = {
+    getApiToken: async () => 'catalog-test-token',
+    fetch: async () => {
+      calls++;
+      return Response.json({ success: true, data: {
+        category: { id: 743, total_products: 1 },
+        options: [{ key: 'rating', values: [{ value_ru: 16, value_kz: null, products_count: 1 }] }],
+      } });
+    },
+  };
+  const request = () => handleRequest(post({ action: 'category_facets', categoryId: 743 }), deps);
+  const first = await request();
+  assertEquals(first.status, 200);
+  assertEquals((await first.json()).options[0].values[0].value_ru, 16);
+  const cached = await request();
+  assertEquals((await cached.json()).cacheHit, true);
+  assertEquals(calls, 1);
+});
+
+Deno.test('category_facets by pagetitle rejects another category and retries instead of caching it', async () => {
+  resetCatalogCachesForTest();
+  let calls = 0;
+  const deps = {
+    getApiToken: async () => 'catalog-test-token',
+    fetch: async () => {
+      calls++;
+      return Response.json({ success: true, data: {
+        category: { id: calls === 1 ? 7 : 8, pagetitle: calls === 1 ? 'Розетки' : 'Кабель', total_products: 1 },
+        options: [{ key: 'size', values: [{ value_ru: '10' }] }],
+      } });
+    },
+  };
+  const request = () => handleRequest(post({ action: 'category_facets', pagetitle: 'Кабель' }), deps);
+  const first = await request();
+  assertEquals(first.status, 502);
+  const recovered = await request();
+  assertEquals(recovered.status, 200);
+  assertEquals((await recovered.json()).category.pagetitle, 'Кабель');
+  const cached = await request();
+  assertEquals((await cached.json()).cacheHit, true);
+  assertEquals(calls, 2);
+});
+
 Deno.test('category_facets bounds unique in-flight upstream calls without blocking duplicate requests', async () => {
   resetCatalogCachesForTest();
   const release: Array<() => void> = [];
   let upstreamCalls = 0;
   const deps = {
     getApiToken: async () => 'catalog-test-token',
-    fetch: async () => {
+    fetch: async (input: RequestInfo | URL) => {
       upstreamCalls++;
       await new Promise<void>((resolve) => release.push(resolve));
-      return Response.json({ data: { category: null, options: [] } });
+      const categoryId = Number(new URL(String(input)).pathname.split('/').at(-2));
+      return Response.json({ data: { category: { id: categoryId, total_products: 0 }, options: [] } });
     },
   };
   const requestFor = (categoryId: number) => handleRequest(post({ action: 'category_facets', categoryId }), deps);
@@ -517,8 +693,8 @@ Deno.test('multi-page category deadline aborts and drains every active page befo
       assert(signal, `page ${page} must pass abort signal to upstream`);
       if (page === 1) {
         return Response.json({ data: {
-          results: [{ pagetitle: 'First page only' }],
-          pagination: { pages: 3 },
+          results: [{ id: 1, pagetitle: 'First page only', alias: 'first-page-only', parent: 0 }],
+          pagination: { page: 1, per_page: 1, pages: 3, total: 3 },
         } });
       }
       return await new Promise<Response>((_resolve, reject) => {

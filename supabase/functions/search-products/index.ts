@@ -278,6 +278,41 @@ const FACETS_TTL_MS = 60 * 60 * 1000;
 const facetsCache: Map<string, { value: any; ts: number }> = new Map();
 const facetsInFlight: Map<string, SharedLoad<{ category: any; options: any[] }>> = new Map();
 
+function catalogObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function catalogData(raw: unknown, label: string): Record<string, unknown> {
+  if (!catalogObject(raw) || raw.success === false) throw new Error(`${label} returned an invalid response`);
+  let data: unknown = raw;
+  // Both catalog endpoints may wrap their payload in one or two data envelopes.
+  for (let level = 0; level < 2 && catalogObject(data) && 'data' in data; level++) {
+    if (data.success === false) throw new Error(`${label} returned an invalid response`);
+    data = data.data;
+  }
+  if (!catalogObject(data) || data.success === false) throw new Error(`${label} returned an invalid response`);
+  return data;
+}
+
+function validFacetOption(option: unknown): boolean {
+  if (!catalogObject(option) || typeof option.key !== 'string' || !option.key.trim() ||
+    !Array.isArray(option.values)) return false;
+  if ((option.caption_ru != null && typeof option.caption_ru !== 'string') ||
+    (option.caption_kz != null && typeof option.caption_kz !== 'string')) return false;
+  return option.values.every((value: unknown) => {
+    if (!catalogObject(value)) return false;
+    const ru = value.value_ru ?? value.value;
+    const kz = value.value_kz;
+    const validRu = typeof ru === 'string' || (typeof ru === 'number' && Number.isFinite(ru));
+    const validKz = kz == null || typeof kz === 'string';
+    const usable = (typeof ru === 'string' && !!ru.trim()) || typeof ru === 'number' ||
+      (typeof kz === 'string' && !!kz.trim());
+    const count = value.products_count;
+    return (ru == null || validRu) && validKz && usable &&
+      (count == null || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0));
+  });
+}
+
 function storeFacetsCache(key: string, value: { category: any; options: any[] }): void {
   const now = Date.now();
   for (const [cachedKey, entry] of facetsCache) {
@@ -332,14 +367,23 @@ async function fetchCategoryFacets(
         const errText = await res.text();
         throw new Error(`Facets API ${res.status}: ${errText.slice(0, 200)}`);
       }
-      const raw = await res.json();
-      // API shape: { success, data: { category: {...}, options: [...] } }
-      // Some envelopes nest data twice; handle both.
-      let data = raw.data || raw;
-      if (data && typeof data === 'object' && 'data' in data && !('options' in data)) data = (data as any).data;
+      const data = catalogData(await res.json(), 'Facets API');
+      const category = data.category;
+      const options = data.options;
+      const totalProducts = catalogObject(category) ? category.total_products : null;
+      if (!catalogObject(category) || !Array.isArray(options) ||
+        typeof totalProducts !== 'number' || !Number.isSafeInteger(totalProducts) || totalProducts < 0 ||
+        (category.id == null && (typeof category.pagetitle !== 'string' || !category.pagetitle.trim())) ||
+        (opts.categoryId != null && String(category.id) !== String(opts.categoryId)) ||
+        (opts.pagetitle != null && (typeof category.pagetitle !== 'string' ||
+          category.pagetitle.trim() !== opts.pagetitle.trim())) ||
+        (totalProducts > 0 && !options.some((option) => Array.isArray(option?.values) && option.values.length > 0)) ||
+        options.some((option) => !validFacetOption(option))) {
+        throw new Error('Facets API returned an incomplete response');
+      }
       const value = {
-        category: data?.category || null,
-        options: Array.isArray(data?.options) ? data.options : [],
+        category,
+        options,
       };
       controller.signal.throwIfAborted();
       storeFacetsCache(cacheKey, value);
@@ -416,21 +460,29 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
 }
 
 // Recursively walk MsCategory tree, collect every `pagetitle` into the set.
-function collectPagetitles(nodes: any[], acc: Set<string>, depth = 0): void {
-  if (!Array.isArray(nodes)) return;
+function collectPagetitles(nodes: unknown, acc: Set<string>, depth = 0): void {
+  if (!Array.isArray(nodes)) throw new Error('Category listing returned an incomplete response');
   if (depth > 10) throw new Error('Category tree exceeds supported depth');
   for (const node of nodes) {
-    if (node && typeof node.pagetitle === 'string' && node.pagetitle.trim()) {
-      acc.add(node.pagetitle.trim());
-      if (acc.size > MAX_CATEGORY_TITLES) throw new Error('Category listing exceeds safe limit');
+    if (!catalogObject(node) || typeof node.id !== 'number' || !Number.isSafeInteger(node.id) || node.id < 0 ||
+      typeof node.pagetitle !== 'string' || !node.pagetitle.trim() ||
+      typeof node.alias !== 'string' ||
+      typeof node.parent !== 'number' || !Number.isSafeInteger(node.parent) || node.parent < 0 ||
+      (node.children != null && !Array.isArray(node.children))) {
+      throw new Error('Category listing returned an incomplete response');
     }
-    if (node && Array.isArray(node.children) && node.children.length > 0) {
-      collectPagetitles(node.children, acc, depth + 1);
-    }
+    acc.add(node.pagetitle.trim());
+    if (acc.size > MAX_CATEGORY_TITLES) throw new Error('Category listing exceeds safe limit');
+    if (Array.isArray(node.children) && node.children.length > 0) collectPagetitles(node.children, acc, depth + 1);
   }
 }
 
-async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<{ results: any[]; pagination: any }> {
+type CategoryPage = {
+  results: unknown[];
+  pagination: { page: number; perPage: number; pages: number; total: number };
+};
+
+async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<CategoryPage> {
   const params = new URLSearchParams({
     parent: '0',
     depth: '10',
@@ -454,11 +506,23 @@ async function fetchCategoriesPage(token: string, page: number, signal: AbortSig
       categoriesLoggedRawOnce = true;
       console.log(`[Categories] Raw page ${page} sample: ${JSON.stringify(raw).slice(0, 600)}`);
     }
-    const data = raw.data || raw;
-    return {
-      results: data.results || [],
-      pagination: data.pagination || { page, per_page: 200, pages: 1, total: 0 },
-    };
+    const data = catalogData(raw, 'Categories API');
+    const pagination = data.pagination;
+    const pageNumber = catalogObject(pagination) ? pagination.page : null;
+    const perPage = catalogObject(pagination) ? pagination.per_page : null;
+    const pages = catalogObject(pagination) ? pagination.pages : null;
+    const total = catalogObject(pagination) ? pagination.total : null;
+    if (!Array.isArray(data.results) || typeof pageNumber !== 'number' ||
+      typeof perPage !== 'number' || typeof pages !== 'number' || typeof total !== 'number' ||
+      !Number.isSafeInteger(pageNumber) || pageNumber !== page ||
+      !Number.isSafeInteger(perPage) || perPage < 1 || perPage > 200 ||
+      !Number.isSafeInteger(pages) || pages < 1 ||
+      !Number.isSafeInteger(total) || total < 0 ||
+      pages !== Math.max(1, Math.ceil(total / perPage)) ||
+      data.results.length !== Math.min(perPage, Math.max(0, total - (page - 1) * perPage))) {
+      throw new Error('Categories API returned an incomplete response');
+    }
+    return { results: data.results, pagination: { page: pageNumber, perPage, pages, total } };
   } finally {
     upstream.cleanup();
   }
@@ -482,14 +546,12 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
     const first = await fetchCategoriesPage(token, 1, controller.signal, httpFetch);
     collectPagetitles(first.results, acc);
 
-    const reportedPages = first.pagination?.pages;
-    const pages = reportedPages == null ? 1 : Number(reportedPages);
-    if (!Number.isSafeInteger(pages) || pages < 0 || pages > MAX_CATEGORIES_PAGES) {
+    if (first.pagination.pages > MAX_CATEGORIES_PAGES) {
       throw new Error('Category listing exceeds safe page limit');
     }
-    const totalPages = Math.max(1, pages);
+    const totalPages = first.pagination.pages;
     for (let start = 2; start <= totalPages; start += MAX_CATEGORIES_CONCURRENCY) {
-      const pending: Promise<{ results: any[] }>[] = [];
+      const pending: Promise<CategoryPage>[] = [];
       for (let page = start; page < Math.min(start + MAX_CATEGORIES_CONCURRENCY, totalPages + 1); page++) {
         pending.push(fetchCategoriesPage(token, page, controller.signal, httpFetch));
       }
@@ -499,12 +561,20 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
       const failed = batch.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') throw failed.reason;
       for (const result of batch) {
-        if (result.status === 'fulfilled') collectPagetitles(result.value.results, acc);
+        if (result.status === 'fulfilled') {
+          if (result.value.pagination.pages !== totalPages ||
+            result.value.pagination.perPage !== first.pagination.perPage ||
+            result.value.pagination.total !== first.pagination.total) {
+            throw new Error('Category listing changed during pagination');
+          }
+          collectPagetitles(result.value.results, acc);
+        }
       }
     }
 
     controller.signal.throwIfAborted();
     const flat = Array.from(acc).sort();
+    if (flat.length === 0) throw new Error('Category listing returned no categories');
     categoriesCache = { value: flat, ts: Date.now() };
     console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
     return flat;

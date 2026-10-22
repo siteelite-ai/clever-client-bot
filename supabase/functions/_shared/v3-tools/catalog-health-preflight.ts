@@ -17,7 +17,7 @@ export type CatalogHealthClassification =
   | "transport"
   | "schema_error";
 
-type CheckName = "categories" | "products" | "facets";
+type CheckName = "categories" | "products" | "facets" | "article_filter";
 type CheckResult = {
   status: "ok" | "unavailable";
   http_status: number | null;
@@ -28,10 +28,10 @@ export type CatalogHealthPreflightResult = {
   ok: boolean;
   status: "ready" | "unavailable";
   classification?: CatalogHealthClassification;
-  // A dependency failure skips facets rather than sending another request to
-  // a distressed upstream. A ready result must always contain all three.
+  // A dependency failure skips dependent checks rather than sending another
+  // request to a distressed upstream. Ready requires all four checks.
   checks: Pick<Record<CheckName, CheckResult>, "categories" | "products"> &
-    Partial<Pick<Record<CheckName, CheckResult>, "facets">>;
+    Partial<Pick<Record<CheckName, CheckResult>, "facets" | "article_filter">>;
 };
 
 const CHECK_TIMEOUT_MS = 8_000;
@@ -41,6 +41,21 @@ const MAX_CATEGORY_TITLE_CHARS = 160;
 
 type EndpointResult = { check: CheckResult; results?: unknown[] };
 type Leaf = { id: number; pagetitle: string };
+type ProductIdentity = { id: number; article: string };
+
+/** A single request proves completeness only when the upstream says page 1 is the entire window. */
+function isCompleteFirstPage(data: unknown, results: unknown[]): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const pagination = (data as { pagination?: unknown }).pagination;
+  if (!pagination || typeof pagination !== "object" || Array.isArray(pagination)) {
+    return false;
+  }
+  const page = pagination as Record<string, unknown>;
+  return page.page === 1 && page.pages === 1 &&
+    Number.isSafeInteger(page.per_page) && Number(page.per_page) > 0 &&
+    Number.isSafeInteger(page.total) && page.total === results.length &&
+    results.length <= Number(page.per_page);
+}
 
 function cleanCategoryTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -113,6 +128,21 @@ function hasUsableProduct(results: unknown[]): boolean {
   });
 }
 
+/** Derive the exact filter probe from a usable baseline SKU, never a fixture. */
+function representativeProductIdentity(results: unknown[]): ProductIdentity | null {
+  for (const raw of results) {
+    if (!hasUsableProduct([raw])) continue;
+    const product = raw as Record<string, unknown>;
+    if (!Number.isSafeInteger(product.id) || Number(product.id) <= 0) continue;
+    if (typeof product.article !== "string") continue;
+    const article = product.article.trim();
+    if (!article || [...article].length > 120 ||
+      /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(article)) continue;
+    return { id: Number(product.id), article };
+  }
+  return null;
+}
+
 export function isExactCatalogHealthPreflightPayload(
   body: unknown,
 ): body is { type: typeof CATALOG_HEALTH_PREFLIGHT_TYPE } {
@@ -160,8 +190,10 @@ async function checkEndpoint(
   name: CheckName,
   deps: CatalogClientDeps,
   leaf?: Leaf,
+  identity?: ProductIdentity,
 ): Promise<EndpointResult> {
-  if (name === "facets" && !leaf) {
+  if ((name === "facets" && !leaf) ||
+    (name === "article_filter" && !identity)) {
     return { check: {
       status: "unavailable", http_status: null, classification: "schema_error",
     } };
@@ -170,8 +202,11 @@ async function checkEndpoint(
     ? "parent=0&depth=10&per_page=200&page=1"
     : name === "products"
     ? "per_page=20&page=1&min_price=1"
+    : name === "article_filter"
+    ? new URLSearchParams({ article: identity?.article ?? "", per_page: "50", page: "1" }).toString()
     : new URLSearchParams({ pagetitle: leaf?.pagetitle ?? "" }).toString();
-  const path = name === "facets" ? "categories/options" : name;
+  const path = name === "facets" ? "categories/options"
+    : name === "article_filter" ? "products" : name;
   const url = `${deps.baseUrl}/${path}?${params}`;
   const controller = new AbortController();
   const timeoutMs = Math.min(
@@ -253,6 +288,35 @@ async function checkEndpoint(
               classification: "schema_error",
             } };
         }
+        if (name === "article_filter") {
+          const data = envelope?.data;
+          const filtered = data && typeof data === "object" && !Array.isArray(data)
+            ? data as { results?: unknown }
+            : null;
+          const results = filtered?.results;
+          // Unknown, contradictory or multi-page metadata cannot prove the
+          // exact filter: unseen rows may violate it. Never report ready.
+          const valid = envelope?.success !== false && !!identity &&
+            Array.isArray(results) && results.length > 0 &&
+            isCompleteFirstPage(filtered, results) &&
+            results.every((raw) => {
+              if (!hasUsableProduct([raw])) return false;
+              const product = raw as Record<string, unknown>;
+              return Number.isSafeInteger(product.id) && Number(product.id) > 0 &&
+                typeof product.article === "string" &&
+                product.article.trim() === identity.article;
+            }) &&
+            results.some((raw) =>
+              (raw as Record<string, unknown>).id === identity.id
+            );
+          return { check: valid
+            ? { status: "ok", http_status: response.status }
+            : {
+              status: "unavailable",
+              http_status: response.status,
+              classification: "schema_error",
+            } };
+        }
         // Discovery accepts either envelope; search_catalog specifically
         // consumes data.results, so the products check follows that adapter.
         const data = name === "categories"
@@ -263,6 +327,7 @@ async function checkEndpoint(
           : null;
         const validCategories = Array.isArray(results) &&
           results.length > 0 &&
+          isCompleteFirstPage(data, results) &&
           results.every((root) =>
             root && typeof root === "object" && !Array.isArray(root) &&
             typeof root.id === "number" &&
@@ -270,7 +335,8 @@ async function checkEndpoint(
           );
         const validProducts = Array.isArray(results) &&
           hasUsableProduct(results);
-        if (name === "categories" ? !validCategories : !validProducts) {
+        if (envelope?.success === false ||
+          (name === "categories" ? !validCategories : !validProducts)) {
           return { check: {
             status: "unavailable",
             http_status: response.status,
@@ -301,15 +367,15 @@ async function checkEndpoint(
 }
 
 /**
- * Checks route availability on one representative live leaf. This is not
- * proof that a different customer's exact category has healthy facets; use
+ * Checks route availability on one representative live leaf and exact article.
+ * This is not proof that a different customer's exact category has healthy facets; use
  * the private exact-category route probe before that paid QA scenario.
  */
 export async function runCatalogHealthPreflight(
   deps: CatalogClientDeps,
 ): Promise<CatalogHealthPreflightResult> {
-  // The first two checks are independent. Facets follow only after a live,
-  // validated leaf is available, with one additional bounded read-only call.
+  // The first two checks are independent. Facets and exact article follow
+  // only after usable baseline data, with bounded read-only calls in parallel.
   const [categoryResult, productResult] = await Promise.all([
     checkEndpoint("categories", deps),
     checkEndpoint("products", deps),
@@ -342,14 +408,34 @@ export async function runCatalogHealthPreflight(
       checks,
     };
   }
-  const facets = (await checkEndpoint("facets", deps, leaf)).check;
-  const allChecks = { ...checks, facets };
-  return facets.status === "ok"
+  const identity = representativeProductIdentity(productResult.results ?? []);
+  if (!identity) {
+    return {
+      ok: false,
+      status: "unavailable",
+      classification: "schema_error",
+      checks: {
+        ...checks,
+        article_filter: {
+          status: "unavailable", http_status: null, classification: "schema_error",
+        },
+      },
+    };
+  }
+  const [facetResult, articleResult] = await Promise.all([
+    checkEndpoint("facets", deps, leaf),
+    checkEndpoint("article_filter", deps, undefined, identity),
+  ]);
+  const facets = facetResult.check;
+  const article_filter = articleResult.check;
+  const allChecks = { ...checks, facets, article_filter };
+  return facets.status === "ok" && article_filter.status === "ok"
     ? { ok: true, status: "ready", checks: allChecks }
     : {
       ok: false,
       status: "unavailable",
-      classification: facets.classification ?? "upstream",
+      classification: (facets.status !== "ok" ? facets : article_filter)
+        .classification ?? "upstream",
       checks: allChecks,
     };
 }

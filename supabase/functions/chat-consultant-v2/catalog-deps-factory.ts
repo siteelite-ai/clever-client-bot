@@ -60,9 +60,11 @@ import {
   RESOLVER_THRESHOLDS_DEFAULT,
 } from "./config.ts";
 
-// ─── Categories live cache (module-level, TTL 1h) ───────────────────────────
+// ─── Categories live cache (module-level, TTL 15 min) ───────────────────────
 
 let _categoriesCache: { value: string[]; ts: number } | null = null;
+const MAX_CATEGORY_NODES = 12_000;
+const MAX_CATEGORY_DEPTH = 10;
 
 async function fetchCategoriesLive(
   baseUrl: string,
@@ -75,8 +77,10 @@ async function fetchCategoriesLive(
     return _categoriesCache.value;
   }
   const acc = new Set<string>();
+  let visitedNodes = 0;
   let page = 1;
   let totalPages = 1;
+  let expectedPagination: { pages: number; perPage: number; total: number } | null = null;
   do {
     const params = new URLSearchParams({
       parent: "0",
@@ -97,27 +101,79 @@ async function fetchCategoriesLive(
       console.warn(
         `[catalog-deps] /categories HTTP ${res.status} on page ${page}, aborting`,
       );
-      break;
+      throw new Error(`/categories HTTP ${res.status} on page ${page}`);
     }
     // deno-lint-ignore no-explicit-any
     const raw: any = await res.json();
-    const data = raw?.data ?? raw;
+    // An explicitly present but null data envelope is broken, not a signal
+    // to reinterpret sibling fields as a valid root-level catalog payload.
+    const data = raw && typeof raw === "object" && "data" in raw
+      ? raw.data
+      : raw;
+    const pagination = data?.pagination;
+    if ((raw && typeof raw === "object" && "success" in raw && raw.success !== true) ||
+      (data && typeof data === "object" && "success" in data && data.success !== true)) {
+      throw new Error(`/categories unsuccessful response on page ${page}`);
+    }
+    if (
+      !Array.isArray(data?.results) ||
+      !Number.isSafeInteger(pagination?.page) || pagination.page !== page ||
+      !Number.isSafeInteger(pagination?.per_page) || pagination.per_page < 1 ||
+      pagination.per_page > 200 ||
+      !Number.isSafeInteger(pagination?.pages) || pagination.pages < 1 ||
+      pagination.pages > 10 ||
+      !Number.isSafeInteger(pagination?.total) || pagination.total < 0 ||
+      pagination.pages !== Math.max(1, Math.ceil(pagination.total / pagination.per_page)) ||
+      (expectedPagination !== null &&
+        (pagination.pages !== expectedPagination.pages ||
+          pagination.per_page !== expectedPagination.perPage ||
+          pagination.total !== expectedPagination.total))
+    ) {
+      throw new Error(`/categories incomplete pagination on page ${page}`);
+    }
+    const expectedLength = Math.min(
+      pagination.per_page,
+      Math.max(0, pagination.total - (page - 1) * pagination.per_page),
+    );
+    if (data.results.length !== expectedLength) {
+      throw new Error(`/categories incomplete results on page ${page}`);
+    }
+    expectedPagination ??= {
+      pages: pagination.pages,
+      perPage: pagination.per_page,
+      total: pagination.total,
+    };
     // deno-lint-ignore no-explicit-any
-    const walk = (nodes: any[]) => {
-      if (!Array.isArray(nodes)) return;
+    const walk = (nodes: any[], depth = 0) => {
+      if (depth > MAX_CATEGORY_DEPTH) {
+        throw new Error(`/categories tree exceeds requested depth on page ${page}`);
+      }
       for (const n of nodes) {
-        if (n && typeof n.pagetitle === "string" && n.pagetitle.trim()) {
-          acc.add(n.pagetitle.trim());
+        if (++visitedNodes > MAX_CATEGORY_NODES) {
+          throw new Error("/categories tree exceeds safe node limit");
         }
-        if (n && Array.isArray(n.children) && n.children.length) walk(n.children);
+        if (!n || !Number.isSafeInteger(n.id) || n.id <= 0 ||
+          typeof n.pagetitle !== "string" || !n.pagetitle.trim() ||
+          (n.children != null && !Array.isArray(n.children))) {
+          throw new Error(`/categories incomplete node on page ${page}`);
+        }
+        acc.add(n.pagetitle.trim());
+        if (Array.isArray(n.children) && n.children.length) {
+          walk(n.children, depth + 1);
+        }
       }
     };
-    walk(data?.results ?? []);
-    totalPages = Math.max(1, Number(data?.pagination?.pages) || 1);
+    walk(data.results);
+    totalPages = pagination.pages;
     page++;
-  } while (page <= totalPages && page <= 10);
+  } while (page <= totalPages);
 
   const flat = Array.from(acc).sort();
+  if (flat.length === 0) {
+    throw new Error("/categories returned no categories");
+  }
+  // Never cache a failed or truncated traversal: only a fully verified list
+  // may be reused by the resolver for the next 15 minutes.
   _categoriesCache = { value: flat, ts: Date.now() };
   return flat;
 }
