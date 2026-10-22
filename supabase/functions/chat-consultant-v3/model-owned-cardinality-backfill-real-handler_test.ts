@@ -64,6 +64,19 @@ function protocolEvents(body: string): Event[] {
     .flatMap((event) => event.v3_event ? [event.v3_event as Event] : []);
 }
 
+function publicStreamText(body: string): string {
+  return body.split("\n\n")
+    .filter((part) => part.startsWith("data: ") && part !== "data: [DONE]")
+    .map((part) =>
+      JSON.parse(part.slice(6)) as {
+        choices?: Array<{ delta?: { content?: string } }>;
+      }
+    )
+    .flatMap((event) =>
+      event.choices?.map(({ delta }) => delta?.content ?? "") ?? []
+    ).join("\n");
+}
+
 async function runCase(
   fixtureProducts: Product[],
   options: { message?: string; history?: HistoryMessage[] } = {},
@@ -150,7 +163,10 @@ async function runCase(
                 key: "brand",
                 caption_ru: "Бренд",
                 type: "string",
-                values: [{ value_ru: "Тест", products_count: 5 }],
+                values: [{
+                  value_ru: "Тест",
+                  products_count: fixtureProducts.length,
+                }],
               }],
             },
           });
@@ -287,14 +303,17 @@ async function runCase(
       ),
     );
     assertEquals(response.status, 200);
-    const protocol = protocolEvents(await response.text());
+    const wireBody = await response.text();
+    const protocol = protocolEvents(wireBody);
+    const publicText = publicStreamText(wireBody);
     const trace = JSON.stringify({
       modelCalls,
       catalogQueries,
       steps,
       protocol,
+      publicText,
     });
-    return { modelCalls, catalogQueries, steps, protocol, trace };
+    return { modelCalls, catalogQueries, steps, protocol, publicText, trace };
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
@@ -403,6 +422,51 @@ Deno.test({
       ),
       result.trace,
     );
+  },
+});
+
+Deno.test({
+  name:
+    "one proven model-owned card is rendered with an honest explicit multi-choice shortfall",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runCase([
+      products[0],
+      { ...products[1], pagetitle: "Колодка штепсельная без кабеля" },
+    ], {
+      history: priorCableHistory,
+    });
+    assert(result.modelCalls.includes("search_catalog"), result.trace);
+    assert(!result.modelCalls.includes("render_products"), result.trace);
+    assertEquals(renderedIds(result.protocol), [101], result.trace);
+    const blocks = result.protocol.filter((event) =>
+      event.type === "products_block"
+    );
+    assertEquals(blocks.length, 1, result.trace);
+    assertEquals(Number(blocks[0].count), 1, result.trace);
+    assertEquals(
+      (blocks[0].selection_contract as { result_cardinality?: unknown })
+        ?.result_cardinality,
+      { target: 5, minimum: 3, mode: "alternatives", explicit: true },
+      result.trace,
+    );
+    assert(
+      result.steps.some(({ step, meta }) =>
+        step === "v3_result_cardinality_shortfall" && meta?.actual === 1 &&
+        meta?.source === "model_owned_filtered_terminal"
+      ),
+      result.trace,
+    );
+    assert(/подтвердить 1 вариант/iu.test(result.publicText), result.trace);
+    assert(
+      /ослабить условия|какое условие можно изменить/iu.test(result.publicText),
+      result.trace,
+    );
+    assert(
+      /с вашего согласия|без вашего согласия/iu.test(result.publicText),
+      result.trace,
+    );
+    assert(!result.trace.includes("item-900/"), result.trace);
   },
 });
 

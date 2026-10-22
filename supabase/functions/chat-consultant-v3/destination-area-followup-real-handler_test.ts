@@ -183,6 +183,8 @@ async function runFollowup({
   latestServerBatch = false,
   serverBatchProducts = [products[0]],
   catalogProducts = products,
+  catalogQueryProducts = null,
+  catalogQueryProductsByCall = null,
   categoryLeaf = leaf,
   includeShapeFacet = false,
   catalogProductDelayMs = 0,
@@ -209,6 +211,10 @@ async function runFollowup({
   latestServerBatch?: boolean;
   serverBatchProducts?: typeof products;
   catalogProducts?: typeof products;
+  /** A lexical page may differ from the first live category page. */
+  catalogQueryProducts?: typeof products | null;
+  /** Exercise consecutive grounded lexical pages with different evidence. */
+  catalogQueryProductsByCall?: Array<typeof products> | null;
   categoryLeaf?: string;
   includeShapeFacet?: boolean;
   catalogProductDelayMs?: number;
@@ -293,6 +299,7 @@ async function runFollowup({
   let steps: Step[] = [];
   let catalogRequests = 0;
   let catalogProductReads = 0;
+  let catalogQueryReads = 0;
   const catalogProductRequestUrls: string[] = [];
   let catalogProductInFlight = 0;
   let catalogProductPeakInFlight = 0;
@@ -507,7 +514,19 @@ async function runFollowup({
               });
             }
             const matching = title
-              ? catalogProducts.filter((product) => product.pagetitle === title)
+              ? [...catalogProducts, ...(catalogQueryProducts ?? [])].filter(
+                (product) => product.pagetitle === title,
+              )
+              : url.searchParams.has("query") && catalogQueryProductsByCall &&
+                  url.searchParams.get("per_page") === "8"
+              ? catalogQueryProductsByCall[Math.min(
+                catalogQueryReads++,
+                catalogQueryProductsByCall.length - 1,
+              )] ?? []
+              : url.searchParams.has("query") && catalogQueryProductsByCall
+              ? catalogProducts
+              : url.searchParams.has("query") && catalogQueryProducts
+              ? catalogQueryProducts
               : catalogProducts;
             return json({
               data: {
@@ -771,6 +790,22 @@ function hasEnforcedDestinationArea(
   return frozen && ((enforced && filteredSearch) || gatedRecovery);
 }
 
+function hasVerifiedAdditionalSelectionTerminalRecovery(steps: Step[]): boolean {
+  return steps.some(({ step, meta }) =>
+    step === "v3_server_rendered_selection_base_checked" &&
+    meta?.matched === true
+  ) && steps.some(({ step, meta }) =>
+    step === "v3_elliptical_selection_context_resolved" &&
+    meta?.additional_selection === true
+  ) && steps.some(({ step, meta }) =>
+    step === "v3_grounded_category_search_recovery" &&
+    (meta?.source === "category" || meta?.source === "token" ||
+      meta?.source === "server_verified_additional_selection")
+  ) && steps.some(({ step, meta }) =>
+    step === "v3_semantic_render_recovery" && Number(meta?.rendered) > 0
+  );
+}
+
 Deno.test({
   name: "other-options follow-up keeps the completed selection context when fresh catalog products return 502",
   permissions: { read: true, env: false, net: false },
@@ -859,6 +894,129 @@ Deno.test({
         ),
         answer,
       );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "a rejected category page cannot suppress a later budget-proven lexical page",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const expensive = {
+        ...item(
+          6,
+          "expensive-third",
+          "Светодиодный светильник для гостиной Дорогой",
+          "для гостиной",
+          35,
+        ),
+        price: 6_000,
+      };
+      const affordable = {
+        ...item(
+          7,
+          "affordable-third",
+          "Светодиодный светильник для гостиной Доступный",
+          "для гостиной",
+          35,
+        ),
+        price: 3_000,
+      };
+      const result = await runFollowup({
+        baseRequest:
+          "Покажи светодиодные светильники до 4000 тенге.",
+        catalogProducts: [expensive],
+        catalogQueryProducts: [affordable],
+        rawReasoning:
+          "Ищу светодиодные светильники в пределах указанного бюджета и проверяю цену каждого товара.",
+      });
+      assert(
+        result.catalogProductRequestUrls.some((url) =>
+          url.includes("category=") && !url.includes("query=")
+        ),
+        JSON.stringify(result.catalogProductRequestUrls),
+      );
+      assert(
+        result.catalogProductRequestUrls.some((url) => url.includes("query=")),
+        JSON.stringify({ urls: result.catalogProductRequestUrls, steps: result.steps }),
+      );
+      assert(
+        result.steps.some(({ step }) => step === "v3_remote_step_budget_finalize") &&
+          result.steps.some(({ step }) =>
+            step === "v3_verified_additional_category_pool_rejected"
+          ) &&
+          !result.steps.some(({ step }) =>
+            step === "v3_derived_selection_search_routed_to_finalizer"
+          ) &&
+          result.steps.some(({ step, meta }) =>
+            step === "v3_grounded_category_search_recovery" &&
+            (meta?.source === "category" || meta?.source === "token")
+          ),
+        JSON.stringify(result.steps),
+      );
+      const rendered = blocks(result.events);
+      assertEquals(rendered.length, 1, JSON.stringify(result.steps));
+      assert(rendered[0].markdown?.includes(affordable.url), JSON.stringify(result.steps));
+      assert(!rendered[0].markdown?.includes(expensive.url));
+      assert(!rendered[0].markdown?.includes(priorUrl));
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "an over-budget lexical page cannot suppress the next grounded valid page",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const expensive = {
+        ...item(
+          8,
+          "over-budget-lexical",
+          "Светодиодный светильник Дорогой",
+          "для гостиной",
+          35,
+        ),
+        price: 6_000,
+      };
+      const affordable = {
+        ...item(
+          9,
+          "within-budget-lexical",
+          "Светодиодный светильник Доступный",
+          "для гостиной",
+          35,
+        ),
+        price: 3_000,
+      };
+      const result = await runFollowup({
+        baseRequest: "Покажи светодиодные светильники до 4000 тенге.",
+        catalogProducts: [expensive],
+        catalogQueryProductsByCall: [[expensive], [affordable]],
+        rawReasoning:
+          "Ищу светодиодные светильники в пределах указанного бюджета и проверяю цену каждого товара.",
+      });
+      assert(
+        result.catalogProductRequestUrls.filter((url) =>
+          url.includes("query=") && url.includes("per_page=8")
+        ).length >= 2,
+        JSON.stringify(result.catalogProductRequestUrls),
+      );
+      assert(
+        result.steps.some(({ step }) =>
+          step === "v3_verified_additional_lexical_pool_rejected"
+        ),
+        JSON.stringify(result.steps),
+      );
+      const rendered = blocks(result.events);
+      assertEquals(rendered.length, 1, JSON.stringify(result.steps));
+      assert(rendered[0].markdown?.includes(affordable.url), JSON.stringify(result.steps));
+      assert(!rendered[0].markdown?.includes(expensive.url));
+      assert(!rendered[0].markdown?.includes(priorUrl));
     } finally {
       restoreOfflineModuleSetup();
     }
@@ -996,7 +1154,7 @@ Deno.test({
         assert(
           searches.length > 0 || result.steps.some(({ step }) =>
             step === "v3_terminal_visible_request_recovery"
-          ),
+          ) || hasVerifiedAdditionalSelectionTerminalRecovery(result.steps),
           JSON.stringify(result.steps),
         );
         for (const { meta } of searches) {
@@ -1071,7 +1229,7 @@ Deno.test({
       assert(
         roundSearches.length > 0 || modelOnlyRound.steps.some(({ step }) =>
           step === "v3_terminal_visible_request_recovery"
-        ),
+        ) || hasVerifiedAdditionalSelectionTerminalRecovery(modelOnlyRound.steps),
         JSON.stringify(modelOnlyRound.steps),
       );
       for (const { meta } of roundSearches) {

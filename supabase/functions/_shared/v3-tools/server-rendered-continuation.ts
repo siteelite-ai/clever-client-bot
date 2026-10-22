@@ -129,13 +129,16 @@ export function isNeutralAcknowledgement(query: string): boolean {
 function isSameAreaReaffirmation(
   query: string,
   base: string,
-  currentFollowup: string,
 ): boolean {
   // A number is normally a new criterion. The sole exception is a narrowly
   // worded suitability question that repeats the original destination area;
   // the independent area validator rejects a new room, size or other axis.
+  // That validator requires an additional-options selection as its witness.
+  // Use the same fixed witness for any past reaffirmation: its validity must
+  // not depend on the wording of the *current* read-only question. The current
+  // question is validated separately by isReadOnlyRenderedFollowup.
   return /\d/u.test(query) && verifiedRenderedDestinationContextUnchanged({
-    selectionRequest: `${base}\n${currentFollowup}`,
+    selectionRequest: `${base}\nА есть другие варианты?`,
     baseRequest: base,
     serverVerifiedBaseRequest: base,
     serverVerifiedPriorQueriesNewestFirst: [query, base],
@@ -145,14 +148,13 @@ function isSameAreaReaffirmation(
 function isUnchangedDependentTurn(
   query: string,
   base: string,
-  currentFollowup: string,
 ): boolean {
   return isAdditionalProductSelectionFollowup(query) ||
     isNeutralAcknowledgement(query) ||
     isRecentProductShowFollowup(query) ||
     isPureRecentPriceFollowup(query) ||
     isNeutralRenderedEvidenceQuestion(query) ||
-    isSameAreaReaffirmation(query, base, currentFollowup);
+    isSameAreaReaffirmation(query, base);
 }
 
 function isReadOnlyRenderedFollowup(query: string, base: string): boolean {
@@ -160,11 +162,7 @@ function isReadOnlyRenderedFollowup(query: string, base: string): boolean {
     isRecentProductShowFollowup(query) ||
     isPureRecentPriceFollowup(query) ||
     isNeutralRenderedEvidenceQuestion(query) ||
-    // The existing destination guard accepts an unchanged-area reaffirmation
-    // as an intervening turn. Its selection argument must be the short
-    // additional-options form; use that same validation for a current
-    // evidence-only question without inheriting any new criterion.
-    isSameAreaReaffirmation(query, base, "А есть другие варианты?");
+    isSameAreaReaffirmation(query, base);
 }
 
 /** A positive count alone is not proof: require the exact completed stream,
@@ -260,13 +258,15 @@ function completedZeroCardResponse(
     // A clarification, scope update, contact block or price certificate is
     // another active interaction, not a neutral zero-card bridge. Model prose
     // containing a catalog URL could be an uncounted card, so never skip it.
-    if (![
-      "diagnostic",
-      "delta",
-      "tool_event",
-      "assistant_turn_break",
-      "done",
-    ].includes(event.type)) {
+    if (
+      ![
+        "diagnostic",
+        "delta",
+        "tool_event",
+        "assistant_turn_break",
+        "done",
+      ].includes(event.type)
+    ) {
       return false;
     }
     if (
@@ -312,7 +312,6 @@ function hasDurableContinuationCertificate(
     !isUnchangedDependentTurn(
       query,
       base.user_query as string,
-      "А есть другие варианты?",
     ) ||
     !Array.isArray(row.steps) || row.steps.length === 0 ||
     row.steps.length > MAX_STEP_COUNT ||
@@ -350,9 +349,11 @@ function hasDurableContinuationCertificate(
   );
   if (activeProofSteps.length !== 1) return false;
   const verified = record(activeProofSteps[0]?.meta);
-  return Boolean(verified && verified.base_log_id === base.id &&
-    verified.latest_card_log_id === latestCard.id &&
-    verified.recovered_count === latestCardCount && latestCardCount > 0);
+  return Boolean(
+    verified && verified.base_log_id === base.id &&
+      verified.latest_card_log_id === latestCard.id &&
+      verified.recovered_count === latestCardCount && latestCardCount > 0,
+  );
 }
 
 function proofFromVerifiedChain(
@@ -546,7 +547,7 @@ export function resolveServerRenderedSelectionProof(
   const intervening = ordered.slice(0, baseIndex);
   if (
     intervening.some(({ query }) =>
-      !isUnchangedDependentTurn(query, baseRequest, currentFollowup)
+      !isUnchangedDependentTurn(query, baseRequest)
     )
   ) return null;
   const shownProductUrls = baseCards.map(({ url }) => url);
