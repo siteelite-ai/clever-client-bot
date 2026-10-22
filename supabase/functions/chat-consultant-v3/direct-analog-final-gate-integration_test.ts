@@ -346,6 +346,10 @@ Deno.test({
     assertEquals(blocks[0].selection_contract?.direct_analog_proof?.status,
       "confirmed_direct");
     assertEquals(blocks[0].selection_contract?.direct_analog_proof?.candidates?.length, 3);
+    assert(JSON.stringify(result.events).includes("Кандидаты на замену: 3 шт."));
+    assert(JSON.stringify(result.events).includes("Прошли проверку по восьми критериям"));
+    assert(JSON.stringify(result.events).includes("Совместимость по габаритам, глубине, подключению и условиям установки не подтверждена"));
+    assert(!JSON.stringify(result.events).includes("Подборка прямых аналогов"));
     assert(result.steps.some(({ step }) => step === "v3_replacement_final_fact_gate_passed"));
     assert(!JSON.stringify(result.events).includes("private-technical-reviewer"));
     assert(!JSON.stringify(result.events).includes("PRIVATE_SENTINEL"));
@@ -438,7 +442,7 @@ Deno.test({
     assertEquals(blocks.length, 1, JSON.stringify(result.steps));
     assertEquals(blocks[0].count, 5);
     assertEquals(blocks[0].selection_contract?.direct_analog_proof, undefined);
-    assert(!JSON.stringify(result.events).includes("Подборка прямых аналогов"));
+    assert(!JSON.stringify(result.events).includes("Кандидаты на замену:"));
   },
 });
 

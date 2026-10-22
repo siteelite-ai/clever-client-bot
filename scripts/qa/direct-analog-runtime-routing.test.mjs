@@ -70,7 +70,7 @@ test("egress rebuilds proof from exact live cache, source, and rendered order", 
 test("a missing or changed certificate keeps the provisional claim and cannot leak staged proof", () => {
   assert.match(guarded, /if \(!directAnalogProof\) \{\s*send\(\{\s*type: "delta",\s*origin: "server",\s*content: `Это предварительные кандидаты/u);
   assert.match(egress, /let confirmedDirectAnalogProof: DirectAnalogProof \| null = null/u);
-  assert.match(egress, /const caption = confirmedDirectAnalogProof\s*\? `Подборка прямых аналогов[\s\S]*?: replacementProofCaption\(replacementLastProof\)/u);
+  assert.match(egress, /const caption = confirmedDirectAnalogProof\s*\? `Кандидаты на замену:[\s\S]*?Прошли проверку по восьми критериям[\s\S]*?Совместимость по габаритам, глубине, подключению и условиям установки не подтверждена[\s\S]*?: replacementProofCaption\(replacementLastProof\)/u);
   assert.match(egress, /direct_analog_proof: confirmedDirectAnalogProof \?\? undefined/u);
   assert.doesNotMatch(egress, /direct_analog_proof: stagedDirectProof/u);
   const compare = egress.indexOf("JSON.stringify(stagedDirectProof)");

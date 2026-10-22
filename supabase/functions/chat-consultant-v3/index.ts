@@ -25994,7 +25994,7 @@ Deno.serve(async (req) => {
               ),
             });
             const caption = confirmedDirectAnalogProof
-              ? `Подборка прямых аналогов по восьми проверенным параметрам: ${confirmedDirectAnalogProof.candidates.length} шт. Данные производителей утверждены и загружены для этого запроса; монтажное отверстие Ø${confirmedDirectAnalogProof.target_cutout_mm} мм и положительный остаток подтверждены. Полная взаимозаменяемость вне этих параметров не обещается: перед покупкой сверьте габариты, глубину и условия установки по паспортам.`
+              ? `Кандидаты на замену: ${confirmedDirectAnalogProof.candidates.length} шт. Прошли проверку по восьми критериям, включая диапазон монтажного отверстия для Ø${confirmedDirectAnalogProof.target_cutout_mm} мм. Совместимость по габаритам, глубине, подключению и условиям установки не подтверждена — сверьте их по паспортам перед покупкой.`
               : replacementProofCaption(replacementLastProof);
             const disclosure: SseEvent = {
               type: "delta",
