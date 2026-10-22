@@ -1,27 +1,27 @@
 {
   "schemaVersion": 1,
   "projectRef": "yngoixmvmxdfxokuafjp",
-  "runtime_source_commit_sha": "d3812d18ee681c404623abe3cbc1e746a3d2089c",
+  "runtime_source_commit_sha": "d049be0c307487445f9347af310086ebdb5ac44f",
   "widgetVersion": "widget-23a6d944053a770b",
   "previewFunctions": {
     "chat-consultant-closure-preview": {
-      "version": 2,
-      "ezbr_sha256": "0e333436381d2e0a95deb56815eb8a05c4b6b46bc0b51ff56a984b91052e1976",
+      "version": 3,
+      "ezbr_sha256": "435a592a2c9c13b80f0c99123bb2df5c68aa279ab0c598296dfd53be64f06300",
       "verify_jwt": true
     },
     "chat-consultant-v2-closure-preview": {
-      "version": 2,
-      "ezbr_sha256": "f6b85093864c3a85c8dcd3704bd12af7f8c61144ebf5e0767bf4a00e17b2b1a1",
+      "version": 3,
+      "ezbr_sha256": "76a8281ff4acbbdfbcdf381ef5c8076e8774df1fff149023d905196b9598dab1",
       "verify_jwt": true
     },
     "chat-consultant-v3-closure-preview": {
-      "version": 184,
-      "ezbr_sha256": "6bad7d403145848c73b661961a8931fd8d7cb9c25905e7c2b374ac061fd1e9f6",
+      "version": 186,
+      "ezbr_sha256": "3c0972e7427207c78f8bf2871f0d55b29d67f83456b99ee7a8c4a9add7631a25",
       "verify_jwt": true
     },
     "search-products-closure-preview": {
-      "version": 2,
-      "ezbr_sha256": "3dd905d5c455bef41beb73c7aa50042fe189a91489d894a219d5c17e145af182",
+      "version": 3,
+      "ezbr_sha256": "a031704de7cc5fa97d255e2cbb4b1ce500cb996b2bd30e8983358d892eec7c9a",
       "verify_jwt": true
     }
   },
