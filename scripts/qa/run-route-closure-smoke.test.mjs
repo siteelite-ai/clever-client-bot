@@ -8,9 +8,13 @@ import {
   ROUTE_CLOSURE_SECRET_ENV,
   ROUTE_CLOSURE_SECRET_HEADER,
   ROUTE_CLOSURE_TIMEOUT_MS,
+  ROUTE_CLOSURE_MAX_AGE_SECONDS,
+  ROUTE_CLOSURE_MAX_FUTURE_SECONDS,
 } from './run-route-closure-smoke.mjs';
 
-const secret = 'q'.repeat(64);
+const issuedSeconds = Math.floor(Date.now() / 1000);
+const runId = `${issuedSeconds}_${'0123456789abcdef'.repeat(2)}`;
+const secret = `${runId}_${'q'.repeat(64)}`;
 const jwt = [
   Buffer.from('{"alg":"HS256"}').toString('base64url'),
   Buffer.from('{"role":"anon"}').toString('base64url'),
@@ -65,7 +69,7 @@ test('exactly three fixed endpoints and five free, ordered checks per endpoint',
       assert.equal(init.method, 'POST');
       assert.equal(init.body, '{');
       assert.notEqual(init.headers[ROUTE_CLOSURE_SECRET_HEADER], secret);
-      assert.match(init.headers[ROUTE_CLOSURE_SECRET_HEADER], /^[A-Za-z0-9_-]{32,256}$/);
+      assert.match(init.headers[ROUTE_CLOSURE_SECRET_HEADER], /^\d{10}_[a-f0-9]{32}_[A-Za-z0-9_-]{64}$/);
     } else if (i % 5 === 3) {
       assert.equal(init.method, 'GET');
       assert.equal(init.body, undefined);
@@ -82,6 +86,7 @@ test('missing credentials, wrong project and arbitrary URLs fail before any requ
   const inputs = [
     { argv, env: {} },
     { argv, env: { [ROUTE_CLOSURE_SECRET_ENV]: 'short' } },
+    { argv, env: { [ROUTE_CLOSURE_SECRET_ENV]: 'q'.repeat(64) } },
     { argv: [], env: { [ROUTE_CLOSURE_SECRET_ENV]: secret } },
     { argv: ['--project-ref=otherproject'], env: { [ROUTE_CLOSURE_SECRET_ENV]: secret } },
     { argv: [...argv, '--endpoint=https://attacker.invalid'], env: { [ROUTE_CLOSURE_SECRET_ENV]: secret } },
@@ -95,6 +100,30 @@ test('missing credentials, wrong project and arbitrary URLs fail before any requ
     const code = await main({
       argv, env: { [ROUTE_CLOSURE_SECRET_ENV]: secret }, widgetSource,
       ...input,
+      emit: (summary) => summaries.push(summary),
+      fetchImpl: async () => { requests++; throw new Error('must not fetch'); },
+    });
+    assert.equal(code, 2);
+    assert.equal(requests, 0);
+    assert.deepEqual(summaries, [{ ok: false, status: 'not_run', classification: 'config' }]);
+  }
+});
+
+test('expired, future-dated, and malformed QA credentials fail before network', async () => {
+  assert.equal(ROUTE_CLOSURE_MAX_AGE_SECONDS, 20 * 60);
+  assert.equal(ROUTE_CLOSURE_MAX_FUTURE_SECONDS, 120);
+  const cases = [
+    { nowSeconds: issuedSeconds + ROUTE_CLOSURE_MAX_AGE_SECONDS + 1, value: secret },
+    { nowSeconds: issuedSeconds - ROUTE_CLOSURE_MAX_FUTURE_SECONDS - 1, value: secret },
+    { nowSeconds: Number.NaN, value: secret },
+    { nowSeconds: issuedSeconds, value: `${issuedSeconds}_${'g'.repeat(32)}_${'q'.repeat(64)}` },
+    { nowSeconds: issuedSeconds, value: `${runId}_${'q'.repeat(63)}` },
+  ];
+  for (const { nowSeconds, value } of cases) {
+    let requests = 0;
+    const summaries = [];
+    const code = await main({
+      argv, nowSeconds, env: { [ROUTE_CLOSURE_SECRET_ENV]: value }, widgetSource,
       emit: (summary) => summaries.push(summary),
       fetchImpl: async () => { requests++; throw new Error('must not fetch'); },
     });

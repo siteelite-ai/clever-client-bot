@@ -28,10 +28,21 @@ are forbidden and each request is aborted after five seconds at most.
 The preview functions must already be deployed with `verify_jwt = true` and
 configured to validate the `x-volt220-route-qa-secret` header against the
 server-side `VOLT220_ROUTE_QA_SECRET` **before** calling the underlying
-handler. An anon JWT alone is not sufficient. Generate the server-side QA
-secret independently, retain it only for the short QA window, and rotate or
-delete it immediately afterward. Keep it out of shell history, chat, issue
-comments, screenshots, and the repository. The runner
+handler. An anon JWT alone is not sufficient. Generate a new, independent
+QA secret for each run in this exact wire format:
+`<10-digit Unix epoch seconds>_<32 lowercase hex random digits>_<64 base64url random characters>`.
+Use a cryptographic random source for the 16-byte run ID and 48-byte value;
+the latter must be base64url without padding. Static 32–256-character secrets
+from the earlier draft are no longer accepted. Both the server and runner
+reject a credential more than 20 minutes old or dated over 120 seconds in the
+future. The server compares the whole credential with its configured secret;
+the timestamp alone never grants access. Allow for clock skew and finish the
+15-probe run within that window.
+
+Retain the matching secret only for the short QA window, and rotate or delete
+it immediately afterward. Expiry **does not remove** a lingering Supabase
+secret; verify deletion or rotation separately. Keep it out of shell history,
+chat, issue comments, screenshots, and the repository. The runner
 reads the public `anon` JWT from `public/widget.js`; it rejects a non-anon JWT.
 
 After securely placing the matching QA secret in the process environment:

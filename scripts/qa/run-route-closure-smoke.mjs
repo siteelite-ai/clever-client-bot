@@ -15,9 +15,20 @@ export const ROUTE_CLOSURE_FUNCTIONS = Object.freeze([
 export const ROUTE_CLOSURE_SECRET_ENV = 'VOLT220_ROUTE_QA_SECRET';
 export const ROUTE_CLOSURE_SECRET_HEADER = 'x-volt220-route-qa-secret';
 export const ROUTE_CLOSURE_TIMEOUT_MS = 5_000;
+export const ROUTE_CLOSURE_MAX_AGE_SECONDS = 20 * 60;
+export const ROUTE_CLOSURE_MAX_FUTURE_SECONDS = 120;
 
-const secretPattern = /^[A-Za-z0-9_-]{32,256}$/;
+const secretPattern = /^(\d{10})_[a-f0-9]{32}_[A-Za-z0-9_-]{64}$/;
 const jwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+function validSecret(value, nowSeconds) {
+  if (typeof value !== 'string' || !Number.isSafeInteger(nowSeconds)) return false;
+  const match = secretPattern.exec(value);
+  if (!match) return false;
+  const issuedSeconds = Number(match[1]);
+  return issuedSeconds - nowSeconds <= ROUTE_CLOSURE_MAX_FUTURE_SECONDS &&
+    nowSeconds - issuedSeconds <= ROUTE_CLOSURE_MAX_AGE_SECONDS;
+}
 
 function publicAnonKey(widgetSource) {
   const key = widgetSource.match(/supabaseKey:\s*'([^']+)'/)?.[1];
@@ -37,7 +48,9 @@ function endpointFor(functionName) {
 }
 
 function wrongSecret(secret) {
-  return `${secret[0] === 'A' ? 'B' : 'A'}${secret.slice(1)}`;
+  // Keep the timestamp and wire format valid: this probes the equality gate,
+  // not merely the format rejection branch.
+  return `${secret.slice(0, -1)}${secret.at(-1) === 'A' ? 'B' : 'A'}`;
 }
 
 const probeCases = Object.freeze([
@@ -110,6 +123,7 @@ export async function main({
   widgetSource,
   fetchImpl = fetch,
   timeoutMs = ROUTE_CLOSURE_TIMEOUT_MS,
+  nowSeconds = Math.floor(Date.now() / 1000),
   emit = (summary) => process.stdout.write(`${JSON.stringify(summary)}\n`),
 } = {}) {
   const configFailure = () => {
@@ -122,7 +136,7 @@ export async function main({
     timeoutMs > ROUTE_CLOSURE_TIMEOUT_MS) return configFailure();
 
   const secret = env?.[ROUTE_CLOSURE_SECRET_ENV];
-  if (typeof secret !== 'string' || !secretPattern.test(secret)) return configFailure();
+  if (!validSecret(secret, nowSeconds)) return configFailure();
 
   let anonKey;
   try {
