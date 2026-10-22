@@ -12,6 +12,7 @@ import {
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 import {
   buildDerivedSelectionPublicExplanation,
   buildDerivedSelectionReasoningMessages,
@@ -910,6 +911,15 @@ Deno.test("an unprojected physical context requires reasoning before catalog sea
   assertEquals(
     hasSelectionMeasurementContext(
       "Найди однополюсный автомат C16 не дороже 1 000 тенге",
+    ),
+    false,
+  );
+  assertEquals(
+    hasSelectionMeasurementContext(
+      joinCustomerTurns([
+        "Найди кабель ВВГ 3×1,5",
+        "А есть другие варианты?",
+      ]),
     ),
     false,
   );
@@ -1834,6 +1844,35 @@ Deno.test("two-sided fit reasoning cannot be projected as one scalar product mea
       "Расчётный показатель товара должен быть от 3750 до 5000 лм.",
     ),
     true,
+  );
+});
+
+Deno.test("scalar projection keeps customer and reasoning measurements separate without losing multiline units", () => {
+  const pairedReasoning = "мм. Проверю исходный и конечный размер.";
+  // Neither field independently contains a measured two-sided fit. The model
+  // must not supply the missing unit for a customer number across fields.
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужна трубка диаметром 12",
+      pairedReasoning,
+    ),
+    true,
+  );
+  // A line break inside one field is ordinary whitespace, so a genuine
+  // customer measurement still participates in the paired-fit contract.
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужна трубка диаметром 12\nмм.",
+      "Проверю исходный и конечный размер.",
+    ),
+    false,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужна трубка",
+      "Диаметр 12\nмм. Проверю исходный и конечный размер.",
+    ),
+    false,
   );
 });
 

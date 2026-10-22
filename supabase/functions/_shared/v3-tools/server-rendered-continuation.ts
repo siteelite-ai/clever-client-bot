@@ -10,6 +10,7 @@ import {
 import {
   verifiedRenderedDestinationContextUnchanged,
 } from "./destination-area-measurement-coverage.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 /** A bounded projection of prior durable v3 turns. Database
  * access and the current-turn exclusion belong to the caller. In particular,
@@ -138,7 +139,7 @@ function isSameAreaReaffirmation(
   // not depend on the wording of the *current* read-only question. The current
   // question is validated separately by isReadOnlyRenderedFollowup.
   return /\d/u.test(query) && verifiedRenderedDestinationContextUnchanged({
-    selectionRequest: `${base}\nА есть другие варианты?`,
+    selectionRequest: joinCustomerTurns([base, "А есть другие варианты?"]),
     baseRequest: base,
     serverVerifiedBaseRequest: base,
     serverVerifiedPriorQueriesNewestFirst: [query, base],

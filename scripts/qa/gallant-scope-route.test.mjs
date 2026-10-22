@@ -202,7 +202,11 @@ test('generic freeform assortment fallback verifies a live leaf, keeps compound 
   assert.match(routes, /freeformVerification\?\.status === "indeterminate"/);
   assert.match(routes, /Это не означает, что товаров нет/);
   assert.match(routes, /verifiedFreeformChoice && freeformCandidate/);
-  assert.match(routes, /\$\{freeformCandidate\.original_request\}/);
+  assert.match(
+    routes,
+    /effective_request:\s*joinCustomerTurns\(\[\s*freeformCandidate\.original_request,/,
+    'the verified original and current criteria must remain separate customer turns',
+  );
   assert.match(routes, /Текущие критерии клиента: \$\{userMessage\}/);
 
   const selected = between(

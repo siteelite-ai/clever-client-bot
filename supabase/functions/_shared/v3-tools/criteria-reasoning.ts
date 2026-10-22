@@ -883,8 +883,11 @@ function measuredCriterionIdentity(
       key.match(/(?:,|\()\s*([a-zа-я°]{1,6}[²³]?\d?)\)?\s*$/iu)?.[1] ??
         schemaMeasurementUnitTokens(key).at(-1) ?? "";
     const candidate = canonicalMeasurementUnit(tail);
+    // Model reasoning and customer wording are separate trust sources. Parse
+    // each before combining units, so a model's trailing number cannot take
+    // the customer's first word as its unit across the role boundary.
     const mentionedUnits = new Set(
-      extractClientQuantities(`${reasoningText}\n${customerText}`)
+      [reasoningText, customerText].flatMap(extractClientQuantities)
         .map((quantity) => canonicalMeasurementUnit(quantity.unit)),
     );
     if (candidate && mentionedUnits.has(candidate)) unit = candidate;

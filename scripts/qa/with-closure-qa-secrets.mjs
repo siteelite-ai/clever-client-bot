@@ -25,6 +25,7 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { request as httpsRequest } from 'node:https';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -37,6 +38,8 @@ const RUN_ID_PATTERN = /^\d{10}_[a-f0-9]{32}$/;
 const VALUE_SUFFIX_PATTERN = /^[A-Za-z0-9_-]{64}$/;
 const API_ORIGIN = 'https://api.supabase.com';
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_REQUEST_BYTES = 64 * 1024;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const CHILD_TIMEOUT_MS = 5 * 60_000;
 const CHILD_MAX_TIMEOUT_MS = 15 * 60_000;
 // Checkpoints after the first cleanup when POST may still finish server-side.
@@ -118,6 +121,116 @@ function requestSignal(abortSignal) {
   return abortSignal
     ? AbortSignal.any([abortSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
     : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+}
+
+/**
+ * The CLI transport deliberately uses Node's HTTPS client rather than fetch.
+ * It never follows redirects, retries requests, or exposes response bodies in
+ * errors. `requestImpl` is injectable so transport failure paths can be tested
+ * without making a network request.
+ */
+export function managementHttpsRequest(url, init, {
+  requestImpl = httpsRequest,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  maxResponseBytes = MAX_RESPONSE_BYTES,
+} = {}) {
+  return new Promise((resolve, reject) => {
+    let target;
+    const method = init?.method;
+    const body = init?.body;
+    try {
+      target = new URL(url);
+      if (target.origin !== API_ORIGIN || target.username || target.password || target.hash ||
+        !['GET', 'POST', 'DELETE'].includes(method) || init?.redirect !== 'error' ||
+        (method === 'GET' ? body !== undefined : typeof body !== 'string') ||
+        (body !== undefined && Buffer.byteLength(body) > MAX_REQUEST_BYTES) ||
+        !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > REQUEST_TIMEOUT_MS ||
+        !Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1 ||
+        maxResponseBytes > MAX_RESPONSE_BYTES) {
+        throw new Error('Invalid request');
+      }
+    } catch {
+      reject(new SafeQaError('Management API HTTPS request was invalid'));
+      return;
+    }
+    if (init.signal?.aborted) {
+      reject(new SafeQaError('Management API HTTPS request was interrupted'));
+      return;
+    }
+
+    let request;
+    let timer;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      init.signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      request?.destroy();
+      reject(new SafeQaError('Management API HTTPS transport failed'));
+    };
+    const succeed = (response) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(response);
+    };
+    const onAbort = () => fail();
+    try {
+      request = requestImpl(target, {
+        method,
+        headers: {
+          ...init.headers,
+          ...(body === undefined ? {} : { 'Content-Length': String(Buffer.byteLength(body)) }),
+        },
+      }, (response) => {
+        // https.request never follows redirects, and a 3xx is a hard failure.
+        if (response.statusCode >= 300 && response.statusCode < 400) {
+          fail();
+          return;
+        }
+        const chunks = [];
+        let byteCount = 0;
+        let ended = false;
+        response.on('data', (chunk) => {
+          if (settled) return;
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          byteCount += bytes.length;
+          if (byteCount > maxResponseBytes) fail();
+          else chunks.push(bytes);
+        });
+        response.on('error', fail);
+        response.on('aborted', fail);
+        response.on('close', () => { if (!ended) fail(); });
+        response.on('end', () => {
+          if (settled) return;
+          ended = true;
+          if (response.complete === false) {
+            fail();
+            return;
+          }
+          const responseBody = Buffer.concat(chunks).toString('utf8');
+          succeed({
+            status: response.statusCode,
+            json: async () => JSON.parse(responseBody),
+          });
+        });
+      });
+      request.on('error', fail);
+      init.signal?.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(fail, timeoutMs);
+      if (init.signal?.aborted) {
+        fail();
+        return;
+      }
+      request.end(body);
+    } catch {
+      fail();
+    }
+  });
 }
 
 /** Values, response bodies, and caught transport errors are never returned. */
@@ -230,7 +343,7 @@ export async function runWithClosureQaSecrets({
   token,
   command,
   args = [],
-  fetchImpl = fetch,
+  fetchImpl = managementHttpsRequest,
   createCredentials = createClosureQaCredentials,
   runChild = runTrustedChild,
   delay = defaultDelay,

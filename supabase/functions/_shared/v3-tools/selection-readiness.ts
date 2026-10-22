@@ -1,4 +1,5 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
@@ -241,7 +242,7 @@ export function resolveScopedCatalogSelectionContinuation(
   const category = record.resolved_category.trim().slice(0, 200);
   if (!original || !category) return null;
   return {
-    message: `${original}\nУточнение клиента: ${current}`,
+    message: joinCustomerTurns([original, `Уточнение клиента: ${current}`]),
     category,
   };
 }
@@ -286,11 +287,11 @@ interface ReadinessProfile {
 export function selectionReadinessEvidenceFromHistory(
   history: Array<{ role: string; content: string }>,
 ): string {
-  return history
+  const turns = history
     .filter((message) => message.role === "user")
     .map((message) => String(message.content ?? "").trim())
-    .filter(Boolean)
-    .join("\n");
+    .filter(Boolean);
+  return joinCustomerTurns(turns);
 }
 
 function explicitCompactSpecificationTokens(value: string): string[] {
@@ -846,7 +847,9 @@ export function selectReadinessClarification(
   if (!current) return null;
   // A label in a customer's question is not a supplied value.  In particular,
   // "площадь не знаю, высота 4 м" must not make both geometry axes complete.
-  const evidence = `${dialogueEvidence}\n${current}`.replace(
+  const evidence = joinCustomerTurns(
+    [String(dialogueEvidence ?? "").trim(), current].filter(Boolean),
+  ).replace(
     /(?:площад\p{L}*|размер\p{L}*|высот\p{L}*|мощн\p{L}*|ток\p{L}*|длин\p{L}*|расстоян\p{L}*|напряж\p{L}*|фаз\p{L}*|проклад\p{L}*|жил\p{L}*|заземл\p{L}*|цокол\p{L}*|форм\p{L}*|питан\p{L}*)[^,;.!?\n]{0,30}(?:не\s+знаю|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)/giu,
     "",
   );
@@ -953,7 +956,7 @@ export function resolveSelectionReadinessRequest(
   const original = record.token.trim().slice(0, 500);
   if (!original || !current) return { message: current, scoped: false };
   return {
-    message: `${original}\nУточнение клиента: ${current}`,
+    message: joinCustomerTurns([original, `Уточнение клиента: ${current}`]),
     scoped: true,
   };
 }

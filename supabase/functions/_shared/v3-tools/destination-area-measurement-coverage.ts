@@ -1,6 +1,8 @@
 import {
+  CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
   isPhysicalMeasurementUnit,
+  joinCustomerTurns,
   normalizeMeasurementText,
 } from "./criteria-consistency.ts";
 import {
@@ -10,7 +12,7 @@ import {
 import { verifyReplacementDestinationFit } from "./selection-contract.ts";
 
 export interface DestinationAreaMeasurementCoverageInput {
-  /** The synthetic request passed to selection: exact base + newline + follow-up. */
+  /** The synthetic request passed to selection: exact base + turn boundary + follow-up. */
   selectionRequest: string;
   /** The base recovered from the controlled product-batch history. */
   baseRequest: string;
@@ -90,7 +92,7 @@ function hasServerVerifiedAreaEvidence(
     latestAreaQuery &&
       containsOnlyRequiredArea(latestAreaQuery, minimumAreaM2) &&
       normalizedIdentity(evidence) ===
-        normalizedIdentity(`${followup}\n${latestAreaQuery}`),
+        normalizedIdentity(joinCustomerTurns([followup, latestAreaQuery])),
   );
 }
 
@@ -186,10 +188,12 @@ export function verifiedRenderedDestinationContextUnchanged(
   const verifiedBase = String(input.serverVerifiedBaseRequest ?? "");
   const selection = String(input.selectionRequest ?? "");
   if (
-    !base || !verifiedBase || !selection.startsWith(`${base}\n`) ||
+    !base || !verifiedBase ||
+    !selection.startsWith(`${base}${CUSTOMER_TURN_BOUNDARY}`) ||
     normalizedIdentity(base) !== normalizedIdentity(verifiedBase)
   ) return false;
-  const followup = selection.slice(base.length + 1).trim();
+  const followup = selection.slice(base.length + CUSTOMER_TURN_BOUNDARY.length)
+    .trim();
   if (!isAdditionalProductSelectionFollowup(followup)) return false;
   const baseFit = verifyReplacementDestinationFit(verifiedBase, []);
   const selectionFit = verifyReplacementDestinationFit(selection, []);
@@ -224,11 +228,13 @@ export function verifiedDestinationAreaCoversSoleMeasurement(
   const selection = String(input.selectionRequest ?? "");
   const evidence = String(input.customerMeasurementEvidence ?? "");
   if (
-    !base || !verifiedBase || !selection.startsWith(`${base}\n`) ||
+    !base || !verifiedBase ||
+    !selection.startsWith(`${base}${CUSTOMER_TURN_BOUNDARY}`) ||
     normalizedIdentity(base) !== normalizedIdentity(verifiedBase)
   ) return NOT_COVERED;
 
-  const followup = selection.slice(base.length + 1).trim();
+  const followup = selection.slice(base.length + CUSTOMER_TURN_BOUNDARY.length)
+    .trim();
   if (!isAdditionalProductSelectionFollowup(followup)) return NOT_COVERED;
 
   const baseFit = verifyReplacementDestinationFit(base, []);

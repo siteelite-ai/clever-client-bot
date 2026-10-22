@@ -4,6 +4,7 @@ import {
   extractClientQuantities,
   findUnderstatedCriteria,
   isPhysicalMeasurementUnit,
+  joinCustomerTurns,
   normalizeMeasurementText,
   normalizeUnit,
 } from "./criteria-consistency.ts";
@@ -49,6 +50,46 @@ Deno.test("extract: product codes are not measurements", () => {
   assertEquals(extractClientQuantities("Acti9 C16, номинальный ток 16 А"), [
     { value: 16, unit: "а" },
   ]);
+});
+
+Deno.test("extract: line breaks within one turn remain valid unit spacing", () => {
+  assertEquals(
+    extractClientQuantities("Нужен ток 16\nА"),
+    [{ value: 16, unit: "а" }],
+  );
+  assertEquals(
+    extractClientQuantities("Комната 25\nкв. м"),
+    [{ value: 25, unit: "м²" }],
+  );
+  assertEquals(extractClientQuantities("Сечение 120\nмм^2"), [
+    { value: 120, unit: "мм²" },
+  ]);
+  assertEquals(extractClientQuantities("Нужен ток 16\u2028А"), [
+    { value: 16, unit: "а" },
+  ]);
+  assertEquals(extractClientQuantities("Комната 25\u2029кв. м"), [
+    { value: 25, unit: "м²" },
+  ]);
+  assertEquals(extractClientQuantities("Нужен ток 16 А"), [
+    { value: 16, unit: "а" },
+  ]);
+});
+
+Deno.test("extract: server-composed turns cannot share a measurement unit", () => {
+  assertEquals(
+    extractClientQuantities(joinCustomerTurns([
+      "Найди кабель ВВГ 3×1,5",
+      "А есть другие варианты?",
+    ])),
+    [],
+  );
+  assertEquals(
+    extractClientQuantities(joinCustomerTurns([
+      "Комната 25\nкв. м",
+      "Нужен ток 16\nА",
+    ])),
+    [{ value: 25, unit: "м²" }, { value: 16, unit: "а" }],
+  );
 });
 
 Deno.test("normalizeUnit preserves ASCII square and cubic suffixes", () => {

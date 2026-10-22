@@ -17,6 +17,7 @@ import {
   isVerifiedReadinessScopeReply,
 } from "./active-selection-scope.ts";
 import { resolveSelectionReadinessRequest } from "./selection-readiness.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 function assertEquals(
   actual: unknown,
@@ -490,7 +491,10 @@ Deno.test("verified same-section choice outranks only a weak readiness new-task 
   assertEquals(
     resolveSelectionReadinessRequest("120 м²", slots),
     {
-      message: "Нужен прожектор для двора\nУточнение клиента: 120 м²",
+      message: joinCustomerTurns([
+        "Нужен прожектор для двора",
+        "Уточнение клиента: 120 м²",
+      ]),
       scoped: true,
     },
   );
@@ -554,8 +558,10 @@ Deno.test("a complete IEK floodlight refinement consumes readiness but a height 
   assertEquals(
     resolveSelectionReadinessRequest(shortAnswer, slots),
     {
-      message:
-        "Нужны уличные прожекторы для двора\nУточнение клиента: До 4 м",
+      message: joinCustomerTurns([
+        "Нужны уличные прожекторы для двора",
+        "Уточнение клиента: До 4 м",
+      ]),
       scoped: true,
     },
   );
@@ -622,7 +628,10 @@ Deno.test("a complete IEK floodlight refinement consumes readiness but a height 
   assertEquals(
     resolveSelectionReadinessRequest("Нужно 5кВт", cableSlots),
     {
-      message: "Подбери кабель IEK для двигателя\nУточнение клиента: Нужно 5кВт",
+      message: joinCustomerTurns([
+        "Подбери кабель IEK для двигателя",
+        "Уточнение клиента: Нужно 5кВт",
+      ]),
       scoped: true,
     },
   );

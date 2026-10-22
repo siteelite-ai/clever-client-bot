@@ -1,6 +1,7 @@
 import type { DiscoverCategoryOk, ProductRef } from "./types.ts";
 import { titleContainsLiteralToken } from "./category-reasoning-guard.ts";
 import { classifyConversationBoundaryLocally } from "./conversation-boundary.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 function normalize(value: string): string {
   return String(value ?? "")
@@ -731,7 +732,10 @@ export function resolveServerIssuedBroadAssortmentTypedContinuation(
     // The expert route treats this as customer wording. Do not inject helper
     // prose ("current criteria", "section" etc.): lexical recovery may read
     // those words as customer-specified product attributes.
-    effective_request: `${pending.original_request}\n${currentMessage}`,
+    effective_request: joinCustomerTurns([
+      pending.original_request,
+      currentMessage,
+    ]),
     slot_id: pending.slot_id,
     issued_slot: pending.issued_slot,
   };
@@ -770,8 +774,10 @@ export function resolveServerIssuedBroadAssortmentConstrainedContinuation(
     entity: pending.entity,
     leaf,
     original_request: originalRequest,
-    effective_request:
-      `${originalRequest}\nУточнение клиента по исходному запросу: раздел каталога «${leaf}».`,
+    effective_request: joinCustomerTurns([
+      originalRequest,
+      `Уточнение клиента по исходному запросу: раздел каталога «${leaf}».`,
+    ]),
     slot_id: pending.slot_id,
     issued_slot: pending.issued_slot,
   };
