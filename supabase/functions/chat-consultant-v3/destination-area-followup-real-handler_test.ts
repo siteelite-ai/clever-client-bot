@@ -188,6 +188,7 @@ async function runFollowup({
   catalogProductDelayMs = 0,
   catalogFailTitle = null,
   catalogFailMode = null,
+  catalogProductHttpStatus = null,
   rawReasoning = areaOnlyReasoning,
   retrievalQuery = "светодиодный светильник",
   requiredFacetValues = [],
@@ -213,6 +214,8 @@ async function runFollowup({
   catalogProductDelayMs?: number;
   catalogFailTitle?: string | null;
   catalogFailMode?: "status" | "hang_until_abort" | null;
+  /** Simulate an upstream outage for every fresh product search in this turn. */
+  catalogProductHttpStatus?: 502 | null;
   rawReasoning?: string;
   retrievalQuery?: string;
   requiredFacetValues?: string[];
@@ -466,6 +469,12 @@ async function runFollowup({
           const title = url.searchParams.get("pagetitle");
           if (title) catalogTitleLookups.push(title);
           try {
+            if (catalogProductHttpStatus !== null) {
+              return json(
+                { message: "private upstream diagnostic" },
+                catalogProductHttpStatus,
+              );
+            }
             if (title === catalogFailTitle && catalogFailMode === "status") {
               return json({ message: "catalog unavailable" }, 503);
             }
@@ -761,6 +770,100 @@ function hasEnforcedDestinationArea(
   );
   return frozen && ((enforced && filteredSearch) || gatedRecovery);
 }
+
+Deno.test({
+  name: "other-options follow-up keeps the completed selection context when fresh catalog products return 502",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const result = await runFollowup({
+        catalogProductHttpStatus: 502,
+        // A still-valid client cache must not become a source of fresh cards
+        // when the live catalog cannot verify the second selection.
+        poisonedCache: true,
+      });
+      const answer = publicText(result.events);
+      assert(result.priorLogReads >= 2, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_server_rendered_selection_base_checked" &&
+          meta?.matched === true
+        ),
+        JSON.stringify(result.steps),
+      );
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_elliptical_selection_context_resolved" &&
+          meta?.additional_selection === true && meta?.excluded_urls === 1
+        ),
+        JSON.stringify(result.steps),
+      );
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_user_constraints_frozen" &&
+          Array.isArray(meta?.added) &&
+          meta.added.some((criterion: unknown) => {
+            const value = criterion as Record<string, unknown>;
+            return value.key === "Максимальная площадь освещения, м2" &&
+              value.op === "min" && value.value === "30" &&
+              value.evidence === "user_explicit";
+          })
+        ),
+        JSON.stringify(result.steps),
+      );
+      assertEquals(
+        result.primaryReasoningRequests,
+        1,
+        JSON.stringify(result.steps),
+      );
+      assert(result.catalogProductReads >= 1, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step, meta }) => {
+          if (
+            step !== "v3_tool_call" || meta?.tool !== "search_catalog" ||
+            meta?.ok !== false || meta?.error_code !== "transport_5xx"
+          ) return false;
+          const args = meta.args as {
+            category_in?: string[];
+            options?: { lighting_area?: string[] };
+          } | undefined;
+          return args?.category_in?.includes(leaf) === true &&
+            args.options?.lighting_area?.every((value) =>
+              Number.parseFloat(value) >= 30
+            ) === true &&
+            (args.options?.lighting_area?.length ?? 0) > 0;
+        }),
+        JSON.stringify(result.steps),
+      );
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_catalog_transient_failure_seen" &&
+          meta?.error_code === "transport_5xx"
+        ),
+        JSON.stringify(result.steps),
+      );
+      assertEquals(
+        blocks(result.events).length,
+        0,
+        JSON.stringify(result.events),
+      );
+      assert(
+        answer.includes("временной технической ошибки") &&
+          answer.includes("Не могу подтвердить, что подходящих товаров нет"),
+        answer,
+      );
+      assert(!answer.includes(priorUrl) && !answer.includes(nextUrl), answer);
+      assert(
+        !/не наш[её]л|подходящих товаров нет|товаров не найдено/iu.test(
+          answer.replace("Не могу подтвердить, что подходящих товаров нет", ""),
+        ),
+        answer,
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
 
 Deno.test({
   name: "four-turn room area cannot become a mandatory chandelier shape in the real handler",
