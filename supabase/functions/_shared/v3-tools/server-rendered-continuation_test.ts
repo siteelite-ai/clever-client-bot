@@ -381,39 +381,41 @@ Deno.test("generic price dialogue keeps only the server-verified active card sco
     "an earlier but valid card ID is stale after newer cards",
   );
 
-  for (const [row, reason] of [
-    [
-      { ...verifiedPrice, steps: certifiedSteps.slice(0, 1) },
-      "missing active-proof certificate",
-    ],
-    [
-      {
-        ...verifiedPrice,
-        steps: certifiedSteps.map((step) =>
-          step.step ===
-              "v3_verified_rendered_scope_continuation"
-            ? {
-              ...step,
-              meta: {
-                base_log_id: "another-selection",
-                latest_card_log_id: "original-selection",
-                recovered_count: 1,
-              },
-            }
-            : step
-        ),
-      },
-      "stale base certificate",
-    ],
-    [
-      { ...verifiedPrice, response_events: [{ type: "done" }] },
-      "partial SSE stream",
-    ],
-    [
-      { ...verifiedPrice, user_query: "Какова их стоимость для кухни?" },
-      "new product criterion",
-    ],
-  ] as const) {
+  for (
+    const [row, reason] of [
+      [
+        { ...verifiedPrice, steps: certifiedSteps.slice(0, 1) },
+        "missing active-proof certificate",
+      ],
+      [
+        {
+          ...verifiedPrice,
+          steps: certifiedSteps.map((step) =>
+            step.step ===
+                "v3_verified_rendered_scope_continuation"
+              ? {
+                ...step,
+                meta: {
+                  base_log_id: "another-selection",
+                  latest_card_log_id: "original-selection",
+                  recovered_count: 1,
+                },
+              }
+              : step
+          ),
+        },
+        "stale base certificate",
+      ],
+      [
+        { ...verifiedPrice, response_events: [{ type: "done" }] },
+        "partial SSE stream",
+      ],
+      [
+        { ...verifiedPrice, user_query: "Какова их стоимость для кухни?" },
+        "new product criterion",
+      ],
+    ] as const
+  ) {
     assertEquals(
       resolveServerRenderedSelectionProof(
         [row, successfulSelection()],
@@ -551,7 +553,8 @@ Deno.test("generic scope certificate rejects changed task, unclassified zero-car
             { type: "diagnostic", phase: "start", log_id: "later" },
             {
               type: "delta",
-              content: "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-3/",
+              content:
+                "https://220volt.kz/catalog/svetotexnika/lyustry/lustra-3/",
             },
             {
               type: "diagnostic",
@@ -822,6 +825,89 @@ Deno.test("same-area reaffirmation and read-only comparison preserve completed s
   );
   assertEquals(proof?.baseRequest, request, "verified base");
   assertEquals(proof?.priorQueriesNewestFirst.length, 3, "bounded chain");
+});
+
+Deno.test("a prior same-area reaffirmation is independent of the current read-only question", () => {
+  const request =
+    "Хочу заменить люстру в зале 30 квадратов, мощность от 20 Вт. Покажи варианты";
+  const original = successfulSelection({ user_query: request });
+  const reaffirmation = certifiedZeroCardTurn(
+    "Они точно подходят для освещения 30 квадратных метров?",
+    { id: "reaffirmation", created_at: minutesAgo(2) },
+  );
+
+  for (
+    const question of [
+      "А есть другие варианты?",
+      "Почему эти варианты отличаются по цене?",
+      "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+      "Сколько стоят эти товары?",
+      "Какой из этих вариантов самый дешёвый?",
+    ]
+  ) {
+    const proof = resolveServerRenderedSelectionProof(
+      [reaffirmation, original],
+      sessionId,
+      request,
+      question,
+      now,
+    );
+    assertEquals(proof?.baseRequest, request, `base for ${question}`);
+    assertEquals(
+      proof?.priorQueriesNewestFirst.join("|"),
+      `${reaffirmation.user_query}|${request}`,
+      `verified chain for ${question}`,
+    );
+  }
+});
+
+Deno.test("a current read-only question cannot validate a changed prior criterion", () => {
+  const request =
+    "Хочу заменить люстру в зале 30 квадратов, мощность от 20 Вт. Покажи варианты";
+  const original = successfulSelection({ user_query: request });
+  for (
+    const changed of [
+      "Они точно подходят для освещения 40 квадратных метров?",
+      "Они точно подходят для спальни 30 квадратных метров?",
+      "Подбери варианты до 5000 тенге",
+      "Теперь нужен кабель",
+    ]
+  ) {
+    assertEquals(
+      resolveServerRenderedSelectionProof(
+        [
+          certifiedZeroCardTurn(changed, {
+            id: "changed",
+            created_at: minutesAgo(2),
+          }),
+          original,
+        ],
+        sessionId,
+        request,
+        "Сколько стоят эти товары?",
+        now,
+      ),
+      null,
+      `changed prior criterion: ${changed}`,
+    );
+  }
+  assertEquals(
+    resolveServerRenderedSelectionProof(
+      [
+        certifiedZeroCardTurn(
+          "Они точно подходят для освещения 30 квадратных метров?",
+          { id: "reaffirmation", created_at: minutesAgo(2) },
+        ),
+        original,
+      ],
+      sessionId,
+      request,
+      "Сколько стоят эти товары для спальни?",
+      now,
+    ),
+    null,
+    "changed current criterion",
+  );
 });
 
 Deno.test("semantic changes between cards and other-options request cannot inherit old selection", () => {
