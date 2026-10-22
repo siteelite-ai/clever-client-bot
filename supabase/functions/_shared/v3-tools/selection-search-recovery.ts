@@ -339,9 +339,10 @@ export function filterUnqualifiedCategoryBrowseCandidates<T extends ProductRef>(
 }
 
 /**
- * A live category can contain products while its combined full-text/category
- * lookup returns zero. For a genuinely unconstrained multi-choice request,
- * retry the SAME verified leaf once as a bounded category-only lookup. This
+ * A live category can contain more products than its combined full-text/category
+ * lookup returns. For a genuinely unconstrained multi-choice request whose
+ * source-proven pool is below the explicit minimum, retry the SAME verified
+ * leaf once as a bounded category-only lookup. This
  * changes retrieval, not eligibility: every card still traverses the usual
  * target, mandatory, compatibility and budget gates. No invented category,
  * synonym or facet enters the request.
@@ -409,9 +410,10 @@ export function buildUnqualifiedCategoryBrowseRecovery(
 
   if (
     !Number.isInteger(input.initial_results_count) ||
-    input.initial_results_count !== 0 ||
+    input.initial_results_count < 0 ||
     !Number.isInteger(input.minimum_results) ||
     input.minimum_results <= 1 ||
+    input.initial_results_count >= input.minimum_results ||
     !input.explicit_multiple_choice ||
     input.mandatory_criteria_count !== 0 ||
     input.customer_constraint_count !== 0 ||
@@ -514,26 +516,33 @@ export function buildUnqualifiedCategoryBrowseRecovery(
 }
 
 function hasBroadApplicationFamily(criteria: Criterion[]): boolean {
-  const applicationKeys = new Set(
-    criteria.filter((criterion) =>
+  const applicationValuesByKey = new Map<string, string[]>();
+  for (const criterion of criteria) {
+    if (
       criterion.proof_scope === "application_suitability" &&
       criterion.evidence === "user_explicit" && criterion.op === "eq"
-    ).map((criterion) =>
-      String(criterion.key).toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
-        .trim()
-    ),
-  );
+    ) {
+      const key = String(criterion.key).toLocaleLowerCase("ru-RU")
+        .replace(/ё/gu, "е").trim();
+      applicationValuesByKey.set(key, [
+        ...(applicationValuesByKey.get(key) ?? []),
+        String(criterion.value),
+      ]);
+    }
+  }
   // A customer's one exact subtype is never an invitation to cross into
-  // sibling sales classes. Broad applications compiled from the live schema
-  // have an OR family of at least two customer-grounded class values.
-  return [...applicationKeys].some((key) =>
+  // sibling sales classes. A bare value equivalent to the application
+  // obligation itself is not a second product class in the OR family.
+  return [...applicationValuesByKey].some(([key, applicationValues]) =>
     new Set(
       criteria.filter((criterion) =>
         criterion.proof_scope !== "application_suitability" &&
         criterion.evidence === "user_explicit" && criterion.op === "eq" &&
         String(criterion.key).toLocaleLowerCase("ru-RU")
             .replace(/ё/gu, "е").trim() === key
-      ).map((criterion) => String(criterion.value)),
+      ).map((criterion) => String(criterion.value)).filter((value) =>
+        !isApplicationOnlyFamilyValue(value, applicationValues)
+      ),
     ).size >= 2
   );
 }
@@ -547,6 +556,17 @@ function classLexicalStems(value: string): string[] {
         ? token.slice(0, 4)
         : token
     );
+}
+
+function isApplicationOnlyFamilyValue(
+  value: string,
+  applicationValues: string[],
+): boolean {
+  const stems = new Set(classLexicalStems(value));
+  return stems.size > 0 && applicationValues.some((applicationValue) => {
+    const applicationStems = new Set(classLexicalStems(applicationValue));
+    return [...stems].every((stem) => applicationStems.has(stem));
+  });
 }
 
 function customerNamesNarrowFamilyValue(
@@ -564,12 +584,20 @@ function customerNamesNarrowFamilyValue(
     ),
   );
   for (const key of applicationKeys) {
+    const applicationValues = criteria.filter((criterion) =>
+      criterion.proof_scope === "application_suitability" &&
+      criterion.evidence === "user_explicit" && criterion.op === "eq" &&
+      String(criterion.key).toLocaleLowerCase("ru-RU")
+          .replace(/ё/gu, "е").trim() === key
+    ).map((criterion) => String(criterion.value));
     const variants = criteria.filter((criterion) =>
       criterion.proof_scope !== "application_suitability" &&
       criterion.evidence === "user_explicit" && criterion.op === "eq" &&
       String(criterion.key).toLocaleLowerCase("ru-RU")
           .replace(/ё/gu, "е").trim() === key
-    ).map((criterion) => new Set(classLexicalStems(String(criterion.value))));
+    ).map((criterion) => String(criterion.value))
+      .filter((value) => !isApplicationOnlyFamilyValue(value, applicationValues))
+      .map((value) => new Set(classLexicalStems(value)));
     if (variants.length < 2) continue;
     const shared = new Set(
       [...variants[0]].filter((stem) =>

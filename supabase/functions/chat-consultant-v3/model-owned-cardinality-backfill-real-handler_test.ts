@@ -79,7 +79,14 @@ function publicStreamText(body: string): string {
 
 async function runCase(
   fixtureProducts: Product[],
-  options: { message?: string; history?: HistoryMessage[] } = {},
+  options: {
+    message?: string;
+    history?: HistoryMessage[];
+    /** Simulate an incomplete full-text index inside one verified leaf. */
+    queryCount?: number;
+    /** Simulate repeated upstream rows sharing one catalog identity. */
+    queryDuplicates?: number;
+  } = {},
 ) {
   Deno.env.get = offlineEnvGet;
   const originalFetch = globalThis.fetch;
@@ -87,6 +94,18 @@ async function runCase(
   const intervals = new Set<number>();
   const modelCalls: string[] = [];
   const catalogQueries: string[] = [];
+  const activeLeaf = options.queryCount === undefined
+    ? leafCategory
+    : "Удлинители";
+  const activeCategory = options.queryCount === undefined
+    ? category
+    : "Удлинители";
+  const activeProducts = options.queryCount === undefined
+    ? fixtureProducts
+    : fixtureProducts.map((product) => ({
+      ...product,
+      category: activeLeaf,
+    }));
   let steps: Step[] = [];
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
@@ -146,8 +165,12 @@ async function runCase(
                   pagetitle: leafCategory,
                   children: [],
                 }],
+              }, {
+                id: 3,
+                pagetitle: "Удлинители",
+                children: [],
               }],
-              pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+              pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
             },
           });
         }
@@ -155,9 +178,9 @@ async function runCase(
           return json({
             data: {
               category: {
-                id: 1,
-                pagetitle: category,
-                total_products: fixtureProducts.length,
+                id: options.queryCount === undefined ? 1 : 3,
+                pagetitle: activeCategory,
+                total_products: activeProducts.length,
               },
               options: [{
                 key: "brand",
@@ -165,7 +188,7 @@ async function runCase(
                 type: "string",
                 values: [{
                   value_ru: "Тест",
-                  products_count: fixtureProducts.length,
+                  products_count: activeProducts.length,
                 }],
               }],
             },
@@ -181,18 +204,25 @@ async function runCase(
             ),
           ].filter(Boolean);
           const matching = categoryFilter.length > 0
-            ? fixtureProducts.filter((product) =>
+            ? activeProducts.filter((product) =>
               categoryFilter.includes(product.category)
             )
-            : fixtureProducts;
+            : activeProducts;
           const maxPrice = Number(url.searchParams.get("max_price"));
           const budgetSafe = maxPrice > 0
             ? matching.filter((product) => product.price <= maxPrice)
             : matching;
+          const queried = options.queryCount !== undefined &&
+              url.searchParams.has("query")
+            ? options.queryDuplicates && budgetSafe[0]
+              ? Array.from({ length: options.queryDuplicates }, () =>
+                budgetSafe[0])
+              : budgetSafe.slice(0, options.queryCount)
+            : budgetSafe;
           return json({
             data: {
-              results: budgetSafe.slice(0, perPage),
-              pagination: { total: budgetSafe.length },
+              results: queried.slice(0, perPage),
+              pagination: { total: queried.length },
             },
           });
         }
@@ -217,7 +247,7 @@ async function runCase(
               finish_reason: "stop",
               message: {
                 content: JSON.stringify({
-                  candidates: [{ pagetitle: category, confidence: 0.99 }],
+                  candidates: [{ pagetitle: activeCategory, confidence: 0.99 }],
                 }),
               },
             }],
@@ -243,11 +273,18 @@ async function runCase(
           )
         ) {
           modelCalls.push("search_catalog");
-          return modelTool("search_catalog", {
-            mode: "by_filter",
-            category: leafCategory,
-            per_page: 1,
-          }, `Ищу товары в подтверждённой категории «${leafCategory}».`);
+          return modelTool("search_catalog", options.queryCount === undefined
+            ? {
+              mode: "by_filter",
+              category: activeLeaf,
+              per_page: 1,
+            }
+            : {
+              mode: "by_query",
+              query: "удлинители",
+              category_in: [activeLeaf],
+              per_page: 1,
+            }, `Ищу товары в подтверждённой категории «${activeLeaf}».`);
         }
         if (
           body.tools?.some(({ function: schema }) =>
@@ -388,6 +425,115 @@ Deno.test({
       !result.steps.some(({ step }) =>
         step === "v3_result_cardinality_shortfall"
       ),
+      result.trace,
+    );
+  },
+});
+
+for (const queryCount of [1, 2]) {
+  Deno.test({
+    name:
+      `real full-text shortfall of ${queryCount} choice(s) browses only the same verified leaf`,
+    permissions: { read: true, env: false, net: false },
+    async fn() {
+      const result = await runCase(products, {
+        message: "Предложи несколько удлинителей на выбор",
+        queryCount,
+      });
+      const browse = result.steps.filter(({ step, meta }) =>
+        step === "v3_source_proven_cardinality_recovery" &&
+        meta?.kind === "verify_unqualified_browse_in_grounded_category"
+      );
+      assertEquals(browse.length, 1, result.trace);
+      assertEquals(browse[0].meta?.eligible, 5, result.trace);
+      assertEquals(renderedIds(result.protocol), [101, 102, 103, 104, 105], result.trace);
+      assertEquals(new Set(renderedIds(result.protocol)).size, 5, result.trace);
+      assert(
+        result.catalogQueries.some((raw) => {
+          const params = new URL(raw).searchParams;
+          return !params.has("query") &&
+            (params.get("category_in") === "Удлинители" ||
+              params.get("category") === "Удлинители") &&
+            Number(params.get("per_page")) === 50;
+        }),
+        result.trace,
+      );
+      assert(!result.steps.some(({ step }) =>
+        step === "v3_result_cardinality_shortfall"
+      ), result.trace);
+    },
+  });
+}
+
+Deno.test({
+  name: "three duplicate upstream rows count as one choice and trigger one same-leaf browse",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runCase(products, {
+      message: "Предложи несколько удлинителей на выбор",
+      queryCount: 3,
+      queryDuplicates: 3,
+    });
+    const browse = result.steps.filter(({ step, meta }) =>
+      step === "v3_source_proven_cardinality_recovery" &&
+      meta?.kind === "verify_unqualified_browse_in_grounded_category"
+    );
+    assertEquals(browse.length, 1, result.trace);
+    assertEquals(browse[0].meta?.eligible, 5, result.trace);
+    assertEquals(renderedIds(result.protocol), [101, 102, 103, 104, 105], result.trace);
+    assertEquals(new Set(renderedIds(result.protocol)).size, 5, result.trace);
+  },
+});
+
+Deno.test({
+  name: "real sparse leaf reports two proven choices without inventing a third",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runCase(products.slice(0, 2), {
+      message: "Предложи несколько удлинителей на выбор",
+      queryCount: 1,
+    });
+    assertEquals(renderedIds(result.protocol), [101, 102], result.trace);
+    assert(
+      result.steps.some(({ step, meta }) =>
+        step === "v3_source_proven_cardinality_recovery" &&
+        meta?.kind === "verify_unqualified_browse_in_grounded_category" &&
+        meta?.eligible === 2
+      ),
+      result.trace,
+    );
+    assert(
+      result.steps.some(({ step, meta }) =>
+        step === "v3_result_cardinality_shortfall" && meta?.actual === 2
+      ),
+      result.trace,
+    );
+    assert(/подтвердить 2 варианта/iu.test(result.publicText), result.trace);
+  },
+});
+
+Deno.test({
+  name: "real full-text shortfall cannot erase a numeric customer requirement",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runCase(products, {
+      message: "Предложи несколько удлинителей 16 А на выбор",
+      queryCount: 1,
+    });
+    assert(
+      !result.steps.some(({ step, meta }) =>
+        step === "v3_source_proven_cardinality_recovery" &&
+        meta?.kind === "verify_unqualified_browse_in_grounded_category"
+      ),
+      result.trace,
+    );
+    assert(
+      !result.catalogQueries.some((raw) => {
+        const params = new URL(raw).searchParams;
+        return !params.has("query") &&
+          (params.get("category_in") === "Удлинители" ||
+            params.get("category") === "Удлинители");
+      }),
       result.trace,
     );
   },

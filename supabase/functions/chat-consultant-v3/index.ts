@@ -11616,8 +11616,9 @@ async function runExpertLoop(
     });
   }
 
-  // One eligibility boundary serves both a zero-result query recovery and a
-  // model declaration that omitted search entirely. The latter can happen
+  // One eligibility boundary serves zero-result and short-of-choice query
+  // recoveries as well as a model declaration that omitted search entirely.
+  // The latter can happen
   // after a slow provider retry; waiting for a second model call leaves no
   // time for the already-grounded catalog lookup.
   const buildCurrentUnqualifiedCategoryBrowse = (
@@ -19934,7 +19935,25 @@ async function runExpertLoop(
               targetPassed.has(product.id) && visiblePassed.has(product.id)
             );
           };
-          let eligible = eligiblePool(result.results);
+          // Cardinality is the number of distinct catalog identities, never
+          // the number of repeated upstream rows for the same SKU.
+          let eligible = mergeSourceProvenSelectionPools(
+            [],
+            eligiblePool(result.results),
+          );
+          // A nonempty full-text response may still contain only one or two
+          // verified choices. For an unconstrained explicit multi-choice
+          // request, browse the same independently discovered leaf once;
+          // this is retrieval only, not permission to relax card eligibility.
+          // Zero-row recovery already runs above and must not be repeated.
+          const unqualifiedShortfallAttempt = eligible.length > 0 &&
+              eligible.length < resultCardinality.minimum &&
+              selectedSearchRecoveryAttempt === null
+            ? buildCurrentUnqualifiedCategoryBrowse(
+              runArgs,
+              eligible.length,
+            )
+            : null;
           // Snapshot the initial model result before optional recovery can
           // pull cards from a broader or unscoped search.
           if (
@@ -20025,10 +20044,15 @@ async function runExpertLoop(
           const recoveryQueue: Array<{
             attempt: SelectionSearchRecoveryAttempt;
             scope: "leaf" | "unscoped";
-          }> = shortfallPlan.map((attempt) => ({
-            attempt,
-            scope: "leaf",
-          }));
+          }> = [
+            ...(unqualifiedShortfallAttempt
+              ? [{ attempt: unqualifiedShortfallAttempt, scope: "leaf" as const }]
+              : []),
+            ...shortfallPlan.map((attempt) => ({
+              attempt,
+              scope: "leaf" as const,
+            })),
+          ];
           let unscopedAttempted = false;
           const recoveryDeadline = Math.min(
             TURN_TIMEOUT_MS - 6_000,
@@ -20091,6 +20115,8 @@ async function runExpertLoop(
               });
             if (
               scope === "leaf" && !unscopedAttempted &&
+              attempt.kind ===
+                "verify_literal_feature_under_broad_application" &&
               (emptyScopedRows || verifiedLiteralShortfall)
             ) {
               // A nonempty retrieval can still contain zero *proved* cards.
@@ -20133,7 +20159,7 @@ async function runExpertLoop(
             });
             if (eligible.length >= resultCardinality.minimum) break;
           }
-          if (shortfallPlan.length > 0 && eligible.length > 0) {
+          if (recoveryQueue.length > 0 && eligible.length > 0) {
             result = {
               ...result,
               results: eligible,

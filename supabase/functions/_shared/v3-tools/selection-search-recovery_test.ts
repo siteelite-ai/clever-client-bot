@@ -473,6 +473,28 @@ Deno.test("unqualified multi-choice browse retries only the same verified leaf",
   assertEquals(second.literal_qualifier_terms, []);
 });
 
+Deno.test("unqualified browse recovers one or two proven choices, but never a satisfied minimum", () => {
+  for (const initial_results_count of [0, 1, 2]) {
+    const attempt = buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      initial_results_count,
+    });
+    assert(attempt, `initial=${initial_results_count}`);
+    assertEquals(attempt.args, {
+      mode: "by_filter",
+      category_in: ["Удлинители"],
+      per_page: 50,
+    });
+    assertEquals(attempt.relaxed_inputs, ["full_text_retrieval_only"]);
+  }
+  for (const initial_results_count of [3, 4, -1, 1.5]) {
+    assertEquals(buildUnqualifiedCategoryBrowseRecovery({
+      ...unqualifiedBrowseInput,
+      initial_results_count,
+    }), null, `initial=${initial_results_count}`);
+  }
+});
+
 Deno.test("unqualified browse proves every remaining qualifier from product facts", () => {
   const attempt = buildUnqualifiedCategoryBrowseRecovery(
     unqualifiedBrowseInput,
@@ -649,7 +671,7 @@ Deno.test("unqualified browse excludes hard criteria, one-card and identity requ
   }
   for (const changes of [
     { minimum_results: 1 },
-    { initial_results_count: 1 },
+    { initial_results_count: 3 },
     { minimum_results: 0 },
     { explicit_multiple_choice: false },
   ]) {
@@ -1171,6 +1193,61 @@ Deno.test("frozen application alternative survives final composition and activat
   });
   assertEquals(unscoped.evidence_required_criteria, mandatory);
   assertEquals(unscoped.revalidate, plan[0].revalidate);
+});
+
+Deno.test("bare application value cannot make a broad product noun look like an explicit narrow subtype", () => {
+  const classKey = "Вид светильника";
+  const family: Criterion[] = [
+    "бытовые линейные светильники",
+    "бытовые светильники накладные",
+    "бытовой",
+  ].map((value) => ({
+    key: classKey,
+    op: "eq",
+    value,
+    evidence: "user_explicit",
+  }));
+  const application: Criterion = {
+    key: classKey,
+    op: "eq",
+    value: "бытовой",
+    evidence: "user_explicit",
+    proof_scope: "application_suitability",
+  };
+  const feature: Criterion = {
+    key: "С датчиком движения",
+    op: "eq",
+    value: "да",
+    evidence: "user_explicit",
+  };
+  const input = {
+    search_args: { mode: "by_filter", max_price: 4000 },
+    customer_message:
+      "Нужны бытовые светильники с датчиком движения до 4000, несколько вариантов",
+    mandatory_criteria: [...family, application, feature],
+    leaf_categories: ["Светильники"],
+    source_proven_count: 1,
+    minimum_results: 3,
+  };
+  const broad = buildSourceProvenCardinalityRecoveryPlan(input);
+  assertEquals(broad.length, 2);
+  assertEquals(broad[0].args, {
+    mode: "by_query",
+    query: "движения",
+    category_in: ["Светильники"],
+    max_price: 4000,
+    per_page: 50,
+  });
+  assertEquals(broad[0].evidence_required_criteria, input.mandatory_criteria);
+  assertEquals(buildSourceProvenCardinalityRecoveryPlan({
+    ...input,
+    customer_message:
+      "Нужны бытовые накладные светильники с датчиком движения до 4000",
+  }), []);
+  assertEquals(buildSourceProvenCardinalityRecoveryPlan({
+    ...input,
+    mandatory_criteria: [family[0], family[2], application, feature],
+  }), []);
 });
 
 Deno.test("nonempty acoustic-only scoped rows still permit one source-verified unscoped retry", () => {
