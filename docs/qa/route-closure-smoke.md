@@ -11,6 +11,15 @@ The only permitted destination is the canonical Supabase project
 - `chat-consultant-v2-closure-preview`
 - `search-products-closure-preview`
 
+Before requesting the private QA credential, run the read-only
+`scripts/qa/verify-preview-bundles.mjs` against
+`docs/qa/preview-bundles-candidate-20261022.json` with the Management PAT in a
+protected environment. It checks the four closed preview versions/hashes,
+their `verify_jwt` flags, the four unchanged public baselines and the local
+runtime source. A mismatch is a hard stop; update the manifest only after a
+deliberate, independently recorded deployment and a fresh public baseline.
+This attestation does not replace the routing smoke or prove catalog/AI behavior.
+
 For each path the runner expects: 403 with no QA secret, 403 with a wrong QA
 secret, **401 for an invalid Bearer JWT despite a valid QA secret**, 405 for an
 authenticated `GET`, and 400 for an authenticated `POST` containing only the
