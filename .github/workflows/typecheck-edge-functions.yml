@@ -19,6 +19,10 @@ on:
       - 'public/widget-version.js'
       - 'public/widget-version.json'
       - 'scripts/qa/**'
+      - 'src/pages/Settings.tsx'
+      - 'src/lib/settingsSave.ts'
+      - 'src/lib/settingsSave.test.ts'
+      - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
       - 'docs/qa/notion-source-index-20261009.json'
@@ -41,6 +45,10 @@ on:
       - 'public/widget-version.js'
       - 'public/widget-version.json'
       - 'scripts/qa/**'
+      - 'src/pages/Settings.tsx'
+      - 'src/lib/settingsSave.ts'
+      - 'src/lib/settingsSave.test.ts'
+      - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
       - 'docs/qa/notion-source-index-20261009.json'
@@ -91,6 +99,9 @@ jobs:
 
       - name: Test all QA evaluators and widget contracts
         run: node --test scripts/qa/*.test.mjs
+
+      - name: Test admin settings secret update boundary
+        run: ./node_modules/.bin/vitest run --config vitest.settings.config.ts
 
       - name: Verify pinned release inventory
         run: node scripts/qa/build-release-ledger.mjs --check
