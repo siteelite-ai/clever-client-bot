@@ -51,6 +51,21 @@ Deno.test("extract: product codes are not measurements", () => {
   ]);
 });
 
+Deno.test("extract: a new turn cannot supply the unit for a trailing product size", () => {
+  assertEquals(
+    extractClientQuantities("Найди кабель ВВГ 3×1,5\nА есть другие варианты?"),
+    [],
+  );
+  assertEquals(
+    extractClientQuantities("Найди модель 250\nКвадратов не требуется"),
+    [],
+  );
+  assertEquals(extractClientQuantities("Найди модель 250\nкв. м"), []);
+  assertEquals(extractClientQuantities("Нужен ток 16 А"), [
+    { value: 16, unit: "а" },
+  ]);
+});
+
 Deno.test("normalizeUnit preserves ASCII square and cubic suffixes", () => {
   assertEquals(normalizeUnit("мм2"), "мм²");
   assertEquals(normalizeUnit("м3"), "м³");

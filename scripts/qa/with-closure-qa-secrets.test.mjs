@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import {
   ACCESS_PREFIX,
   CATALOG_PREFIX,
   PROJECT_REF,
   createClosureQaCredentials,
+  managementHttpsRequest,
   runWithClosureQaSecrets,
 } from './with-closure-qa-secrets.mjs';
 
@@ -71,6 +73,144 @@ function options(api, runChild = async () => {}) {
   };
 }
 
+const MANAGEMENT_URL = `https://api.supabase.com/v1/projects/${PROJECT_REF}/secrets`;
+
+function fakeHttps({ statusCode = 200, chunks = ['[]'], error, stall = false, complete = true } = {}) {
+  const calls = [];
+  let destroyed = 0;
+  const requestImpl = (url, requestOptions, onResponse) => {
+    const request = new EventEmitter();
+    request.destroy = () => { destroyed++; };
+    request.end = (body) => {
+      calls.push({ url: String(url), options: requestOptions, body });
+      queueMicrotask(() => {
+        if (error) {
+          request.emit('error', new Error(error));
+          return;
+        }
+        if (stall) return;
+        const response = new EventEmitter();
+        response.statusCode = statusCode;
+        response.complete = complete;
+        onResponse(response);
+        for (const chunk of chunks) response.emit('data', chunk);
+        response.emit('end');
+        response.emit('close');
+      });
+    };
+    return request;
+  };
+  return { requestImpl, calls, get destroyed() { return destroyed; } };
+}
+
+function transportInit(method = 'GET', body) {
+  return {
+    method,
+    redirect: 'error',
+    headers: { Authorization: 'Bearer test-token', Accept: 'application/json' },
+    ...(body === undefined ? {} : { body }),
+  };
+}
+
+test('HTTPS transport sends exact method and body with bounded JSON response', async () => {
+  const list = fakeHttps({ chunks: ['[{"name":', '"TEST"}]'] });
+  const response = await managementHttpsRequest(MANAGEMENT_URL, transportInit(), { requestImpl: list.requestImpl });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), [{ name: 'TEST' }]);
+  assert.equal(list.calls[0].url, MANAGEMENT_URL);
+  assert.equal(list.calls[0].options.method, 'GET');
+  assert.equal(list.calls[0].body, undefined);
+
+  for (const [method, payload, statusCode] of [
+    ['POST', '[{"name":"TEST","value":"secret"}]', 201],
+    ['DELETE', '["TEST"]', 200],
+  ]) {
+    const api = fakeHttps({ statusCode, chunks: ['{}'] });
+    const result = await managementHttpsRequest(MANAGEMENT_URL, transportInit(method, payload), {
+      requestImpl: api.requestImpl,
+    });
+    assert.equal(result.status, statusCode);
+    assert.equal(api.calls.length, 1);
+    assert.equal(api.calls[0].options.method, method);
+    assert.equal(api.calls[0].options.headers['Content-Length'], String(Buffer.byteLength(payload)));
+    assert.equal(api.calls[0].body, payload);
+  }
+});
+
+test('HTTPS transport rejects redirects without following and redacts transport errors', async () => {
+  const redirect = fakeHttps({ statusCode: 307, chunks: ['{"location":"elsewhere"}'] });
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit(), { requestImpl: redirect.requestImpl }),
+    /transport failed/,
+  );
+  assert.equal(redirect.calls.length, 1);
+  assert.equal(redirect.destroyed, 1);
+
+  const failed = fakeHttps({ error: 'socket failed with test-token and secret' });
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit(), { requestImpl: failed.requestImpl }),
+    (error) => !String(error).includes('test-token') && !String(error).includes('secret'),
+  );
+});
+
+test('HTTPS transport refuses invalid origin, overlarge bodies, truncated responses, and invalid JSON', async () => {
+  const api = fakeHttps();
+  await assert.rejects(
+    managementHttpsRequest('https://example.com/secrets', transportInit(), { requestImpl: api.requestImpl }),
+    /request was invalid/,
+  );
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit('POST', 'x'.repeat(65 * 1024)), {
+      requestImpl: api.requestImpl,
+    }),
+    /request was invalid/,
+  );
+  assert.equal(api.calls.length, 0);
+
+  const oversized = fakeHttps({ chunks: ['12345', '67890'] });
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit(), {
+      requestImpl: oversized.requestImpl,
+      maxResponseBytes: 8,
+    }),
+    /transport failed/,
+  );
+  assert.equal(oversized.destroyed, 1);
+
+  const truncated = fakeHttps({ chunks: ['[]'], complete: false });
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit(), { requestImpl: truncated.requestImpl }),
+    /transport failed/,
+  );
+
+  const invalidJson = fakeHttps({ chunks: ['not-json'] });
+  const response = await managementHttpsRequest(MANAGEMENT_URL, transportInit(), {
+    requestImpl: invalidJson.requestImpl,
+  });
+  await assert.rejects(response.json(), SyntaxError);
+});
+
+test('HTTPS transport destroys stalled requests on abort or deadline', async () => {
+  const controller = new AbortController();
+  const aborted = fakeHttps({ stall: true });
+  const pending = managementHttpsRequest(MANAGEMENT_URL, {
+    ...transportInit(), signal: controller.signal,
+  }, { requestImpl: aborted.requestImpl });
+  controller.abort();
+  await assert.rejects(pending, /transport failed/);
+  assert.equal(aborted.destroyed, 1);
+
+  const timedOut = fakeHttps({ stall: true });
+  await assert.rejects(
+    managementHttpsRequest(MANAGEMENT_URL, transportInit(), {
+      requestImpl: timedOut.requestImpl,
+      timeoutMs: 5,
+    }),
+    /transport failed/,
+  );
+  assert.equal(timedOut.destroyed, 1);
+});
+
 test('runId and both values match the time-bounded gate protocol', () => {
   assert.match(FIXTURE.runId, /^\d{10}_[a-f0-9]{32}$/);
   assert.equal(FIXTURE.names[0], `${ACCESS_PREFIX}${FIXTURE.runId}`);
@@ -117,6 +257,19 @@ test('partial POST failure still deletes exactly both attempted names', async ()
   assert.deepEqual(api.calls.map((call) => call.method), ['GET', 'POST', 'DELETE', 'GET', 'GET', 'GET', 'GET']);
   assert.deepEqual(api.calls[2].body, FIXTURE.names);
   assert.equal(api.secrets.size, 0);
+});
+
+test('POST requires 201 and DELETE requires 200; neither status is retried as POST', async () => {
+  const createApi = fakeManagementApi({ createStatus: 200 });
+  await assert.rejects(runWithClosureQaSecrets(options(createApi)), /secret state uncertain/);
+  assert.equal(createApi.calls.filter((call) => call.method === 'POST').length, 1);
+  assert.equal(createApi.secrets.size, 0);
+
+  const deleteApi = fakeManagementApi({ deleteStatus: 201 });
+  await assert.rejects(runWithClosureQaSecrets(options(deleteApi)), /secret state uncertain/);
+  assert.equal(deleteApi.calls.filter((call) => call.method === 'POST').length, 1);
+  assert.equal(deleteApi.calls.filter((call) => call.method === 'DELETE').length, 1);
+  assert.equal(deleteApi.secrets.size, 0);
 });
 
 test('late POST completion after first DELETE is caught and re-deleted for this runId', async () => {

@@ -914,6 +914,12 @@ Deno.test("an unprojected physical context requires reasoning before catalog sea
     false,
   );
   assertEquals(
+    hasSelectionMeasurementContext(
+      "Найди кабель ВВГ 3×1,5\nА есть другие варианты?",
+    ),
+    false,
+  );
+  assertEquals(
     shouldRequireDerivedSelectionReasoning({
       intentMode: "select",
       phase: "search_after_discovery",
