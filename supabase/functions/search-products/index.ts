@@ -352,7 +352,8 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
         .abortSignal(signal)
         .single();
       signal.throwIfAborted();
-      if (data?.volt220_api_token) legacyDbToken = data.volt220_api_token;
+      const settingsRow = data as unknown as { volt220_api_token?: string | null } | null;
+      if (settingsRow?.volt220_api_token) legacyDbToken = settingsRow.volt220_api_token;
     } catch (e) {
       signal.throwIfAborted();
       console.log('[API Token] DB read failed, falling back to env var');
