@@ -32,6 +32,7 @@
 
 import { CircuitBreaker, getCatalogBreaker } from './circuit-breaker.ts';
 import { filterRawOptions, isBlacklistedFacetKey } from './facet-filter.ts';
+import { assessCategoryFacets } from '../../_shared/catalog-evidence.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -152,6 +153,8 @@ export interface CategoryOptionsResult {
   status: 'ok' | 'empty' | 'http_error' | 'timeout' | 'network_error' | 'upstream_unavailable';
   options: RawOption[];
   totalProducts: number;     // category.total_products из API (может быть 0 при degraded)
+  /** Verified identity from the upstream category, required for cache hits. */
+  categoryPagetitle?: string;
   ms: number;
   httpStatus?: number;
   errorMessage?: string;
@@ -295,7 +298,8 @@ async function fetchWithTimeout(
  *       - HTTP 5xx, timeout, network_error → `breaker.recordFailure()`.
  *   • 1 попытка с базовым `timeoutMs`.
  *   • При `kind ∈ {'timeout','network_error'}` → пауза 300ms и 2-я попытка
- *     с таймаутом × 1.33. (5xx НЕ ретраим — это уже ответ сервера, не транспорт.)
+ *     с таймаутом × 1.33. Для /categories/options отдельно допускается один
+ *     такой же retry HTTP 502; продуктовый поиск HTTP 5xx НЕ ретраит.
  *   • НИКАКИХ дальнейших ретраев. Это синхронный live-API в SSE-потоке —
  *     длительные backoff-ы недопустимы (fail-fast).
  *   • Q3 recovery (semantic, для не-ASCII facet keys) — отдельный слой,
@@ -310,6 +314,7 @@ async function fetchWithRetry(
   apiToken: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  retry502 = false,
 ): Promise<
   | { ok: true; res: Response }
   | { ok: false; kind: 'timeout' | 'network_error' | 'upstream_unavailable'; message: string }
@@ -321,14 +326,20 @@ async function fetchWithRetry(
     return { ok: false, kind: 'upstream_unavailable', message: 'circuit_breaker_open' };
   }
   let attempt = await fetchWithTimeout(url, apiToken, timeoutMs, fetchFn);
-  recordAttemptOutcome(breaker, attempt);
+  const retryableFacet502 = retry502 && attempt.ok && attempt.res.status === 502;
+  // A facet 502 plus its bounded retry is ONE logical breaker probe. Deferring
+  // its outcome also avoids stranding a HALF_OPEN probe or opening the shared
+  // product breaker after just three failed facet requests.
+  if (!retryableFacet502) recordAttemptOutcome(breaker, attempt);
 
-  if (attempt.ok) return attempt;
+  if (attempt.ok && !retryableFacet502) return attempt;
 
-  // Ретраим только транспорт (timeout/network), НЕ 5xx.
-  if (attempt.kind === 'timeout' || attempt.kind === 'network_error') {
+  // Точечный bounded retry для taxonomy/facets HTTP 502; продуктовый поиск
+  // сохраняет прежний latency-контракт и не ретраит HTTP 5xx.
+  if (retryableFacet502 ||
+      (!attempt.ok && (attempt.kind === 'timeout' || attempt.kind === 'network_error'))) {
     await new Promise((r) => setTimeout(r, 300));
-    if (!breaker.canPass()) {
+    if (!retryableFacet502 && !breaker.canPass()) {
       return { ok: false, kind: 'upstream_unavailable', message: 'circuit_breaker_open_on_retry' };
     }
     attempt = await fetchWithTimeout(url, apiToken, Math.round(timeoutMs * 1.33), fetchFn);
@@ -487,7 +498,7 @@ export async function getCategoryOptions(
   // Восстановленные различия от прежней версии: теперь ретраим и network_error
   // (раньше только timeout) — это корректно по спеке retry policy и
   // приводит к симметрии с searchProducts.
-  const fetched = await fetchWithRetry(url, deps.apiToken, timeoutMs, fetchFn);
+  const fetched = await fetchWithRetry(url, deps.apiToken, timeoutMs, fetchFn, true);
 
   if (!fetched.ok) {
     return {
@@ -523,19 +534,35 @@ export async function getCategoryOptions(
     };
   }
 
-  // Q2: double-unwrap.
-  const data: any = unwrapDouble(raw);
-  const optionsArrRaw: RawOption[] = Array.isArray(data?.options) ? data.options : [];
+  // HTTP 200 is not evidence of a usable schema. Validate the complete
+  // envelope, category identity and facet values before any caller can cache
+  // this result or infer that the category has no facets.
+  const evidence = assessCategoryFacets(raw, { pagetitle }, res.status);
+  if (evidence.state !== 'verified') {
+    return {
+      status: 'http_error',
+      options: [],
+      totalProducts: 0,
+      ms: Date.now() - t0,
+      httpStatus: res.status,
+      errorMessage: `unverified_facets:${evidence.reason}`,
+    };
+  }
+  const optionsArrRaw = evidence.options as unknown as RawOption[];
   // Manual blacklist (facet-filter.ts) — отсекаем технические/служебные ключи
   // и медиа-поля до того, как они попадут в Facet Matcher / price_clarify / кэш.
   const optionsArr: RawOption[] = filterRawOptions(optionsArrRaw);
-  const totalProducts = Number(data?.category?.total_products) || 0;
+  const totalProducts = evidence.totalProducts;
 
   if (optionsArr.length === 0) {
+    // A verified empty category is a real zero. If the response had facets but
+    // policy filtering removed them, this is still only "no usable facets",
+    // never a claim that the category itself is empty.
     return {
       status: 'empty',
       options: [],
       totalProducts,
+      categoryPagetitle: pagetitle,
       ms: Date.now() - t0,
     };
   }
@@ -544,6 +571,7 @@ export async function getCategoryOptions(
     status: 'ok',
     options: optionsArr,
     totalProducts,
+    categoryPagetitle: pagetitle,
     ms: Date.now() - t0,
   };
 }

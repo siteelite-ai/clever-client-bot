@@ -483,6 +483,59 @@ export async function assembleCatalog(
     meta: { status: resolver.status, pagetitle: resolver.pagetitle, confidence: resolver.confidence },
   });
 
+  // A failed or incomplete taxonomy cannot support a catalog absence claim.
+  // Stop before query expansion/fallback, which would otherwise turn a 502
+  // into a misleading soft_404 ("no products") and potentially change topic.
+  if (resolver.source === "error" && (
+    resolver.catalogEvidence === "visible_only" ||
+    resolver.error?.startsWith("list_categories:") ||
+    resolver.error === "empty_categories_list" ||
+    resolver.error === "incomplete_categories_list"
+  )) {
+    trace.errors.push({
+      stage: "category_resolver",
+      message: resolver.error ?? "catalog_taxonomy_unavailable",
+    });
+    if (input.route === "S_PRICE") {
+      const outcome: SPriceOutcome = {
+        status: "error",
+        products: [],
+        totalCount: 0,
+        clarifySlot: null,
+        zeroPriceLeak: 0,
+        autoNarrowingAttempts: 0,
+        branch: null,
+        errorMessage: "catalog_taxonomy_unavailable",
+        ms: now() - tCR0,
+      };
+      return {
+        composerOutcome: { kind: "price", outcome },
+        ood: false,
+        trace,
+        resolvedPagetitle: null,
+        disallowCrosssell: true,
+      };
+    }
+    const outcome: SearchOutcome = {
+      status: "error",
+      products: [],
+      totalFromApi: 0,
+      zeroPriceFiltered: 0,
+      postFilterDropped: 0,
+      attempts: [],
+      softFallbackContext: null,
+      errorMessage: "catalog_taxonomy_unavailable",
+      ms: now() - tCR0,
+    };
+    return {
+      composerOutcome: { kind: "search", outcome },
+      ood: false,
+      trace,
+      resolvedPagetitle: null,
+      disallowCrosssell: true,
+    };
+  }
+
   // ── 2b. §22.2 spec — Branch A kick-off (Query-First Category Noun Extractor)
   // Запускаем параллельно с probe и Query Expansion. Не блокирует пайплайн —
   // ждём только перед runSearch. Если флаг выключен ИЛИ deps нет ИЛИ extractor

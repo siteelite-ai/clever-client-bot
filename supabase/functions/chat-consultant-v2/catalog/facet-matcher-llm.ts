@@ -29,8 +29,8 @@ import {
   type CategoryOptionsResult,
   type RawOption,
   type RawOptionValue,
-  getCategoryOptions,
 } from './api-client.ts';
+import { loadCategoryFacets } from './facet-cache.ts';
 import { norm } from '../lexicon-resolver.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
@@ -405,21 +405,11 @@ export async function matchFacetsWithLLM(
   }
 
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
-  let facetsResult: CategoryOptionsResult;
-  let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = 'live';
-  try {
-    const cached = await deps.cacheGetOrCompute<CategoryOptionsResult>(
-      'facets',
-      input.pagetitle,
-      ttl,
-      () => getCategoryOptions(input.pagetitle, deps.apiClient),
-    );
-    facetsResult = cached.value;
-    source = cached.cacheHit ? 'cache' : 'live';
-  } catch {
-    source = 'unavailable';
-    facetsResult = await getCategoryOptions(input.pagetitle, deps.apiClient);
-  }
+  const loaded = await loadCategoryFacets(
+    input.pagetitle, ttl, deps.apiClient, deps.cacheGetOrCompute,
+  );
+  let facetsResult: CategoryOptionsResult = loaded.value;
+  let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = loaded.source;
 
   if (
     facetsResult.status === 'http_error' ||

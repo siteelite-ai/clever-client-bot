@@ -128,15 +128,16 @@ export async function getOrCompute<T>(
   ttlSec: number,
   compute: () => Promise<T>,
   locale: string = DEFAULT_LOCALE,
+  isCacheable: (value: T) => boolean = () => true,
 ): Promise<{ value: T; cacheHit: boolean; cacheKey: string }> {
   const cacheKey = await hashKey(namespace, rawKey, locale);
   const cached = await get<T>(cacheKey);
-  if (cached !== null && cached !== undefined) {
+  if (cached !== null && cached !== undefined && isCacheable(cached)) {
     return { value: cached, cacheHit: true, cacheKey };
   }
   const value = await compute();
-  // fire-and-forget set (не блокирует ответ пользователю)
-  set(cacheKey, value, ttlSec).catch(() => {});
+  // An HTTP or schema failure is a request outcome, not reusable evidence.
+  if (isCacheable(value)) set(cacheKey, value, ttlSec).catch(() => {});
   return { value, cacheHit: false, cacheKey };
 }
 
