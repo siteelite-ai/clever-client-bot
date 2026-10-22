@@ -213,13 +213,40 @@ Deno.test("catalog QA prefers a usable product's exact live leaf over unrelated 
       requestedLeaf = url.searchParams.get("pagetitle");
       return json({ data: {
         category: { id: 7, pagetitle: "Product leaf", total_products: 1 },
-        options: [],
+        options: [{ key: "brand", caption_ru: "Brand", values: [
+          { value_ru: "Fixture", products_count: 1 },
+        ] }],
       } });
     }) as typeof fetch,
   });
   assertEquals(requestedLeaf, "Product leaf");
   assertEquals(result.ok, true);
   assert(!JSON.stringify(result).includes("Product leaf"));
+});
+
+Deno.test("catalog QA requires a real facet value when the leaf has products", async () => {
+  for (const { values, expectedStatus } of [
+    { values: [], expectedStatus: "unavailable" },
+    { values: [{ value_ru: "Fixture", products_count: 1 }], expectedStatus: "ready" },
+  ] as const) {
+    const result = await runCatalogHealthPreflight({
+      baseUrl: BASE, apiToken: "fixture-private-token",
+      fetchImpl: (async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+        if (path.endsWith("/products")) return productPage([HEALTHY_PRODUCT]);
+        return json({ data: {
+          category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 },
+          options: [{ key: "brand", caption_ru: "Brand", values }],
+        } });
+      }) as typeof fetch,
+    });
+    assertEquals(result.status, expectedStatus);
+    assertEquals(result.checks.facets?.status, expectedStatus === "ready" ? "ok" : "unavailable");
+    if (expectedStatus === "unavailable") {
+      assertEquals(result.classification, "schema_error");
+    }
+  }
 });
 
 Deno.test("catalog QA retains independent results and never mistakes 500 for empty stock", async () => {
@@ -376,6 +403,43 @@ Deno.test("catalog QA rejects missing, contradictory, or invalid later taxonomy 
   assertEquals(shortFirst.result.classification, "schema_error");
 });
 
+Deno.test("catalog QA requires explicit children on both parent and leaf nodes", async () => {
+  for (const roots of [
+    [{ id: 1, pagetitle: "Root" }],
+    [{ id: 1, pagetitle: "Root", children: [{ id: 7, pagetitle: "Leaf" }] }],
+  ]) {
+    const { result, pageCalls, dependentCalls } = await checkCategoryPages(() =>
+      categoryPage(roots)
+    );
+    assertEquals(pageCalls, [1]);
+    assertEquals(dependentCalls, 0);
+    assertEquals(result.classification, "schema_error");
+    assertEquals(result.checks.categories.http_status, 200);
+  }
+});
+
+Deno.test("catalog QA uses the runtime depth=10 completeness boundary", async () => {
+  const rootsAtDepth = (leafDepth: number) => {
+    let node: { id: number; pagetitle: string; children: unknown[] } = {
+      id: 7, pagetitle: "Live leaf & parts", children: [],
+    };
+    for (let depth = leafDepth - 1; depth >= 0; depth--) {
+      node = { id: 100 + depth, pagetitle: `Ancestor ${depth}`, children: [node] };
+    }
+    return [node];
+  };
+  const complete = await checkCategoryPages(() => categoryPage(rootsAtDepth(9)));
+  assertEquals(complete.result.status, "ready");
+  assertEquals(complete.dependentCalls, 2);
+
+  // A node at the requested depth may have children hidden by the API even
+  // when it reports children=[]. Discovery rejects this exact boundary.
+  const truncated = await checkCategoryPages(() => categoryPage(rootsAtDepth(10)));
+  assertEquals(truncated.result.classification, "schema_error");
+  assertEquals(truncated.result.checks.categories.http_status, 200);
+  assertEquals(truncated.dependentCalls, 0);
+});
+
 Deno.test("catalog QA rejects a reported taxonomy larger than the page or node cap", async () => {
   for (const pagination of [
     { page: 1, per_page: 1, pages: 65, total: 65 },
@@ -458,6 +522,10 @@ Deno.test("catalog QA rejects malformed or wrong-leaf facets and times out the t
   for (const body of [
     { data: { category: { id: 8, pagetitle: "Other", total_products: 1 }, options: [] } },
     { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 } } },
+    { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 }, options: [] } },
+    { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 }, options: [
+      { key: "brand", caption_ru: "Brand", values: [] },
+    ] } },
     { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: -1 }, options: [] } },
     { data: { category: { id: 7, pagetitle: "Live leaf & parts", total_products: 1 }, options: [null] } },
     { success: false, ...HEALTHY_FACETS },

@@ -3,6 +3,7 @@ import {
   isRestrictedCatalogProduct,
   normalizeProductUrl,
 } from "./search-catalog.ts";
+import { assessCategoryFacets } from "../catalog-evidence.ts";
 
 /** This route is private QA infrastructure, never a customer chat message. */
 export const CATALOG_HEALTH_PREFLIGHT_TYPE = "catalog_health_preflight";
@@ -41,6 +42,9 @@ const MAX_CATEGORY_PAGES = 64;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_TAXONOMY_NODES = 12_000;
 const MAX_CATEGORY_TITLE_CHARS = 160;
+// Match the depth=10 completeness boundary of the discovery adapter. A node
+// at depth 10 may have descendants hidden by the requested tree depth.
+const REQUESTED_TAXONOMY_DEPTH = 10;
 
 type EndpointResult = { check: CheckResult; results?: unknown[] };
 type Leaf = { id: number; pagetitle: string };
@@ -118,10 +122,12 @@ function scanCategoryNodes(
   roots: unknown[],
   seenIds: Set<number>,
 ): boolean {
-  const stack = [...roots];
+  const stack = roots.map((node) => ({ node, depth: 0 }));
   while (stack.length > 0) {
     if (seenIds.size >= MAX_TAXONOMY_NODES) return false;
-    const raw = stack.pop();
+    const next = stack.pop();
+    if (!next || next.depth >= REQUESTED_TAXONOMY_DEPTH) return false;
+    const raw = next.node;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
     const node = raw as Record<string, unknown>;
     if (!Number.isSafeInteger(node.id) || Number(node.id) <= 0 ||
@@ -130,7 +136,9 @@ function scanCategoryNodes(
       return false;
     }
     seenIds.add(Number(node.id));
-    for (const child of node.children) stack.push(child);
+    for (const child of node.children) {
+      stack.push({ node: child, depth: next.depth + 1 });
+    }
   }
   return true;
 }
@@ -419,7 +427,14 @@ async function checkEndpoint(
             category?.pagetitle === leaf.pagetitle &&
             Number.isSafeInteger(category?.total_products) &&
             Number(category?.total_products) >= 0 &&
-            validOptions;
+            validOptions &&
+            // Keep QA readiness at least as strict as the runtime adapter:
+            // positive product count needs an actual facet value, not merely
+            // a nonempty list of empty facet shells.
+            assessCategoryFacets(json, {
+              categoryId: leaf.id,
+              pagetitle: leaf.pagetitle,
+            }).state === "verified";
           return { check: valid
             ? { status: "ok", http_status: response.status }
             : {

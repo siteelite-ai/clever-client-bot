@@ -156,7 +156,9 @@ Deno.test("catalog QA uses current settings and emits sanitized four-check resul
         assertEquals(url.searchParams.get("pagetitle"), "Root");
         return json({ data: {
           category: { id: 1, pagetitle: "Root", total_products: 1 },
-          options: [{ key: "type", caption_ru: "Type", values: [] }],
+          options: [{ key: "type", caption_ru: "Type", values: [
+            { value_ru: "Fixture", products_count: 1 },
+          ] }],
         } });
       }
     }
