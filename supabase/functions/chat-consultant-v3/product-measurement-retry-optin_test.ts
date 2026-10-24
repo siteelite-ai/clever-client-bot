@@ -9,9 +9,91 @@ import { restoreOfflineModuleSetup } from "./model-no-search-integration-fixture
 // catalog, database, browser or paid model is contacted by these tests.
 const {
   productMeasurementHttpRetryEnabled,
+  productMeasurementProCorrectionEnabled,
+  productMeasurementProCorrectionRoute,
   runProductMeasurementCorrection,
 } = await import("./index.ts");
 restoreOfflineModuleSetup();
+
+Deno.test("DeepSeek Pro correction is OFF outside the explicitly opted-in closed preview", () => {
+  const enabled = "true";
+  assertEquals(
+    productMeasurementProCorrectionEnabled({
+      admissionScope: "production",
+      closureScope: "closure_preview",
+      enabled,
+    }),
+    false,
+  );
+  assertEquals(
+    productMeasurementProCorrectionEnabled({
+      admissionScope: "preview",
+      closureScope: undefined,
+      enabled,
+    }),
+    false,
+  );
+  assertEquals(
+    productMeasurementProCorrectionEnabled({
+      admissionScope: "preview",
+      closureScope: "closure_preview",
+      enabled: undefined,
+    }),
+    false,
+  );
+  assertEquals(
+    productMeasurementProCorrectionEnabled({
+      admissionScope: "preview",
+      closureScope: "closure_preview",
+      enabled: "TRUE",
+    }),
+    false,
+  );
+  assertEquals(
+    productMeasurementProCorrectionEnabled({
+      admissionScope: "preview",
+      closureScope: "closure_preview",
+      enabled,
+    }),
+    true,
+  );
+});
+
+Deno.test("pinned Pro route applies only to product_measurement", () => {
+  assertEquals(
+    productMeasurementProCorrectionRoute({
+      repairReason: "product_measurement",
+      enabled: false,
+    }),
+    null,
+  );
+  for (
+    const repairReason of [
+      "invalid_declaration",
+      "environmental_protection",
+      "paired_fit",
+    ]
+  ) {
+    assertEquals(
+      productMeasurementProCorrectionRoute({
+        repairReason,
+        enabled: true,
+      }),
+      null,
+    );
+  }
+  assertEquals(
+    productMeasurementProCorrectionRoute({
+      repairReason: "product_measurement",
+      enabled: true,
+    }),
+    {
+      modelRouting: { model: "deepseek/deepseek-v4-pro-0813" },
+      providerRoute: "openrouter_only",
+      requestedModel: "deepseek/deepseek-v4-pro-0813",
+    },
+  );
+});
 
 Deno.test("paid measurement retry is OFF by default and scoped to its server lane", () => {
   const none = () => undefined;

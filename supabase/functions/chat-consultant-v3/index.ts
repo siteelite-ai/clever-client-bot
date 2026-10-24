@@ -903,7 +903,28 @@ const DERIVED_REASONING_LOVABLE_RETRY_ENABLED =
     apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY,
   });
 
+/** A closed-QA-only model experiment. Neither production nor ordinary preview
+ * can activate this route from a project-wide environment variable alone. */
+export function productMeasurementProCorrectionEnabled(input: {
+  admissionScope: ChatV3AdmissionScope;
+  closureScope: unknown;
+  enabled: string | null | undefined;
+}): boolean {
+  return input.admissionScope === "preview" &&
+    input.closureScope === "closure_preview" && input.enabled === "true";
+}
+const PRODUCT_MEASUREMENT_PRO_CORRECTION_ENABLED =
+  productMeasurementProCorrectionEnabled({
+    admissionScope: ADMISSION_SCOPE,
+    closureScope: CLOSURE_TEST_MARKER,
+    enabled: Deno.env.get(
+      "VOLT220_PRODUCT_MEASUREMENT_PRO_CLOSURE_PREVIEW_ENABLED",
+    ),
+  });
+
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
+const PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL =
+  "deepseek/deepseek-v4-pro-0813";
 const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
   MODEL,
   parseConfiguredModelFallbacks(
@@ -919,6 +940,25 @@ const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
     Deno.env.get("OPENROUTER_GENERAL_INQUIRY_FALLBACK_MODELS"),
   ),
 );
+/** Keep the preview experiment pinned to one model and OpenRouter: no model
+ * fallback and no Lovable provider failover on this correction call. */
+export function productMeasurementProCorrectionRoute(input: {
+  repairReason: string;
+  enabled: boolean;
+}): {
+  modelRouting: OpenRouterModelRouting;
+  providerRoute: "openrouter_only";
+  requestedModel: string;
+} | null {
+  if (input.repairReason !== "product_measurement" || !input.enabled) {
+    return null;
+  }
+  return {
+    modelRouting: { model: PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL },
+    providerRoute: "openrouter_only",
+    requestedModel: PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL,
+  };
+}
 const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
 const TURN_TIMEOUT_MS = 32_000;
@@ -3557,6 +3597,7 @@ interface ORResponse {
   toolCalls: ORToolCall[];
   finishReason: string;
   provider?: string;
+  httpStatus?: number;
 }
 
 interface ORToolSchema {
@@ -3759,6 +3800,7 @@ async function callOpenRouter(
     toolCalls,
     finishReason: data?.choices?.[0]?.finish_reason ?? "stop",
     provider,
+    httpStatus: res.status,
   };
 }
 
@@ -12980,6 +13022,32 @@ async function runExpertLoop(
                   };
                 }
               }
+              const proCorrectionRoute = productMeasurementProCorrectionRoute({
+                repairReason,
+                enabled: PRODUCT_MEASUREMENT_PRO_CORRECTION_ENABLED,
+              });
+              const correctionModelRouting = proCorrectionRoute?.modelRouting ??
+                GENERAL_INQUIRY_MODEL_ROUTING;
+              const correctionProviderRoute = proCorrectionRoute?.providerRoute ??
+                (DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? "openrouter_only"
+                  : "configured");
+              const correctionRoutingMeta = {
+                ...("model" in correctionModelRouting
+                  ? { requested_model: correctionModelRouting.model }
+                  : { requested_models: correctionModelRouting.models }),
+                requested_provider_route: correctionProviderRoute,
+              };
+              if (proCorrectionRoute) {
+                steps.push({
+                  step: "v3_product_measurement_pro_correction_route",
+                  ms: now(),
+                  meta: {
+                    ...correctionRoutingMeta,
+                    timeout_ms: correctionTimeout,
+                  },
+                });
+              }
               const correctionAttempt = (timeoutMs: number) => {
                 derivedReasoningProviderAttempts += 1;
                 return callOpenRouter(
@@ -12993,17 +13061,16 @@ async function runExpertLoop(
                   0,
                   [reasoningToolSchema],
                   1200,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
-                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED
-                    ? "openrouter_only"
-                    : "configured",
+                  correctionModelRouting,
+                  correctionProviderRoute,
                 );
               };
               try {
                 structuredReasoning = await runProductMeasurementCorrection({
                   repairReason,
                   retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
-                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED &&
+                    !proCorrectionRoute,
                   attempt: correctionAttempt,
                   initialTimeoutMs: correctionTimeout,
                   retryTimeoutMs: () =>
@@ -13019,6 +13086,7 @@ async function runExpertLoop(
                       step: "v3_product_measurement_correction_http_retry",
                       ms: now(),
                       meta: {
+                        ...correctionRoutingMeta,
                         upstream_status: httpError.status,
                         ...upstreamFailureDiagnosticMeta(httpError),
                         initial_timeout_ms: correctionTimeout,
@@ -13059,6 +13127,7 @@ async function runExpertLoop(
                     step: "v3_product_measurement_correction_failed",
                     ms: now(),
                     meta: {
+                      ...correctionRoutingMeta,
                       error_category: correctionFailure.kind,
                       upstream_status: correctionError instanceof
                           UpstreamHttpError
@@ -13092,7 +13161,9 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   repair_reason: repairReason,
-                  retry_model: GENERAL_INQUIRY_MODEL,
+                  ...correctionRoutingMeta,
+                  response_provider: structuredReasoning.provider ?? null,
+                  observed_http_status: structuredReasoning.httpStatus ?? null,
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
                     declaration?.text.trim() &&
