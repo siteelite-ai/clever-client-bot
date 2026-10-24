@@ -1,0 +1,205 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T15:57:41.401Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 2,
+  "requested_repetitions": {
+    "customer-vvgng-3x1_5-all": 1,
+    "customer-generator-clean-power": 1
+  },
+  "cases": [
+    {
+      "id": "customer-vvgng-3x1_5-all",
+      "title": "Все позиции негорючего кабеля ВВГ 3×1,5",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvgng-3x1_5-all_base_1792511861404_1",
+          "turns": [
+            {
+              "message": "какой есть кабель ввг 3*1,5 негорючий покажи все позиции",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14788,
+              "network_attempts": 1,
+              "log_id": "d870d74b-dab6-42e8-9f57-4a96b11d7985",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5/",
+                  "price": 500,
+                  "stockLine": "Алматы (10733 м), Караганда (1375 м), Астана (16 м)",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5/)**\n  Цена: *500* ₸/м\n  Наличие: Алматы (10733 м), Караганда (1375 м), Астана (16 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг 3*1,5",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5/",
+                  "price": 486,
+                  "stockLine": "Караганда (36705 м), Астана (7797 м), Алматы (802 м)",
+                  "cardText": "- **[Кабель ВВГ нг 3*1,5](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5/)**\n  Цена: *486* ₸/м\n  Наличие: Караганда (36705 м), Астана (7797 м), Алматы (802 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5 Тк",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-tk/",
+                  "price": 483,
+                  "stockLine": "Караганда (25867 м), Астана (934 м), Алматы (92 м)",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5 Тк](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-tk/)**\n  Цена: *483* ₸/м\n  Наличие: Караганда (25867 м), Астана (934 м), Алматы (92 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-gk-gost/",
+                  "price": 493,
+                  "stockLine": "Астана (20610 м), Караганда (6825 м), Актобе (3300 м) и ещё 2 городов",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-gk-gost/)**\n  Цена: *493* ₸/м\n  Наличие: Астана (20610 м), Караганда (6825 м), Актобе (3300 м) и ещё 2 городов"
+                }
+              ],
+              "text": "Понял требования: сохраняю точный размер 3×1,5 и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.Ищу товары в разделе «Кабель ВВГ». По обязательным условиям проверяю «Негорючесть: Да».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-6eb63311",
+                "mandatory_criteria": [
+                  {
+                    "key": "Негорючесть",
+                    "op": "eq",
+                    "value": "Да",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 8,
+                  "minimum": 3,
+                  "mode": "exhaustive",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Кабель ВВГ»: 226 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1357
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 230",
+                  "duration_ms": 507
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-generator-clean-power",
+      "title": "Генератор 900 Вт, котёл и чистая синусоида",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-generator-clean-power_base_1792511876204_1",
+          "turns": [
+            {
+              "message": "В частном коттедже иногда отключают электроэнергию. Я подключаю бензиновый генератор на 900 Вт, но у него грязная энергия. Для газового котла и циркуляционного насоса нужна чистая энергия. Подбери подходящее решение.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 5405,
+              "network_attempts": 1,
+              "log_id": "64e04478-59b9-4e10-99c0-56c9bb5171dd",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для газового котла нужен ИБП с явно указанной чистой синусоидой на выходе: ступенчатая или аппроксимированная форма может нарушать работу электроники, розжига и циркуляционного насоса.\n\nУточните максимальное суммарное потребление котла и насоса в Вт. Мощность ИБП выбирайте с запасом 50% и отдельно проверьте пусковой ток насоса: номинальная мощность в ВА не заменяет активную мощность в Вт.\n\nДля времени автономной работы проверьте ёмкость и напряжение батарей, возможность подключения внешнего аккумулятора и допустимый ток заряда. Перед покупкой сопоставьте эти параметры с паспортом конкретной модели котла.\n\nЕсли питание будет от генератора, совместимость входа конкретного ИБП с его напряжением и частотой пока не подтверждена; это нужно сверить по паспортам обоих устройств.\n\nВ найденных карточках недостаточно оснований для подбора по мощности: укажите максимальное суммарное потребление котла и насоса в Вт. До этого конкретную модель безопасно рекомендовать нельзя.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": "unverified",
+                  "summary": "ИБП: проверено 7 карточек, доказано 0",
+                  "duration_ms": 3681
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T15:58:01.615Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 2,
+    "recorded_cases": 2,
+    "planned_runs": 2,
+    "recorded_runs": 2,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "d870d74b-dab6-42e8-9f57-4a96b11d7985",
+    "64e04478-59b9-4e10-99c0-56c9bb5171dd"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

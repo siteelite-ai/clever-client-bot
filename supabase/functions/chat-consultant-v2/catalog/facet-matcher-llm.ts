@@ -29,8 +29,8 @@ import {
   type CategoryOptionsResult,
   type RawOption,
   type RawOptionValue,
-  getCategoryOptions,
 } from './api-client.ts';
+import { loadCategoryFacets } from './facet-cache.ts';
 import { norm } from '../lexicon-resolver.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
@@ -87,6 +87,8 @@ export interface FacetMatcherLLMResult {
   /** facet → alias-keys (для optionAliases в searchProducts; совместимость с §3.1). */
   optionAliases: Record<string, string[]>;
   source: 'cache' | 'live' | 'bootstrap' | 'unavailable';
+  /** Исходный статус /categories/options, до возможного bootstrap. */
+  facetSchemaStatus?: CategoryOptionsResult['status'];
   ms: number;
   /** Краткий слепок схемы, переданной LLM (для логов/отладки). */
   schemaDigest: { facets_count: number; total_values: number };
@@ -405,21 +407,12 @@ export async function matchFacetsWithLLM(
   }
 
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
-  let facetsResult: CategoryOptionsResult;
-  let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = 'live';
-  try {
-    const cached = await deps.cacheGetOrCompute<CategoryOptionsResult>(
-      'facets',
-      input.pagetitle,
-      ttl,
-      () => getCategoryOptions(input.pagetitle, deps.apiClient),
-    );
-    facetsResult = cached.value;
-    source = cached.cacheHit ? 'cache' : 'live';
-  } catch {
-    source = 'unavailable';
-    facetsResult = await getCategoryOptions(input.pagetitle, deps.apiClient);
-  }
+  const loaded = await loadCategoryFacets(
+    input.pagetitle, ttl, deps.apiClient, deps.cacheGetOrCompute,
+  );
+  let facetsResult: CategoryOptionsResult = loaded.value;
+  const facetSchemaStatus = facetsResult.status;
+  let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = loaded.source;
 
   if (
     facetsResult.status === 'http_error' ||
@@ -441,6 +434,7 @@ export async function matchFacetsWithLLM(
       mode: 'category_unavailable',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source: 'unavailable',
+      facetSchemaStatus,
       ms: Date.now() - t0,
     };
     }
@@ -452,6 +446,7 @@ export async function matchFacetsWithLLM(
       mode: 'no_facets',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source,
+      facetSchemaStatus,
       ms: Date.now() - t0,
     };
   }
@@ -578,6 +573,7 @@ export async function matchFacetsWithLLM(
       mode: 'llm_failed',
       unresolved: cleanTraits.map((t) => ({ trait: t })),
       source,
+      facetSchemaStatus,
       ms: Date.now() - t0,
       schemaDigest: { facets_count: facets.length, total_values: totalValues },
       llmModel,
@@ -676,6 +672,7 @@ export async function matchFacetsWithLLM(
     facetCaptions,
     optionAliases,
     source,
+    facetSchemaStatus,
     ms: Date.now() - t0,
     schemaDigest: { facets_count: facets.length, total_values: totalValues },
     llmModel,

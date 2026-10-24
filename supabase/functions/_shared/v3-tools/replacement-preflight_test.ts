@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 import {
   buildReplacementProofContract,
   compileLiveCompactReplacementContract,
@@ -120,12 +121,19 @@ Deno.test("a verified scoped replacement keeps the original source separate from
     },
   };
   const continuation = {
-    message: `${original}\nУточнение клиента: ${reply}`,
+    message: joinCustomerTurns([original, `Уточнение клиента: ${reply}`]),
     category,
   };
   assertEquals(
     resolveScopedReplacementSource(reply, continuation, slot),
     original,
+  );
+  assertEquals(
+    resolveScopedReplacementSource(reply, {
+      ...continuation,
+      message: `${original}\nУточнение клиента: ${reply}`,
+    }, slot),
+    null,
   );
   assertEquals(
     resolveScopedReplacementSource("2 полюса", continuation, slot),

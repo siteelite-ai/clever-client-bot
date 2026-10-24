@@ -9,6 +9,10 @@ import {
   type SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { filterPerProductMeasuredCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
+import {
+  CUSTOMER_TURN_BOUNDARY,
+  extractClientQuantities,
+} from "../_shared/v3-tools/criteria-consistency.ts";
 
 // Import the real pure/DB-bound helpers without opening an HTTP socket.
 const originalServe = Deno.serve;
@@ -154,6 +158,7 @@ Deno.test("initial request and a new topic never read or inherit prior measureme
     text: "Новая тема. Нужен светильник на 3000 лм",
     sourceCount: 0,
     lookupFailed: false,
+    priorQueriesNewestFirst: [],
   });
   assertEquals(calls(), 0);
 });
@@ -172,6 +177,9 @@ Deno.test("same-topic follow-up inherits customer numbers from completed server 
   );
   assertEquals(calls(), 2);
   assertEquals(result.sourceCount, 1);
+  assertEquals(result.priorQueriesNewestFirst, [
+    "Нужен светильник не менее 3000 лм",
+  ]);
   assertMatch(result.text, /Нужен светильник не менее 3000 лм/u);
   assertFalse(result.lookupFailed);
 });
@@ -192,6 +200,10 @@ Deno.test("repeated follow-ups retain the initial number across a rotated sessio
     Date.now(),
   );
   assertEquals(result.sourceCount, 1);
+  assertEquals(result.priorQueriesNewestFirst, [
+    "А ещё?",
+    "Нужен светильник на 3000 лм",
+  ]);
   assertMatch(result.text, /Нужен светильник на 3000 лм/u);
   assertFalse(result.lookupFailed);
 });
@@ -204,6 +216,19 @@ Deno.test("current explicit value overrides older value on the same physical sca
   assertFalse(result.text.includes("4000"));
   assertMatch(result.text, /25 м²/u);
   assertEquals(result.sourceCount, 1);
+});
+
+Deno.test("completed customer turns stay separate while multiline units within a turn survive", () => {
+  const result = composeVerifiedCustomerMeasurementEvidence(
+    "А есть другие варианты?",
+    ["Длина 10\nм; найди кабель ВВГ 3×1,5"],
+  );
+  assertEquals(result.sourceCount, 1);
+  assertEquals(result.text.includes(CUSTOMER_TURN_BOUNDARY), true);
+  assertEquals(extractClientQuantities(result.text), [{
+    value: 10,
+    unit: "м",
+  }]);
 });
 
 Deno.test("failed server-log read never upgrades client history to numeric authority", async () => {

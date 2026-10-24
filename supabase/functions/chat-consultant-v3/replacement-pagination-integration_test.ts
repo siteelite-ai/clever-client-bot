@@ -6,10 +6,12 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  enableVerifiedFactsInOfflineFixture,
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+enableVerifiedFactsInOfflineFixture();
+await import("./index.ts");
 
 const leaf = "Светильники";
 const sourceTitle =
@@ -39,11 +41,18 @@ function product(id: number, eligible = true) {
     category: leaf,
     price: 1200 + id,
     warehouses: [{ city: "Караганда", amount: 5 }],
-    options: traits.map(([key, caption, value]) => ({
-      key,
-      caption_ru: caption,
-      value_ru: !eligible && key === "kind" ? "линейный" : value,
-    })),
+    options: [
+      ...traits.map(([key, caption, value]) => ({
+        key,
+        caption_ru: caption,
+        value_ru: !eligible && key === "kind" ? "линейный" : value,
+      })),
+      // Synthetic proof for the guarded route. The real DN027B card lacks a
+      // verified cutout, so the live handler must still ask the customer.
+      { key: "cutout", caption_ru: "Монтажное отверстие, мм", value_ru: "90" },
+      { key: "lamp_technology", caption_ru: "Тип лампы", value_ru: "LED" },
+      { key: "lamp_socket", caption_ru: "Цоколь", value_ru: "нет" },
+    ],
   };
 }
 
@@ -81,7 +90,10 @@ type Run = {
 
 async function runTurn(
   secondPageEligibleIds: number[],
-  { completeWindow = false }: { completeWindow?: boolean } = {},
+  { completeWindow = false, sourceHasCutout = true }: {
+    completeWindow?: boolean;
+    sourceHasCutout?: boolean;
+  } = {},
 ): Promise<Run> {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
@@ -170,12 +182,32 @@ async function runTurn(
             url.searchParams.has("article") || url.searchParams.has("pagetitle")
           ) {
             return json({
-              data: { results: [source], pagination: { total: 1 } },
+              data: {
+                results: [
+                  sourceHasCutout ? source : {
+                    ...source,
+                    options: source.options.filter(({ key }) =>
+                      key !== "cutout"
+                    ),
+                  },
+                ],
+                pagination: { total: 1 },
+              },
             });
           }
           if (url.searchParams.has("query")) {
             return json({
-              data: { results: [source], pagination: { total: 1 } },
+              data: {
+                results: [
+                  sourceHasCutout ? source : {
+                    ...source,
+                    options: source.options.filter(({ key }) =>
+                      key !== "cutout"
+                    ),
+                  },
+                ],
+                pagination: { total: 1 },
+              },
             });
           }
           assertEquals(url.searchParams.get("category"), leaf);
@@ -296,6 +328,12 @@ Deno.test({
   async fn() {
     try {
       const full = await runTurn([3, 4, 5, 6]);
+      assert(
+        full.outbound.some((request) =>
+          request.includes("/rest/v1/verified_product_facts")
+        ),
+        "the opt-in route must attempt to load the private evidence",
+      );
       const fullBlocks = productBlocks(full.events);
       assertEquals(fullBlocks.length, 1, JSON.stringify(full.steps));
       assertEquals(fullBlocks[0].count, 5);
@@ -307,7 +345,10 @@ Deno.test({
         fullBlocks[0].selection_contract?.result_cardinality?.target,
         5,
       );
-      assertEquals(full.catalogPages, [1, 2]);
+      // Guarded retrieval can probe several filter stages on page 1 before
+      // widening to page 2; only the latter proves pagination completed.
+      assert(full.catalogPages.includes(2), JSON.stringify(full.catalogPages));
+      assert(full.catalogPages.every((page) => page === 1 || page === 2));
       for (const id of [2, 3, 4, 5, 6]) {
         assert(fullBlocks[0].markdown?.includes(`альтернативный ${id}`));
       }
@@ -318,8 +359,9 @@ Deno.test({
       );
       assert(
         full.steps.some(({ step, meta }) =>
-          step === "v3_replacement_preflight_rendered" &&
-          meta?.pages_scanned === 2
+          step === "v3_replacement_guarded_window" &&
+          meta?.selected === 5 &&
+          Number(meta?.tool_pages) >= 2
         ),
         JSON.stringify(full.steps),
       );
@@ -328,7 +370,11 @@ Deno.test({
       const shortBlocks = productBlocks(short.events);
       assertEquals(shortBlocks.length, 1, JSON.stringify(short.steps));
       assertEquals(shortBlocks[0].count, 2);
-      assertEquals(short.catalogPages, [1, 2]);
+      assert(
+        short.catalogPages.includes(2),
+        JSON.stringify(short.catalogPages),
+      );
+      assert(short.catalogPages.every((page) => page === 1 || page === 2));
       const disclosure = visibleText(short.events);
       assert(disclosure.includes("подтвердить 2 варианта"), disclosure);
       assert(
@@ -337,25 +383,44 @@ Deno.test({
       );
       assert(!disclosure.includes("аналогов нет"), disclosure);
 
-      // A single verified card can also be the complete *filtered query*
+      // A single structurally screened card can also be the complete *filtered query*
       // result. That is a catalog-evidence shortage, not a pagination defect:
       // do not manufacture extra cards or silently weaken structural gates.
       const complete = await runTurn([], { completeWindow: true });
       const completeBlocks = productBlocks(complete.events);
       assertEquals(completeBlocks.length, 1, JSON.stringify(complete.steps));
       assertEquals(completeBlocks[0].count, 1);
-      assertEquals(complete.catalogPages, [1]);
+      assert(complete.catalogPages.length > 0);
+      assert(complete.catalogPages.every((page) => page === 1));
       assert(
         visibleText(complete.events).includes(
-          "В выполненном поиске удалось подтвердить 1 вариант",
+          "Пока удалось подтвердить 1 вариант",
         ),
       );
       assert(
         complete.steps.some(({ step, meta }) =>
-          step === "v3_replacement_preflight_rendered" &&
-          meta?.strict_total === 50 && meta?.pages_scanned === 1
+          step === "v3_replacement_guarded_window" &&
+          meta?.selected === 1 && Number(meta?.tool_pages) >= 1
         ),
         JSON.stringify(complete.steps),
+      );
+
+      // The actual source card has no verified cut-out in catalog evidence.
+      // It must ask before any shortlist or paid model call, rather than
+      // treating the model code D90 or generic diameter as proof.
+      const unknownCutout = await runTurn([], { sourceHasCutout: false });
+      assertEquals(productBlocks(unknownCutout.events).length, 0);
+      assertEquals(unknownCutout.catalogPages, []);
+      assert(
+        visibleText(unknownCutout.events).includes(
+          "диаметр монтажного отверстия",
+        ),
+      );
+      assert(
+        unknownCutout.steps.some(({ step }) =>
+          step === "v3_replacement_cutout_question_issued"
+        ),
+        JSON.stringify(unknownCutout.steps),
       );
     } finally {
       restoreOfflineModuleSetup();

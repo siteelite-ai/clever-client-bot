@@ -54,7 +54,12 @@ After enabling observation, a v3 chat request and a `search-products`
 category-facet request were admitted and released in the new ledger, each with
 `would_reject=false`; the catalog request returned HTTP 200 with 54 facet
 options. Five malformed/misrouted v3 security probes returned their expected
-405/400/400/413 responses without paid work. The first chat request used an
+405/400/400/413 responses without paid work. At 15:45 UTC, the same
+invalid-JSON POST to the direct Supabase v3 URL and the Cloudflare proxy v3 URL
+returned HTTP 400 in 1.26 s and 1.38 s, respectively. The handler rejects
+invalid JSON before database admission, catalog and model work; this checks
+reachability and early validation through both paths, **not** admission
+enforcement or a successful chat turn. The first chat request used an
 older synthetic prompt without an explicit electrical-socket constraint and
 exposed an electrical-vs-computer subtype ambiguity; it is **not** a passing
 customer acceptance result. The later exact client prompt, «Найди двойные
@@ -65,14 +70,35 @@ connectors and electrical subtype (report
 An earlier run with the same prompt failed only because two product-page
 fetches were transiently unavailable; both pages subsequently verified.
 
+At 14:05 UTC a read-only aggregate of the production ledger showed 69 v3 and
+73 `search-products` reservations since observe began at 05:20 UTC; all 142
+were released, with zero `would_reject`, active, or expired-unreleased rows.
+At 15:43 UTC a further read-only aggregate showed 69 v3 and 127
+`search-products` reservations since observation began: 54 additional catalog
+reservations and no additional v3 reservation. `would_reject`, active and
+expired-unreleased counts remained zero for both routes. These are ledger
+counts, not proof of all-route coverage or of a representative day.
+Observed per-minute peaks were six model and 19 catalog reservations; p95
+release latency was 19.3 s for v3 and 3.4 s for catalog. Targeted Edge-log
+filters found no v1/v2 POST in the last 24 hours, but the all-route Logs
+Explorer group was incomplete (it omitted catalog calls visible under a
+separate filter). The ledger does not distinguish direct Supabase from
+Cloudflare-proxied traffic. These data cover **less than nine hours** of
+observe mode, not the required representative day; they do not justify
+`enforce` or a public-security sign-off.
+
 ## Gate before enforcement
 
 Observe real traffic for at least one representative day, including both
 direct Supabase and proxy entrypoints and all public function slugs. Check
 rate/in-flight peaks, `would_reject`, reservation release/expiry, RPC failures
 and latency, 429/5xx, catalog fanout per accepted turn and OpenRouter spend.
-The old v1/v2 routes and the separately deployed public beta-search route
-must not be assumed unused from v3 chat logs. The current global cap is only
+The old v1/v2 routes must not be assumed unused from v3 chat logs. A later
+read-only inspection of the exact deployed `chat-consultant-beta-search` v80
+bundle (`c109f6284c2f75f50ba010d4ff2de915e6a93460d74576deabb2e2eb65e944a6`)
+confirmed a retired handler without model/catalog calls; live OPTIONS and GET
+returned 204 and 410. This closes the beta paid-surface concern, but does not
+establish whether legacy clients still call that retired URL. The current global cap is only
 an aggregate spend guard: an attacker may exhaust it and deny legitimate
 users, so do not call it per-user abuse protection. Turn on `enforce` only
 after those gates and a direct/proxy boundary smoke; choose thresholds from

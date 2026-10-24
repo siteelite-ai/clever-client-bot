@@ -270,7 +270,7 @@ Deno.test("bounded live source-leaf fallback recovers only proved products after
             { id: 1, pagetitle: "Люстры", children: [] },
             { id: 2, pagetitle: "Офисные светильники", children: [] },
           ],
-          pagination: { pages: 1 },
+          pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
         },
       };
     } else if (url.pathname.endsWith("/categories/options")) {

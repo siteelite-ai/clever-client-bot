@@ -171,6 +171,7 @@ export type CatalogScenario =
   | "soft_404" // §5.6.1: 0 товаров → 1 короткая фраза, без cross-sell
   | "all_zero_price" // двойной фильтр выкинул всё → CONTACT_MANAGER без товаров
   | "error" // catastrophic → нейтральная фраза + escalation
+  | "constraints_unverified" // категория есть, но требуемые характеристики не доказаны
   | "clarify"; // §4.4 price branch: probe.total > 50 → price_clarify slot, без LLM
 
 /**
@@ -273,6 +274,12 @@ export async function composeCatalogAnswer(
   const scenario = decideScenario(norm);
   const newStreak = nextSoft404Streak(input.prevSoft404Streak, norm);
 
+  // This is neither a zero-result claim nor a whole-catalog outage. Keep it
+  // deterministic so an LLM cannot accidentally invent matching products.
+  if (scenario === "constraints_unverified") {
+    return composeConstraintsUnverified(input, newStreak);
+  }
+
   // ── Branch 0 (S_PRICE): clarify — детерминированный рендер, БЕЗ LLM. ──
   // §4.4: probe.total > 50 → выводим вопрос с топ-N option-значениями.
   // §5.6.1: streak НЕ меняется (новое состояние, не empty и не ok).
@@ -366,6 +373,8 @@ export function decideScenario(
       return "all_zero_price";
     case "error":
       return "error";
+    case "constraints_unverified":
+      return "constraints_unverified";
     case "clarify":
       // Только S_PRICE: probe.total > 50 → price_clarify slot.
       return "clarify";
@@ -394,7 +403,7 @@ export function nextSoft404Streak(
     : wrapSearch(outcome);
 
   // §5.6.1: clarify — новое состояние, streak неизменен.
-  if (norm.status === "clarify") return prev;
+  if (norm.status === "clarify" || norm.status === "constraints_unverified") return prev;
 
   const isZero =
     norm.status === "empty" ||
@@ -737,6 +746,30 @@ async function composeNoResults(
       output_tokens: llm.output_tokens,
       total_tokens: llm.input_tokens + llm.output_tokens,
       model: llm.model,
+    },
+  };
+}
+
+/** A truthful, no-card clarification when required attributes lack proof. */
+function composeConstraintsUnverified(
+  input: ComposeCatalogInput,
+  newStreak: 0 | 1 | 2,
+): ComposeCatalogOutput {
+  const text = "Пока не могу подтвердить по данным каталога, что товары соответствуют всем указанным характеристикам, поэтому не буду показывать неподтверждённые варианты. Уточните, какие требования можно изменить, или обратитесь к менеджеру.";
+  input.onDelta(text);
+  return {
+    text,
+    scenario: "constraints_unverified",
+    newSoft404Streak: newStreak,
+    contactManager: false,
+    greeting_stripped: null,
+    crosssell: { presentInLLM: false, rendered: false, violation: null },
+    formatter: { rendered: 0, zeroPriceFiltered: 0, contractFiltered: 0 },
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      model: "deterministic",
     },
   };
 }

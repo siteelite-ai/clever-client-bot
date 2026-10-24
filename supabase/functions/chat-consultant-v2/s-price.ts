@@ -59,6 +59,7 @@ export const PRICE_CLARIFY_OPTIONS_LIMIT = 5;
 export type SPriceStatus =
   | "ok"               // products готовы (отсортированы, price>0), показать
   | "clarify"          // создан price_clarify slot, products = []
+  | "constraints_unverified" // обязательные характеристики не доказаны; без карточек
   | "empty"            // probe.total === 0
   | "all_zero_price"   // probe нашёл, но все price=0 → contactManager (scenario-path)
   | "error"            // HTTP/timeout/network — escalation, streak не меняем

@@ -4,21 +4,32 @@ on:
   push:
     paths:
       - 'supabase/functions/chat-consultant/**'
+      - 'supabase/functions/chat-consultant-closure-preview/**'
       - 'supabase/functions/chat-consultant-v2/**'
+      - 'supabase/functions/chat-consultant-v2-closure-preview/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/search-products-closure-preview/**'
+      - 'supabase/functions/knowledge-process/**'
+      - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/*integration_secrets*.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
       - 'public/widget-version.js'
       - 'public/widget-version.json'
       - 'scripts/qa/**'
+      - 'src/pages/Settings.tsx'
+      - 'src/lib/settingsSave.ts'
+      - 'src/lib/settingsSave.test.ts'
+      - 'src/lib/privateIntegrationSecrets.ts'
+      - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
       - 'docs/qa/notion-source-index-20261009.json'
@@ -26,21 +37,32 @@ on:
   pull_request:
     paths:
       - 'supabase/functions/chat-consultant/**'
+      - 'supabase/functions/chat-consultant-closure-preview/**'
       - 'supabase/functions/chat-consultant-v2/**'
+      - 'supabase/functions/chat-consultant-v2-closure-preview/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/chat-consultant-v3-preview/**'
       - 'supabase/functions/chat-consultant-v3-closure-preview/**'
       - 'supabase/functions/search-products/**'
+      - 'supabase/functions/search-products-closure-preview/**'
+      - 'supabase/functions/knowledge-process/**'
+      - 'supabase/functions/admin-integration-secrets/**'
       - 'supabase/functions/_shared/**'
       - 'supabase/config.toml'
       - 'supabase/migrations/20261009150000_chat_v3_admission_guard.sql'
       - 'supabase/migrations/20261020120000_public_api_admission.sql'
+      - 'supabase/migrations/*integration_secrets*.sql'
       - 'public/embed.js'
       - 'index.html'
       - 'public/widget.js'
       - 'public/widget-version.js'
       - 'public/widget-version.json'
       - 'scripts/qa/**'
+      - 'src/pages/Settings.tsx'
+      - 'src/lib/settingsSave.ts'
+      - 'src/lib/settingsSave.test.ts'
+      - 'src/lib/privateIntegrationSecrets.ts'
+      - 'vitest.settings.config.ts'
       - 'docs/qa/release-inventory-v*-*.json'
       - 'docs/qa/source-provenance-20261009.json'
       - 'docs/qa/notion-source-index-20261009.json'
@@ -51,8 +73,16 @@ jobs:
     name: deno check edge functions
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact change commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Setup Deno
         uses: denoland/setup-deno@v1
@@ -65,8 +95,8 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Install test dependencies
-        run: npm install --ignore-scripts --package-lock=false --no-audit --no-fund
+      - name: Install locked test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Type-check chat-consultant
         run: deno check supabase/functions/chat-consultant/index.ts
@@ -83,6 +113,12 @@ jobs:
       - name: Type-check catalog proxy
         run: deno check supabase/functions/search-products/index.ts
 
+      - name: Type-check isolated legacy and catalog QA closures
+        run: deno check supabase/functions/chat-consultant-closure-preview/index.ts supabase/functions/chat-consultant-v2-closure-preview/index.ts supabase/functions/search-products-closure-preview/index.ts
+
+      - name: Type-check secret administration and knowledge processing
+        run: deno check supabase/functions/admin-integration-secrets/index.ts supabase/functions/knowledge-process/index.ts
+
       - name: Type-check widget
         run: deno check public/widget.js
 
@@ -92,11 +128,44 @@ jobs:
       - name: Test all QA evaluators and widget contracts
         run: node --test scripts/qa/*.test.mjs
 
+      - name: Test admin settings secret update boundary
+        run: ./node_modules/.bin/vitest run --config vitest.settings.config.ts
+
+      - name: Test admin integration secret API boundary
+        run: deno test supabase/functions/admin-integration-secrets/handler_test.ts
+
+      - name: Test knowledge embedding secret-safe diagnostics
+        run: deno test supabase/functions/knowledge-process/provider-transport_test.ts
+
+      - name: Test server-side integration secret mode and fail-closed boundary
+        run: deno test supabase/functions/_shared/integration-secrets_test.ts
+
+      - name: Test isolated route QA admission
+        run: deno test supabase/functions/_shared/route-qa-gate_test.ts
+
       - name: Verify pinned release inventory
         run: node scripts/qa/build-release-ledger.mjs --check
+
+      - name: Verify pinned V9 release inventory
+        run: node scripts/qa/build-release-ledger-v9.mjs --check
 
       - name: Test shared and function-level v3 safeguards
         run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts supabase/functions/chat-consultant-v3/*_test.ts
 
       - name: Test legacy and catalog request boundaries and shared admission
-        run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/admission_test.ts supabase/functions/chat-consultant/replacement-traits_test.ts supabase/functions/chat-consultant-v2/admission_test.ts supabase/functions/chat-consultant-v2/request-guard_test.ts supabase/functions/search-products/index_test.ts supabase/functions/_shared/public-api-admission_test.ts
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/admission_test.ts supabase/functions/chat-consultant/replacement-traits_test.ts supabase/functions/chat-consultant/subject-admission-cross-route_test.ts supabase/functions/chat-consultant-v2/admission_test.ts supabase/functions/chat-consultant-v2/request-guard_test.ts supabase/functions/search-products/index_test.ts supabase/functions/_shared/public-api-admission_test.ts supabase/functions/_shared/public-subject-admission_test.ts
+
+      - name: Test legacy taxonomy cache completeness
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/chat-consultant/catalog-cache_test.ts supabase/functions/chat-consultant-v2/catalog-deps-factory_test.ts
+
+      - name: Test shared catalog evidence and V2 failure recovery
+        run: deno test --allow-read --allow-env --allow-net supabase/functions/_shared/catalog-evidence_test.ts supabase/functions/chat-consultant-v2/catalog/api-client_test.ts supabase/functions/chat-consultant-v2/catalog/facet-cache_test.ts supabase/functions/chat-consultant-v2/catalog/facet-matcher_test.ts supabase/functions/chat-consultant-v2/catalog-assembler-evidence_test.ts
+
+      - name: Test V2 constrained-product evidence and category-only search
+        run: >-
+          deno test --allow-read --allow-env --allow-net
+          supabase/functions/chat-consultant-v2/catalog/facet-matcher-llm_test.ts
+          supabase/functions/chat-consultant-v2/catalog-assembler_test.ts
+          supabase/functions/chat-consultant-v2/s-catalog-composer_test.ts
+          supabase/functions/chat-consultant-v2/s-price_test.ts
+          supabase/functions/chat-consultant-v2/s-search_test.ts

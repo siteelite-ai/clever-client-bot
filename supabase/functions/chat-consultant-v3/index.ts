@@ -16,6 +16,11 @@ import {
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import {
+  integrationSecretBundleForV3,
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from "../_shared/integration-secrets.ts";
+import {
   resolveVisibleSystemTotalRequirement,
   verifySystemTotalCapacityPlan,
 } from "../_shared/v3-tools/system-total-capacity.ts";
@@ -28,12 +33,14 @@ import {
 import {
   executeSearchCatalog,
   expandOptionAlternatives,
+  type CatalogClientDeps,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
 import {
   type DiscoverCategoryInput,
   type DiscoverCategoryOk,
   executeDiscoverCategory,
+  verifyExactCatalogLeaf,
   type Facet,
 } from "../_shared/v3-tools/discover-category.ts";
 import {
@@ -98,21 +105,26 @@ import {
 } from "../_shared/v3-tools/final-card-facet-gate.ts";
 import { setActiveCatalogFacetSchema } from "../_shared/v3-tools/catalog-facet-proof-ledger.ts";
 import {
+  CUSTOMER_TURN_BOUNDARY,
   correctCriteria,
   extractClientQuantities,
   findUnderstatedCriteria,
   isPhysicalMeasurementUnit,
+  joinCustomerTurns,
+  joinMeasurementEvidenceSegments,
 } from "../_shared/v3-tools/criteria-consistency.ts";
 import {
   alignCriteriaImportanceWithReasoning,
   alignCriteriaWithReasoning,
   canonicalMeasurementUnit,
+  certifiedCustomerApplicationCapacityOptions,
   compileMeasuredReasoningSearchContract,
   customerAggregateMeasurementScope,
   customerOwnsDerivedExactFacetValue,
   demoteUnfrozenRenderCriteria,
   filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
+  preserveCertifiedCustomerCapacityOptions,
   projectLiteralMeasuredCriteria,
   projectReasoningRangeCriteria,
   projectSingleRecommendedMeasuredCriterion,
@@ -149,6 +161,9 @@ import {
   buildSelectionSearchRecoveryPlan,
   buildSourceProvenCardinalityRecoveryPlan,
   buildUnqualifiedCategoryBrowseRecovery,
+  classifyTaxonomyOutageExactLookup,
+  isConfirmedTaxonomyOutageFailure,
+  shouldAttemptTaxonomyOutageExactLookup,
   filterUnqualifiedCategoryBrowseCandidates,
   filterSelectionRecoveryPool,
   isRecoverableSelectionSearchFailure,
@@ -167,6 +182,7 @@ import {
   TRANSIENT_CATALOG_FAILURE_NOTICE,
   transientCatalogFailureFinalization,
   unscopedSourceProvenCardinalityAttempt,
+  verifyTaxonomyOutageExactProduct,
 } from "../_shared/v3-tools/selection-search-recovery.ts";
 import {
   buildDerivedSelectionPublicExplanation,
@@ -201,6 +217,16 @@ import {
   INVALID_DERIVED_DECLARATION_CORRECTION,
   type RequiredProductMeasurementGap,
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
+import {
+  verifiedDestinationAreaCoversSoleMeasurement,
+  verifiedRenderedDestinationContextUnchanged,
+} from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
+import {
+  isNeutralAcknowledgement,
+  resolveServerRenderedSelectionProof,
+  type ServerRenderedProductCard,
+  type ServerRenderedSelectionProof,
+} from "../_shared/v3-tools/server-rendered-continuation.ts";
 import {
   advanceSelectionTarget,
   bootstrapSelectionTargetFromDiscovery,
@@ -324,6 +350,7 @@ import {
   terminalPairedFitDecision,
 } from "./selection-jargon-policy.ts";
 import {
+  appearanceFacetClaimsFromText,
   dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
   explicitPostNominalIdentityFacet,
@@ -336,6 +363,8 @@ import {
   productMatchesExcludedReplacementIdentity,
   projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
+  resolveCustomerAppearanceFacetOwnership,
+  unownedAppearanceMentionsInText,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
   compactCodeTokensInQuery,
@@ -384,7 +413,6 @@ import {
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
   extractPriorAssistantProse,
-  extractRenderedProductTitles,
   extractRenderedProductUrls,
   isAdditionalProductSelectionFollowup,
   isEvidenceOnlyFollowup,
@@ -393,14 +421,12 @@ import {
   latestRecentProductEvidenceSet,
   latestRenderedSelectionRequest,
   loadRecentProductEvidence,
+  MAX_RECENT_EVIDENCE_PRODUCTS,
   persistRecentProductEvidence as persistRecentProductEvidenceUnchecked,
   productUrlIdentity,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import {
-  exactRecentPriceSkuFromSearch,
-  proveRecentPriceSet,
-} from "../_shared/v3-tools/recent-price-proof.ts";
+import { proveRecentPriceSet } from "../_shared/v3-tools/recent-price-proof.ts";
 import {
   buildExactPriceUnitAnswer,
   isExactPriceUnitQuestion,
@@ -499,9 +525,41 @@ import {
   productProvesDirectReplacementAxes,
 } from "../_shared/v3-tools/replacement-direct-facet-proof.ts";
 import {
+  adjudicateVerifiedStructuralCandidate,
   evaluateStructuralReplacementCandidate,
   resolveStructuralReplacementProfile,
+  type StructuralReplacementProfile,
 } from "../_shared/v3-tools/replacement-structural-proof.ts";
+import {
+  guardedStructuralSelectionContract,
+  hasVerifiedRecessedStructuralMount,
+} from "../_shared/v3-tools/replacement-verified-selection-contract.ts";
+import {
+  extractReplacementDimensions,
+  replacementDimensionBounds,
+} from "../_shared/v3-tools/replacement-provisional-evidence.ts";
+import type { ReplacementCandidateFit } from "../_shared/v3-tools/replacement-candidate-fit.ts";
+import { retrieveReplacementCandidateWindow } from "../_shared/v3-tools/replacement-candidate-retrieval.ts";
+import {
+  createReplacementCatalogBudget,
+  retrieveVerifiedCutoutShortlist,
+  selectVerifiedCutoutHints,
+  type VerifiedCutoutShortlistResult,
+} from "../_shared/v3-tools/replacement-verified-shortlist.ts";
+import { createVerifiedManufacturerHydrator } from "../_shared/v3-tools/verified-manufacturer-hydration.ts";
+import { validateVerifiedManufacturerFacts } from "../_shared/v3-tools/verified-manufacturer-facts.ts";
+import { structuralSourceEvidenceSnapshot } from "../_shared/v3-tools/verified-manufacturer-source-snapshot.ts";
+import {
+  buildDirectAnalogProof,
+  directAnalogSourceEligible,
+  selectProofEligibleDirectAnalogCandidates,
+  type DirectAnalogProof,
+} from "../_shared/v3-tools/direct-analog-proof.ts";
+import {
+  parseReplacementCutoutReply,
+  resolveServerIssuedReplacementCutoutPending,
+  type VerifiedReplacementCutoutPending,
+} from "../_shared/v3-tools/replacement-cutout-clarification.ts";
 import {
   evaluateLedLampCandidate,
   evaluateLedLampFamilyBrowseCandidate,
@@ -672,10 +730,15 @@ import {
 } from "../_shared/v3-tools/conversation-boundary.ts";
 import {
   classifyPublicFailure,
+  isConfirmedTransientUpstreamHttp5xx,
+  type UpstreamFailureDiagnostics,
   UpstreamHttpError,
+  retryConfirmedUpstreamHttp5xxOnce,
+  upstreamFailureDiagnosticMeta,
 } from "../_shared/v3-tools/public-failure.ts";
 import {
   type ChatV3AdmissionResult,
+  type ChatV3AdmissionScope,
   admissionDiagnosticError,
   checkChatV3AdmissionWithDeadline,
   releaseChatV3Admission,
@@ -687,11 +750,36 @@ import {
   releasePublicApiAdmission,
 } from "../_shared/public-api-admission.ts";
 import {
+  type PublicSubjectAdmissionResult,
+  type PublicSubjectProofResult,
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+} from "../_shared/public-subject-admission.ts";
+import {
   previewSecretAuthorized,
   PREVIEW_QA_SECRET_ENV,
   PREVIEW_SECRET_ENV,
   PREVIEW_SECRET_HEADER,
+  readClosureTestSecret,
 } from "../_shared/v3-tools/preview-secret-gate.ts";
+import {
+  CATALOG_QA_SECRET_ENV,
+  CATALOG_QA_SECRET_HEADER,
+  isExactCatalogHealthPreflightPayload,
+  runCatalogHealthPreflight,
+  type CatalogHealthClassification,
+  type CatalogHealthPreflightResult,
+} from "../_shared/v3-tools/catalog-health-preflight.ts";
+import {
+  isCatalogRouteProbeCandidate,
+  parseCatalogRouteProbePayload,
+  runCatalogRouteProbe,
+} from "../_shared/v3-tools/catalog-route-probe.ts";
+import {
+  directAnalogProofEnabled,
+  verifiedManufacturerFactsEnabled,
+} from "../_shared/v3-tools/verified-manufacturer-flags.ts";
 import {
   fetchChatCompletionWithFailover,
   isChatCompletionFailoverEnabled,
@@ -704,6 +792,17 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get("access-control-request-headers");
+  if (!requested?.split(",").some((header) =>
+    header.trim().toLowerCase() === "x-volt-subject-proof"
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    "Access-Control-Allow-Headers": `${corsHeaders["Access-Control-Allow-Headers"]}, x-volt-subject-proof`,
+  };
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -719,6 +818,57 @@ const ADMISSION_SCOPE = resolveChatV3AdmissionScope(
     __VOLT220_ADMISSION_SCOPE__?: "preview";
   }).__VOLT220_ADMISSION_SCOPE__,
 );
+const CLOSURE_TEST_MARKER =
+  (globalThis as typeof globalThis & {
+    __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
+  }).__VOLT220_CLOSURE_TEST_SCOPE__;
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle(
+  integrationSecretBundleForV3(
+    DEPLOYMENT_VARIANT,
+    CLOSURE_TEST_MARKER === "closure_preview",
+  ),
+);
+const VERIFIED_MANUFACTURER_FACTS_ENABLED = verifiedManufacturerFactsEnabled(
+  ADMISSION_SCOPE,
+);
+const DIRECT_ANALOG_PROOF_ENABLED = directAnalogProofEnabled(ADMISSION_SCOPE);
+/** The extra paid retry is independent of verified-facts rollout. Both lanes
+ * are server-only opt-ins; production keeps the old single-call behavior. */
+export function productMeasurementHttpRetryEnabled(
+  scope: ChatV3AdmissionScope,
+  readEnv: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): boolean {
+  const name = scope === "preview"
+    ? "VOLT220_PRODUCT_MEASUREMENT_HTTP_RETRY_PREVIEW_ENABLED"
+    : "VOLT220_PRODUCT_MEASUREMENT_HTTP_RETRY_PRODUCTION_ENABLED";
+  return readEnv(name) === "true";
+}
+const PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED =
+  productMeasurementHttpRetryEnabled(ADMISSION_SCOPE);
+
+/** Server-only preview opt-in. Default OFF preserves the existing catalog
+ * failure path until the exact-identity recovery is independently accepted. */
+export function taxonomyOutageExactLookupEnabled(
+  readEnv: (name: string) => string | undefined = (name) => Deno.env.get(name),
+): boolean {
+  return readEnv("VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED") === "true";
+}
+
+/** One correction call is the legacy behavior. The second paid attempt is
+ * reachable only for a measured-product gap on an explicitly opted-in lane. */
+export function runProductMeasurementCorrection<T>(input: {
+  repairReason: string;
+  retryEnabled: boolean;
+  attempt: (timeoutMs: number) => Promise<T>;
+  initialTimeoutMs: number;
+  retryTimeoutMs: () => number | null;
+  signal: AbortSignal;
+  onRetry?: (error: UpstreamHttpError, timeoutMs: number) => void;
+}): Promise<T> {
+  return input.repairReason === "product_measurement" && input.retryEnabled
+    ? retryConfirmedUpstreamHttp5xxOnce(input)
+    : input.attempt(input.initialTimeoutMs);
+}
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,
   globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
@@ -729,6 +879,29 @@ const LOVABLE_API_KEY = LOVABLE_AGENT_FAILOVER_ENABLED
   : null;
 const LOVABLE_AGENT_MODEL = Deno.env.get("LOVABLE_AGENT_MODEL") ??
   "google/gemini-3-flash-preview";
+
+/** A scoped reliability experiment, not general provider failover. It needs
+ * both the closure wrapper marker and an explicit server-side flag/key; even
+ * a project-wide flag cannot enable it in production or ordinary preview. */
+export function derivedReasoningLovableRetryEnabled(input: {
+  scope: unknown;
+  enabled: string | null | undefined;
+  apiKey: string | null | undefined;
+}): boolean {
+  return input.scope === "closure_preview" && input.enabled === "true" &&
+    Boolean(input.apiKey?.trim());
+}
+const DERIVED_REASONING_LOVABLE_RETRY_KEY = Deno.env.get("LOVABLE_API_KEY");
+const DERIVED_REASONING_LOVABLE_RETRY_ENABLED =
+  derivedReasoningLovableRetryEnabled({
+    scope: (globalThis as typeof globalThis & {
+      __VOLT220_DERIVED_REASONING_RETRY_SCOPE__?: "closure_preview";
+    }).__VOLT220_DERIVED_REASONING_RETRY_SCOPE__,
+    enabled: Deno.env.get(
+      "VOLT220_DERIVED_REASONING_LOVABLE_RETRY_CLOSURE_PREVIEW_ENABLED",
+    ),
+    apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY,
+  });
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
 const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
@@ -846,6 +1019,8 @@ type SseEvent =
         }
       >;
       result_cardinality?: ResultCardinalityContract;
+      /** Server-owned proof, revalidated against the exact cards at egress. */
+      direct_analog_proof?: DirectAnalogProof;
     };
   }
   | { type: "contacts"; html: string }
@@ -871,6 +1046,43 @@ function encodeSse(ev: SseEvent): Uint8Array {
   );
 }
 
+function v3SubjectDenied(decision: {
+  reason: string;
+  retryAfterSeconds?: number | null;
+}): Response {
+  const limited = decision.reason === "limit_exceeded";
+  const invalidProof = decision.reason === "missing_proof" ||
+    decision.reason === "invalid_proof";
+  const error = limited ? "rate_limited" : invalidProof
+    ? "access_denied"
+    : "request_unavailable";
+  const content = limited
+    ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+    : invalidProof
+    ? "Не удалось подтвердить запрос. Обновите страницу и попробуйте ещё раз."
+    : "Не удалось безопасно запустить запрос. Повторите попытку позже.";
+  const encoder = new TextDecoder();
+  const body = ([
+    { type: "delta", content, origin: "server" },
+    {
+      type: "diagnostic", log_id: null, phase: "complete",
+      products_count: 0, error,
+    },
+    { type: "done" },
+  ] satisfies SseEvent[]).map((event) => encoder.decode(encodeSse(event))).join("");
+  return new Response(body, {
+    status: limited ? 429 : invalidProof ? 403 : 503,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Pipeline": "v3",
+      ...(limited ? { "Retry-After": String(decision.retryAfterSeconds || 60) } : {}),
+    },
+  });
+}
+
 // ─── Settings ───────────────────────────────────────────────────────────────
 
 interface AppSettings {
@@ -891,13 +1103,16 @@ async function loadSettings(
   supabase: SupabaseClient,
   signal: AbortSignal,
 ): Promise<AppSettings> {
+  const legacySecretColumns: string = INTEGRATION_SECRETS_MODE === "private-required"
+    ? ""
+    : "openrouter_api_key, volt220_api_token, ";
+  const settingsProjection: string =
+    `${legacySecretColumns}classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled`;
   const read = await readSettingsRowWithRetry(
     (attemptSignal) =>
       supabase
         .from("app_settings")
-        .select(
-          "openrouter_api_key, volt220_api_token, classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled",
-        )
+        .select(settingsProjection)
         .limit(1)
         .abortSignal(attemptSignal)
         .single(),
@@ -913,11 +1128,34 @@ async function loadSettings(
     v3_jargon_axial_modifiers_enabled?: boolean;
     v3_criteria_gate_enabled?: boolean;
   } | null;
+  const onShadowComparison = (event: {
+    key: string;
+    privateReadOk: boolean;
+    privatePresent: boolean;
+    legacyPresent: boolean;
+    fingerprintMatch: boolean | null;
+  }) => console.info("[integration-secret-shadow]", event);
+  const [openrouterKey, catalogToken] = await Promise.all([
+    resolveIntegrationSecret(
+      supabase,
+      "openrouter_api_key",
+      INTEGRATION_SECRETS_MODE,
+      () => row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
+      onShadowComparison,
+      signal,
+    ),
+    resolveIntegrationSecret(
+      supabase,
+      "volt220_api_token",
+      INTEGRATION_SECRETS_MODE,
+      () => row?.volt220_api_token ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      onShadowComparison,
+      signal,
+    ),
+  ]);
   return {
-    openrouter_api_key: row?.openrouter_api_key ??
-      Deno.env.get("OPENROUTER_API_KEY") ?? null,
-    volt220_api_token: row?.volt220_api_token ??
-      Deno.env.get("VOLT220_API_TOKEN") ?? null,
+    openrouter_api_key: openrouterKey,
+    volt220_api_token: catalogToken,
     classifier_model: row?.classifier_model?.trim() ||
       "google/gemini-2.5-flash",
     v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
@@ -940,6 +1178,8 @@ async function loadSettings(
 interface ToolContext {
   cache: ProductCache;
   supabase: SupabaseClient;
+  /** Shared request deadline; optional for isolated tool tests. */
+  turnSignal?: AbortSignal;
   catalogToken: string;
   openrouterKey: string;
   lovableApiKey: string | null;
@@ -948,6 +1188,26 @@ interface ToolContext {
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
   observeCatalogToolResult?: (result: ToolResult) => void;
+  /** Per-turn provenance boundary shared by every catalog and jargon route. */
+  catalogAppearanceGuard?: (
+    name: "search_catalog" | "jargon_recover_catalog",
+    args: Record<string, unknown>,
+  ) => { args: Record<string, unknown> } | { error: ToolResult };
+}
+
+/** Lexical candidates are proofs only if their own catalog request survives
+ * the same request-scoped I/O gate unchanged. A broadened candidate no longer
+ * proves the helper's model-authored title token, so skip it and continue to
+ * the next candidate instead of searching with silently rewritten evidence. */
+function authorizeJargonCatalogCandidate(
+  ctx: ToolContext,
+  input: SearchCatalogInput,
+): boolean {
+  if (!ctx.catalogAppearanceGuard) return true;
+  const candidate = { ...input } as Record<string, unknown>;
+  const guarded = ctx.catalogAppearanceGuard("search_catalog", candidate);
+  return "args" in guarded &&
+    JSON.stringify(guarded.args) === JSON.stringify(candidate);
 }
 
 async function runTool(
@@ -955,6 +1215,19 @@ async function runTool(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolResult> {
+  if (
+    (name === "search_catalog" || name === "jargon_recover_catalog") &&
+    ctx.catalogAppearanceGuard
+  ) {
+    const guarded = ctx.catalogAppearanceGuard(name, args);
+    if ("error" in guarded) return guarded.error;
+    // Keep the caller's reference in sync with the actual egress request.
+    // Tool logs and downstream recovery must see the guarded arguments.
+    if (guarded.args !== args) {
+      for (const key of Object.keys(args)) delete args[key];
+      Object.assign(args, guarded.args);
+    }
+  }
   const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   if (name === "search_catalog") {
     const result = await executeSearchCatalog(
@@ -983,6 +1256,8 @@ async function runTool(
         lovableModel: LOVABLE_AGENT_MODEL,
         categoryContextEnabled: ctx.jargonCategoryContextEnabled,
         axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
+        authorizeCatalogSearch: (candidate) =>
+          authorizeJargonCatalogCandidate(ctx, candidate),
       },
       ctx.cache,
     );
@@ -993,6 +1268,8 @@ async function runTool(
     return executeLookupKnowledge(
       args as unknown as LookupKnowledgeInput,
       ctx.supabase,
+      ctx.openrouterKey,
+      INTEGRATION_SECRETS_MODE,
     );
   }
   if (name === "lookup_contacts") {
@@ -1230,6 +1507,60 @@ function summariseToolResultMeta(
 function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ")
     .trim();
+}
+
+/** Taxonomy-outage model lookups may use only a literal article supplied by
+ * the customer in this active request, never a code invented in model prose. */
+export function customerOwnsExactCatalogArticle(
+  article: unknown,
+  currentUserMessage: string,
+  trustedBaseUserMessage: string | null = null,
+): boolean {
+  const exact = typeof article === "string"
+    ? normalizeForMatch(article).trim()
+    : "";
+  if (exact.length < 3) return false;
+  const customer = normalizeForMatch(
+    `${currentUserMessage} ${trustedBaseUserMessage ?? ""}`,
+  );
+  return ` ${customer} `.includes(` ${exact} `);
+}
+
+/** With no live taxonomy, an exact customer identity is the sole safe lookup
+ * argument. Model-supplied category, facets and prices cannot narrow it. */
+export function exactCustomerIdentitySearchDuringTaxonomyOutage(
+  input: Record<string, unknown>,
+  currentUserMessage: string,
+  trustedBaseUserMessage: string | null = null,
+): Record<string, unknown> | null {
+  if (
+    input.mode === "by_article" && customerOwnsExactCatalogArticle(
+      input.article,
+      currentUserMessage,
+      trustedBaseUserMessage,
+    )
+  ) return { mode: "by_article", article: input.article };
+  if (input.mode !== "by_pagetitle" || typeof input.pagetitle !== "string") {
+    return null;
+  }
+  const exactTitle = normalizeForMatch(input.pagetitle).trim();
+  const customerText = normalizeForMatch(
+    `${currentUserMessage} ${trustedBaseUserMessage ?? ""}`,
+  );
+  return exactTitle.length >= 3 &&
+      ` ${customerText} `.includes(` ${exactTitle} `)
+    ? { mode: "by_pagetitle", pagetitle: input.pagetitle }
+    : null;
+}
+
+/** The first discovery is normally server-compiled and text-free. This also
+ * closes the model-owned discovery fallback before live facets exist. */
+export function shouldDeferAppearanceProseBeforeDiscovery(
+  intentMode: "select" | "inquire",
+  hasDiscovery: boolean,
+  pendingDiscovery: boolean,
+): boolean {
+  return !hasDiscovery && (intentMode === "select" || pendingDiscovery);
 }
 
 /** A model-selected live value is not, by itself, a customer requirement. */
@@ -1674,6 +2005,8 @@ async function guardedOutcomeForSearch(
           lovableModel: LOVABLE_AGENT_MODEL,
           categoryContextEnabled: ctx.jargonCategoryContextEnabled,
           axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
+          authorizeCatalogSearch: (candidate) =>
+            authorizeJargonCatalogCandidate(ctx, candidate),
         }, ctx.cache)
         : null;
 
@@ -3266,6 +3599,8 @@ type LLMPhase =
   | "derived_reasoning"
   | "final_render";
 
+type LLMProviderRoute = "configured" | "openrouter_only" | "lovable_only";
+
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
@@ -3278,6 +3613,7 @@ async function callOpenRouter(
   toolSchemas: readonly ORToolSchema[] = TOOL_SCHEMAS,
   maxTokens = 4000,
   modelRouting: OpenRouterModelRouting = AGENT_MODEL_ROUTING,
+  providerRoute: LLMProviderRoute = "configured",
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -3312,17 +3648,28 @@ async function callOpenRouter(
     const availableTools = toolSchemas.filter((schema) =>
       availableToolNames.includes(schema.function.name)
     );
+    if (providerRoute === "lovable_only" &&
+      !DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+      throw new Error("derived_reasoning_lovable_retry_unavailable");
+    }
     const completion = await fetchChatCompletionWithFailover({
-      primary: {
-        id: "openrouter",
-        url: "https://openrouter.ai/api/v1/chat/completions",
-        apiKey,
-        headers: {
-          "HTTP-Referer": "https://chat-volt.testdevops.ru",
-          "X-Title": "220volt-chat-consultant-v3",
+      primary: providerRoute === "lovable_only"
+        ? {
+          id: "lovable",
+          url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+          apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY!,
+          model: LOVABLE_AGENT_MODEL,
+        }
+        : {
+          id: "openrouter",
+          url: "https://openrouter.ai/api/v1/chat/completions",
+          apiKey,
+          headers: {
+            "HTTP-Referer": "https://chat-volt.testdevops.ru",
+            "X-Title": "220volt-chat-consultant-v3",
+          },
         },
-      },
-      fallback: LOVABLE_API_KEY
+      fallback: providerRoute === "configured" && LOVABLE_API_KEY
         ? {
           id: "lovable",
           url: "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -3348,10 +3695,23 @@ async function callOpenRouter(
     });
     res = completion.response;
     provider = completion.provider;
+    const providerDiagnostics: UpstreamFailureDiagnostics = {
+      provider: completion.provider === "openrouter" ||
+          completion.provider === "lovable"
+        ? completion.provider
+        : "other",
+      failedOver: completion.failedOver,
+      primaryStatus: completion.primaryStatus ?? null,
+      primarySkipped: completion.primarySkipped ?? false,
+    };
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new UpstreamHttpError(res.status, errText);
+      throw new UpstreamHttpError(res.status, errText, {
+        ...providerDiagnostics,
+        origin: "http_response",
+        observedHttpStatus: res.status,
+      });
     }
 
     // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
@@ -3365,6 +3725,11 @@ async function callOpenRouter(
       throw new UpstreamHttpError(
         502,
         "completion returned no usable provider choice",
+        {
+          ...providerDiagnostics,
+          origin: "completion_envelope",
+          observedHttpStatus: res.status,
+        },
       );
     }
   } finally {
@@ -4222,6 +4587,803 @@ interface DirectReplacementResult {
   source_candidate_ids?: string[];
 }
 
+const VERIFIED_MANUFACTURER_FACT_COLUMNS =
+  "product_id,article,catalog_url,catalog_leaf_category,source_url,document_version,document_page,verified_at,valid_until,revoked_at,approval_status,approved_at,approved_by,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm,outer_diameter_mm,color_temperature_k,fixture_form,integrated_led,socket_kind,socket_code,driver_included,driver_type,supply_min_v,supply_max_v";
+const DIRECT_ANALOG_FACT_COLUMNS =
+  `${VERIFIED_MANUFACTURER_FACT_COLUMNS},mounting_method,luminous_flux_lm,public_source_url`;
+
+async function loadApprovedManufacturerFacts(
+  ctx: ToolContext,
+  productIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<unknown[]> {
+  if (productIds.length === 0) return [];
+  if (productIds.length > 100 || signal?.aborted) {
+    throw new Error("verified_fact_request_invalid");
+  }
+  // This client was constructed with the service-role key. The table denies
+  // public reads and runtime writes; a row is still revalidated against the
+  // live product's id, article and URL before any technical fact is used.
+  const query = ctx.supabase.from("verified_product_facts")
+    // Preserve the existing verified-facts route until the new nullable
+    // columns have been migrated and the separate direct-proof flag is on.
+    .select(DIRECT_ANALOG_PROOF_ENABLED
+      ? DIRECT_ANALOG_FACT_COLUMNS
+      : VERIFIED_MANUFACTURER_FACT_COLUMNS)
+    .in("product_id", [...productIds])
+    .eq("approval_status", "approved")
+    .is("revoked_at", null)
+    .gt("valid_until", new Date().toISOString());
+  const { data, error } = signal
+    ? await query.abortSignal(signal)
+    : await query;
+  if (error || !Array.isArray(data)) {
+    throw new Error("verified_fact_read_unavailable");
+  }
+  return data;
+}
+
+/**
+ * The search hydrator memoizes approved rows for one turn. A row can be
+ * revoked or edited after that hydration and before the cards are emitted.
+ * Re-read only the facts on which this exact rendered set relies, once, with
+ * service-role authority. Never replace the selection's facts with newly
+ * fetched values: a changed fact requires a new selection, not a late upgrade.
+ */
+async function revalidateReplacementFactsBeforeCards(
+  ctx: ToolContext,
+  products: readonly ProductFull[],
+  requireEveryProduct: boolean,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const reliedOn = products.filter((product) =>
+    product.verified_manufacturer_facts !== undefined
+  );
+  if (!requireEveryProduct && reliedOn.length === 0) return { ok: true };
+  if (
+    // The direct certificate caps at five cards; provisional "show all"
+    // requests can legitimately render up to ten under the shared cap.
+    products.length < 2 || products.length > 11 ||
+    new Set(products.map(({ id }) => id)).size !== products.length ||
+    (requireEveryProduct && reliedOn.length !== products.length) ||
+    reliedOn.some(({ id }) => !id || id.length > 160) ||
+    ctx.turnSignal?.aborted
+  ) return { ok: false, reason: "invalid_selection" };
+
+  const selectedState = products.map((product) => ({
+    product,
+    // Include mutable live offer values as well as the approved facts and
+    // catalogue traits used by the selector and the egress proof builder.
+    snapshot: JSON.stringify({
+      evidence: structuralSourceEvidenceSnapshot(product),
+      price: product.price,
+      stock: product.stock,
+      warehouse_evidence: product.warehouse_evidence,
+      warehouses: product.warehouses,
+      unit: product.unit,
+    }),
+  }));
+  const controller = new AbortController();
+  const signal = ctx.turnSignal
+    ? AbortSignal.any([ctx.turnSignal, controller.signal])
+    : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rows = await Promise.race([
+      loadApprovedManufacturerFacts(
+        ctx,
+        reliedOn.map(({ id }) => id),
+        signal,
+      ),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("verified_fact_egress_timeout"));
+        }, 2_000);
+      }),
+    ]);
+    if (signal.aborted) return { ok: false, reason: "aborted" };
+    const expected = new Map(reliedOn.map((product) => [product.id, product]));
+    const rowById = new Map<string, unknown>();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return { ok: false, reason: "malformed_row" };
+      }
+      const id = (row as Record<string, unknown>).product_id;
+      if (typeof id !== "string" || !expected.has(id) || rowById.has(id)) {
+        return { ok: false, reason: "unexpected_or_duplicate_row" };
+      }
+      rowById.set(id, row);
+    }
+    if (rowById.size !== expected.size) {
+      return { ok: false, reason: "missing_or_revoked_row" };
+    }
+    const now = new Date();
+    for (const { product, snapshot } of selectedState) {
+      // Paginated searches may replace a cache object with an equivalent
+      // ProductFull. Compare its complete relied-on projection, not JS object
+      // identity, before binding the fresh row to what egress will render.
+      const currentCard = ctx.cache.get(product.id);
+      if (
+        !currentCard ||
+        JSON.stringify({
+          evidence: structuralSourceEvidenceSnapshot(currentCard),
+          price: currentCard.price,
+          stock: currentCard.stock,
+          warehouse_evidence: currentCard.warehouse_evidence,
+          warehouses: currentCard.warehouses,
+          unit: currentCard.unit,
+        }) !== snapshot
+      ) return { ok: false, reason: "live_card_changed" };
+      if (!expected.has(product.id)) continue;
+      const current = validateVerifiedManufacturerFacts(
+        rowById.get(product.id), currentCard, now,
+      );
+      if (
+        !current || JSON.stringify(current) !==
+          JSON.stringify(product.verified_manufacturer_facts)
+      ) return { ok: false, reason: "approved_fact_changed" };
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      reason: signal.aborted ? "timeout_or_aborted" : "read_unavailable",
+    };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function loadApprovedCutoutHints(
+  ctx: ToolContext,
+  cutoutMm: number,
+  leafCategory: string,
+  signal: AbortSignal,
+): Promise<unknown[]> {
+  if (
+    signal.aborted || !Number.isFinite(cutoutMm) ||
+    cutoutMm <= 0 || cutoutMm > 10_000 ||
+    !leafCategory || leafCategory.length > 240
+  ) return [];
+  // Only private, currently approved evidence supplies search hints. No row
+  // leaves the service-role handler, and all technical claims are independently
+  // revalidated against a fresh live catalog card before selection.
+  const { data, error } = await ctx.supabase.from("verified_product_facts")
+    .select(
+      "product_id,article,catalog_url,catalog_leaf_category,approval_status,revoked_at,valid_until,cutout_shape,cutout_kind,cutout_min_mm,cutout_max_mm",
+    )
+    .eq("approval_status", "approved")
+    .is("revoked_at", null)
+    .gt("valid_until", new Date().toISOString())
+    .eq("catalog_leaf_category", leafCategory)
+    .eq("cutout_shape", "round")
+    .lte("cutout_min_mm", cutoutMm)
+    .gte("cutout_max_mm", cutoutMm)
+    .order("approved_at", { ascending: false })
+    .limit(8)
+    .abortSignal(signal);
+  if (error || !Array.isArray(data) || data.length > 8) {
+    throw new Error("verified_cutout_hint_read_unavailable");
+  }
+  return data;
+}
+
+/** Source-only structural replacements remain a shortlist, never a fit certificate. */
+async function selectGuardedStructuralReplacement(
+  originalRequest: string,
+  profile: StructuralReplacementProfile,
+  requested: ResultCardinalityContract,
+  budgetCap: number | null,
+  customerCutoutMm: number | null,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<DirectReplacementResult> {
+  const source = profile.source;
+  const manufacturerFacts = VERIFIED_MANUFACTURER_FACTS_ENABLED
+    ? createVerifiedManufacturerHydrator(
+      (ids, signal) => loadApprovedManufacturerFacts(ctx, ids, signal),
+      // One source, at most eight shortlist article waves, and the remaining
+      // paginated pages share a twenty-query budget. Each live search page is
+      // hydrated at most once and the page cap below reserves the remainder.
+      { maxBatchIds: 100, maxQueries: 20, maxFailures: 2 },
+    )
+    : null;
+  if (manufacturerFacts && ctx.cache.get(source.id) === source) {
+    const sourceController = new AbortController();
+    const sourceSignal = ctx.turnSignal
+      ? AbortSignal.any([sourceController.signal, ctx.turnSignal])
+      : sourceController.signal;
+    let sourceTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // The database request should observe AbortSignal, but the handler must
+      // remain bounded even if a transport implementation fails to do so.
+      // The hydrator checks the signal again after await before touching cache.
+      await Promise.race([
+        manufacturerFacts.hydrate(
+          ctx.cache,
+          [source.id],
+          sourceSignal,
+        ),
+        new Promise<void>((resolve) => {
+          sourceTimer = setTimeout(() => {
+            sourceController.abort();
+            resolve();
+          }, 1_200);
+        }),
+      ]);
+    } finally {
+      if (sourceTimer !== undefined) clearTimeout(sourceTimer);
+    }
+  }
+  const sourceCutout = extractReplacementDimensions(source).mounting_cutout_mm;
+  const sourceCutoutBounds = replacementDimensionBounds(sourceCutout);
+  const sourceEvidenceSnapshot = manufacturerFacts
+    ? structuralSourceEvidenceSnapshot(source)
+    : null;
+  if (
+    sourceCutout.status === "conflicting" ||
+    (customerCutoutMm !== null && sourceCutout.status === "known" &&
+      (!sourceCutoutBounds ||
+        customerCutoutMm < sourceCutoutBounds.min_mm ||
+        customerCutoutMm > sourceCutoutBounds.max_mm))
+  ) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Данные о монтажном отверстии исходного светильника противоречат друг другу. Не могу безопасно подобрать замену; уточните размер по паспорту или у менеджера.",
+    });
+    steps.push({
+      step: "v3_replacement_cutout_source_conflict",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id, catalog_cutout_mm: sourceCutout.mm },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+  if (sourceCutout.mm === null && customerCutoutMm === null) {
+    if (
+      !source.id || source.id.length > 200 ||
+      !source.pagetitle || source.pagetitle.length > 500 ||
+      !profile.leafCategory || profile.leafCategory.length > 300 ||
+      !originalRequest || originalRequest.length > 1_600
+    ) {
+      send({
+        type: "delta",
+        origin: "server",
+        content: "Не удалось сохранить проверенный контекст исходного товара. Повторите запрос позже; неподтверждённые замены не показываю.",
+      });
+      return { handled: true, products: [], outcome: "query_inconsistent" };
+    }
+    const question = "Какой диаметр монтажного отверстия в потолке? Напишите одно число в миллиметрах, например 90 мм. Код размера в названии товара не подтверждает размер выреза.";
+    const pending: VerifiedReplacementCutoutPending = {
+      status: "pending",
+      slot_id: crypto.randomUUID(),
+      facet_key: "mounting_cutout_mm",
+      question,
+      options: [],
+      scope: {
+        kind: "replacement_mounting_cutout",
+        source_product_id: source.id,
+        source_title: source.pagetitle,
+        source_leaf: profile.leafCategory,
+        original_request: originalRequest,
+      },
+    };
+    send({ type: "delta", origin: "server", content: question });
+    send({ type: "slot_update", slots: { pending_clarification: pending } });
+    steps.push({
+      step: "v3_replacement_cutout_question_issued",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+
+  const rejected = new Map<string, number>();
+  const excludedCutoutExamples: Array<{
+    candidate_id: string;
+    source_or_customer_cutout_mm: number;
+    candidate_cutout_mm: number;
+  }> = [];
+  const reject = (reason: string) =>
+    rejected.set(reason, (rejected.get(reason) ?? 0) + 1);
+  const identity = (value: string | null | undefined) =>
+    String(value ?? "").normalize("NFKC").toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
+  const assess = (candidate: ProductRef, trace: boolean):
+    { full: ProductFull; fit: ReplacementCandidateFit } | null => {
+      const full = ctx.cache.get(candidate.id);
+      if (!full) {
+        if (trace) reject("candidate_full_card_missing");
+        return null;
+      }
+      if (
+        full.id === source.id ||
+        (full.article && source.article && full.article === source.article) ||
+        identity(full.pagetitle) === identity(source.pagetitle) ||
+        full.url === source.url
+      ) {
+        if (trace) reject("candidate_is_source");
+        return null;
+      }
+      if (budgetCap !== null && full.price > budgetCap) {
+        if (trace) reject("customer_budget_exceeded");
+        return null;
+      }
+      // This guarded path separately proves the actual mounting cut-out.
+      // Generic catalogue diameter is the outer housing on many products and
+      // must not override a verified cut-out match. Other legacy routes keep
+      // their original structural window.
+      const proof = adjudicateVerifiedStructuralCandidate(
+        profile, full, customerCutoutMm,
+      );
+      if (!proof.ok) {
+        if (trace) {
+          reject(`strict:${proof.reason}`);
+          const candidateCutout = extractReplacementDimensions(full)
+            .mounting_cutout_mm.mm;
+          const expectedCutout = customerCutoutMm ?? sourceCutout.mm;
+          if (
+            proof.fit.checks.mounting_cutout_mm.status === "mismatch" &&
+            candidateCutout !== null && expectedCutout !== null &&
+            excludedCutoutExamples.length < 5
+          ) {
+            excludedCutoutExamples.push({
+              candidate_id: full.id,
+              source_or_customer_cutout_mm: expectedCutout,
+              candidate_cutout_mm: candidateCutout,
+            });
+          }
+        }
+        return null;
+      }
+      return { full, fit: proof.fit };
+    };
+  const strictOptions = Object.fromEntries(
+    Object.entries(profile.searchOptions).filter(([, values]) =>
+      Array.isArray(values) && values.length === 1 &&
+      typeof values[0] === "string" && Boolean(values[0].trim())
+    ),
+  );
+  const softFacetOrder = Object.keys(strictOptions).sort((left, right) => {
+    const priority = (key: string) => {
+      const caption = identity(source.facet_captions?.[key]);
+      if (/цвет|температур|драйвер|пра/u.test(caption)) return 0;
+      if (/мощност|поток|диаметр/u.test(caption)) return 1;
+      if (/напряжен|защит/u.test(caption)) return 2;
+      if (/ламп|цокол|разъем|разъём/u.test(caption)) return 3;
+      if (/вид|монтаж|установк/u.test(caption)) return 4;
+      return 2;
+    };
+    return priority(left) - priority(right);
+  });
+  const guardedBudget = manufacturerFacts
+    ? createReplacementCatalogBudget({
+      deadlineMs: Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+      signal: ctx.turnSignal,
+    })
+    : null;
+  const proofAwareSearch = DIRECT_ANALOG_PROOF_ENABLED &&
+    manufacturerFacts !== null &&
+    directAnalogSourceEligible(source, customerCutoutMm) &&
+    requested.target >= 3;
+  const desiredProofCount = Math.min(5, requested.target);
+  const structuralCandidates = (products: readonly ProductRef[]) =>
+    products.flatMap((candidate) => {
+      const result = assess(candidate, false);
+      return result ? [result] : [];
+    });
+  const enoughCandidates = (products: readonly ProductRef[]) => {
+    const accepted = structuralCandidates(products);
+    if (!proofAwareSearch) return accepted.length >= requested.target;
+    return selectProofEligibleDirectAnalogCandidates({
+      source,
+      candidates: accepted.map(({ full }) => full),
+      customerCutoutMm,
+      maxCards: desiredProofCount,
+    }).candidates.length >= desiredProofCount;
+  };
+  let shortlist: VerifiedCutoutShortlistResult | null = null;
+  let shortlistReadFailed = false;
+  const shortlistProofArticles = new Set<string>();
+  const shortlistProofUrls = new Set<string>();
+  let retrieved: Awaited<ReturnType<typeof retrieveReplacementCandidateWindow>> |
+    null = null;
+  try {
+    const targetCutoutMm = customerCutoutMm ?? sourceCutout.mm;
+    if (
+      guardedBudget && manufacturerFacts && targetCutoutMm !== null &&
+      !guardedBudget.signal.aborted
+    ) {
+      let onAbort: (() => void) | undefined;
+      try {
+        const cancelled = new Promise<unknown[]>((resolve) => {
+          onAbort = () => resolve([]);
+          guardedBudget.signal.addEventListener("abort", onAbort, {
+            once: true,
+          });
+          if (guardedBudget.signal.aborted) resolve([]);
+        });
+        const rows = await Promise.race([
+          loadApprovedCutoutHints(
+            ctx,
+            targetCutoutMm,
+            profile.leafCategory,
+            guardedBudget.signal,
+          ),
+          cancelled,
+        ]);
+        const hints = selectVerifiedCutoutHints(
+          rows,
+          targetCutoutMm,
+          profile.leafCategory,
+          new Date(),
+        );
+        if (!guardedBudget.signal.aborted && hints.length > 0) {
+          shortlist = await retrieveVerifiedCutoutShortlist({
+            hints,
+            sourceProductId: source.id,
+            leafCategory: profile.leafCategory,
+            maxPrice: budgetCap ?? undefined,
+            deps: {
+              baseUrl: CATALOG_BASE_URL,
+              apiToken: ctx.catalogToken,
+              fetchImpl: guardedBudget.shortlistFetch,
+              signal: guardedBudget.signal,
+            },
+            cache: ctx.cache,
+            remainingMs: guardedBudget.remainingMs,
+            hydrate: (cache, ids, signal) =>
+              manufacturerFacts.hydrate(cache, ids, signal),
+            accept: (candidate) => {
+              const assessed = assess(candidate, false);
+              if (!assessed) return false;
+              if (!proofAwareSearch) return true;
+              const { full } = assessed;
+              if (
+                !full.article || !full.url ||
+                shortlistProofArticles.has(full.article) ||
+                shortlistProofUrls.has(full.url)
+              ) return false;
+              const proved = selectProofEligibleDirectAnalogCandidates({
+                source,
+                candidates: [full],
+                customerCutoutMm,
+                maxCards: 3,
+              }).candidates.length === 1;
+              if (!proved) return false;
+              shortlistProofArticles.add(full.article);
+              shortlistProofUrls.add(full.url);
+              return true;
+            },
+            target: proofAwareSearch ? desiredProofCount : requested.target,
+          });
+        }
+      } catch {
+        shortlistReadFailed = true;
+      } finally {
+        if (onAbort) guardedBudget.signal.removeEventListener("abort", onAbort);
+      }
+    }
+    if (
+      !enoughCandidates(shortlist?.products ?? []) &&
+      (!guardedBudget ||
+        (!guardedBudget.signal.aborted &&
+          guardedBudget.remainingRequests() > 0 &&
+          guardedBudget.remainingMs() > 0))
+    ) {
+      retrieved = await retrieveReplacementCandidateWindow({
+        leafCategory: profile.leafCategory,
+        strictOptions,
+        softFacetOrder,
+        maxPrice: budgetCap ?? undefined,
+        deps: {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+          ...(guardedBudget
+            ? {
+              fetchImpl: guardedBudget.fallbackFetch,
+              signal: guardedBudget.signal,
+            }
+            : {}),
+        },
+        cache: ctx.cache,
+        maxPagesTotal: manufacturerFacts
+          ? Math.min(12, 20 - manufacturerFacts.stats().queries)
+          : 12,
+        maxCatalogRequestsTotal: guardedBudget?.remainingRequests() ?? 20,
+        maxPagesPerStage: 1,
+        maxLeafPages: 4,
+        deadlineMs: guardedBudget?.remainingMs() ??
+          Math.max(1, Math.min(9_000, 28_000 - (Date.now() - t0))),
+        stopWhen: (products) =>
+          enoughCandidates([...new Map([
+            ...(shortlist?.products ?? []),
+            ...products,
+          ].map((candidate) => [candidate.id, candidate])).values()]),
+        ...(manufacturerFacts
+          ? {
+            search: async (
+              input: SearchCatalogInput,
+              deps: CatalogClientDeps,
+              cache: ProductCache,
+            ) => {
+              const result = await executeSearchCatalog(input, deps, cache);
+              if (result.ok) {
+                await manufacturerFacts.hydrate(
+                  cache,
+                  result.results.map(({ id }) => id),
+                  deps.signal,
+                );
+              }
+              return result;
+            },
+          }
+          : {}),
+      });
+    }
+  } finally {
+    guardedBudget?.close();
+  }
+  if (
+    manufacturerFacts &&
+    structuralSourceEvidenceSnapshot(ctx.cache.get(source.id)) !==
+      sourceEvidenceSnapshot
+  ) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Исходная карточка изменилась во время проверки каталога. Повторите запрос; неподтверждённые аналоги не показываю.",
+    });
+    steps.push({
+      step: "v3_replacement_source_changed_during_search",
+      ms: Date.now() - t0,
+      meta: { source_id: source.id },
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const candidatePool = [...new Map([
+    ...(shortlist?.products ?? []),
+    ...(retrieved?.products ?? []),
+  ].map((candidate) => [candidate.id, candidate])).values()];
+  const structuralSelection = candidatePool.flatMap((candidate) => {
+    const result = assess(candidate, true);
+    return result ? [result] : [];
+  });
+  // A direct certificate must bind only the cards it actually renders. Keep
+  // the legacy structural window when the opt-in is OFF or fewer than three
+  // distinct live candidates satisfy every manufacturer-backed proof axis.
+  const proofSelection = proofAwareSearch
+    ? selectProofEligibleDirectAnalogCandidates({
+      source,
+      candidates: structuralSelection.map(({ full }) => full),
+      customerCutoutMm,
+      maxCards: Math.min(5, requested.target),
+    })
+    : null;
+  const provenIds = proofSelection?.proof
+    ? new Set(proofSelection.candidates.map(({ id }) => id))
+    : null;
+  const selected = provenIds
+    ? structuralSelection.filter(({ full }) => provenIds.has(full.id))
+    : structuralSelection.slice(0, requested.target);
+  steps.push({
+    step: "v3_replacement_guarded_window",
+    ms: Date.now() - t0,
+    meta: {
+      source_id: source.id,
+      selected: selected.length,
+      target: requested.target,
+      direct_proof_eligible: proofSelection?.candidates.length ?? null,
+      termination: retrieved?.termination ??
+        (enoughCandidates(shortlist?.products ?? [])
+          ? "verified_shortlist_target_reached"
+          : "verified_shortlist_interrupted"),
+      tool_pages: retrieved?.pagesRequested ?? 0,
+      catalog_requests: guardedBudget?.stats().totalRequests ??
+        retrieved?.catalogRequestsMade ?? 0,
+      verified_shortlist: shortlist
+        ? {
+          attempted: shortlist.attempted,
+          accepted: shortlist.products.length,
+          rejected: shortlist.rejected,
+          catalog_errors: shortlist.catalogErrors,
+          interrupted: shortlist.interrupted,
+        }
+        : null,
+      verified_shortlist_read_failed: shortlistReadFailed,
+      manufacturer_facts: manufacturerFacts?.stats() ?? null,
+      rejected: Object.fromEntries(rejected),
+      excluded_cutout_examples: excludedCutoutExamples,
+      catalog_exhaustiveness: "not_established",
+    },
+  });
+  if (selected.length === 0) {
+    const inspectedPages = (retrieved?.stages ?? []).reduce(
+      (total, stage) => total + stage.pages.length,
+      0,
+    );
+    const interrupted = shortlistReadFailed || shortlist?.interrupted ||
+      (manufacturerFacts?.stats().failed ?? 0) > 0 ||
+      (manufacturerFacts?.stats().aborted ?? 0) > 0 ||
+      (manufacturerFacts?.stats().exhausted ?? 0) > 0 ||
+      retrieved === null || ![
+      "stage_plan_completed",
+      "target_reached",
+    ].includes(retrieved.termination);
+    send({
+      type: "delta",
+      origin: "server",
+      content: inspectedPages === 0 || interrupted
+        ? "Проверка каталога не завершилась. Не могу судить, есть ли подходящие замены; повторите запрос позже. Товары с другим или неподтверждённым монтажным вырезом не показываю."
+        : "В просмотренном окне каталога не подтвердилось ни одного кандидата с тем же типом и характеристиками и доказанным совпадением монтажного отверстия. Товар с другим размером выреза или без указанного размера не показываю. Это не значит, что подходящих товаров нет; можно продолжить проверку или уточнить размер у менеджера.",
+    });
+    return {
+      handled: true,
+      products: [],
+      outcome: inspectedPages === 0 || interrupted
+        ? "upstream_error"
+        : "query_inconsistent",
+    };
+  }
+  const selectedIds = selected.map(({ full }) => full.id);
+  const rendered = executeRenderProducts({
+    product_ids: selectedIds,
+    total_available: selected.length,
+  }, ctx.cache);
+  if (
+    !rendered.ok || rendered.rendered_count !== selected.length ||
+    rendered.rendered_ids.length !== selectedIds.length ||
+    rendered.rendered_ids.some((id, index) => id !== selectedIds[index])
+  ) {
+    steps.push({
+      step: "v3_replacement_guarded_render_incomplete",
+      ms: Date.now() - t0,
+      meta: {
+        selected: selected.length,
+        rendered: rendered.ok ? rendered.rendered_count : null,
+      },
+    });
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Не удалось подтвердить полный набор карточек для показа. Повторите запрос позже; неполную подборку не показываю.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  const selectionContract = guardedStructuralSelectionContract({
+    profile,
+    candidates: selected.map(({ full }) => full),
+    customerCutoutMm,
+    budgetCap,
+    requested,
+  });
+  if (!selectionContract) {
+    steps.push({
+      step: "v3_replacement_guarded_contract_unverified",
+      ms: Date.now() - t0,
+      meta: { selected: selected.length },
+    });
+    send({
+      type: "delta",
+      origin: "server",
+      content: "Не удалось подтвердить общие условия подбора для всех карточек. Непроверенные варианты не показываю; повторите запрос позже.",
+    });
+    return { handled: true, products: [], outcome: "upstream_error" };
+  }
+  // New direct-analog claims are a separate, default-OFF proof lane. The
+  // existing shortlist and its cautious copy remain unchanged without three
+  // complete manufacturer-backed matches.
+  const directAnalogProof = DIRECT_ANALOG_PROOF_ENABLED
+    ? buildDirectAnalogProof({
+      source,
+      candidates: selected.map(({ full }) => full),
+      customerCutoutMm,
+    })
+    : null;
+  if (directAnalogProof) {
+    Object.assign(selectionContract, { direct_analog_proof: directAnalogProof });
+  }
+  const softName: Record<string, string> = {
+    generic_diameter: "общий диаметр",
+    power: "мощность",
+    luminous_flux: "световой поток",
+    color_temperature: "цветовая температура",
+    kind: "вид светильника",
+    driver: "драйвер",
+  };
+  const perCard = selected.map(({ full, fit }, index) => {
+    const differences = fit.soft_differences.map(({ field }) =>
+      softName[field] ?? field
+    );
+    if (fit.checks.outer_diameter_mm.status === "different") {
+      differences.push("наружный диаметр");
+    }
+    return `№${index + 1} «${full.pagetitle}»: кандидат, не подтверждена полная взаимозаменяемость; монтажный вырез совпадает${
+      differences.length ? `; отличаются/требуют проверки: ${differences.join(", ")}` : ""
+    }. Проверьте перекрытие отверстия, глубину установки, подключение и условия эксплуатации.`;
+  });
+  const shortfall = resultCardinalityShortfallText(
+    selected.length,
+    requested,
+    { candidateCoverage: "partial" },
+  );
+  const proofProducts = [source, ...selected.map(({ full }) => full)];
+  if (
+    VERIFIED_MANUFACTURER_FACTS_ENABLED &&
+    (directAnalogProof !== null || proofProducts.some((product) =>
+      product.verified_manufacturer_facts !== undefined
+    ))
+  ) {
+    // This is the last asynchronous step before candidate text or cards. The
+    // search hydrator's per-turn memo cannot authorize public output: approval
+    // can be revoked or edited after the shortlist was assembled. Both the
+    // direct certificate and provisional cut-out claims use this same gate.
+    const freshness = await revalidateReplacementFactsBeforeCards(
+      ctx,
+      proofProducts,
+      directAnalogProof !== null,
+    );
+    const rebuilt = directAnalogProof && freshness.ok
+      ? buildDirectAnalogProof({
+        source,
+        candidates: selected.map(({ full }) => full),
+        customerCutoutMm,
+      })
+      : null;
+    if (
+      !freshness.ok ||
+      (directAnalogProof !== null && JSON.stringify(rebuilt) !==
+        JSON.stringify(directAnalogProof))
+    ) {
+      steps.push({
+        step: "v3_replacement_final_fact_gate_rejected",
+        ms: Date.now() - t0,
+        meta: {
+          reason: freshness.ok ? "proof_changed" : freshness.reason,
+          direct_proof_staged: directAnalogProof !== null,
+          selected: selected.length,
+        },
+      });
+      send({
+        type: "delta",
+        origin: "server",
+        content:
+          "Не удалось повторно подтвердить данные производителей перед показом вариантов. Непроверенные карточки не показываю; повторите запрос позже.",
+      });
+      return { handled: true, products: [], outcome: "upstream_error" };
+    }
+    steps.push({
+      step: "v3_replacement_final_fact_gate_passed",
+      ms: Date.now() - t0,
+      meta: {
+        direct_proof_staged: directAnalogProof !== null,
+        selected: selected.length,
+      },
+    });
+  }
+  if (!directAnalogProof) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: `Это предварительные кандидаты, не подтверждённые взаимозаменяемые аналоги. Проверена только ограниченная часть каталога.\n\n${perCard.join("\n\n")}${shortfall ? `\n\n${shortfall}` : ""}`,
+    });
+  }
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: selected.length,
+    selection_contract: selectionContract,
+  });
+  return {
+    handled: true,
+    products: selected.map(({ full }) => full),
+    outcome: "found",
+  };
+}
+
 async function selectVerifiedCompactReplacementContinuation(
   userMessage: string,
   discovery: DiscoverCategoryOk,
@@ -4933,12 +6095,16 @@ async function selectVerifiedOrdinaryReplacement(
   steps: StepLog[],
   t0: number,
   verifiedExactSource: ProductRef | null = null,
+  customerCutoutMm: number | null = null,
 ): Promise<DirectReplacementResult> {
   const started = Date.now();
   const verifiedSourceBoundary = verifiedExactSource
     ? parseExplicitReplacementSourceBoundary(userMessage)
     : null;
-  if (verifiedExactSource && !verifiedSourceBoundary) {
+  if (
+    verifiedExactSource && !verifiedSourceBoundary &&
+    customerCutoutMm === null
+  ) {
     // A source product may be reused only with the independently parsed
     // request frame that justified its exact-title admission.
     send({
@@ -5370,7 +6536,7 @@ async function selectVerifiedOrdinaryReplacement(
   }
   setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
 
-  if (sourceIdentityVerified) {
+  if (sourceIdentityVerified && customerCutoutMm === null) {
     const resolved = resolveLedLampCompatibilityProfile(
       ctx.cache.get(anchor.id) ?? (anchor as ProductFull),
       discovery.facets,
@@ -5479,6 +6645,47 @@ async function selectVerifiedOrdinaryReplacement(
   const structuralProfile = structuralResolution.status === "ready"
     ? structuralResolution.profile
     : null;
+  // Preserve the pre-existing structural algorithm when the verified-facts
+  // rollout is off. A public catalog cut-out alone cannot switch routes.
+  const guardedStructuralMount = VERIFIED_MANUFACTURER_FACTS_ENABLED &&
+    structuralProfile !== null &&
+    hasVerifiedRecessedStructuralMount(structuralProfile);
+
+  if (
+    customerCutoutMm !== null &&
+    (!sourceOnlyVerified || !guardedStructuralMount)
+  ) {
+    send({
+      type: "delta",
+      origin: "server",
+      content: "После уточнения монтажного выреза не удалось повторно подтвердить технические характеристики исходного товара. Чтобы не показать неподходящую замену, повторите исходный запрос позже.",
+    });
+    steps.push({
+      step: "v3_replacement_cutout_live_profile_unverified",
+      ms: Date.now() - t0,
+      meta: {
+        source_id: anchor.id,
+        source_only_verified: sourceOnlyVerified,
+        profile_ready: Boolean(structuralProfile),
+        recessed_mount_verified: guardedStructuralMount,
+      },
+    });
+    return { handled: true, products: [], outcome: "query_inconsistent" };
+  }
+
+  if (sourceOnlyVerified && structuralProfile && guardedStructuralMount) {
+    return await selectGuardedStructuralReplacement(
+      userMessage,
+      structuralProfile,
+      requestedCardinality,
+      budgetCap,
+      customerCutoutMm,
+      ctx,
+      send,
+      steps,
+      t0,
+    );
+  }
 
   const axisLimit = equivalentOnly ? 6 : 3;
   const allExplicitAxes = structuralProfile ? []
@@ -6508,6 +7715,8 @@ async function selectVerifiedSemanticCompoundProducts(
     lovableModel: LOVABLE_AGENT_MODEL,
     categoryContextEnabled: ctx.jargonCategoryContextEnabled,
     axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
+    authorizeCatalogSearch: (candidate) =>
+      authorizeJargonCatalogCandidate(ctx, candidate),
   }, ctx.cache);
   const matchedQuery = recovered.ok
     ? String(recovered.matched_query ?? "").trim()
@@ -6599,58 +7808,173 @@ async function selectVerifiedSemanticCompoundProducts(
   return { handled: true, products };
 }
 
-async function refreshRecentProductSet(
-  evidence: RecentProductEvidence[],
-  ctx: ToolContext,
-): Promise<ProductFull[]> {
-  const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const refreshed = await Promise.all(latestEvidence.map(async (previous) => {
-    const result = await executeSearchCatalog(
-      {
-        mode: "by_pagetitle",
-        pagetitle: previous.pagetitle,
-        per_page: 3,
-      },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
-      ctx.cache,
-    );
-    if (!result.ok) return null;
-    const wanted = previous.pagetitle.toLowerCase().replace(/ё/g, "е").replace(
-      /\s+/g,
-      " ",
-    ).trim();
-    const exact = result.results.find((product) =>
-      product.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ")
-        .trim() === wanted
-    );
-    return exact ? ctx.cache.get(String(exact.id)) ?? null : null;
-  }));
-  return refreshed.filter((product): product is ProductFull =>
-    Boolean(
-      product && Number.isFinite(product.price) && product.price > 0,
-    )
-  );
+function renderedCardTitleIdentity(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
 }
 
-/** Price comparison must refresh the exact previously shown SKU, not the first
- * search hit with the same title. Keep the ordinary show-followup unchanged. */
-async function refreshExactRecentPriceSet(
+const RECENT_BATCH_REFRESH_CONCURRENCY = 3;
+const RECENT_BATCH_REFRESH_MAX_MS = 20_000;
+const RECENT_CARD_LOOKUP_TIMEOUT_MS = 5_000;
+
+/** Refresh a completed server-rendered batch, not browser history or a stale
+ * cache. Equal titles share one lookup, but each distinct URL must still be
+ * found exactly once. Work stays bounded even for the full ten-card renderer.
+ * No partial result is committed to the turn cache or passed to price proof. */
+async function rehydrateServerRenderedBatch(
+  cards: ServerRenderedProductCard[],
+  ctx: ToolContext,
+  t0: number,
+): Promise<{
+  products: ProductFull[];
+  recoveredCount: number;
+  catalogRequests: number;
+}> {
+  if (
+    cards.length === 0 || cards.length > MAX_RECENT_EVIDENCE_PRODUCTS ||
+    cards.some((card) =>
+      !renderedCardTitleIdentity(card.pagetitle) ||
+      !productUrlIdentity(card.url)
+    )
+  ) return { products: [], recoveredCount: 0, catalogRequests: 0 };
+
+  const grouped = new Map<string, {
+    title: string;
+    cards: Array<{ card: ServerRenderedProductCard; index: number }>;
+  }>();
+  cards.forEach((card, index) => {
+    const key = renderedCardTitleIdentity(card.pagetitle);
+    const group = grouped.get(key) ?? { title: card.pagetitle, cards: [] };
+    group.cards.push({ card, index });
+    grouped.set(key, group);
+  });
+  const groups = [...grouped.values()];
+  const products: Array<ProductFull | null> = Array(cards.length).fill(null);
+  const remainingTurnMs = MAX_ACCEPTED_WORK_MS - 5_000 - (Date.now() - t0);
+  const budgetMs = Math.min(RECENT_BATCH_REFRESH_MAX_MS, remainingTurnMs);
+  if (budgetMs < 500 || ctx.turnSignal?.aborted) {
+    return { products: [], recoveredCount: 0, catalogRequests: 0 };
+  }
+  const deadlineAt = Date.now() + budgetMs;
+  const controller = new AbortController();
+  const signal = ctx.turnSignal
+    ? AbortSignal.any([controller.signal, ctx.turnSignal])
+    : controller.signal;
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  let nextGroup = 0;
+  let recoveredCount = 0;
+  let catalogRequests = 0;
+  let failed = false;
+  try {
+    const workers = Array.from({
+      length: Math.min(RECENT_BATCH_REFRESH_CONCURRENCY, groups.length),
+    }, async () => {
+      while (!failed && !signal.aborted) {
+        const group = groups[nextGroup++];
+        if (!group) return;
+        const timeoutMs = Math.min(
+          RECENT_CARD_LOOKUP_TIMEOUT_MS,
+          deadlineAt - Date.now(),
+        );
+        if (timeoutMs < 500) {
+          failed = true;
+          controller.abort();
+          return;
+        }
+        // A private cache per request avoids concurrent lookups overwriting
+        // each other's IDs and prevents a failed batch from entering egress.
+        const lookupCache: ProductCache = new Map();
+        catalogRequests++;
+        const result = await executeSearchCatalog({
+          mode: "by_pagetitle",
+          pagetitle: group.title,
+          per_page: 50,
+        }, {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+          singleRequest: true,
+          signal,
+          timeoutMs,
+        }, lookupCache);
+        ctx.observeCatalogToolResult?.(result);
+        if (signal.aborted) return;
+        if (!result.ok) {
+          failed = true;
+          controller.abort();
+          return;
+        }
+        for (const { card, index } of group.cards) {
+          const exact = result.results.filter((ref) => {
+            const product = lookupCache.get(String(ref.id));
+            return product &&
+              renderedCardTitleIdentity(product.pagetitle) ===
+                renderedCardTitleIdentity(card.pagetitle) &&
+              productUrlIdentity(product.url) === card.url;
+          });
+          if (exact.length !== 1) {
+            failed = true;
+            controller.abort();
+            return;
+          }
+          products[index] = lookupCache.get(String(exact[0].id)) ?? null;
+          if (!products[index]) {
+            failed = true;
+            controller.abort();
+            return;
+          }
+          recoveredCount++;
+        }
+      }
+    });
+    await Promise.all(workers);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (
+    failed || signal.aborted || recoveredCount !== cards.length ||
+    products.some((product) => !product) ||
+    new Set(products.map((product) => product!.id)).size !== cards.length
+  ) return { products: [], recoveredCount, catalogRequests };
+  const complete = products as ProductFull[];
+  for (const product of complete) ctx.cache.set(product.id, product);
+  return { products: complete, recoveredCount, catalogRequests };
+}
+
+function refreshRecentProductSet(
+  evidence: RecentProductEvidence[],
+  ctx: ToolContext,
+): ProductFull[] {
+  const latestEvidence = latestRecentProductEvidenceSet(evidence);
+  // The only admissible cache here was populated in this turn by the exact
+  // server-card rehydration below. Never launch another title-only search:
+  // two different SKUs can have exactly the same displayed title.
+  const refreshed = latestEvidence.map((previous) => {
+    const product = ctx.cache.get(previous.id);
+    return product &&
+        renderedCardTitleIdentity(product.pagetitle) ===
+          renderedCardTitleIdentity(previous.pagetitle) &&
+        productUrlIdentity(product.url) === productUrlIdentity(previous.url) &&
+        Number.isFinite(product.price) && product.price > 0
+      ? product
+      : null;
+  });
+  return refreshed.every(Boolean) ? refreshed as ProductFull[] : [];
+}
+
+/** Price comparison uses the complete, freshly rehydrated server batch. */
+function refreshExactRecentPriceSet(
   latestEvidence: RecentProductEvidence[],
   ctx: ToolContext,
-): Promise<Array<ProductFull | null>> {
-  return await Promise.all(latestEvidence.map(async (previous) => {
-    const result = await executeSearchCatalog(
-      {
-        mode: "by_pagetitle",
-        pagetitle: previous.pagetitle,
-        per_page: 50,
-      },
-      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
-      ctx.cache,
-    );
-    if (!result.ok) return null;
-    return exactRecentPriceSkuFromSearch(previous, result.results, ctx.cache);
-  }));
+): Array<ProductFull | null> {
+  return latestEvidence.map((previous) => {
+    const product = ctx.cache.get(previous.id);
+    return product &&
+        renderedCardTitleIdentity(product.pagetitle) ===
+          renderedCardTitleIdentity(previous.pagetitle) &&
+        productUrlIdentity(product.url) === productUrlIdentity(previous.url)
+      ? product
+      : null;
+  });
 }
 
 async function selectVerifiedRecentShowFollowup(
@@ -6665,10 +7989,7 @@ async function selectVerifiedRecentShowFollowup(
     return { handled: false, products: [] };
   }
   const started = Date.now();
-  const liveProducts = (await refreshRecentProductSet(evidence, ctx)).slice(
-    0,
-    5,
-  );
+  const liveProducts = refreshRecentProductSet(evidence, ctx);
   const elapsed = Date.now() - started;
   if (liveProducts.length === 0) {
     send({
@@ -6734,7 +8055,7 @@ async function selectVerifiedRecentPriceFollowup(
 
   const started = Date.now();
   const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const refreshed = await refreshExactRecentPriceSet(latestEvidence, ctx);
+  const refreshed = refreshExactRecentPriceSet(latestEvidence, ctx);
   const proof = proveRecentPriceSet(
     latestEvidence,
     refreshed,
@@ -6960,6 +8281,19 @@ interface VerifiedCustomerMeasurementEvidence {
   text: string;
   sourceCount: number;
   lookupFailed: boolean;
+  /** Completed server-log customer turns before physical-unit compaction. */
+  priorQueriesNewestFirst: string[];
+}
+
+/** Model fields are separate evidence sources, not adjacent words in one sentence. */
+export function composeModelDeclarationMeasurementEvidence(
+  reasoningEvidence: string,
+  measurementEvidence: string,
+): string {
+  return joinMeasurementEvidenceSegments([
+    reasoningEvidence,
+    measurementEvidence,
+  ]);
 }
 
 const MEASUREMENT_EVIDENCE_LOG_LIMIT = 8;
@@ -6990,7 +8324,8 @@ export function composeVerifiedCustomerMeasurementEvidence(
     const query = String(raw ?? "").trim();
     if (
       !query || query.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS ||
-      length + query.length + 1 > MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS
+      length + query.length + CUSTOMER_TURN_BOUNDARY.length >
+        MEASUREMENT_EVIDENCE_MAX_TOTAL_CHARS
     ) continue;
     const units = physicalCustomerUnits(query);
     if (units.size === 0 || [...units].some((unit) => seenUnits.has(unit))) {
@@ -6998,10 +8333,10 @@ export function composeVerifiedCustomerMeasurementEvidence(
     }
     pieces.push(query);
     sourceCount++;
-    length += query.length + 1;
+    length += query.length + CUSTOMER_TURN_BOUNDARY.length;
     for (const unit of units) seenUnits.add(unit);
   }
-  return { text: pieces.join("\n"), sourceCount };
+  return { text: joinCustomerTurns(pieces), sourceCount };
 }
 
 /** Logs are the only authority for a prior turn: browser history and slots
@@ -7020,6 +8355,7 @@ export async function loadVerifiedCustomerMeasurementEvidence(
     text: currentQuery,
     sourceCount: 0,
     lookupFailed: false,
+    priorQueriesNewestFirst: [] as string[],
   };
   if (skipPriorLookup) return currentOnly;
   const createdAfter = activeSelectionScopeLookupCreatedAfter(
@@ -7095,10 +8431,85 @@ export async function loadVerifiedCustomerMeasurementEvidence(
       currentQuery,
       previousQueries,
     );
-    return { ...composed, lookupFailed: false };
+    return {
+      ...composed,
+      lookupFailed: false,
+      priorQueriesNewestFirst: previousQueries,
+    };
   } catch (error) {
     console.error("[v3] customer measurement evidence lookup failed", error);
     return { ...currentOnly, lookupFailed: true };
+  }
+}
+
+/** A browser-supplied follow-up suggests a scope but cannot certify that
+ * the original request produced a completed product batch. Any failed proof
+ * is handled before model or catalog search in the dependent route. */
+async function loadServerRenderedSelectionProof(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  browserBase: string | null,
+  currentFollowup: string | null,
+  requestStartedAt: number,
+): Promise<{
+  proof: ServerRenderedSelectionProof | null;
+  lookupFailed: boolean;
+}> {
+  if (
+    browserBase !== null &&
+    (!browserBase || browserBase.length > MEASUREMENT_EVIDENCE_MAX_QUERY_CHARS)
+  ) {
+    return { proof: null, lookupFailed: false };
+  }
+  try {
+    const createdAfter = activeSelectionScopeLookupCreatedAfter(requestStartedAt);
+    const createdBefore = new Date(requestStartedAt).toISOString();
+    const columns =
+      "id,session_id,user_query,error,final_products_count,response_events,steps,created_at";
+    const [sessionRead, boundaryRead] = await runWithDeadline(
+      () => Promise.all([
+        supabase.from("chat_request_logs")
+          .select(columns)
+          .eq("session_id", sessionId)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .order("created_at", { ascending: false })
+          .limit(MEASUREMENT_EVIDENCE_LOG_LIMIT),
+        supabase.from("chat_request_logs")
+          .select(columns)
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .gte("created_at", createdAfter)
+          .lt("created_at", createdBefore)
+          .filter(
+            "response_events",
+            "cs",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]),
+      MEASUREMENT_EVIDENCE_READ_TIMEOUT_MS,
+    );
+    if (
+      sessionRead.error || boundaryRead.error ||
+      !Array.isArray(sessionRead.data)
+    ) return { proof: null, lookupFailed: true };
+    return {
+      proof: resolveServerRenderedSelectionProof(
+        [...sessionRead.data, ...(boundaryRead.data ? [boundaryRead.data] : [])],
+        sessionId,
+        browserBase,
+        currentFollowup,
+      ),
+      lookupFailed: false,
+    };
+  } catch {
+    return { proof: null, lookupFailed: true };
   }
 }
 
@@ -7329,6 +8740,71 @@ async function loadVerifiedSelectionReadinessPending(
     }
   } catch (error) {
     console.error("[v3] selection readiness slot lookup exception", error);
+  }
+  return { slot: null, lookupFailed: true };
+}
+
+async function loadVerifiedReplacementCutoutPending(
+  supabase: SupabaseClient,
+  sessionId: string,
+  currentLogId: string,
+  slots: Record<string, unknown>,
+): Promise<{
+  slot: VerifiedReplacementCutoutPending | null;
+  lookupFailed: boolean;
+}> {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return { slot: null, lookupFailed: false };
+  }
+  const scope = (pending as Record<string, unknown>).scope;
+  if (
+    !scope || typeof scope !== "object" || Array.isArray(scope) ||
+    (scope as Record<string, unknown>).kind !== "replacement_mounting_cutout"
+  ) return { slot: null, lookupFailed: false };
+
+  try {
+    // Only the immediate completed turn can issue a measurement slot. A
+    // browser-supplied or older slot cannot bind a new source product.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let { data, error } = await supabase.from("chat_request_logs")
+        .select("session_id,error,response_events")
+        .eq("session_id", sessionId)
+        .eq("pipeline", "v3")
+        .neq("id", currentLogId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && !data) {
+        const rotated = await supabase.from("chat_request_logs")
+          .select("session_id,error,response_events")
+          .eq("pipeline", "v3")
+          .neq("id", currentLogId)
+          .contains(
+            "response_events",
+            conversationBoundaryJsonbContainment(sessionId),
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        data = rotated.data;
+        error = rotated.error;
+      }
+      if (error) return { slot: null, lookupFailed: true };
+      if (data && data.error !== "in_progress") {
+        return {
+          slot: resolveServerIssuedReplacementCutoutPending(
+            slots,
+            data,
+            sessionId,
+          ),
+          lookupFailed: false,
+        };
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  } catch (error) {
+    console.error("[v3] replacement cutout slot lookup exception", error);
   }
   return { slot: null, lookupFailed: true };
 }
@@ -7700,6 +9176,7 @@ interface ReplayLogRow {
   id: string;
   session_id: string | null;
   user_query: string | null;
+  public_subject_hash?: string | null;
   error: string | null;
   response_events: unknown;
 }
@@ -7714,13 +9191,16 @@ async function readReplayLog(
   supabase: SupabaseClient,
   messageId: string,
   timeoutMs = 3_000,
+  requireSubjectBinding = false,
 ): Promise<ReplayLogRow | null> {
   try {
     const { data, error } = await runWithDeadline(
       () =>
         supabase
           .from("chat_request_logs")
-          .select("id,session_id,user_query,error,response_events")
+          .select(requireSubjectBinding
+            ? "id,session_id,user_query,public_subject_hash,error,response_events"
+            : "id,session_id,user_query,error,response_events")
           .eq("message_id", messageId)
           .maybeSingle(),
       timeoutMs,
@@ -7743,10 +9223,11 @@ async function claimTurnLogStart(
   userQuery: string,
   initialSteps: StepLog[],
   resumeOnly: boolean,
+  subjectHash: string | null = null,
 ): Promise<TurnClaim> {
   try {
     if (resumeOnly) {
-      const existing = await readReplayLog(supabase, messageId);
+      const existing = await readReplayLog(supabase, messageId, 3_000, !!subjectHash);
       return existing
         ? { kind: "existing", row: existing }
         : { kind: "missing" };
@@ -7756,6 +9237,10 @@ async function claimTurnLogStart(
       .insert({
         session_id: sessionId,
         message_id: messageId,
+        // The column is referenced only for a verified proof. OFF and unsigned
+        // observe retain their original database contract; rollout applies the
+        // migration before turning on signed observation.
+        ...(subjectHash ? { public_subject_hash: subjectHash } : {}),
         user_query: userQuery,
         pipeline: "v3",
         branch: "v3_expert",
@@ -7769,7 +9254,7 @@ async function claimTurnLogStart(
       .select("id")
       .single();
     if (error && error.code === "23505") {
-      const existing = await readReplayLog(supabase, messageId);
+      const existing = await readReplayLog(supabase, messageId, 3_000, !!subjectHash);
       return existing
         ? { kind: "existing", row: existing }
         : { kind: "unavailable" };
@@ -7872,6 +9357,9 @@ async function runExpertLoop(
   preExcludedProductUrls: string[] = [],
   verifiedInitialDiscoveryLeaf: string | null = null,
   replacementEgressGuarded = false,
+  serverRenderedBaseRequest: string | null = null,
+  serverVerifiedPriorQueriesNewestFirst: readonly string[] = [],
+  rawCurrentUserMessage = userMessage,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -7879,6 +9367,14 @@ async function runExpertLoop(
   const observedSearchCatalog = async (
     ...args: Parameters<typeof executeSearchCatalog>
   ): Promise<Awaited<ReturnType<typeof executeSearchCatalog>>> => {
+    if (ctx.catalogAppearanceGuard) {
+      const input = args[0] as unknown as Record<string, unknown>;
+      const guarded = ctx.catalogAppearanceGuard("search_catalog", input);
+      if ("error" in guarded) {
+        return guarded.error as Awaited<ReturnType<typeof executeSearchCatalog>>;
+      }
+      args[0] = guarded.args as unknown as SearchCatalogInput;
+    }
     const result = await executeSearchCatalog(...args);
     ctx.observeCatalogToolResult?.({ ...result, tool: "search_catalog" });
     return result;
@@ -7941,6 +9437,15 @@ async function runExpertLoop(
   let pendingDerivedSelectionMeasurementScope: string | null = null;
   const provisionalCustomerMeasurementScope =
     customerAggregateMeasurementScope(verifiedCustomerMeasurementEvidence);
+  const destinationAreaCoverage = verifiedDestinationAreaCoversSoleMeasurement({
+    selectionRequest: userMessage,
+    baseRequest: ellipticalContinuation?.baseUserMessage ?? "",
+    serverVerifiedBaseRequest: serverRenderedBaseRequest ?? "",
+    customerMeasurementEvidence: verifiedCustomerMeasurementEvidence,
+    serverVerifiedPriorQueriesNewestFirst,
+  });
+  let destinationAreaCoverageLogged = false;
+  let destinationAreaCoverageApplied = false;
   const cardMeasurementScope = () =>
     provisionalCustomerMeasurementScope ??
     pendingDerivedSelectionMeasurementScope ??
@@ -7959,16 +9464,33 @@ async function runExpertLoop(
     lastDiscover?.facets ?? [],
     certifiedPairedCriteria,
   );
+  const scopedApplicationCapacityContract = (
+    additionalCriteria: Criterion[] = [],
+  ): Criterion[] => scopeCardCriteria(
+    mergeMandatorySelectionCriteria([
+      ...userBackedSearchCriteria,
+      ...enforcedSearchCriteria,
+      ...(currentSelectionCriteriaPlan()?.mandatory_criteria ?? []),
+      ...additionalCriteria,
+    ]),
+    verifiedCustomerMeasurementEvidence,
+  ).criteria;
   const scopeLiveFacetOptions = (
     options: Record<string, unknown> | null | undefined,
     facets: Facet[],
     reasoningText: string,
   ): Record<string, string[]> => {
     const scoped: Record<string, string[]> = {};
+    const certifiedCapacityOptions = certifiedCustomerApplicationCapacityOptions(
+      scopedApplicationCapacityContract(),
+      verifiedCustomerMeasurementEvidence,
+      facets,
+    );
     for (const [key, rawValues] of Object.entries(options ?? {})) {
       if (!Array.isArray(rawValues)) continue;
       const facet = facets.find((candidate) => candidate.key === key);
       const retained = rawValues.map(String).filter((value) =>
+        certifiedCapacityOptions[key]?.includes(value) ||
         scopeCardCriteria([{
           key: facet?.caption || key,
           op: "eq",
@@ -8004,6 +9526,18 @@ async function runExpertLoop(
   ) => buildVisibleRequestContract(userMessage, context).filter(
     (requirement) => {
       if (
+        requirement.kind === "literal_modifier" &&
+        unownedAppearanceMentionsInText(
+          lastDiscover?.facets ?? [],
+          requirement.label,
+          {
+            currentUserMessage: rawCurrentUserMessage,
+            trustedActiveProductTarget: trustedAppearanceTarget(),
+            trustedBaseUserMessage: trustedAppearanceBaseRequest,
+          },
+        ).length > 0
+      ) return false;
+      if (
         cardMeasurementScope() !== "system_total" ||
         (requirement.kind !== "bounded_measurement" &&
           requirement.kind !== "linear_measurement")
@@ -8034,6 +9568,13 @@ async function runExpertLoop(
     ).products;
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
+  // Terminal recovery may deliberately select an earlier proven category
+  // instead of the latest (possibly rejected) corrective discovery.
+  let appearanceCatalogDiscoveryOverride: DiscoverCategoryOk | null | undefined;
+  const appearanceCatalogDiscovery = () =>
+    appearanceCatalogDiscoveryOverride === undefined
+      ? lastDiscover
+      : appearanceCatalogDiscoveryOverride;
   // Machine-readable projection of the facet values the consultant declared
   // and then used for search. It is merged into render criteria server-side so
   // the cards cannot silently diverge from the preceding reasoning.
@@ -8220,7 +9761,7 @@ async function runExpertLoop(
           titleContainsLiteralToken(product.pagetitle, namedSeriesToken)
         )
         ? findNamedSeriesFacetEvidence(
-          lastDiscover?.facets ?? [],
+          appearanceCatalogDiscovery()?.facets ?? [],
           namedSeriesToken,
         )
         : null;
@@ -8397,6 +9938,88 @@ async function runExpertLoop(
     visibleText += emittedBlockText;
     return emittedBlockText;
   };
+  const trustedAppearanceBaseRequest = serverRenderedBaseRequest ??
+    ellipticalContinuation?.baseUserMessage ?? null;
+  const trustedAppearanceTarget = () =>
+    activeSelectionTarget ?? appearanceCatalogDiscovery()?.category?.pagetitle ?? null;
+  const safeVisibleAppearanceProse = (
+    candidate: string,
+    pendingDiscovery = false,
+  ): string => {
+    const discovery = appearanceCatalogDiscovery();
+    if (!candidate.trim()) return candidate;
+    if (!discovery) {
+      // Before the live category/facets arrive there is no vocabulary with
+      // which to prove model-authored appearance claims. Keep the model's
+      // reasoning internally, but do not stream its selection prose yet.
+      if (!shouldDeferAppearanceProseBeforeDiscovery(
+        intentMode,
+        Boolean(discovery),
+        pendingDiscovery,
+      )) return candidate;
+      steps.push({
+        step: "v3_unverified_appearance_public_text_deferred",
+        ms: now(),
+        meta: { source: "taxonomy_pending" },
+      });
+      return "";
+    }
+    const parts = candidate.split(/(?<=[.!?])\s+|\n+/u);
+    const kept = parts.filter((part) =>
+      unownedAppearanceMentionsInText(discovery.facets, part, {
+        currentUserMessage: rawCurrentUserMessage,
+        trustedActiveProductTarget: trustedAppearanceTarget(),
+        trustedBaseUserMessage: trustedAppearanceBaseRequest,
+      }).length === 0
+    );
+    if (kept.length < parts.length) {
+      steps.push({
+        step: "v3_unowned_appearance_public_text_suppressed",
+        ms: now(),
+        meta: { removed_sentences: parts.length - kept.length },
+      });
+    }
+    return kept.join(" ").trim();
+  };
+  const appearanceFacetValueIsUnowned = (
+    facet: DiscoverCategoryOk["facets"][number],
+    value: string,
+  ): boolean => {
+    const target = trustedAppearanceTarget();
+    const isAppearanceClaim = appearanceFacetClaimsFromText(
+      [facet],
+      `${facet.caption || facet.key}: ${value}`,
+      { trustedActiveProductTarget: target },
+    ).some((claim) =>
+      claim.key === facet.key &&
+      normalizeForMatch(claim.value) === normalizeForMatch(value)
+    );
+    return isAppearanceClaim && !resolveCustomerAppearanceFacetOwnership({
+      facet,
+      value,
+      currentUserMessage: rawCurrentUserMessage,
+      trustedActiveProductTarget: target,
+      trustedBaseUserMessage: trustedAppearanceBaseRequest,
+    });
+  };
+  const appearanceCriterionIsCustomerOwned = (
+    criterion: Criterion,
+  ): boolean => {
+    const discovery = appearanceCatalogDiscovery();
+    if (!discovery || criterion.op !== "eq") return true;
+    const options = projectCriteriaFacetOptions(
+      [criterion],
+      discovery.facets,
+    ).options;
+    return !Object.entries(options).some(([key, values]) => {
+      const facet = discovery.facets.find((candidate) =>
+        candidate.key === key
+      );
+      return facet && values.some((value) =>
+        appearanceFacetValueIsUnowned(facet, value)
+      );
+    });
+  };
   const freezeSelectionCriteria = (
     criteria: Criterion[],
     provenance: SelectionCriterionProvenance,
@@ -8405,7 +10028,9 @@ async function runExpertLoop(
       ? "catalog_verified"
       : "derived_required";
     const attributedCriteria = scopeCardCriteria(
-      omitDisclosedUnverifiedCriteria(criteria),
+      omitDisclosedUnverifiedCriteria(criteria.filter(
+        appearanceCriterionIsCustomerOwned,
+      )),
     ).criteria.map((
       criterion,
     ) => ({
@@ -8453,12 +10078,62 @@ async function runExpertLoop(
         selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({
           ...criterion,
         })),
-        omitDisclosedUnverifiedCriteria(criteria),
+        omitDisclosedUnverifiedCriteria(criteria.filter(
+          appearanceCriterionIsCustomerOwned,
+        )),
         [],
         false,
       )
-      : omitDisclosedUnverifiedCriteria(criteria),
+      : omitDisclosedUnverifiedCriteria(criteria.filter(
+        appearanceCriterionIsCustomerOwned,
+      )),
   ).criteria;
+  const reconcileSelectionAppearanceScope = (): void => {
+    if (!lastDiscover) return;
+    let removed = 0;
+    const scoped = (criteria: Criterion[]): Criterion[] => {
+      const retained = criteria.filter(appearanceCriterionIsCustomerOwned);
+      removed += criteria.length - retained.length;
+      return retained;
+    };
+    if (selectionCriteriaPlan) {
+      selectionCriteriaPlan = restrictSelectionCriteriaPlan(
+        selectionCriteriaPlan,
+        scoped([...selectionCriteriaPlan.mandatory_criteria]),
+      );
+    }
+    userBackedSearchCriteria = scoped(userBackedSearchCriteria);
+    enforcedSearchCriteria = scoped(enforcedSearchCriteria);
+    reasoningProjectedSearchCriteria = scoped(reasoningProjectedSearchCriteria);
+    postFilterOnlyReasoningCriteria = scoped(postFilterOnlyReasoningCriteria);
+    latestRenderCriteria = scoped(latestRenderCriteria);
+    const retainedPending = scoped(pendingUnverifiedRecoveryCriteria);
+    pendingUnverifiedRecoveryCriteria.splice(
+      0,
+      pendingUnverifiedRecoveryCriteria.length,
+      ...retainedPending,
+    );
+    for (const values of [
+      userBackedSearchFacetValues,
+      modelAssumedSearchFacetValues,
+    ]) {
+      const retained = values.filter(({ key, value }) => {
+        const facet = lastDiscover?.facets.find((candidate) =>
+          candidate.key === key
+        );
+        return !facet || !appearanceFacetValueIsUnowned(facet, value);
+      });
+      removed += values.length - retained.length;
+      values.splice(0, values.length, ...retained);
+    }
+    if (removed > 0) {
+      steps.push({
+        step: "v3_unowned_appearance_removed_from_selection_plan",
+        ms: now(),
+        meta: { removed, plan_hash: selectionCriteriaPlan?.hash ?? null },
+      });
+    }
+  };
   // Discovery can freeze a live numeric facet before the consultant has
   // declared whether the customer's number belongs to one card or the whole
   // installation. When that scope becomes known, reconcile every persistent
@@ -8880,6 +10555,19 @@ async function runExpertLoop(
   let freshSearch:
     | { tool: string; ids: string[]; total: number; mode?: string }
     | null = null;
+  // A model-owned category-only search can exhaust the remote decision step
+  // before render_products. Preserve only its FIRST source-proven pool, bound
+  // to the exact live discovery and executed category, not a later retry.
+  let modelOwnedFilteredPool: {
+    ids: string[];
+    total: number;
+    discovery: DiscoverCategoryOk;
+    category: string;
+    target: string;
+    criteria: Criterion[];
+    exclusions: Criterion[];
+    budget: number | null;
+  } | null = null;
   // First non-empty semantic search in an ordinary selection turn. Unlike
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
@@ -9103,6 +10791,15 @@ async function runExpertLoop(
   );
   const replacementIntent = Boolean(replacementSourceMessage);
   const replacementEvidenceMessage = replacementSourceMessage ?? userMessage;
+  // Use turn-aware customer history for the facet/measurement guard. A trailing
+  // number in a prior turn must not borrow the first unit-like word of this
+  // turn, while line breaks inside either message remain meaningful.
+  const recentCustomerTurnEvidence = joinCustomerTurns([
+    ...history.filter((message) => message.role === "user").slice(-6).map((
+      message,
+    ) => message.content),
+    userMessage,
+  ]);
   const priorReplacementReasoning = replacementIntent
     ? extractPriorAssistantProse(history.slice(-8), 4)
     : "";
@@ -9983,8 +11680,9 @@ async function runExpertLoop(
     });
   }
 
-  // One eligibility boundary serves both a zero-result query recovery and a
-  // model declaration that omitted search entirely. The latter can happen
+  // One eligibility boundary serves zero-result and short-of-choice query
+  // recoveries as well as a model declaration that omitted search entirely.
+  // The latter can happen
   // after a slow provider retry; waiting for a second model call leaves no
   // time for the already-grounded catalog lookup.
   const buildCurrentUnqualifiedCategoryBrowse = (
@@ -9993,7 +11691,7 @@ async function runExpertLoop(
   ): SelectionSearchRecoveryAttempt | null => {
     const discovery = lastDiscover;
     if (!discovery) return null;
-    return buildUnqualifiedCategoryBrowseRecovery({
+    const attempt = buildUnqualifiedCategoryBrowseRecovery({
       search_args: searchArgs,
       customer_message: userMessage,
       leaf_categories: discovery.leaf_categories.map((leaf) =>
@@ -10032,6 +11730,349 @@ async function runExpertLoop(
           codeConstraints.length > 0,
       ),
     });
+    // A room descriptor copied into a literal qualifier must not turn a
+    // verified broad browse into an implicit product-shape filter.
+    return attempt?.literal_qualifier_terms?.some((term) =>
+        unownedAppearanceMentionsInText(discovery.facets, term, {
+          currentUserMessage: rawCurrentUserMessage,
+          trustedActiveProductTarget: trustedAppearanceTarget(),
+          trustedBaseUserMessage: trustedAppearanceBaseRequest,
+        }).length > 0
+      )
+      ? null
+      : attempt;
+  };
+  const verifiedAppearanceBrowseArgs = (
+    originalQuery = "",
+    sourceArgs: Record<string, unknown> = {},
+  ): Record<string, unknown> | null => {
+    const discovery = appearanceCatalogDiscovery();
+    if (!discovery) return null;
+    const leaves = discovery.leaf_categories.map(({ pagetitle }) =>
+      pagetitle
+    ).filter((leaf) =>
+      Boolean(leaf) && unownedAppearanceMentionsInText(
+        discovery.facets,
+        leaf,
+        {
+          currentUserMessage: rawCurrentUserMessage,
+          trustedActiveProductTarget: trustedAppearanceTarget(),
+          trustedBaseUserMessage: trustedAppearanceBaseRequest,
+        },
+      ).length === 0
+    );
+    const category = discovery.category?.pagetitle?.trim() ?? "";
+    const safeCategory = category && unownedAppearanceMentionsInText(
+        discovery.facets,
+        category,
+        {
+          currentUserMessage: rawCurrentUserMessage,
+          trustedActiveProductTarget: trustedAppearanceTarget(),
+          trustedBaseUserMessage: trustedAppearanceBaseRequest,
+        },
+      ).length === 0
+      ? category
+      : "";
+    if (leaves.length === 0 && !safeCategory) return null;
+    const customerBudget = extractBudgetCap(userMessage) ??
+      (trustedAppearanceBaseRequest
+        ? extractBudgetCap(trustedAppearanceBaseRequest)
+        : null);
+    const customerFloorText = trustedAppearanceBaseRequest
+      ? joinCustomerTurns([rawCurrentUserMessage, trustedAppearanceBaseRequest])
+      : rawCurrentUserMessage;
+    const customerPriceFloors = [...customerFloorText.matchAll(
+      /(?:^|[^\p{L}])(?:от|не\s+дешевле|не\s+ниже)\s*([\d\s\u00a0]{1,12})\s*(?:тенге|тг|₸)(?=$|[^\p{L}])/giu,
+    )].map((match) => Number(match[1].replace(/\s+/gu, "")))
+      .filter((amount) => Number.isSafeInteger(amount) && amount > 0);
+    const sourceMinPrice = typeof sourceArgs.min_price === "number" &&
+        Number.isSafeInteger(sourceArgs.min_price) &&
+        customerPriceFloors.includes(sourceArgs.min_price)
+      ? sourceArgs.min_price
+      : null;
+    // Keep an exact live technical code only when it appears both in the
+    // customer's active request and in the model query being repaired. This
+    // includes IP ratings and other alphanumeric catalog codes without a
+    // product-specific list or trusting model-only preferences.
+    const normalizeEvidence = (text: string) =>
+      ` ${normalizeForMatch(text).replace(/\s+/gu, " ").trim()} `;
+    const customerEvidence = normalizeEvidence(
+      `${rawCurrentUserMessage} ${trustedAppearanceBaseRequest ?? ""}`,
+    );
+    const queryEvidence = normalizeEvidence(originalQuery);
+    const exactTechnicalOptions: Record<string, string[]> = {};
+    const rememberTechnicalOption = (key: string, value: string) => {
+      const facet = discovery.facets.find((candidate) => candidate.key === key);
+      if (!facet || appearanceFacetValueIsUnowned(facet, value) ||
+        !facet.values.some((candidate) => candidate.value === value)) return;
+      const values = exactTechnicalOptions[key] ?? [];
+      if (!values.includes(value)) exactTechnicalOptions[key] = [...values, value];
+    };
+    for (const { key, value } of userBackedSearchFacetValues) {
+      rememberTechnicalOption(key, value);
+    }
+    const criterionOptions = projectCriteriaFacetOptions(
+      userBackedSearchCriteria.filter(appearanceCriterionIsCustomerOwned),
+      discovery.facets,
+    ).options;
+    for (const [key, values] of Object.entries(criterionOptions)) {
+      for (const value of values) rememberTechnicalOption(key, value);
+    }
+    if (originalQuery) {
+      for (const facet of discovery.facets) {
+        const supported = facet.values.map(({ value }) => value).filter(
+          (value) => {
+            const canonical = normalizeForMatch(value).trim();
+            return canonical.length >= 3 &&
+              /\p{L}/u.test(canonical) && /\d/u.test(canonical) &&
+              customerEvidence.includes(` ${canonical} `) &&
+              queryEvidence.includes(` ${canonical} `) &&
+              !appearanceFacetValueIsUnowned(facet, value);
+          },
+        );
+        for (const value of supported) rememberTechnicalOption(facet.key, value);
+      }
+    }
+    const appearanceScope = {
+      currentUserMessage: rawCurrentUserMessage,
+      trustedActiveProductTarget: trustedAppearanceTarget(),
+      trustedBaseUserMessage: trustedAppearanceBaseRequest,
+    };
+    const safeQueryTokens = originalQuery.split(/\s+/u).filter((token) => {
+      if (!token.trim()) return false;
+      if (
+        unownedAppearanceMentionsInText(
+          discovery.facets,
+          token,
+          appearanceScope,
+        ).length > 0
+      ) return false;
+      const canonical = normalizeForMatch(token).trim();
+      return canonical.length > 0 && (
+        customerEvidence.includes(` ${canonical} `) ||
+        normalizeEvidence(trustedAppearanceTarget() ?? "").includes(
+          ` ${canonical} `,
+        )
+      );
+    });
+    const safeTechnicalQuery = safeQueryTokens.join(" ").trim();
+    const targetTokens = normalizeForMatch(trustedAppearanceTarget() ?? "")
+      .split(/\s+/u).filter(Boolean);
+    const safeQueryHasCustomerTechnicalTerm = safeQueryTokens.some((token) => {
+      const canonical = normalizeForMatch(token).trim();
+      const isTargetWord = targetTokens.some((targetWord) =>
+        canonical === targetWord ||
+        (canonical.length >= 5 && targetWord.length >= 5 &&
+          canonical.slice(0, 4) === targetWord.slice(0, 4))
+      );
+      return /\d/u.test(canonical) ||
+        (/\p{L}/u.test(canonical) && canonical.length >= 4 && !isTargetWord);
+    });
+    const useSafeQuery = Object.keys(exactTechnicalOptions).length === 0 &&
+      safeQueryHasCustomerTechnicalTerm &&
+      unownedAppearanceMentionsInText(
+        discovery.facets,
+        safeTechnicalQuery,
+        appearanceScope,
+      ).length === 0;
+    return {
+      mode: useSafeQuery ? "by_query" : "by_filter",
+      ...(useSafeQuery ? { query: safeTechnicalQuery } : {}),
+      ...(leaves.length > 0
+        ? { category_in: leaves }
+        : { category: safeCategory }),
+      ...(Object.keys(exactTechnicalOptions).length > 0
+        ? { options: exactTechnicalOptions }
+        : {}),
+      ...(customerBudget !== null ? { max_price: customerBudget } : {}),
+      ...(sourceMinPrice !== null ? { min_price: sourceMinPrice } : {}),
+      ...(catalogPriceExtreme === "cheapest"
+        ? { sort_cheapest: true }
+        : catalogPriceExtreme === "expensive"
+        ? { sort_expensive: true }
+        : {}),
+      ...(Number.isSafeInteger(sourceArgs.page) &&
+          Number(sourceArgs.page) >= 1
+        ? { page: sourceArgs.page }
+        : {}),
+      per_page: 50,
+    };
+  };
+
+  // Central catalog I/O boundary. Direct model searches, terminal recovery,
+  // jargon recovery and bounded observed searches all pass through this same
+  // request-scoped gate; non-search tools are untouched.
+  ctx.catalogAppearanceGuard = (name, input) => {
+    const discovery = appearanceCatalogDiscovery();
+    if (!discovery) {
+      // An exact customer-supplied identity can still be recovered during a
+      // taxonomy outage. Free model text cannot: without live facets there is
+      // no way to distinguish the requested product from an invented shape.
+      if (name === "search_catalog") {
+        const exact = exactCustomerIdentitySearchDuringTaxonomyOutage(
+          input,
+          rawCurrentUserMessage,
+          trustedAppearanceBaseRequest,
+        );
+        if (exact) return { args: exact };
+      }
+      return {
+        error: {
+          tool: name,
+          ok: false,
+          error_code: "bad_input",
+          message: "No verified category for catalog appearance provenance",
+        },
+      };
+    }
+    const scope = {
+      currentUserMessage: rawCurrentUserMessage,
+      trustedActiveProductTarget: trustedAppearanceTarget(),
+      trustedBaseUserMessage: trustedAppearanceBaseRequest,
+    };
+    const query = typeof input.query === "string" ? input.query : "";
+    const pagetitle = typeof input.pagetitle === "string"
+      ? input.pagetitle
+      : "";
+    const modifiers = Array.isArray(input.modifiers)
+      ? input.modifiers.filter((value): value is string =>
+        typeof value === "string"
+      )
+      : [];
+    const suppliedCategories = [
+      typeof input.category === "string" ? input.category : "",
+      ...(Array.isArray(input.category_in)
+        ? input.category_in.filter((value): value is string =>
+          typeof value === "string"
+        )
+        : []),
+      // search-catalog injects this field into by_filter categories even when
+      // category/category_in were already validated by another route.
+      typeof input.anchor_leaf_category === "string"
+        ? input.anchor_leaf_category
+        : "",
+    ].filter(Boolean);
+    const unownedIn = (text: string) =>
+      unownedAppearanceMentionsInText(discovery.facets, text, scope);
+    // The catalog serializer reads all of these string fields independently
+    // of search mode. Inspect the complete human-readable surface once at
+    // I/O rather than trusting an earlier, route-specific argument guard.
+    const unownedText = [
+      query,
+      pagetitle,
+      ...suppliedCategories,
+      ...modifiers,
+    ].flatMap(unownedIn);
+    const unownedCategory = suppliedCategories.some((value) =>
+      unownedIn(value).length > 0
+    );
+    if (unownedText.length > 0) {
+      steps.push({
+        step: name === "jargon_recover_catalog"
+          ? "v3_unowned_appearance_jargon_query_rejected_at_io"
+          : "v3_unowned_appearance_query_broadened_at_io",
+        ms: now(),
+        meta: {
+          source: "catalog_io_boundary",
+          dropped: unownedText,
+          unowned_category: unownedCategory,
+          unowned_pagetitle: Boolean(pagetitle && unownedIn(pagetitle).length),
+          verified_category: discovery.category.pagetitle,
+        },
+      });
+      if (name === "jargon_recover_catalog") {
+        return {
+          error: {
+            tool: name,
+            ok: false,
+            error_code: "bad_input",
+            message: "Unverified appearance modifier in jargon recovery",
+          },
+        };
+      }
+      // An article is an exact identity, not a text query. Keep it while
+      // removing only the model's contaminating category; other modes need
+      // a verified category-wide browse rather than their invented title.
+      if (input.mode === "by_article") {
+        const {
+          category: _category,
+          category_in: _categoryIn,
+          anchor_leaf_category: _anchorLeafCategory,
+          query: _query,
+          pagetitle: _pagetitle,
+          modifiers: _modifiers,
+          ...rest
+        } = input;
+        // The second pass still checks any appearance option values.
+        return ctx.catalogAppearanceGuard?.(name, rest) ?? { args: rest };
+      }
+      const broad = verifiedAppearanceBrowseArgs(query || pagetitle, input);
+      return broad
+        ? { args: broad }
+        : {
+          error: {
+            tool: name,
+            ok: false,
+            error_code: "bad_input",
+            message: "No verified category for an unowned appearance query",
+          },
+        };
+    }
+    if (name !== "search_catalog") {
+      return { args: input };
+    }
+    const options = input.options && typeof input.options === "object"
+      ? input.options as Record<string, unknown>
+      : null;
+    if (!options) return { args: input };
+    const kept: Record<string, unknown> = {};
+    const removed: Array<{ key: string; value: string }> = [];
+    for (const [key, values] of Object.entries(options ?? {})) {
+      const facet = discovery.facets.find((candidate) => candidate.key === key);
+      if (!facet || !Array.isArray(values)) {
+        kept[key] = values;
+        continue;
+      }
+      const safeValues = values.filter((value) => {
+        if (!appearanceFacetValueIsUnowned(facet, String(value))) return true;
+        removed.push({ key, value: String(value) });
+        return false;
+      });
+      if (safeValues.length > 0) kept[key] = safeValues;
+    }
+    if (removed.length === 0) return { args: input };
+    steps.push({
+      step: "v3_unowned_appearance_options_removed_at_io",
+      ms: now(),
+      meta: {
+        removed,
+        verified_category: discovery.category.pagetitle,
+      },
+    });
+    // Keep the original query/title/article and unrelated technical axes.
+    // Only an empty filter without a live category needs a broad replacement.
+    const { options: _options, ...rest } = input;
+    if (
+      input.mode === "by_filter" && Object.keys(kept).length === 0 &&
+      !input.category && !input.category_in
+    ) {
+      const broad = verifiedAppearanceBrowseArgs("", input);
+      if (broad) return { args: broad };
+      return {
+        error: {
+          tool: name,
+          ok: false,
+          error_code: "bad_input",
+          message: "No verified category after appearance filter removal",
+        },
+      };
+    }
+    return {
+      args: {
+        ...rest,
+        ...(Object.keys(kept).length > 0 ? { options: kept } : {}),
+      },
+    };
   };
 
   const turnController = new AbortController();
@@ -10394,6 +12435,11 @@ async function runExpertLoop(
           );
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
+          let closureRetryOutcomePending: {
+            model: string;
+            provider: string;
+            timeoutMs: number;
+          } | null = null;
           const primaryReasoningTimeout = Math.min(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
@@ -10411,14 +12457,33 @@ async function runExpertLoop(
               [reasoningToolSchema],
               1200,
               buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
+              DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                ? "openrouter_only"
+                : "configured",
             );
           } catch (reasoningError) {
-            const timedOut =
+            const timedOut = !(reasoningError instanceof UpstreamHttpError) && (
               (reasoningError as Error)?.name === "TimeoutError" ||
               String((reasoningError as Error)?.message ?? reasoningError)
-                .includes("llm_call_timeout:");
-            const transientProviderFailure = reasoningError instanceof
-                UpstreamHttpError && reasoningError.status >= 500;
+                .includes("llm_call_timeout:")
+            );
+            // The primary reasoning call can return HTTP 200 with no usable
+            // choice. Before origin diagnostics this surfaced as a synthetic
+            // 502 and received the one bounded alternate-model attempt. Keep
+            // that recovery only when no provider-level failover has already
+            // consumed the alternate; an HTTP auth/quota/rate-limit response
+            // (or a failed fallback after one) must never trigger a third call.
+            const unusablePrimaryCompletion =
+              reasoningError instanceof UpstreamHttpError &&
+              reasoningError.origin === "completion_envelope" &&
+              reasoningError.status === 502 &&
+              reasoningError.observed_http_status === 200 &&
+              reasoningError.failed_over === false &&
+              reasoningError.primary_status === null;
+            const transientProviderFailure =
+              (isConfirmedTransientUpstreamHttp5xx(reasoningError) &&
+                reasoningError.failed_over !== true) ||
+              unusablePrimaryCompletion;
             const retryTimeout = (timedOut || transientProviderFailure) &&
                 !turnController.signal.aborted
               ? boundedAgentStepTimeout(
@@ -10434,9 +12499,15 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 primary_model: ctx.selectionReasoningModel,
-                retry_model: GENERAL_INQUIRY_MODEL,
+                retry_model: DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? LOVABLE_AGENT_MODEL
+                  : GENERAL_INQUIRY_MODEL,
+                retry_provider: DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? "lovable"
+                  : "openrouter",
                 primary_timeout_ms: primaryReasoningTimeout,
                 retry_timeout_ms: retryTimeout,
+                ...upstreamFailureDiagnosticMeta(reasoningError),
               },
             });
             structuredReasoning = await callOpenRouter(
@@ -10451,17 +12522,51 @@ async function runExpertLoop(
               [reasoningToolSchema],
               1200,
               GENERAL_INQUIRY_MODEL_ROUTING,
+              DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                ? "lovable_only"
+                : "configured",
             );
             derivedReasoningProviderAttempts += 1;
+            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+              // A provider HTTP 200 is not yet a usable selection contract.
+              // Record success only after resolving and validating the forced
+              // declaration below, never merely after a named tool call.
+              closureRetryOutcomePending = {
+                model: LOVABLE_AGENT_MODEL,
+                provider: structuredReasoning.provider ?? "unknown",
+                timeoutMs: retryTimeout,
+              };
+            } else {
+              steps.push({
+                step: "v3_derived_selection_reasoning_retry_recovered",
+                ms: now(),
+                meta: {
+                  retry_model: GENERAL_INQUIRY_MODEL,
+                  retry_provider: structuredReasoning.provider ?? "unknown",
+                  retry_timeout_ms: retryTimeout,
+                },
+              });
+            }
+          }
+          const recordClosureRetryOutcome = (
+            validated: boolean,
+            reason: string | null = null,
+          ) => {
+            if (!closureRetryOutcomePending) return;
             steps.push({
-              step: "v3_derived_selection_reasoning_retry_recovered",
+              step: validated
+                ? "v3_derived_selection_reasoning_retry_recovered"
+                : "v3_derived_selection_reasoning_retry_contract_unverified",
               ms: now(),
               meta: {
-                retry_model: GENERAL_INQUIRY_MODEL,
-                retry_timeout_ms: retryTimeout,
+                retry_model: closureRetryOutcomePending.model,
+                retry_provider: closureRetryOutcomePending.provider,
+                retry_timeout_ms: closureRetryOutcomePending.timeoutMs,
+                ...(reason ? { reason } : {}),
               },
             });
-          }
+            closureRetryOutcomePending = null;
+          };
           const cleanDeclarationCall = (
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
@@ -10520,6 +12625,11 @@ async function runExpertLoop(
                   ],
                 }
                 : null,
+              {
+                currentUserMessage: rawCurrentUserMessage,
+                trustedBaseRequest: trustedAppearanceBaseRequest,
+                trustedActiveProductTarget: trustedAppearanceTarget(),
+              },
             );
           };
           const cleanResolvedDeclaration = (
@@ -10618,7 +12728,7 @@ async function runExpertLoop(
                 lastDiscover?.facets ?? [],
               ).criteria.length > 0
               : false;
-            return classifyRequiredProductMeasurementGap({
+            const gapInput = {
               required: unresolvedProductMeasurementRequired,
               measurementScope,
               pairedFitProven,
@@ -10635,6 +12745,42 @@ async function runExpertLoop(
               competingThresholds: hasCompetingMeasuredSelectionTiers(
                 declaration.measurementEvidence,
               ) || recommendedExact.reason === "competing_values",
+            };
+            const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
+            if (uncoveredGap !== "unprojectable_criterion") return uncoveredGap;
+            // The independently verified original request and fresh per-card
+            // destination gate discharge only this customer area. The model
+            // need not repeat its unit after classification prose is cleaned;
+            // any other surviving physical number keeps the original repair.
+            const modelPhysicalMeasurements = [
+              declaration.reasoningEvidence,
+              declaration.measurementEvidence,
+            ].flatMap(extractClientQuantities)
+              .filter(({ unit }) => isPhysicalMeasurementUnit(unit));
+            const noConflictingModelMeasurement =
+              declaration.requiredFacetValues.length === 0 &&
+              modelPhysicalMeasurements.every(({ unit, value }) =>
+                unit === "м²" && value === destinationAreaCoverage.minimumAreaM2
+              );
+            if (!destinationAreaCoverage.covered ||
+              !noConflictingModelMeasurement) {
+              return uncoveredGap;
+            }
+            destinationAreaCoverageApplied = true;
+            if (!destinationAreaCoverageLogged) {
+              steps.push({
+                step: "v3_destination_area_card_proof_covers_measurement",
+                ms: now(),
+                meta: {
+                  minimum_area_m2: destinationAreaCoverage.minimumAreaM2,
+                  source: "server_rendered_base_and_fresh_card_gate",
+                },
+              });
+              destinationAreaCoverageLogged = true;
+            }
+            return classifyRequiredProductMeasurementGap({
+              ...gapInput,
+              independentCardProofCoversRequiredMeasurement: true,
             });
           };
           const missingRequiredProductMeasurement = () =>
@@ -10652,6 +12798,7 @@ async function runExpertLoop(
             return Boolean(pair.reference) && pair.state === "unproven";
           };
           const stopForUnverifiedPairedFit = () => {
+            recordClosureRetryOutcome(false, "paired_fit_unverified");
             const pair = pairedDecisionForEvidence(
               declaration?.reasoningEvidence ?? "",
             );
@@ -10682,6 +12829,7 @@ async function runExpertLoop(
               declaration,
             );
           const stopForUnverifiedProtection = () => {
+            recordClosureRetryOutcome(false, "environmental_protection_unverified");
             const notice =
               "Не удалось подтвердить обязательную защиту для указанных условий эксплуатации по характеристикам товаров. Не буду выдавать неподтверждённые варианты как подходящие; уточните требование к защите или повторите запрос.";
             send({ type: "delta", content: notice });
@@ -10705,6 +12853,7 @@ async function runExpertLoop(
             correctionFailure: ReturnType<typeof classifyPublicFailure> | null =
               null,
           ) => {
+            recordClosureRetryOutcome(false, "product_measurement_unverified");
             const notice = correctionFailure?.customer_message ??
               "Не удалось однозначно проверить обязательный числовой параметр товара по каталогу. Не буду показывать неподтверждённые варианты; уточните требование к товару или повторите запрос.";
             send({ type: "delta", content: notice });
@@ -10735,6 +12884,7 @@ async function runExpertLoop(
             };
           };
           const stopForInvalidDerivedDeclaration = () => {
+            recordClosureRetryOutcome(false, "invalid_declaration");
             const declarationArgs = declarationCall?.args &&
                 typeof declarationCall.args === "object"
               ? declarationCall.args as Record<string, unknown>
@@ -10774,13 +12924,19 @@ async function runExpertLoop(
           };
           const needsEnvironmentalProtectionRetry =
             missingEnvironmentalProtection();
-          const repairReason = chooseDerivedReasoningRepair({
-            resolvedText: declaration?.text,
-            environmentalProtectionMissing: needsEnvironmentalProtectionRetry,
-            pairedFitMissing: missingPairedFitProof(),
-            productMeasurementMissing: missingRequiredProductMeasurement(),
-            providerAttempts: derivedReasoningProviderAttempts,
-          });
+          // The closure-only two-provider route has already exhausted its
+          // allowance after a second response, including an invalid HTTP 200.
+          // Do not let any later contract correction reopen provider failover.
+          const repairReason = DERIVED_REASONING_LOVABLE_RETRY_ENABLED &&
+              derivedReasoningProviderAttempts >= 2
+            ? null
+            : chooseDerivedReasoningRepair({
+              resolvedText: declaration?.text,
+              environmentalProtectionMissing: needsEnvironmentalProtectionRetry,
+              pairedFitMissing: missingPairedFitProof(),
+              productMeasurementMissing: missingRequiredProductMeasurement(),
+              providerAttempts: derivedReasoningProviderAttempts,
+            });
           if (repairReason) {
             const correctionTimeout = boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS,
@@ -10824,12 +12980,13 @@ async function runExpertLoop(
                   };
                 }
               }
-              try {
-                structuredReasoning = await callOpenRouter(
+              const correctionAttempt = (timeoutMs: number) => {
+                derivedReasoningProviderAttempts += 1;
+                return callOpenRouter(
                   apiKey,
                   correctionMessages,
                   turnController.signal,
-                  correctionTimeout,
+                  timeoutMs,
                   "derived_reasoning",
                   ["declare_selection_reasoning"],
                   "declare_selection_reasoning",
@@ -10837,7 +12994,39 @@ async function runExpertLoop(
                   [reasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
+                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                    ? "openrouter_only"
+                    : "configured",
                 );
+              };
+              try {
+                structuredReasoning = await runProductMeasurementCorrection({
+                  repairReason,
+                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                  attempt: correctionAttempt,
+                  initialTimeoutMs: correctionTimeout,
+                  retryTimeoutMs: () =>
+                    boundedAgentStepTimeout(
+                      LLM_TIMEOUT_DERIVED_RETRY_MS,
+                      now(),
+                      DERIVED_REASONING_SOFT_DEADLINE_MS,
+                      MIN_AGENT_STEP_BUDGET_MS,
+                    ),
+                  signal: turnController.signal,
+                  onRetry: (httpError, retryTimeoutMs) => {
+                    steps.push({
+                      step: "v3_product_measurement_correction_http_retry",
+                      ms: now(),
+                      meta: {
+                        upstream_status: httpError.status,
+                        ...upstreamFailureDiagnosticMeta(httpError),
+                        initial_timeout_ms: correctionTimeout,
+                        retry_timeout_ms: retryTimeoutMs,
+                      },
+                    });
+                  },
+                });
               } catch (correctionError) {
                 const correctionFailure = classifyPublicFailure(correctionError);
                 // A cancelled turn is not a failed declaration. Let the outer
@@ -10875,6 +13064,7 @@ async function runExpertLoop(
                           UpstreamHttpError
                         ? correctionError.status
                         : null,
+                      ...upstreamFailureDiagnosticMeta(correctionError),
                       timeout_ms: correctionTimeout,
                     },
                   });
@@ -10885,7 +13075,6 @@ async function runExpertLoop(
                 }
                 throw correctionError;
               }
-              derivedReasoningProviderAttempts += 1;
               declarationCall = cleanDeclarationCall(
                 structuredReasoning.toolCalls.find((toolCall) =>
                   toolCall.name === "declare_selection_reasoning"
@@ -10928,6 +13117,7 @@ async function runExpertLoop(
           if (productMeasurementGap) {
             return stopForUnverifiedProductMeasurement(productMeasurementGap);
           }
+          recordClosureRetryOutcome(true);
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());
@@ -10960,13 +13150,16 @@ async function runExpertLoop(
             pairedCompatibilityOwned && measuredReference
               ? visibleDeclarationText
               : declaration.measurementEvidence;
+          const separatedDeclarationEvidence =
+            composeModelDeclarationMeasurementEvidence(
+              visibleDeclarationText,
+              measurementDeclarationEvidence,
+            );
           pendingDerivedSelectionMeasurementEvidence =
             measurementDeclarationEvidence;
           pendingDerivedSelectionMeasurementScope =
             effectiveDeclaredMeasurementScope;
-          reconcileSelectionMeasurementScope(
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
-          );
+          reconcileSelectionMeasurementScope(separatedDeclarationEvidence);
           // Keep the complete validated declaration in the agent context and
           // all search gates. The public explanation is composed separately
           // from frozen criteria below; the function call remains consumed.
@@ -11175,7 +13368,7 @@ async function runExpertLoop(
           );
           const derivedExactFacetCriteria = scopeCardCriteria(
             derivedExactImportance.criteria,
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+            separatedDeclarationEvidence,
           ).criteria;
           if (derivedExactImportance.demoted.length > 0) {
             steps.push({
@@ -11244,7 +13437,7 @@ async function runExpertLoop(
           ]);
           const scopedDerivedMandatory = filterPerProductMeasuredCriteria(
             proposedDerivedMandatoryCriteria,
-            `${visibleDeclarationText}\n${measurementDeclarationEvidence}`,
+            separatedDeclarationEvidence,
             verifiedCustomerMeasurementEvidence,
             effectiveDeclaredMeasurementScope,
             lastDiscover?.facets ?? [],
@@ -11546,7 +13739,7 @@ async function runExpertLoop(
           }
           const directSearchCandidate = directSearchBase ??
             modelSearchAbsentBrowse?.args ?? null;
-          const directSearchArgs = directSearchCandidate
+          const directSearchGuard = directSearchCandidate
             ? guardSearchFilters(
               directSearchCandidate,
               lastDiscover.facets ?? [],
@@ -11559,17 +13752,56 @@ async function runExpertLoop(
                   effectiveDeclaredMeasurementScope !== "system_total",
                 allowProseOnlyFacetInference: false,
                 authoritativeFacetValues: userBackedSearchFacetValues,
+                currentUserMessage: rawCurrentUserMessage,
+                trustedActiveProductTarget: trustedAppearanceTarget(),
+                trustedBaseUserMessage: trustedAppearanceBaseRequest,
               },
-            ).args
+            )
             : null;
-          if (directSearchArgs?.options) {
+          const directSearchArgs = directSearchGuard?.requiresBroadBrowse
+            ? verifiedAppearanceBrowseArgs(
+              typeof directSearchCandidate?.query === "string"
+                ? directSearchCandidate.query
+                : "",
+              directSearchCandidate ?? {},
+            )
+            : directSearchGuard?.args ?? null;
+          if (directSearchGuard?.requiresBroadBrowse) {
+            steps.push({
+              step: "v3_unowned_appearance_query_broadened",
+              ms: now(),
+              meta: {
+                source: "derived_reasoning",
+                dropped: directSearchGuard.dropped,
+                verified_category: lastDiscover.category.pagetitle,
+              },
+            });
+          }
+          if (directSearchArgs) {
             const scopedOptions = scopeLiveFacetOptions(
               directSearchArgs.options as Record<string, unknown>,
               lastDiscover.facets ?? [],
               visibleDeclarationText,
             );
-            if (Object.keys(scopedOptions).length > 0) {
-              directSearchArgs.options = scopedOptions;
+            // The generic guard interprets each selected live tier as a new
+            // customer equality. For a customer-owned application threshold,
+            // higher catalog tiers are witnesses, not invented requests.
+            // Restore only witnesses already present in the direct
+            // search proposal and certified by the frozen customer criterion.
+            const scopedCustomerCriteria = scopedApplicationCapacityContract(
+              derivedMandatoryCriteria,
+            );
+            const retainedOptions = directSearchArgs.mode === "by_filter"
+              ? preserveCertifiedCustomerCapacityOptions(
+                scopedCustomerCriteria,
+                verifiedCustomerMeasurementEvidence,
+                lastDiscover.facets ?? [],
+                directSearchOptions,
+                scopedOptions,
+              )
+              : scopedOptions;
+            if (Object.keys(retainedOptions).length > 0) {
+              directSearchArgs.options = retainedOptions;
             } else {
               delete directSearchArgs.options;
             }
@@ -12224,7 +14456,10 @@ async function runExpertLoop(
           const safeReasoning = sanitizeIntermediateReasoning(
             publicResponseText,
           );
-          const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
+          const introText = safeVisibleAppearanceProse(
+            safeVisiblePriceProse(safeReasoning.text.trim()),
+            resp.toolCalls.some((call) => call.name === "discover_category"),
+          ) ||
             (catalogPriceExtreme
               ? "Проверяю подходящую категорию, наличие и цены в каталоге."
               : "");
@@ -12359,6 +14594,7 @@ async function runExpertLoop(
               meta: { fragment_index: step },
             });
           }
+          outText = safeVisibleAppearanceProse(outText);
           if (outText.trim()) {
             if (!isFirstTurn) {
               send({ type: "assistant_turn_break", reason: "final_text" });
@@ -12411,7 +14647,9 @@ async function runExpertLoop(
                 reason: "text_before_render",
               });
             }
-            const modelCaption = safeVisiblePriceProse(publicResponseText);
+            const modelCaption = safeVisibleAppearanceProse(
+              safeVisiblePriceProse(publicResponseText),
+            );
             if (modelCaption) send({ type: "delta", content: modelCaption });
             finalText += modelCaption;
             if (isFirstTurn) {
@@ -12438,7 +14676,9 @@ async function runExpertLoop(
           const safeReasoning = sanitizeIntermediateReasoning(
             publicResponseText,
           );
-          const derivedText = safeVisiblePriceProse(safeReasoning.text.trim());
+          const derivedText = safeVisibleAppearanceProse(
+            safeVisiblePriceProse(safeReasoning.text.trim()),
+          );
           if (derivedText) {
             send({ type: "assistant_turn_break", reason: "intro_late" });
             send({ type: "delta", content: derivedText });
@@ -12487,7 +14727,10 @@ async function runExpertLoop(
           const safeReasoning = sanitizeIntermediateReasoning(
             publicResponseText,
           );
-          const introText = safeVisiblePriceProse(safeReasoning.text.trim()) ||
+          const introText = safeVisibleAppearanceProse(
+            safeVisiblePriceProse(safeReasoning.text.trim()),
+            resp.toolCalls.some((call) => call.name === "discover_category"),
+          ) ||
             (catalogPriceExtreme
               ? "Проверяю подходящую категорию, наличие и цены в каталоге."
               : "");
@@ -12654,6 +14897,19 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+        let unownedAppearanceBrowseUnavailable = false;
+        // Save the ORIGINAL model scope before category guards may rewrite it.
+        // A corrected request does not prove the model searched that scope.
+        const originalModelCategoryOnlyScope =
+          tc.name === "search_catalog" && !serverCompiledGroundedSearch &&
+            (resp.provider === "openrouter" || resp.provider === "lovable") &&
+            tc.args.mode === "by_filter" &&
+            typeof tc.args.category === "string" &&
+            Object.keys(tc.args).every((key) =>
+              key === "mode" || key === "category" || key === "per_page"
+            )
+            ? tc.args.category
+            : null;
 
         // Category-neutral cardinality contract: preserve the model's chosen
         // IDs, then fill from the same materialized search pool. The expanded
@@ -12995,15 +15251,17 @@ async function runExpertLoop(
         // declared in the consultant's reasoning survive; invented filters and
         // values explicitly negated by the customer are removed.
         if (tc.name === "search_catalog" && lastDiscover) {
-          const userEvidence = `${
-            history.filter((message) => message.role === "user").slice(-6).map((
-              message,
-            ) => message.content).join("\n")
-          }\n${userMessage}`;
-          const declaredReasoning =
-            `${userEvidence}\n${priorReplacementReasoning}\n${
-              initialSelectionDiscoveryNoun ?? ""
-            }\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const userEvidence = recentCustomerTurnEvidence;
+          // guardSearchFilters also parses physical units from this evidence;
+          // independent model fields must not lend one another a unit.
+          const declaredReasoning = joinMeasurementEvidenceSegments([
+            userEvidence,
+            priorReplacementReasoning,
+            initialSelectionDiscoveryNoun ?? "",
+            firstAssistantText,
+            assistantReasoning,
+            resp.text,
+          ].filter(Boolean));
           reconcileSelectionMeasurementScope(declaredReasoning);
           const guarded = guardSearchFilters(
             tc.args as Record<string, unknown>,
@@ -13018,11 +15276,36 @@ async function runExpertLoop(
               allowProseOnlyFacetInference:
                 tc.id !== derivedStructuredSearchCallId,
               authoritativeFacetValues: userBackedSearchFacetValues,
+                currentUserMessage: rawCurrentUserMessage,
+              trustedActiveProductTarget: trustedAppearanceTarget(),
+              trustedBaseUserMessage: trustedAppearanceBaseRequest,
             },
           );
+          const guardedSearchArgs = guarded.requiresBroadBrowse
+            ? verifiedAppearanceBrowseArgs(
+              typeof tc.args.query === "string" ? tc.args.query : "",
+              tc.args,
+            )
+            : guarded.args;
+          if (guarded.requiresBroadBrowse) {
+            steps.push({
+              step: "v3_unowned_appearance_query_broadened",
+              ms: now(),
+              meta: {
+                source: tc.id === derivedStructuredSearchCallId
+                  ? "derived_reasoning"
+                  : "model_tool_call",
+                dropped: guarded.dropped,
+                verified_category: lastDiscover.category.pagetitle,
+              },
+            });
+          }
+          if (!guardedSearchArgs) {
+            unownedAppearanceBrowseUnavailable = true;
+          }
           const explicitIdentity =
             intentMode === "select" && !replacementIntent &&
-              guarded.args.mode === "by_filter"
+              guardedSearchArgs?.mode === "by_filter"
               ? explicitPostNominalIdentityFacet(
                 lastDiscover.facets,
                 userMessage,
@@ -13038,16 +15321,16 @@ async function runExpertLoop(
               : [];
           const guardedArgs = explicitIdentity
             ? {
-              ...guarded.args,
+              ...guardedSearchArgs,
               options: {
-                ...(guarded.args.options &&
-                    typeof guarded.args.options === "object"
-                  ? guarded.args.options as Record<string, string[]>
+                ...(guardedSearchArgs?.options &&
+                    typeof guardedSearchArgs.options === "object"
+                  ? guardedSearchArgs.options as Record<string, string[]>
                   : {}),
                 [explicitIdentity.key]: [explicitIdentity.value],
               },
             }
-            : guarded.args;
+            : guardedSearchArgs ?? guarded.args;
           const identityGuard = replacementIntent
             ? dropImplicitReplacementIdentityFilters(
               guardedArgs,
@@ -13949,6 +16232,14 @@ async function runExpertLoop(
         }
 
         let gateShortCircuit: ToolResult | null = null;
+        if (unownedAppearanceBrowseUnavailable) {
+          gateShortCircuit = {
+            tool: "search_catalog",
+            ok: false,
+            error_code: "bad_input",
+            message: "No verified category for an unowned appearance query",
+          } as ToolResult;
+        }
         let selfRequery:
           | { query: string; ids: string[]; total: number }
           | null = null;
@@ -16353,6 +18644,103 @@ async function runExpertLoop(
           }
         }
 
+        // Later selection compilers can rewrite a guarded tool call. Recheck
+        // appearance provenance at the actual I/O boundary, including the
+        // frozen render plan, without disturbing technical or jargon queries.
+        if (tc.name === "search_catalog" && lastDiscover) {
+          reconcileSelectionAppearanceScope();
+          const finalAppearanceGuard = guardSearchFilters(
+            tc.args as Record<string, unknown>,
+            lastDiscover.facets,
+            "",
+            userMessage,
+            "",
+            [],
+            {
+              currentUserMessage: rawCurrentUserMessage,
+              trustedActiveProductTarget: trustedAppearanceTarget(),
+              trustedBaseUserMessage: trustedAppearanceBaseRequest,
+              allowProseOnlyFacetInference: false,
+            },
+          );
+          if (finalAppearanceGuard.requiresBroadBrowse) {
+            const broad = verifiedAppearanceBrowseArgs(
+              typeof tc.args.query === "string" ? tc.args.query : "",
+              tc.args,
+            );
+            if (broad) tc.args = broad;
+            else {
+              gateShortCircuit ??= {
+                tool: "search_catalog",
+                ok: false,
+                error_code: "bad_input",
+                message: "No verified category for an unowned appearance query",
+              } as ToolResult;
+            }
+            steps.push({
+              step: "v3_unowned_appearance_query_broadened_at_io",
+              ms: now(),
+              meta: {
+                dropped: finalAppearanceGuard.dropped,
+                verified_category: lastDiscover.category.pagetitle,
+              },
+            });
+          }
+          const originalOptions = tc.args.options &&
+              typeof tc.args.options === "object"
+            ? tc.args.options as Record<string, unknown>
+            : null;
+          if (originalOptions) {
+            const retainedOptions: Record<string, unknown> = {};
+            const removed: Array<{ key: string; value: string }> = [];
+            for (const [key, rawValues] of Object.entries(originalOptions)) {
+              const facet = lastDiscover.facets.find((candidate) =>
+                candidate.key === key
+              );
+              if (!facet || !Array.isArray(rawValues)) {
+                retainedOptions[key] = rawValues;
+                continue;
+              }
+              const retained = rawValues.filter((rawValue) => {
+                const value = String(rawValue);
+                if (!appearanceFacetValueIsUnowned(facet, value)) return true;
+                removed.push({ key, value });
+                return false;
+              });
+              if (retained.length > 0) retainedOptions[key] = retained;
+            }
+            if (removed.length > 0) {
+              const { options: _options, ...searchArgs } = tc.args;
+              tc.args = {
+                ...searchArgs,
+                ...(Object.keys(retainedOptions).length > 0
+                  ? { options: retainedOptions }
+                  : {}),
+              };
+              if (
+                tc.args.mode === "by_filter" && !tc.args.category &&
+                !tc.args.category_in && !tc.args.options
+              ) {
+                const broad = verifiedAppearanceBrowseArgs("", tc.args);
+                if (broad) tc.args = broad;
+                else {
+                  gateShortCircuit ??= {
+                    tool: "search_catalog",
+                    ok: false,
+                    error_code: "bad_input",
+                    message: "No verified category after appearance filter removal",
+                  } as ToolResult;
+                }
+              }
+              steps.push({
+                step: "v3_unowned_appearance_options_removed_at_io",
+                ms: now(),
+                meta: { removed },
+              });
+            }
+          }
+        }
+
         const runArgs: Record<string, unknown> = tc.args;
         // A frozen OR must survive every later guard and search rewrite,
         // including compatibility-shaped and named-series paths that do not
@@ -16493,6 +18881,163 @@ async function runExpertLoop(
           summary: `${tc.name}…`,
         });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (
+          taxonomyOutageExactLookupEnabled() &&
+          tc.name === "discover_category" && !result.ok &&
+          isTransientCatalogToolFailure(result)
+        ) {
+          // This early terminal path must close the tool_event started above;
+          // otherwise the widget can leave its progress indicator spinning.
+          const discoveryDuration = Date.now() - toolStart;
+          send({
+            type: "tool_event",
+            tool: tc.name,
+            phase: "result",
+            duration_ms: discoveryDuration,
+            summary: summariseToolResult(tc.name, result),
+          });
+          steps.push({
+            step: "v3_tool_call",
+            ms: now(),
+            meta: {
+              tool: tc.name,
+              ok: false,
+              error_code: result.error_code,
+              duration_ms: discoveryDuration,
+              args: summariseToolArgs(tc.name, runArgs),
+            },
+          });
+          // A failed taxonomy is not evidence of an empty category. Do not
+          // repeat discovery, infer facets, or let an unscoped model search
+          // nominate a sibling. The only exception is one literal customer
+          // identity lookup, admitted before any successful discovery and
+          // only when the complete request has no other unproved conditions.
+          const lookup = isConfirmedTaxonomyOutageFailure(result) &&
+              shouldAttemptTaxonomyOutageExactLookup({
+                intentMode,
+                replacementIntent,
+                successfulDiscoveries: selectionDiscoveries.length,
+                hasLastDiscovery: Boolean(lastDiscover),
+                catalogSearchAttempted,
+                productsRendered,
+                hasFreshSearch: Boolean(freshSearch),
+              })
+            ? classifyTaxonomyOutageExactLookup(userMessage)
+            : null;
+          let recoveredId: string | null = null;
+          if (lookup && now() < TURN_TIMEOUT_MS - 9_000) {
+            const lookupArgs = {
+              mode: lookup.mode,
+              ...(lookup.mode === "by_article"
+                ? { article: lookup.value }
+                : { query: lookup.value }),
+              per_page: 3,
+            };
+            const lookupStarted = Date.now();
+            send({
+              type: "tool_event",
+              tool: "search_catalog",
+              phase: "start",
+              summary: "Проверяю одну точную маркировку…",
+            });
+            // This is the sole taxonomy-outage exception to the category-
+            // grounded appearance gate: `lookup` was parsed from this turn's
+            // literal customer request (not model prose) and admits no extra
+            // conditions. Without a successful discovery there are no live
+            // facets to apply, so keep the existing single-request identity
+            // lookup and verify the one returned card below.
+            const exactSearch = await executeSearchCatalog(
+              lookupArgs,
+              {
+                baseUrl: CATALOG_BASE_URL,
+                apiToken: ctx.catalogToken,
+                timeoutMs: 4_500,
+                signal: ctx.turnSignal,
+                singleRequest: true,
+              },
+              ctx.cache,
+            );
+            ctx.observeCatalogToolResult?.(exactSearch);
+            const lookupDuration = Date.now() - lookupStarted;
+            send({
+              type: "tool_event",
+              tool: "search_catalog",
+              phase: "result",
+              duration_ms: lookupDuration,
+              summary: summariseToolResult("search_catalog", exactSearch),
+            });
+            steps.push({
+              step: "v3_tool_call",
+              ms: now(),
+              meta: {
+                tool: "search_catalog",
+                ok: exactSearch.ok,
+                error_code: exactSearch.ok ? null : exactSearch.error_code,
+                duration_ms: lookupDuration,
+                args: { mode: lookup.mode, exact_identity: true },
+              },
+            });
+            if (exactSearch.ok && exactSearch.tool === "search_catalog") {
+              const full = ctx.cache.get(String(exactSearch.results[0]?.id));
+              if (
+                full &&
+                verifyTaxonomyOutageExactProduct(
+                  lookup,
+                  exactSearch,
+                  full,
+                )
+              ) {
+                const rendered = executeRenderProducts({
+                  product_ids: [full.id],
+                  total_available: 1,
+                }, ctx.cache);
+                if (rendered.ok && rendered.rendered_count === 1) {
+                  recoveredId = full.id;
+                  const caption =
+                    "Разделы каталога временно недоступны. Подтвердил только карточку товара с указанной вами точной маркировкой; подбор других вариантов сейчас не проверен.";
+                  send({ type: "delta", content: caption, origin: "server" });
+                  finalText += `${finalText ? "\n\n" : ""}${caption}`;
+                  send({
+                    type: "products_block",
+                    markdown: rendered.markdown,
+                    count: 1,
+                    total_available: 1,
+                  });
+                  productsRendered += 1;
+                  shownIds.add(full.id);
+                }
+              }
+            }
+            steps.push({
+              step: "v3_taxonomy_outage_exact_lookup",
+              ms: now(),
+              meta: {
+                mode: lookup.mode,
+                catalog_ok: exactSearch.ok,
+                recovered: Boolean(recoveredId),
+                candidate_coverage: exactSearch.ok &&
+                    exactSearch.tool === "search_catalog"
+                  ? exactSearch.candidate_coverage ?? "unknown"
+                  : "unknown",
+              },
+            });
+          }
+          if (recoveredId) {
+            steps.push({
+              step: "v3_turn_end",
+              ms: now(),
+              meta: { reason: "taxonomy_outage_exact_identity" },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+          steps.push({
+            step: "v3_taxonomy_outage_fail_closed",
+            ms: now(),
+            meta: { exact_lookup_admitted: Boolean(lookup) },
+          });
+          return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+        }
 
         if (
           tc.name === "search_catalog" &&
@@ -17454,7 +19999,85 @@ async function runExpertLoop(
               targetPassed.has(product.id) && visiblePassed.has(product.id)
             );
           };
-          let eligible = eligiblePool(result.results);
+          // Cardinality is the number of distinct catalog identities, never
+          // the number of repeated upstream rows for the same SKU.
+          let eligible = mergeSourceProvenSelectionPools(
+            [],
+            eligiblePool(result.results),
+          );
+          // A nonempty full-text response may still contain only one or two
+          // verified choices. For an unconstrained explicit multi-choice
+          // request, browse the same independently discovered leaf once;
+          // this is retrieval only, not permission to relax card eligibility.
+          // Zero-row recovery already runs above and must not be repeated.
+          const unqualifiedShortfallAttempt = eligible.length > 0 &&
+              eligible.length < resultCardinality.minimum &&
+              selectedSearchRecoveryAttempt === null
+            ? buildCurrentUnqualifiedCategoryBrowse(
+              runArgs,
+              eligible.length,
+            )
+            : null;
+          // Snapshot the initial model result before optional recovery can
+          // pull cards from a broader or unscoped search.
+          if (
+            !modelOwnedFilteredPool && originalModelCategoryOnlyScope &&
+            selectedSearchRecoveryAttempt === null &&
+            runArgs.mode === "by_filter" &&
+            runArgs.category === originalModelCategoryOnlyScope &&
+            Object.keys(runArgs).every((key) =>
+              key === "mode" || key === "category" || key === "per_page" ||
+              key === "max_price"
+            ) &&
+            (runArgs.max_price === undefined ||
+              (sourceProofBudget !== null &&
+                Number(runArgs.max_price) === sourceProofBudget)) &&
+            lastDiscover &&
+            selectionDiscoveries.at(-1) === lastDiscover &&
+            resultCardinality.explicit && resultCardinality.target > 1 &&
+            eligible.length > 0 &&
+            !transientCatalogFailureSeen && !catalogPriceExtreme &&
+            !namedSeriesToken && !requiredCatalogAlias &&
+            !declaredAliasQuery && !explicitCompoundMarking &&
+            !semanticCompoundEvidenceRequired &&
+            directProductLookup.articles.length === 0 &&
+            directProductLookup.modelCodes.length === 0 &&
+            activeCompatibilityRelations.length === 0 &&
+            !hasSelectionMeasurementContext(userMessage) &&
+            !reasoningNeedsCompatibilityRelations(
+              `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+            ) &&
+            (
+              originalModelCategoryOnlyScope ===
+                lastDiscover.category.pagetitle ||
+              lastDiscover.leaf_categories.some(({ pagetitle }) =>
+                pagetitle === originalModelCategoryOnlyScope
+              )
+            )
+          ) {
+            const target = activeSelectionTarget;
+            if (target) {
+              modelOwnedFilteredPool = {
+                ids: [...new Set(eligible.map(({ id }) => String(id)))],
+                total: result.total,
+                discovery: lastDiscover,
+                category: originalModelCategoryOnlyScope,
+                target,
+                criteria: structuredClone(sourceProofCriteria),
+                exclusions: structuredClone(derivedExcludedClassificationCriteria),
+                budget: sourceProofBudget,
+              };
+              steps.push({
+                step: "v3_model_owned_filtered_pool_preserved",
+                ms: now(),
+                meta: {
+                  category: originalModelCategoryOnlyScope,
+                  eligible: eligible.length,
+                  minimum: resultCardinality.minimum,
+                },
+              });
+            }
+          }
           const shortfallPlan = buildSourceProvenCardinalityRecoveryPlan({
             search_args: runArgs,
             customer_message: userMessage,
@@ -17485,10 +20108,15 @@ async function runExpertLoop(
           const recoveryQueue: Array<{
             attempt: SelectionSearchRecoveryAttempt;
             scope: "leaf" | "unscoped";
-          }> = shortfallPlan.map((attempt) => ({
-            attempt,
-            scope: "leaf",
-          }));
+          }> = [
+            ...(unqualifiedShortfallAttempt
+              ? [{ attempt: unqualifiedShortfallAttempt, scope: "leaf" as const }]
+              : []),
+            ...shortfallPlan.map((attempt) => ({
+              attempt,
+              scope: "leaf" as const,
+            })),
+          ];
           let unscopedAttempted = false;
           const recoveryDeadline = Math.min(
             TURN_TIMEOUT_MS - 6_000,
@@ -17551,6 +20179,8 @@ async function runExpertLoop(
               });
             if (
               scope === "leaf" && !unscopedAttempted &&
+              attempt.kind ===
+                "verify_literal_feature_under_broad_application" &&
               (emptyScopedRows || verifiedLiteralShortfall)
             ) {
               // A nonempty retrieval can still contain zero *proved* cards.
@@ -17593,7 +20223,7 @@ async function runExpertLoop(
             });
             if (eligible.length >= resultCardinality.minimum) break;
           }
-          if (shortfallPlan.length > 0 && eligible.length > 0) {
+          if (recoveryQueue.length > 0 && eligible.length > 0) {
             result = {
               ...result,
               results: eligible,
@@ -18580,6 +21210,11 @@ async function runExpertLoop(
                 explicitCustomerEvidence,
                 `${firstAssistantText}\n${assistantReasoning}`,
                 buildVisibleRequestContract(explicitCustomerEvidence),
+                {
+                  currentUserMessage: rawCurrentUserMessage,
+                  trustedActiveProductTarget: trustedAppearanceTarget(),
+                  trustedBaseUserMessage: trustedAppearanceBaseRequest,
+                },
               );
               const inheritedExplicit = ellipticalContinuation
                 ? guardSearchFilters(
@@ -18591,12 +21226,21 @@ async function runExpertLoop(
                   buildVisibleRequestContract(
                     ellipticalContinuation.baseUserMessage,
                   ),
+                  {
+                    currentUserMessage: ellipticalContinuation.baseUserMessage,
+                    trustedActiveProductTarget: trustedAppearanceTarget(),
+                  },
                 )
                 : null;
               const reasoningProjection = projectExplicitReasoningFacetValues(
                 lastDiscover.facets,
                 `${firstAssistantText}\n${assistantReasoning}`,
                 userMessage,
+                {
+                  currentUserMessage: rawCurrentUserMessage,
+                  trustedActiveProductTarget: trustedAppearanceTarget(),
+                  trustedBaseUserMessage: trustedAppearanceBaseRequest,
+                },
               );
               const compactCodeProjection = projectExplicitCompactFacetValues(
                 lastDiscover.facets,
@@ -20056,6 +22700,7 @@ async function runExpertLoop(
         ? derivedStructuredSearchDiscovery
         : null) ??
       (selectionDiscoveries.length === 0 ? lastDiscover : null);
+    appearanceCatalogDiscoveryOverride = terminalDiscover;
     const terminalGroundedTargets = terminalRecoveryScope?.targets ?? [];
     const terminalCriteriaBase = scopeCardCriteria(preserveFrozenSelectionCriteria(
       latestRenderCriteria,
@@ -20158,7 +22803,7 @@ async function runExpertLoop(
         contract_complete: true,
       });
     };
-    const terminalFinalizationRequired = shouldFinalizePendingSelection({
+    const terminalPendingSelectionState = {
       products_rendered: productsRendered,
       intent_mode: intentMode,
       has_discovery: Boolean(terminalDiscover),
@@ -20173,7 +22818,10 @@ async function runExpertLoop(
       compatibility_required: reasoningNeedsCompatibilityRelations(
         terminalReasoningEvidence,
       ),
-    });
+    };
+    const terminalFinalizationRequired = shouldFinalizePendingSelection(
+      terminalPendingSelectionState,
+    );
 
     const attemptTerminalJargonRecovery = async (source: string): Promise<
       | {
@@ -20334,6 +22982,8 @@ async function runExpertLoop(
       split: PendingJargonAxisSplit,
     ): Promise<boolean> => {
       if (
+        // Partial split bypasses the common per-card destination-fit gate.
+        destinationAreaCoverageApplied ||
         !terminalDiscover || !terminalSelectionTarget ||
         split.modifiers.length === 0 ||
         terminalPairDecision.state !== "not_applicable"
@@ -21876,11 +24526,118 @@ async function runExpertLoop(
       }
     }
 
+    const safeAdditionalSelectionTerminalScope = Boolean(
+      serverRenderedBaseRequest && terminalDiscover &&
+        terminalSelectionTarget && preExcludedProductUrlSet.size > 0 &&
+        !catalogPriceExtreme && !semanticCompoundEvidenceRequired &&
+        !explicitCompoundMarking && !namedSeriesToken &&
+        !broadAssortmentRequest &&
+        terminalPairDecision.state === "not_applicable" &&
+        activeCompatibilityRelations.length === 0,
+    );
+    let terminalGroundedSearchRecovered = false;
     if (
       productsRendered === 0 && !terminalAliasRequirement &&
       !semanticBackedSearch && !replacementIntent && intentMode === "select" &&
       !seriesTurnRequiresGrounding
     ) {
+      // A server-certified "more options" turn can browse its exact live leaf
+      // without depending on inflected title search. Only this verified scope
+      // may use a category-only pool; every result is still rechecked by the
+      // ordinary target, criteria, destination, budget and prior-URL gates.
+      const groundedLeafNames = terminalDiscover && terminalSelectionTarget &&
+          safeAdditionalSelectionTerminalScope
+        ? terminalDiscover.leaf_categories.map(({ pagetitle }) => pagetitle)
+          .filter((pagetitle) =>
+            terminalGroundedTargets.some((target) =>
+              normalizeForMatch(target) === normalizeForMatch(pagetitle)
+            )
+          ).slice(0, 3)
+        : [];
+      if (terminalDiscover && terminalSelectionTarget &&
+          groundedLeafNames.length > 0) {
+        const recovered = await runTool("search_catalog", {
+          mode: "by_filter",
+          category_in: groundedLeafNames,
+          per_page: 50,
+        }, ctx);
+        if (recovered.ok && recovered.tool === "search_catalog") {
+          const categoryProducts = filterProductsByGroundedCategoryTargets(
+            recovered.results.map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(product)),
+            terminalGroundedTargets,
+            terminalDiscover.category.pagetitle,
+            terminalCategoryEvidence,
+          );
+          const categoryIds = categoryProducts.map((product) => product.id);
+          const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+            scopeCardCriteria(
+              userBackedSearchCriteria,
+              terminalReasoningEvidence,
+            ).criteria,
+            latestRenderCriteria,
+            userBackedSearchCriteria,
+            Boolean(namedSeriesToken),
+          ), terminalReasoningEvidence).criteria;
+          const gate = gateWithLiteralCompoundEvidence(
+            projectPairedTitleEvidence(
+              categoryProducts,
+              activeCompatibilityRelations,
+            ),
+            terminalCriteria,
+          ).report;
+          const targetIds = new Set(verifyTerminalSelectionTarget(
+            terminalSelectionTarget,
+            categoryProducts,
+          ).passed_ids);
+          const eligibleIds = guardVisibleCardinality(categoryIds.filter((id) =>
+            gate.passed_ids.includes(id)
+          )).ids.filter((id) => targetIds.has(id));
+          const budgetIds = filterProductIdsByBudgetCap(
+            eligibleIds,
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids;
+          const renderableIds = finalizeTerminalRenderIds(
+            terminalPairedSafeIds(budgetIds, "category_preacceptance"),
+          );
+          // Only a pool with an actually renderable card may displace lexical
+          // recovery. A broad category page whose cards all fail the frozen
+          // contract is not evidence that no narrower search can succeed.
+          if (renderableIds.length > 0) {
+            semanticBackedSearch = {
+              ids: categoryIds,
+              total: recovered.total,
+              criteria: userBackedSearchCriteria.map((criterion) => ({
+                ...criterion,
+              })),
+              label: groundedLeafNames.join(", "),
+              evidenceStrength: 0,
+            };
+            terminalGroundedSearchRecovered = true;
+            steps.push({
+              step: "v3_grounded_category_search_recovery",
+              ms: now(),
+              meta: {
+                source: "server_verified_additional_selection",
+                categories: groundedLeafNames,
+                candidates: categoryIds.length,
+                total: recovered.total,
+              },
+            });
+          } else if (recovered.results.length > 0) {
+            steps.push({
+              step: "v3_verified_additional_category_pool_rejected",
+              ms: now(),
+              meta: {
+                catalog_candidates: recovered.results.length,
+                grounded_candidates: categoryIds.length,
+                renderable_candidates: 0,
+              },
+            });
+          }
+        }
+      }
       const evidence =
         `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(
@@ -21904,7 +24661,9 @@ async function runExpertLoop(
           requireTitleEvidence: true,
           source: "token" as const,
         }));
-      for (const candidate of [...categoryQueries, ...tokenQueries]) {
+      for (const candidate of semanticBackedSearch
+        ? []
+        : [...categoryQueries, ...tokenQueries]) {
         const query = candidate.query;
         const recovered = await runTool("search_catalog", {
           mode: "by_query",
@@ -21922,6 +24681,72 @@ async function runExpertLoop(
           )
           .map((product) => String(product.id));
         if (ids.length === 0) continue;
+        if (safeAdditionalSelectionTerminalScope) {
+          // For a server-verified "more options" turn, a title hit is not yet
+          // an eligible card. A non-empty but over-budget (or otherwise
+          // rejected) first page must not suppress a later grounded query.
+          // Other selection routes retain their existing first-hit behavior.
+          const candidateProducts = ids.map((id) => ctx.cache.get(id))
+            .filter((product): product is ProductFull => Boolean(product));
+          const groundedProducts = terminalDiscover &&
+              terminalGroundedTargets.length > 0
+            ? filterProductsByGroundedCategoryTargets(
+              candidateProducts,
+              terminalGroundedTargets,
+              terminalDiscover.category.pagetitle,
+              terminalCategoryEvidence,
+            )
+            : [];
+          const terminalCriteria = scopeCardCriteria(resolveRenderCriteria(
+            scopeCardCriteria(
+              userBackedSearchCriteria,
+              terminalReasoningEvidence,
+            ).criteria,
+            latestRenderCriteria,
+            userBackedSearchCriteria,
+            Boolean(namedSeriesToken),
+          ), terminalReasoningEvidence).criteria;
+          const gate = gateWithLiteralCompoundEvidence(
+            projectPairedTitleEvidence(
+              groundedProducts,
+              activeCompatibilityRelations,
+            ),
+            terminalCriteria,
+          ).report;
+          const groundedIds = new Set(groundedProducts.map((product) =>
+            product.id
+          ));
+          const targetIds = new Set(verifyTerminalSelectionTarget(
+            terminalSelectionTarget ?? "",
+            groundedProducts,
+          ).passed_ids);
+          const eligibleIds = guardVisibleCardinality(ids.filter((id) =>
+            gate.passed_ids.includes(id)
+          )).ids.filter((id) =>
+            groundedIds.has(id) && targetIds.has(id)
+          );
+          const budgetIds = filterProductIdsByBudgetCap(
+            eligibleIds,
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids;
+          const renderableIds = finalizeTerminalRenderIds(
+            terminalPairedSafeIds(budgetIds, "lexical_preacceptance"),
+          );
+          if (renderableIds.length === 0) {
+            steps.push({
+              step: "v3_verified_additional_lexical_pool_rejected",
+              ms: now(),
+              meta: {
+                source: candidate.source,
+                candidates: ids.length,
+                grounded_candidates: groundedProducts.length,
+                renderable_candidates: 0,
+              },
+            });
+            continue;
+          }
+        }
         semanticBackedSearch = {
           ids,
           total: recovered.total,
@@ -21931,6 +24756,10 @@ async function runExpertLoop(
           label: query,
           evidenceStrength: explicitCompoundMarking ? 2 : 0,
         };
+        // Recompute a previously false pending gate only for a continuation
+        // certified by server-side rendered history. Initial/jargon turns keep
+        // their existing eligibility even when a late lexical query succeeds.
+        terminalGroundedSearchRecovered = safeAdditionalSelectionTerminalScope;
         steps.push({
           step: "v3_grounded_category_search_recovery",
           ms: now(),
@@ -21945,6 +24774,16 @@ async function runExpertLoop(
       }
     }
 
+    // The initial pending-selection decision predates this last catalog
+    // lookup. Reconsider only a source-proven terminal pool; specialist-mode
+    // exclusions remain in the same gate, and card guards remain unchanged.
+    const terminalSemanticFinalizationRequired =
+      terminalFinalizationRequired ||
+      (terminalGroundedSearchRecovered && shouldFinalizePendingSelection({
+        ...terminalPendingSelectionState,
+        has_search_attempt: true,
+      }));
+
     // Ordinary selections can end after a successful semantic search without
     // the model issuing render_products. Recover the FIRST non-empty pool,
     // never a later broad retry, and run the same evidence gate again.
@@ -21955,7 +24794,7 @@ async function runExpertLoop(
       !terminalAliasRequirement &&
       semanticBackedSearch &&
       terminalSelectionTarget &&
-      terminalFinalizationRequired &&
+      terminalSemanticFinalizationRequired &&
       !replacementIntent &&
       intentMode === "select" &&
       (
@@ -22092,6 +24931,159 @@ async function runExpertLoop(
           rejected: gate.rejected,
         },
       });
+    }
+
+    // A proven model-owned category filter can outlive the remote-step budget
+    // even when the terminal lexical ranker cannot repeat a colloquial noun.
+    // Do not widen taxonomy or override stricter terminal routes above.
+    const filteredPool = modelOwnedFilteredPool;
+    if (
+      productsRendered === 0 && deadlineFinalizeBreak &&
+      agentPhase === "terminal_after_search" &&
+      filteredPool && !terminalDiscover &&
+      lastDiscover === filteredPool.discovery &&
+      selectionDiscoveries.at(-1) === filteredPool.discovery &&
+      terminalSelectionTarget === filteredPool.target &&
+      terminalPairDecision.state === "not_applicable" &&
+      !transientCatalogFailureSeen && !catalogPriceExtreme &&
+      !replacementIntent && !seriesTurnRequiresGrounding &&
+      !namedSeriesToken && !terminalAliasRequirement &&
+      !semanticCompoundEvidenceRequired && !explicitCompoundMarking &&
+      !broadAssortmentRequest && intentMode === "select" &&
+      resultCardinality.explicit && resultCardinality.target > 1 &&
+      activeCompatibilityRelations.length === 0 &&
+      !hasSelectionMeasurementContext(userMessage) &&
+      !reasoningNeedsCompatibilityRelations(terminalReasoningEvidence)
+    ) {
+      const permittedLeaves = new Set(
+        filteredPool.category === filteredPool.discovery.category.pagetitle
+          ? filteredPool.discovery.leaf_categories.map(({ pagetitle }) =>
+            pagetitle
+          )
+          : [filteredPool.category],
+      );
+      if (permittedLeaves.size === 0) {
+        permittedLeaves.add(filteredPool.discovery.category.pagetitle);
+      }
+      const scopedProducts = filteredPool.ids
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull =>
+          Boolean(
+            product && product.price > 0 &&
+              typeof product.leaf_category === "string" &&
+              permittedLeaves.has(product.leaf_category),
+          )
+        );
+      const provenProducts = preferCustomerClassPool(
+        sourceProvenSelectionPool(
+          scopedProducts,
+          filteredPool.criteria,
+          filteredPool.budget,
+          filteredPool.exclusions,
+        ),
+      );
+      const targetReport = verifiedApplicationSelectionContract
+        ? verifySelectionTargetWithExactLiveCategoryContract({
+          target: filteredPool.target,
+          products: provenProducts,
+          live_category: filteredPool.discovery.category.pagetitle,
+          mandatory_criteria: verifiedApplicationSelectionContract.criteria,
+          criteria_passed_ids: applyCriteriaGate(
+            provenProducts,
+            verifiedApplicationSelectionContract.criteria,
+          ).passed_ids,
+          contract_complete: true,
+        })
+        : verifySelectionTargetWithVisibleTitle(
+          filteredPool.target,
+          provenProducts,
+        );
+      const targetPassed = new Set(targetReport.passed_ids);
+      const provenIds = provenProducts.map(({ id }) => id)
+        .filter((id) => targetPassed.has(id));
+      const previousAppearanceDiscovery = appearanceCatalogDiscoveryOverride;
+      appearanceCatalogDiscoveryOverride = filteredPool.discovery;
+      try {
+        const visibleIds = guardVisibleCardinality(provenIds, {
+          productClass: filteredPool.target,
+          taxonomyClass: filteredPool.discovery.category.pagetitle,
+        }).ids;
+        const safeIds = finalizeTerminalRenderIds(
+          terminalPairedSafeIds(
+            visibleIds,
+            "model_owned_filtered_terminal",
+          ),
+        );
+        if (safeIds.length > 0) {
+          const frozenRenderCriteria: Criterion[] = [
+            ...filteredPool.criteria,
+            ...(filteredPool.budget !== null
+              ? [{
+                key: "Цена",
+                op: "max" as const,
+                value: filteredPool.budget,
+                level: "A" as const,
+                evidence: "user_explicit" as const,
+              }]
+              : []),
+          ];
+          const rendered = await runTool("render_products", {
+            product_ids: safeIds,
+            criteria: frozenRenderCriteria,
+            total_available: filteredPool.total,
+          }, ctx);
+          if (rendered.ok && rendered.tool === "render_products") {
+            // executeRenderProducts formats cards but does not evaluate its
+            // criteria argument. Only a successful render may attach the
+            // already-enforced contract to the products_block SSE wrapper.
+            freezeSelectionCriteria(frozenRenderCriteria, "render_alignment");
+            announceResultCardinalityShortfall(
+              rendered.rendered_count,
+              "model_owned_filtered_terminal",
+            );
+            for (const id of safeIds) shownIds.add(id);
+            send({
+              type: "products_block",
+              markdown: rendered.markdown,
+              count: rendered.rendered_count,
+              total_available: filteredPool.total,
+            });
+            productsRendered += rendered.rendered_count;
+            steps.push({
+              step: "v3_model_owned_filtered_terminal_render",
+              ms: now(),
+              meta: {
+                category: filteredPool.category,
+                preserved: filteredPool.ids.length,
+                proven: provenProducts.length,
+                rendered: rendered.rendered_count,
+              },
+            });
+            steps.push({
+              step: "v3_turn_end",
+              ms: now(),
+              meta: {
+                reason: "model_owned_filtered_terminal_render",
+                step_count: MAX_STEPS,
+              },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+        }
+        steps.push({
+          step: "v3_model_owned_filtered_terminal_skipped",
+          ms: now(),
+          meta: {
+            preserved: filteredPool.ids.length,
+            scoped: scopedProducts.length,
+            proven: provenProducts.length,
+            visible: visibleIds.length,
+            safe: safeIds.length,
+          },
+        });
+      } finally {
+        appearanceCatalogDiscoveryOverride = previousAppearanceDiscovery;
+      }
     }
 
     // A compact model search can contain candidates that satisfy different
@@ -22429,8 +25421,8 @@ async function runExpertLoop(
           const catalogFree = guarded.suppressed
             ? { text: "", removed: [] as string[] }
             : stripUnrenderedCatalogFactSegments(guarded.text);
-          const visibleReasoning = safeVisiblePriceProse(
-            catalogFree.text.trim(),
+          const visibleReasoning = safeVisibleAppearanceProse(
+            safeVisiblePriceProse(catalogFree.text.trim()),
           );
           if (visibleReasoning) {
             send({ type: "delta", content: visibleReasoning });
@@ -22527,6 +25519,7 @@ async function runExpertLoop(
 
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   } finally {
+    ctx.catalogAppearanceGuard = undefined;
     clearTimeout(turnTimer);
   }
 }
@@ -22535,7 +25528,7 @@ async function runExpertLoop(
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== "POST") {
     return new Response("Method not allowed", {
@@ -22553,6 +25546,9 @@ Deno.serve(async (req) => {
     suppliedPreviewSecret,
     Deno.env.get(PREVIEW_SECRET_ENV),
     Deno.env.get(PREVIEW_QA_SECRET_ENV),
+    readClosureTestSecret(
+      "access", ADMISSION_SCOPE, CLOSURE_TEST_MARKER, suppliedPreviewSecret,
+    ),
   )) {
     return new Response(JSON.stringify({ error: "preview_access_denied" }), {
       status: 403,
@@ -22606,6 +25602,119 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (isExactCatalogHealthPreflightPayload(rawBody)) {
+    // This is a server-to-server QA route, independent of the public widget
+    // and of preview admission. Do not advertise its header in CORS. A bad or
+    // absent secret must fail before the first database/catalog/model request.
+    if (!await previewSecretAuthorized(
+      req.headers.get(CATALOG_QA_SECRET_HEADER),
+      Deno.env.get(CATALOG_QA_SECRET_ENV),
+      readClosureTestSecret(
+        "catalog", ADMISSION_SCOPE, CLOSURE_TEST_MARKER,
+        req.headers.get(CATALOG_QA_SECRET_HEADER),
+      ),
+    )) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    const unavailable = (
+      classification: CatalogHealthClassification,
+    ): CatalogHealthPreflightResult => ({
+      ok: false,
+      status: "unavailable",
+      classification,
+      checks: {
+        categories: { status: "unavailable", http_status: null, classification },
+        products: { status: "unavailable", http_status: null, classification },
+      },
+    });
+    let result: CatalogHealthPreflightResult;
+    try {
+      const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        // This one-shot, server-side health check never owns a user session.
+        // Supabase Auth may otherwise arm a background refresh timer even
+        // after this request has returned (and leak the serverless isolate).
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
+      });
+      const settings = await loadSettings(supabase, AbortSignal.timeout(8_000));
+      result = settings.settings_read_status !== "ok"
+        ? unavailable("upstream")
+        : !settings.volt220_api_token
+        ? unavailable("auth")
+        : await runCatalogHealthPreflight({
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: settings.volt220_api_token,
+        });
+    } catch {
+      result = unavailable("upstream");
+    }
+    return new Response(JSON.stringify(result), {
+      status: result.ok ? 200 : 503,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    });
+  }
+
+  if (isCatalogRouteProbeCandidate(rawBody)) {
+    // The representative search/taxonomy probe is private QA infrastructure.
+    // Authenticate before parsing or touching settings, catalog, or model.
+    if (!await previewSecretAuthorized(
+      req.headers.get(CATALOG_QA_SECRET_HEADER),
+      Deno.env.get(CATALOG_QA_SECRET_ENV),
+      readClosureTestSecret(
+        "catalog", ADMISSION_SCOPE, CLOSURE_TEST_MARKER,
+        req.headers.get(CATALOG_QA_SECRET_HEADER),
+      ),
+    )) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+    const payload = parseCatalogRouteProbePayload(rawBody);
+    if (!payload) {
+      return new Response(JSON.stringify({ error: "invalid_probe" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+    try {
+      const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
+      });
+      const settings = await loadSettings(supabase, AbortSignal.timeout(8_000));
+      if (settings.settings_read_status !== "ok" || !settings.volt220_api_token) {
+        return new Response(JSON.stringify({
+          ok: false, status: "unavailable",
+          classification: settings.settings_read_status !== "ok" ? "upstream" : "auth",
+          checks: {},
+        }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        });
+      }
+      const result = await runCatalogRouteProbe(payload, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: settings.volt220_api_token,
+      });
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 503,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    } catch {
+      return new Response(JSON.stringify({
+        ok: false, status: "unavailable", classification: "upstream", checks: {},
+      }), {
+        status: 503,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+  }
+
   const validation = validateChatRequestBody(rawBody);
   if (!validation.ok) {
     return new Response(
@@ -22618,6 +25727,17 @@ Deno.serve(async (req) => {
   }
 
   const body = validation.value;
+  // A replay is a data read, not only a free request. Verify the trusted
+  // ingress proof before looking up the messageId so a different subject
+  // cannot replay another browser's persisted answer. Preview has its own
+  // secret gate and never consumes public subject capacity.
+  const subjectVerification: PublicSubjectProofResult | null =
+    ADMISSION_SCOPE === "production"
+      ? await verifyPublicSubjectProof({ req })
+      : null;
+  if (subjectVerification && !subjectVerification.allowed) {
+    return v3SubjectDenied(subjectVerification);
+  }
   const userMessage = body.message;
   const requestLookupKeys = extractReplacementLookupKeys(userMessage);
   const requestResultCardinality = resolveResultCardinality(userMessage, {
@@ -22635,9 +25755,11 @@ Deno.serve(async (req) => {
   // planning, or rendering before that independent verification.
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-    // This pinned Supabase client has no per-query abortSignal method. Bound
-    // every database HTTP request centrally, including cache and log writes.
+    // One-shot service-role requests own no user session. Disable Supabase
+    // Auth's background refresh timer, including on replay-only requests.
+    auth: { persistSession: false, autoRefreshToken: false },
+    // Bound every database HTTP request centrally, including cache and log
+    // writes. Guarded fact reads also use their per-query abortSignal.
     global: { fetch: createDeadlineFetch(fetch, DB_FETCH_TIMEOUT_MS) },
   });
 
@@ -22807,6 +25929,7 @@ Deno.serve(async (req) => {
           out = { type: "delta", content, ...(origin === "server" ? { origin } : {}) };
           finalTextAccum += content;
         } else if (ev.type === "products_block") {
+          let confirmedDirectAnalogProof: DirectAnalogProof | null = null;
           if (replacementEgressRequest && ev.count > 0) {
             flushReplacementTurnBreak();
           }
@@ -22824,6 +25947,31 @@ Deno.serve(async (req) => {
               liveProducts,
               renderedIds,
             );
+            // The selector's certificate is not an egress authorization. Bind
+            // it again to the exact rendered order and current trusted cache;
+            // any missing, changed or expired fact falls back to provisional
+            // wording and no public direct-analog proof.
+            const stagedDirectProof = ev.selection_contract?.direct_analog_proof;
+            const sourceFull = source
+              ? liveProducts.find((product) =>
+                product.id === source.id && product.url ===
+                  stagedDirectProof?.source_product_url
+              )
+              : undefined;
+            if (
+              DIRECT_ANALOG_PROOF_ENABLED && stagedDirectProof && sourceFull &&
+              renderedProducts.length === ev.count
+            ) {
+              const rebuilt = buildDirectAnalogProof({
+                source: sourceFull,
+                candidates: renderedProducts,
+                customerCutoutMm: stagedDirectProof.target_cutout_mm,
+              });
+              if (
+                rebuilt && JSON.stringify(rebuilt) ===
+                  JSON.stringify(stagedDirectProof)
+              ) confirmedDirectAnalogProof = rebuilt;
+            }
             // No route can currently attest that its selected search axes are
             // the *complete* set of critical source specifications. Therefore
             // even exact source lookups disclose candidate status; the proof
@@ -22845,7 +25993,9 @@ Deno.serve(async (req) => {
                 source,
               ),
             });
-            const caption = replacementProofCaption(replacementLastProof);
+            const caption = confirmedDirectAnalogProof
+              ? `Кандидаты на замену: ${confirmedDirectAnalogProof.candidates.length} шт. Прошли проверку по восьми критериям, включая диапазон монтажного отверстия для Ø${confirmedDirectAnalogProof.target_cutout_mm} мм. Совместимость по габаритам, глубине, подключению и условиям установки не подтверждена — сверьте их по паспортам перед покупкой.`
+              : replacementProofCaption(replacementLastProof);
             const disclosure: SseEvent = {
               type: "delta",
               content: `\n\n${caption}`,
@@ -22869,6 +26019,7 @@ Deno.serve(async (req) => {
                 ),
                 price_comparison_proven:
                   replacementLastProof.cheaper_than_source_proven,
+                direct_analog_proven: confirmedDirectAnalogProof !== null,
               },
             });
           }
@@ -22915,6 +26066,7 @@ Deno.serve(async (req) => {
             ...publicBlock,
             selection_contract: {
               ...selectionContract,
+              direct_analog_proof: confirmedDirectAnalogProof ?? undefined,
               result_cardinality: selectionContract.result_cardinality ?? {
                 ...requestResultCardinality,
               },
@@ -22977,6 +26129,7 @@ Deno.serve(async (req) => {
             userMessage,
             [...steps],
             body.resumeOnly,
+            subjectVerification?.subjectHash ?? null,
           ),
         6_000,
       ).catch((error): TurnClaim => {
@@ -23014,6 +26167,38 @@ Deno.serve(async (req) => {
       }
 
       if (claim.kind === "existing") {
+        if (subjectVerification?.mode === "enforce" &&
+          (!subjectVerification.subjectHash ||
+            claim.row.public_subject_hash !== subjectVerification.subjectHash)) {
+          // Older unbound rows are not grandfathered into enforced replay.
+          // Session and message IDs are browser controlled, not identity.
+          send({
+            type: "delta",
+            content: "Не удалось безопасно восстановить запрос. Отправьте сообщение ещё раз.",
+          });
+          send({
+            type: "diagnostic", log_id: null, phase: "complete",
+            products_count: 0, error: "request_conflict",
+          });
+          clearInterval(keepAliveTimer);
+          send({ type: "done" });
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+        if (subjectVerification?.mode === "observe") {
+          if (!subjectVerification.subjectHash) {
+            console.warn("[v3] subject replay would reject", {
+              reason: subjectVerification.reason,
+            });
+          } else if (
+            claim.row.public_subject_hash !== subjectVerification.subjectHash
+          ) {
+            // Telemetry only: observe must not break an existing replay.
+            console.warn("[v3] subject replay would reject", {
+              reason: "subject_mismatch",
+            });
+          }
+        }
         if (
           claim.row.session_id !== sessionId ||
           claim.row.user_query !== userMessage
@@ -23118,6 +26303,7 @@ Deno.serve(async (req) => {
       let logFinalized = false;
       let admission: ChatV3AdmissionResult | null = null;
       let publicAdmission: PublicApiAdmissionResult | null = null;
+      let subjectAdmission: PublicSubjectAdmissionResult | null = null;
 
       const finalizeLogAwait = async (errOverride?: string | null) => {
         if (logFinalized) return;
@@ -23145,6 +26331,42 @@ Deno.serve(async (req) => {
         // returned above and never spend a second admission reservation.
         // With the default `off` mode this makes no database call and leaves
         // the current production pipeline untouched.
+        if (ADMISSION_SCOPE === "production" && subjectVerification) {
+          subjectAdmission = await reservePublicSubjectAdmission({
+            verification: subjectVerification,
+            route: "chat-consultant-v3",
+            rpc: (name, args) => supabase.rpc(name, args),
+            timeoutMs: ADMISSION_RPC_TIMEOUT_MS,
+          });
+          if (subjectAdmission.mode !== "off") {
+            steps.push({
+              step: "public_subject_admission_checked",
+              ms: Date.now() - t0,
+              meta: {
+                mode: subjectAdmission.mode,
+                allowed: subjectAdmission.allowed,
+                reason: subjectAdmission.reason,
+                would_reject: subjectAdmission.wouldReject,
+                failure: subjectAdmission.failure,
+              },
+            });
+          }
+          if (!subjectAdmission.allowed) {
+            errorMsg = `subject_admission_${subjectAdmission.reason}`;
+            publicDiagnosticError = subjectAdmission.reason === "limit_exceeded"
+              ? "rate_limited"
+              : "request_unavailable";
+            send({
+              type: "delta",
+              content: subjectAdmission.reason === "limit_exceeded"
+                ? "Сервис сейчас перегружен. Пожалуйста, повторите запрос немного позже."
+                : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+            });
+            return;
+          }
+        }
+        // A rejected subject must not spend the legacy global V3 budget.
+        // The subject guard above is inert while its default mode is off.
         admission = await checkChatV3AdmissionWithDeadline(
           logId,
           (name, args) => supabase.rpc(name, args),
@@ -23216,6 +26438,7 @@ Deno.serve(async (req) => {
               database: SupabaseClient,
               evidenceSessionId: string,
               products: ProductFull[],
+              replaceExisting = false,
             ) =>
               persistRecentProductEvidenceUnchecked(
                 database,
@@ -23223,6 +26446,7 @@ Deno.serve(async (req) => {
                 products,
                 4_000,
                 () => !workTimedOut && !streamCompleted && !turnSignal.aborted,
+                replaceExisting,
               );
             const settings = await loadSettings(supabase, turnSignal);
             // A slow settings response must not start paid catalog/model work
@@ -23255,6 +26479,26 @@ Deno.serve(async (req) => {
             }
 
             const priorHistory = stripCurrentUserEcho(history, userMessage);
+            // A strict acknowledgement requires no prior product facts. Exit
+            // before the boundary model, server-log read or catalog hydration.
+            // A pending clarification is deliberately excluded; short answers
+            // to an issued question still follow the verified slot route.
+            if (
+              !Reflect.get(slots, "pending_clarification") &&
+              isNeutralAcknowledgement(userMessage)
+            ) {
+              send({
+                type: "delta",
+                content:
+                  "Пожалуйста! Обращайтесь, если понадобится помощь с подбором.",
+              });
+              steps.push({
+                step: "v3_neutral_acknowledgement_no_catalog",
+                ms: Date.now() - t0,
+              });
+              productsCount = 0;
+              return;
+            }
             const pendingSlot = slots.pending_clarification;
             const pendingRecord =
               pendingSlot && typeof pendingSlot === "object" &&
@@ -23262,6 +26506,110 @@ Deno.serve(async (req) => {
                 ? pendingSlot as Record<string, unknown>
                 : null;
             const pendingScope = pendingRecord?.scope;
+            const clientSelectionReadinessScope = Boolean(
+              pendingScope && typeof pendingScope === "object" &&
+              !Array.isArray(pendingScope) &&
+              (pendingScope as Record<string, unknown>).kind ===
+                "selection_readiness"
+            );
+            const clientReplacementCutoutScope =
+              VERIFIED_MANUFACTURER_FACTS_ENABLED && Boolean(
+                pendingScope && typeof pendingScope === "object" &&
+                  !Array.isArray(pendingScope) &&
+                  (pendingScope as Record<string, unknown>).kind ===
+                    "replacement_mounting_cutout"
+              );
+            const requestedAdditionalSelection =
+              isAdditionalProductSelectionFollowup(userMessage);
+            const requestedEvidence = isEvidenceOnlyFollowup(userMessage);
+            const requestedShow = isRecentProductShowFollowup(userMessage);
+            const requestedPriceSelection =
+              isRecentProductPriceSelectionFollowup(userMessage);
+            // A bare "show/proceed" after an outstanding question is not a
+            // reference to a rendered batch. Verify the immediately previous
+            // server-issued slot before giving it precedence; browser slots
+            // and forged history alone must never bypass the card-proof guard.
+            const pendingProgressRequest =
+              isUnansweredReadinessProgressRequest(userMessage) &&
+              !requestedAdditionalSelection && !requestedEvidence &&
+              !requestedPriceSelection &&
+              !/(?:^|[^\p{L}])(?:их|эти|те)(?:$|[^\p{L}])/iu.test(
+                userMessage,
+              );
+            const pendingReadinessPreflight =
+              pendingProgressRequest && clientSelectionReadinessScope
+                ? await loadVerifiedSelectionReadinessPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : null;
+            const pendingCutoutPreflight =
+              pendingProgressRequest && clientReplacementCutoutScope
+                ? await loadVerifiedReplacementCutoutPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : null;
+            const verifiedPendingQuestionProgress = Boolean(
+              pendingReadinessPreflight?.slot || pendingCutoutPreflight?.slot,
+            );
+            const renderedReferenceRequested =
+              !verifiedPendingQuestionProgress &&
+              (requestedAdditionalSelection || requestedEvidence ||
+                requestedShow || requestedPriceSelection);
+            const browserHasRenderedCard =
+              extractRenderedProductUrls(priorHistory).length > 0;
+            const browserRenderedBase = renderedReferenceRequested &&
+                browserHasRenderedCard
+              ? latestRenderedSelectionRequest(priorHistory)
+              : null;
+            const preflightRenderedRead = renderedReferenceRequested &&
+                (!browserHasRenderedCard || browserRenderedBase)
+                ? await loadServerRenderedSelectionProof(
+                  supabase,
+                  sessionId,
+                  logId,
+                  browserRenderedBase,
+                  userMessage,
+                  t0,
+                )
+                : { proof: null, lookupFailed: false };
+            const preflightRenderedSelection = preflightRenderedRead.proof;
+            const preflightAdditionalSelection = requestedAdditionalSelection
+              ? preflightRenderedSelection
+              : null;
+            if (requestedAdditionalSelection) {
+              steps.push({
+                step: "v3_server_rendered_selection_base_checked",
+                ms: Date.now() - t0,
+                meta: { matched: Boolean(preflightAdditionalSelection) },
+              });
+            }
+            if (
+              renderedReferenceRequested &&
+              !preflightRenderedSelection
+            ) {
+              // Prove a completed server-owned batch before any branch can
+              // spend a model/catalog call on browser-supplied history. This
+              // also prevents a forged card from retaining the old task at
+              // the conversation boundary below.
+              send({
+                type: "delta",
+                content:
+                  "Не могу однозначно продолжить прежний подбор. Повторите полный запрос — проверю товары заново.",
+              });
+              steps.push({
+                step: "v3_unverified_rendered_selection_context_rejected",
+                ms: Date.now() - t0,
+                meta: { base_matched: false },
+              });
+              productsCount = 0;
+              return;
+            }
             const clientCatalogClarification = Boolean(
               pendingRecord?.facet_key === "catalog_section" ||
                 (pendingScope && typeof pendingScope === "object" &&
@@ -23285,14 +26633,26 @@ Deno.serve(async (req) => {
             const freeformVerification = freeformCandidate
               ? await verifyServerIssuedBroadAssortmentFreeformLeaf(
                 freeformCandidate,
-                (leaf) => executeDiscoverCategory({ noun: leaf }, {
-                  baseUrl: CATALOG_BASE_URL,
-                  apiToken: settings.volt220_api_token!,
-                  // The catalog-derived taxonomy has a one-hour cache. Reuse
-                  // it when warm: the final product proof still checks the
-                  // live leaf and series, while a cold load is bounded below.
-                  timeoutMs: 6_000,
-                }),
+                async (leaf) => {
+                  const deps = {
+                    baseUrl: CATALOG_BASE_URL,
+                    apiToken: settings.volt220_api_token!,
+                    // The taxonomy cache may be reused; final product proof
+                    // still checks the live leaf/series intersection.
+                    timeoutMs: 6_000,
+                  };
+                  const exact = await verifyExactCatalogLeaf(leaf, deps);
+                  // Exact bare sections need only taxonomy. Compound answers
+                  // absent from taxonomy may keep the prior facet-assisted
+                  // resolver. Ambiguous or parent identities never bypass
+                  // the stricter exact-leaf gate by falling back.
+                  if (exact.ok) return exact;
+                  if (
+                    exact.error_code !== "category_not_found" ||
+                    exact.reason !== "absent"
+                  ) return exact;
+                  return await executeDiscoverCategory({ noun: leaf }, deps);
+                },
               )
               : null;
             const verifiedFreeformChoice =
@@ -23335,20 +26695,50 @@ Deno.serve(async (req) => {
                 },
               });
             }
-            const clientSelectionReadinessScope = Boolean(
-              pendingScope && typeof pendingScope === "object" &&
-                !Array.isArray(pendingScope) &&
-                (pendingScope as Record<string, unknown>).kind ===
-                  "selection_readiness",
+            const verifiedCutoutState = pendingCutoutPreflight ??
+              (clientReplacementCutoutScope
+                ? await loadVerifiedReplacementCutoutPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : { slot: null, lookupFailed: false });
+            const verifiedCutoutMm = parseReplacementCutoutReply(
+              userMessage,
+              verifiedCutoutState.slot,
             );
-            const verifiedReadinessState = clientSelectionReadinessScope
-              ? await loadVerifiedSelectionReadinessPending(
-                supabase,
-                sessionId,
-                logId,
-                slots,
-              )
-              : { slot: null, lookupFailed: false };
+            if (
+              clientReplacementCutoutScope && !verifiedCutoutState.slot &&
+              (/^\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?[.!]?\s*$/iu.test(userMessage) ||
+                isUnansweredReadinessProgressRequest(userMessage))
+            ) {
+              // An unverified browser slot cannot turn a number or "покажи"
+              // into a source-bound replacement search.
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: null },
+              });
+              send({
+                type: "delta",
+                origin: "server",
+                content: "Не удалось подтвердить прежний вопрос о монтажном отверстии. Повторите исходный запрос на подбор замены.",
+              });
+              steps.push({
+                step: "v3_replacement_cutout_unverified_reply_stopped",
+                ms: Date.now() - t0,
+              });
+              return;
+            }
+            const verifiedReadinessState = pendingReadinessPreflight ??
+              (clientSelectionReadinessScope
+                ? await loadVerifiedSelectionReadinessPending(
+                  supabase,
+                  sessionId,
+                  logId,
+                  slots,
+                )
+                : { slot: null, lookupFailed: false });
             const readinessSlots = clientSelectionReadinessScope
               ? {
                 ...slots,
@@ -23358,7 +26748,8 @@ Deno.serve(async (req) => {
             // A broad slot is deliberately absent from boundary classification.
             // Otherwise the existing "server-scoped clarification" shortcut turns
             // even a complete unrelated request into a Gallant continuation.
-            const boundarySlots = clientCatalogClarification
+            const boundarySlots = clientCatalogClarification ||
+                clientReplacementCutoutScope
               ? {
                 ...readinessSlots,
                 pending_clarification: undefined,
@@ -23470,7 +26861,8 @@ Deno.serve(async (req) => {
               : { scope: null, lookupFailed: false };
             if (
               activeScopeState.lookupFailed ||
-              verifiedReadinessState.lookupFailed
+              verifiedReadinessState.lookupFailed ||
+              verifiedCutoutState.lookupFailed
             ) {
               // An unverified previous state may contain an active identity.
               // Never substitute unscoped cards when its read failed.
@@ -23487,6 +26879,7 @@ Deno.serve(async (req) => {
                 meta: {
                   active_scope: activeScopeState.lookupFailed,
                   readiness_slot: verifiedReadinessState.lookupFailed,
+                  replacement_cutout_slot: verifiedCutoutState.lookupFailed,
                 },
               });
               return;
@@ -23561,7 +26954,24 @@ Deno.serve(async (req) => {
             const effectiveReadinessNewTask = readinessQuestionSuperseded
               ? null
               : readinessNewTask;
-            const boundary = activeScopeExplicitBoundary
+            const verifiedCutoutContinuation = verifiedCutoutMm !== null &&
+              Boolean(verifiedCutoutState.slot);
+            const dependentCutoutReply = Boolean(
+              verifiedCutoutState.slot &&
+                (isUnansweredReadinessProgressRequest(userMessage) ||
+                  /^\s*(?:(?:около|примерно|приблизительно)\s+)?(?:отверстие|вырез|диаметр)?\s*[:=]?[Ø⌀]?\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?(?:\s*,?\s*(?:если верно|наверное|примерно))?[.!]?\s*$/iu
+                    .test(userMessage)),
+            );
+            const boundary = verifiedCutoutContinuation || dependentCutoutReply
+              ? {
+                mode: "continuation" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: verifiedCutoutContinuation
+                  ? "server_verified_replacement_cutout"
+                  : "server_verified_cutout_reply_requires_format",
+              }
+              : activeScopeExplicitBoundary
               ? {
                 mode: "new_task" as const,
                 confidence: 1,
@@ -23592,7 +27002,11 @@ Deno.serve(async (req) => {
               }
               : await classifyConversationBoundary(
                 userMessage,
-                priorHistory,
+                // The browser can forge prior assistant prose and product
+                // cards. They must not enter even the boundary classifier;
+                // server-log proof below decides whether product context is
+                // available after routing.
+                priorHistory.filter((message) => message.role === "user"),
                 boundarySlots,
                 {
                   apiKey: settings.openrouter_api_key!,
@@ -23614,17 +27028,15 @@ Deno.serve(async (req) => {
             );
             const matchedPendingClarification = Boolean(
               matchedVerifiedBroadSelection || freeformCandidate ||
+                (verifiedCutoutMm !== null && verifiedCutoutState.slot) ||
                 verifiedNumericReadinessAnswer ||
                 resolvePendingClarificationChoice(boundarySlots, userMessage),
             );
             const referencesRenderedProducts =
-              extractRenderedProductTitles(priorHistory, 1).length > 0 && (
-                isAdditionalProductSelectionFollowup(userMessage) ||
-                isEvidenceOnlyFollowup(userMessage) ||
-                isRecentProductShowFollowup(userMessage) ||
-                isRecentProductPriceSelectionFollowup(userMessage)
-              );
-            const startsNewTask = activeScopeExplicitBoundary ||
+              Boolean(preflightRenderedSelection);
+            const startsNewTask = !verifiedCutoutContinuation &&
+              !dependentCutoutReply && (
+              activeScopeExplicitBoundary ||
               Boolean(effectiveReadinessNewTask) ||
               shouldStartNewConversation(boundary, {
                 matchedPendingClarification,
@@ -23635,7 +27047,29 @@ Deno.serve(async (req) => {
                   userMessage,
                   clientCatalogClarification,
                   verifiedBroadChoiceState.verifiedSlot,
-                ));
+                )));
+            if (
+              verifiedCutoutState.slot && verifiedCutoutMm === null &&
+              !startsNewTask
+            ) {
+              // A conversational, out-of-range or bare-progress answer is not
+              // a measurement. Keep the immediate server-issued scope alive;
+              // a genuinely independent new topic bypasses this block.
+              send({
+                type: "delta",
+                origin: "server",
+                content: `Нужен один точный размер от 20 до 1000 мм, без диапазона и пояснений. ${verifiedCutoutState.slot.question}`,
+              });
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: verifiedCutoutState.slot },
+              });
+              steps.push({
+                step: "v3_replacement_cutout_question_reissued",
+                ms: Date.now() - t0,
+              });
+              return;
+            }
             // Only after a continuation decision may a server-verified free-form
             // broad scope reach the old expert route. Exact chips take the bounded
             // deterministic route below. A stale/forged scope is never restored.
@@ -23664,19 +27098,21 @@ Deno.serve(async (req) => {
             const effectiveSessionId = startsNewTask
               ? `session_${crypto.randomUUID()}`
               : sessionId;
-            const effectiveHistory = startsNewTask ? [] : priorHistory;
+            let effectiveHistory = startsNewTask ? [] : priorHistory;
             const effectiveSlots = startsNewTask ? {} : trustedSlots;
             // Only an expert selection spends the extra read. The current
             // customer turn stays the routing input; earlier quantities may
             // authorise a hard measured criterion only if recovered from the
             // completed server log for this exact active session.
-            let customerMeasurementEvidencePromise: Promise<string> | null =
-              null;
+            let customerMeasurementEvidencePromise:
+              | Promise<VerifiedCustomerMeasurementEvidence>
+              | null = null;
             const mayCarryPriorMeasurements = !startsNewTask && (
               effectiveHistory.some((message) => message.role === "user") ||
               matchedPendingClarification || Boolean(sameSectionScope)
             );
-            const verifiedCustomerMeasurementEvidence = (): Promise<string> =>
+            const verifiedCustomerMeasurementEvidence = ():
+              Promise<VerifiedCustomerMeasurementEvidence> =>
               customerMeasurementEvidencePromise ??= (async () => {
                 const evidence = await loadVerifiedCustomerMeasurementEvidence(
                   supabase,
@@ -23696,13 +27132,8 @@ Deno.serve(async (req) => {
                     prior_context_available: mayCarryPriorMeasurements,
                   },
                 });
-                return evidence.text;
+                return evidence;
               })();
-            const electricalTripDiagnostic =
-              resolveElectricalProtectionTripDiagnostic(
-                userMessage,
-                effectiveHistory,
-              );
             const measuredBreakerGuidance = buildMeasuredBreakerGuidance(
               userMessage,
             );
@@ -23732,6 +27163,10 @@ Deno.serve(async (req) => {
                 verified_selection_readiness_slot: Boolean(
                   verifiedReadinessState.slot,
                 ),
+                verified_replacement_cutout_slot: Boolean(
+                  verifiedCutoutState.slot,
+                ),
+                verified_replacement_cutout_reply: verifiedCutoutMm !== null,
                 verified_freeform_readiness_answer:
                   verifiedFreeformReadinessAnswer,
                 readiness_independent_overridden_by_verified_answer:
@@ -23749,6 +27184,19 @@ Deno.serve(async (req) => {
                 type: "conversation_boundary",
                 mode: "new_task",
                 session_id: effectiveSessionId,
+              });
+              if (clientReplacementCutoutScope) {
+                send({
+                  type: "slot_update",
+                  slots: { pending_clarification: null },
+                });
+              }
+            } else if (verifiedCutoutContinuation) {
+              // The numeric reply consumes the issued source/measurement once,
+              // before any catalog lookup or early-return path below.
+              send({
+                type: "slot_update",
+                slots: { pending_clarification: null },
               });
             } else if (
               matchedPendingClarification || pendingBroadAssortmentScope ||
@@ -23774,6 +27222,7 @@ Deno.serve(async (req) => {
             const ctx: ToolContext = {
               cache,
               supabase,
+              turnSignal,
               catalogToken: settings.volt220_api_token!,
               openrouterKey: settings.openrouter_api_key!,
               lovableApiKey: LOVABLE_API_KEY,
@@ -23785,53 +27234,170 @@ Deno.serve(async (req) => {
                 settings.v3_jargon_axial_modifiers_enabled,
             };
             replacementEgressCache = cache;
+            const additionalProductSelectionFollowup =
+              requestedAdditionalSelection && !startsNewTask;
+            const verifiedAdditionalSelection =
+              additionalProductSelectionFollowup
+                ? preflightAdditionalSelection
+                : null;
 
-            let recentProductEvidence = await loadRecentProductEvidence(
-              supabase,
-              effectiveSessionId,
-            );
-            if (
-              recentProductEvidence.length === 0 &&
-              isEvidenceOnlyFollowup(userMessage)
-            ) {
-              const lookupTitles = extractRenderedProductTitles(
+            // Cache v2 is not an authority for previously shown products. The
+            // latest completed server batch is the only source of card identity,
+            // even if the current wording escaped a follow-up classifier.
+            const activeRenderedRead = startsNewTask ||
+                preflightRenderedSelection
+              ? {
+                proof: preflightRenderedSelection,
+                lookupFailed: false,
+              }
+              : await loadServerRenderedSelectionProof(
+                  supabase,
+                  effectiveSessionId,
+                  logId,
+                  null,
+                  null,
+                  t0,
+                );
+            const activeRenderedProof = activeRenderedRead.proof;
+            if (activeRenderedRead.lookupFailed) {
+              const staleRows = await loadRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+              );
+              const referencedContext = renderedReferenceRequested ||
+                browserHasRenderedCard || staleRows.length > 0 ||
+                boundary.reason === "local_followup_reference" ||
+                isEllipticalAttributeFollowup(userMessage);
+              if (referencedContext) {
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось проверить контекст прежнего подбора из-за временной ошибки. Повторите запрос позже.",
+                });
+                steps.push({
+                  step: "v3_recent_product_evidence_lookup_failed_closed",
+                  ms: Date.now() - t0,
+                  meta: { referenced_context: true },
+                });
+                productsCount = 0;
+                return;
+              }
+            }
+            if (activeRenderedProof) {
+              // Browser-provided assistant prose, card Markdown, prices and
+              // even echoed prior customer turns are not proof. Model and
+              // criteria routes see only customer turns from the same durable
+              // server logs; the current batch's facts enter separately via
+              // fresh catalog evidence below.
+              effectiveHistory = [...activeRenderedProof.priorQueriesNewestFirst]
+                .reverse().map((content) => ({ role: "user" as const, content }));
+            } else {
+              // This also covers log-read failure with hidden browser links:
+              // no unproved assistant prose may enter any later model branch.
+              // The current request remains authoritative; prior customer
+              // text is conversational context only, never product proof.
+              effectiveHistory = effectiveHistory.filter((message) =>
+                message.role === "user"
+              );
+            }
+            const electricalTripDiagnostic =
+              resolveElectricalProtectionTripDiagnostic(
+                userMessage,
                 effectiveHistory,
               );
-              const recoveredProducts: ProductFull[] = [];
-              for (const pagetitle of lookupTitles) {
-                const recovered = await runTool("search_catalog", {
-                  mode: "by_pagetitle",
-                  pagetitle,
-                  per_page: 3,
-                }, ctx);
-                if (
-                  !recovered.ok || recovered.tool !== "search_catalog"
-                ) continue;
-                const wanted = pagetitle.toLowerCase().replace(/ё/g, "е")
-                  .trim();
-                const exact = recovered.results.find((product) =>
-                  product.pagetitle.toLowerCase().replace(/ё/g, "е").trim() ===
-                    wanted
-                );
-                if (!exact) continue;
-                const full = ctx.cache.get(String(exact.id));
-                if (full) recoveredProducts.push(full);
-              }
-              recentProductEvidence = compactRecentProducts(recoveredProducts);
-              if (recentProductEvidence.length > 0) {
+            let recentProductEvidence: RecentProductEvidence[] = [];
+            if (activeRenderedProof && !additionalProductSelectionFollowup) {
+              // Rehydrate the *entire* latest batch. A partial set cannot
+              // justify a cheapest claim, a comparison, or "these products".
+              const lookupCards = activeRenderedProof.recentShownProductCards;
+              const refresh = await rehydrateServerRenderedBatch(
+                lookupCards,
+                ctx,
+                t0,
+              );
+              const recoveredProducts = refresh.products;
+              const complete = recoveredProducts.length === lookupCards.length;
+              const compact = complete
+                ? compactRecentProducts(recoveredProducts)
+                : [];
+              if (complete && compact.length === lookupCards.length) {
+                recentProductEvidence = compact;
+                // This durable server-owned certificate is used by the next
+                // turn if the present generic evidence question completes
+                // without a new products_block. It is tied to the exact
+                // prior selection and batch, not to browser history or a
+                // broad lexical follow-up guess.
+                steps.push({
+                  step: "v3_verified_rendered_scope_continuation",
+                  ms: Date.now() - t0,
+                  meta: {
+                    base_log_id: activeRenderedProof.baseLogId,
+                    latest_card_log_id: activeRenderedProof.latestCardLogId,
+                    recovered_count: compact.length,
+                  },
+                });
                 steps.push({
                   step: "v3_recent_product_evidence_recovered",
                   ms: Date.now() - t0,
                   meta: {
                     count: recentProductEvidence.length,
-                    lookup_titles: lookupTitles.length,
+                    lookup_titles: lookupCards.length,
+                    catalog_requests: refresh.catalogRequests,
+                    source: "completed_server_products_block",
                   },
                 });
                 await persistRecentProductEvidence(
                   supabase,
                   effectiveSessionId,
                   recoveredProducts,
+                  true,
                 );
+              } else {
+                steps.push({
+                  step: "v3_recent_product_evidence_unavailable",
+                  ms: Date.now() - t0,
+                  meta: {
+                    source: "completed_server_products_block",
+                    expected_count: lookupCards.length,
+                    recovered_count: refresh.recoveredCount,
+                    catalog_requests: refresh.catalogRequests,
+                  },
+                });
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось повторно проверить все ранее показанные товары в каталоге. Не буду делать вывод по неполному списку. Повторите полный запрос — проверю актуальные карточки заново.",
+                });
+                productsCount = 0;
+                return;
+              }
+            } else if (!startsNewTask && !activeRenderedProof) {
+              // A stale cache is only a signal to stop a dependent turn; its
+              // rows are never supplied as facts to any branch or model.
+              const staleRows = await loadRecentProductEvidence(
+                supabase,
+                effectiveSessionId,
+              );
+              if (
+                browserHasRenderedCard || staleRows.length > 0 ||
+                boundary.reason === "local_followup_reference" ||
+                isEllipticalAttributeFollowup(userMessage)
+              ) {
+                send({
+                  type: "delta",
+                  content:
+                    "Не удалось подтвердить прежнюю подборку на сервере. Повторите полный запрос — проверю товары заново.",
+                });
+                steps.push({
+                  step: "v3_recent_product_evidence_unproven_context_stopped",
+                  ms: Date.now() - t0,
+                  meta: {
+                    browser_card: browserHasRenderedCard,
+                    stale_cache_present: staleRows.length > 0,
+                  },
+                });
+                productsCount = 0;
+                return;
               }
             }
             if (recentProductEvidence.length > 0) {
@@ -23851,25 +27417,26 @@ Deno.serve(async (req) => {
               recentProductEvidence.length > 0 &&
               isRecentProductPriceSelectionFollowup(userMessage) &&
               !isPureRecentPriceFollowup(userMessage);
-            const previouslyRenderedProductUrls = extractRenderedProductUrls(
-              effectiveHistory,
-            );
-            const additionalProductSelectionFollowup =
-              previouslyRenderedProductUrls.length > 0 &&
-              isAdditionalProductSelectionFollowup(userMessage);
-            const ellipticalBaseRequest = additionalProductSelectionFollowup ||
-                (recentProductEvidence.length > 0 &&
-                  (
-                    isEllipticalAttributeFollowup(userMessage) ||
-                    constrainedRecentPriceFollowup
-                  ))
-              ? latestRenderedSelectionRequest(effectiveHistory)
+            const ellipticalAttributeFollowup =
+              recentProductEvidence.length > 0 &&
+              (isEllipticalAttributeFollowup(userMessage) ||
+                constrainedRecentPriceFollowup);
+            const ellipticalBaseRequest = additionalProductSelectionFollowup
+              ? verifiedAdditionalSelection?.baseRequest ?? null
+              : ellipticalAttributeFollowup
+              ? (preflightRenderedSelection?.baseRequest ??
+                (activeRenderedProof &&
+                    !isAdditionalProductSelectionFollowup(
+                      activeRenderedProof.baseRequest,
+                    )
+                  ? activeRenderedProof.baseRequest
+                  : null))
               : null;
             const additionalSelectionRequest =
               additionalProductSelectionFollowup &&
               Boolean(ellipticalBaseRequest);
             const priorShownProductUrls = additionalSelectionRequest
-              ? previouslyRenderedProductUrls
+              ? verifiedAdditionalSelection?.shownProductUrls ?? []
               : [];
             const ellipticalContinuation:
               | EllipticalSelectionContinuation
@@ -24041,7 +27608,82 @@ Deno.serve(async (req) => {
             // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
             // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
             // Так утечка внутреннего устройства невозможна в принципе.
-            if (verifiedBroadChoice && !startsNewTask) {
+            if (
+              verifiedCutoutContinuation && verifiedCutoutState.slot &&
+              verifiedCutoutMm !== null
+            ) {
+              const issued = verifiedCutoutState.slot.scope;
+              replacementEgressRequest = issued.original_request;
+              const sourceResult = await executeSearchCatalog({
+                mode: "by_pagetitle",
+                pagetitle: issued.source_title,
+                per_page: 2,
+              }, {
+                baseUrl: CATALOG_BASE_URL,
+                apiToken: ctx.catalogToken,
+              }, ctx.cache);
+              const source = sourceResult.ok
+                ? resolveUniqueExactReplacementTitle(
+                  issued.source_title,
+                  sourceResult,
+                )
+                : null;
+              if (
+                !source || source.id !== issued.source_product_id ||
+                normalizeForMatch(source.leaf_category ?? "") !==
+                  normalizeForMatch(issued.source_leaf) ||
+                !isUnqualifiedVerifiedReplacementSource(
+                  issued.original_request,
+                  source.pagetitle,
+                  source.article,
+                  source.leaf_category,
+                )
+              ) {
+                send({
+                  type: "delta",
+                  origin: "server",
+                  content: "Не удалось повторно подтвердить исходный товар для подбора замены. Напишите исходный запрос заново; неподтверждённые карточки не показываю.",
+                });
+                steps.push({
+                  step: "v3_replacement_cutout_source_reverification_failed",
+                  ms: Date.now() - t0,
+                  meta: {
+                    source_id: issued.source_product_id,
+                    catalog_error: sourceResult.ok
+                      ? null
+                      : sourceResult.error_code,
+                  },
+                });
+              } else {
+                const direct = await selectVerifiedOrdinaryReplacement(
+                  issued.original_request,
+                  ctx,
+                  send,
+                  steps,
+                  t0,
+                  source,
+                  verifiedCutoutMm,
+                );
+                if (!direct.handled) {
+                  send({
+                    type: "delta",
+                    origin: "server",
+                    content: "Не удалось подтвердить совместимые варианты в каталоге. Повторите исходный запрос позже; неподтверждённые товары не показываю.",
+                  });
+                  steps.push({
+                    step: "v3_replacement_cutout_continuation_fail_closed",
+                    ms: Date.now() - t0,
+                  });
+                } else {
+                  productsCount = direct.products.length;
+                  await persistRecentProductEvidence(
+                    supabase,
+                    effectiveSessionId,
+                    direct.products,
+                  );
+                }
+              }
+            } else if (verifiedBroadChoice && !startsNewTask) {
               const products = await answerVerifiedBroadAssortmentChoice(
                 verifiedBroadChoice,
                 ctx,
@@ -24159,8 +27801,10 @@ Deno.serve(async (req) => {
                     entity: verifiedFreeformChoice.entity,
                     leaf: verifiedFreeformChoice.leaf,
                     original_request: freeformCandidate.original_request,
-                    effective_request:
-                      `${freeformCandidate.original_request}\nУточнение клиента по исходному запросу: раздел каталога «${verifiedFreeformChoice.leaf}». Текущие критерии клиента: ${userMessage}`,
+                    effective_request: joinCustomerTurns([
+                      freeformCandidate.original_request,
+                      `Уточнение клиента по исходному запросу: раздел каталога «${verifiedFreeformChoice.leaf}». Текущие критерии клиента: ${userMessage}`,
+                    ]),
                     slot_id: verifiedFreeformChoice.slot_id,
                     issued_slot: verifiedFreeformChoice.issued_slot,
                   }
@@ -24202,7 +27846,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -24210,6 +27854,9 @@ Deno.serve(async (req) => {
                   [],
                   verifiedBroadChoiceState.typedContinuation?.leaf ?? null,
                   Boolean(replacementEgressRequest),
+                  null,
+                  [],
+                  userMessage,
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -24313,7 +27960,7 @@ Deno.serve(async (req) => {
               });
               const out = await runExpertLoop(
                 additionalSelectionRequest
-                  ? `${ellipticalBaseRequest}\n${userMessage}`
+                  ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
                   : isShortAttributeSelectionFollowup(userMessage)
                   ? `${scopedSelectionRequest.message} ${sameSectionScope.leaf}`
                   : scopedSelectionRequest.message,
@@ -24329,7 +27976,7 @@ Deno.serve(async (req) => {
                   relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
                   criteriaGateEnabled: true,
                 },
-                await verifiedCustomerMeasurementEvidence(),
+                (await verifiedCustomerMeasurementEvidence()).text,
                 recentProductEvidence,
                 [],
                 null,
@@ -24342,6 +27989,9 @@ Deno.serve(async (req) => {
                   ? sameSectionScope.leaf
                   : null,
                 Boolean(replacementEgressRequest),
+                null,
+                [],
+                userMessage,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -24397,7 +28047,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -24405,6 +28055,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   Boolean(replacementEgressRequest),
+                  null,
+                  [],
+                  userMessage,
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -24558,7 +28211,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   [],
                   null,
@@ -24566,6 +28219,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   Boolean(replacementEgressRequest),
+                  null,
+                  [],
+                  userMessage,
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -24926,7 +28582,7 @@ Deno.serve(async (req) => {
                       settings.v3_relaxation_hints_enabled,
                     criteriaGateEnabled: true,
                   },
-                  await verifiedCustomerMeasurementEvidence(),
+                  (await verifiedCustomerMeasurementEvidence()).text,
                   recentProductEvidence,
                   direct.source_candidate_ids ?? [],
                   replacementSelectionPlan,
@@ -24934,6 +28590,9 @@ Deno.serve(async (req) => {
                   [],
                   null,
                   Boolean(replacementEgressRequest),
+                  null,
+                  [],
+                  userMessage,
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -24948,10 +28607,45 @@ Deno.serve(async (req) => {
                 );
               }
             } else {
+              const combinedSelectionRequest = additionalSelectionRequest
+                ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
+                : scopedSelectionRequest.message;
+              const needsServerAreaProof = additionalSelectionRequest &&
+                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
+              const customerMeasurementEvidence =
+                await verifiedCustomerMeasurementEvidence();
+              const verifiedAreaContinuation = !needsServerAreaProof ||
+                verifiedRenderedDestinationContextUnchanged({
+                  selectionRequest: combinedSelectionRequest,
+                  baseRequest: ellipticalBaseRequest ?? "",
+                  serverVerifiedBaseRequest:
+                    verifiedAdditionalSelection?.baseRequest ?? "",
+                  serverVerifiedPriorQueriesNewestFirst:
+                    customerMeasurementEvidence.priorQueriesNewestFirst,
+                });
+              if (needsServerAreaProof && !verifiedAreaContinuation) {
+                // A short dependent request must not turn a browser-supplied
+                // previous selection into a certified A-level criterion when
+                // the completed batch is missing or a later customer turn
+                // changed the destination/area. The same server-log proof is
+                // required by the fresh per-card gate in the expert loop.
+                send({
+                  type: "delta",
+                  content:
+                    "Не могу однозначно продолжить прежний подбор. Повторите запрос, указав помещение и площадь, — проверю товары заново.",
+                });
+                steps.push({
+                  step: "v3_unverified_rendered_selection_context_rejected",
+                  ms: Date.now() - t0,
+                  meta: {
+                    base_matched: Boolean(verifiedAdditionalSelection),
+                  },
+                });
+                productsCount = 0;
+                return;
+              }
               const out = await runExpertLoop(
-                additionalSelectionRequest
-                  ? `${ellipticalBaseRequest}\n${userMessage}`
-                  : scopedSelectionRequest.message,
+                combinedSelectionRequest,
                 effectiveHistory,
                 effectiveSlots,
                 settings.openrouter_api_key!,
@@ -24966,7 +28660,7 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                await verifiedCustomerMeasurementEvidence(),
+                customerMeasurementEvidence.text,
                 recentProductEvidence,
                 [],
                 null,
@@ -24974,6 +28668,9 @@ Deno.serve(async (req) => {
                 priorShownProductUrls,
                 null,
                 Boolean(replacementEgressRequest),
+                verifiedAdditionalSelection?.baseRequest ?? null,
+                customerMeasurementEvidence.priorQueriesNewestFirst,
+                userMessage,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -24992,7 +28689,8 @@ Deno.serve(async (req) => {
             Date.now() - t0,
             RESPONSE_TARGET_MS,
             TERMINAL_LOG_RESERVE_MS +
-              (admission.releaseRequired || publicAdmission?.releaseRequired
+              (admission.releaseRequired || publicAdmission?.releaseRequired ||
+                  subjectAdmission?.releaseRequired
                 ? ADMISSION_RPC_TIMEOUT_MS
                 : 0),
             MAX_ACCEPTED_WORK_MS,
@@ -25124,7 +28822,21 @@ Deno.serve(async (req) => {
             }
           })());
         }
-        // Both independent ledgers are released before closing SSE. Running
+        if (subjectAdmission) {
+          const checkedSubjectAdmission = subjectAdmission;
+          releaseJobs.push((async () => {
+            const released = await releasePublicSubjectAdmission({
+              reservation: checkedSubjectAdmission,
+              rpc: (name, args) => supabase.rpc(name, args),
+            });
+            if (released.failure) {
+              console.error("[v3] subject reservation release incomplete", {
+                failure: released.failure,
+              });
+            }
+          })());
+        }
+        // All independent ledgers are released before closing SSE. Running
         // these bounded releases together preserves the existing terminal
         // response deadline instead of serially adding another DB timeout.
         await Promise.allSettled(releaseJobs);

@@ -1,4 +1,5 @@
 import type { Facet } from "./discover-category.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 import {
   compactFacetCandidateKeys,
   compactFacetCodeSupportScore,
@@ -1161,7 +1162,7 @@ export function resolveScopedReplacementSource(
   if (
     !original || !current || !isReplacementIntent(original) ||
     scopedContinuation.message !==
-      `${original}\nУточнение клиента: ${current}`
+      joinCustomerTurns([original, `Уточнение клиента: ${current}`])
   ) return null;
   return original;
 }

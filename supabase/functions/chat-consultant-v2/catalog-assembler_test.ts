@@ -22,6 +22,7 @@
 
 import { assertEquals, assert, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { assembleCatalog, type AssemblerDeps, type AssemblerInput } from "./catalog-assembler.ts";
+import { composeCatalogAnswer } from "./s-catalog-composer.ts";
 import type { ApiClientDeps, RawProduct, RawOption } from "./catalog/api-client.ts";
 import type { ResolverDeps } from "./category-resolver.ts";
 import type { ExpansionDeps } from "./query-expansion.ts";
@@ -114,7 +115,13 @@ function mockApiClient(
       );
     }
     // options
-    const inner = { options: r.options, category: { total_products: r.totalProducts ?? 0 } };
+    const inner = {
+      options: r.options,
+      category: {
+        pagetitle: u.searchParams.get("pagetitle"),
+        total_products: r.totalProducts ?? (r.options.length > 0 ? 1 : 0),
+      },
+    };
     const wrapped = r.doubleWrap
       ? { data: { data: inner } }     // Q2: double
       : { data: inner };               // single
@@ -435,4 +442,278 @@ Deno.test("INV: assembler НИКОГДА не сужает funnel сам (clarif
     assert(!c.url.includes("options%5B") && !c.url.includes("options["),
       `assembler не должен инжектить optionFilters в probe (${c.url})`);
   }
+});
+
+Deno.test("INV: positive category with absent facet values still returns catalog products", async () => {
+  const products = [product(1, 100, "prod-one"), product(2, 200, "prod-two")];
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [], totalProducts: products.length };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: products, total: products.length };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const result = await assembleCatalog(
+    baseInput("S_CATALOG", "prod", { intent: intent() }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+
+  assertEquals(result.composerOutcome?.kind, "search");
+  if (result.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(result.composerOutcome.outcome.status, "ok");
+  assertEquals(result.composerOutcome.outcome.products.map((p) => p.id), [1, 2]);
+  assertEquals(result.disallowCrosssell, false);
+  assertEquals(
+    result.trace.stages.find((stage) => stage.stage === "facet_matcher")?.meta?.status,
+    "no_facets",
+  );
+});
+
+Deno.test("INV: constrained catalog request cannot render unrelated cards without facet proof", async () => {
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [], totalProducts: 2 };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [product(1, 100, "single white socket")], total: 2 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const query = "двойные чёрные розетки";
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", query, {
+      intent: intent({
+        search_modifiers: ["двойные", "чёрные"],
+        critical_modifiers: ["двойные", "чёрные"],
+      }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "constraints_unverified");
+  assertEquals(assembled.composerOutcome.outcome.products, []);
+  assertEquals(assembled.disallowCrosssell, true);
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "s_search"), false);
+
+  let llmCalls = 0;
+  const composed = await composeCatalogAnswer({
+    query,
+    outcome: assembled.composerOutcome,
+    history: [],
+    prevSoft404Streak: 1,
+    onDelta: () => {},
+  }, { streamLLM: async () => { llmCalls++; throw new Error("must not call LLM"); } });
+  assertEquals(composed.scenario, "constraints_unverified");
+  assertEquals(composed.formatter.rendered, 0);
+  assertEquals(composed.newSoft404Streak, 1);
+  assertEquals(composed.contactManager, false);
+  assertEquals(llmCalls, 0);
+  assert(!composed.text.includes("single white socket"));
+  assert(!composed.text.includes("не наш"));
+});
+
+Deno.test("INV: value-empty facet response stays degraded even when probe reconstructs matching values", async () => {
+  const candidate = {
+    ...product(1, 100, "black socket"),
+    options: [{ key: "color", caption_ru: "Color", value_ru: "black" }],
+  };
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [], totalProducts: 1 };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [candidate], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({ search_modifiers: ["black"], critical_modifiers: ["black"] }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "constraints_unverified");
+  assertEquals(assembled.composerOutcome.outcome.products, []);
+  assertEquals(assembled.trace.stages.find((stage) => stage.stage === "facet_matcher")?.meta?.facets_source, "bootstrap");
+  assertEquals(assembled.trace.stages.find((stage) => stage.stage === "constraint_evidence_gate")?.meta?.reason, "facet_values_unavailable");
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "s_search"), false);
+});
+
+Deno.test("INV: transport failure preserves prior probe-bootstrap recovery for matched critical trait", async () => {
+  const candidate = {
+    ...product(1, 100, "black socket"),
+    options: [{ key: "color", caption_ru: "Color", value_ru: "black" }],
+  };
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) return "http_500";
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [candidate], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({ search_modifiers: ["black"], critical_modifiers: ["black"] }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "ok");
+  assertEquals(assembled.composerOutcome.outcome.products.map((p) => p.id), [1]);
+  assertEquals(assembled.trace.stages.find((stage) => stage.stage === "facet_matcher")?.meta?.facets_source, "bootstrap");
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "constraint_evidence_gate"), false);
+});
+
+Deno.test("INV: transport failure without bootstrap cannot promise an unmatched critical trait", async () => {
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) return "http_500";
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [product(1, 100, "white socket")], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({ search_modifiers: ["black"], critical_modifiers: ["black"] }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "constraints_unverified");
+  assertEquals(assembled.composerOutcome.outcome.products, []);
+  assertEquals(
+    assembled.trace.stages.find((stage) => stage.stage === "constraint_evidence_gate")?.meta?.reason,
+    "critical_modifier_unmatched",
+  );
+});
+
+Deno.test("INV: LLM matcher also preserves transport bootstrap recovery", async () => {
+  const candidate = {
+    ...product(1, 100, "black socket"),
+    options: [{ key: "color", caption_ru: "Color", value_ru: "black" }],
+  };
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) return "http_500";
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [candidate], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const deps = buildDeps(m.deps, "Synthetic Cat");
+  deps.facetsLLM = {
+    apiClient: m.deps,
+    cacheGetOrCompute: makeFacetsDeps(m.deps).cacheGetOrCompute,
+    callLLM: async () => ({
+      text: JSON.stringify({
+        items: [{ trait: "black", classification: "resolved", facet_key: "color", value: "black", confidence: 0.95 }],
+      }),
+      model: "test-model",
+    }),
+  };
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({ search_modifiers: ["black"], critical_modifiers: ["black"] }),
+    }),
+    deps,
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "ok");
+  assertEquals(assembled.composerOutcome.outcome.products.map((p) => p.id), [1]);
+  assertEquals(assembled.trace.stages.find((stage) => stage.stage === "facet_matcher")?.meta?.llm_mode, "ok");
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "constraint_evidence_gate"), false);
+});
+
+Deno.test("INV: constrained cheapest request does not skip evidence gate", async () => {
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [], totalProducts: 3 };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [product(1, 100, "single white socket")], total: 3 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_PRICE", "самая дешёвая двойная чёрная розетка", {
+      intent: intent({
+        price_intent: "cheapest",
+        search_modifiers: ["двойная", "чёрная"],
+        critical_modifiers: ["двойная", "чёрная"],
+      }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "price");
+  if (assembled.composerOutcome?.kind !== "price") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "constraints_unverified");
+  assertEquals(assembled.composerOutcome.outcome.products, []);
+  assertEquals(assembled.disallowCrosssell, true);
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "s_price"), false);
+});
+
+Deno.test("INV: verified live facet match keeps constrained product search working", async () => {
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [
+        rawOption("color", [{ value: "black", count: 1 }], "Color"),
+      ], totalProducts: 1 };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [product(1, 100, "black socket")], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({
+        search_modifiers: ["black"],
+        critical_modifiers: ["black"],
+      }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "ok");
+  assertEquals(assembled.composerOutcome.outcome.products.map((p) => p.id), [1]);
+  assertEquals(assembled.trace.stages.some((stage) => stage.stage === "constraint_evidence_gate"), false);
+});
+
+Deno.test("INV: a live schema cannot excuse an unmatched critical modifier", async () => {
+  const m = mockApiClient((ctx) => {
+    if (ctx.path.endsWith("/categories/options")) {
+      return { kind: "options", options: [
+        rawOption("color", [{ value: "white", count: 1 }], "Color"),
+      ], totalProducts: 1 };
+    }
+    if (ctx.path.endsWith("/products")) {
+      return { kind: "products", results: [product(1, 100, "white socket")], total: 1 };
+    }
+    throw new Error(`unexpected ${ctx.path}`);
+  });
+  const assembled = await assembleCatalog(
+    baseInput("S_CATALOG", "black socket", {
+      intent: intent({
+        search_modifiers: ["black"],
+        critical_modifiers: ["black"],
+      }),
+    }),
+    buildDeps(m.deps, "Synthetic Cat"),
+  );
+  assertEquals(assembled.composerOutcome?.kind, "search");
+  if (assembled.composerOutcome?.kind !== "search") throw new Error("type narrow");
+  assertEquals(assembled.composerOutcome.outcome.status, "constraints_unverified");
+  assertEquals(assembled.composerOutcome.outcome.products, []);
+  assertEquals(
+    assembled.trace.stages.find((stage) => stage.stage === "constraint_evidence_gate")?.meta?.reason,
+    "critical_modifier_unmatched",
+  );
 });

@@ -36,6 +36,24 @@ export interface CriterionViolation {
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 
+// A line break is allowed inside one customer message (`16\nА`, `25\nкв. м`).
+// When the server joins separate customer turns, a non-whitespace boundary
+// must prevent a trailing number in one turn from borrowing the first word of
+// the next as its unit. Keep this marker in the joined evidence rather than
+// teaching every measurement parser to guess where a turn ended.
+export const CUSTOMER_TURN_BOUNDARY = "\n\n---\n\n";
+
+/** Preserve line breaks within one field while blocking measurements across independent fields. */
+export function joinMeasurementEvidenceSegments(
+  segments: readonly string[],
+): string {
+  return segments.join(CUSTOMER_TURN_BOUNDARY);
+}
+
+export function joinCustomerTurns(turns: readonly string[]): string {
+  return joinMeasurementEvidenceSegments(turns);
+}
+
 export function normalizeUnit(raw: string): string {
   return String(raw ?? "")
     .toLowerCase()
@@ -94,6 +112,8 @@ export function extractClientQuantities(text: string): ClientQuantity[] {
   // A number embedded in a product/model identifier is not a measurement:
   // `Acti9 C16` must not become `9 C`, just as `IP65` is not `65` of an
   // arbitrary unit. An explicit quantity still works (`C16, ток 16 А`).
+  // A newline or Unicode line separator inside one customer turn is ordinary
+  // spacing. Distinct server-composed turns carry CUSTOMER_TURN_BOUNDARY.
   const re = new RegExp(String.raw`(?<![a-zа-я0-9])(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {

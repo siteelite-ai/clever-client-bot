@@ -1,0 +1,68 @@
+name: Verified manufacturer facts PostgreSQL 16
+
+on:
+  push:
+    paths:
+      - 'supabase/migrations/20261020150000_verified_product_facts.sql'
+      - 'supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql'
+      - 'supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql'
+      - 'supabase/migrations/20261021020000_verified_product_facts_public_source.sql'
+      - 'docs/security/verified-manufacturer-facts-local-test.sql'
+      - '.github/workflows/verified-manufacturer-facts-postgres.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261020150000_verified_product_facts.sql'
+      - 'supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql'
+      - 'supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql'
+      - 'supabase/migrations/20261021020000_verified_product_facts_public_source.sql'
+      - 'docs/security/verified-manufacturer-facts-local-test.sql'
+      - '.github/workflows/verified-manufacturer-facts-postgres.yml'
+
+jobs:
+  verified-facts-sql:
+    name: disposable PostgreSQL 16 facts migration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: verified_facts_ci
+          POSTGRES_PASSWORD: verified-facts-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d verified_facts_ci"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGPASSWORD: verified-facts-ci-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql --version
+
+      - name: Create disposable Supabase-like roles
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -c 'CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS; GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;'
+
+      - name: Apply base and incremental candidate migrations in order
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020150000_verified_product_facts.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020170000_verified_product_facts_fixture_form.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261021010000_verified_product_facts_direct_axes.sql
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261021020000_verified_product_facts_public_source.sql
+
+      - name: Assert privileges, constraints and approval immutability
+        run: |
+          psql -X -h 127.0.0.1 -p 5432 -U postgres -d verified_facts_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/verified-manufacturer-facts-local-test.sql

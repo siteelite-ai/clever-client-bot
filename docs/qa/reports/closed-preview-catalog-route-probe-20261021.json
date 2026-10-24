@@ -1,0 +1,51 @@
+{
+  "evidence_recorded_at_utc": "2026-10-21T19:14:49Z",
+  "probe_completed_before_utc": "2026-10-21T19:14:49Z",
+  "probe_request_timestamp_utc": null,
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "request": {
+    "type": "catalog_route_probe",
+    "query_present": true,
+    "exact_category_present": true,
+    "check_facets": true,
+    "request_values_redacted": true,
+    "private_qa_admission_used": true,
+    "paid_chat_turns": 0,
+    "openrouter_calls_by_probe": 0
+  },
+  "response": {
+    "http_status": 503,
+    "ok": false,
+    "status": "unavailable",
+    "classification": "upstream",
+    "checks": {
+      "search": {
+        "status": "ok",
+        "duration_ms": 3526
+      },
+      "exact_leaf": {
+        "status": "ok",
+        "duration_ms": 1559,
+        "taxonomy_cache": "eligible_unverified"
+      },
+      "taxonomy": {
+        "status": "unavailable",
+        "classification": "upstream",
+        "duration_ms": 3955,
+        "taxonomy_cache": "eligible_unverified"
+      }
+    }
+  },
+  "interpretation": {
+    "isolated_stage": "GET /categories/options?pagetitle=<validated exact category> or its response adapter",
+    "upstream_http_status": null,
+    "upstream_http_status_exposed_by_probe": false,
+    "note": "The exact-leaf check confirms the taxonomy can be read, and the search check confirms /products can be queried. The optional taxonomy check then calls discover_category for that validated exact title without a model key and fails. This isolates the failing stage, but the sanitized response does not distinguish a 5xx HTTP reply from an unusable /categories/options payload. The earlier customer breaker turn emitted transport_5xx twice; only server-side tool logs can prove its exact upstream status and route."
+  },
+  "correlation": {
+    "prior_report": "docs/qa/reports/closed-preview-breaker-followup-v180-ready-20261021.json",
+    "prior_log_id": "5a986aba-1a45-4a1f-985d-aa6ee7233f16",
+    "prior_catalog_preflight": "ready",
+    "prior_catalog_preflight_started_at_utc": "2026-10-21T19:11:09.140Z"
+  }
+}

@@ -28,6 +28,26 @@ still checks the public anon JWT; that JWT is published in the widget and is
 4. Browser preview harnesses must **not** embed this secret. Use a trusted
    server-side QA proxy if interactive preview testing is needed.
 
+Before any paid customer-acceptance turns, an authorized project operator can
+run the **catalog-only** gate against the exact protected closure-preview
+deployment:
+
+```sh
+node scripts/qa/with-closure-qa-secrets.mjs --project-ref=yngoixmvmxdfxokuafjp -- node scripts/qa/preflight-only-closure.mjs
+```
+
+This requires permission to create and remove two short-lived Edge Function
+secrets. The wrapper passes their values only to the trusted child, suppresses
+child output, and verifies deletion. The child makes one
+`catalog_health_preflight` request, which checks every root taxonomy page
+within bounded limits, plus a usable product, representative facets and an
+exact article filter. It then exits without a customer chat or OpenRouter
+call. A successful exit proves this bounded taxonomy and representative
+catalog gate; it does **not** prove every client's exact category, the three
+required analogs or the remaining browser acceptance cases. Do not use the
+full `run-customer-acceptance.mjs`
+example merely to check catalog health: it continues into paid chat turns.
+
 If the secret is absent, weak or invalid, both protected preview functions
 fail closed. For an emergency preview shutdown, remove/rotate the preview
 secret and verify that the public-anon POST returns 403 on **both** endpoints.

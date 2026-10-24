@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "projectRef": "yngoixmvmxdfxokuafjp",
+  "runtime_source_commit_sha": "a39168ef9045fb23e71d44292484e579a2365d96",
+  "widgetVersion": "widget-48cf7f8e6bd967b3",
+  "previewFunctions": {
+    "chat-consultant-closure-preview": {
+      "version": 33,
+      "ezbr_sha256": "435a592a2c9c13b80f0c99123bb2df5c68aa279ab0c598296dfd53be64f06300",
+      "verify_jwt": true
+    },
+    "chat-consultant-v2-closure-preview": {
+      "version": 33,
+      "ezbr_sha256": "76a8281ff4acbbdfbcdf381ef5c8076e8774df1fff149023d905196b9598dab1",
+      "verify_jwt": true
+    },
+    "chat-consultant-v3-closure-preview": {
+      "version": 219,
+      "ezbr_sha256": "95deaeca794eb3a3adac93066c167e810f702264d105fd590905ab47d820d95b",
+      "verify_jwt": true
+    },
+    "search-products-closure-preview": {
+      "version": 33,
+      "ezbr_sha256": "a031704de7cc5fa97d255e2cbb4b1ce500cb996b2bd30e8983358d892eec7c9a",
+      "verify_jwt": true
+    }
+  },
+  "publicFunctions": {
+    "chat-consultant": {
+      "version": 1105,
+      "ezbr_sha256": "8f56525d4b7de1f58f62b911ffc598f2c1294ac1ab5f45ec718c1cd40645856e"
+    },
+    "chat-consultant-v2": {
+      "version": 533,
+      "ezbr_sha256": "d29c59e18d6fc955a33635d42d282e5398bd369243de846aa8d79e165a748abe"
+    },
+    "chat-consultant-v3": {
+      "version": 605,
+      "ezbr_sha256": "3ef4a7c24b1ec22e5f1504f127de8e8d39c5696be3f28d68bd8ac8e8291f47f0"
+    },
+    "search-products": {
+      "version": 735,
+      "ezbr_sha256": "b6b7ffabee5dd15c909bc2b35cd7b7805c992e27d0ef87e46a37b03b1b4ada03"
+    }
+  }
+}

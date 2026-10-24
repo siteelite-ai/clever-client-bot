@@ -98,6 +98,13 @@ Deno.test("decideScenario: error → error", () => {
   assertEquals(decideScenario(mockOutcome("error")), "error");
 });
 
+Deno.test("decideScenario: unverified constraints are not empty or catalog outage", () => {
+  assertEquals(
+    decideScenario(mockOutcome("constraints_unverified")),
+    "constraints_unverified",
+  );
+});
+
 // ─── nextSoft404Streak (§5.6.1) ──────────────────────────────────────────────
 
 Deno.test("soft404: 0 + empty → 1", () => {
@@ -129,6 +136,49 @@ Deno.test("soft404: 0 + all_zero_price → 1", () => {
 
 Deno.test("soft404: 1 + error (no products) → 1 (no change, infra failure)", () => {
   assertEquals(nextSoft404Streak(1, mockOutcome("error")), 1);
+});
+
+Deno.test("soft404: unverified constraints do not claim zero products", () => {
+  assertEquals(nextSoft404Streak(1, mockOutcome("constraints_unverified")), 1);
+});
+
+Deno.test("compose unverified constraints: deterministic no-card answer for search and price", async () => {
+  for (const kind of ["search", "price"] as const) {
+    let llmCalls = 0;
+    const outcome = kind === "search"
+      ? { kind, outcome: mockOutcome("constraints_unverified", [mockProduct()]) }
+      : { kind, outcome: {
+        status: "constraints_unverified" as const,
+        products: [mockProduct()],
+        totalCount: 5,
+        clarifySlot: null,
+        zeroPriceLeak: 0,
+        autoNarrowingAttempts: 0,
+        branch: null,
+        ms: 1,
+      } };
+    const chunks: string[] = [];
+    const result = await composeCatalogAnswer({
+      query: "двойная чёрная розетка",
+      outcome,
+      history: [],
+      prevSoft404Streak: 1,
+      onDelta: (chunk) => chunks.push(chunk),
+    }, { streamLLM: async () => {
+      llmCalls++;
+      throw new Error("must not call LLM");
+    } });
+    assertEquals(result.scenario, "constraints_unverified");
+    assertEquals(result.formatter.rendered, 0);
+    assertEquals(result.contactManager, false);
+    assertEquals(result.newSoft404Streak, 1);
+    assertEquals(result.usage.total_tokens, 0);
+    assertEquals(chunks, [result.text]);
+    assertEquals(llmCalls, 0);
+    assert(!result.text.includes("Тестовый товар"));
+    assert(!result.text.includes("не наш"));
+    assertStringIncludes(result.text, "не могу подтвердить");
+  }
 });
 
 // ─── splitByMarker (§5.4.1) ─────────────────────────────────────────────────

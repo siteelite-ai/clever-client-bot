@@ -26,6 +26,10 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from "../_shared/integration-secrets.ts";
 
 import type {
   ChatHistoryMessage,
@@ -71,6 +75,14 @@ import {
   type PublicApiAdmissionResult,
   type PublicApiAdmissionRpc,
 } from "../_shared/public-api-admission.ts";
+import {
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+  type PublicSubjectAdmissionRpc,
+} from "../_shared/public-subject-admission.ts";
+
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle("chat-consultant-v2");
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -78,6 +90,17 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get("access-control-request-headers");
+  if (!requested?.split(",").some((header) =>
+    header.trim().toLowerCase() === "x-volt-subject-proof"
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    "Access-Control-Allow-Headers": `${corsHeaders["Access-Control-Allow-Headers"]}, x-volt-subject-proof`,
+  };
+}
 
 const BUILD_MARKER = "v2-step11-category-only-search-2026-04-29";
 
@@ -103,6 +126,7 @@ function getAdminClient() {
 type V2AdmissionOptions = {
   // Injection seam for deterministic route tests; HTTP requests cannot set it.
   rpc?: PublicApiAdmissionRpc;
+  subjectRpc?: PublicSubjectAdmissionRpc;
   readEnv?: (name: string) => string | undefined;
   acceptedWork?: (request: V2Request) => Promise<Response>;
   bodyReadTimeoutMs?: number;
@@ -139,6 +163,36 @@ function v2AdmissionDenied(
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache",
       ...(limited ? { "Retry-After": String(admission.retryAfterSeconds || 60) } : {}),
+    },
+  });
+}
+
+function v2SubjectDenied(
+  decision: { reason: string; retryAfterSeconds?: number | null },
+  traceId: string,
+): Response {
+  const limited = decision.reason === "limit_exceeded";
+  const invalidProof = decision.reason === "missing_proof" ||
+    decision.reason === "invalid_proof";
+  const error = limited ? "rate_limited" : invalidProof
+    ? "access_denied"
+    : "service_unavailable";
+  const content = limited
+    ? "Слишком много запросов. Подождите минуту."
+    : invalidProof
+    ? "Не удалось подтвердить запрос. Обновите страницу и попробуйте ещё раз."
+    : "Сервис временно недоступен. Попробуйте позже.";
+  const payload = {
+    choices: [{ delta: { content } }],
+    meta: { pipeline_version: "v2", error, traceId },
+  };
+  return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
+    status: limited ? 429 : invalidProof ? 403 : 503,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      ...(limited ? { "Retry-After": String(decision.retryAfterSeconds || 60) } : {}),
     },
   });
 }
@@ -335,7 +389,7 @@ export async function handleChatConsultantV2(
   admissionOptions: V2AdmissionOptions = {},
 ): Promise<Response> {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
@@ -366,16 +420,63 @@ export async function handleChatConsultantV2(
 
   const v2req: V2Request = validation.value;
   const admissionRpc = admissionOptions.rpc ?? v2AdmissionRpc();
+  const subjectRpc = admissionOptions.subjectRpc ??
+    (admissionRpc as unknown as PublicSubjectAdmissionRpc);
+  const subjectVerification = await verifyPublicSubjectProof({
+    req,
+    readEnv: admissionOptions.readEnv,
+  });
+  if (subjectVerification.mode === "observe" && subjectVerification.wouldReject) {
+    console.warn("[chat-consultant-v2] subject proof would reject", {
+      reason: subjectVerification.reason,
+      failure: subjectVerification.failure,
+      would_reject: true,
+    });
+  }
+  if (!subjectVerification.allowed) {
+    return v2SubjectDenied(subjectVerification, traceId);
+  }
+  const subjectAdmission = await reservePublicSubjectAdmission({
+    verification: subjectVerification,
+    route: "chat-consultant-v2",
+    rpc: subjectRpc,
+    readEnv: admissionOptions.readEnv,
+  });
+  if (subjectAdmission.mode === "observe") {
+    console.info("[chat-consultant-v2] subject admission observed", {
+      reason: subjectAdmission.reason,
+      failure: subjectAdmission.failure,
+      would_reject: subjectAdmission.wouldReject,
+    });
+  }
+  const releaseSubjectAdmission = () => releasePublicSubjectAdmission({
+    reservation: subjectAdmission,
+    rpc: subjectRpc,
+  });
+  if (!subjectAdmission.allowed) {
+    await releaseSubjectAdmission();
+    return v2SubjectDenied(subjectAdmission, traceId);
+  }
   const admission = await reservePublicApiAdmission({
     route: "chat-consultant-v2",
     lanes: ["model", "catalog"],
     rpc: admissionRpc,
     readEnv: admissionOptions.readEnv,
   });
-  const releaseAdmission = () => releasePublicApiAdmission({
-    reservation: admission,
-    rpc: admissionRpc,
-  });
+  const releaseAdmission = async () => {
+    const [global, subject] = await Promise.allSettled([
+      releasePublicApiAdmission({ reservation: admission, rpc: admissionRpc }),
+      releaseSubjectAdmission(),
+    ]);
+    if (global.status === "rejected" ||
+      (global.status === "fulfilled" && global.value.attempted && !global.value.released)) {
+      console.error("[chat-consultant-v2] global admission release incomplete");
+    }
+    if (subject.status === "rejected" ||
+      (subject.status === "fulfilled" && subject.value.attempted && !subject.value.released)) {
+      console.error("[chat-consultant-v2] subject admission release incomplete");
+    }
+  };
   if (!admission.allowed) {
     // An ambiguous RPC timeout might have committed a reservation.
     await releaseAdmission();
@@ -396,7 +497,7 @@ export async function handleChatConsultantV2(
   if (admissionOptions.acceptedWork) {
     try {
       const response = await admissionOptions.acceptedWork(v2req);
-      return admission.releaseRequired
+      return admission.releaseRequired || subjectAdmission.releaseRequired
         ? releaseV2OnlyAfterUpstream(response, releaseAdmission)
         : response;
     } catch (error) {
@@ -413,18 +514,25 @@ export async function handleChatConsultantV2(
         // ── Подготавливаем ClassifierDeps (для S2) ──────────────────────
         const supabase = getAdminClient();
 
-        const { data: settingsData, error: settingsErr } = await supabase
-          .from("app_settings")
-          .select("openrouter_api_key")
-          .limit(1)
-          .single();
-        if (settingsErr) {
-          throw new Error(`app_settings read: ${settingsErr.message}`);
+        let legacyOpenRouterKey: string | undefined;
+        if (INTEGRATION_SECRETS_MODE !== "private-required") {
+          const { data: settingsData, error: settingsErr } = await supabase
+            .from("app_settings")
+            .select("openrouter_api_key")
+            .limit(1)
+            .single();
+          if (settingsErr) {
+            throw new Error(`app_settings read: ${settingsErr.message}`);
+          }
+          legacyOpenRouterKey = settingsData?.openrouter_api_key as string | undefined;
         }
-        const openRouterKey =
-          (settingsData?.openrouter_api_key as string | undefined) ||
-          Deno.env.get("OPENROUTER_API_KEY") ||
-          "";
+        const openRouterKey = await resolveIntegrationSecret(
+          supabase,
+          "openrouter_api_key",
+          INTEGRATION_SECRETS_MODE,
+          () => legacyOpenRouterKey || Deno.env.get("OPENROUTER_API_KEY") || "",
+          (event) => console.info("[integration-secret-shadow]", event),
+        );
         if (!openRouterKey) {
           throw new Error("openrouter_api_key not configured");
         }
@@ -548,7 +656,7 @@ export async function handleChatConsultantV2(
           const prevStreak = (mutableNextState.slot_state ?? DEFAULT_SLOT_STATE).soft404_streak;
 
           // Загружаем catalog-специфичные настройки (volt220 token + thresholds).
-          const catalogSettings = await loadCatalogAppSettings(supabase);
+          const catalogSettings = await loadCatalogAppSettings(supabase, INTEGRATION_SECRETS_MODE);
           const catalogDeps = createCatalogProductionDeps({
             // deno-lint-ignore no-explicit-any
             supabase: supabase as any,
@@ -835,7 +943,7 @@ export async function handleChatConsultantV2(
       "X-Accel-Buffering": "no",
     },
   });
-  return admission.releaseRequired
+  return admission.releaseRequired || subjectAdmission.releaseRequired
     ? releaseV2OnlyAfterUpstream(response, releaseAdmission)
     : response;
 }

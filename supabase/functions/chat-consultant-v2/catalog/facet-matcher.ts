@@ -24,15 +24,15 @@ import {
   type CategoryOptionsResult,
   type RawOption,
   type RawOptionValue,
-  getCategoryOptions,
 } from './api-client.ts';
+import { loadCategoryFacets } from './facet-cache.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
 export type FacetMatchStatus =
   | 'ok'                    // ≥1 модификатор замэтчился, optionFilters непуст
   | 'no_matches'            // facets есть, но ни один modifier не совпал
-  | 'no_facets'             // /categories/options вернул пустой список (ok-empty)
+  | 'no_facets'             // фасетных значений нет; не означает отсутствие товаров
   | 'category_unavailable'; // API: timeout/network_error/http_error И bootstrap не дал результата
 
 /**
@@ -61,6 +61,8 @@ export interface FacetMatchResult {
   unmatchedModifiers: string[];
   /** Откуда пришёл результат facets-вызова. */
   source: FacetSource;
+  /** Исходный статус /categories/options, до возможного bootstrap. */
+  facetSchemaStatus?: CategoryOptionsResult['status'];
   ms: number;
 }
 
@@ -240,22 +242,11 @@ export async function matchFacets(
   })}`);
 
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
-  let facetsResult: CategoryOptionsResult;
-  let source: 'cache' | 'live' | 'unavailable' = 'live';
-  try {
-    const cached = await deps.cacheGetOrCompute<CategoryOptionsResult>(
-      'facets',
-      pagetitle,
-      ttl,
-      () => getCategoryOptions(pagetitle, deps.apiClient),
-    );
-    facetsResult = cached.value;
-    source = cached.cacheHit ? 'cache' : 'live';
-  } catch (_e) {
-    // Кэш-ошибки не должны валить пайплайн — defensive.
-    source = 'unavailable';
-    facetsResult = await getCategoryOptions(pagetitle, deps.apiClient);
-  }
+  const loaded = await loadCategoryFacets(
+    pagetitle, ttl, deps.apiClient, deps.cacheGetOrCompute,
+  );
+  const facetsResult: CategoryOptionsResult = loaded.value;
+  const source = loaded.source;
 
   // ── 2. Обработка статуса API. ───────────────────────────────────────────
   // §4.10.1: при transport-failure пробуем bootstrap (per-item options из probe).
@@ -286,6 +277,7 @@ export async function matchFacets(
         matchedModifiers: [],
         unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
         source: 'unavailable',
+        facetSchemaStatus: facetsResult.status,
         ms: Date.now() - t0,
       };
       console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
@@ -305,8 +297,14 @@ export async function matchFacets(
     }
   }
 
-  // §4.10.1: при empty live-ответе тоже пробуем bootstrap.
-  if (!isTransportFailure && (facetsResult.status === 'empty' || facetsResult.options.length === 0)) {
+  // §4.10.1: no facet values can coexist with a positive, identity-verified
+  // product count. Bootstrap if possible; otherwise preserve a facet-less
+  // product search rather than declaring the category unavailable or empty.
+  if (!isTransportFailure && (
+    facetsResult.status === 'empty' ||
+    facetsResult.status === 'facets_unavailable' ||
+    facetsResult.options.length === 0
+  )) {
     if (bootstrapOptions && bootstrapOptions.length > 0) {
       optionsForMatch = bootstrapOptions;
       effectiveSource = 'bootstrap';
@@ -325,6 +323,7 @@ export async function matchFacets(
         matchedModifiers: [],
         unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
         source: effectiveSource,
+        facetSchemaStatus: facetsResult.status,
         ms: Date.now() - t0,
       };
       console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
@@ -386,6 +385,7 @@ export async function matchFacets(
     matchedModifiers: matched,
     unmatchedModifiers: unmatched,
     source: effectiveSource,
+    facetSchemaStatus: facetsResult.status,
     ms: Date.now() - t0,
   };
 

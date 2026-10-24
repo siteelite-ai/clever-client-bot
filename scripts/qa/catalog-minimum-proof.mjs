@@ -31,6 +31,18 @@ export function validCatalogMinimumContract(value) {
     /^[\p{L}\p{N}²³./%\- ]{1,20}$/u.test(value.unit));
 }
 
+/** A plural superlative needs a bounded, complete category and an exact count. */
+export function validCatalogLowestNContract(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join(',') !== 'count,source_url,title_prefix,unit' ||
+      !Number.isSafeInteger(value.count) || value.count < 2 || value.count > 20) return false;
+  return validCatalogMinimumContract({
+    source_url: value.source_url,
+    title_prefix: value.title_prefix,
+    unit: value.unit,
+  });
+}
+
 function displayText(value) {
   return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
 }
@@ -232,6 +244,8 @@ function proofFromPages(pages, sourceUrl, unit) {
   return {
     source_url: source,
     listed_total: total,
+    covered_total: counted,
+    page_count: pageCount,
     matching_available: candidates.length,
     eligible_products: candidates,
     excluded_out_of_stock: excludedOutOfStock,

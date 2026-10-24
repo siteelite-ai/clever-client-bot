@@ -1,0 +1,70 @@
+name: Widget production build
+
+on:
+  push:
+    paths:
+      - '.github/workflows/widget-production-build.yml'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'public/**'
+      - 'src/**'
+      - 'scripts/qa/**'
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - 'vite.config.*'
+      - 'postcss.config.*'
+      - 'tailwind.config.*'
+      - 'tsconfig*.json'
+  pull_request:
+    paths:
+      - '.github/workflows/widget-production-build.yml'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'public/**'
+      - 'src/**'
+      - 'scripts/qa/**'
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - 'vite.config.*'
+      - 'postcss.config.*'
+      - 'tailwind.config.*'
+      - 'tsconfig*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  widget-production-build:
+    name: widget contract and production Vite build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact change commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Check widget release contract
+        run: node scripts/qa/check-widget-release-contract.mjs
+
+      - name: Test widget loader contract
+        run: node --test scripts/qa/widget-loader-contract.test.mjs
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build production frontend
+        run: npm run build

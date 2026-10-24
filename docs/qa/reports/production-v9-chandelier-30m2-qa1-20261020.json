@@ -1,0 +1,408 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T17:10:55.986Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-chandelier-30m2": 1
+  },
+  "cases": [
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-chandelier-30m2_base_1792516255994_1",
+          "turns": [
+            {
+              "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 12534,
+              "network_attempts": 1,
+              "log_id": "105a2754-d50b-48d1-b571-82144191311a",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002740",
+                  "name": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Наличие пульта": "Нет",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "7.2",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "8",
+                    "Объем, м3": "0.18",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "акрил",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "белый",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "паук",
+                    "Страна происхождения": "КИТАЙ",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет"
+                  },
+                  "offerPrice": 23666,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — Модель MATEO от бренда Estares сочетает современный дизайн и интеллектуальные технологии для дома. Люстра управляется напрямую от выключателя, обеспечивая простое и удобное включение и выключение света. Объемная светящаяся конструкция равномерно освещает помещение, а мощность 100 Вт позволяет освещать комнаты до 35 м². Надежные материалы — алюминий, ударопрочный акрил и оптический силикон — гарантируют долгий ср"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002746",
+                  "name": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Наличие пульта": "Да",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Вес, кг.": "3.8",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "2",
+                    "Объем, м3": "0.045",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "акрил",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "35",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "кольцо",
+                    "Страна происхождения": "КИТАЙ",
+                    "Подходит для натяжного потолка": "Нет",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "50"
+                  },
+                  "offerPrice": 29961,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "description_excerpt": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20, бренд Estares Артикул: SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20 Люстра светодиодная управляемая SOFIA 100W коллекции Estares сочетает футуристичный дизайн и интеллектуальные технологии для современного дома. Модель оснащена прозрачным акриловым плафоном и двойным кольцом светодиодов, что обеспечивает равномерное освещение помещений до 35–38 м². Управление осуществляется через мобильное приложение (APP) и пуль"
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-55-e14x8-r-600*1200-goldcrystal-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002731",
+                  "name": "Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Наличие пульта": "Нет",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Нет",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Отделка стекла": "crystal",
+                    "Вес, кг.": "14",
+                    "Тип цоколя": "E14",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "8",
+                    "Объем, м3": "0.1",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "хрусталь",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "30",
+                    "Форма подходящей лампочки": "свеча; свеча на ветру",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "вниз; в стороны",
+                    "Форма люстры": "каскад",
+                    "Страна происхождения": "КИТАЙ",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "60"
+                  },
+                  "offerPrice": 41208,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-55-e14x8-r-600*1200-goldcrystal-220-ip20/",
+                  "description_excerpt": "Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20, бренд Estares Артикул: уточните у менеджера Люстра ROXANA 55 E14х8 Estares предназначена для создания яркого и изысканного освещения в жилых и коммерческих помещениях. Она сочетает хромированные и золотые элементы с кристальными подвесками, придавая интерьеру элегантность и роскошь. Подходит для гостиных, столовых, спален и кабинетов, а также для помещений в классическом, неоклассическом и арт-деко стилях. Назначение и область применения: "
+                },
+                {
+                  "identity": "220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-65-e14x8-r-600*1200-chromecrystal-220-ip20",
+                  "verified": true,
+                  "sku": "УТ-00002732",
+                  "name": "Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20",
+                  "facets": {
+                    "Категория": "Люстры",
+                    "Наличие пульта": "Нет",
+                    "Степень защиты, IP": "20",
+                    "Регулировка высоты": "Да",
+                    "Единица измерения": "шт",
+                    "Тип крепления": "монтажная планка",
+                    "Отделка стекла": "crystal",
+                    "Вес, кг.": "15",
+                    "Тип цоколя": "E14",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Количество рожков": "8",
+                    "Объем, м3": "0.1",
+                    "Материал основы": "алюминий",
+                    "Бренд": "Estares",
+                    "Материал плафонов": "хрусталь",
+                    "Код ТН ВЭД": "9405110033",
+                    "Цвет плафонов": "прозрачный",
+                    "Место установки": "внутри помещения",
+                    "Максимальная площадь освещения, м2": "30",
+                    "Форма подходящей лампочки": "свеча",
+                    "Назначение": "кафе; кухня; офис; гостиная; прихожая; спальня",
+                    "Направление плафона или абажура": "во все стороны",
+                    "Форма люстры": "каскадный цилиндр",
+                    "Страна происхождения": "КИТАЙ",
+                    "Подходит для натяжного потолка": "Да",
+                    "Наличие ламп": "Нет",
+                    "Регулировка направления абажура": "Нет",
+                    "Диаметр люстры, см": "60"
+                  },
+                  "offerPrice": 47827,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-65-e14x8-r-600*1200-chromecrystal-220-ip20/",
+                  "description_excerpt": "Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20 Артикул: ROXANA65-E14x8 Люстра ROXANA 65 E14х8 Estares — это роскошная светодиодная люстра с 8 лампами E14, предназначенная для создания изысканной атмосферы в помещениях любого типа. Благодаря сочетанию хромированного металла и прозрачного стекла, люстра отлично вписывается в интерьеры стиля классика, неоклассика, арт-деко и современный стиль с элементами люкса. Назначение и область применения: - Жилые помещения: спальни, гостиные, кабин"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/",
+                  "price": 23666,
+                  "stockLine": "Караганда (8 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-mateo-100w-8r-onoff-1005*250-blackwhite-220-ip20/)**\n  Цена: *23 666* ₸\n  Бренд: Estares\n  Наличие: Караганда (8 шт)"
+                },
+                {
+                  "title": "Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/",
+                  "price": 29961,
+                  "stockLine": "Караганда (7 шт)",
+                  "cardText": "- **[Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-svetodiodnaya-upravlyaemaya-sofia-100w-r-app-500*1000-chromeclear-220-ip20/)**\n  Цена: *29 961* ₸\n  Бренд: Estares\n  Наличие: Караганда (7 шт)"
+                },
+                {
+                  "title": "Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-55-e14x8-r-600*1200-goldcrystal-220-ip20/",
+                  "price": 41208,
+                  "stockLine": "Караганда (4 шт)",
+                  "cardText": "- **[Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-55-e14x8-r-600*1200-goldcrystal-220-ip20/)**\n  Цена: *41 208* ₸\n  Бренд: Estares\n  Наличие: Караганда (4 шт)"
+                },
+                {
+                  "title": "Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20",
+                  "url": "https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-65-e14x8-r-600*1200-chromecrystal-220-ip20/",
+                  "price": 47827,
+                  "stockLine": "Караганда (5 шт)",
+                  "cardText": "- **[Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20](https://220volt.kz/catalog/svetotexnika/lyustryi/lyustra-roxana-65-e14x8-r-600*1200-chromecrystal-220-ip20/)**\n  Цена: *47 827* ₸\n  Бренд: Estares\n  Наличие: Караганда (5 шт)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Люстры». Сверяю заявленные условия с характеристиками каталога. Суммарную потребность всей системы не приписываю каждому отдельному товару.Показанные товары — отдельные варианты, а не подтверждённая схема под суммарную потребность. Чтобы проверить итог, нужно определить количество и расположение изделий, подтвердить показатели каждой позиции и применимость их суммирования.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Люстры»: 29 тов., фасетов 31, листьев 1",
+                  "duration_ms": 1057
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=6; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 29",
+                  "duration_ms": 695
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Они точно подходят для освещения 30 квадратных метров?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 4229,
+              "network_attempts": 1,
+              "log_id": "333f2ba2-c5b9-40ec-a07c-e13897715678",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "По ранее показанным карточкам могу подтвердить только следующие данные:\nДля 30 м² по заявленному в карточке параметру «Максимальная площадь освещения, м2»: 4 из 4 вариантов имеют значение не ниже запроса, 0 — ниже, по 0 подтвердить значение нельзя. Это проверка заявленной характеристики, а не гарантия достаточной освещённости или пригодности установки в конкретном помещении.\n1. Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — 23 666 ₸/шт; Максимальная площадь освещения, м2: 35; Подходит для натяжного потолка: Да; Степень защиты, IP: 20; Цвет плафонов: белый; Форма люстры: паук; Количество рожков: 8; Материал плафонов: акрил; Наличие пульта: Нет.\n2. Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20 — 29 961 ₸/шт; Максимальная площадь освещения, м2: 35; Подходит для натяжного потолка: Нет; Диаметр люстры, см: 50; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: кольцо; Количество рожков: 2; Материал плафонов: акрил.\n3. Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20 — 41 208 ₸/шт; Максимальная площадь освещения, м2: 30; Форма подходящей лампочки: свеча; свеча на ветру; Подходит для натяжного потолка: Да; Диаметр люстры, см: 60; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: каскад; Количество рожков: 8.\n4. Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20 — 47 827 ₸/шт; Максимальная площадь освещения, м2: 30; Форма подходящей лампочки: свеча; Подходит для натяжного потолка: Да; Диаметр люстры, см: 60; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: каскадный цилиндр; Количество рожков: 8.\nЕсли нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1644,
+              "network_attempts": 1,
+              "log_id": "4498d512-7b13-43a4-9eec-763685848086",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Сравниваю цены и подтверждённые характеристики ранее показанных вариантов:\n1. Люстра светодиодная управляемая MATEO 100W 8R-ON/OFF-1005*250-BLACK/WHITE-220-IP20 — 23 666 ₸/шт; Максимальная площадь освещения, м2: 35; Степень защиты, IP: 20; Цвет плафонов: белый; Форма люстры: паук; Количество рожков: 8; Материал плафонов: акрил; Наличие пульта: Нет; Направление плафона или абажура: вниз; в стороны.\n2. Люстра светодиодная управляемая SOFIA 100W R-APP-500*1000-CHROME/CLEAR-220-IP20 — 29 961 ₸/шт; Максимальная площадь освещения, м2: 35; Диаметр люстры, см: 50; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: кольцо; Количество рожков: 2; Материал плафонов: акрил; Наличие пульта: Да.\n3. Люстра ROXANA 55 E14х8 R-600*1200-GOLD/CRYSTAL-220-IP20 — 41 208 ₸/шт; Максимальная площадь освещения, м2: 30; Диаметр люстры, см: 60; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: каскад; Форма подходящей лампочки: свеча; свеча на ветру; Количество рожков: 8; Материал плафонов: хрусталь.\n4. Люстра ROXANA 65 E14х8 R-600*1200-CHROME/CRYSTAL-220-IP20 — 47 827 ₸/шт; Максимальная площадь освещения, м2: 30; Диаметр люстры, см: 60; Степень защиты, IP: 20; Цвет плафонов: прозрачный; Форма люстры: каскадный цилиндр; Форма подходящей лампочки: свеча; Количество рожков: 8; Материал плафонов: хрусталь.\nЕсли нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "А есть другие варианты?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 15888,
+              "network_attempts": 1,
+              "log_id": "db442741-7dff-4f61-8a95-47714e18862e",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Онлайн-консультант временно недоступен из-за ограничения внешнего сервиса. Ваш запрос сформулирован нормально — повторите его позже или свяжитесь с менеджером.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Люстры»: 29 тов., фасетов 31, листьев 1",
+                  "duration_ms": 942
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 1"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "finished_at": "2026-10-20T17:11:33.935Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 4,
+    "recorded_turns": 4
+  },
+  "log_ids": [
+    "105a2754-d50b-48d1-b571-82144191311a",
+    "333f2ba2-c5b9-40ec-a07c-e13897715678",
+    "4498d512-7b13-43a4-9eec-763685848086",
+    "db442741-7dff-4f61-8a95-47714e18862e"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 4,
+    "verified": 4,
+    "unverified": 0
+  },
+  "passed": false
+}

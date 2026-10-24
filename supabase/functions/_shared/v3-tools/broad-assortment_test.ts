@@ -33,6 +33,10 @@ import {
   isSameSectionNominalRefinement,
   scopeFromCompletedServerLog,
 } from "./active-selection-scope.ts";
+import {
+  extractClientQuantities,
+  joinCustomerTurns,
+} from "./criteria-consistency.ts";
 
 const discover: DiscoverCategoryOk = {
   ok: true,
@@ -256,7 +260,10 @@ Deno.test("constrained broad chip retains the logged city, budget and other orig
   });
   assertEquals(
     continuation?.effective_request,
-    `${originalRequest}\nУточнение клиента по исходному запросу: раздел каталога «Розетки».`,
+    joinCustomerTurns([
+      originalRequest,
+      "Уточнение клиента по исходному запросу: раздел каталога «Розетки».",
+    ]),
   );
   assertStringIncludes(continuation!.effective_request, "в Алматы");
   assertStringIncludes(continuation!.effective_request, "до 5000 тенге");
@@ -1080,7 +1087,7 @@ Deno.test("a compound answer binds only a unique server-issued leaf and preserve
   assertEquals(typed?.original_request, log.user_query);
   assertEquals(
     typed!.effective_request,
-    `${log.user_query}\n${typed!.typed_request}`,
+    joinCustomerTurns([log.user_query, typed!.typed_request]),
     "only customer-authored words may enter the lexical recovery pipeline",
   );
   assertStringIncludes(typed!.effective_request, "двойные электрические");
@@ -1121,6 +1128,39 @@ Deno.test("a compound answer binds only a unique server-issued leaf and preserve
   );
   assertStringIncludes(constrained!.effective_request, constrainedOriginal);
   assertStringIncludes(constrained!.effective_request, "двойные розетки");
+});
+
+Deno.test("broad assortment continuation isolates turns while retaining multiline measurements within the reply", () => {
+  const slots = { pending_clarification: { slot_id: "server-slot-1" } };
+  const originalRequest = "Покажи ассортимент Gallant в Алматы ток 16";
+  const log = { ...completedChoiceLog("Gallant"), user_query: originalRequest };
+  const reply = "А двойные розетки 25\nВт";
+  const typed = resolveServerIssuedBroadAssortmentTypedContinuation(
+    slots,
+    log,
+    reply,
+    "session-A",
+  );
+  assertEquals(typed?.leaf, "Розетки");
+  assertEquals(
+    typed?.effective_request,
+    joinCustomerTurns([
+      originalRequest,
+      reply,
+    ]),
+  );
+  assertEquals(extractClientQuantities(typed!.effective_request), [
+    { value: 25, unit: "вт" },
+  ]);
+
+  const constrained = resolveServerIssuedBroadAssortmentConstrainedContinuation(
+    slots,
+    log,
+    "Розетки",
+    "session-A",
+  );
+  assertEquals(constrained?.leaf, "Розетки");
+  assertEquals(extractClientQuantities(constrained!.effective_request), []);
 });
 
 Deno.test("compound leaf binding fails closed on ambiguity, negation, another series or unverified slot", async () => {
@@ -1326,7 +1366,10 @@ Deno.test("attribute rejection keeps the server-issued section, while rejection 
       "session-A",
     );
     assertEquals(typed?.leaf, "Розетки", message);
-    assertEquals(typed?.effective_request, `${log.user_query}\n${message}`);
+    assertEquals(
+      typed?.effective_request,
+      joinCustomerTurns([log.user_query, message]),
+    );
   }
   for (
     const message of [

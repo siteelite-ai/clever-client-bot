@@ -13,7 +13,9 @@ import {
   isAdditionalProductSelectionFollowup,
   isEvidenceOnlyFollowup,
   isRecentProductPriceSelectionFollowup,
+  isPureRecentPriceFollowup,
   isRecentProductShowFollowup,
+  MAX_RECENT_EVIDENCE_PRODUCTS,
   latestRecentProductEvidenceSet,
   latestRenderedSelectionRequest,
   loadRecentProductEvidence,
@@ -45,6 +47,22 @@ Deno.test("recent evidence keeps bounded factual fields", () => {
   assertEquals(evidence.length, 1);
   assertEquals(evidence[0].article, "A-1");
   assertEquals(evidence[0].short_traits, ["Датчик: микроволновый"]);
+});
+
+Deno.test("recent evidence retains the full rendered ten-card window, never an eleventh", () => {
+  const evidence = compactRecentProducts(
+    Array.from({ length: 12 }, (_, index) =>
+      product({
+        id: `item-${index + 1}`,
+        pagetitle: `Светильник ${index + 1}`,
+        url: `https://220volt.kz/catalog/test/item-${index + 1}/`,
+      })
+    ),
+  );
+  assertEquals(MAX_RECENT_EVIDENCE_PRODUCTS, 10);
+  assertEquals(evidence.length, 10);
+  assertEquals(evidence.map((item) => item.id),
+    Array.from({ length: 10 }, (_, index) => `item-${index + 1}`));
 });
 
 Deno.test("recent evidence prompt neutralizes markup and forbids stale render", () => {
@@ -209,6 +227,36 @@ Deno.test("price follow-up classifier requires both a superlative and a referenc
     isRecentProductPriceSelectionFollowup("дай ссылку на товар"),
     false,
   );
+});
+
+Deno.test("price follow-up shares the generic ranking intent across Russian inflections", () => {
+  for (const request of [
+    "Какая из них самая дешевая?",
+    "Какую из них назовёшь самой дешёвой?",
+    "Покажи из них самый дешёвый",
+    "Выберите самый дорогой из этих вариантов",
+    "Какие из показанных самые недорогие?",
+    "Какой из них с минимальной ценой?",
+    "Назовите наиболее доступную из предложенных моделей",
+    "Самый бюджетный, дай ссылку",
+  ]) {
+    assertEquals(isRecentProductPriceSelectionFollowup(request), true, request);
+    assertEquals(isPureRecentPriceFollowup(request), true, request);
+  }
+});
+
+Deno.test("recent price selection rejects negation, new criteria and standalone searches", () => {
+  for (const request of [
+    "Не самый дешёвый из них",
+    "Не бюджетный из этих вариантов",
+    "Самый дешёвый или самый дорогой из них",
+    "Найди самый дешёвый кабель",
+    "Покажи самый дешёвый из них, но только белый",
+    "Какая из них самая дешёвая до 1000 ₸?",
+    "Сколько стоят эти товары?",
+  ]) {
+    assertEquals(isPureRecentPriceFollowup(request), false, request);
+  }
 });
 
 Deno.test("price follow-up uses only the newest rendered batch", () => {

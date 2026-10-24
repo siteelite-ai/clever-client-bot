@@ -108,6 +108,39 @@ test('complete synthetic four-suite evidence passes with exact inventory coverag
   assert(!JSON.stringify(summary).includes('SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY'));
 });
 
+test('catalog health preflight is an opt-in gate for new release evidence', () => {
+  const evidence = syntheticEvidence();
+  evidence.requireCatalogPreflight = true;
+  const missing = expectFailure(evidence, 'catalog_preflight_not_ready');
+  assert.equal(missing.failures.filter((failure) => failure.code === 'catalog_preflight_not_ready').length,
+    MATRIX_MANIFESTS.length);
+
+  for (const report of evidence.reports) {
+    report.catalog_preflight = { ok: true, status: 'ready', http_status: 200, duration_ms: 17 };
+  }
+  assert.equal(validateReleaseEvidence(evidence).verdict, 'PASS');
+});
+
+test('opt-in gate rejects an incomplete or unsafe catalog preflight assertion without echoing it', () => {
+  const ready = { ok: true, status: 'ready', http_status: 200, duration_ms: 17 };
+  const badValues = [
+    { ...ready, ok: false },
+    { ...ready, status: 'unavailable' },
+    { ...ready, http_status: 503 },
+    { ...ready, duration_ms: -1 },
+    { ...ready, duration_ms: '17' },
+    { ...ready, checks: { raw: 'SECRET_RESPONSE_MUST_NOT_APPEAR_IN_SUMMARY' } },
+  ];
+  for (const value of badValues) {
+    const evidence = syntheticEvidence();
+    evidence.requireCatalogPreflight = true;
+    for (const report of evidence.reports) report.catalog_preflight = { ...ready };
+    evidence.reports[0].catalog_preflight = value;
+    const summary = expectFailure(evidence, 'catalog_preflight_not_ready');
+    assert.equal(summary.failures.filter((failure) => failure.code === 'catalog_preflight_not_ready').length, 1);
+  }
+});
+
 test('historical v3 inventory cannot be substituted for the re-pinned v8 matrix', () => {
   const evidence = syntheticEvidence();
   evidence.inventory = JSON.parse(fs.readFileSync(
@@ -269,7 +302,18 @@ test('attestation is explicit and malformed candidate identity cannot appear in 
   assert.deepEqual(parseCliArgs(['--attestation=assertion.json', '--report=one.json', '--report=two.json']), {
     attestationFile: 'assertion.json',
     reportFiles: ['one.json', 'two.json'],
+    requireCatalogPreflight: false,
   });
+  assert.deepEqual(parseCliArgs([
+    '--require-catalog-preflight', '--attestation=assertion.json', '--report=one.json',
+  ]), {
+    attestationFile: 'assertion.json',
+    reportFiles: ['one.json'],
+    requireCatalogPreflight: true,
+  });
+  assert.throws(() => parseCliArgs([
+    '--attestation=assertion.json', '--require-catalog-preflight', '--require-catalog-preflight',
+  ]), /duplicate --require-catalog-preflight/);
   const numericVersion = syntheticEvidence();
   numericVersion.attestation.preview_function_version = 12;
   assert.equal(expectFailure(numericVersion, 'preview_function_version_invalid').preview_function_version, null);

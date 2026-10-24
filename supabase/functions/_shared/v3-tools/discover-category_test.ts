@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   executeDiscoverCategory,
   liftUngroundedLeafToCustomerHeadAncestor,
+  resetDiscoverCategoryCacheForTest,
   resolveGroundedCategoryHeadToken,
   resolveHeadCategoryByFacetEvidence,
   resolveHeadCategoryByLeastSpecializedSibling,
@@ -9,6 +10,269 @@ import {
   resolveLocalCategoryPagetitles,
 } from "./discover-category.ts";
 import { isTransientCatalogToolFailure } from "./selection-search-recovery.ts";
+
+Deno.test("ordinary discovery rejects malformed first taxonomy page without caching it", async () => {
+  const page = {
+    results: [{ id: 91_001, pagetitle: "Проверочная категория", children: [] }],
+    pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+  };
+  const malformed = [
+    { data: { pagination: page.pagination } },
+    { data: { results: page.results } },
+    { data: null, ...page },
+    { success: false, data: page },
+    { data: { success: false, ...page } },
+    {
+      data: {
+        ...page,
+        results: [{
+          id: 91_001,
+          pagetitle: "Проверочная категория",
+          alias: "proverochnaya-kategoriya",
+          parent: 0,
+        }],
+      },
+    },
+  ];
+  for (const response of malformed) {
+    let calls = 0;
+    const fetchImpl = ((_url: string | URL | Request) => {
+      calls++;
+      return Promise.resolve(new Response(JSON.stringify(response)));
+    }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await executeDiscoverCategory(
+        { noun: "Проверочная категория" },
+        {
+          baseUrl: "https://catalog.example.test",
+          apiToken: "test-token",
+          fetchImpl,
+        },
+      );
+      assertEquals(result.ok, false);
+      if (!result.ok) {
+        assertEquals(result.error_code, "transport_5xx");
+        assertEquals(isTransientCatalogToolFailure(result), true);
+      }
+    }
+    assertEquals(
+      calls,
+      2,
+      "an invalid taxonomy must be fetched again, never cached",
+    );
+  }
+});
+
+Deno.test("ordinary discovery never caches an empty HTTP 200 taxonomy", async () => {
+  resetDiscoverCategoryCacheForTest();
+  try {
+    let empty = true;
+    let taxonomyLoads = 0;
+    const fetchImpl = ((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/categories?")) {
+        taxonomyLoads++;
+        return Promise.resolve(Response.json({
+          success: true,
+          data: {
+            results: empty ? [] : [{
+              id: 91_200,
+              pagetitle: "Контрольные розетки",
+              children: [],
+            }],
+            pagination: {
+              page: 1,
+              per_page: 200,
+              pages: 1,
+              total: empty ? 0 : 1,
+            },
+          },
+        }));
+      }
+      if (url.includes("/categories/options?")) {
+        return Promise.resolve(Response.json({
+          data: {
+            category: {
+              id: 91_200,
+              pagetitle: "Контрольные розетки",
+              total_products: 1,
+            },
+            options: [{
+              key: "cvet",
+              caption_ru: "Цвет",
+              type: "string",
+              values: [{ value_ru: "белый", products_count: 1 }],
+            }],
+          },
+        }));
+      }
+      throw new Error(`unexpected request ${url}`);
+    }) as typeof fetch;
+    const deps = {
+      baseUrl: "https://catalog.example.test",
+      apiToken: "test-token",
+      fetchImpl,
+    };
+    const failed = await executeDiscoverCategory({
+      noun: "Контрольные розетки",
+    }, deps);
+    assertEquals(failed.ok, false);
+    if (!failed.ok) assertEquals(failed.error_code, "transport_5xx");
+    empty = false;
+    const recovered = await executeDiscoverCategory({
+      noun: "Контрольные розетки",
+    }, deps);
+    assertEquals(recovered.ok, true);
+    assertEquals(
+      taxonomyLoads,
+      2,
+      "the healthy retry must fetch a new taxonomy",
+    );
+  } finally {
+    resetDiscoverCategoryCacheForTest();
+  }
+});
+
+Deno.test("Swagger-valid category without children is unavailable until child coverage is proven", async () => {
+  const fetchImpl = (() =>
+    Promise.resolve(
+      new Response(JSON.stringify({
+        data: {
+          results: [{
+            id: 91_500,
+            pagetitle: "Категория без дочерних данных",
+            alias: "kategoriya-bez-dochernih-dannih",
+            parent: 0,
+          }],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        },
+      })),
+    )) as typeof fetch;
+  const result = await executeDiscoverCategory(
+    { noun: "Категория без дочерних данных" },
+    {
+      baseUrl: "https://catalog.example.test",
+      apiToken: "test-token",
+      fetchImpl,
+    },
+  );
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error_code, "transport_5xx");
+    assertEquals(
+      result.message,
+      "category taxonomy child coverage is unproven",
+    );
+  }
+});
+
+Deno.test("depth-10 taxonomy boundary cannot be cached as a complete leaf", async () => {
+  resetDiscoverCategoryCacheForTest();
+  try {
+    const nodeAtDepth = (depth: number): Record<string, unknown> => ({
+      id: 94_000 + depth,
+      pagetitle: `Уровень ${depth}`,
+      children: depth === 10 ? [] : [nodeAtDepth(depth + 1)],
+    });
+    let taxonomyLoads = 0;
+    const fetchImpl = ((input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/categories")) {
+        throw new Error(
+          `truncated taxonomy must not reach another route: ${url}`,
+        );
+      }
+      taxonomyLoads++;
+      return Promise.resolve(Response.json({
+        data: {
+          results: [nodeAtDepth(0)],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        },
+      }));
+    }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await executeDiscoverCategory(
+        { noun: "Уровень 10" },
+        {
+          baseUrl: "https://catalog.example.test",
+          apiToken: "test-token",
+          fetchImpl,
+        },
+      );
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error_code, "transport_5xx");
+    }
+    assertEquals(
+      taxonomyLoads,
+      2,
+      "depth-limit responses must never enter the one-hour cache",
+    );
+  } finally {
+    resetDiscoverCategoryCacheForTest();
+  }
+});
+
+Deno.test("ordinary discovery rejects an incomplete later taxonomy page without caching it", async () => {
+  const firstRows = Array.from({ length: 200 }, (_, index) => ({
+    id: 92_000 + index,
+    pagetitle: `Категория ${92_000 + index}`,
+    children: [],
+  }));
+  const finalRow = {
+    id: 92_500,
+    pagetitle: "Последняя категория",
+    children: [],
+  };
+  for (
+    const secondPage of [
+      {
+        results: [],
+        pagination: { page: 2, per_page: 200, pages: 2, total: 201 },
+      },
+      {
+        results: [finalRow],
+        pagination: { page: 2, per_page: 200, pages: 2, total: 202 },
+      },
+    ]
+  ) {
+    let calls = 0;
+    const fetchImpl = ((input: string | URL | Request) => {
+      calls++;
+      const page = Number(new URL(String(input)).searchParams.get("page"));
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          success: true,
+          data: page === 1
+            ? {
+              results: firstRows,
+              pagination: { page: 1, per_page: 200, pages: 2, total: 201 },
+            }
+            : secondPage,
+        })),
+      );
+    }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await executeDiscoverCategory(
+        { noun: "Категория 92000" },
+        {
+          baseUrl: "https://catalog.example.test",
+          apiToken: "test-token",
+          fetchImpl,
+        },
+      );
+      assertEquals(result.ok, false);
+      if (!result.ok) {
+        assertEquals(result.error_code, "transport_5xx");
+        assertEquals(isTransientCatalogToolFailure(result), true);
+      }
+    }
+    assertEquals(
+      calls,
+      4,
+      "neither page may be cached after a partial traversal",
+    );
+  }
+});
 
 Deno.test("live category discovery bounds taxonomy and resolver headers and bodies", async () => {
   const baseDeps = {
@@ -62,9 +326,10 @@ Deno.test("live category discovery bounds taxonomy and resolver headers and bodi
       taxonomyLoads++;
       return Promise.resolve(
         new Response(JSON.stringify({
+          success: true,
           data: {
             results: [{ id: 501, pagetitle: "Светильники", children: [] }],
-            pagination: { pages: 1 },
+            pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
           },
         })),
       );
@@ -212,22 +477,34 @@ Deno.test("discovery distinguishes failed options HTTP from a genuinely absent c
     const fetchImpl = ((url: string | URL | Request) => {
       const path = String(url);
       if (path.includes("/categories?")) {
-        return Promise.resolve(new Response(JSON.stringify({ data: {
-          results: [{ id: 70_001, pagetitle: "Контрольная категория", children: [] }],
-          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
-        } })));
+        return Promise.resolve(
+          new Response(JSON.stringify({
+            data: {
+              results: [{
+                id: 70_001,
+                pagetitle: "Контрольная категория",
+                children: [],
+              }],
+              pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+            },
+          })),
+        );
       }
       if (path.includes("/categories/options?")) {
-        return Promise.resolve(status === 200
-          ? new Response(JSON.stringify({ data: {
-            category: {
-              id: 70_001,
-              pagetitle: "Контрольная категория",
-              total_products: 0,
-            },
-            options: [],
-          } }))
-          : new Response(`HTTP ${status}`, { status }));
+        return Promise.resolve(
+          status === 200
+            ? new Response(JSON.stringify({
+              data: {
+                category: {
+                  id: 70_001,
+                  pagetitle: "Контрольная категория",
+                  total_products: 0,
+                },
+                options: [],
+              },
+            }))
+            : new Response(`HTTP ${status}`, { status }),
+        );
       }
       throw new Error(`unexpected fetch ${path}`);
     }) as typeof fetch;
@@ -268,7 +545,9 @@ Deno.test("taxonomy HTTP failures remain retryable verification failures", async
         apiToken: "test-token",
         forceFreshTaxonomy: true,
         fetchImpl: (() =>
-          Promise.resolve(new Response(`HTTP ${status}`, { status }))) as typeof fetch,
+          Promise.resolve(
+            new Response(`HTTP ${status}`, { status }),
+          )) as typeof fetch,
       },
     );
     assertEquals(result.ok, false, `taxonomy HTTP ${status}`);
@@ -296,17 +575,27 @@ Deno.test("resolver HTTP failures do not become category_not_found", async () =>
     const fetchImpl = ((url: string | URL | Request) => {
       const path = String(url);
       if (path.includes("/categories?")) {
-        return Promise.resolve(new Response(JSON.stringify({ data: {
-          results: [{ id: 71_001, pagetitle: "Светильники", children: [] }],
-          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
-        } })));
+        return Promise.resolve(
+          new Response(JSON.stringify({
+            data: {
+              results: [{ id: 71_001, pagetitle: "Светильники", children: [] }],
+              pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+            },
+          })),
+        );
       }
       if (path.includes("openrouter.ai")) {
-        return Promise.resolve(status === 200
-          ? new Response(JSON.stringify({ choices: [{ message: {
-            content: JSON.stringify({ candidates: [] }),
-          } }] }))
-          : new Response(`HTTP ${status}`, { status }));
+        return Promise.resolve(
+          status === 200
+            ? new Response(JSON.stringify({
+              choices: [{
+                message: {
+                  content: JSON.stringify({ candidates: [] }),
+                },
+              }],
+            }))
+            : new Response(`HTTP ${status}`, { status }),
+        );
       }
       throw new Error(`unexpected fetch ${path}`);
     }) as typeof fetch;
@@ -334,21 +623,25 @@ Deno.test("resolver HTTP failures do not become category_not_found", async () =>
 
 Deno.test("ambiguous category prefetch retains failures without hiding a usable candidate", async () => {
   const request = { noun: "нужен кабель" };
-  const taxonomy = new Response(JSON.stringify({ data: {
-    results: [
-      { id: 72_001, pagetitle: "Кабели силовые", children: [] },
-      { id: 72_002, pagetitle: "Кабели сигнальные", children: [] },
-    ],
-    pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
-  } }));
+  const taxonomy = new Response(JSON.stringify({
+    data: {
+      results: [
+        { id: 72_001, pagetitle: "Кабели силовые", children: [] },
+        { id: 72_002, pagetitle: "Кабели сигнальные", children: [] },
+      ],
+      pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
+    },
+  }));
   const fetchImpl = ((url: string | URL | Request) => {
     const path = String(url);
     if (path.includes("/categories?")) return Promise.resolve(taxonomy.clone());
     if (path.includes("/categories/options?")) {
-      return Promise.resolve(new URL(path).searchParams.get("pagetitle") ===
-          "Кабели силовые"
-        ? new Response("unavailable", { status: 503 })
-        : new Response("missing", { status: 404 }));
+      return Promise.resolve(
+        new URL(path).searchParams.get("pagetitle") ===
+            "Кабели силовые"
+          ? new Response("unavailable", { status: 503 })
+          : new Response("missing", { status: 404 }),
+      );
     }
     throw new Error(`unexpected fetch ${path}`);
   }) as typeof fetch;
@@ -367,32 +660,46 @@ Deno.test("ambiguous category prefetch retains failures without hiding a usable 
     openrouterApiKey: "test-model-token",
     fetchImpl: ((url: string | URL | Request) => {
       const path = String(url);
-      if (path.includes("/categories?")) return Promise.resolve(taxonomy.clone());
+      if (path.includes("/categories?")) {
+        return Promise.resolve(taxonomy.clone());
+      }
       if (path.includes("/categories/options?")) {
-        return Promise.resolve(new URL(path).searchParams.get("pagetitle") ===
-            "Кабели силовые"
-          ? new Response("unavailable", { status: 503 })
-          : new Response(JSON.stringify({ data: {
-            category: {
-              id: 72_002,
-              pagetitle: "Кабели сигнальные",
-              total_products: 2,
-            },
-            options: [{
-              key: "type",
-              caption_ru: "Тип",
-              type: "string",
-              values: [{ value_ru: "контрольный", products_count: 2 }],
-            }],
-          } })));
+        return Promise.resolve(
+          new URL(path).searchParams.get("pagetitle") ===
+              "Кабели силовые"
+            ? new Response("unavailable", { status: 503 })
+            : new Response(JSON.stringify({
+              data: {
+                category: {
+                  id: 72_002,
+                  pagetitle: "Кабели сигнальные",
+                  total_products: 2,
+                },
+                options: [{
+                  key: "type",
+                  caption_ru: "Тип",
+                  type: "string",
+                  values: [{ value_ru: "контрольный", products_count: 2 }],
+                }],
+              },
+            })),
+        );
       }
       if (path.includes("openrouter.ai")) {
-        return Promise.resolve(new Response(JSON.stringify({ choices: [{
-          message: { content: JSON.stringify({ candidates: [{
-            pagetitle: "Кабели сигнальные",
-            confidence: 0.9,
-          }] }) },
-        }] })));
+        return Promise.resolve(
+          new Response(JSON.stringify({
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  candidates: [{
+                    pagetitle: "Кабели сигнальные",
+                    confidence: 0.9,
+                  }],
+                }),
+              },
+            }],
+          })),
+        );
       }
       throw new Error(`unexpected fetch ${path}`);
     }) as typeof fetch,
@@ -413,44 +720,74 @@ Deno.test("price-only fresh taxonomy sees a new leaf while ordinary discovery ke
     const path = String(url);
     if (path.includes("/categories?")) {
       taxonomyLoads++;
-      if (failFreshFetch) return Promise.resolve(new Response("unavailable", { status: 503 }));
-      return Promise.resolve(new Response(JSON.stringify({
-        data: {
-          results: [{ id: 9500, pagetitle: "Кабель ВВГ", children: currentLeaves }],
-          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
-        },
-      })));
+      if (failFreshFetch) {
+        return Promise.resolve(new Response("unavailable", { status: 503 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            results: [{
+              id: 9500,
+              pagetitle: "Кабель ВВГ",
+              children: currentLeaves,
+            }],
+            pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+          },
+        })),
+      );
     }
     if (path.includes("/categories/options?")) {
-      return Promise.resolve(new Response(JSON.stringify({
-        data: {
-          category: { id: 9500, pagetitle: "Кабель ВВГ", total_products: 2 },
-          options: [{
-            key: "section",
-            caption_ru: "Сечение",
-            type: "string",
-            values: [{ value_ru: "1,5", products_count: 2 }],
-          }],
-        },
-      })));
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            category: { id: 9500, pagetitle: "Кабель ВВГ", total_products: 2 },
+            options: [{
+              key: "section",
+              caption_ru: "Сечение",
+              type: "string",
+              values: [{ value_ru: "1,5", products_count: 2 }],
+            }],
+          },
+        })),
+      );
     }
     throw new Error(`unexpected fetch ${path}`);
   }) as typeof fetch;
-  const deps = { baseUrl: "https://catalog.example.test", apiToken: "test-token", fetchImpl };
+  const deps = {
+    baseUrl: "https://catalog.example.test",
+    apiToken: "test-token",
+    fetchImpl,
+  };
   const noun = { noun: "Кабель ВВГ" };
 
-  const seeded = await executeDiscoverCategory(noun, { ...deps, forceFreshTaxonomy: true });
+  const seeded = await executeDiscoverCategory(noun, {
+    ...deps,
+    forceFreshTaxonomy: true,
+  });
   assertEquals(seeded.ok, true);
-  if (seeded.ok) assertEquals(seeded.leaf_categories, [{ id: 9501, pagetitle: "ВВГ 3x1,5" }]);
+  if (seeded.ok) {
+    assertEquals(seeded.leaf_categories, [{
+      id: 9501,
+      pagetitle: "ВВГ 3x1,5",
+    }]);
+  }
   assertEquals(taxonomyLoads, 1);
 
   currentLeaves = [oldLeaf, newLeaf];
   const cached = await executeDiscoverCategory(noun, deps);
   assertEquals(cached.ok, true);
-  if (cached.ok) assertEquals(cached.leaf_categories, [{ id: 9501, pagetitle: "ВВГ 3x1,5" }]);
+  if (cached.ok) {
+    assertEquals(cached.leaf_categories, [{
+      id: 9501,
+      pagetitle: "ВВГ 3x1,5",
+    }]);
+  }
   assertEquals(taxonomyLoads, 1);
 
-  const refreshed = await executeDiscoverCategory(noun, { ...deps, forceFreshTaxonomy: true });
+  const refreshed = await executeDiscoverCategory(noun, {
+    ...deps,
+    forceFreshTaxonomy: true,
+  });
   assertEquals(refreshed.ok, true);
   if (refreshed.ok) {
     assertEquals(
@@ -461,7 +798,10 @@ Deno.test("price-only fresh taxonomy sees a new leaf while ordinary discovery ke
   assertEquals(taxonomyLoads, 2);
 
   failFreshFetch = true;
-  const failed = await executeDiscoverCategory(noun, { ...deps, forceFreshTaxonomy: true });
+  const failed = await executeDiscoverCategory(noun, {
+    ...deps,
+    forceFreshTaxonomy: true,
+  });
   assertEquals(failed.ok, false);
   if (!failed.ok) assertEquals(failed.error_code, "transport_5xx");
   assertEquals(taxonomyLoads, 3);
@@ -471,11 +811,21 @@ Deno.test("price-only fresh taxonomy sees a new leaf while ordinary discovery ke
 });
 
 Deno.test("price-only taxonomy rejects missing, changed and truncated pagination", async () => {
-  const root = (id: number) => ({ id, pagetitle: `Категория ${id}`, children: [] });
-  const firstRows = Array.from({ length: 200 }, (_, index) => root(10_000 + index));
+  const root = (id: number) => ({
+    id,
+    pagetitle: `Категория ${id}`,
+    children: [],
+  });
+  const firstRows = Array.from(
+    { length: 200 },
+    (_, index) => root(10_000 + index),
+  );
   const cases = [
     {
-      first: { results: [root(10_000)], pagination: { page: 1, per_page: 200, total: 1 } },
+      first: {
+        results: [root(10_000)],
+        pagination: { page: 1, per_page: 200, total: 1 },
+      },
       second: null,
     },
     {
@@ -532,27 +882,37 @@ Deno.test("price-only taxonomy resolves a category on the final verified page", 
     if (url.pathname.endsWith("/categories")) {
       const page = Number(url.searchParams.get("page"));
       fetchedPages.push(page);
-      return Promise.resolve(new Response(JSON.stringify({
-        data: {
-          results: page === 1 ? firstRows : [{
-            id: 21_000,
-            pagetitle: "Кабель ВВГ",
-            children: [{ id: 21_001, pagetitle: "ВВГ 3x1,5", children: [] }],
-          }],
-          pagination: { page, per_page: 200, pages: 2, total: 201 },
-        },
-      })));
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            results: page === 1 ? firstRows : [{
+              id: 21_000,
+              pagetitle: "Кабель ВВГ",
+              children: [{ id: 21_001, pagetitle: "ВВГ 3x1,5", children: [] }],
+            }],
+            pagination: { page, per_page: 200, pages: 2, total: 201 },
+          },
+        })),
+      );
     }
     if (url.pathname.endsWith("/categories/options")) {
-      return Promise.resolve(new Response(JSON.stringify({ data: {
-        category: { id: 21_000, pagetitle: "Кабель ВВГ", total_products: 1 },
-        options: [{
-          key: "section",
-          caption_ru: "Сечение",
-          type: "string",
-          values: [{ value_ru: "1,5", products_count: 1 }],
-        }],
-      } })));
+      return Promise.resolve(
+        new Response(JSON.stringify({
+          data: {
+            category: {
+              id: 21_000,
+              pagetitle: "Кабель ВВГ",
+              total_products: 1,
+            },
+            options: [{
+              key: "section",
+              caption_ru: "Сечение",
+              type: "string",
+              values: [{ value_ru: "1,5", products_count: 1 }],
+            }],
+          },
+        })),
+      );
     }
     throw new Error(`unexpected fetch ${url}`);
   }) as typeof fetch;
@@ -568,7 +928,10 @@ Deno.test("price-only taxonomy resolves a category on the final verified page", 
   assertEquals(result.ok, true);
   if (result.ok) {
     assertEquals(result.resolution_method, "exact");
-    assertEquals(result.leaf_categories, [{ id: 21_001, pagetitle: "ВВГ 3x1,5" }]);
+    assertEquals(result.leaf_categories, [{
+      id: 21_001,
+      pagetitle: "ВВГ 3x1,5",
+    }]);
   }
   assertEquals(fetchedPages, [1, 2]);
 });
@@ -579,10 +942,14 @@ Deno.test("price-only discovery stops after fresh taxonomy when the class title 
     requests++;
     const url = new URL(String(input));
     assertEquals(url.pathname.endsWith("/categories"), true);
-    return Promise.resolve(new Response(JSON.stringify({ data: {
-      results: [{ id: 31_000, pagetitle: "Кабель ВВГ", children: [] }],
-      pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
-    } })));
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        data: {
+          results: [{ id: 31_000, pagetitle: "Кабель ВВГ", children: [] }],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+        },
+      })),
+    );
   }) as typeof fetch;
   const result = await executeDiscoverCategory(
     { noun: "Кабель" },

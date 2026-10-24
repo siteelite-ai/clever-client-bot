@@ -20,6 +20,17 @@ const validPost = () => new Request(URL, {
   }),
 });
 
+Deno.test("v2 preflight advertises only the requested signed-proof header", async () => {
+  const ordinary = await handleChatConsultantV2(new Request(URL, { method: "OPTIONS" }));
+  assertEquals(ordinary.status, 200);
+  assertEquals(ordinary.headers.get("access-control-allow-headers")?.includes("x-volt-subject-proof"), false);
+  const signed = await handleChatConsultantV2(new Request(URL, {
+    method: "OPTIONS",
+    headers: { "Access-Control-Request-Headers": "content-type, X-Volt-Subject-Proof" },
+  }));
+  assertEquals(signed.headers.get("access-control-allow-headers")?.includes("x-volt-subject-proof"), true);
+});
+
 Deno.test("v2 admission denies model/catalog budget before paid work, with SSE framing", async () => {
   let workCalls = 0;
   let rpcCalls = 0;
@@ -178,4 +189,60 @@ Deno.test("v2 cancellation retains admission until underlying paid stream settle
   sourceController.close();
   await canceling;
   assertEquals(releaseCalls, 1);
+});
+
+const SUBJECT_PROOF_ENV = {
+  PUBLIC_API_ADMISSION_MODE: "off",
+  PUBLIC_SUBJECT_PROOF_KID: "test-key",
+  PUBLIC_SUBJECT_PROOF_HMAC_KEY: btoa("a".repeat(32)).replace(/=+$/u, ""),
+  PUBLIC_SUBJECT_LIMIT_PER_MINUTE: "5",
+  PUBLIC_SUBJECT_LIMIT_IN_FLIGHT: "2",
+};
+
+Deno.test("v2 subject enforcement rejects missing proof before model/catalog work", async () => {
+  let paidCalls = 0;
+  const response = await handleChatConsultantV2(validPost(), {
+    readEnv: readEnv({ ...SUBJECT_PROOF_ENV, PUBLIC_SUBJECT_ADMISSION_MODE: "enforce" }),
+    rpc: () => { throw new Error("global admission must not run"); },
+    subjectRpc: () => { throw new Error("subject admission must not run without proof"); },
+    acceptedWork: async () => { paidCalls++; throw new Error("paid work must not run"); },
+  });
+  assertEquals(response.status, 403);
+  assertEquals(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
+  const body = await response.text();
+  assertEquals(body.includes('"error":"access_denied"'), true);
+  assertEquals(body.endsWith("data: [DONE]\n\n"), true);
+  assertEquals(paidCalls, 0);
+});
+
+Deno.test("v2 subject observation preserves an unsigned SSE response", async () => {
+  let paidCalls = 0;
+  const observed: unknown[][] = [];
+  const originalWarn = console.warn;
+  const originalInfo = console.info;
+  try {
+    console.warn = (...args) => { observed.push(args); };
+    console.info = (...args) => { observed.push(args); };
+    const response = await handleChatConsultantV2(validPost(), {
+      readEnv: readEnv({ ...SUBJECT_PROOF_ENV, PUBLIC_SUBJECT_ADMISSION_MODE: "observe" }),
+      rpc: () => { throw new Error("global admission is off"); },
+      subjectRpc: () => { throw new Error("unsigned observe must not reserve"); },
+      acceptedWork: async () => {
+        paidCalls++;
+        return new Response("data: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      },
+    });
+    assertEquals(response.status, 200);
+    assertEquals(await response.text(), "data: [DONE]\n\n");
+    assertEquals(paidCalls, 1);
+    assertEquals(observed.some(([label, data]) =>
+      label === "[chat-consultant-v2] subject proof would reject" &&
+      (data as { reason?: string }).reason === "missing_proof"
+    ), true);
+  } finally {
+    console.warn = originalWarn;
+    console.info = originalInfo;
+  }
 });

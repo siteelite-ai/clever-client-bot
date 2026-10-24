@@ -88,6 +88,7 @@ export interface SearchInput {
 export type SearchStatus =
   | "ok"               // ≥1 товар после всех фильтров
   | "soft_fallback"    // 0 со strict, но ≥1 без optionFilters → composer должен tail-line
+  | "constraints_unverified" // характеристики не подтверждены; карточки показывать нельзя
   | "empty"            // 0 везде
   | "all_zero_price"   // API дал товары, но все price≤0 (HARD BAN)
   | "error";           // HTTP/timeout/network — escalation, не считаем soft 404

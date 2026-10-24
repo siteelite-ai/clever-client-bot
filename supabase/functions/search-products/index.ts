@@ -1,18 +1,48 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
+  integrationSecretModeForBundle,
+  resolveIntegrationSecret,
+} from '../_shared/integration-secrets.ts';
+import {
   releasePublicApiAdmission,
   reservePublicApiAdmission,
   type PublicApiAdmissionRpc,
 } from '../_shared/public-api-admission.ts';
+import {
+  releasePublicSubjectAdmission,
+  reservePublicSubjectAdmission,
+  verifyPublicSubjectProof,
+  type PublicSubjectAdmissionRpc,
+} from '../_shared/public-subject-admission.ts';
 import { readRequestTextBounded } from '../_shared/v3-tools/request-validation.ts';
+import {
+  assessCategoryFacets,
+  assessCategoryPage,
+  combineCategoryPages,
+  type CategoryEvidence,
+  type CategoryPageEvidence,
+  type FacetEvidence,
+} from '../_shared/catalog-evidence.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+function subjectProofPreflightHeaders(req: Request): typeof corsHeaders {
+  const requested = req.headers.get('access-control-request-headers');
+  if (!requested?.split(',').some((header) =>
+    header.trim().toLowerCase() === 'x-volt-subject-proof'
+  )) return corsHeaders;
+  return {
+    ...corsHeaders,
+    'Access-Control-Allow-Headers': `${corsHeaders['Access-Control-Allow-Headers']}, x-volt-subject-proof`,
+  };
+}
+
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
+const INTEGRATION_SECRETS_MODE = integrationSecretModeForBundle('search-products');
 const VOLT220_CATEGORIES_URL = 'https://220volt.kz/api/categories';
 const VOLT220_CATEGORY_OPTIONS_URL = 'https://220volt.kz/api/categories/options';
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -20,7 +50,6 @@ const MAX_PAGE = 1000;
 const MAX_PER_PAGE = 200;
 const MAX_CATEGORIES_PAGES = 50;
 const MAX_CATEGORIES_CONCURRENCY = 4;
-const MAX_CATEGORY_TITLES = 10_000;
 const MAX_FACETS_CACHE_ENTRIES = 128;
 const MAX_FACETS_IN_FLIGHT = 32;
 const CATEGORIES_FETCH_TIMEOUT_MS = 20_000;
@@ -35,6 +64,7 @@ type RequestDeps = {
   fetch?: typeof fetch;
   publicAdmissionRpc?: PublicApiAdmissionRpc;
   publicAdmissionReadEnv?: (name: string) => string | undefined;
+  subjectAdmissionRpc?: PublicSubjectAdmissionRpc;
   catalogDeadlineMs?: number;
   bodyReadTimeoutMs?: number;
 };
@@ -132,6 +162,30 @@ function admissionErrorResponse(
   if (limited && admission.retryAfterSeconds) {
     headers['Retry-After'] = String(admission.retryAfterSeconds);
   }
+  if (action === 'category_facets') {
+    return jsonResponse({ error: message, category: null, options: [] }, status, headers);
+  }
+  if (action === 'list_categories') {
+    return jsonResponse({ error: message, categories: [], count: 0 }, status, headers);
+  }
+  return requestError(message, status, headers);
+}
+
+function subjectAdmissionErrorResponse(
+  action: unknown,
+  decision: { reason: string; retryAfterSeconds?: number | null },
+): Response {
+  const limited = decision.reason === 'limit_exceeded';
+  const invalidProof = decision.reason === 'missing_proof' ||
+    decision.reason === 'invalid_proof';
+  const status = limited ? 429 : invalidProof ? 403 : 503;
+  const message = limited
+    ? 'Too many requests. Please try again later.'
+    : invalidProof
+    ? 'Request could not be verified. Please refresh and try again.'
+    : 'Service temporarily unavailable.';
+  const headers: Record<string, string> = {};
+  if (limited) headers['Retry-After'] = String(decision.retryAfterSeconds || 60);
   if (action === 'category_facets') {
     return jsonResponse({ error: message, category: null, options: [] }, status, headers);
   }
@@ -276,23 +330,23 @@ async function fetchCategoryFacets(
 
     const upstream = childTimeoutSignal(controller.signal, 15_000);
     try {
-      const res = await httpFetch(url, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        signal: upstream.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Facets API ${res.status}: ${errText.slice(0, 200)}`);
+      let evidence: FacetEvidence = { state: 'unavailable', reason: 'http_error' };
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const res = await httpFetch(url, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          signal: upstream.signal,
+        });
+        if (res.status === 502 && attempt === 1) continue;
+        evidence = assessCategoryFacets(res.ok ? await res.json() : null, opts, res.status);
+        break;
       }
-      const raw = await res.json();
-      // API shape: { success, data: { category: {...}, options: [...] } }
-      // Some envelopes nest data twice; handle both.
-      let data = raw.data || raw;
-      if (data && typeof data === 'object' && 'data' in data && !('options' in data)) data = (data as any).data;
+      if (evidence.state !== 'verified') {
+        throw new Error(`Facets API evidence unavailable: ${evidence.reason}`);
+      }
       const value = {
-        category: data?.category || null,
-        options: Array.isArray(data?.options) ? data.options : [],
+        category: evidence.category,
+        options: evidence.options,
       };
       controller.signal.throwIfAborted();
       storeFacetsCache(cacheKey, value);
@@ -318,17 +372,27 @@ async function fetchCategoryFacets(
 // =============================================================================
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
 let categoriesCache: { value: string[]; ts: number } | null = null;
-let categoriesInFlight: SharedLoad<string[]> | null = null;
-let categoriesLoggedRawOnce = false;
+let categoriesInFlight: SharedLoad<Exclude<CategoryEvidence, { state: 'unavailable' }>> | null = null;
 
 async function getApiToken(signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  
+  let supabase: ReturnType<typeof createClient> | null = null;
   if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
     try {
-      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    } catch {
+      if (INTEGRATION_SECRETS_MODE === 'private-required') {
+        // The resolver below will emit a sanitized configuration error.
+      } else {
+        console.log('[API Token] DB read failed, falling back to env var');
+      }
+    }
+  }
+  let legacyDbToken: string | null = null;
+  if (supabase && INTEGRATION_SECRETS_MODE !== 'private-required') {
+    try {
       const { data } = await supabase
         .from('app_settings')
         .select('volt220_api_token')
@@ -336,35 +400,28 @@ async function getApiToken(signal: AbortSignal): Promise<string> {
         .abortSignal(signal)
         .single();
       signal.throwIfAborted();
-      if (data?.volt220_api_token) return data.volt220_api_token;
+      const settingsRow = data as unknown as { volt220_api_token?: string | null } | null;
+      if (settingsRow?.volt220_api_token) legacyDbToken = settingsRow.volt220_api_token;
     } catch (e) {
       signal.throwIfAborted();
       console.log('[API Token] DB read failed, falling back to env var');
     }
   }
-  
   signal.throwIfAborted();
-  const envToken = Deno.env.get('VOLT220_API_TOKEN');
-  if (!envToken) throw new Error('VOLT220_API_TOKEN is not configured');
-  return envToken;
+  const token = await resolveIntegrationSecret(
+    supabase,
+    'volt220_api_token',
+    INTEGRATION_SECRETS_MODE,
+    () => legacyDbToken || Deno.env.get('VOLT220_API_TOKEN') || null,
+    (event) => console.info('[integration-secret-shadow]', event),
+    signal,
+  );
+  signal.throwIfAborted();
+  if (!token) throw new Error('VOLT220_API_TOKEN is not configured');
+  return token;
 }
 
-// Recursively walk MsCategory tree, collect every `pagetitle` into the set.
-function collectPagetitles(nodes: any[], acc: Set<string>, depth = 0): void {
-  if (!Array.isArray(nodes)) return;
-  if (depth > 10) throw new Error('Category tree exceeds supported depth');
-  for (const node of nodes) {
-    if (node && typeof node.pagetitle === 'string' && node.pagetitle.trim()) {
-      acc.add(node.pagetitle.trim());
-      if (acc.size > MAX_CATEGORY_TITLES) throw new Error('Category listing exceeds safe limit');
-    }
-    if (node && Array.isArray(node.children) && node.children.length > 0) {
-      collectPagetitles(node.children, acc, depth + 1);
-    }
-  }
-}
-
-async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<{ results: any[]; pagination: any }> {
+async function fetchCategoriesPage(token: string, page: number, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<CategoryPageEvidence> {
   const params = new URLSearchParams({
     parent: '0',
     depth: '10',
@@ -373,57 +430,58 @@ async function fetchCategoriesPage(token: string, page: number, signal: AbortSig
   });
   const upstream = childTimeoutSignal(signal, CATEGORIES_FETCH_TIMEOUT_MS);
   try {
-    const res = await httpFetch(`${VOLT220_CATEGORIES_URL}?${params}`, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      signal: upstream.signal,
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Categories API ${res.status}: ${errText.slice(0, 200)}`);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const res = await httpFetch(`${VOLT220_CATEGORIES_URL}?${params}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        signal: upstream.signal,
+      });
+      if (res.status === 502 && attempt === 1) continue;
+      const evidence = assessCategoryPage(res.ok ? await res.json() : null, page, res.status, {
+        maxPages: MAX_CATEGORIES_PAGES,
+        maxPerPage: 200,
+      });
+      signal.throwIfAborted();
+      if (evidence.state === 'unavailable') {
+        throw new Error(evidence.reason === 'invalid_pagination'
+          ? 'Category listing exceeds safe page limit or has invalid pagination'
+          : `Category listing evidence unavailable on page ${page}: ${evidence.reason}`);
+      }
+      return evidence;
     }
-    const raw = await res.json();
-    signal.throwIfAborted();
-    if (!categoriesLoggedRawOnce) {
-      categoriesLoggedRawOnce = true;
-      console.log(`[Categories] Raw page ${page} sample: ${JSON.stringify(raw).slice(0, 600)}`);
-    }
-    const data = raw.data || raw;
-    return {
-      results: data.results || [],
-      pagination: data.pagination || { page, per_page: 200, pages: 1, total: 0 },
-    };
+    throw new Error(`Category listing evidence unavailable on page ${page}: http_error`);
   } finally {
     upstream.cleanup();
   }
 }
 
-async function listCategories(token: string, signal: AbortSignal, httpFetch: typeof fetch = fetch): Promise<string[]> {
+async function listCategories(
+  token: string,
+  signal: AbortSignal,
+  httpFetch: typeof fetch = fetch,
+): Promise<Exclude<CategoryEvidence, { state: 'unavailable' }>> {
   signal.throwIfAborted();
   // Cache hit
   if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) {
     console.log(`[Categories] cache HIT (${categoriesCache.value.length} items, age=${Math.round((Date.now() - categoriesCache.ts) / 1000)}s)`);
-    return categoriesCache.value;
+    return { state: 'complete', names: categoriesCache.value };
   }
   if (categoriesInFlight) return awaitSharedLoad(categoriesInFlight, signal);
 
   const controller = new AbortController();
-  const load = (async (): Promise<string[]> => {
+  const load = (async (): Promise<Exclude<CategoryEvidence, { state: 'unavailable' }>> => {
     console.log('[Categories] cache MISS, fetching from /api/categories');
     const t0 = Date.now();
-    const acc = new Set<string>();
-
+    const pages: CategoryPageEvidence[] = [];
     const first = await fetchCategoriesPage(token, 1, controller.signal, httpFetch);
-    collectPagetitles(first.results, acc);
-
-    const reportedPages = first.pagination?.pages;
-    const pages = reportedPages == null ? 1 : Number(reportedPages);
-    if (!Number.isSafeInteger(pages) || pages < 0 || pages > MAX_CATEGORIES_PAGES) {
+    if (first.state === 'unavailable') throw new Error(`Category listing evidence unavailable: ${first.reason}`);
+    pages.push(first);
+    if (first.pagination.pages > MAX_CATEGORIES_PAGES) {
       throw new Error('Category listing exceeds safe page limit');
     }
-    const totalPages = Math.max(1, pages);
+    const totalPages = first.pagination.pages;
     for (let start = 2; start <= totalPages; start += MAX_CATEGORIES_CONCURRENCY) {
-      const pending: Promise<{ results: any[] }>[] = [];
+      const pending: Promise<CategoryPageEvidence>[] = [];
       for (let page = start; page < Math.min(start + MAX_CATEGORIES_CONCURRENCY, totalPages + 1); page++) {
         pending.push(fetchCategoriesPage(token, page, controller.signal, httpFetch));
       }
@@ -433,15 +491,26 @@ async function listCategories(token: string, signal: AbortSignal, httpFetch: typ
       const failed = batch.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') throw failed.reason;
       for (const result of batch) {
-        if (result.status === 'fulfilled') collectPagetitles(result.value.results, acc);
+        if (result.status === 'fulfilled') {
+          pages.push(result.value);
+        }
       }
     }
 
     controller.signal.throwIfAborted();
-    const flat = Array.from(acc).sort();
-    categoriesCache = { value: flat, ts: Date.now() };
-    console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
-    return flat;
+    const evidence = combineCategoryPages(pages);
+    if (evidence.state === 'unavailable') {
+      throw new Error(`Category listing evidence unavailable: ${evidence.reason}`);
+    }
+    // Missing/null children leaves descendant coverage unproven: return the
+    // visible names for this call without freezing a partial taxonomy for 1h.
+    if (evidence.state === 'complete') {
+      categoriesCache = { value: evidence.names, ts: Date.now() };
+      console.log(`[Categories] cache STORED ${evidence.names.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    } else {
+      console.log(`[Categories] uncached incomplete child coverage (${evidence.names.length} visible pagetitles, pages=${totalPages})`);
+    }
+    return evidence;
   })();
   const shared = { controller, promise: load, waiters: 0 };
   categoriesInFlight = shared;
@@ -464,7 +533,7 @@ export function resetCatalogCachesForTest(): void {
 export async function handleRequest(req: Request, deps: RequestDeps = {}): Promise<Response> {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: subjectProofPreflightHeaders(req) });
   }
   if (req.method !== 'POST') {
     return requestError('Method not allowed', 405, { Allow: 'POST, OPTIONS' });
@@ -480,6 +549,39 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     if (validationError) return requestError(validationError);
     requestAction = body.action;
     const rpc = deps.publicAdmissionRpc ?? publicAdmissionRpc;
+    const subjectRpc = deps.subjectAdmissionRpc ??
+      (rpc as unknown as PublicSubjectAdmissionRpc);
+    const subjectVerification = await verifyPublicSubjectProof({
+      req,
+      readEnv: deps.publicAdmissionReadEnv,
+    });
+    if (subjectVerification.mode === 'observe' && subjectVerification.wouldReject) {
+      console.warn('[search-products] subject proof would reject', {
+        reason: subjectVerification.reason,
+        failure: subjectVerification.failure,
+        would_reject: true,
+      });
+    }
+    if (!subjectVerification.allowed) {
+      return subjectAdmissionErrorResponse(body.action, subjectVerification);
+    }
+    const subjectAdmission = await reservePublicSubjectAdmission({
+      verification: subjectVerification,
+      route: 'search-products',
+      rpc: subjectRpc,
+      readEnv: deps.publicAdmissionReadEnv,
+    });
+    if (subjectAdmission.mode === 'observe') {
+      console.info('[search-products] subject admission observed', {
+        reason: subjectAdmission.reason,
+        failure: subjectAdmission.failure,
+        would_reject: subjectAdmission.wouldReject,
+      });
+    }
+    if (!subjectAdmission.allowed) {
+      await releasePublicSubjectAdmission({ reservation: subjectAdmission, rpc: subjectRpc });
+      return subjectAdmissionErrorResponse(body.action, subjectAdmission);
+    }
     const admission = await reservePublicApiAdmission({
       route: 'search-products',
       lanes: ['catalog'],
@@ -506,9 +608,14 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     // ===== Branch: list categories (flat array of pagetitle) =====
     if (body && body.action === 'list_categories') {
       const apiToken = await readApiToken(controller.signal);
-      const categories = await listCategories(apiToken, controller.signal, httpFetch);
+      const evidence = await listCategories(apiToken, controller.signal, httpFetch);
       return new Response(
-        JSON.stringify({ categories, count: categories.length }),
+        JSON.stringify({
+          categories: evidence.names,
+          count: evidence.names.length,
+          coverage: evidence.state,
+          count_is_complete: evidence.state === 'complete',
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -600,12 +707,14 @@ export async function handleRequest(req: Request, deps: RequestDeps = {}): Promi
     } finally {
       clearTimeout(deadlineTimer);
       req.signal.removeEventListener('abort', onRequestAbort);
-      if (admission.releaseRequired) {
-        try {
-          const release = await releasePublicApiAdmission({ reservation: admission, rpc });
-          if (!release.released) console.error('[search-products] admission release failed', release.failure);
-        } catch {
-          console.error('[search-products] admission release threw unexpectedly');
+      const releases = await Promise.allSettled([
+        releasePublicApiAdmission({ reservation: admission, rpc }),
+        releasePublicSubjectAdmission({ reservation: subjectAdmission, rpc: subjectRpc }),
+      ]);
+      for (const [index, outcome] of releases.entries()) {
+        if (outcome.status === 'rejected' ||
+          (outcome.status === 'fulfilled' && outcome.value.attempted && !outcome.value.released)) {
+          console.error(`[search-products] ${index === 0 ? 'global' : 'subject'} admission release incomplete`);
         }
       }
     }

@@ -25,7 +25,8 @@ function savedDialogue(updatedAt) {
   };
 }
 
-function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomUUID, source = widgetSource } = {}) {
+function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomUUID,
+  cryptoGetRandomValues, disableCrypto = false, mathRandom, source = widgetSource } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://220volt.testdevops.ru/',
@@ -35,17 +36,32 @@ function bootWidget({ state, now, confirmResult = true, fetchImpl, cryptoRandomU
   if (Number.isFinite(now)) dom.window.Date.now = () => now;
   dom.window.TextEncoder = TextEncoder;
   dom.window.TextDecoder = TextDecoder;
-  if (cryptoRandomUUID) {
-    Object.defineProperty(dom.window.crypto, 'randomUUID', {
+  if (disableCrypto) {
+    Object.defineProperty(dom.window, 'crypto', {
+      configurable: true,
+      value: undefined,
+    });
+  } else {
+    if (cryptoRandomUUID) Object.defineProperty(dom.window.crypto, 'randomUUID', {
       configurable: true,
       value: cryptoRandomUUID,
     });
+    if (cryptoGetRandomValues) Object.defineProperty(dom.window.crypto, 'getRandomValues', {
+      configurable: true,
+      value: cryptoGetRandomValues,
+    });
   }
+  if (mathRandom) dom.window.Math.random = mathRandom;
   dom.window.fetch = fetchImpl ?? (async () => {
     throw new Error('Unexpected fetch in widget session-state test');
   });
   if (state) dom.window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  dom.window.eval(source);
+  try {
+    dom.window.eval(source);
+  } catch (error) {
+    dom.window.close();
+    throw error;
+  }
   return dom;
 }
 
@@ -149,11 +165,12 @@ test('an existing in-progress request is accepted before the backend waits for r
 });
 
 test('widget exposes its API on the browser window and uses browser crypto for message IDs', async () => {
+  const sessionUUID = '123e4567-e89b-42d3-a456-426614174098';
   const messageId = '123e4567-e89b-42d3-a456-426614174099';
   let cryptoCalls = 0;
   let requestBody;
   const dom = bootWidget({
-    cryptoRandomUUID: () => { cryptoCalls += 1; return messageId; },
+    cryptoRandomUUID: () => { cryptoCalls += 1; return cryptoCalls === 1 ? sessionUUID : messageId; },
     fetchImpl: async (_url, init) => {
       requestBody = JSON.parse(init.body);
       return new Response(completeAnswerSse('Проверка завершена.'), {
@@ -178,7 +195,47 @@ test('widget exposes its API on the browser window and uses browser crypto for m
   await waitForWidget(() => visibleMessages(dom).includes('Проверка завершена.'), 'Widget response was not completed');
 
   assert.equal(requestBody.messageId, messageId);
-  assert.equal(cryptoCalls, 1);
+  assert.equal(requestBody.sessionId, `session_${sessionUUID}`);
+  assert.equal(readState(dom).sessionId, requestBody.sessionId, 'new secure session must persist after a turn');
+  assert.equal(cryptoCalls, 2);
+  dom.window.close();
+});
+
+test('new sessions use cryptographic bytes if randomUUID is unavailable and never use Math.random', () => {
+  let randomCalls = 0;
+  let secureCalls = 0;
+  const bytes = Uint8Array.from(Array.from({ length: 16 }, (_, i) => i + 1));
+  const expected = `session_${Buffer.from(bytes).toString('hex')}`;
+  const dom = bootWidget({
+    cryptoRandomUUID: () => { throw new Error('Unavailable outside secure context'); },
+    cryptoGetRandomValues: (target) => {
+      secureCalls += 1;
+      target.set(bytes);
+      return target;
+    },
+    mathRandom: () => { randomCalls += 1; return 0.5; },
+  });
+
+  dom.window.document.querySelector('[aria-label="Новый диалог"]').click();
+  assert.equal(readState(dom).sessionId, expected);
+  assert.match(expected, /^session_[0-9a-f]{32}$/u);
+  assert.equal(secureCalls, 2, 'initialization and reset must both use Web Crypto');
+  assert.equal(randomCalls, 0, 'session generation must not use Math.random');
+  dom.window.close();
+});
+
+test('unavailable Web Crypto fails closed for new sessions but preserves an active saved session', () => {
+  let randomCalls = 0;
+  assert.throws(() => bootWidget({
+    disableCrypto: true,
+    mathRandom: () => { randomCalls += 1; return 0.5; },
+  }), /Secure session ID generation is unavailable/u);
+  assert.equal(randomCalls, 0, 'no predictable fallback ID may be minted');
+
+  const now = 1_800_000_000_000;
+  const dom = bootWidget({ state: savedDialogue(now - 1_000), now, disableCrypto: true });
+  assert.equal(readState(dom).sessionId, 'session_saved_customer_test');
+  assert.match(visibleMessages(dom), /старый вопрос про кабель/u);
   dom.window.close();
 });
 
@@ -203,9 +260,8 @@ test('restored assistant content cannot inject HTML or event handlers through ma
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__xss, undefined);
   assert.match(messages.textContent, /<img src=x onerror=/u);
-  const link = messages.querySelector('a[href^="https://example.com/"]');
-  assert.ok(link);
-  assert.equal(link.getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]'), null);
+  assert.match(messages.textContent, /\[ссылка\]\(https:\/\/example\.com\/" onmouseover="bad\)/u);
   assert.equal(
     messages.querySelector('a[href^="https://220volt.kz/"]')?.getAttribute('href'),
     'https://220volt.kz/catalog/item/?a=1&b=2',
@@ -229,14 +285,96 @@ test('markdown formatting preserves URL underscores and cannot promote URL conte
   const messages = dom.window.document.querySelector('#volt-widget-messages');
   const links = messages.querySelectorAll('a');
 
-  assert.equal(links.length, 3);
+  assert.equal(links.length, 2);
   assert.equal(links[0].getAttribute('href'), productUrl);
   assert.equal(links[0].querySelector('strong')?.textContent, 'Товар', 'link label markdown should remain formatted');
   assert.equal(links[1].getAttribute('href'), 'https://220volt.kz/catalog/product_model');
-  assert.equal(links[2].getAttribute('href'), suspiciousUrl);
-  assert.equal(links[2].getAttribute('onmouseover'), null);
+  assert.ok(messages.textContent.includes(`[ссылка](${suspiciousUrl})`), 'rejected link must stay visible');
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__xss, undefined);
+  dom.window.close();
+});
+
+test('assistant markdown only links to the canonical HTTPS storefront', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  const allowed = 'https://220volt.kz/catalog/item/?a=1&b=2';
+  const denied = [
+    'http://220volt.kz/catalog/item/',
+    'https://example.com/catalog/item/',
+    'https://220volt.kz.evil.example/catalog/item/',
+    'https://220volt.kz@evil.example/catalog/item/',
+    'https://evil.example@220volt.kz/catalog/item/',
+    'https://220volt.kz:443/catalog/item/',
+    'https://www.220volt.kz/catalog/item/',
+    'https://wa.me/77013029775',
+    'mailto:manager@220volt.kz',
+    'tel:+77001234567',
+    'viber://chat?number=77001234567',
+  ];
+  state.history[2].content = [
+    `- **[Настоящий товар](${allowed})**`,
+    ...denied.map((url, index) => `[Не доверять ${index + 1}](${url})`),
+    '[Выполнить](javascript:alert(1))',
+  ].join('\n');
+  const dom = bootWidget({ state, now });
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = messages.querySelectorAll('a');
+
+  assert.equal(links.length, 1, 'only an exact first-party HTTPS link may be navigable');
+  assert.equal(links[0].getAttribute('href'), allowed);
+  assert.equal(links[0].getAttribute('target'), '_blank');
+  assert.match(links[0].getAttribute('rel'), /\bnoopener\b/u);
+  assert.equal(links[0].textContent, 'Настоящий товар');
+  for (const [index, url] of denied.entries()) {
+    assert.ok(messages.textContent.includes(`[Не доверять ${index + 1}](${url})`), `rejected URL ${url} must remain visible`);
+  }
+  assert.match(messages.textContent, /\[Выполнить\]\(javascript:alert\(1\)\)/u);
+  dom.window.close();
+});
+
+test('streamed product cards use the same link policy while only server contacts retain verified actions', async () => {
+  const productUrl = 'https://220volt.kz/catalog/item/';
+  const productMarkdown = [
+    `- **[Товар](${productUrl})**`,
+    '- **[Поддельная карточка](https://220volt.kz.evil.example/catalog/item/)**',
+  ].join('\n');
+  const contactsMarkdown = [
+    '- [Телефон](tel:+77013029775)',
+    '- [Почта](mailto:intermag@220volt.kz)',
+    '- [Чужая почта](mailto:someone@example.com)',
+    '- [WhatsApp](https://wa.me/77013029775)',
+    '- [WhatsApp с параметрами](https://wa.me/77013029775?text=redirect)',
+    '- [Поддельный WhatsApp](https://wa.me.evil.example/77013029775)',
+    '- [WhatsApp с логином](https://attacker@wa.me/77013029775)',
+  ].join('\n');
+  const sse = [
+    { v3_event: { type: 'diagnostic', log_id: 'link-policy-test', phase: 'start' } },
+    { choices: [{ delta: { content: 'Контакты: [Телефон](tel:+77013029775)' } }] },
+    { v3_event: { type: 'products_block', markdown: productMarkdown, count: 1 } },
+    { v3_event: { type: 'contacts', html: contactsMarkdown } },
+    { v3_event: { type: 'diagnostic', log_id: 'link-policy-test', phase: 'complete', products_count: 1 } },
+  ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Покажи товар и контакты';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => visibleMessages(dom).includes('Чужая почта') &&
+    !dom.window.document.querySelector('#volt-widget-new-chat').disabled,
+  'streamed contact and product bubbles should complete');
+
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  const links = [...messages.querySelectorAll('a')].map((link) => link.getAttribute('href'));
+  assert.deepEqual(links, [productUrl, 'tel:+77013029775', 'mailto:intermag@220volt.kz',
+    'https://wa.me/77013029775']);
+  assert.match(messages.textContent, /Контакты: \[Телефон\]\(tel:\+77013029775\)/u,
+    'model-authored phone link must stay inert');
+  assert.match(messages.textContent, /\[Поддельная карточка\]\(https:\/\/220volt\.kz\.evil\.example\/catalog\/item\/\)/u);
+  assert.match(messages.textContent, /\[Чужая почта\]\(mailto:someone@example\.com\)/u);
+  assert.match(messages.textContent, /\[WhatsApp с параметрами\]\(https:\/\/wa\.me\/77013029775\?text=redirect\)/u);
+  assert.match(messages.textContent, /\[Поддельный WhatsApp\]\(https:\/\/wa\.me\.evil\.example\/77013029775\)/u);
+  assert.match(messages.textContent, /\[WhatsApp с логином\]\(https:\/\/attacker@wa\.me\/77013029775\)/u);
   dom.window.close();
 });
 
@@ -367,6 +505,42 @@ test('an open tab expires its dialogue after inactivity', () => {
   dom.window.close();
 });
 
+test('first-turn server boundary rotates the session without showing a new-topic divider', async () => {
+  const boundarySessionId = 'session_first_turn_boundary';
+  let requestSessionId;
+  const sse = [
+    `data: ${JSON.stringify({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundarySessionId } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'Подбираю кабель.' } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'first-turn-boundary', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      requestSessionId = JSON.parse(init.body).sessionId;
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Найди кабель ВВГ 3×1,5';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => readState(dom)?.history?.at(-1)?.content === 'Подбираю кабель.',
+    'first turn should finish in the server-issued session');
+
+  const state = readState(dom);
+  assert.notEqual(state.sessionId, requestSessionId);
+  assert.equal(state.sessionId, boundarySessionId);
+  assert.deepEqual(state.history.map((item) => item.role), ['assistant', 'user', 'assistant']);
+  assert.equal(dom.window.document.querySelectorAll('.volt-topic-divider').length, 0);
+  assert.doesNotMatch(visibleMessages(dom), /Новая тема/u);
+  dom.window.close();
+
+  const reloaded = bootWidget({ state });
+  assert.equal(readState(reloaded).sessionId, boundarySessionId);
+  assert.match(visibleMessages(reloaded), /Найди кабель ВВГ 3×1,5/u);
+  assert.equal(reloaded.window.document.querySelectorAll('.volt-topic-divider').length, 0);
+  reloaded.window.close();
+});
+
 test('server boundary automatically isolates a self-contained new topic without a user reset', async () => {
   const now = 1_800_000_000_000;
   const boundarySessionId = 'session_automatic_new_topic';
@@ -405,6 +579,14 @@ test('server boundary automatically isolates a self-contained new topic without 
   assert.equal(dom.window.document.querySelectorAll('.volt-topic-divider').length, 1);
   assert.match(visibleMessages(dom), /Новая тема/u);
   dom.window.close();
+
+  const reloaded = bootWidget({ state, now });
+  assert.equal(readState(reloaded).sessionId, boundarySessionId);
+  assert.doesNotMatch(visibleMessages(reloaded), /старый вопрос про кабель/u);
+  assert.match(visibleMessages(reloaded), /а у тебя есть лампы кукуруза/u);
+  assert.equal(reloaded.window.document.querySelectorAll('.volt-topic-divider').length, 0,
+    'the old topic is absent after reload, so there is nothing to separate');
+  reloaded.window.close();
 });
 
 test('replay keeps the request session immutable after a conversation boundary rotates the visible session', async () => {
@@ -520,7 +702,8 @@ test('customer text echoed by an exact-price response remains inert in streamed 
   const messages = dom.window.document.querySelector('#volt-widget-messages');
   assert.equal(messages.querySelector('img'), null);
   assert.equal(dom.window.__echoXss, undefined);
-  assert.equal(messages.querySelector('a[href^="https://example.com/"]')?.getAttribute('onmouseover'), null);
+  assert.equal(messages.querySelector('a[href^="https://example.com/"]'), null);
+  assert.match(messages.textContent, /\[ссылка\]\(https:\/\/example\.com\/" onmouseover="window\.__echoXss=2\)/u);
   assert.match(messages.textContent, /<img src=x onerror=/u);
   dom.window.close();
 });

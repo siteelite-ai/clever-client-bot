@@ -19,7 +19,7 @@ import {
   isPhysicalMeasurementUnit,
   normalizeUnit,
 } from "../_shared/v3-tools/criteria-consistency.ts";
-import { isRecentProductPriceSelectionFollowup } from "../_shared/v3-tools/recent-product-evidence.ts";
+export { isPureRecentPriceFollowup } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { stripExplicitNewTaskPreface } from "../_shared/v3-tools/request-preface.ts";
 import {
   extractReplacementLookupKeys,
@@ -91,79 +91,6 @@ export function isPureNamedSeriesBrowse(
       .test(word)
   );
   return hasAction && words.every((word) => allowed.has(word));
-}
-
-/** Price-only selection from the last verified batch, never a new fit test. */
-export function isPureRecentPriceFollowup(userMessage: string): boolean {
-  if (!isRecentProductPriceSelectionFollowup(userMessage)) return false;
-  const words = normalize(userMessage).split(" ").filter(Boolean);
-  const allowed = new Set([
-    "а",
-    "ну",
-    "тогда",
-    "пожалуйста",
-    "можно",
-    "мне",
-    "да",
-    "хорошо",
-    "покажи",
-    "покажите",
-    "выведи",
-    "выведите",
-    "дай",
-    "дайте",
-    "найди",
-    "найдите",
-    "какой",
-    "какая",
-    "какие",
-    "который",
-    "самый",
-    "самая",
-    "самые",
-    "дешевый",
-    "дешевая",
-    "дешевые",
-    "недорогой",
-    "недорогая",
-    "недорогие",
-    "доступный",
-    "доступная",
-    "доступные",
-    "дорогой",
-    "дорогая",
-    "дорогие",
-    "бюджетный",
-    "бюджетная",
-    "бюджетные",
-    "премиум",
-    "премьюм",
-    "флагман",
-    "из",
-    "них",
-    "этих",
-    "вариантов",
-    "варианта",
-    "вариант",
-    "этот",
-    "эта",
-    "эти",
-    "тот",
-    "та",
-    "те",
-    "выше",
-    "списка",
-    "ссылку",
-    "ссылка",
-    "на",
-    "товар",
-    "товары",
-    "цена",
-    "цену",
-    "стоит",
-    "сколько",
-  ]);
-  return words.every((word) => allowed.has(word));
 }
 
 export type DirectSelectionRoute =

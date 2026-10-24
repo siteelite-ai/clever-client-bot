@@ -1,0 +1,146 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-21T19:11:09.140Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-breaker-filter-cheapest-followup": 1
+  },
+  "cases": [
+    {
+      "id": "customer-breaker-filter-cheapest-followup",
+      "title": "Простой фильтр автомата и сохранение 16 А в продолжении",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-breaker-filter-cheapest-followup_base_1792609870862_1",
+          "turns": [
+            {
+              "message": "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика C",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 16679,
+              "network_attempts": 1,
+              "log_id": "5a986aba-1a45-4a1f-985d-aa6ee7233f16",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Не удалось завершить проверку товаров из-за временной технической ошибки. Не могу подтвердить, что подходящих товаров нет. Повторите запрос позже.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: transport_5xx",
+                  "duration_ms": 2938
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "ошибка: transport_5xx",
+                  "duration_ms": 2158
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 1"
+              ]
+            },
+            {
+              "message": "самый бюджетный, дай ссылку",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 2517,
+              "network_attempts": 1,
+              "log_id": "9e63476c-926f-4ba5-b787-2c5d83f5eebe",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Не могу однозначно продолжить прежний подбор. Повторите полный запрос — проверю товары заново.\n\nПолная проверка всех подходящих товаров не выполнена, поэтому минимальную цену по каталогу подтвердить не могу. Могу сообщить только данные проверенных карточек.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "products 0 < 1"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "catalog_preflight": {
+    "ok": true,
+    "status": "ready",
+    "http_status": 200,
+    "duration_ms": 1712
+  },
+  "finished_at": "2026-10-21T19:11:30.063Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "5a986aba-1a45-4a1f-985d-aa6ee7233f16",
+    "9e63476c-926f-4ba5-b787-2c5d83f5eebe"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}
