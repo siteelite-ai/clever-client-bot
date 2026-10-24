@@ -16,15 +16,17 @@ const env = {
   VOLT220_V3_QA_SECRET: access,
   VOLT220_V3_CATALOG_QA_SECRET: catalog,
 };
+const checkNames = ['categories', 'products', 'facets', 'article_filter'];
+const notRunChecks = Object.fromEntries(checkNames.map((name) => [name, { status: 'not_run' }]));
+const readyChecks = Object.fromEntries(checkNames.map((name) => [
+  name, { status: 'ok', http_status: 200 },
+]));
 
 function readyResponse() {
   return new Response(JSON.stringify({
     ok: true,
     status: 'ready',
-    checks: Object.fromEntries(
-      ['categories', 'products', 'facets', 'article_filter']
-        .map((name) => [name, { status: 'ok', http_status: 200 }]),
-    ),
+    checks: readyChecks,
   }), { status: 200 });
 }
 
@@ -40,7 +42,9 @@ test('preflight-only child makes exactly one authenticated private catalog probe
     },
   });
   assert.equal(code, 0);
-  assert.deepEqual(summaries, [{ ok: true, status: 'ready', http_status: 200 }]);
+  assert.deepEqual(summaries, [{
+    ok: true, status: 'ready', http_status: 200, checks: readyChecks,
+  }]);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, CLOSURE_PREFLIGHT_ENDPOINT);
   assert.equal(requests[0].init.method, 'POST');
@@ -70,7 +74,9 @@ test('missing or ambiguous credentials, bad public key and CLI arguments fail be
     });
     assert.equal(code, 2);
     assert.equal(requests, 0);
-    assert.deepEqual(summaries, [{ ok: false, status: 'not_run', classification: 'config' }]);
+    assert.deepEqual(summaries, [{
+      ok: false, status: 'not_run', classification: 'config', checks: notRunChecks,
+    }]);
   }
 });
 
@@ -86,11 +92,59 @@ test('failed and malicious upstream responses cannot leak credentials or respons
   assert.equal(code, 1);
   assert.deepEqual(summaries, [{
     ok: false, status: 'unavailable', classification: 'upstream', http_status: 503,
+    checks: notRunChecks,
   }]);
   const output = JSON.stringify(summaries);
   assert.equal(output.includes(access), false);
   assert.equal(output.includes(catalog), false);
   assert.equal(output.includes('attacker.invalid'), false);
+});
+
+test('check diagnostics allowlist fixed names, statuses, codes and classifications only', async () => {
+  const malicious = `private:${access}:${catalog}:https://attacker.invalid`;
+  const summaries = [];
+  const code = await main({
+    env, widgetSource, argv: [], emit: (summary) => summaries.push(summary),
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: false,
+      status: 'unavailable',
+      classification: 'upstream',
+      checks: {
+        categories: {
+          status: 'unavailable', http_status: 503, classification: 'upstream',
+          message: malicious, url: malicious, token: malicious,
+        },
+        products: {
+          status: malicious, http_status: 99, classification: malicious,
+          response_body: malicious,
+        },
+        facets: {
+          status: 'ok', http_status: 600, classification: 'route',
+          headers: { Authorization: malicious },
+        },
+        article_filter: {
+          status: 'unavailable', http_status: 429, classification: 'rate_limit',
+          error: malicious,
+        },
+        [malicious]: { status: 'ok', http_status: 200 },
+      },
+      error: malicious,
+    }), { status: 503 }),
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(summaries, [{
+    ok: false, status: 'unavailable', classification: 'upstream', http_status: 503,
+    checks: {
+      categories: { status: 'unavailable', http_status: 503, classification: 'upstream' },
+      products: { status: 'not_run' },
+      facets: { status: 'ok', classification: 'route' },
+      article_filter: { status: 'unavailable', http_status: 429, classification: 'rate_limit' },
+    },
+  }]);
+  const output = JSON.stringify(summaries);
+  for (const forbidden of [access, catalog, 'attacker.invalid', 'response_body', 'Authorization']) {
+    assert.equal(output.includes(forbidden), false);
+  }
 });
 
 test('the exact CLI is runnable by the restricted short-lived-secret wrapper without paid calls', async () => {
@@ -103,10 +157,7 @@ test('the exact CLI is runnable by the restricted short-lived-secret wrapper wit
     }
     return new Response(${JSON.stringify(JSON.stringify({
       ok: true, status: 'ready',
-      checks: Object.fromEntries(
-        ['categories', 'products', 'facets', 'article_filter']
-          .map((name) => [name, { status: 'ok', http_status: 200 }]),
-      ),
+      checks: readyChecks,
     }))}, { status: 200 });
   };`;
   await runTrustedChild(process.execPath, [

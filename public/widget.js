@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-23a6d944053a770b';
+  var WIDGET_VERSION = 'widget-48cf7f8e6bd967b3';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -1496,6 +1496,9 @@
 
     var userMessages = messagesContainer.querySelectorAll('.volt-message.user');
     var currentUserBubble = userMessages.length ? userMessages[userMessages.length - 1] : null;
+    // A fresh conversation also receives a server boundary. Its session must
+    // rotate, but there is no earlier visible user topic to separate from it.
+    if (userMessages.length < 2) return true;
     if (currentUserBubble && currentUserBubble.previousElementSibling &&
         currentUserBubble.previousElementSibling.classList.contains('volt-topic-divider')) return true;
     if (currentUserBubble) {

@@ -10,7 +10,7 @@ import {
   verifyProductLinks, verifyProductPage, visibleInternalTextFailures,
 } from './run-customer-acceptance.mjs';
 import {
-  CATALOG_QA_SECRET_ENV, CATALOG_QA_SECRET_HEADER, catalogPreflightRequired,
+  CATALOG_PREFLIGHT_TIMEOUT_MS, CATALOG_QA_SECRET_ENV, CATALOG_QA_SECRET_HEADER, catalogPreflightRequired,
   runCatalogHealthPreflight, trustedCatalogPreflightEndpoint,
 } from './catalog-health-preflight.mjs';
 
@@ -38,6 +38,9 @@ const strictArgs = ['node', 'runner', '--strict-full-suite', '--endpoint=https:/
 const catalogQaSecret = 's'.repeat(32);
 
 test('remote and strict acceptance require a private catalog probe before paid turns', () => {
+  // The read-only server probe may spend 8 s each on settings, base routes,
+  // bounded identity discovery and exact-article verification.
+  assert.ok(CATALOG_PREFLIGHT_TIMEOUT_MS >= 40_000);
   assert.equal(catalogPreflightRequired(DEFAULT_ENDPOINT), true);
   assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3'), false);
   assert.equal(catalogPreflightRequired('http://localhost:54321/functions/v1/chat-consultant-v3', true), true);
@@ -70,6 +73,12 @@ test('catalog preflight sends only the private probe and requires all four healt
     },
   });
   assert.equal(result.ok, true);
+  assert.deepEqual(result.checks, {
+    categories: { status: 'ok', http_status: 200 },
+    products: { status: 'ok', http_status: 200 },
+    facets: { status: 'ok', http_status: 200 },
+    article_filter: { status: 'ok', http_status: 200 },
+  });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, previewEndpoint);
   assert.equal(requests[0].init.method, 'POST');
@@ -78,6 +87,33 @@ test('catalog preflight sends only the private probe and requires all four healt
   assert.equal(requests[0].init.headers[CATALOG_QA_SECRET_HEADER], catalogQaSecret);
   assert.equal(requests[0].init.headers['x-volt-preview-secret'], previewHeader['x-volt-preview-secret']);
   assert.equal(requests[0].init.headers.apikey, 'public-test-key');
+});
+
+test('catalog check diagnostics discard untrusted fields and out-of-range values', async () => {
+  const privateText = `private:${catalogQaSecret}:https://attacker.example`;
+  const result = await runCatalogHealthPreflight({
+    endpoint: DEFAULT_ENDPOINT,
+    anonKey: 'public-test-key',
+    env: { [CATALOG_QA_SECRET_ENV]: catalogQaSecret },
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: false,
+      status: 'unavailable',
+      checks: {
+        categories: { status: 'unavailable', http_status: 503, classification: 'upstream', error: privateText },
+        products: { status: privateText, http_status: 600, classification: privateText },
+        facets: { status: 'ok', http_status: 200.5, url: privateText },
+        [privateText]: { status: 'ok', http_status: 200 },
+      },
+      error: privateText,
+    }), { status: 503 }),
+  });
+  assert.deepEqual(result.checks, {
+    categories: { status: 'unavailable', http_status: 503, classification: 'upstream' },
+    products: { status: 'not_run' },
+    facets: { status: 'ok' },
+    article_filter: { status: 'not_run' },
+  });
+  assert.equal(JSON.stringify(result).includes(privateText), false);
 });
 
 test('catalog preflight fails closed on outages and malformed success without reflecting secrets or response bodies', async () => {
@@ -2551,6 +2587,8 @@ test('parseSse exposes automatic conversation boundaries', () => {
   ].join('\n'));
   assert.deepEqual(parsed.conversationBoundary, { mode: 'new_task', sessionId: 'session_new_scope' });
   assert.deepEqual(evaluate({ conversation_boundary: 'new_task' }, parsed), []);
+  assert.deepEqual(evaluate({ conversation_boundary: 'continuation' }, parsed,
+    { isInitialTurn: true }), []);
   assert(evaluate({ conversation_boundary: 'continuation' }, parsed).includes('unexpected conversation boundary: new_task'));
 });
 

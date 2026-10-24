@@ -505,6 +505,42 @@ test('an open tab expires its dialogue after inactivity', () => {
   dom.window.close();
 });
 
+test('first-turn server boundary rotates the session without showing a new-topic divider', async () => {
+  const boundarySessionId = 'session_first_turn_boundary';
+  let requestSessionId;
+  const sse = [
+    `data: ${JSON.stringify({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundarySessionId } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'Подбираю кабель.' } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'first-turn-boundary', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      requestSessionId = JSON.parse(init.body).sessionId;
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  dom.window.document.querySelector('#volt-widget-input').value = 'Найди кабель ВВГ 3×1,5';
+  dom.window.document.querySelector('#volt-widget-send').click();
+  await waitForWidget(() => readState(dom)?.history?.at(-1)?.content === 'Подбираю кабель.',
+    'first turn should finish in the server-issued session');
+
+  const state = readState(dom);
+  assert.notEqual(state.sessionId, requestSessionId);
+  assert.equal(state.sessionId, boundarySessionId);
+  assert.deepEqual(state.history.map((item) => item.role), ['assistant', 'user', 'assistant']);
+  assert.equal(dom.window.document.querySelectorAll('.volt-topic-divider').length, 0);
+  assert.doesNotMatch(visibleMessages(dom), /Новая тема/u);
+  dom.window.close();
+
+  const reloaded = bootWidget({ state });
+  assert.equal(readState(reloaded).sessionId, boundarySessionId);
+  assert.match(visibleMessages(reloaded), /Найди кабель ВВГ 3×1,5/u);
+  assert.equal(reloaded.window.document.querySelectorAll('.volt-topic-divider').length, 0);
+  reloaded.window.close();
+});
+
 test('server boundary automatically isolates a self-contained new topic without a user reset', async () => {
   const now = 1_800_000_000_000;
   const boundarySessionId = 'session_automatic_new_topic';
@@ -543,6 +579,14 @@ test('server boundary automatically isolates a self-contained new topic without 
   assert.equal(dom.window.document.querySelectorAll('.volt-topic-divider').length, 1);
   assert.match(visibleMessages(dom), /Новая тема/u);
   dom.window.close();
+
+  const reloaded = bootWidget({ state, now });
+  assert.equal(readState(reloaded).sessionId, boundarySessionId);
+  assert.doesNotMatch(visibleMessages(reloaded), /старый вопрос про кабель/u);
+  assert.match(visibleMessages(reloaded), /а у тебя есть лампы кукуруза/u);
+  assert.equal(reloaded.window.document.querySelectorAll('.volt-topic-divider').length, 0,
+    'the old topic is absent after reload, so there is nothing to separate');
+  reloaded.window.close();
 });
 
 test('replay keeps the request session immutable after a conversation boundary rotates the visible session', async () => {

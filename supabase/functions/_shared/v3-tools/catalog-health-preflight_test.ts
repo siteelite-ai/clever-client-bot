@@ -44,6 +44,17 @@ function productPage(products: unknown[]): Response {
   } } });
 }
 
+function pagedProducts(
+  products: unknown[],
+  page: number,
+  total: number,
+  pagination: Record<string, unknown> = {},
+): Response {
+  return json({ data: { results: products, pagination: {
+    page, per_page: 20, pages: Math.ceil(total / 20), total, ...pagination,
+  } } });
+}
+
 function categoryPage(categories: unknown[]): Response {
   return json({ data: { results: categories, pagination: {
     page: 1, per_page: 200, pages: 1, total: categories.length,
@@ -678,6 +689,186 @@ Deno.test("catalog QA accepts duplicate exact articles only when the baseline SK
   assertEquals(result.status, "ready");
 });
 
+Deno.test("catalog QA proves a string product ID across the exact article filter", async () => {
+  const baseline = { ...HEALTHY_PRODUCT, id: "SKU-7" };
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+      if (url.pathname.endsWith("/categories/options")) return json(HEALTHY_FACETS);
+      return productPage([baseline]);
+    }) as typeof fetch,
+  });
+  assertEquals(result.status, "ready");
+  assertEquals(result.checks.article_filter?.status, "ok");
+  assert(!JSON.stringify(result).includes("SKU-7"));
+});
+
+Deno.test("catalog QA compares mixed numeric/string IDs but rejects a different ID with the same article", async () => {
+  for (const [filteredId, expected] of [
+    ["7", "ready"],
+    ["8", "unavailable"],
+  ] as const) {
+    const baseline = { ...HEALTHY_PRODUCT, id: 7 };
+    const result = await runCatalogHealthPreflight({
+      baseUrl: BASE, apiToken: "fixture-private-token",
+      fetchImpl: (async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+        if (url.pathname.endsWith("/categories/options")) return json(HEALTHY_FACETS);
+        return productPage([url.searchParams.has("article")
+          ? { ...baseline, id: filteredId }
+          : baseline]);
+      }) as typeof fetch,
+    });
+    assertEquals(result.status, expected);
+    assertEquals(result.checks.article_filter?.status, expected === "ready" ? "ok" : "unavailable");
+  }
+});
+
+Deno.test("catalog QA finds a live article on a later bounded product page", async () => {
+  const firstPage = Array.from({ length: 20 }, (_, index) => ({
+    ...HEALTHY_PRODUCT, id: `NO-ARTICLE-${index}`, article: null,
+  }));
+  const later = { ...HEALTHY_PRODUCT, id: "LATER-SKU" };
+  const pages: number[] = [];
+  let exactArticle: string | null = null;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+      if (url.pathname.endsWith("/categories/options")) return json(HEALTHY_FACETS);
+      if (url.searchParams.has("article")) {
+        exactArticle = url.searchParams.get("article");
+        return productPage([later]);
+      }
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      return page === 1
+        ? pagedProducts(firstPage, 1, 21)
+        : pagedProducts([later], 2, 21);
+    }) as typeof fetch,
+  });
+  assertEquals(result.status, "ready");
+  assertEquals(pages, [1, 2]);
+  assertEquals(exactArticle, "FIX-1");
+  assert(!JSON.stringify(result).includes("LATER-SKU"));
+});
+
+Deno.test("catalog QA skips a complete page without usable products before finding a later article", async () => {
+  const noArticle = Array.from({ length: 20 }, (_, index) => ({
+    ...HEALTHY_PRODUCT, id: `NO-ARTICLE-${index}`, article: null,
+  }));
+  const unusable = Array.from({ length: 20 }, (_, index) => ({
+    ...HEALTHY_PRODUCT, id: `ZERO-PRICE-${index}`, price: 0, article: null,
+  }));
+  const last = { ...HEALTHY_PRODUCT, id: "PAGE-THREE-SKU" };
+  const pages: number[] = [];
+  let exactArticle: string | null = null;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+      if (url.pathname.endsWith("/categories/options")) return json(HEALTHY_FACETS);
+      if (url.searchParams.has("article")) {
+        exactArticle = url.searchParams.get("article");
+        return productPage([last]);
+      }
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      return pagedProducts(page === 1 ? noArticle : page === 2 ? unusable : [last], page, 41);
+    }) as typeof fetch,
+  });
+  assertEquals(result.status, "ready");
+  assertEquals(pages, [1, 2, 3]);
+  assertEquals(exactArticle, "FIX-1");
+  assertEquals(result.checks.article_filter?.status, "ok");
+  assert(!JSON.stringify(result).includes("PAGE-THREE-SKU"));
+});
+
+Deno.test("catalog QA fails closed if later pagination is ignored or empty", async () => {
+  const firstPage = Array.from({ length: 20 }, (_, index) => ({
+    ...HEALTHY_PRODUCT, id: `NO-ARTICLE-${index}`, article: null,
+  }));
+  for (const { second, total } of [
+    { second: pagedProducts([HEALTHY_PRODUCT], 1, 21), total: 21 },
+    { second: pagedProducts([], 2, 21), total: 21 },
+    { second: pagedProducts([null], 2, 21), total: 21 },
+    { second: json({ success: false, data: { results: [HEALTHY_PRODUCT], pagination: {
+      page: 2, per_page: 20, pages: 2, total: 21,
+    } } }), total: 21 },
+    { second: json({ success: "failed", data: { results: [HEALTHY_PRODUCT], pagination: {
+      page: 2, per_page: 20, pages: 2, total: 21,
+    } } }), total: 21 },
+    { second: json({ results: [HEALTHY_PRODUCT], pagination: {
+      page: 2, per_page: 20, pages: 2, total: 21,
+    } }), total: 21 },
+    { second: pagedProducts([HEALTHY_PRODUCT], 2, 21, { per_page: 0 }), total: 21 },
+    { second: pagedProducts([HEALTHY_PRODUCT], 2, 40), total: 40 },
+    { second: pagedProducts(firstPage, 2, 40), total: 40 },
+  ]) {
+    let facetCalls = 0;
+    let articleCalls = 0;
+    const result = await runCatalogHealthPreflight({
+      baseUrl: BASE, apiToken: "fixture-private-token",
+      fetchImpl: (async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+        if (url.pathname.endsWith("/categories/options")) {
+          facetCalls++;
+          return json(HEALTHY_FACETS);
+        }
+        if (url.searchParams.has("article")) {
+          articleCalls++;
+          return productPage([HEALTHY_PRODUCT]);
+        }
+        return url.searchParams.get("page") === "1"
+          ? pagedProducts(firstPage, 1, total)
+          : second.clone();
+      }) as typeof fetch,
+    });
+    assertEquals(result.status, "unavailable");
+    assertEquals(result.classification, "schema_error");
+    assertEquals(result.checks.facets?.status, "ok");
+    assertEquals(result.checks.article_filter?.status, "unavailable");
+    assertEquals(facetCalls, 1);
+    assertEquals(articleCalls, 0);
+  }
+});
+
+Deno.test("catalog QA never claims readiness without a usable article in its bounded pages", async () => {
+  const noArticle = { ...HEALTHY_PRODUCT, article: null };
+  const pages: number[] = [];
+  let facetCalls = 0;
+  const result = await runCatalogHealthPreflight({
+    baseUrl: BASE, apiToken: "fixture-private-token",
+    fetchImpl: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/categories")) return categoryPage(HEALTHY_CATEGORIES);
+      if (url.pathname.endsWith("/categories/options")) {
+        facetCalls++;
+        return json(HEALTHY_FACETS);
+      }
+      if (url.searchParams.has("article")) throw new Error("no article probe allowed");
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      return pagedProducts(Array.from({ length: 20 }, (_, index) => ({
+        ...noArticle, id: `NO-ARTICLE-${page}-${index}`,
+      })), page, 80);
+    }) as typeof fetch,
+  });
+  assertEquals(result.status, "unavailable");
+  assertEquals(result.checks.facets?.status, "ok");
+  assertEquals(result.checks.article_filter, {
+    status: "unavailable", http_status: null, classification: "schema_error",
+  });
+  assertEquals(pages, [1, 2, 3]);
+  assertEquals(facetCalls, 1);
+});
+
 Deno.test("catalog QA cannot prove an article filter without a usable baseline article", async () => {
   const calls: string[] = [];
   const result = await runCatalogHealthPreflight({
@@ -688,6 +879,9 @@ Deno.test("catalog QA cannot prove an article filter without a usable baseline a
       if (url.pathname.endsWith("/categories")) {
         return categoryPage(HEALTHY_CATEGORIES);
       }
+      if (url.pathname.endsWith("/categories/options")) {
+        return json(HEALTHY_FACETS);
+      }
       return productPage([{ ...HEALTHY_PRODUCT, article: null }]);
     }) as typeof fetch,
   });
@@ -695,7 +889,8 @@ Deno.test("catalog QA cannot prove an article filter without a usable baseline a
   assertEquals(result.checks.article_filter, {
     status: "unavailable", http_status: null, classification: "schema_error",
   });
-  assertEquals(calls, ["/api/categories", "/api/products"]);
+  assertEquals(result.checks.facets?.status, "ok");
+  assertEquals(calls, ["/api/categories", "/api/products", "/api/categories/options"]);
 });
 
 Deno.test("catalog QA classifies filtered-article transport failure without exposing identity", async () => {

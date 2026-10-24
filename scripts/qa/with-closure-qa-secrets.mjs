@@ -42,6 +42,7 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const CHILD_TIMEOUT_MS = 5 * 60_000;
 const CHILD_MAX_TIMEOUT_MS = 15 * 60_000;
+const CHILD_SUMMARY_MAX_BYTES = 1_024;
 // Checkpoints after the first cleanup when POST may still finish server-side.
 const UNCERTAIN_POST_RECHECK_MS = Object.freeze([2_000, 5_000, 15_000]);
 
@@ -61,6 +62,66 @@ function assertSecret(value) {
     throw new SafeQaError('Temporary secret generator returned an invalid value');
   }
   return value;
+}
+
+/** Return only fixed, non-sensitive status fields from the catalog-only child. */
+export function safeCatalogSummary(output) {
+  let parsed;
+  try {
+    parsed = JSON.parse(output.trim());
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+    Object.keys(parsed).some((key) =>
+      !['ok', 'status', 'classification', 'http_status', 'checks'].includes(key)) ||
+    typeof parsed.ok !== 'boolean' ||
+    !['ready', 'unavailable', 'not_run'].includes(parsed.status) ||
+    parsed.ok !== (parsed.status === 'ready') ||
+    (parsed.classification !== undefined &&
+      !['auth', 'route', 'rate_limit', 'upstream', 'transport', 'schema_error', 'config']
+        .includes(parsed.classification)) ||
+    (parsed.http_status !== undefined &&
+      (!Number.isSafeInteger(parsed.http_status) || parsed.http_status < 100 ||
+        parsed.http_status > 599))) return null;
+  let checks;
+  if (parsed.checks !== undefined) {
+    const names = ['categories', 'products', 'facets', 'article_filter'];
+    if (!parsed.checks || typeof parsed.checks !== 'object' || Array.isArray(parsed.checks) ||
+      Object.keys(parsed.checks).length !== names.length ||
+      names.some((name) => !Object.hasOwn(parsed.checks, name))) return null;
+    checks = {};
+    for (const name of names) {
+      const check = parsed.checks[name];
+      if (!check || typeof check !== 'object' || Array.isArray(check) ||
+        Object.keys(check).some((key) => !['status', 'classification', 'http_status'].includes(key)) ||
+        !['ok', 'unavailable', 'not_run'].includes(check.status) ||
+        (check.classification !== undefined &&
+          !['auth', 'route', 'rate_limit', 'upstream', 'transport', 'schema_error'].includes(check.classification)) ||
+        (check.http_status !== undefined &&
+          (!Number.isSafeInteger(check.http_status) || check.http_status < 100 ||
+            check.http_status > 599))) return null;
+      checks[name] = {
+        status: check.status,
+        ...(check.classification === undefined ? {} : { classification: check.classification }),
+        ...(check.http_status === undefined ? {} : { http_status: check.http_status }),
+      };
+    }
+  }
+  // A green child exit cannot certify the catalog without the same four
+  // successful route proofs required by the private preflight itself.
+  if (parsed.ok && (parsed.http_status !== 200 ||
+    parsed.classification !== undefined ||
+    !checks || Object.values(checks).some((check) =>
+      check.status !== 'ok' || check.http_status !== 200 ||
+      check.classification !== undefined))) return null;
+  return {
+    ok: parsed.ok,
+    status: parsed.status,
+    ...(parsed.classification === undefined ? {} : { classification: parsed.classification }),
+    ...(parsed.http_status === undefined ? {} : { http_status: parsed.http_status }),
+    ...(checks === undefined ? {} : { checks }),
+  };
 }
 
 /** The name and header value carry the same unguessable, time-bounded runId. */
@@ -301,9 +362,8 @@ export async function runTrustedChild(command, args, qaEnv, {
       child = spawn(command, args, {
         env: childEnv,
         shell: false,
-        // Do not forward or buffer the child output. A trusted QA script may
-        // accidentally print a credential in any encoding or chunk pattern.
-        stdio: ['inherit', 'ignore', 'ignore'],
+        // Buffer at most one tiny summary; never forward arbitrary child output.
+        stdio: ['inherit', 'pipe', 'ignore'],
       });
     } catch {
       reject(new SafeQaError('Child QA process could not start'));
@@ -320,12 +380,33 @@ export async function runTrustedChild(command, args, qaEnv, {
     if (abortSignal?.aborted) stop();
     const timer = setTimeout(stop, timeoutMs);
     let spawnFailed = false;
+    let outputBytes = 0;
+    let outputOverflow = false;
+    const outputChunks = [];
+    child.stdout?.on('data', (chunk) => {
+      if (outputOverflow) return;
+      outputBytes += chunk.length;
+      if (outputBytes > CHILD_SUMMARY_MAX_BYTES) {
+        outputOverflow = true;
+        outputChunks.length = 0;
+      } else {
+        outputChunks.push(chunk);
+      }
+    });
     child.on('error', () => { spawnFailed = true; });
     child.on('close', (code) => {
       clearTimeout(timer);
       if (hardTimer) clearTimeout(hardTimer);
       abortSignal?.removeEventListener('abort', stop);
-      if (spawnFailed || code !== 0 || abortSignal?.aborted) {
+      const childSucceeded = !spawnFailed && code === 0 && !abortSignal?.aborted;
+      const catalogOnly = args.length === 1 &&
+        args[0] === 'scripts/qa/preflight-only-closure.mjs';
+      const summary = catalogOnly && !outputOverflow
+        ? safeCatalogSummary(Buffer.concat(outputChunks).toString('utf8')) : null;
+      if (summary && summary.ok === childSucceeded) {
+        process.stdout.write(`Catalog preflight: ${JSON.stringify(summary)}\n`);
+      }
+      if (!childSucceeded || (catalogOnly && summary?.ok !== true)) {
         reject(new SafeQaError('Child QA command failed or was interrupted'));
       } else {
         resolve();

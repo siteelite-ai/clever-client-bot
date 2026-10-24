@@ -2257,6 +2257,7 @@ export function evaluate(expect = {}, response, {
   userMessages = [],
   previousClarificationChoice = null,
   message = null,
+  isInitialTurn = false,
   nowMs = Date.now(),
 } = {}) {
   const failures = [];
@@ -2373,7 +2374,10 @@ export function evaluate(expect = {}, response, {
   if (expect.conversation_boundary === 'new_task' && response.conversationBoundary?.mode !== 'new_task') {
     failures.push('expected automatic new_task conversation boundary');
   }
-  if (expect.conversation_boundary === 'continuation' && response.conversationBoundary) {
+  // A self-contained first request may legitimately establish a fresh server
+  // session. There is no prior customer turn whose context could be lost.
+  if (expect.conversation_boundary === 'continuation' && response.conversationBoundary &&
+      !(isInitialTurn && response.conversationBoundary.mode === 'new_task')) {
     failures.push(`unexpected conversation boundary: ${response.conversationBoundary.mode}`);
   }
   if (expect.require_clarification_choice !== undefined) {
@@ -2867,6 +2871,7 @@ export async function fetchAcceptanceTurn(payload, {
 
 async function runTurn({ message, expect, synthetic = false, trackVerifiedBatches = false }, state) {
   const startedAt = Date.now();
+  const isInitialTurn = !state.history.some((entry) => entry.role === 'user');
   const payload = {
     message,
     messageId: crypto.randomUUID(),
@@ -2958,6 +2963,7 @@ async function runTurn({ message, expect, synthetic = false, trackVerifiedBatche
         ],
         previousClarificationChoice: state.previousClarificationChoice,
         message,
+        isInitialTurn,
       })
     : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');

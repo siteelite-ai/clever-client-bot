@@ -9,6 +9,7 @@ import {
   createClosureQaCredentials,
   managementHttpsRequest,
   runWithClosureQaSecrets,
+  safeCatalogSummary,
 } from './with-closure-qa-secrets.mjs';
 
 function deterministicCredentials() {
@@ -22,6 +23,45 @@ const FIXTURE = deterministicCredentials();
 const [ACCESS_NAME, CATALOG_NAME] = FIXTURE.names;
 const ACCESS = FIXTURE.access;
 const CATALOG = FIXTURE.catalog;
+
+test('catalog-only summary keeps fixed check statuses and rejects extra fields', () => {
+  const safe = {
+    ok: false,
+    status: 'unavailable',
+    classification: 'schema_error',
+    http_status: 503,
+    checks: {
+      categories: { status: 'ok', http_status: 200 },
+      products: { status: 'ok', http_status: 200 },
+      facets: { status: 'unavailable', classification: 'schema_error', http_status: 200 },
+      article_filter: { status: 'not_run' },
+    },
+  };
+  assert.deepEqual(safeCatalogSummary(JSON.stringify(safe)), safe);
+  assert.equal(safeCatalogSummary(JSON.stringify({ ...safe, ok: true })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({ ...safe, status: 'ready' })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({ ...safe, token: 'sensitive' })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({
+    ...safe, checks: { ...safe.checks, facets: { ...safe.checks.facets, url: 'sensitive' } },
+  })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({
+    ...safe, checks: { ...safe.checks, facets: { status: 'unavailable', http_status: 999 } },
+  })), null);
+  const ready = {
+    ok: true,
+    status: 'ready',
+    http_status: 200,
+    checks: Object.fromEntries(Object.keys(safe.checks).map((name) =>
+      [name, { status: 'ok', http_status: 200 }])),
+  };
+  assert.deepEqual(safeCatalogSummary(JSON.stringify(ready)), ready);
+  assert.equal(safeCatalogSummary(JSON.stringify({ ...ready, checks: undefined })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({ ...ready, http_status: 202 })), null);
+  assert.equal(safeCatalogSummary(JSON.stringify({
+    ...ready, checks: { ...ready.checks, facets: { status: 'not_run' } },
+  })), null);
+  assert.equal(safeCatalogSummary('not-json'), null);
+});
 
 function fakeManagementApi({
   initialNames = [],

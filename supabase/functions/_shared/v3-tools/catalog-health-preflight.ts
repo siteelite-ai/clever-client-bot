@@ -38,6 +38,9 @@ export type CatalogHealthPreflightResult = {
 const CHECK_TIMEOUT_MS = 8_000;
 const CATEGORY_DEADLINE_MS = 10_000;
 const CATEGORY_PAGE_SIZE = 200;
+const PRODUCT_PAGE_SIZE = 20;
+const MAX_IDENTITY_PAGES = 3;
+const MAX_PRODUCT_ID_CHARS = 120;
 const MAX_CATEGORY_PAGES = 64;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_TAXONOMY_NODES = 12_000;
@@ -46,9 +49,19 @@ const MAX_CATEGORY_TITLE_CHARS = 160;
 // at depth 10 may have descendants hidden by the requested tree depth.
 const REQUESTED_TAXONOMY_DEPTH = 10;
 
-type EndpointResult = { check: CheckResult; results?: unknown[] };
+type ProductPagination = {
+  page: number;
+  pages: number;
+  per_page: number;
+  total: number;
+};
+type EndpointResult = {
+  check: CheckResult;
+  results?: unknown[];
+  pagination?: ProductPagination;
+};
 type Leaf = { id: number; pagetitle: string };
-type ProductIdentity = { id: number; article: string };
+type ProductIdentity = { id: string; article: string };
 
 /** An exact article filter must fit in one page; taxonomy has its own full-tree walker. */
 function isCompleteFirstPage(data: unknown, results: unknown[]): boolean {
@@ -278,17 +291,52 @@ function hasUsableProduct(results: unknown[]): boolean {
   });
 }
 
+/** The runtime identifies catalog products with String(id), not numeric IDs. */
+function canonicalProductId(value: unknown): string | null {
+  if (typeof value !== "string" &&
+    (typeof value !== "number" || !Number.isFinite(value))) return null;
+  const id = String(value);
+  return id.trim() && [...id].length <= MAX_PRODUCT_ID_CHARS &&
+      !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(id)
+    ? id
+    : null;
+}
+
+/** Pagination is required only when looking beyond the baseline product page. */
+function readProductPagination(
+  data: unknown,
+  requestedPage: number,
+  results: unknown[],
+): ProductPagination | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const raw = (data as { pagination?: unknown }).pagination;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const page = raw as Record<string, unknown>;
+  if (page.page !== requestedPage ||
+    page.per_page !== PRODUCT_PAGE_SIZE ||
+    !Number.isSafeInteger(page.total) || Number(page.total) < 1 ||
+    !Number.isSafeInteger(page.pages) || Number(page.pages) < 1 ||
+    Number(page.pages) !== Math.ceil(Number(page.total) / PRODUCT_PAGE_SIZE) ||
+    requestedPage > Number(page.pages) ||
+    results.length !== Math.min(
+      PRODUCT_PAGE_SIZE,
+      Number(page.total) - (requestedPage - 1) * PRODUCT_PAGE_SIZE,
+    )) return null;
+  return page as ProductPagination;
+}
+
 /** Derive the exact filter probe from a usable baseline SKU, never a fixture. */
 function representativeProductIdentity(results: unknown[]): ProductIdentity | null {
   for (const raw of results) {
     if (!hasUsableProduct([raw])) continue;
     const product = raw as Record<string, unknown>;
-    if (!Number.isSafeInteger(product.id) || Number(product.id) <= 0) continue;
+    const id = canonicalProductId(product.id);
+    if (!id) continue;
     if (typeof product.article !== "string") continue;
     const article = product.article.trim();
     if (!article || [...article].length > 120 ||
       /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(article)) continue;
-    return { id: Number(product.id), article };
+    return { id, article };
   }
   return null;
 }
@@ -341,6 +389,7 @@ async function checkEndpoint(
   deps: CatalogClientDeps,
   leaf?: Leaf,
   identity?: ProductIdentity,
+  productPage = 1,
 ): Promise<EndpointResult> {
   if ((name === "facets" && !leaf) ||
     (name === "article_filter" && !identity)) {
@@ -349,7 +398,7 @@ async function checkEndpoint(
     } };
   }
   const params = name === "products"
-    ? "per_page=20&page=1&min_price=1"
+    ? `per_page=${PRODUCT_PAGE_SIZE}&page=${productPage}&min_price=1`
     : name === "article_filter"
     ? new URLSearchParams({ article: identity?.article ?? "", per_page: "50", page: "1" }).toString()
     : new URLSearchParams({ pagetitle: leaf?.pagetitle ?? "" }).toString();
@@ -457,12 +506,12 @@ async function checkEndpoint(
             results.every((raw) => {
               if (!hasUsableProduct([raw])) return false;
               const product = raw as Record<string, unknown>;
-              return Number.isSafeInteger(product.id) && Number(product.id) > 0 &&
+              return canonicalProductId(product.id) !== null &&
                 typeof product.article === "string" &&
                 product.article.trim() === identity.article;
             }) &&
             results.some((raw) =>
-              (raw as Record<string, unknown>).id === identity.id
+              canonicalProductId((raw as Record<string, unknown>).id) === identity.id
             );
           return { check: valid
             ? { status: "ok", http_status: response.status }
@@ -478,9 +527,20 @@ async function checkEndpoint(
         const results = data && typeof data === "object" && !Array.isArray(data)
           ? (data as { results?: unknown }).results
           : null;
+        // The baseline proves that the catalog has a usable product. Later
+        // pages only help locate an article-bearing identity; a complete page
+        // of restricted or otherwise unusable products is not a schema error.
         const validProducts = Array.isArray(results) &&
-          hasUsableProduct(results);
-        if (envelope?.success === false || !validProducts) {
+          (productPage > 1
+            ? results.every((raw) => !!raw && typeof raw === "object" && !Array.isArray(raw))
+            : hasUsableProduct(results));
+        const pagination = Array.isArray(results)
+          ? readProductPagination(data, productPage, results)
+          : null;
+        if (envelope?.success === false ||
+          (productPage > 1 && envelope?.success !== undefined && envelope.success !== true) ||
+          !validProducts ||
+          (productPage > 1 && !pagination)) {
           return { check: {
             status: "unavailable",
             http_status: response.status,
@@ -490,6 +550,7 @@ async function checkEndpoint(
         return {
           check: { status: "ok", http_status: response.status },
           results: results as unknown[],
+          ...(pagination ? { pagination } : {}),
         };
       })(),
       timeout,
@@ -508,6 +569,44 @@ async function checkEndpoint(
     if (timeoutId !== undefined) clearTimeout(timeoutId);
     controller.abort();
   }
+}
+
+/** A tiny read-only probe when page one has no usable article; never guess a SKU. */
+async function findProductIdentity(
+  deps: CatalogClientDeps,
+  baseline: EndpointResult,
+): Promise<{ identity: ProductIdentity | null; failure?: CheckResult }> {
+  const first = representativeProductIdentity(baseline.results ?? []);
+  if (first) return { identity: first };
+  const pagination = baseline.pagination;
+  if (!pagination) return { identity: null };
+  const deadline = Date.now() + Math.min(deps.timeoutMs ?? CHECK_TIMEOUT_MS, CHECK_TIMEOUT_MS);
+  for (let page = 2; page <= Math.min(pagination.pages, MAX_IDENTITY_PAGES); page++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return { identity: null, failure: {
+        status: "unavailable", http_status: null, classification: "transport",
+      } };
+    }
+    const result = await checkEndpoint("products", {
+      ...deps,
+      timeoutMs: Math.max(1, Math.min(deps.timeoutMs ?? CHECK_TIMEOUT_MS, remaining)),
+    }, undefined, undefined, page);
+    if (result.check.status !== "ok") {
+      return { identity: null, failure: result.check };
+    }
+    const current = result.pagination;
+    if (!current || current.pages !== pagination.pages ||
+      current.per_page !== pagination.per_page || current.total !== pagination.total) {
+      return { identity: null, failure: {
+        status: "unavailable", http_status: result.check.http_status,
+        classification: "schema_error",
+      } };
+    }
+    const identity = representativeProductIdentity(result.results ?? []);
+    if (identity) return { identity };
+  }
+  return { identity: null };
 }
 
 /**
@@ -552,22 +651,28 @@ export async function runCatalogHealthPreflight(
       checks,
     };
   }
-  const identity = representativeProductIdentity(productResult.results ?? []);
+  const facetPromise = checkEndpoint("facets", deps, leaf);
+  const { identity, failure } = await findProductIdentity(deps, productResult);
   if (!identity) {
+    const facets = (await facetPromise).check;
+    const article_filter = failure ?? {
+      status: "unavailable", http_status: null, classification: "schema_error" as const,
+    };
     return {
       ok: false,
       status: "unavailable",
-      classification: "schema_error",
+      classification: facets.status !== "ok"
+        ? facets.classification ?? "upstream"
+        : article_filter.classification ?? "schema_error",
       checks: {
         ...checks,
-        article_filter: {
-          status: "unavailable", http_status: null, classification: "schema_error",
-        },
+        facets,
+        article_filter,
       },
     };
   }
   const [facetResult, articleResult] = await Promise.all([
-    checkEndpoint("facets", deps, leaf),
+    facetPromise,
     checkEndpoint("article_filter", deps, undefined, identity),
   ]);
   const facets = facetResult.check;

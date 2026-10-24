@@ -2,10 +2,11 @@
  * Exact customer category health still needs the separate private route probe. */
 export const CATALOG_QA_SECRET_ENV = 'VOLT220_V3_CATALOG_QA_SECRET';
 export const CATALOG_QA_SECRET_HEADER = 'x-catalog-qa-secret';
-// Settings load (8 s), parallel base routes (8 s), then validated live
-// facet and exact-article routes in parallel (8 s). Keep one bounded outer
-// deadline above their maximum.
-export const CATALOG_PREFLIGHT_TIMEOUT_MS = 28_000;
+// Settings load (8 s), parallel base routes (8 s), bounded page-2/3 identity
+// discovery (8 s), then exact-article verification (8 s). The facet probe
+// overlaps discovery; leave 8 s for network/response overhead outside the
+// server's worst-case 32 s route budget.
+export const CATALOG_PREFLIGHT_TIMEOUT_MS = 40_000;
 
 const projectOrigin = 'https://yngoixmvmxdfxokuafjp.supabase.co';
 const functionPaths = new Set([
@@ -14,6 +15,24 @@ const functionPaths = new Set([
   '/functions/v1/chat-consultant-v3-closure-preview',
 ]);
 const classifications = new Set(['auth', 'route', 'rate_limit', 'upstream', 'transport', 'schema_error']);
+const checkNames = ['categories', 'products', 'facets', 'article_filter'];
+
+/** Keep only bounded diagnostic values, never provider-controlled text. */
+function safeChecks(checks) {
+  return Object.fromEntries(checkNames.map((name) => {
+    const check = checks && typeof checks === 'object' && !Array.isArray(checks)
+      ? checks[name] : null;
+    const status = check?.status === 'ok' || check?.status === 'unavailable'
+      ? check.status : 'not_run';
+    return [name, {
+      status,
+      ...(Number.isSafeInteger(check?.http_status) && check.http_status >= 100 &&
+          check.http_status <= 599 ? { http_status: check.http_status } : {}),
+      ...(classifications.has(check?.classification)
+        ? { classification: check.classification } : {}),
+    }];
+  }));
+}
 
 function isLocalEndpoint(endpoint) {
   try {
@@ -91,11 +110,12 @@ export async function runCatalogHealthPreflight({
   timeoutMs = CATALOG_PREFLIGHT_TIMEOUT_MS,
 } = {}) {
   const started = Date.now();
-  const result = (ok, classification = null, httpStatus = null) => ({
+  const result = (ok, classification = null, httpStatus = null, checks = null) => ({
     ok,
     status: ok ? 'ready' : 'unavailable',
     ...(classification ? { classification } : {}),
     ...(httpStatus !== null ? { http_status: httpStatus } : {}),
+    ...(checks !== null ? { checks: safeChecks(checks) } : {}),
     duration_ms: Date.now() - started,
   });
   // Check the destination before reading or attaching a private credential.
@@ -143,13 +163,13 @@ export async function runCatalogHealthPreflight({
       body.checks?.facets?.status === 'ok' && body.checks?.article_filter?.status === 'ok' &&
       body.checks.categories.http_status === 200 && body.checks.products.http_status === 200 &&
       body.checks.facets.http_status === 200 && body.checks.article_filter.http_status === 200) {
-      return result(true, null, status);
+      return result(true, null, status, body.checks);
     }
     const serverClassification = body?.classification;
     return result(false,
       status === 200 ? 'schema_error'
         : classifications.has(serverClassification) ? serverClassification : classifyStatus(status),
-      status);
+      status, body?.checks);
   } catch {
     return result(false, 'transport');
   } finally {

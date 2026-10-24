@@ -18,6 +18,10 @@ export const CLOSURE_PREFLIGHT_TIMEOUT_MS = 40_000;
 
 const secretPattern = /^[A-Za-z0-9_-]{32,256}$/;
 const publicJwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const checkNames = ['categories', 'products', 'facets', 'article_filter'];
+const checkClassifications = new Set([
+  'auth', 'route', 'rate_limit', 'upstream', 'transport', 'schema_error',
+]);
 
 function publicWidgetKey(widgetSource) {
   const key = widgetSource.match(/supabaseKey:\s*'([^']+)'/)?.[1];
@@ -26,20 +30,36 @@ function publicWidgetKey(widgetSource) {
     : null;
 }
 
+function safeChecks(checks) {
+  return Object.fromEntries(checkNames.map((name) => {
+    const check = checks && typeof checks === 'object' && !Array.isArray(checks)
+      ? checks[name] : null;
+    return [name, {
+      status: check?.status === 'ok' || check?.status === 'unavailable'
+        ? check.status : 'not_run',
+      ...(Number.isSafeInteger(check?.http_status) && check.http_status >= 100 &&
+          check.http_status <= 599 ? { http_status: check.http_status } : {}),
+      ...(checkClassifications.has(check?.classification)
+        ? { classification: check.classification } : {}),
+    }];
+  }));
+}
+
 /** Only whitelisted, non-sensitive fields leave this process. */
 function safeSummary(result) {
   return {
     ok: result.ok === true,
-    status: result.ok === true ? 'ready' : 'unavailable',
+    status: result.ok === true ? 'ready'
+      : result.status === 'not_run' ? 'not_run' : 'unavailable',
     ...(typeof result.classification === 'string' &&
-        ['auth', 'route', 'rate_limit', 'upstream', 'transport', 'schema_error', 'config']
-          .includes(result.classification)
+        (checkClassifications.has(result.classification) || result.classification === 'config')
       ? { classification: result.classification }
       : {}),
     ...(Number.isSafeInteger(result.http_status) && result.http_status >= 100 &&
         result.http_status <= 599
       ? { http_status: result.http_status }
       : {}),
+    checks: safeChecks(result.checks),
   };
 }
 
@@ -51,7 +71,7 @@ export async function main({
   emit = (summary) => process.stdout.write(`${JSON.stringify(summary)}\n`),
 } = {}) {
   const configFailure = () => {
-    emit({ ok: false, status: 'not_run', classification: 'config' });
+    emit(safeSummary({ ok: false, status: 'not_run', classification: 'config' }));
     return 2;
   };
   // No caller-provided endpoint, redirect target, or secret-bearing CLI args.
@@ -96,7 +116,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exitCode = await main();
   } catch {
     // Never print a thrown request or provider error: it may contain headers.
-    process.stderr.write('{"ok":false,"status":"unavailable","classification":"transport"}\n');
+    process.stderr.write(`${JSON.stringify(safeSummary({
+      ok: false, status: 'unavailable', classification: 'transport',
+    }))}\n`);
     process.exitCode = 1;
   }
 }
