@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "projectRef": "yngoixmvmxdfxokuafjp",
-  "runtime_source_commit_sha": "d049be0c307487445f9347af310086ebdb5ac44f",
+  "runtime_source_commit_sha": "dfd61a2b71162c8bb4af57c043963e111d2dd241",
   "widgetVersion": "widget-23a6d944053a770b",
   "previewFunctions": {
     "chat-consultant-closure-preview": {
@@ -15,8 +15,8 @@
       "verify_jwt": true
     },
     "chat-consultant-v3-closure-preview": {
-      "version": 186,
-      "ezbr_sha256": "3c0972e7427207c78f8bf2871f0d55b29d67f83456b99ee7a8c4a9add7631a25",
+      "version": 187,
+      "ezbr_sha256": "766773a70f98a31e9251e5191c50931eab6ed25a19b1d8d9b70020a380351cf7",
       "verify_jwt": true
     },
     "search-products-closure-preview": {
