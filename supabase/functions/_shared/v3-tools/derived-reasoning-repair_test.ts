@@ -487,18 +487,9 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   );
   assertEquals(correctionStart >= 0 && correctionEnd > correctionStart, true);
   const correctionCall = source.slice(correctionStart, correctionEnd);
-  assertStringIncludes(
-    source,
-    "const correctionModelRouting = proCorrectionRoute?.modelRouting ??",
-  );
-  assertStringIncludes(source, "GENERAL_INQUIRY_MODEL_ROUTING;");
-  assertStringIncludes(
-    correctionCall,
-    "productionProCorrectionRoute",
-  );
   assertStringIncludes(correctionCall, "runProductMeasurementCorrection({");
   assertEquals(
-    /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*&&\s*!proCorrectionRoute\s*,/u
+    /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*,/u
       .test(correctionCall),
     true,
   );
@@ -530,7 +521,7 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
       '["declare_selection_reasoning"],',
       '"declare_selection_reasoning",',
       "[reasoningToolSchema],",
-      "correctionModelRouting,",
+      "GENERAL_INQUIRY_MODEL_ROUTING,",
     ]
   ) {
     assertStringIncludes(correctionCall, mandatoryArg);

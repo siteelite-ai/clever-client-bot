@@ -34,7 +34,7 @@ Deno.test("a certified live IP range is known before deciding whether to repair 
   );
   const repairCall = position("return callOpenRouter(", correctionAttempt);
   const repairAssignment = position(
-    "runProductMeasurementCorrection({",
+    "structuredReasoning = await runProductMeasurementCorrection({",
     repairCall,
   );
   assert(range < repairGuard && repairGuard < repairDecision);
