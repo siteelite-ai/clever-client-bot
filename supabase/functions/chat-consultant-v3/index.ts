@@ -869,6 +869,36 @@ export function runProductMeasurementCorrection<T>(input: {
     ? retryConfirmedUpstreamHttp5xxOnce(input)
     : input.attempt(input.initialTimeoutMs);
 }
+
+/** Production-only recovery for the Pro measurement correction. A failed
+ * provider call may use the previous model once, but only while the turn still
+ * has enough time. Auth, quota and rate-limit failures are not retried. */
+export async function runProductMeasurementProCorrectionWithFallback<T>(input: {
+  attemptPro: (timeoutMs: number) => Promise<T>;
+  attemptLegacy: (timeoutMs: number) => Promise<T>;
+  proTimeoutMs: number;
+  fallbackTimeoutMs: () => number | null;
+  signal: AbortSignal;
+  onFallback?: (error: unknown, timeoutMs: number) => void;
+}): Promise<T> {
+  try {
+    return await input.attemptPro(input.proTimeoutMs);
+  } catch (error) {
+    if (input.signal.aborted) throw error;
+    const recoverableHttp = error instanceof UpstreamHttpError &&
+      error.status >= 500 && error.status < 600;
+    const recoverableTimeout = error instanceof Error &&
+      (error.name === "TimeoutError" ||
+        error.message.includes("llm_call_timeout:"));
+    if (!recoverableHttp && !recoverableTimeout) throw error;
+    const timeoutMs = input.fallbackTimeoutMs();
+    if (timeoutMs === null || !Number.isFinite(timeoutMs) ||
+      timeoutMs < 2_500) throw error;
+    input.onFallback?.(error, timeoutMs);
+    if (input.signal.aborted) throw error;
+    return await input.attemptLegacy(timeoutMs);
+  }
+}
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,
   globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
@@ -903,13 +933,21 @@ const DERIVED_REASONING_LOVABLE_RETRY_ENABLED =
     apiKey: DERIVED_REASONING_LOVABLE_RETRY_KEY,
   });
 
-/** A closed-QA-only model experiment. Neither production nor ordinary preview
- * can activate this route from a project-wide environment variable alone. */
+/** This source release enables only the production measurement correction.
+ * An Owner can disable it without redeploying by setting this exact server-side
+ * flag to "false"; ordinary preview remains isolated from the flag. */
+const PRODUCT_MEASUREMENT_PRO_PRODUCTION_RELEASE_ENABLED =
+  Deno.env.get("VOLT220_PRODUCT_MEASUREMENT_PRO_PRODUCTION_ENABLED") !==
+    "false";
 export function productMeasurementProCorrectionEnabled(input: {
   admissionScope: ChatV3AdmissionScope;
   closureScope: unknown;
   enabled: string | null | undefined;
+  productionEnabled?: boolean;
 }): boolean {
+  if (input.admissionScope === "production") {
+    return input.productionEnabled === true;
+  }
   return input.admissionScope === "preview" &&
     input.closureScope === "closure_preview" && input.enabled === "true";
 }
@@ -920,6 +958,7 @@ const PRODUCT_MEASUREMENT_PRO_CORRECTION_ENABLED =
     enabled: Deno.env.get(
       "VOLT220_PRODUCT_MEASUREMENT_PRO_CLOSURE_PREVIEW_ENABLED",
     ),
+    productionEnabled: PRODUCT_MEASUREMENT_PRO_PRODUCTION_RELEASE_ENABLED,
   });
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
@@ -13026,18 +13065,25 @@ async function runExpertLoop(
                 repairReason,
                 enabled: PRODUCT_MEASUREMENT_PRO_CORRECTION_ENABLED,
               });
+              const productionProCorrectionRoute = Boolean(proCorrectionRoute) &&
+                ADMISSION_SCOPE === "production";
+              const legacyCorrectionProviderRoute =
+                DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  ? "openrouter_only"
+                  : "configured";
               const correctionModelRouting = proCorrectionRoute?.modelRouting ??
                 GENERAL_INQUIRY_MODEL_ROUTING;
               const correctionProviderRoute = proCorrectionRoute?.providerRoute ??
-                (DERIVED_REASONING_LOVABLE_RETRY_ENABLED
-                  ? "openrouter_only"
-                  : "configured");
+                legacyCorrectionProviderRoute;
               const correctionRoutingMeta = {
                 ...("model" in correctionModelRouting
                   ? { requested_model: correctionModelRouting.model }
                   : { requested_models: correctionModelRouting.models }),
                 requested_provider_route: correctionProviderRoute,
               };
+              let effectiveCorrectionRoutingMeta: Record<string, unknown> =
+                correctionRoutingMeta;
+              let effectiveCorrectionTimeoutMs = correctionTimeout;
               if (proCorrectionRoute) {
                 steps.push({
                   step: "v3_product_measurement_pro_correction_route",
@@ -13065,36 +13111,112 @@ async function runExpertLoop(
                   correctionProviderRoute,
                 );
               };
+              const legacyCorrectionAttempt = (timeoutMs: number) => {
+                derivedReasoningProviderAttempts += 1;
+                return callOpenRouter(
+                  apiKey,
+                  correctionMessages,
+                  turnController.signal,
+                  timeoutMs,
+                  "derived_reasoning",
+                  ["declare_selection_reasoning"],
+                  "declare_selection_reasoning",
+                  0,
+                  [reasoningToolSchema],
+                  1200,
+                  { model: GENERAL_INQUIRY_MODEL },
+                  "openrouter_only",
+                );
+              };
               try {
-                structuredReasoning = await runProductMeasurementCorrection({
-                  repairReason,
-                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
-                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED &&
-                    !proCorrectionRoute,
-                  attempt: correctionAttempt,
-                  initialTimeoutMs: correctionTimeout,
-                  retryTimeoutMs: () =>
-                    boundedAgentStepTimeout(
-                      LLM_TIMEOUT_DERIVED_RETRY_MS,
-                      now(),
-                      DERIVED_REASONING_SOFT_DEADLINE_MS,
-                      MIN_AGENT_STEP_BUDGET_MS,
-                    ),
-                  signal: turnController.signal,
-                  onRetry: (httpError, retryTimeoutMs) => {
-                    steps.push({
-                      step: "v3_product_measurement_correction_http_retry",
-                      ms: now(),
-                      meta: {
-                        ...correctionRoutingMeta,
-                        upstream_status: httpError.status,
-                        ...upstreamFailureDiagnosticMeta(httpError),
-                        initial_timeout_ms: correctionTimeout,
-                        retry_timeout_ms: retryTimeoutMs,
-                      },
-                    });
-                  },
-                });
+                structuredReasoning = productionProCorrectionRoute
+                  ? await runProductMeasurementProCorrectionWithFallback({
+                    attemptPro: async (timeoutMs) => {
+                      const response = await correctionAttempt(timeoutMs);
+                      const proposedCall = cleanDeclarationCall(
+                        response.toolCalls.find((toolCall) =>
+                          toolCall.name === "declare_selection_reasoning"
+                        ),
+                      );
+                      const proposedDeclaration = proposedCall
+                        ? cleanResolvedDeclaration(
+                          resolvePairedDeclaration(proposedCall.args),
+                        )
+                        : null;
+                      if (!proposedDeclaration?.text.trim()) {
+                        throw new UpstreamHttpError(
+                          502,
+                          "Pro correction returned no usable declaration",
+                          {
+                            origin: "completion_envelope",
+                            observedHttpStatus: response.httpStatus ?? 200,
+                            provider: "openrouter",
+                          },
+                        );
+                      }
+                      return response;
+                    },
+                    attemptLegacy: legacyCorrectionAttempt,
+                    proTimeoutMs: correctionTimeout,
+                    fallbackTimeoutMs: () =>
+                      boundedAgentStepTimeout(
+                        LLM_TIMEOUT_DERIVED_RETRY_MS,
+                        now(),
+                        DERIVED_REASONING_SOFT_DEADLINE_MS,
+                        MIN_AGENT_STEP_BUDGET_MS,
+                      ),
+                    signal: turnController.signal,
+                    onFallback: (error, fallbackTimeoutMs) => {
+                      effectiveCorrectionRoutingMeta = {
+                        requested_model: GENERAL_INQUIRY_MODEL,
+                        requested_provider_route: "openrouter_only",
+                      };
+                      effectiveCorrectionTimeoutMs = fallbackTimeoutMs;
+                      steps.push({
+                        step: "v3_product_measurement_pro_correction_fallback",
+                        ms: now(),
+                        meta: {
+                          initial_requested_model:
+                            PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL,
+                          fallback_requested_model: GENERAL_INQUIRY_MODEL,
+                          fallback_timeout_ms: fallbackTimeoutMs,
+                          upstream_status: error instanceof UpstreamHttpError
+                            ? error.status
+                            : null,
+                          ...upstreamFailureDiagnosticMeta(error),
+                        },
+                      });
+                    },
+                  })
+                  : await runProductMeasurementCorrection({
+                    repairReason,
+                    retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
+                      !DERIVED_REASONING_LOVABLE_RETRY_ENABLED &&
+                      !proCorrectionRoute,
+                    attempt: correctionAttempt,
+                    initialTimeoutMs: correctionTimeout,
+                    retryTimeoutMs: () =>
+                      boundedAgentStepTimeout(
+                        LLM_TIMEOUT_DERIVED_RETRY_MS,
+                        now(),
+                        DERIVED_REASONING_SOFT_DEADLINE_MS,
+                        MIN_AGENT_STEP_BUDGET_MS,
+                      ),
+                    signal: turnController.signal,
+                    onRetry: (httpError, retryTimeoutMs) => {
+                      steps.push({
+                        step: "v3_product_measurement_correction_http_retry",
+                        ms: now(),
+                        meta: {
+                          ...correctionRoutingMeta,
+                          upstream_status: httpError.status,
+                          ...upstreamFailureDiagnosticMeta(httpError),
+                          initial_timeout_ms: correctionTimeout,
+                          retry_timeout_ms: retryTimeoutMs,
+                        },
+                      });
+                    },
+                  });
               } catch (correctionError) {
                 const correctionFailure = classifyPublicFailure(correctionError);
                 // A cancelled turn is not a failed declaration. Let the outer
@@ -13127,14 +13249,14 @@ async function runExpertLoop(
                     step: "v3_product_measurement_correction_failed",
                     ms: now(),
                     meta: {
-                      ...correctionRoutingMeta,
+                      ...effectiveCorrectionRoutingMeta,
                       error_category: correctionFailure.kind,
                       upstream_status: correctionError instanceof
                           UpstreamHttpError
                         ? correctionError.status
                         : null,
                       ...upstreamFailureDiagnosticMeta(correctionError),
-                      timeout_ms: correctionTimeout,
+                      timeout_ms: effectiveCorrectionTimeoutMs,
                     },
                   });
                   return stopForUnverifiedProductMeasurement(
@@ -13161,10 +13283,10 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   repair_reason: repairReason,
-                  ...correctionRoutingMeta,
+                  ...effectiveCorrectionRoutingMeta,
                   response_provider: structuredReasoning.provider ?? null,
                   observed_http_status: structuredReasoning.httpStatus ?? null,
-                  timeout_ms: correctionTimeout,
+                  timeout_ms: effectiveCorrectionTimeoutMs,
                   recovered: Boolean(
                     declaration?.text.trim() &&
                       !missingRequiredProductMeasurement() &&

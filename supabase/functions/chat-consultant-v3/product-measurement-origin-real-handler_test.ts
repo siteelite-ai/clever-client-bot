@@ -1,6 +1,6 @@
-// The real HTTP/SSE handler must persist the provenance of two different
-// provider failures during a product-measurement correction. All outbound
-// traffic is replaced with fixture responses; no paid request is made.
+// The real HTTP/SSE handler must keep Pro scoped to product-measurement
+// correction, with one bounded legacy-model fallback on a transient Pro
+// failure. All outbound traffic uses fixture responses; no paid request is made.
 import {
   assert,
   assertEquals,
@@ -12,7 +12,12 @@ import {
 import "./index.ts";
 
 type Step = { step?: string; meta?: Record<string, unknown> };
-type Variant = "http_502" | "unusable_http_200" | "valid_correction";
+type Variant =
+  | "http_502"
+  | "unusable_http_200"
+  | "valid_correction"
+  | "fallback_success"
+  | "malformed_tool_200_fallback_success";
 type CorrectionRequest = { model?: string; models?: string[] };
 const productionHandler = offlineHandler();
 const offlineEnvGet = Deno.env.get;
@@ -119,7 +124,10 @@ async function runFailure(
         }
         if (url.pathname === "/api/products") {
           catalogProductRequests++;
-          if (variant === "valid_correction") {
+          if (
+            variant === "valid_correction" || variant === "fallback_success" ||
+            variant === "malformed_tool_200_fallback_success"
+          ) {
             return json({
               data: { results: [], pagination: { total: 0 } },
             });
@@ -148,7 +156,12 @@ async function runFailure(
           if (correction) {
             correctionRequests++;
             correctionBodies.push(body);
-            if (variant === "valid_correction") {
+            if (
+              variant === "valid_correction" ||
+              ((variant === "fallback_success" ||
+                variant === "malformed_tool_200_fallback_success") &&
+                body.model === "google/gemini-2.5-flash")
+            ) {
               return json({
                 choices: [{
                   finish_reason: "tool_calls",
@@ -174,7 +187,20 @@ async function runFailure(
                 }],
               });
             }
-            return variant === "http_502"
+            if (variant === "malformed_tool_200_fallback_success") {
+              // A nominally successful completion with a choice and text is
+              // still unusable for this forced structured declaration.
+              return json({
+                choices: [{
+                  finish_reason: "stop",
+                  message: {
+                    content: "I would choose a 500 VA UPS.",
+                    tool_calls: [],
+                  },
+                }],
+              });
+            }
+            return variant === "http_502" || variant === "fallback_success"
               ? json({ error: "fixture provider failure" }, 502)
               : json({ choices: [] }, 200);
           }
@@ -242,7 +268,10 @@ async function runFailure(
             }],
           });
         }
-        if (variant === "valid_correction") {
+        if (
+          variant === "valid_correction" || variant === "fallback_success" ||
+          variant === "malformed_tool_200_fallback_success"
+        ) {
           return json({
             choices: [{
               finish_reason: "stop",
@@ -280,7 +309,11 @@ async function runFailure(
     );
     assertEquals(response.status, 200);
     const events = sseEvents(await response.text());
-    assertEquals(declarationRequests, 2, JSON.stringify(steps));
+    assertEquals(
+      declarationRequests,
+      1 + correctionRequests,
+      JSON.stringify(steps),
+    );
     return {
       steps,
       events,
@@ -298,12 +331,55 @@ async function runFailure(
 
 Deno.test({
   name:
-    "real handler records HTTP 502 versus unusable HTTP 200 correction origin without an OFF retry",
+    "production handler tries Pro only for measurement correction, then one legacy fallback on retryable failure",
   permissions: { read: true, env: false, net: false },
   async fn() {
     try {
       for (const variant of ["http_502", "unusable_http_200"] as const) {
         const result = await runFailure(variant);
+        const route = result.steps.find(({ step }) =>
+          step === "v3_product_measurement_pro_correction_route"
+        );
+        assertEquals(
+          route?.meta?.requested_model,
+          "deepseek/deepseek-v4-pro-0813",
+        );
+        assertEquals(route?.meta?.requested_provider_route, "openrouter_only");
+        const fallback = result.steps.find(({ step }) =>
+          step === "v3_product_measurement_pro_correction_fallback"
+        );
+        assert(fallback, JSON.stringify(result.steps));
+        assertEquals(
+          fallback.meta?.initial_requested_model,
+          "deepseek/deepseek-v4-pro-0813",
+        );
+        assertEquals(
+          fallback.meta?.fallback_requested_model,
+          "google/gemini-2.5-flash",
+        );
+        assertEquals(fallback.meta?.upstream_status, 502);
+        assertEquals(
+          fallback.meta?.upstream_origin,
+          variant === "http_502" ? "http_response" : "completion_envelope",
+        );
+        assertEquals(
+          fallback.meta?.observed_http_status,
+          variant === "http_502" ? 502 : 200,
+        );
+        assertEquals(result.correctionRequests, 2);
+        assertEquals(
+          result.correctionBodies.map(({ model }) => model),
+          ["deepseek/deepseek-v4-pro-0813", "google/gemini-2.5-flash"],
+        );
+        assert(
+          result.modelBodies.filter((body) =>
+            !result.correctionBodies.includes(body)
+          ).every((body) =>
+            body.model !== "deepseek/deepseek-v4-pro-0813" &&
+            !body.models?.includes("deepseek/deepseek-v4-pro-0813")
+          ),
+          "Classification and primary reasoning must not switch to Pro",
+        );
         const failure = result.steps.find(({ step }) =>
           step === "v3_product_measurement_correction_failed"
         );
@@ -320,12 +396,6 @@ Deno.test({
         assertEquals(failure.meta?.upstream_provider, "openrouter");
         assertEquals(failure.meta?.provider_failed_over, false);
         assertEquals(failure.meta?.requested_model, "google/gemini-2.5-flash");
-        assertEquals(result.correctionRequests, 1);
-        assertEquals(
-          result.correctionBodies[0].model,
-          "google/gemini-2.5-flash",
-        );
-        assertEquals(result.correctionBodies[0].models, undefined);
         assertEquals(result.catalogProductRequests, 0);
         assertEquals(
           result.steps.some(({ step }) =>
@@ -349,6 +419,65 @@ Deno.test({
           !JSON.stringify(result.events).includes("fixture provider failure"),
         );
       }
+
+      for (
+        const variant of [
+          "fallback_success",
+          "malformed_tool_200_fallback_success",
+        ] as const
+      ) {
+        const recovered = await runFailure(variant);
+        assertEquals(
+          recovered.correctionBodies.map(({ model }) => model),
+          ["deepseek/deepseek-v4-pro-0813", "google/gemini-2.5-flash"],
+        );
+        const fallback = recovered.steps.find(({ step }) =>
+          step === "v3_product_measurement_pro_correction_fallback"
+        );
+        assert(fallback, JSON.stringify(recovered.steps));
+        assertEquals(fallback.meta?.upstream_status, 502);
+        assertEquals(
+          fallback.meta?.upstream_origin,
+          variant === "fallback_success"
+            ? "http_response"
+            : "completion_envelope",
+        );
+        assertEquals(
+          fallback.meta?.observed_http_status,
+          variant === "fallback_success" ? 502 : 200,
+        );
+        const corrected = recovered.steps.find(({ step, meta }) =>
+          step === "v3_derived_selection_measurement_retry" &&
+          meta?.repair_reason === "product_measurement"
+        );
+        assert(corrected, JSON.stringify(recovered.steps));
+        assertEquals(
+          corrected.meta?.requested_model,
+          "google/gemini-2.5-flash",
+        );
+        assertEquals(corrected.meta?.recovered, true);
+        assert(recovered.catalogProductRequests > 0);
+        assertEquals(
+          recovered.steps.some(({ step }) =>
+            step === "v3_product_measurement_correction_failed" ||
+            step === "v3_product_measurement_unverified"
+          ),
+          false,
+        );
+      }
+
+      const firstTry = await runFailure("valid_correction");
+      assertEquals(firstTry.correctionRequests, 1);
+      assertEquals(
+        firstTry.correctionBodies[0].model,
+        "deepseek/deepseek-v4-pro-0813",
+      );
+      assertEquals(
+        firstTry.steps.some(({ step }) =>
+          step === "v3_product_measurement_pro_correction_fallback"
+        ),
+        false,
+      );
     } finally {
       restoreOfflineModuleSetup();
     }
