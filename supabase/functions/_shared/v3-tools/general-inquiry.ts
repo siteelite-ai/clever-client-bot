@@ -45,6 +45,16 @@ function policyWords(value: string): string[] {
  */
 type PolicyScope = { kind: "place" | "mode" | "carrier" | "method" | "number"; value: string };
 
+// A payment method is a typed facet, not the arbitrary word following
+// "оплатить": in "Как оплатить заказ?" заказ is the verb's object.
+const PAYMENT_METHODS = [
+  { id: "kaspi", pattern: /(?:^|[^\p{L}])(?:kaspi|каспи)(?=$|[^\p{L}])/u },
+  { id: "card", pattern: /(?:^|[^\p{L}])(?:карт\p{L}*|visa|mastercard)(?=$|[^\p{L}])/u },
+  { id: "cash", pattern: /(?:^|[^\p{L}])(?:налич\p{L}*|налом)(?=$|[^\p{L}])/u },
+  { id: "receipt", pattern: /(?:^|[^\p{L}])(?:при\s+получен\p{L}*|наложенн\p{L}*\s+платеж\p{L}*)(?=$|[^\p{L}])/u },
+  { id: "online", pattern: /(?:^|[^\p{L}])(?:онлайн|online|безналич\p{L}*)(?=$|[^\p{L}])/u },
+] as const;
+
 function explicitPolicyScope(message: string): PolicyScope[] {
   const normalized = message.toLocaleLowerCase("ru").replace(/ё/gu, "е");
   const scopes = new Map<string, PolicyScope>();
@@ -70,13 +80,10 @@ function explicitPolicyScope(message: string): PolicyScope[] {
     const value = word.length > 4 ? word.slice(0, -1) : word;
     scopes.set(`place:${value}`, { kind: "place", value });
   }
-  for (const match of normalized.matchAll(/(?:^|[^\p{L}])(?:оплат\p{L}*|рассроч\p{L}*)\s+([\p{L}][\p{L}\d-]*)/gu)) {
-    const word = match[1];
-    // A directly named payment method is a customer constraint even without
-    // "через": "Оплата Kaspi?" must not quote a cash-only KB sentence.
-    if (/^(?:по|в|во|из|до|через|при|с|со)$/u.test(word)) continue;
-    const value = word.length > 4 ? word.slice(0, -1) : word;
-    scopes.set(`method:${value}`, { kind: "method", value });
+  for (const method of PAYMENT_METHODS) {
+    if (method.pattern.test(normalized)) {
+      scopes.set(`method:${method.id}`, { kind: "method", value: method.id });
+    }
   }
   for (const number of normalized.match(/\d+/gu) ?? []) {
     scopes.set(`number:${number}`, { kind: "number", value: number });
@@ -144,7 +151,10 @@ export function buildStorePolicyEvidenceAnswer(
       const passageTopic = factTopicMentions[0]?.topic ?? sourceTopics[0];
       if (!topics.includes(passageTopic) || !sourceTopics.includes(passageTopic)) continue;
       const words = policyWords(`${title} ${fact}`);
-      if (!scope.every((requested) => words.some((word) => scopeWordMatches(requested, word)))) continue;
+      const evidenceScopes = explicitPolicyScope(`${title} ${fact}`);
+      if (!scope.every((requested) => requested.kind === "method"
+        ? evidenceScopes.some((candidate) => candidate.kind === "method" && candidate.value === requested.value)
+        : words.some((word) => scopeWordMatches(requested, word)))) continue;
       const factScopes = explicitPolicyScope(fact);
       if (scope.some((requested) => {
         // A heading may supply context; a conflicting detail in this fact
@@ -153,6 +163,9 @@ export function buildStorePolicyEvidenceAnswer(
         if (sameKind.length === 0) return false;
         if (requested.kind === "place" && sameKind.some((candidate) => candidate.value !== requested.value)) {
           return true;
+        }
+        if (requested.kind === "method") {
+          return !sameKind.some((candidate) => candidate.value === requested.value);
         }
         return !sameKind.some((candidate) => candidate.value === requested.value) &&
           !policyWords(fact).some((word) => scopeWordMatches(requested, word));

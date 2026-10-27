@@ -102,6 +102,28 @@ Deno.test("a payment-method name without a preposition must be supported by the 
   assert(supported.text?.includes("Kaspi"));
 });
 
+Deno.test("payment verb object is not mistaken for a requested payment method", () => {
+  const answer = buildStorePolicyEvidenceAnswer("Как оплатить заказ?", [
+    { title: "Оплата", snippet: "Оплатить заказ можно банковской картой." },
+  ]);
+  assertEquals(answer.matched, 1);
+  assert(answer.text?.includes("банковской картой"));
+});
+
+Deno.test("payment on receipt does not inherit an online-only KB policy", () => {
+  assertEquals(buildStorePolicyEvidenceAnswer("Оплата при получении?", [
+    { title: "Оплата", snippet: "Оплата доступна только онлайн." },
+  ]), { text: null, matched: 0 });
+  assertEquals(buildStorePolicyEvidenceAnswer("Оплата при получении?", [
+    { title: "Оплата при получении", snippet: "Оплата доступна только онлайн." },
+  ]), { text: null, matched: 0 });
+  const supported = buildStorePolicyEvidenceAnswer("Оплата при получении?", [
+    { title: "Оплата", snippet: "При получении заказа можно оплатить наличными." },
+  ]);
+  assertEquals(supported.matched, 1);
+  assert(supported.text?.includes("При получении"));
+});
+
 Deno.test("countrywide delivery answer omits another city's tariff in the same KB chunk", () => {
   const answer = buildStorePolicyEvidenceAnswer("Сколько стоит доставка по Казахстану?", [
     {
