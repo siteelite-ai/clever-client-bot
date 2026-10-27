@@ -404,6 +404,7 @@ import {
 } from "../_shared/v3-tools/catalog-search-outcome.ts";
 import {
   detectUserIntentMode,
+  isStorePolicyInquiry,
   requiresCatalogGroundingForInquiry,
   resolveNamedSeriesToken,
   shouldSuppressNegativeSuitabilityCard,
@@ -487,7 +488,10 @@ import {
 import { buildMeasuredBreakerGuidance } from "../_shared/v3-tools/measured-breaker-guidance.ts";
 import {
   buildGeneralInquiryMessages,
+  buildStorePolicyKnowledgeMessages,
   GENERAL_INQUIRY_UNAVAILABLE_TEXT,
+  STORE_POLICY_LOOKUP_FAILED_TEXT,
+  STORE_POLICY_UNAVAILABLE_TEXT,
   shouldAnswerGeneralInquiryDirectly,
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
@@ -27577,7 +27581,14 @@ Deno.serve(async (req) => {
                 route: "exact_inquiry",
                 userMessage,
               });
-            const generalInquiryDirect = shouldAnswerGeneralInquiryDirectly({
+            const bareItemPolicyFollowup = /^(?:а\s+)?(?:гарант\p{L}*|возврат\p{L}*|обмен\p{L}*)[?.!\s]*$/iu
+              .test(userMessage.trim());
+            const storePolicyInquiry = isStorePolicyInquiry(userMessage) &&
+              !additionalSelectionRequest && !matchedVerifiedBroadSelection &&
+              !freeformCandidate && !hasExactProductInquiry &&
+              !namedSeriesInquiryToken &&
+              !(recentProductEvidence.length > 0 && bareItemPolicyFollowup);
+            const generalInquiryDirect = !storePolicyInquiry && shouldAnswerGeneralInquiryDirectly({
               intentMode: detectUserIntentMode(userMessage),
               exactProductInquiry: hasExactProductInquiry,
               namedSeriesInquiry: Boolean(namedSeriesInquiryToken),
@@ -27606,8 +27617,9 @@ Deno.serve(async (req) => {
               ) ??
                 extractBroadAssortmentScope(userMessage)
               : null;
-            const readinessClarification = additionalSelectionRequest ||
-                matchedVerifiedBroadSelection || freeformCandidate
+            const readinessClarification = storePolicyInquiry ||
+                additionalSelectionRequest || matchedVerifiedBroadSelection ||
+                freeformCandidate
               ? null
               : selectReadinessClarification(
                 scopedSelectionRequest.message,
@@ -28303,6 +28315,93 @@ Deno.serve(async (req) => {
                 meta: { count: recentProductEvidence.length },
               });
               send({ type: "delta", content: answer });
+              productsCount = 0;
+            } else if (storePolicyInquiry) {
+              // Store conditions are not catalog facets and must never be
+              // answered by the tool-free general inquiry model from memory.
+              const knowledgeStarted = Date.now();
+              send({
+                type: "tool_event",
+                tool: "lookup_knowledge",
+                phase: "start",
+                summary: "Проверяю условия магазина…",
+              });
+              let knowledge: Awaited<ReturnType<typeof executeLookupKnowledge>> | null = null;
+              try {
+                knowledge = await executeLookupKnowledge(
+                  { query: userMessage, top_k: 5 },
+                  supabase,
+                  settings.openrouter_api_key!,
+                  INTEGRATION_SECRETS_MODE,
+                );
+              } catch {
+                // A private integration-secret failure cannot fall through to
+                // an ungrounded response about store rules.
+              }
+              send({
+                type: "tool_event",
+                tool: "lookup_knowledge",
+                phase: "result",
+                duration_ms: Date.now() - knowledgeStarted,
+                summary: knowledge
+                  ? summariseToolResult("lookup_knowledge", knowledge)
+                  : "Не удалось проверить условия",
+              });
+              const hits = knowledge?.ok ? knowledge.hits : [];
+              steps.push({
+                step: "v3_store_policy_knowledge_lookup",
+                ms: Date.now() - t0,
+                meta: {
+                  ok: Boolean(knowledge?.ok),
+                  hits: hits.length,
+                  duration_ms: Date.now() - knowledgeStarted,
+                },
+              });
+              let answered = false;
+              if (hits.length > 0) {
+                try {
+                  const inquiry = await callOpenRouter(
+                    settings.openrouter_api_key!,
+                    buildStorePolicyKnowledgeMessages(userMessage, hits),
+                    executionController.signal,
+                    LLM_TIMEOUT_TOOL_DECISION_MS,
+                    "tool_decision",
+                    [],
+                    null,
+                    0.15,
+                    [],
+                    1400,
+                    GENERAL_INQUIRY_MODEL_ROUTING,
+                  );
+                  const guarded = sanitizeIntermediateReasoning(inquiry.text);
+                  // The catalog-fact sanitizer also strips ₸ amounts; using it
+                  // here would delete KB-grounded delivery tariffs.
+                  const visible = guarded.suppressed ? "" : guarded.text.trim();
+                  if (visible) {
+                    send({ type: "delta", content: visible });
+                    answered = true;
+                    steps.push({
+                      step: "v3_store_policy_knowledge_answer",
+                      ms: Date.now() - t0,
+                      meta: { chars: visible.length, hits: hits.length },
+                    });
+                  }
+                } catch (error) {
+                  steps.push({
+                    step: "v3_store_policy_knowledge_answer_failed",
+                    ms: Date.now() - t0,
+                    meta: { error: String((error as Error)?.message ?? error) },
+                  });
+                }
+              }
+              if (!answered) {
+                send({
+                  type: "delta",
+                  content: knowledge?.ok
+                    ? STORE_POLICY_UNAVAILABLE_TEXT
+                    : STORE_POLICY_LOOKUP_FAILED_TEXT,
+                });
+              }
               productsCount = 0;
             } else if (generalInquiryDirect) {
               let answered = false;

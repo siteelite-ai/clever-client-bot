@@ -16,6 +16,42 @@ export function requiresCatalogGroundingForInquiry(message: string): boolean {
   return extractNamedSeriesToken(message) !== null;
 }
 
+/**
+ * Store terms are not product facets. A customer asking about the store's
+ * delivery, payment or after-sale rules needs knowledge-base evidence. Keep
+ * catalog requests that merely mention a service ("найди кабель с доставкой")
+ * on the selection route.
+ */
+export function isStorePolicyInquiry(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  const service = /(?:^|[^\p{L}])(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|рассрочк\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*|оферт\p{L}*)(?=$|[^\p{L}])/u;
+  if (!service.test(normalized)) return false;
+  // Per-item warranty/return questions need that item's evidence, not a
+  // generic store policy paragraph that may state a different term.
+  if (/(?:на|для|у)\s+(?:эт\p{L}*|данн\p{L}*|указанн\p{L}*|конкретн\p{L}*)\s+\p{L}+/u.test(normalized)) {
+    return false;
+  }
+
+  const policyObject = /(?:^|[^\p{L}])(?:услови\p{L}*|правил\p{L}*|тариф\p{L}*|стоимост\p{L}*|срок\p{L}*|способ\p{L}*|порядок|вариант\p{L}*)(?:\s+\p{L}+)?\s+(?:доставк\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)/u;
+  const asksPolicyAction = /(?:^|[^\p{L}])(?:как|когда|где|сколько)\s+(?:\p{L}+\s+){0,2}(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*)/u;
+  const directAvailability = /(?:^|[^\p{L}])(?:есть\s+ли|возможн\p{L}*\s+ли)\s+(?:у\s+вас\s+)?(?:доставк\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)/u;
+  const asksToLearn = /(?:хоч\p{L}*\s+узнат\p{L}*|расскаж\p{L}*|объясн\p{L}*|уточн\p{L}*)\s+(?:(?:мне|пожалуйста|про|об|о)\s+){0,3}(?:доставк\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*)/u;
+  const directTopic = /^(?:а\s+)?(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)(?=$|[^\p{L}])/u;
+  const policyQuestion = policyObject.test(normalized) ||
+    asksPolicyAction.test(normalized) || directAvailability.test(normalized) ||
+    asksToLearn.test(normalized) || directTopic.test(normalized);
+  if (!policyQuestion) return false;
+
+  const productSelection = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+  if (productSelection.test(normalized) && !policyObject.test(normalized) &&
+    !asksToLearn.test(normalized)) return false;
+  // "Есть ли кабель с доставкой?" asks about product availability, unlike
+  // "Есть ли доставка?" whose grammatical object is the service itself.
+  if (/(?:есть\s+ли|име(?:ется|ются)|прода(?:е(?:те|шь)|ются))/u.test(normalized) &&
+    !directAvailability.test(normalized) && !policyObject.test(normalized)) return false;
+  return true;
+}
+
 export function resolveNamedSeriesToken(
   message: string,
   recentDialogue: Array<{ role: "user" | "assistant"; content: string }>,

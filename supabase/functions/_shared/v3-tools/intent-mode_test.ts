@@ -1,5 +1,40 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { detectUserIntentMode, extractNamedSeriesToken, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+import { detectUserIntentMode, extractNamedSeriesToken, isStorePolicyInquiry, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+
+Deno.test("store policy questions require knowledge evidence across service topics", () => {
+  for (const question of [
+    "Какие у вас условия доставки по Казахстану?",
+    "Сколько стоит доставка до двери?",
+    "Есть ли у вас самовывоз?",
+    "Как оплатить заказ?",
+    "Расскажите о рассрочке",
+    "Какие сроки возврата товара?",
+    "Покажи способы оплаты",
+    "А гарантия?",
+    "Доставка по Казахстану",
+    "Оплата Kaspi",
+  ]) {
+    assertEquals(isStorePolicyInquiry(question), true, question);
+  }
+});
+
+Deno.test("service mentions do not hijack product selection or availability", () => {
+  for (const question of [
+    "Найди кабель ВВГ с доставкой в Алматы",
+    "Предложи варианты ламп с доставкой",
+    "Покажи автоматы со скидкой",
+    "Есть ли кабель ВВГ с доставкой?",
+    "Какие кабели есть с гарантией?",
+    "Нужен светильник с бесплатной доставкой",
+    "Доставьте мне кабель ВВГ 3×1,5",
+    "Как выбрать кабель с доставкой?",
+    "Какой срок гарантии на эту модель?",
+    "Гарантия на эту лампу?",
+    "Расскажите про лампы со скидкой",
+  ]) {
+    assertEquals(isStorePolicyInquiry(question), false, question);
+  }
+});
 
 Deno.test("suitability questions are inquiry mode", () => {
   assertEquals(detectUserIntentMode("Подойдёт или нет?"), "inquire");
