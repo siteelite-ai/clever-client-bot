@@ -17,6 +17,29 @@ export function requiresCatalogGroundingForInquiry(message: string): boolean {
 }
 
 const PRODUCT_SELECTION_VERB = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+const EXPLICIT_PRODUCT_COMMAND = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+const SOFT_PRODUCT_REQUEST = /(?:^|[^\p{L}])(?:нуж\p{L}*|хоч\p{L}*)\s+(.+)/u;
+const STORE_SERVICE_TERM = /(?:^|[^\p{L}])(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|рассрочк\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*|оферт\p{L}*)(?=$|[^\p{L}])/u;
+const SERVICE_AS_REQUEST_OBJECT = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|выбер\p{L}*|нуж\p{L}*|хоч\p{L}*)\s+(?:(?!(?:с|со|по|для)(?=$|[^\p{L}]))\p{L}+\s+){0,2}(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|рассрочк\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*|оферт\p{L}*)(?=$|[^\p{L}])/u;
+
+function hasIndependentProductTask(clause: string): boolean {
+  if (isStorePolicyInquiry(clause) || SERVICE_AS_REQUEST_OBJECT.test(clause)) return false;
+  if (EXPLICIT_PRODUCT_COMMAND.test(clause)) return true;
+  const soft = clause.match(SOFT_PRODUCT_REQUEST);
+  if (!soft) return false;
+  let objectPhrase = soft[1];
+  const service = STORE_SERVICE_TERM.exec(objectPhrase);
+  if (service) {
+    // "Нужен кабель с доставкой": the service is an adjunct to a separate
+    // product object. "Нужна быстрая доставка": it is the object itself.
+    const beforeService = objectPhrase.slice(0, service.index);
+    const adjunct = beforeService.match(/^(.*?)\s+(?:с|со|по|для)\s*$/u);
+    if (!adjunct) return false;
+    objectPhrase = adjunct[1];
+  }
+  const object = objectPhrase.match(/\p{L}{3,}/gu)?.at(-1);
+  return Boolean(object && !/ть(?:ся)?$/u.test(object));
+}
 
 /** A policy question in a separate clause must not erase a product task. */
 export function hasMixedProductPolicyRequest(message: string): boolean {
@@ -25,9 +48,8 @@ export function hasMixedProductPolicyRequest(message: string): boolean {
     .map((clause) => clause.trim())
     .filter(Boolean);
   if (clauses.length < 2) return false;
-  return clauses.some((clause) =>
-    PRODUCT_SELECTION_VERB.test(clause) && !isStorePolicyInquiry(clause)
-  ) && clauses.some((clause) => isStorePolicyInquiry(clause));
+  return clauses.some(hasIndependentProductTask) &&
+    clauses.some((clause) => isStorePolicyInquiry(clause));
 }
 
 /**
@@ -38,8 +60,7 @@ export function hasMixedProductPolicyRequest(message: string): boolean {
  */
 export function isStorePolicyInquiry(message: string): boolean {
   const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
-  const service = /(?:^|[^\p{L}])(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|рассрочк\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*|оферт\p{L}*)(?=$|[^\p{L}])/u;
-  if (!service.test(normalized)) return false;
+  if (!STORE_SERVICE_TERM.test(normalized)) return false;
   // Per-item warranty/return questions need that item's evidence, not a
   // generic store policy paragraph that may state a different term.
   if (/(?:на|для|у)\s+(?:эт\p{L}*|данн\p{L}*|указанн\p{L}*|конкретн\p{L}*)\s+\p{L}+/u.test(normalized)) {
@@ -63,7 +84,8 @@ export function isStorePolicyInquiry(message: string): boolean {
   const policyQuestion = policyObject.test(normalized) ||
     asksPolicyAction.test(normalized) || servicePermission.test(normalized) ||
     directAvailability.test(normalized) ||
-    asksToLearn.test(normalized) || directTopic.test(normalized);
+    asksToLearn.test(normalized) || directTopic.test(normalized) ||
+    SERVICE_AS_REQUEST_OBJECT.test(normalized);
   if (!policyQuestion) return false;
 
   if (hasMixedProductPolicyRequest(normalized)) {
@@ -71,7 +93,8 @@ export function isStorePolicyInquiry(message: string): boolean {
     // policy-only answer would silently discard the requested product.
     return false;
   }
-  if (PRODUCT_SELECTION_VERB.test(normalized) && !policyObject.test(normalized) &&
+  if (PRODUCT_SELECTION_VERB.test(normalized) && !SERVICE_AS_REQUEST_OBJECT.test(normalized) &&
+    !policyObject.test(normalized) &&
     !asksToLearn.test(normalized)) return false;
   // "Есть ли кабель с доставкой?" asks about product availability, unlike
   // "Есть ли доставка?" whose grammatical object is the service itself.
@@ -105,6 +128,7 @@ export function detectUserIntentMode(message: string): UserIntentMode {
   // A service explanation in a second clause must not switch an explicit
   // product selection into the tool-free informational route.
   if (hasMixedProductPolicyRequest(normalized)) return "select";
+  if (isStorePolicyInquiry(normalized)) return "inquire";
   // Explanation requests must keep their prose even when the answer also
   // contains product cards. Conversely, a catalog imperative wins over words
   // such as "характеристика": in "найди автомат ... характеристика C" that

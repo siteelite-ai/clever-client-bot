@@ -52,6 +52,9 @@ Deno.test("compound product and store-policy tasks keep product selection route"
     "Расскажи условия доставки и подбери светильник",
     "Найди кабель, потом расскажи про доставку",
     "Хочу лампу; сколько стоит доставка?",
+    "Подбери кабель и расскажи условия доставки",
+    "Нужен удлинитель с доставкой и расскажи условия оплаты",
+    "Хочу лампу с доставкой и расскажи условия оплаты",
   ]) {
     assertEquals(hasMixedProductPolicyRequest(question), true, question);
     assertEquals(isStorePolicyInquiry(question), false, question);
@@ -67,6 +70,19 @@ Deno.test("compound product and store-policy tasks keep product selection route"
   }
   assertEquals(isStorePolicyInquiry("Какие у вас условия доставки по Казахстану?"), true);
   assertEquals(detectUserIntentMode("Расскажи, чем хороша серия Галант"), "inquire");
+});
+
+Deno.test("desire for store services alone is never a product-selection clause", () => {
+  for (const question of [
+    "Нужна доставка и оплата",
+    "Хочу доставку и оплату",
+    "Нужна доставка и гарантия",
+    "Нужна быстрая доставка и оплата",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), false, question);
+    assertEquals(isStorePolicyInquiry(question), true, question);
+    assertEquals(detectUserIntentMode(question), "inquire", question);
+  }
 });
 
 Deno.test("suitability questions are inquiry mode", () => {

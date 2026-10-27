@@ -236,6 +236,21 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
 }
 
 Deno.test({
+  name: "pure delivery and payment request stays on real knowledge handler route",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn("Нужна доставка и оплата");
+    const stepNames = result.steps.map(({ step }) => step);
+    assert(stepNames.includes("v3_store_policy_knowledge_lookup"), JSON.stringify(stepNames));
+    assert(!stepNames.includes("v3_general_inquiry_direct_answer"));
+    assert(!result.requests.some((request) =>
+      request.startsWith("GET https://fixture.catalog.invalid/api/")
+    ), "a service-only request must not search catalog");
+    assertEquals(result.modelCalls, 0);
+  },
+});
+
+Deno.test({
   name: "mixed product and delivery request stays on real catalog handler route",
   permissions: { read: true, env: false, net: false },
   async fn() {
