@@ -28427,6 +28427,12 @@ Deno.serve(async (req) => {
                   settings.openrouter_api_key!,
                   INTEGRATION_SECRETS_MODE,
                 ),
+                () => executeLookupKnowledge(
+                  { query: userMessage, top_k: 10, fts_only: true },
+                  supabase,
+                  settings.openrouter_api_key!,
+                  INTEGRATION_SECRETS_MODE,
+                ),
               );
               send({
                 type: "tool_event",

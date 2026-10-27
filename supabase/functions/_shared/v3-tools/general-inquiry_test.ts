@@ -7,6 +7,7 @@ import {
   STORE_POLICY_UNAVAILABLE_TEXT,
   shouldAnswerGeneralInquiryDirectly,
 } from "./general-inquiry.ts";
+import { executeLookupKnowledge } from "./lookup-knowledge.ts";
 
 const base = {
   intentMode: "inquire" as const,
@@ -161,6 +162,108 @@ Deno.test("KB fact splitting preserves decimals and city abbreviations", () => {
   assert(!answer.text?.includes("Срок доставки"));
 });
 
+Deno.test("real payment KB chunk yields only explicit methods, not 'при наличии договора'", () => {
+  const answer = buildStorePolicyEvidenceAnswer("Какие способы оплаты доступны?", [
+    {
+      title: "Оплата | «220 volt»",
+      snippet: "Главная Оплата Оплата Цена на заказанный Товар изменению не подлежит после подтверждения Заказа или оплаты Товара . Доставка оплачивается одновременно с товаром. Для физических лиц 1. Условия оплаты: 100% предоплата при заказе на сайте; Оплата при получении в пункте самовывоза. 2. Способы оплаты: наличными в пункте самовывоза или — банковской картой; — через личный кабинет на KaspiPay; — средствами на балансе в личном кабинете на сайте 3. ВАЖНО: На совершение платежа отводится 20 минут.",
+    },
+    {
+      title: "Оплата | «220 volt»",
+      snippet: "Для юридических лиц (без договора); При наличии заключенного договора действуют условия оплаты, указанные в договоре. 2. Способы оплаты: безналичный расчет наличными в пункте самовывоза средствами на балансе в личном кабинете на сайте 3.ВАЖНО: На совершение платежа отводится 20 минут.",
+    },
+  ]);
+  assert(answer.matched >= 2);
+  assert(answer.text?.includes("банковской картой"));
+  assert(answer.text?.includes("KaspiPay"));
+  assert(!answer.text?.includes("При наличии заключенного договора"));
+});
+
+Deno.test("one FTS recovery pass can restore omitted payment facts without laundering incidental wording", async () => {
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const answer = await resolveStorePolicyKnowledgeAnswer(
+    "Какие способы оплаты доступны?",
+    async () => {
+      primaryCalls++;
+      return {
+        ok: true,
+        hits: [{
+          title: "Оплата | «220 volt»",
+          snippet: "При наличии заключенного договора действуют условия оплаты, указанные в договоре.",
+        }],
+      };
+    },
+    async () => {
+      fallbackCalls++;
+      return {
+        ok: true,
+        hits: [{
+          title: "Оплата | «220 volt»",
+          snippet: "2. Способы оплаты: наличными в пункте самовывоза или — банковской картой; — через личный кабинет на KaspiPay.",
+        }],
+      };
+    },
+  );
+  assertEquals(primaryCalls, 1);
+  assertEquals(fallbackCalls, 1);
+  assertEquals(answer.status, "answered");
+  assert(answer.text.includes("банковской картой"));
+  assert(answer.text.includes("KaspiPay"));
+  assert(!answer.text.includes("При наличии заключенного договора"));
+
+  const alreadyAnswered = await resolveStorePolicyKnowledgeAnswer(
+    "Когда доставят заказ?",
+    async () => ({ ok: true, hits: [{ title: "Доставка", snippet: "Срок доставки — 3 дня. Доставка стоит 2 000 ₸." }] }),
+    async () => {
+      fallbackCalls++;
+      return { ok: true, hits: [] };
+    },
+  );
+  assertEquals(alreadyAnswered.status, "answered");
+  assertEquals(fallbackCalls, 1);
+  assert(alreadyAnswered.text.includes("3 дня"));
+  assert(!alreadyAnswered.text.includes("2 000"));
+});
+
+Deno.test("FTS-only KB recovery uses no embedding call and remains capped", async () => {
+  const originalFetch = globalThis.fetch;
+  let networkCalls = 0;
+  let rpcArgs: Record<string, unknown> | undefined;
+  globalThis.fetch = async () => {
+    networkCalls++;
+    throw new Error("embedding fetch must not run");
+  };
+  try {
+    const mockClient = {
+      rpc: async (_name: string, args: Record<string, unknown>) => {
+        rpcArgs = args;
+        return { data: [{
+          entry_id: "entry-1",
+          chunk_id: "chunk-1",
+          title: "Оплата",
+          content: "Оплата банковской картой доступна.",
+          type: "general",
+          source_url: null,
+          score: 1,
+        }], error: null };
+      },
+    } as unknown as Parameters<typeof executeLookupKnowledge>[1];
+    const result = await executeLookupKnowledge(
+      { query: "Какие способы оплаты доступны?", top_k: 100, fts_only: true },
+      mockClient,
+      "unused",
+      "private-required",
+    );
+    assertEquals(result.ok, true);
+    assertEquals(rpcArgs?.query_embedding, null);
+    assertEquals(rpcArgs?.match_count, 10);
+    assertEquals(networkCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("countrywide delivery answer omits another city's tariff in the same KB chunk", () => {
   const answer = buildStorePolicyEvidenceAnswer("Сколько стоит доставка по Казахстану?", [
     {
@@ -271,6 +374,7 @@ Deno.test("store-policy handler is KB-first and precedes tool-free inquiry and c
   const branch = source.slice(policyStart, generalStart);
   assert(branch.includes("executeLookupKnowledge("));
   assert(branch.includes("resolveStorePolicyKnowledgeAnswer("));
+  assert(branch.includes("fts_only: true"));
   assert(!branch.includes("executeSearchCatalog("));
   assert(!branch.includes("callOpenRouter("));
   assert(!branch.includes("stripUnrenderedCatalogFactSegments"));
