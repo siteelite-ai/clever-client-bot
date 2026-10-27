@@ -110,28 +110,25 @@ export function planProductMeasurementProCorrection(input: {
 }): ProCorrectionBudget {
   const remaining = Math.floor(input.softDeadlineMs - input.elapsedMs);
   const legacyTimeoutMs = Math.min(input.legacyTimeoutMs, remaining);
-  const minimumLegacyMs = 6_500;
   const legacyGraceMs = 1_500;
   const transitionReserveMs = 500;
-  const hedgedLegacyTimeoutMs = Math.min(
-    input.legacyTimeoutMs,
-    remaining - legacyGraceMs - transitionReserveMs,
-  );
   const proTimeoutMs = Math.min(
     input.proMaxTimeoutMs,
     remaining - transitionReserveMs,
   );
+  // A canary is optional: never shorten the original Flash call merely to
+  // squeeze Pro into a turn that lacks its full fallback time after grace.
   if (
     !Number.isFinite(remaining) || !Number.isFinite(legacyTimeoutMs) ||
-    !Number.isFinite(proTimeoutMs) || !Number.isFinite(hedgedLegacyTimeoutMs) ||
-    hedgedLegacyTimeoutMs < minimumLegacyMs
+    !Number.isFinite(proTimeoutMs) ||
+    remaining < legacyGraceMs + input.legacyTimeoutMs + transitionReserveMs
   ) {
     return { route: "legacy", timeoutMs: legacyTimeoutMs };
   }
   return {
     route: "hedged",
     proTimeoutMs: Math.floor(proTimeoutMs),
-    legacyTimeoutMs: Math.floor(hedgedLegacyTimeoutMs),
+    legacyTimeoutMs: Math.floor(input.legacyTimeoutMs),
     legacyGraceMs,
   };
 }

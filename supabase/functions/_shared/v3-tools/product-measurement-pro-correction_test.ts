@@ -147,6 +147,30 @@ Deno.test("hedge budget preserves eight seconds for Flash at failed-canary timin
   );
 });
 
+Deno.test("hedge needs the full baseline Flash timeout after grace and reserve", () => {
+  const planWithRemaining = (remainingMs: number) =>
+    planProductMeasurementProCorrection({
+      elapsedMs: 26_000 - remainingMs,
+      softDeadlineMs: 26_000,
+      legacyTimeoutMs: 8_000,
+      proMaxTimeoutMs: 8_000,
+    });
+  // The optional Pro route must not shorten the legacy 8s request, even when
+  // the remaining turn budget could accommodate a 6.5-7.9s Flash attempt.
+  assertEquals(planWithRemaining(8_500), { route: "legacy", timeoutMs: 8_000 });
+  assertEquals(planWithRemaining(9_900), { route: "legacy", timeoutMs: 8_000 });
+  assertEquals(planWithRemaining(9_999), { route: "legacy", timeoutMs: 8_000 });
+  assertEquals(planWithRemaining(10_000), {
+    route: "hedged",
+    proTimeoutMs: 8_000,
+    legacyTimeoutMs: 8_000,
+    legacyGraceMs: 1_500,
+  });
+  // Below the original call timeout, the non-hedged branch keeps its prior
+  // behavior: only the remaining soft-deadline budget is available.
+  assertEquals(planWithRemaining(7_000), { route: "legacy", timeoutMs: 7_000 });
+});
+
 Deno.test("production canary cohort is deterministic and zero is always off", () => {
   assertEquals(proCorrectionSessionInRollout("session-1", 0), false);
   assertEquals(proCorrectionSessionInRollout("session-1", 10_000), true);
