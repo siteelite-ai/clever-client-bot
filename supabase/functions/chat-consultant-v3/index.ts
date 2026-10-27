@@ -731,6 +731,7 @@ import {
 import {
   classifyPublicFailure,
   isConfirmedTransientUpstreamHttp5xx,
+  type SafeCompletionShape,
   type UpstreamFailureDiagnostics,
   UpstreamHttpError,
   retryConfirmedUpstreamHttp5xxOnce,
@@ -785,6 +786,12 @@ import {
   isChatCompletionFailoverEnabled,
   isProviderErrorFinishReason,
 } from "../_shared/v3-tools/model-provider-failover.ts";
+import {
+  inspectForcedToolEnvelope,
+  planProductMeasurementProCorrection,
+  productMeasurementProCorrectionEnabled,
+  runHedgedProductMeasurementProCorrection,
+} from "../_shared/v3-tools/product-measurement-pro-correction.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -845,6 +852,9 @@ export function productMeasurementHttpRetryEnabled(
 }
 const PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED =
   productMeasurementHttpRetryEnabled(ADMISSION_SCOPE);
+// Zero means a source deployment cannot change any production conversation.
+// A separate reviewed canary release may raise this to 1/10,000.
+const PRODUCT_MEASUREMENT_PRO_PRODUCTION_BUCKETS_PER_10K = 0;
 
 /** Server-only preview opt-in. Default OFF preserves the existing catalog
  * failure path until the exact-identity recovery is independently accepted. */
@@ -913,6 +923,8 @@ const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
 const GENERAL_INQUIRY_MODEL =
   Deno.env.get("OPENROUTER_GENERAL_INQUIRY_MODEL") ??
     "google/gemini-2.5-flash";
+const PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL =
+  "deepseek/deepseek-v4-pro-0813";
 const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
   GENERAL_INQUIRY_MODEL,
   parseConfiguredModelFallbacks(
@@ -3557,6 +3569,8 @@ interface ORResponse {
   toolCalls: ORToolCall[];
   finishReason: string;
   provider?: string;
+  httpStatus?: number;
+  completionShape?: SafeCompletionShape;
 }
 
 interface ORToolSchema {
@@ -3614,6 +3628,7 @@ async function callOpenRouter(
   maxTokens = 4000,
   modelRouting: OpenRouterModelRouting = AGENT_MODEL_ROUTING,
   providerRoute: LLMProviderRoute = "configured",
+  requireForcedToolEnvelope = false,
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -3633,6 +3648,7 @@ async function callOpenRouter(
 
   let res: Response;
   let provider = "openrouter";
+  let completionShape: SafeCompletionShape | null = null;
   let data: {
     choices?: Array<{
       message?: {
@@ -3679,6 +3695,9 @@ async function callOpenRouter(
         : null,
       body: {
         ...modelRouting,
+        ...(requireForcedToolEnvelope
+          ? { provider: { require_parameters: true } }
+          : {}),
         temperature,
         max_tokens: maxTokens,
         messages,
@@ -3718,9 +3737,13 @@ async function callOpenRouter(
     // Таймер держим живым до полного парсинга, иначе один медленный ответ
     // (типичный для reasoning-моделей) съедает весь бюджет хода.
     data = await res.json() as typeof data;
+    if (requireForcedToolEnvelope && forcedToolName) {
+      completionShape = inspectForcedToolEnvelope(data, forcedToolName);
+    }
     if (
       !data?.choices?.[0] ||
-      isProviderErrorFinishReason(data.choices[0].finish_reason)
+      isProviderErrorFinishReason(data.choices[0].finish_reason) ||
+      completionShape !== null && completionShape.status !== "usable"
     ) {
       throw new UpstreamHttpError(
         502,
@@ -3729,6 +3752,7 @@ async function callOpenRouter(
           ...providerDiagnostics,
           origin: "completion_envelope",
           observedHttpStatus: res.status,
+          ...(completionShape ? { completionShape } : {}),
         },
       );
     }
@@ -3759,6 +3783,8 @@ async function callOpenRouter(
     toolCalls,
     finishReason: data?.choices?.[0]?.finish_reason ?? "stop",
     provider,
+    httpStatus: res.status,
+    ...(completionShape ? { completionShape } : {}),
   };
 }
 
@@ -12684,21 +12710,24 @@ async function runExpertLoop(
             userMessage,
             lastDiscover?.facets ?? [],
           );
-          const requiredProductMeasurementGap = () => {
+          const requiredProductMeasurementGap = (
+            candidateDeclaration = declaration,
+            recordCoverage = true,
+          ) => {
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
             if (
               (replacementIntent || isReplacementProofRequest(userMessage)) ||
               !unresolvedProductMeasurementRequired ||
-              !declaration
+              !candidateDeclaration
             ) {
               return null;
             }
             const measurementScope = provisionalCustomerMeasurementScope ??
-              declaration.measurementScope;
+              candidateDeclaration.measurementScope;
             const pairedFitProven = pairedDecisionForEvidence(
-              declaration.reasoningEvidence,
+              candidateDeclaration.reasoningEvidence,
             ).state === "required";
             // A spatial system total never becomes a criterion on each card;
             // a resolved two-sided fit supplies its own strict relations.
@@ -12707,7 +12736,7 @@ async function runExpertLoop(
             }
             const compiled = compileMeasuredReasoningSearchContract(
               [],
-              declaration.measurementEvidence,
+              candidateDeclaration.measurementEvidence,
               [],
               lastDiscover?.facets ?? [],
               {
@@ -12716,13 +12745,13 @@ async function runExpertLoop(
               },
             );
             const recommendedExact = projectSingleRecommendedMeasuredCriterion(
-              declaration.measurementEvidence,
+              candidateDeclaration.measurementEvidence,
               lastDiscover?.facets ?? [],
             );
             const certifiedRecommendedExact = recommendedExact.criterion
               ? filterPerProductMeasuredCriteria(
                 [recommendedExact.criterion],
-                declaration.measurementEvidence,
+                candidateDeclaration.measurementEvidence,
                 verifiedCustomerMeasurementEvidence,
                 measurementScope,
                 lastDiscover?.facets ?? [],
@@ -12734,7 +12763,7 @@ async function runExpertLoop(
               pairedFitProven,
               scalarProjectionAllowed: shouldProjectDerivedScalarMeasurement(
                 userMessage,
-                declaration.text,
+                candidateDeclaration.text,
                 measurementScope,
               ),
               // Advisory projections do not constrain search or cards. A
@@ -12743,7 +12772,7 @@ async function runExpertLoop(
                 compiled.mandatory_criteria.length > 0 ||
                 certifiedRecommendedExact,
               competingThresholds: hasCompetingMeasuredSelectionTiers(
-                declaration.measurementEvidence,
+                candidateDeclaration.measurementEvidence,
               ) || recommendedExact.reason === "competing_values",
             };
             const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
@@ -12753,12 +12782,12 @@ async function runExpertLoop(
             // need not repeat its unit after classification prose is cleaned;
             // any other surviving physical number keeps the original repair.
             const modelPhysicalMeasurements = [
-              declaration.reasoningEvidence,
-              declaration.measurementEvidence,
+              candidateDeclaration.reasoningEvidence,
+              candidateDeclaration.measurementEvidence,
             ].flatMap(extractClientQuantities)
               .filter(({ unit }) => isPhysicalMeasurementUnit(unit));
             const noConflictingModelMeasurement =
-              declaration.requiredFacetValues.length === 0 &&
+              candidateDeclaration.requiredFacetValues.length === 0 &&
               modelPhysicalMeasurements.every(({ unit, value }) =>
                 unit === "м²" && value === destinationAreaCoverage.minimumAreaM2
               );
@@ -12766,8 +12795,8 @@ async function runExpertLoop(
               !noConflictingModelMeasurement) {
               return uncoveredGap;
             }
-            destinationAreaCoverageApplied = true;
-            if (!destinationAreaCoverageLogged) {
+            if (recordCoverage) destinationAreaCoverageApplied = true;
+            if (recordCoverage && !destinationAreaCoverageLogged) {
               steps.push({
                 step: "v3_destination_area_card_proof_covers_measurement",
                 ms: now(),
@@ -12785,7 +12814,7 @@ async function runExpertLoop(
           };
           const missingRequiredProductMeasurement = () =>
             requiredProductMeasurementGap() !== null;
-          const missingPairedFitProof = () => {
+          const missingPairedFitProof = (candidateDeclaration = declaration) => {
             // A measured object and a live paired graph create the obligation.
             // The raw tool argument is not the proof consumed by the terminal
             // gate: resolution may remove an unsupported clause or an entire
@@ -12793,7 +12822,7 @@ async function runExpertLoop(
             // model omitted the pair selection altogether. An unrelated
             // measured property stays not_applicable and costs no retry.
             const pair = pairedDecisionForEvidence(
-              declaration?.reasoningEvidence ?? "",
+              candidateDeclaration?.reasoningEvidence ?? "",
             );
             return Boolean(pair.reference) && pair.state === "unproven";
           };
@@ -12821,12 +12850,14 @@ async function runExpertLoop(
               shownProductIds: [...shownIds],
             };
           };
-          const missingEnvironmentalProtection = () =>
+          const missingEnvironmentalProtection = (
+            candidateDeclaration = declaration,
+          ) =>
             environmentalRange.status !== "enumerated" &&
             hasUnresolvedEnvironmentalProtectionObligation(
               userMessage,
               lastDiscover?.facets ?? [],
-              declaration,
+              candidateDeclaration,
             );
           const stopForUnverifiedProtection = () => {
             recordClosureRetryOutcome(false, "environmental_protection_unverified");
@@ -12980,12 +13011,61 @@ async function runExpertLoop(
                   };
                 }
               }
-              const correctionAttempt = (timeoutMs: number) => {
+              const proEnabled = repairReason === "product_measurement" &&
+                productMeasurementProCorrectionEnabled({
+                  scope: ADMISSION_SCOPE,
+                  closureScope: CLOSURE_TEST_MARKER,
+                  sessionId: ctx.sessionId,
+                  productionBucketsPer10k:
+                    PRODUCT_MEASUREMENT_PRO_PRODUCTION_BUCKETS_PER_10K,
+                  readEnv: (name) => Deno.env.get(name),
+                });
+              const proBudget = proEnabled
+                ? planProductMeasurementProCorrection({
+                  elapsedMs: now(),
+                  softDeadlineMs: DERIVED_REASONING_SOFT_DEADLINE_MS,
+                  legacyTimeoutMs: LLM_TIMEOUT_DERIVED_RETRY_MS,
+                  proMaxTimeoutMs: LLM_TIMEOUT_DERIVED_RETRY_MS,
+                })
+                : null;
+              const proPlan = proBudget?.route === "hedged"
+                ? proBudget
+                : null;
+              let effectiveCorrectionModel = GENERAL_INQUIRY_MODEL;
+              let effectiveCorrectionTimeoutMs = correctionTimeout;
+              if (proEnabled && !proPlan) {
+                steps.push({
+                  step: "v3_product_measurement_pro_skipped_budget",
+                  ms: now(),
+                  meta: {
+                    remaining_before_soft_deadline_ms:
+                      DERIVED_REASONING_SOFT_DEADLINE_MS - now(),
+                  },
+                });
+              }
+              if (proPlan) {
+                steps.push({
+                  step: "v3_product_measurement_pro_correction_route",
+                  ms: now(),
+                  meta: {
+                    requested_model: PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL,
+                    provider_route: "openrouter_only",
+                    pro_timeout_ms: proPlan.proTimeoutMs,
+                    legacy_timeout_ms: proPlan.legacyTimeoutMs,
+                    legacy_grace_ms: proPlan.legacyGraceMs,
+                  },
+                });
+              }
+              const correctionAttempt = (
+                timeoutMs: number,
+                signal: AbortSignal = turnController.signal,
+                hedged = false,
+              ) => {
                 derivedReasoningProviderAttempts += 1;
                 return callOpenRouter(
                   apiKey,
                   correctionMessages,
-                  turnController.signal,
+                  signal,
                   timeoutMs,
                   "derived_reasoning",
                   ["declare_selection_reasoning"],
@@ -12993,14 +13073,130 @@ async function runExpertLoop(
                   0,
                   [reasoningToolSchema],
                   1200,
-                  GENERAL_INQUIRY_MODEL_ROUTING,
-                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  hedged ? { model: GENERAL_INQUIRY_MODEL } :
+                    GENERAL_INQUIRY_MODEL_ROUTING,
+                  hedged || DERIVED_REASONING_LOVABLE_RETRY_ENABLED
                     ? "openrouter_only"
                     : "configured",
                 );
               };
+              const validateHedgedDeclaration = (response: ORResponse) => {
+                let proposedDeclaration: ReturnType<typeof cleanResolvedDeclaration> | null = null;
+                try {
+                  const proposedCall = cleanDeclarationCall(
+                    response.toolCalls.find((call) =>
+                      call.name === "declare_selection_reasoning"
+                    ),
+                  );
+                  proposedDeclaration = proposedCall
+                    ? cleanResolvedDeclaration(
+                      resolvePairedDeclaration(proposedCall.args),
+                    )
+                    : null;
+                } catch { /* malformed provider data is never a declaration */ }
+                if (
+                  proposedDeclaration?.text.trim() &&
+                  requiredProductMeasurementGap(proposedDeclaration, false) ===
+                    null &&
+                  !missingPairedFitProof(proposedDeclaration) &&
+                  !missingEnvironmentalProtection(proposedDeclaration)
+                ) return response;
+                throw new UpstreamHttpError(
+                  502,
+                  "Correction returned no usable declaration",
+                  {
+                    origin: "completion_envelope",
+                    observedHttpStatus: response.httpStatus ?? 200,
+                    provider: response.provider === "openrouter" ||
+                        response.provider === "lovable"
+                      ? response.provider
+                      : "other",
+                    completionShape: {
+                      ...(response.completionShape ?? {
+                        finishReason: "other",
+                        toolCallCount: Math.min(response.toolCalls.length, 20),
+                        contentPresent: response.text.length > 0,
+                      }),
+                      status: "missing_declaration",
+                    },
+                  },
+                );
+              };
+              const proCorrectionAttempt = async (
+                timeoutMs: number,
+                signal: AbortSignal,
+              ) => {
+                derivedReasoningProviderAttempts += 1;
+                return validateHedgedDeclaration(await callOpenRouter(
+                  apiKey,
+                  correctionMessages,
+                  signal,
+                  timeoutMs,
+                  "derived_reasoning",
+                  ["declare_selection_reasoning"],
+                  "declare_selection_reasoning",
+                  0,
+                  [reasoningToolSchema],
+                  2400,
+                  { model: PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL },
+                  "openrouter_only",
+                  true,
+                ));
+              };
+              const legacyHedgeAttempt = async (
+                timeoutMs: number,
+                signal: AbortSignal,
+              ) => validateHedgedDeclaration(
+                await correctionAttempt(timeoutMs, signal, true),
+              );
               try {
-                structuredReasoning = await runProductMeasurementCorrection({
+                if (proPlan) {
+                  const hedged =
+                    await runHedgedProductMeasurementProCorrection({
+                      attemptPro: proCorrectionAttempt,
+                      attemptLegacy: legacyHedgeAttempt,
+                      proTimeoutMs: proPlan.proTimeoutMs,
+                      legacyTimeoutMs: proPlan.legacyTimeoutMs,
+                      legacyGraceMs: proPlan.legacyGraceMs,
+                      signal: turnController.signal,
+                      onLegacyStarted: () => {
+                        steps.push({
+                          step: "v3_product_measurement_pro_correction_hedge",
+                          ms: now(),
+                          meta: {
+                            requested_model: GENERAL_INQUIRY_MODEL,
+                            timeout_ms: proPlan.legacyTimeoutMs,
+                          },
+                        });
+                      },
+                      onProFailure: (error) => {
+                        steps.push({
+                          step: "v3_product_measurement_pro_correction_unusable",
+                          ms: now(),
+                          meta: {
+                            requested_model:
+                              PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL,
+                            upstream_status: error instanceof UpstreamHttpError
+                              ? error.status
+                              : null,
+                            ...upstreamFailureDiagnosticMeta(error),
+                          },
+                        });
+                      },
+                    });
+                  structuredReasoning = hedged.value;
+                  effectiveCorrectionModel = hedged.route === "pro"
+                    ? PRODUCT_MEASUREMENT_PRO_CORRECTION_MODEL
+                    : GENERAL_INQUIRY_MODEL;
+                  effectiveCorrectionTimeoutMs = hedged.route === "pro"
+                    ? proPlan.proTimeoutMs
+                    : proPlan.legacyTimeoutMs;
+                  steps.push({
+                    step: "v3_product_measurement_pro_correction_winner",
+                    ms: now(),
+                    meta: { requested_model: effectiveCorrectionModel },
+                  });
+                } else structuredReasoning = await runProductMeasurementCorrection({
                   repairReason,
                   retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
                     !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
@@ -13065,7 +13261,8 @@ async function runExpertLoop(
                         ? correctionError.status
                         : null,
                       ...upstreamFailureDiagnosticMeta(correctionError),
-                      timeout_ms: correctionTimeout,
+                      requested_model: effectiveCorrectionModel,
+                      timeout_ms: effectiveCorrectionTimeoutMs,
                     },
                   });
                   return stopForUnverifiedProductMeasurement(
@@ -13092,8 +13289,10 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   repair_reason: repairReason,
-                  retry_model: GENERAL_INQUIRY_MODEL,
-                  timeout_ms: correctionTimeout,
+                  retry_model: effectiveCorrectionModel,
+                  response_provider: structuredReasoning.provider ?? null,
+                  observed_http_status: structuredReasoning.httpStatus ?? null,
+                  timeout_ms: effectiveCorrectionTimeoutMs,
                   recovered: Boolean(
                     declaration?.text.trim() &&
                       !missingRequiredProductMeasurement() &&

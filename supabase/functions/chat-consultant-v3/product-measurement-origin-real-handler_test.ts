@@ -10,9 +10,11 @@ import {
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
 import "./index.ts";
+const fixtureEnvGet = Deno.env.get;
+const fixtureServe = Deno.serve;
 
 type Step = { step?: string; meta?: Record<string, unknown> };
-type Variant = "http_502" | "unusable_http_200";
+type Variant = "http_502" | "unusable_http_200" | "pro_unusable" | "pro_valid";
 
 const category = "ИБП";
 const message = "Нужен ИБП для оборудования мощностью 250 Вт";
@@ -30,7 +32,10 @@ function sseEvents(text: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
 }
 
-async function runFailure(variant: Variant): Promise<{
+async function runFailure(
+  variant: Variant,
+  handler: (request: Request) => Promise<Response> = offlineHandler(),
+): Promise<{
   steps: Step[];
   events: Array<Record<string, unknown>>;
   correctionRequests: number;
@@ -43,6 +48,7 @@ async function runFailure(variant: Variant): Promise<{
   let correctionRequests = 0;
   let declarationRequests = 0;
   let catalogProductRequests = 0;
+  const proVariant = variant === "pro_unusable" || variant === "pro_valid";
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
@@ -97,24 +103,34 @@ async function runFailure(variant: Variant): Promise<{
             data: {
               category: { id: 1, pagetitle: category, total_products: 2 },
               options: [{
-                key: "rated_va",
-                caption_ru: "Номинальная мощность, ВА",
+                key: proVariant ? "rated_w" : "rated_va",
+                caption_ru: proVariant
+                  ? "Номинальная мощность, Вт"
+                  : "Номинальная мощность, ВА",
                 type: "number",
-                unit: "ВА",
-                values: [{ value_ru: "500", products_count: 2 }],
+                unit: proVariant ? "Вт" : "ВА",
+                values: [{ value_ru: proVariant ? "300" : "500", products_count: 2 }],
               }],
             },
           });
         }
         if (url.pathname === "/api/products") {
           catalogProductRequests++;
-          throw new Error(
+          if (!proVariant) throw new Error(
             "Correction failure must stop before catalog product search",
           );
+          return json({
+            data: {
+              results: [],
+              pagination: { page: 1, per_page: 50, pages: 1, total: 0 },
+            },
+          });
         }
       }
       if (url.toString() === "https://openrouter.ai/api/v1/chat/completions") {
         const body = await request.json() as {
+          model?: string;
+          provider?: { require_parameters?: boolean };
           tool_choice?: { function?: { name?: string } };
           tools?: Array<{ function?: { name?: string } }>;
           messages?: Array<{ content?: string }>;
@@ -128,6 +144,43 @@ async function runFailure(variant: Variant): Promise<{
           ) ?? false;
           if (correction) {
             correctionRequests++;
+            if (proVariant) {
+              if (body.model === "deepseek/deepseek-v4-pro-0813") {
+                assertEquals(body.provider?.require_parameters, true);
+                if (variant === "pro_unusable") {
+                  return json({ choices: [{ finish_reason: "stop", message: {
+                    content: "unusable prose, not a tool declaration",
+                  } }] });
+                }
+              } else {
+                assertEquals(body.model, "google/gemini-2.5-flash");
+                await new Promise((resolve) => setTimeout(resolve, 30));
+              }
+              return json({
+                choices: [{
+                  finish_reason: "tool_calls",
+                  message: {
+                    content: null,
+                    tool_calls: [{
+                      id: "offline-valid-correction",
+                      type: "function",
+                      function: {
+                        name: "declare_selection_reasoning",
+                        arguments: JSON.stringify({
+                          reasoning:
+                            "Для оборудования мощностью 250 Вт проверяю общую мощность системы ИБП с запасом, а не требую мощность 250 Вт от каждого отдельного товара.",
+                          measurement_scope: "system_total",
+                          compatible_classifications: [],
+                          excluded_classifications: [],
+                          required_facet_values: [],
+                          explicit_customer_classifications: [],
+                        }),
+                      },
+                    }],
+                  },
+                }],
+              });
+            }
             return variant === "http_502"
               ? json({ error: "fixture provider failure" }, 502)
               : json({ choices: [] }, 200);
@@ -196,17 +249,36 @@ async function runFailure(variant: Variant): Promise<{
             }],
           });
         }
+        if (proVariant && body.tools?.some(({ function: schema }) =>
+          schema?.name === "search_catalog"
+        )) {
+          return json({ choices: [{ finish_reason: "tool_calls", message: {
+            content: null,
+            tool_calls: [{ id: "offline-search", type: "function", function: {
+              name: "search_catalog",
+              arguments: JSON.stringify({ mode: "by_filter", category, per_page: 50 }),
+            } }],
+          } }] });
+        }
+        if (proVariant) return json({
+          choices: [{ finish_reason: "stop", message: { content: "По подтверждённому условию проверяю каталог." } }],
+        });
         throw new Error("Unexpected model phase before measurement correction");
       }
       throw new Error(`Unexpected outbound request: ${request.method} ${url}`);
     };
 
-    const response = await offlineHandler()(
+    const response = await handler(
       new Request(
         "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(proVariant
+              ? { "x-volt-preview-secret": "offline-preview-secret-000000000000000001" }
+              : {}),
+          },
           body: JSON.stringify({
             message,
             messageId: crypto.randomUUID(),
@@ -218,7 +290,7 @@ async function runFailure(variant: Variant): Promise<{
     );
     assertEquals(response.status, 200);
     const events = sseEvents(await response.text());
-    assertEquals(declarationRequests, 2, JSON.stringify(steps));
+    assertEquals(declarationRequests, variant === "pro_unusable" ? 3 : 2, JSON.stringify(steps));
     return { steps, events, correctionRequests, catalogProductRequests };
   } finally {
     for (const id of intervals) clearInterval(id);
@@ -226,6 +298,75 @@ async function runFailure(variant: Variant): Promise<{
     globalThis.fetch = originalFetch;
   }
 }
+
+// A second, isolated handler instance tests the opt-in closure route without
+// making the production source cohort nonzero or contacting a paid provider.
+Deno.test({
+  name: "closed preview hedge accepts valid Pro or rescues a malformed Pro with Flash",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const marker = globalThis as typeof globalThis & {
+      __VOLT220_FUNCTION_VARIANT__?: "preview";
+      __VOLT220_ADMISSION_SCOPE__?: "preview";
+      __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
+    };
+    marker.__VOLT220_FUNCTION_VARIANT__ = "preview";
+    marker.__VOLT220_ADMISSION_SCOPE__ = "preview";
+    marker.__VOLT220_CLOSURE_TEST_SCOPE__ = "closure_preview";
+    let previewHandler: ((request: Request) => Promise<Response>) | null = null;
+    try {
+      Deno.env.get = (name: string) =>
+        name === "VOLT220_PRODUCT_MEASUREMENT_PRO_CLOSURE_PREVIEW_ENABLED"
+          ? "true"
+          : name === "VOLT220_V3_PREVIEW_SECRET"
+          ? "offline-preview-secret-000000000000000001"
+          : fixtureEnvGet(name);
+      (Deno as unknown as { serve: typeof Deno.serve }).serve = ((callback: (
+        request: Request,
+      ) => Promise<Response>) => {
+        previewHandler = callback;
+        return { shutdown() {}, finished: Promise.resolve() };
+      }) as unknown as typeof Deno.serve;
+      await import("./index.ts?product-measurement-pro-hedge-offline-preview");
+      assert(previewHandler);
+      for (const variant of ["pro_unusable", "pro_valid"] as const) {
+        const result = await runFailure(variant, previewHandler);
+        const winner = result.steps.find(({ step }) =>
+          step === "v3_product_measurement_pro_correction_winner"
+        );
+        assert(winner, JSON.stringify(result.steps));
+        assertEquals(
+          winner.meta?.requested_model,
+          variant === "pro_valid"
+            ? "deepseek/deepseek-v4-pro-0813"
+            : "google/gemini-2.5-flash",
+        );
+        assertEquals(result.correctionRequests, variant === "pro_valid" ? 1 : 2);
+        assertEquals(result.steps.some(({ step }) =>
+          step === "v3_product_measurement_correction_failed"
+        ), false);
+        assertEquals(
+          JSON.stringify(result.events).includes("ошибка соединения"),
+          false,
+        );
+        if (variant === "pro_unusable") {
+          const failure = result.steps.find(({ step }) =>
+            step === "v3_product_measurement_pro_correction_unusable"
+          );
+          assert(failure, JSON.stringify(result.steps));
+          assertEquals(failure.meta?.completion_shape_status, "wrong_tool_count");
+          assertEquals(failure.meta?.observed_http_status, 200);
+        }
+      }
+    } finally {
+      Deno.env.get = fixtureEnvGet;
+      (Deno as unknown as { serve: typeof Deno.serve }).serve = fixtureServe;
+      delete marker.__VOLT220_FUNCTION_VARIANT__;
+      delete marker.__VOLT220_ADMISSION_SCOPE__;
+      delete marker.__VOLT220_CLOSURE_TEST_SCOPE__;
+    }
+  },
+});
 
 Deno.test({
   name:

@@ -25,6 +25,29 @@ export interface PublicFailure {
 export type UpstreamFailureOrigin = "http_response" | "completion_envelope";
 export type UpstreamProvider = "openrouter" | "lovable" | "other";
 
+/** Only bounded shape metadata, never model content, tool arguments or a prompt. */
+export interface SafeCompletionShape {
+  status:
+    | "usable"
+    | "missing_choice"
+    | "missing_message"
+    | "provider_error"
+    | "truncated"
+    | "wrong_tool_count"
+    | "wrong_tool_name"
+    | "invalid_arguments"
+    | "missing_declaration";
+  finishReason:
+    | "tool_calls"
+    | "stop"
+    | "length"
+    | "error"
+    | "other"
+    | "missing";
+  toolCallCount: number;
+  contentPresent: boolean;
+}
+
 export interface UpstreamFailureDiagnostics {
   origin?: UpstreamFailureOrigin;
   observedHttpStatus?: number;
@@ -32,6 +55,7 @@ export interface UpstreamFailureDiagnostics {
   failedOver?: boolean;
   primaryStatus?: number | null;
   primarySkipped?: boolean;
+  completionShape?: SafeCompletionShape;
 }
 
 /** Structured transport error: classification never depends on its rendered message. */
@@ -44,6 +68,7 @@ export class UpstreamHttpError extends Error {
   readonly failed_over: boolean | null;
   readonly primary_status: number | null;
   readonly primary_skipped: boolean | null;
+  readonly completion_shape: SafeCompletionShape | null;
 
   constructor(
     status: number,
@@ -61,6 +86,7 @@ export class UpstreamHttpError extends Error {
     this.failed_over = diagnostics.failedOver ?? null;
     this.primary_status = diagnostics.primaryStatus ?? null;
     this.primary_skipped = diagnostics.primarySkipped ?? null;
+    this.completion_shape = diagnostics.completionShape ?? null;
   }
 }
 
@@ -76,6 +102,14 @@ export function upstreamFailureDiagnosticMeta(
     provider_failed_over: error.failed_over,
     primary_http_status: error.primary_status,
     primary_skipped: error.primary_skipped,
+    ...(error.completion_shape
+      ? {
+        completion_shape_status: error.completion_shape.status,
+        completion_finish_reason: error.completion_shape.finishReason,
+        completion_tool_call_count: error.completion_shape.toolCallCount,
+        completion_content_present: error.completion_shape.contentPresent,
+      }
+      : {}),
   };
 }
 
