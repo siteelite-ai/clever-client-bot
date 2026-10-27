@@ -479,7 +479,7 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
   );
   const correctionStart = source.indexOf(
-    "const correctionAttempt = (timeoutMs: number) => {",
+    "const correctionAttempt = (",
   );
   const correctionEnd = source.indexOf(
     "} catch (correctionError) {",
@@ -487,6 +487,11 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   );
   assertEquals(correctionStart >= 0 && correctionEnd > correctionStart, true);
   const correctionCall = source.slice(correctionStart, correctionEnd);
+  assertStringIncludes(
+    correctionCall,
+    "signal: AbortSignal = turnController.signal,",
+  );
+  assertStringIncludes(correctionCall, "hedged = false,");
   assertStringIncludes(correctionCall, "runProductMeasurementCorrection({");
   assertEquals(
     /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*,/u
@@ -516,12 +521,14 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   for (
     const mandatoryArg of [
       "correctionMessages,",
-      "turnController.signal,",
+      "signal,",
       '"derived_reasoning",',
       '["declare_selection_reasoning"],',
       '"declare_selection_reasoning",',
       "[reasoningToolSchema],",
+      "hedged ? { model: GENERAL_INQUIRY_MODEL } :",
       "GENERAL_INQUIRY_MODEL_ROUTING,",
+      '"configured",',
     ]
   ) {
     assertStringIncludes(correctionCall, mandatoryArg);

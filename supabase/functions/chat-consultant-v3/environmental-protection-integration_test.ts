@@ -21,7 +21,7 @@ Deno.test("a certified live IP range is known before deciding whether to repair 
     "const environmentalRange = deriveEnvironmentalProtectionRange(",
   );
   const repairGuard = position(
-    "const missingEnvironmentalProtection = () =>",
+    "const missingEnvironmentalProtection = (",
     range,
   );
   const repairDecision = position(
@@ -29,7 +29,7 @@ Deno.test("a certified live IP range is known before deciding whether to repair 
     repairGuard,
   );
   const correctionAttempt = position(
-    "const correctionAttempt = (timeoutMs: number) =>",
+    "const correctionAttempt = (",
     repairDecision,
   );
   const repairCall = position("return callOpenRouter(", correctionAttempt);
@@ -51,6 +51,7 @@ Deno.test("a certified live IP range is known before deciding whether to repair 
     guard,
     /environmentalRange\.status !== "enumerated"\s*&&\s*hasUnresolvedEnvironmentalProtectionObligation\(\s*userMessage,/u,
   );
+  assert(guard.includes("candidateDeclaration,"));
 
   // If the live schema cannot certify a complete range, no card may escape
   // merely because the model happened to name one plausible IP value.
