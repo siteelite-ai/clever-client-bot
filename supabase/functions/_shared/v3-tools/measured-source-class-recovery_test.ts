@@ -542,5 +542,28 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
   assertEquals(calls.filter((call) => call.includes("/products?")), [
     "/products?category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B&min_price=1&per_page=50",
   ]);
+
+  // A narrower named product cannot inherit chandelier alternatives merely
+  // because those chandeliers also illuminate the same room and area.
+  calls.length = 0;
+  const strip = await recoverMeasuredSourceClassSelection(
+    "Хочу заменить люстру на светодиодную ленту в гостиной 25 м². Что можете предложить?",
+    {
+      baseUrl: "https://catalog.test",
+      apiToken: "test",
+      cache: new Map(),
+      fetchImpl,
+    },
+  );
+  assertEquals(strip?.products, []);
+  assertEquals(strip?.source_status, "not_needed");
+  assertEquals(strip?.source_category, null);
+  assertEquals(
+    calls.some((call) =>
+      call.includes("/products?category=%D0%9B") ||
+      call.includes("/categories/options?pagetitle=%D0%9B")
+    ),
+    false,
+  );
   resetDiscoverCategoryCacheForTest();
 });

@@ -411,7 +411,13 @@ export async function recoverMeasuredSourceClassSelection(
     let sourceVerified = 0;
     let sourceDiscoveryDuration = 0;
     let sourceSearchDuration = 0;
-    if (selected.size < 3) {
+    // Only the customer's broad fixture noun can use the removed lighting
+    // fixture as a separately labelled alternative. A specific target such
+    // as an LED strip or bulb must remain exact-target-only: room/area
+    // suitability alone cannot make a chandelier that requested product.
+    const permitsSourceFixtureAlternatives =
+      normalizedRequestWords(explicit.target_class)[0] === "светильник";
+    if (permitsSourceFixtureAlternatives && selected.size < 3) {
       const sourceStarted = Date.now();
       const sourceDiscovery = await executeDiscoverCategory({
         noun: explicit.source_class,

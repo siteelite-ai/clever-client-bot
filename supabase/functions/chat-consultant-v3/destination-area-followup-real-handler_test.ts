@@ -832,6 +832,11 @@ Deno.test({
           step === "v3_destination_area_card_proof_covers_measurement" &&
           meta?.minimum_area_m2 === 30 &&
           meta?.source === "server_current_request_and_fresh_card_gate"
+        ) || result.steps.some(({ step, meta }) =>
+          step === "v3_measured_replacement_rendered" &&
+          meta?.minimum_area_m2 === 30 &&
+          meta?.live_target_category === leaf &&
+          Number(meta?.rendered) > 0
         ),
         JSON.stringify(result.steps),
       );
