@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { detectUserIntentMode, extractNamedSeriesToken, isStorePolicyInquiry, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+import { detectUserIntentMode, extractNamedSeriesToken, hasMixedProductPolicyRequest, isStorePolicyInquiry, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
 
 Deno.test("store policy questions require knowledge evidence across service topics", () => {
   for (const question of [
@@ -44,6 +44,29 @@ Deno.test("service mentions do not hijack product selection or availability", ()
     assertEquals(isStorePolicyInquiry(question), false, question);
   }
   assertEquals(isStorePolicyInquiry("Покажи способы оплаты и доставки"), true);
+});
+
+Deno.test("compound product and store-policy tasks keep product selection route", () => {
+  for (const question of [
+    "Подбери светильник и расскажи условия доставки",
+    "Расскажи условия доставки и подбери светильник",
+    "Найди кабель, потом расскажи про доставку",
+    "Хочу лампу; сколько стоит доставка?",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), true, question);
+    assertEquals(isStorePolicyInquiry(question), false, question);
+    assertEquals(detectUserIntentMode(question), "select", question);
+  }
+  for (const question of [
+    "Какие у вас условия доставки по Казахстану?",
+    "Покажи способы оплаты и доставки",
+    "Нужен светильник с доставкой",
+    "Расскажи, чем хороша серия Галант",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), false, question);
+  }
+  assertEquals(isStorePolicyInquiry("Какие у вас условия доставки по Казахстану?"), true);
+  assertEquals(detectUserIntentMode("Расскажи, чем хороша серия Галант"), "inquire");
 });
 
 Deno.test("suitability questions are inquiry mode", () => {

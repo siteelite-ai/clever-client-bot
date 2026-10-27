@@ -404,6 +404,7 @@ import {
 } from "../_shared/v3-tools/catalog-search-outcome.ts";
 import {
   detectUserIntentMode,
+  hasMixedProductPolicyRequest,
   isStorePolicyInquiry,
   requiresCatalogGroundingForInquiry,
   resolveNamedSeriesToken,
@@ -27586,7 +27587,8 @@ Deno.serve(async (req) => {
               !freeformCandidate && !hasExactProductInquiry &&
               !namedSeriesInquiryToken &&
               !(recentProductEvidence.length > 0 && bareItemPolicyFollowup);
-            const generalInquiryDirect = !storePolicyInquiry && shouldAnswerGeneralInquiryDirectly({
+            const generalInquiryDirect = !storePolicyInquiry &&
+              !hasMixedProductPolicyRequest(userMessage) && shouldAnswerGeneralInquiryDirectly({
               intentMode: detectUserIntentMode(userMessage),
               exactProductInquiry: hasExactProductInquiry,
               namedSeriesInquiry: Boolean(namedSeriesInquiryToken),

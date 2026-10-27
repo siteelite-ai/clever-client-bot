@@ -77,6 +77,21 @@ export function buildStorePolicyEvidenceAnswer(
     const title = plainEvidence(hit.title);
     const snippet = plainEvidence(hit.snippet);
     if (!snippet) continue;
+    // A stray mention of delivery in a payment article is not delivery
+    // evidence. Anchor the excerpt to the source section itself. For a
+    // multi-topic source, require the excerpt's first service topic to be
+    // one the customer actually asked about; otherwise fail closed.
+    const normalizedTitle = title.toLocaleLowerCase("ru").replace(/ё/gu, "е");
+    const normalizedSnippet = snippet.toLocaleLowerCase("ru").replace(/ё/gu, "е");
+    const sourceTopics = POLICY_TOPICS.filter((topic) => topic.test(normalizedTitle));
+    if (!sourceTopics.some((topic) => topics.includes(topic))) continue;
+    const snippetTopicMentions = POLICY_TOPICS.flatMap((topic) => {
+      const match = topic.exec(normalizedSnippet);
+      return match ? [{ topic, position: match.index }] : [];
+    }).sort((a, b) => a.position - b.position);
+    if (snippetTopicMentions.length > 0 &&
+      !topics.includes(snippetTopicMentions[0].topic)) continue;
+    if (snippetTopicMentions.length === 0 && sourceTopics.length > 1) continue;
     const words = policyWords(`${title} ${snippet}`);
     const body = words.join(" ");
     if (!topics.some((topic) => topic.test(body))) continue;

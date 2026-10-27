@@ -16,6 +16,20 @@ export function requiresCatalogGroundingForInquiry(message: string): boolean {
   return extractNamedSeriesToken(message) !== null;
 }
 
+const PRODUCT_SELECTION_VERB = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+
+/** A policy question in a separate clause must not erase a product task. */
+export function hasMixedProductPolicyRequest(message: string): boolean {
+  const clauses = message.toLocaleLowerCase("ru").replace(/ё/g, "е")
+    .split(/\s+(?:и|потом|также)\s+|[,;]/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  if (clauses.length < 2) return false;
+  return clauses.some((clause) =>
+    PRODUCT_SELECTION_VERB.test(clause) && !isStorePolicyInquiry(clause)
+  ) && clauses.some((clause) => isStorePolicyInquiry(clause));
+}
+
 /**
  * Store terms are not product facets. A customer asking about the store's
  * delivery, payment or after-sale rules needs knowledge-base evidence. Keep
@@ -52,17 +66,12 @@ export function isStorePolicyInquiry(message: string): boolean {
     asksToLearn.test(normalized) || directTopic.test(normalized);
   if (!policyQuestion) return false;
 
-  const productSelection = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
-  const clauses = normalized.split(/\s+(?:и|потом|также)\s+|[,;]/u);
-  if (clauses.some((clause) =>
-    productSelection.test(clause) && !policyObject.test(clause) &&
-    !asksToLearn.test(clause)
-  ) && clauses.some((clause) => service.test(clause))) {
+  if (hasMixedProductPolicyRequest(normalized)) {
     // The query contains both a product task and a store-policy task. A
     // policy-only answer would silently discard the requested product.
     return false;
   }
-  if (productSelection.test(normalized) && !policyObject.test(normalized) &&
+  if (PRODUCT_SELECTION_VERB.test(normalized) && !policyObject.test(normalized) &&
     !asksToLearn.test(normalized)) return false;
   // "Есть ли кабель с доставкой?" asks about product availability, unlike
   // "Есть ли доставка?" whose grammatical object is the service itself.
@@ -93,6 +102,9 @@ export function resolveNamedSeriesToken(
 // controls whether the factual explanation beside render_products is visible.
 export function detectUserIntentMode(message: string): UserIntentMode {
   const normalized = message.toLowerCase().replace(/ё/g, "е");
+  // A service explanation in a second clause must not switch an explicit
+  // product selection into the tool-free informational route.
+  if (hasMixedProductPolicyRequest(normalized)) return "select";
   // Explanation requests must keep their prose even when the answer also
   // contains product cards. Conversely, a catalog imperative wins over words
   // such as "характеристика": in "найди автомат ... характеристика C" that

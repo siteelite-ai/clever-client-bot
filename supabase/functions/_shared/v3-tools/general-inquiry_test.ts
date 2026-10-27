@@ -51,6 +51,21 @@ Deno.test("store policy answer quotes only topic- and location-matching KB facts
   assert(!answer.text?.includes("<script>"));
 });
 
+Deno.test("broad delivery question cannot launder payment tariff through incidental delivery mention", () => {
+  const unrelated = buildStorePolicyEvidenceAnswer("Какие условия доставки?", [
+    { title: "Оплата", snippet: "Оплата 9 999 ₸ не относится к доставке." },
+  ]);
+  assertEquals(unrelated, { text: null, matched: 0 });
+
+  const mixedSource = buildStorePolicyEvidenceAnswer("Какие условия доставки?", [
+    { title: "Доставка и оплата", snippet: "Оплата 9 999 ₸ не относится к доставке." },
+    { title: "Доставка и оплата", snippet: "Доставка по Казахстану согласуется при оформлении заказа." },
+  ]);
+  assertEquals(mixedSource.matched, 1);
+  assert(mixedSource.text?.includes("Доставка по Казахстану"));
+  assert(!mixedSource.text?.includes("9 999"));
+});
+
 Deno.test("policy route with mocked knowledge provider cannot synthesize fabricated tariffs", async () => {
   const originalFetch = globalThis.fetch;
   let modelCalls = 0;

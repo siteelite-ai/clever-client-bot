@@ -236,6 +236,23 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
 }
 
 Deno.test({
+  name: "mixed product and delivery request stays on real catalog handler route",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn(
+      "Подбери электрический удлинитель и расскажи условия доставки",
+    );
+    const stepNames = result.steps.map(({ step }) => step);
+    assert(!stepNames.includes("v3_general_inquiry_direct_answer"), JSON.stringify(stepNames));
+    assert(!stepNames.includes("v3_store_policy_knowledge_lookup"), JSON.stringify(stepNames));
+    assert(result.modelCalls > 0, "the product expert route must run");
+    assert(result.requests.some((request) =>
+      request.startsWith("GET https://fixture.catalog.invalid/api/products?")
+    ), "the catalog must be consulted for the product task");
+  },
+});
+
+Deno.test({
   name:
     "model reasoning without search browses the verified leaf and renders grounded choices offline",
   permissions: { read: true, env: false, net: false },
