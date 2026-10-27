@@ -14,12 +14,17 @@ export interface MeasuredSourceClassRecoveryRequest {
   minimum_area_m2: number;
 }
 
+export interface MeasuredExplicitTargetClassRequest
+  extends MeasuredSourceClassRecoveryRequest {
+  target_class: string;
+}
+
 /**
  * A customer-owned source class may be a bounded search fallback for a
  * measured replacement. It is never itself proof that a product suits the
  * destination: that proof is checked separately on every live card.
  */
-export function parseMeasuredSourceClassRecoveryRequest(
+function parseMeasuredReplacementBase(
   message: string,
 ): MeasuredSourceClassRecoveryRequest | null {
   const request = String(message ?? "").replace(/\s+/gu, " ").trim();
@@ -40,11 +45,7 @@ export function parseMeasuredSourceClassRecoveryRequest(
     !destination || !fit.required || !fit.place ||
     fit.minimum_area_m2 === null ||
     !/^[\p{L}-]{4,40}$/u.test(sourceClass) ||
-    !/(?:светодиод\p{L}*|\bLED\b)/iu.test(destination) ||
-    // The source class may broaden only a generic lighting destination.
-    // A named target item (LED strip, bulb, etc.) is not interchangeable
-    // with the removed item's class and stays on the ordinary route.
-    !/(?:^|\s)(?:освещен\p{L}*|свет)(?:\s|$)/iu.test(destination)
+    !/(?:светодиод\p{L}*|\bLED\b)/iu.test(destination)
   ) return null;
   return {
     source_class: sourceClass,
@@ -52,6 +53,40 @@ export function parseMeasuredSourceClassRecoveryRequest(
     place: fit.place,
     minimum_area_m2: fit.minimum_area_m2,
   };
+}
+
+export function parseMeasuredSourceClassRecoveryRequest(
+  message: string,
+): MeasuredSourceClassRecoveryRequest | null {
+  const parsed = parseMeasuredReplacementBase(message);
+  // The removed source class may broaden only a generic lighting target.
+  // An explicit product class must instead retain its own live taxonomy.
+  return parsed && /(?:^|\s)(?:освещен\p{L}*|свет)(?:\s|$)/iu.test(
+      parsed.destination,
+    )
+    ? parsed
+    : null;
+}
+
+/**
+ * For an explicitly named replacement type, the target class comes from the
+ * customer, never from the removed object or a model-generated synonym. The
+ * actual catalog leaf is resolved later from live taxonomy and rechecked on
+ * each card. This is intentionally independent of any fixture vocabulary.
+ */
+export function parseMeasuredExplicitTargetClassRequest(
+  message: string,
+): MeasuredExplicitTargetClassRequest | null {
+  const parsed = parseMeasuredReplacementBase(message);
+  if (!parsed) return null;
+  const words = parsed.destination.split(/\s+/u);
+  if (
+    words.length !== 2 ||
+    !/^(?:светодиод\p{L}*|LED)$/iu.test(words[0]) ||
+    !/^[\p{L}-]{4,40}$/u.test(words[1]) ||
+    /^(?:освещен\p{L}*|свет)$/iu.test(words[1])
+  ) return null;
+  return { ...parsed, target_class: words[1] };
 }
 
 function normalizedRequestWords(value: string): string[] {
@@ -78,6 +113,7 @@ const DIRECT_REQUEST_FRAME_WORDS = new Set([
   "подберите",
   "предложи",
   "предложите",
+  "предложить",
   "покажи",
   "покажите",
   "найди",
@@ -109,8 +145,11 @@ const DIRECT_REQUEST_FRAME_WORDS = new Set([
  * request structure, then reject every unexplained word rather than trying to
  * enumerate all possible product criteria.
  */
-export function admitMeasuredSourceClassDirectRoute(message: string): boolean {
-  const parsed = parseMeasuredSourceClassRecoveryRequest(message);
+function admitMeasuredDirectRoute(
+  message: string,
+  parsed: MeasuredSourceClassRecoveryRequest | null,
+  explicitTarget: boolean,
+): boolean {
   if (!parsed) return false;
   const request = String(message ?? "").replace(/\s+/gu, " ").trim();
   const relation = request.match(
@@ -133,7 +172,13 @@ export function admitMeasuredSourceClassDirectRoute(message: string): boolean {
   if (
     destinationWords.length !== 2 ||
     !destinationWords.some((word) => /^(?:светодиод\p{L}*|led)$/u.test(word)) ||
-    !destinationWords.some((word) => /^(?:освещен\p{L}*|свет)$/u.test(word))
+    !(explicitTarget
+      ? !destinationWords.some((word) =>
+        /^(?:освещен\p{L}*|свет)$/u.test(word)
+      )
+      : destinationWords.some((word) =>
+        /^(?:освещен\p{L}*|свет)$/u.test(word)
+      ))
   ) return false;
 
   const relationEnd = relation.index + relation[0].length;
@@ -172,6 +217,22 @@ export function admitMeasuredSourceClassDirectRoute(message: string): boolean {
   if (/\p{S}/u.test(residual)) return false;
   return normalizedRequestWords(residual).every((word) =>
     DIRECT_REQUEST_FRAME_WORDS.has(word)
+  );
+}
+
+export function admitMeasuredSourceClassDirectRoute(message: string): boolean {
+  return admitMeasuredDirectRoute(
+    message,
+    parseMeasuredSourceClassRecoveryRequest(message),
+    false,
+  );
+}
+
+export function admitMeasuredExplicitTargetDirectRoute(message: string): boolean {
+  return admitMeasuredDirectRoute(
+    message,
+    parseMeasuredExplicitTargetClassRequest(message),
+    true,
   );
 }
 
@@ -239,12 +300,21 @@ export function verifiedMeasuredLedReplacementProducts(
 }
 
 export interface MeasuredSourceClassRecoveryResult {
-  request: MeasuredSourceClassRecoveryRequest;
-  origin: "target_query" | "source_class_fallback" | "unverified";
+  request:
+    | MeasuredSourceClassRecoveryRequest
+    | MeasuredExplicitTargetClassRequest;
+  origin:
+    | "target_query"
+    | "source_class_fallback"
+    | "explicit_target_class"
+    | "explicit_target_with_source_alternatives"
+    | "unverified";
   products: ProductFull[];
   target_status: string;
   target_verified: number;
   target_duration_ms: number;
+  target_category?: string | null;
+  target_pages?: number;
   source_category: string | null;
   source_status: string;
   source_pages: number;
@@ -271,6 +341,157 @@ export async function recoverMeasuredSourceClassSelection(
     sourceTimeoutMs?: number;
   },
 ): Promise<MeasuredSourceClassRecoveryResult | null> {
+  const explicit = parseMeasuredExplicitTargetClassRequest(message);
+  if (explicit && admitMeasuredExplicitTargetDirectRoute(message)) {
+    // Resolve the customer's target against the live tree first. The removed
+    // class is a separately labelled alternative scope, not evidence that a
+    // source-class product belongs to the customer's exact target category.
+    // Such alternatives still need independent LED, site, area, price and
+    // stock proof; the answer must disclose their different catalog category.
+    const started = Date.now();
+    const discovered = await executeDiscoverCategory({
+      noun: explicit.target_class,
+      semantic_query: explicit.destination,
+    }, {
+      baseUrl: deps.baseUrl,
+      apiToken: deps.apiToken,
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: deps.discoveryTimeoutMs ?? 3_500,
+    });
+    const targetCategory = discovered.ok &&
+        discoveryNounIsGrounded(
+          discovered.category.pagetitle,
+          explicit.target_class,
+        ) &&
+        discovered.leaf_categories.some((leaf) =>
+          leaf.pagetitle === discovered.category.pagetitle
+        )
+      ? discovered.category.pagetitle
+      : null;
+    let targetStatus = discovered.ok
+      ? targetCategory ? "ok" : "unproven_target_leaf"
+      : discovered.error_code;
+    let targetPages = 0;
+    const selected = new Map<string, ProductFull>();
+    if (targetCategory) {
+      for (let page = 1; page <= 3 && selected.size < 5; page++) {
+        const found = await executeSearchCatalog({
+          mode: "by_filter",
+          category: targetCategory,
+          min_price: 1,
+          per_page: 50,
+          page,
+        }, {
+          baseUrl: deps.baseUrl,
+          apiToken: deps.apiToken,
+          fetchImpl: deps.fetchImpl,
+          timeoutMs: deps.targetTimeoutMs ?? 2_500,
+        }, deps.cache);
+        targetPages += 1;
+        if (!found.ok) {
+          targetStatus = found.error_code;
+          break;
+        }
+        const verified = verifiedMeasuredLedReplacementProducts(
+          message,
+          found.results
+            .filter((product) => product.leaf_category === targetCategory)
+            .map(({ id }) => deps.cache.get(id))
+            .filter((product): product is ProductFull => Boolean(product)),
+        ).filter(hasPositiveWarehouseProof);
+        for (const product of verified) selected.set(product.id, product);
+        if (found.results.length < 50 || found.total <= page * 50) break;
+      }
+    }
+    const targetVerified = selected.size;
+    const targetDuration = Date.now() - started;
+    let sourceCategory: string | null = null;
+    let sourceStatus = "not_needed";
+    let sourcePages = 0;
+    let sourceVerified = 0;
+    let sourceDiscoveryDuration = 0;
+    let sourceSearchDuration = 0;
+    if (selected.size < 3) {
+      const sourceStarted = Date.now();
+      const sourceDiscovery = await executeDiscoverCategory({
+        noun: explicit.source_class,
+        semantic_query: explicit.source_class,
+      }, {
+        baseUrl: deps.baseUrl,
+        apiToken: deps.apiToken,
+        fetchImpl: deps.fetchImpl,
+        timeoutMs: deps.discoveryTimeoutMs ?? 3_500,
+      });
+      sourceCategory = sourceDiscovery.ok &&
+          discoveryNounIsGrounded(
+            sourceDiscovery.category.pagetitle,
+            explicit.source_class,
+          ) &&
+          sourceDiscovery.leaf_categories.some((leaf) =>
+            leaf.pagetitle === sourceDiscovery.category.pagetitle
+          )
+        ? sourceDiscovery.category.pagetitle
+        : null;
+      sourceStatus = sourceDiscovery.ok
+        ? sourceCategory ? "ok" : "unproven_source_leaf"
+        : sourceDiscovery.error_code;
+      sourceDiscoveryDuration = Date.now() - sourceStarted;
+      if (sourceCategory && sourceCategory !== targetCategory) {
+        const sourceSearchStarted = Date.now();
+        for (let page = 1; page <= 3 && selected.size < 5; page++) {
+          const found = await executeSearchCatalog({
+            mode: "by_filter",
+            category: sourceCategory,
+            min_price: 1,
+            per_page: 50,
+            page,
+          }, {
+            baseUrl: deps.baseUrl,
+            apiToken: deps.apiToken,
+            fetchImpl: deps.fetchImpl,
+            timeoutMs: deps.sourceTimeoutMs ?? 2_500,
+          }, deps.cache);
+          sourcePages += 1;
+          if (!found.ok) {
+            sourceStatus = found.error_code;
+            break;
+          }
+          const verified = verifiedMeasuredLedReplacementProducts(
+            message,
+            found.results
+              .filter((product) => product.leaf_category === sourceCategory)
+              .map(({ id }) => deps.cache.get(id))
+              .filter((product): product is ProductFull => Boolean(product)),
+          ).filter(hasPositiveWarehouseProof);
+          sourceVerified += verified.length;
+          for (const product of verified) selected.set(product.id, product);
+          if (found.results.length < 50 || found.total <= page * 50) break;
+        }
+        sourceSearchDuration = Date.now() - sourceSearchStarted;
+      }
+    }
+    const products = [...selected.values()].slice(0, 5);
+    return {
+      request: explicit,
+      origin: sourceVerified > 0
+        ? "explicit_target_with_source_alternatives"
+        : products.length > 0
+        ? "explicit_target_class"
+        : "unverified",
+      products,
+      target_status: targetStatus,
+      target_verified: targetVerified,
+      target_duration_ms: targetDuration,
+      target_category: targetCategory,
+      target_pages: targetPages,
+      source_category: sourceCategory,
+      source_status: sourceStatus,
+      source_pages: sourcePages,
+      source_verified: sourceVerified,
+      source_discovery_duration_ms: sourceDiscoveryDuration,
+      source_search_duration_ms: sourceSearchDuration,
+    };
+  }
   if (!admitMeasuredSourceClassDirectRoute(message)) return null;
   const request = parseMeasuredSourceClassRecoveryRequest(message);
   if (!request) return null;

@@ -257,7 +257,9 @@ import {
   verifySelectionTargetWithVisibleTitle,
 } from "../_shared/v3-tools/selection-contract.ts";
 import {
+  admitMeasuredExplicitTargetDirectRoute,
   admitMeasuredSourceClassDirectRoute,
+  parseMeasuredExplicitTargetClassRequest,
   parseMeasuredSourceClassRecoveryRequest,
   recoverMeasuredSourceClassSelection,
 } from "../_shared/v3-tools/measured-source-class-recovery.ts";
@@ -4451,7 +4453,10 @@ async function answerMeasuredSourceClassRecovery(
   steps: StepLog[],
   t0: number,
 ): Promise<{ handled: boolean; products: ProductFull[] }> {
-  if (!parseMeasuredSourceClassRecoveryRequest(userMessage)) {
+  if (
+    !parseMeasuredSourceClassRecoveryRequest(userMessage) &&
+    !parseMeasuredExplicitTargetClassRequest(userMessage)
+  ) {
     return { handled: false, products: [] };
   }
   send({
@@ -4473,22 +4478,26 @@ async function answerMeasuredSourceClassRecovery(
       destination: recovered.request.destination,
       status: recovered.target_status,
       verified: recovered.target_verified,
+      live_target_category: recovered.target_category ?? null,
+      target_pages: recovered.target_pages ?? 0,
       duration_ms: recovered.target_duration_ms,
     },
   });
-  steps.push({
-    step: "v3_measured_replacement_source_class_fallback",
-    ms: Date.now() - t0,
-    meta: {
-      source_class: recovered.request.source_class,
-      live_category: recovered.source_category,
-      status: recovered.source_status,
-      pages: recovered.source_pages,
-      verified: recovered.source_verified,
-      discovery_ms: recovered.source_discovery_duration_ms,
-      search_ms: recovered.source_search_duration_ms,
-    },
-  });
+  if (recovered.source_status !== "not_needed") {
+    steps.push({
+      step: "v3_measured_replacement_source_class_fallback",
+      ms: Date.now() - t0,
+      meta: {
+        source_class: recovered.request.source_class,
+        live_category: recovered.source_category,
+        status: recovered.source_status,
+        pages: recovered.source_pages,
+        verified: recovered.source_verified,
+        discovery_ms: recovered.source_discovery_duration_ms,
+        search_ms: recovered.source_search_duration_ms,
+      },
+    });
+  }
   send({
     type: "tool_event",
     tool: "search_catalog",
@@ -4496,14 +4505,16 @@ async function answerMeasuredSourceClassRecovery(
     duration_ms: recovered.target_duration_ms +
       recovered.source_discovery_duration_ms +
       recovered.source_search_duration_ms,
-    summary:
-      `Проверено подходящих карточек: ${recovered.products.length}; целевой поиск: ${recovered.target_status}; исходный класс: ${recovered.source_status}`,
+    summary: recovered.target_category !== undefined
+      ? `Проверено карточек: ${recovered.products.length}; целевая категория: ${recovered.target_verified}; исходные альтернативы: ${recovered.source_verified}; статус: ${recovered.target_status}`
+      : `Проверено подходящих карточек: ${recovered.products.length}; целевой поиск: ${recovered.target_status}; исходный класс: ${recovered.source_status}`,
   });
   if (recovered.products.length === 0) {
     send({
       type: "delta",
-      content:
-        `Не смог подтвердить светодиодные товары для «${recovered.request.place}» с заявленной площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Это не доказывает, что таких товаров нет в каталоге; для точного подбора можно уточнить вариант у менеджера.`,
+      content: recovered.target_category !== undefined
+        ? `Не смог подтвердить товары именно запрошенного типа «${recovered.request.destination}» для «${recovered.request.place}» с площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Другие типы вместо него не подставляю. Это не доказывает, что подходящих товаров нет во всём каталоге; можно уточнить условия подбора у менеджера.`
+        : `Не смог подтвердить светодиодные товары для «${recovered.request.place}» с заявленной площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Это не доказывает, что таких товаров нет в каталоге; для точного подбора можно уточнить вариант у менеджера.`,
     });
     return { handled: true, products: [] };
   }
@@ -4524,11 +4535,30 @@ async function answerMeasuredSourceClassRecovery(
     });
     return { handled: true, products: [] };
   }
+  const exactTargetShown = Math.min(
+    recovered.target_verified,
+    rendered.rendered_count,
+  );
+  const alternativeShown = rendered.rendered_count - exactTargetShown;
   const classCaveat = recovered.origin === "source_class_fallback"
     ? `Для расширения поиска проверил названный вами исходный класс «${recovered.source_category}»; это не обзор всех видов светодиодного освещения. `
+    : recovered.origin === "explicit_target_with_source_alternatives"
+    ? `${exactTargetShown > 0
+      ? `Из запрошенной категории «${recovered.target_category}» подтверждено ${exactTargetShown}. `
+      : recovered.target_category
+      ? `В запрошенной категории «${recovered.target_category}» подходящих карточек пока не подтвердил. `
+      : `Целевую категорию для «${recovered.request.destination}» пока не удалось подтвердить. `}Альтернативы из названной вами исходной категории «${recovered.source_category}»: ${alternativeShown}. Их принадлежность к целевой каталожной категории не утверждаю. `
+    : recovered.origin === "explicit_target_class"
+    ? `Подобрал только товары из каталожной категории «${recovered.target_category}»; исходный тип не подставлял. `
+    : "";
+  const cardinality = resolveResultCardinality(userMessage, {
+    selection: true,
+  });
+  const shortfall = rendered.rendered_count < cardinality.minimum
+    ? `Подтвердил только ${rendered.rendered_count} подходящих вариантов в проверенной части каталога; неподтверждённые товары для количества не добавляю. `
     : "";
   const caption =
-    `${classCaveat}У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «${recovered.request.place}», максимальная площадь освещения не менее ${recovered.request.minimum_area_m2} м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и требуемую освещённость следует проверить отдельно.`;
+    `${classCaveat}${shortfall}У показанных товаров в актуальных карточках подтверждены светодиодное исполнение, назначение «${recovered.request.place}», максимальная площадь освещения не менее ${recovered.request.minimum_area_m2} м² и положительный складской остаток. Заявленная площадь — характеристика карточки, не независимый светотехнический расчёт; совместимость крепления при замене и световой поток (лм) для требуемой освещённости следует проверить отдельно.`;
   send({ type: "delta", content: caption });
   const plan = extendSelectionCriteriaPlan(null, [{
     key: "Максимальная площадь освещения, м2",
@@ -4553,6 +4583,14 @@ async function answerMeasuredSourceClassRecovery(
         ...(criterion.evidence ? { evidence: criterion.evidence } : {}),
       })),
       visible_requirements: [
+        ...(recovered.origin === "explicit_target_class" &&
+            recovered.target_category
+          ? [{
+            kind: "product_class",
+            label: "Целевой тип товара",
+            value: recovered.target_category,
+          }]
+          : []),
         {
           kind: "application",
           label: "Назначение",
@@ -4561,9 +4599,7 @@ async function answerMeasuredSourceClassRecovery(
         { kind: "technology", label: "Светодиодное исполнение" },
         { kind: "availability", label: "Положительный складской остаток" },
       ],
-      result_cardinality: resolveResultCardinality(userMessage, {
-        selection: true,
-      }),
+      result_cardinality: cardinality,
     },
   });
   steps.push({
@@ -4571,6 +4607,7 @@ async function answerMeasuredSourceClassRecovery(
     ms: Date.now() - t0,
     meta: {
       origin: recovered.origin,
+      live_target_category: recovered.target_category ?? null,
       live_source_category: recovered.source_category,
       rendered: rendered.rendered_count,
       minimum_area_m2: recovered.request.minimum_area_m2,
@@ -28466,12 +28503,18 @@ Deno.serve(async (req) => {
                 });
               }
             } else if (
-              parseMeasuredSourceClassRecoveryRequest(
+              (parseMeasuredSourceClassRecoveryRequest(
                 scopedSelectionRequest.message,
               ) &&
-              admitMeasuredSourceClassDirectRoute(
-                scopedSelectionRequest.message,
-              )
+                admitMeasuredSourceClassDirectRoute(
+                  scopedSelectionRequest.message,
+                ) ||
+                parseMeasuredExplicitTargetClassRequest(
+                  scopedSelectionRequest.message,
+                ) &&
+                  admitMeasuredExplicitTargetDirectRoute(
+                    scopedSelectionRequest.message,
+                  ))
             ) {
               const measuredRecovery = await answerMeasuredSourceClassRecovery(
                 scopedSelectionRequest.message,

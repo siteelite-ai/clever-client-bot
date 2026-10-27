@@ -1,14 +1,19 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  admitMeasuredExplicitTargetDirectRoute,
   admitMeasuredSourceClassDirectRoute,
+  parseMeasuredExplicitTargetClassRequest,
   parseMeasuredSourceClassRecoveryRequest,
   recoverMeasuredSourceClassSelection,
   verifiedMeasuredLedReplacementProducts,
 } from "./measured-source-class-recovery.ts";
+import { resetDiscoverCategoryCacheForTest } from "./discover-category.ts";
 import type { ProductCache, ProductFull } from "./types.ts";
 
 const request =
   "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
+const explicitRequest =
+  "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?";
 
 function product(
   id: string,
@@ -94,6 +99,30 @@ Deno.test("measured direct admission preserves plain source, LED, site and area 
     ]
   ) {
     assertEquals(admitMeasuredSourceClassDirectRoute(message), true, message);
+  }
+});
+
+Deno.test("explicit LED target retains its own customer class and strict whole-request admission", () => {
+  assertEquals(parseMeasuredSourceClassRecoveryRequest(explicitRequest), null);
+  assertEquals(parseMeasuredExplicitTargetClassRequest(explicitRequest), {
+    source_class: "люстру",
+    destination: "светодиодный светильник",
+    place: "гостиной",
+    minimum_area_m2: 25,
+    target_class: "светильник",
+  });
+  assertEquals(admitMeasuredExplicitTargetDirectRoute(explicitRequest), true);
+  assertEquals(admitMeasuredSourceClassDirectRoute(explicitRequest), false);
+  for (const extra of [
+    "до 20 000 ₸",
+    "белого цвета",
+    "на натяжной потолок",
+    "но не люстру",
+    "только 2 варианта",
+  ]) {
+    assertEquals(admitMeasuredExplicitTargetDirectRoute(
+      `Хочу заменить люстру на светодиодный светильник в гостиной 25 м² ${extra}.`,
+    ), false, extra);
   }
 });
 
@@ -369,4 +398,149 @@ Deno.test("destination-only request never opens source-class fallback", async ()
   );
   assertEquals(result, null);
   assertEquals(fetched, false);
+});
+
+Deno.test("explicit class first checks live target leaf, then labels only verified source alternatives", async () => {
+  resetDiscoverCategoryCacheForTest();
+  const calls: string[] = [];
+  let targetResolutionFailed = false;
+  let targetEnough = false;
+  const cards: ProductFull[] = [
+    { ...product("target", "Светильник светодиодный 60W", "гостиная", "25"), leaf_category: "Светильники" },
+    { ...product("target-b", "Светильник светодиодный 65W", "гостиная", "30"), leaf_category: "Светильники" },
+    { ...product("target-c", "Светильник светодиодный 70W", "гостиная", "32"), leaf_category: "Светильники" },
+    product("source-a", "Люстра светодиодная 96W", "гостиная", "30"),
+    product("source-b", "Люстра светодиодная 75W", "гостиная", "28"),
+    product("source-c", "Люстра светодиодная 70W", "гостиная", "25"),
+    product("source-missing-stock", "Люстра светодиодная 65W", "гостиная", "30", 0),
+    product("office", "Люстра светодиодная офисная 48W", "офис", "30"),
+    product("small", "Люстра светодиодная 24W", "гостиная", "12"),
+    product("bulb-only", "Люстра под светодиодные лампы", "гостиная", "30"),
+    { ...product("other-leaf", "Люстра светодиодная 72W", "гостиная", "30"), leaf_category: "Декоративное освещение" },
+  ];
+  const rows = cards.map((card) => ({
+    id: card.id,
+    pagetitle: card.pagetitle,
+    price: card.price,
+    url: card.url,
+    category: { pagetitle: card.leaf_category },
+    ...(card.id === "source-missing-stock"
+      ? {}
+      : { warehouses: [{ city: "Алматы", amount: 3 }] }),
+    options: card.short_traits.map((trait, index) => {
+      const [caption, ...value] = trait.split(":");
+      return {
+        key: `facet_${index}`,
+        caption_ru: caption,
+        value_ru: value.join(":").trim(),
+      };
+    }),
+  }));
+  const fetchImpl: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    calls.push(`${url.pathname}?${url.searchParams.toString()}`);
+    let data: unknown;
+    if (url.pathname.endsWith("/categories")) {
+      data = {
+        data: {
+          results: [
+            { id: 1, pagetitle: "Светильники", children: [] },
+            { id: 2, pagetitle: "Люстры", children: [] },
+            { id: 3, pagetitle: "Декоративное освещение", children: [] },
+          ],
+          pagination: { page: 1, per_page: 200, pages: 1, total: 3 },
+        },
+      };
+    } else if (url.pathname.endsWith("/categories/options")) {
+      const title = url.searchParams.get("pagetitle") ?? "";
+      if (title === "Светильники" && targetResolutionFailed) {
+        return Promise.resolve(new Response("not found", { status: 404 }));
+      }
+      data = {
+        data: {
+          category: { id: title === "Люстры" ? 2 : 1, pagetitle: title, total_products: 8 },
+          options: [{
+            key: "purpose",
+            caption_ru: "Назначение",
+            type: "string",
+            values: [{ value_ru: "гостиная", products_count: 4 }],
+          }],
+        },
+      };
+    } else if (url.pathname.endsWith("/products")) {
+      const category = url.searchParams.get("category");
+      const results = category === "Светильники"
+        ? rows.filter((row) => row.category.pagetitle === "Светильники")
+          .slice(0, targetEnough ? 3 : 1)
+        : category === "Люстры"
+        ? rows.filter((row) => row.category.pagetitle !== "Светильники")
+        : [];
+      data = { data: { results, pagination: { total: results.length } } };
+    } else {
+      throw new Error(`Unexpected URL: ${url}`);
+    }
+    return Promise.resolve(new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  };
+  const recovered = await recoverMeasuredSourceClassSelection(explicitRequest, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    cache: new Map(),
+    fetchImpl,
+  });
+  assertEquals(recovered?.origin, "explicit_target_with_source_alternatives");
+  assertEquals(recovered?.target_category, "Светильники");
+  assertEquals(recovered?.source_category, "Люстры");
+  assertEquals(recovered?.target_verified, 1);
+  assertEquals(recovered?.source_verified, 3);
+  assertEquals(recovered?.products.map(({ id }) => id), [
+    "target",
+    "source-a",
+    "source-b",
+    "source-c",
+  ]);
+  assertEquals(calls.filter((call) => call.includes("/products?")), [
+    "/products?category=%D0%A1%D0%B2%D0%B5%D1%82%D0%B8%D0%BB%D1%8C%D0%BD%D0%B8%D0%BA%D0%B8&min_price=1&per_page=50",
+    "/products?category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B&min_price=1&per_page=50",
+  ]);
+
+  targetEnough = true;
+  calls.length = 0;
+  const exactOnly = await recoverMeasuredSourceClassSelection(explicitRequest, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    cache: new Map(),
+    fetchImpl,
+  });
+  assertEquals(exactOnly?.origin, "explicit_target_class");
+  assertEquals(exactOnly?.source_status, "not_needed");
+  assertEquals(exactOnly?.products.map(({ id }) => id), [
+    "target",
+    "target-b",
+    "target-c",
+  ]);
+  assertEquals(calls.some((call) => call.includes("/products?category=%D0%9B")), false);
+
+  targetResolutionFailed = true;
+  calls.length = 0;
+  const sourceOnly = await recoverMeasuredSourceClassSelection(explicitRequest, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    cache: new Map(),
+    fetchImpl,
+  });
+  assertEquals(sourceOnly?.origin, "explicit_target_with_source_alternatives");
+  assertEquals(sourceOnly?.target_category, null);
+  assertEquals(sourceOnly?.target_status, "category_not_found");
+  assertEquals(sourceOnly?.products.map(({ id }) => id), [
+    "source-a",
+    "source-b",
+    "source-c",
+  ]);
+  assertEquals(calls.filter((call) => call.includes("/products?")), [
+    "/products?category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B&min_price=1&per_page=50",
+  ]);
+  resetDiscoverCategoryCacheForTest();
 });
