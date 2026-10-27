@@ -9454,6 +9454,7 @@ async function runExpertLoop(
     serverVerifiedBaseRequest: serverRenderedBaseRequest ?? "",
     customerMeasurementEvidence: verifiedCustomerMeasurementEvidence,
     serverVerifiedPriorQueriesNewestFirst,
+    serverVerifiedCurrentRequest: rawCurrentUserMessage,
   });
   let destinationAreaCoverageLogged = false;
   let destinationAreaCoverageApplied = false;
@@ -12759,7 +12760,7 @@ async function runExpertLoop(
             };
             const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
             if (uncoveredGap !== "unprojectable_criterion") return uncoveredGap;
-            // The independently verified original request and fresh per-card
+            // The server-verified customer request and fresh per-card
             // destination gate discharge only this customer area. The model
             // need not repeat its unit after classification prose is cleaned;
             // any other surviving physical number keeps the original repair.
@@ -12784,7 +12785,9 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   minimum_area_m2: destinationAreaCoverage.minimumAreaM2,
-                  source: "server_rendered_base_and_fresh_card_gate",
+                  source: serverRenderedBaseRequest
+                    ? "server_rendered_base_and_fresh_card_gate"
+                    : "server_current_request_and_fresh_card_gate",
                 },
               });
               destinationAreaCoverageLogged = true;
@@ -12948,6 +12951,43 @@ async function runExpertLoop(
               productMeasurementMissing: missingRequiredProductMeasurement(),
               providerAttempts: derivedReasoningProviderAttempts,
             });
+          if (repairReason === "product_measurement") {
+            const modelUnits = [
+              declaration?.reasoningEvidence ?? "",
+              declaration?.measurementEvidence ?? "",
+            ].flatMap(extractClientQuantities)
+              .filter(({ unit }) => isPhysicalMeasurementUnit(unit));
+            const unitCategory = (unit: string): string => {
+              switch (canonicalMeasurementUnit(unit)) {
+                case "м²": return "area";
+                case "лм": return "luminous_flux";
+                case "лк": return "illuminance";
+                case "вт":
+                case "квт": return "power";
+                case "в":
+                case "кв": return "voltage";
+                case "а":
+                case "ма": return "current";
+                case "мм":
+                case "см":
+                case "м":
+                case "км": return "length";
+                default: return "other";
+              }
+            };
+            steps.push({
+              step: "v3_product_measurement_gap_before_repair",
+              ms: now(),
+              meta: {
+                gap: requiredProductMeasurementGap(),
+                destination_area_covered: destinationAreaCoverage.covered,
+                model_physical_count_capped: Math.min(modelUnits.length, 9),
+                model_physical_categories: [...new Set(modelUnits.map(({ unit }) =>
+                  unitCategory(unit)
+                ))].sort(),
+              },
+            });
+          }
           if (repairReason) {
             const correctionTimeout = boundedAgentStepTimeout(
               LLM_TIMEOUT_DERIVED_RETRY_MS,

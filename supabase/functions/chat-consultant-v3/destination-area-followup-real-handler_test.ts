@@ -172,6 +172,7 @@ interface Run {
 }
 
 async function runFollowup({
+  freshTurn = false,
   baseRequest = base,
   historyBaseRequest = baseRequest,
   historyCard = previousCard,
@@ -186,6 +187,7 @@ async function runFollowup({
   catalogQueryProducts = null,
   catalogQueryProductsByCall = null,
   categoryLeaf = leaf,
+  includeAreaFacet = true,
   includeShapeFacet = false,
   catalogProductDelayMs = 0,
   catalogFailTitle = null,
@@ -199,6 +201,8 @@ async function runFollowup({
   interveningServerRows = null,
   certifiedNeutralBridge = false,
 }: {
+  /** No browser history or completed server rows: exercise the direct turn. */
+  freshTurn?: boolean;
   baseRequest?: string;
   /** Browser history is a candidate, never authority for a prior request. */
   historyBaseRequest?: string;
@@ -216,6 +220,8 @@ async function runFollowup({
   /** Exercise consecutive grounded lexical pages with different evidence. */
   catalogQueryProductsByCall?: Array<typeof products> | null;
   categoryLeaf?: string;
+  /** Keep product-side area evidence while hiding the category-level facet. */
+  includeAreaFacet?: boolean;
   includeShapeFacet?: boolean;
   catalogProductDelayMs?: number;
   catalogFailTitle?: string | null;
@@ -238,7 +244,7 @@ async function runFollowup({
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
   const prior = priorLog(baseRequest, serverBatchProducts);
-  const priorRows = [
+  const priorRows = freshTurn ? [] : [
     ...(latestServerBatch ? [{
       id: "offline-latest-batch",
       session_id: sessionId,
@@ -439,16 +445,18 @@ async function runFollowup({
                   type: "string",
                   values: [{ value_ru: "для гостиной", products_count: 3 }],
                 },
-                {
-                  key: "lighting_area",
-                  caption_ru: "Максимальная площадь освещения, м2",
-                  type: "number",
-                  unit: "м²",
-                  values: [12, 35].map((area) => ({
-                    value_ru: `${area} м²`,
-                    products_count: 1,
-                  })),
-                },
+                ...(includeAreaFacet
+                  ? [{
+                    key: "lighting_area",
+                    caption_ru: "Максимальная площадь освещения, м2",
+                    type: "number",
+                    unit: "м²",
+                    values: [12, 35].map((area) => ({
+                      value_ru: `${area} м²`,
+                      products_count: 1,
+                    })),
+                  }]
+                  : []),
                 ...(includeShapeFacet
                   ? [{
                     key: "shape",
@@ -650,7 +658,7 @@ async function runFollowup({
             slots: pendingClarification
               ? { pending_clarification: pendingClarification }
               : {},
-            history: [
+            history: freshTurn ? [] : [
               { role: "user", content: historyBaseRequest },
               { role: "assistant", content: historyCard },
               ...(interveningServerRows?.slice().reverse().map((row) =>
@@ -805,6 +813,92 @@ function hasVerifiedAdditionalSelectionTerminalRecovery(steps: Step[]): boolean 
     step === "v3_semantic_render_recovery" && Number(meta?.rendered) > 0
   );
 }
+
+Deno.test({
+  name: "first-turn sole room area uses fresh per-card proof without a model correction",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const result = await runFollowup({
+        freshTurn: true,
+        followupMessage: base,
+        rawReasoning: areaOnlyReasoning,
+        includeAreaFacet: false,
+      });
+      assertEquals(result.correctionRequests, 0, JSON.stringify(result.steps));
+      assertEquals(result.priorLogReads, 0, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step, meta }) =>
+          step === "v3_destination_area_card_proof_covers_measurement" &&
+          meta?.minimum_area_m2 === 30 &&
+          meta?.source === "server_current_request_and_fresh_card_gate"
+        ),
+        JSON.stringify(result.steps),
+      );
+      const rendered = blocks(result.events);
+      assert(rendered.length > 0, JSON.stringify(result.steps));
+      assert(rendered.some(({ markdown }) => markdown?.includes(priorUrl)));
+      assert(rendered.some(({ markdown }) => markdown?.includes(nextUrl)));
+      assert(rendered.every(({ markdown }) =>
+        !markdown?.includes("/office/") && !markdown?.includes("/small/")
+      ));
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "first-turn area proof never admits cards without both destination and sufficient area",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const result = await runFollowup({
+        freshTurn: true,
+        followupMessage: base,
+        includeAreaFacet: false,
+        catalogProducts: [products[2], products[3]],
+      });
+      assertEquals(result.correctionRequests, 0, JSON.stringify(result.steps));
+      assertEquals(blocks(result.events).length, 0, JSON.stringify(result.steps));
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "first-turn area proof does not accept a model-invented lumen threshold",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const result = await runFollowup({
+        freshTurn: true,
+        followupMessage: base,
+        includeAreaFacet: false,
+        rawReasoning:
+          "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+      });
+      assert(result.correctionRequests > 0, JSON.stringify(result.steps));
+      assert(
+        result.steps.some(({ step }) =>
+          step === "v3_derived_selection_reasoning_contract_rejected"
+        ),
+        JSON.stringify(result.steps),
+      );
+      assertEquals(blocks(result.events).length, 0, JSON.stringify(result.steps));
+      assertEquals(
+        result.steps.some(({ step }) =>
+          step === "v3_destination_area_card_proof_covers_measurement"
+        ),
+        false,
+        JSON.stringify(result.steps),
+      );
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
 
 Deno.test({
   name: "other-options follow-up keeps the completed selection context when fresh catalog products return 502",

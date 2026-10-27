@@ -308,6 +308,14 @@ Deno.test({
           variant === "http_502" ? 1 : 2,
         );
         assertEquals(result.catalogProductRequests, 0);
+        const gap = result.steps.find(({ step }) =>
+          step === "v3_product_measurement_gap_before_repair"
+        );
+        assert(gap, JSON.stringify(result.steps));
+        assertEquals(gap.meta?.gap, "unprojectable_criterion");
+        assertEquals(gap.meta?.destination_area_covered, false);
+        assertEquals(typeof gap.meta?.model_physical_count_capped, "number");
+        assertEquals(Array.isArray(gap.meta?.model_physical_categories), true);
         assertEquals(
           result.steps.some(({ step }) =>
             step === "v3_product_measurement_correction_http_retry"

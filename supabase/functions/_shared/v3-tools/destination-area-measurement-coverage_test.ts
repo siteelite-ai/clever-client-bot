@@ -17,6 +17,66 @@ const input: DestinationAreaMeasurementCoverageInput = {
   serverVerifiedPriorQueriesNewestFirst: [base],
 };
 
+const firstTurn: DestinationAreaMeasurementCoverageInput = {
+  selectionRequest: base,
+  baseRequest: "",
+  serverVerifiedBaseRequest: "",
+  customerMeasurementEvidence: base,
+  serverVerifiedPriorQueriesNewestFirst: [],
+  serverVerifiedCurrentRequest: base,
+};
+
+Deno.test("current first-turn room area is covered only by the final per-card destination gate", () => {
+  assertEquals(verifiedDestinationAreaCoversSoleMeasurement(firstTurn), {
+    covered: true,
+    minimumAreaM2: 25,
+  });
+  for (const [room, area] of [
+    ["спальне", 30],
+    ["кухне", 18],
+  ] as const) {
+    const request =
+      `Хочу заменить люстру на светодиодный светильник в ${room} ${area} м². Что подойдет?`;
+    assertEquals(verifiedDestinationAreaCoversSoleMeasurement({
+      ...firstTurn,
+      selectionRequest: request,
+      customerMeasurementEvidence: request,
+      serverVerifiedCurrentRequest: request,
+    }), { covered: true, minimumAreaM2: area });
+  }
+});
+
+Deno.test("first-turn proof rejects forged provenance, extra axes, and non-replacement areas", () => {
+  const rejects = [
+    { ...firstTurn, serverVerifiedCurrentRequest: "" },
+    { ...firstTurn, selectionRequest: `${base} 4000 лм` },
+    { ...firstTurn, customerMeasurementEvidence: `${base} 4000 лм` },
+    { ...firstTurn, serverVerifiedPriorQueriesNewestFirst: [base] },
+    { ...firstTurn, baseRequest: base },
+    { ...firstTurn, serverVerifiedBaseRequest: base },
+    { ...firstTurn, selectionRequest: `${base}\n${followup}` },
+    { ...firstTurn, serverVerifiedCurrentRequest: base.replace("25 м²", "30 м²") },
+    ...[
+      `${base} Не менее 4000 лм.`,
+      `${base} Мощность от 20 Вт.`,
+      `${base} Ширина 1 м.`,
+      `${base} И ещё для спальни 30 м².`,
+      "Покажи светодиодные светильники для гостиной 25 м².",
+    ].map((request) => ({
+      ...firstTurn,
+      selectionRequest: request,
+      customerMeasurementEvidence: request,
+      serverVerifiedCurrentRequest: request,
+    })),
+  ];
+  for (const candidate of rejects) {
+    assertEquals(verifiedDestinationAreaCoversSoleMeasurement(candidate), {
+      covered: false,
+      minimumAreaM2: null,
+    }, JSON.stringify(candidate));
+  }
+});
+
 Deno.test("rendered continuation provenance accepts an unchanged multi-criterion room request", () => {
   const multi =
     "Хочу заменить люстру на светодиодный светильник в гостиной 30 м², мощность от 20 Вт. Что подойдет?";

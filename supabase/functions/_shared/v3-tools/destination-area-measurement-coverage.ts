@@ -22,6 +22,8 @@ export interface DestinationAreaMeasurementCoverageInput {
   customerMeasurementEvidence: string;
   /** All completed server-log customer turns, newest first, before compaction. */
   serverVerifiedPriorQueriesNewestFirst: readonly string[];
+  /** The unmodified current customer turn received by the server. */
+  serverVerifiedCurrentRequest?: string;
 }
 
 export interface DestinationAreaMeasurementCoverage {
@@ -227,6 +229,25 @@ export function verifiedDestinationAreaCoversSoleMeasurement(
   const verifiedBase = String(input.serverVerifiedBaseRequest ?? "");
   const selection = String(input.selectionRequest ?? "");
   const evidence = String(input.customerMeasurementEvidence ?? "");
+  const current = String(input.serverVerifiedCurrentRequest ?? "");
+  // A direct customer request has no earlier rendered batch to certify.
+  // Its own server-received text can carry the sole area obligation, but only
+  // when selection and measurement evidence are exactly that same turn. The
+  // caller still has to run the independent destination/area gate per card.
+  if (
+    !base && !verifiedBase && current &&
+    !selection.includes(CUSTOMER_TURN_BOUNDARY) &&
+    input.serverVerifiedPriorQueriesNewestFirst.length === 0 &&
+    normalizedIdentity(selection) === normalizedIdentity(current) &&
+    normalizedIdentity(evidence) === normalizedIdentity(current)
+  ) {
+    const fit = verifyReplacementDestinationFit(current, []);
+    const area = fit.minimum_area_m2;
+    if (
+      fit.required && fit.place && area !== null &&
+      containsOnlyRequiredArea(current, area)
+    ) return { covered: true, minimumAreaM2: area };
+  }
   if (
     !base || !verifiedBase ||
     !selection.startsWith(`${base}${CUSTOMER_TURN_BOUNDARY}`) ||
