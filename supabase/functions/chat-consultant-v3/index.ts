@@ -503,6 +503,14 @@ import {
   parseConfiguredModelFallbacks,
 } from "../_shared/v3-tools/model-routing.ts";
 import {
+  PRIMARY_MEASUREMENT_GEMINI38_MODEL,
+  PRIMARY_MEASUREMENT_GEMINI38_PROVIDER,
+  primaryMeasurementForcedToolStatus,
+  primaryMeasurementGemini38Cohort,
+  safePrimaryMeasurementTelemetry,
+  type PrimaryMeasurementEnvelopeStatus,
+} from "../_shared/v3-tools/primary-measurement-gemini38-canary.ts";
+import {
   deterministicSeriesExplanation,
   safeSeriesTraits,
 } from "../_shared/v3-tools/series-explanation.ts";
@@ -1184,6 +1192,8 @@ interface ToolContext {
   openrouterKey: string;
   lovableApiKey: string | null;
   selectionReasoningModel: string;
+  /** Incoming-session rollout proof; never derived from rotated new-topic ID. */
+  primaryMeasurementGemini38Cohort?: boolean;
   sessionId: string;
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
@@ -3601,6 +3611,10 @@ type LLMPhase =
 
 type LLMProviderRoute = "configured" | "openrouter_only" | "lovable_only";
 
+interface PrimaryMeasurementCanaryCall {
+  onUpstream: (meta: Record<string, unknown>) => void;
+}
+
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
@@ -3614,6 +3628,7 @@ async function callOpenRouter(
   maxTokens = 4000,
   modelRouting: OpenRouterModelRouting = AGENT_MODEL_ROUTING,
   providerRoute: LLMProviderRoute = "configured",
+  primaryMeasurementCanary: PrimaryMeasurementCanaryCall | null = null,
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -3634,7 +3649,11 @@ async function callOpenRouter(
   let res: Response;
   let provider = "openrouter";
   let data: {
+    id?: unknown;
+    openrouter_metadata?: unknown;
+    usage?: unknown;
     choices?: Array<{
+      error?: unknown;
       message?: {
         content?: string | null;
         tool_calls?: Array<
@@ -3645,6 +3664,7 @@ async function callOpenRouter(
     }>;
   };
   try {
+    const canaryStartedAt = Date.now();
     const availableTools = toolSchemas.filter((schema) =>
       availableToolNames.includes(schema.function.name)
     );
@@ -3667,6 +3687,9 @@ async function callOpenRouter(
           headers: {
             "HTTP-Referer": "https://chat-volt.testdevops.ru",
             "X-Title": "220volt-chat-consultant-v3",
+            ...(primaryMeasurementCanary
+              ? { "X-OpenRouter-Metadata": "enabled" }
+              : {}),
           },
         },
       fallback: providerRoute === "configured" && LOVABLE_API_KEY
@@ -3679,9 +3702,15 @@ async function callOpenRouter(
         : null,
       body: {
         ...modelRouting,
-        temperature,
+        ...(primaryMeasurementCanary ? {} : { temperature }),
         max_tokens: maxTokens,
         messages,
+        ...(primaryMeasurementCanary
+          ? {
+            provider: PRIMARY_MEASUREMENT_GEMINI38_PROVIDER,
+            reasoning_effort: "low",
+          }
+          : {}),
         ...(availableTools.length > 0
           ? {
             tools: availableTools,
@@ -3692,6 +3721,7 @@ async function callOpenRouter(
           : {}),
       },
       signal: localCtrl.signal,
+      ...(primaryMeasurementCanary ? { quotaCooldown: null } : {}),
     });
     res = completion.response;
     provider = completion.provider;
@@ -3706,7 +3736,20 @@ async function callOpenRouter(
     };
 
     if (!res.ok) {
-      const errText = await res.text();
+      if (primaryMeasurementCanary) {
+        primaryMeasurementCanary.onUpstream(
+          safePrimaryMeasurementTelemetry({
+            payload: null,
+            httpStatus: res.status,
+            elapsedMs: Date.now() - canaryStartedAt,
+            envelopeStatus: "http_error",
+          }),
+        );
+        await res.body?.cancel();
+      }
+      const errText = primaryMeasurementCanary
+        ? "primary measurement canary upstream rejected"
+        : await res.text();
       throw new UpstreamHttpError(res.status, errText, {
         ...providerDiagnostics,
         origin: "http_response",
@@ -3717,7 +3760,56 @@ async function callOpenRouter(
     // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
     // Таймер держим живым до полного парсинга, иначе один медленный ответ
     // (типичный для reasoning-моделей) съедает весь бюджет хода.
-    data = await res.json() as typeof data;
+    try {
+      data = await res.json() as typeof data;
+    } catch (error) {
+      if (primaryMeasurementCanary) {
+        primaryMeasurementCanary.onUpstream(
+          safePrimaryMeasurementTelemetry({
+            payload: null,
+            httpStatus: res.status,
+            elapsedMs: Date.now() - canaryStartedAt,
+            envelopeStatus: "invalid_json",
+          }),
+        );
+        throw new UpstreamHttpError(
+          502,
+          "primary measurement canary invalid completion JSON",
+          {
+            ...providerDiagnostics,
+            origin: "completion_envelope",
+            observedHttpStatus: res.status,
+          },
+        );
+      }
+      throw error;
+    }
+    if (primaryMeasurementCanary) {
+      const envelopeStatus: PrimaryMeasurementEnvelopeStatus =
+        primaryMeasurementForcedToolStatus(
+          data,
+          forcedToolName ?? "declare_selection_reasoning",
+        );
+      primaryMeasurementCanary.onUpstream(
+        safePrimaryMeasurementTelemetry({
+          payload: data,
+          httpStatus: res.status,
+          elapsedMs: Date.now() - canaryStartedAt,
+          envelopeStatus,
+        }),
+      );
+      if (envelopeStatus !== "usable") {
+        throw new UpstreamHttpError(
+          502,
+          `primary measurement canary ${envelopeStatus}`,
+          {
+            ...providerDiagnostics,
+            origin: "completion_envelope",
+            observedHttpStatus: res.status,
+          },
+        );
+      }
+    }
     if (
       !data?.choices?.[0] ||
       isProviderErrorFinishReason(data.choices[0].finish_reason)
@@ -12444,6 +12536,21 @@ async function runExpertLoop(
             phaseTimeoutMs,
             LLM_TIMEOUT_DERIVED_PRIMARY_MS,
           );
+          const primaryMeasurementGemini38Canary = Boolean(
+            unresolvedProductMeasurementRequired &&
+              ctx.primaryMeasurementGemini38Cohort,
+          );
+          if (primaryMeasurementGemini38Canary) {
+            steps.push({
+              step: "v3_primary_measurement_gemini38_canary_route",
+              ms: now(),
+              meta: {
+                model: PRIMARY_MEASUREMENT_GEMINI38_MODEL,
+                primary_timeout_ms: primaryReasoningTimeout,
+                phase: "derived_reasoning",
+              },
+            });
+          }
           try {
             structuredReasoning = await callOpenRouter(
               apiKey,
@@ -12456,12 +12563,28 @@ async function runExpertLoop(
               0,
               [reasoningToolSchema],
               1200,
-              buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
-              DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+              primaryMeasurementGemini38Canary
+                ? { model: PRIMARY_MEASUREMENT_GEMINI38_MODEL }
+                : buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
+              primaryMeasurementGemini38Canary
+                ? "openrouter_only"
+                : DERIVED_REASONING_LOVABLE_RETRY_ENABLED
                 ? "openrouter_only"
                 : "configured",
+              primaryMeasurementGemini38Canary
+                ? {
+                  onUpstream: (meta) => steps.push({
+                    step: "v3_primary_measurement_gemini38_upstream",
+                    ms: now(),
+                    meta,
+                  }),
+                }
+                : null,
             );
           } catch (reasoningError) {
+            // This experiment must observe Gemini's own forced declaration.
+            // It cannot spend the old-model retry or hide an unusable envelope.
+            if (primaryMeasurementGemini38Canary) throw reasoningError;
             const timedOut = !(reasoningError instanceof UpstreamHttpError) && (
               (reasoningError as Error)?.name === "TimeoutError" ||
               String((reasoningError as Error)?.message ?? reasoningError)
@@ -27227,6 +27350,10 @@ Deno.serve(async (req) => {
               openrouterKey: settings.openrouter_api_key!,
               lovableApiKey: LOVABLE_API_KEY,
               selectionReasoningModel: settings.classifier_model,
+              primaryMeasurementGemini38Cohort:
+                DEPLOYMENT_VARIANT === "production" &&
+                ADMISSION_SCOPE === "production" &&
+                primaryMeasurementGemini38Cohort(sessionId),
               sessionId: effectiveSessionId,
               jargonCategoryContextEnabled:
                 settings.v3_jargon_category_context_enabled,

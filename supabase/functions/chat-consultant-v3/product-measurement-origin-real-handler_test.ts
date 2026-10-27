@@ -10,9 +10,10 @@ import {
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
 import "./index.ts";
+const offlineEnvGet = Deno.env.get;
 
 type Step = { step?: string; meta?: Record<string, unknown> };
-type Variant = "http_502" | "unusable_http_200";
+type Variant = "http_502" | "unusable_http_200" | "first_http_200_error";
 
 const category = "ИБП";
 const message = "Нужен ИБП для оборудования мощностью 250 Вт";
@@ -30,18 +31,30 @@ function sseEvents(text: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
 }
 
-async function runFailure(variant: Variant): Promise<{
+async function runFailure(
+  variant: Variant,
+  sessionId = crypto.randomUUID(),
+): Promise<{
   steps: Step[];
   events: Array<Record<string, unknown>>;
   correctionRequests: number;
   catalogProductRequests: number;
+  declarationRequests: Array<{
+    body: Record<string, unknown>;
+    metadataHeader: string | null;
+  }>;
 }> {
+  Deno.env.get = offlineEnvGet;
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
   let steps: Step[] = [];
   let correctionRequests = 0;
   let declarationRequests = 0;
+  const declarationRequestDetails: Array<{
+    body: Record<string, unknown>;
+    metadataHeader: string | null;
+  }> = [];
   let catalogProductRequests = 0;
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
@@ -118,14 +131,31 @@ async function runFailure(variant: Variant): Promise<{
           tool_choice?: { function?: { name?: string } };
           tools?: Array<{ function?: { name?: string } }>;
           messages?: Array<{ content?: string }>;
-        };
+        } & Record<string, unknown>;
         if (
           body.tool_choice?.function?.name === "declare_selection_reasoning"
         ) {
           declarationRequests++;
+          declarationRequestDetails.push({
+            body,
+            metadataHeader: request.headers.get("X-OpenRouter-Metadata"),
+          });
           const correction = body.messages?.some(({ content }) =>
             content?.includes("<correction>")
           ) ?? false;
+          if (!correction && variant === "first_http_200_error") {
+            return json({
+              id: "gen-abcdef1234567890",
+              choices: [{
+                finish_reason: "error",
+                error: {
+                  message: "PRIVATE_CUSTOMER_PROMPT_DO_NOT_LOG",
+                  metadata: { error_type: "provider_unavailable" },
+                },
+                message: { content: null },
+              }],
+            });
+          }
           if (correction) {
             correctionRequests++;
             return variant === "http_502"
@@ -210,7 +240,7 @@ async function runFailure(variant: Variant): Promise<{
           body: JSON.stringify({
             message,
             messageId: crypto.randomUUID(),
-            sessionId: crypto.randomUUID(),
+            sessionId,
             history: [],
           }),
         },
@@ -218,8 +248,18 @@ async function runFailure(variant: Variant): Promise<{
     );
     assertEquals(response.status, 200);
     const events = sseEvents(await response.text());
-    assertEquals(declarationRequests, 2, JSON.stringify(steps));
-    return { steps, events, correctionRequests, catalogProductRequests };
+    assertEquals(
+      declarationRequests,
+      variant === "first_http_200_error" ? 1 : 2,
+      JSON.stringify(steps),
+    );
+    return {
+      steps,
+      events,
+      correctionRequests,
+      catalogProductRequests,
+      declarationRequests: declarationRequestDetails,
+    };
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
@@ -274,6 +314,67 @@ Deno.test({
           !JSON.stringify(result.events).includes("fixture provider failure"),
         );
       }
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+Deno.test({
+  name: "first unresolved measurement declaration uses Gemini 3.8 only inside deterministic canary and fails closed on provider HTTP 200 error",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const canary = await runFailure(
+        "first_http_200_error",
+        "5ef79fc0-4c52-48b7-b278-5fa2241039f3",
+      );
+      const route = canary.steps.find(({ step }) =>
+        step === "v3_primary_measurement_gemini38_canary_route"
+      );
+      assert(route, JSON.stringify(canary.steps));
+      const primary = canary.declarationRequests[0];
+      assertEquals(primary.body.model, "google/gemini-3.8-flash");
+      assertEquals(primary.body.models, undefined);
+      assertEquals(primary.body.reasoning_effort, "low");
+      assertEquals(primary.body.temperature, undefined);
+      assertEquals(primary.body.provider, {
+        require_parameters: true,
+        order: ["google-ai-studio", "google-vertex/global"],
+        only: ["google-ai-studio", "google-vertex/global"],
+      });
+      assertEquals(primary.metadataHeader, "enabled");
+      const upstream = canary.steps.find(({ step }) =>
+        step === "v3_primary_measurement_gemini38_upstream"
+      );
+      assertEquals(upstream?.meta?.http_status, 200);
+      assertEquals(upstream?.meta?.envelope_status, "provider_error");
+      assertEquals(upstream?.meta?.choice_error_type, "provider_unavailable");
+      assertEquals(canary.correctionRequests, 0);
+      assertEquals(canary.catalogProductRequests, 0);
+      assertEquals(canary.events.some((event) =>
+        (event.v3_event as { type?: string } | undefined)?.type ===
+          "products_block"
+      ), false);
+      assert(!JSON.stringify(canary.steps).includes("PRIVATE_CUSTOMER_PROMPT_DO_NOT_LOG"));
+      assert(!JSON.stringify(canary.events).includes("PRIVATE_CUSTOMER_PROMPT_DO_NOT_LOG"));
+
+      const offCohort = await runFailure(
+        "http_502",
+        "11111111-1111-4111-8111-111111111111",
+      );
+      assertEquals(offCohort.steps.some(({ step }) =>
+        step === "v3_primary_measurement_gemini38_canary_route"
+      ), false);
+      const unchanged = offCohort.declarationRequests[0];
+      assertEquals(unchanged.body.models, [
+        "offline-model",
+        "deepseek/deepseek-v4-flash",
+      ]);
+      assertEquals(unchanged.body.temperature, 0);
+      assertEquals(unchanged.body.reasoning_effort, undefined);
+      assertEquals(unchanged.body.provider, undefined);
+      assertEquals(unchanged.metadataHeader, null);
+      assertEquals(offCohort.correctionRequests, 1);
     } finally {
       restoreOfflineModuleSetup();
     }
