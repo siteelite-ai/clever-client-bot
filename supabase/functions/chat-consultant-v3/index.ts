@@ -852,9 +852,9 @@ export function productMeasurementHttpRetryEnabled(
 }
 const PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED =
   productMeasurementHttpRetryEnabled(ADMISSION_SCOPE);
-// Zero means a source deployment cannot change any production conversation.
-// A separate reviewed canary release may raise this to 1/10,000.
-const PRODUCT_MEASUREMENT_PRO_PRODUCTION_BUCKETS_PER_10K = 0;
+// One deterministic production cohort in 10,000 for a guarded live canary.
+// Raise only after a real positive Pro result; zero immediately disables it.
+const PRODUCT_MEASUREMENT_PRO_PRODUCTION_BUCKETS_PER_10K = 1;
 
 /** Server-only preview opt-in. Default OFF preserves the existing catalog
  * failure path until the exact-identity recovery is independently accepted. */
