@@ -1197,6 +1197,8 @@ interface ToolContext {
   lovableApiKey: string | null;
   selectionReasoningModel: string;
   sessionId: string;
+  /** Stable incoming request identity for deterministic model rollout only. */
+  rolloutSessionId: string;
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
   observeCatalogToolResult?: (result: ToolResult) => void;
@@ -13015,7 +13017,7 @@ async function runExpertLoop(
                 productMeasurementProCorrectionEnabled({
                   scope: ADMISSION_SCOPE,
                   closureScope: CLOSURE_TEST_MARKER,
-                  sessionId: ctx.sessionId,
+                  sessionId: ctx.rolloutSessionId,
                   productionBucketsPer10k:
                     PRODUCT_MEASUREMENT_PRO_PRODUCTION_BUCKETS_PER_10K,
                   readEnv: (name) => Deno.env.get(name),
@@ -27427,6 +27429,7 @@ Deno.serve(async (req) => {
               lovableApiKey: LOVABLE_API_KEY,
               selectionReasoningModel: settings.classifier_model,
               sessionId: effectiveSessionId,
+              rolloutSessionId: sessionId,
               jargonCategoryContextEnabled:
                 settings.v3_jargon_category_context_enabled,
               jargonAxialModifiersEnabled:
