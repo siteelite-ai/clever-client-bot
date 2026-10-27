@@ -104,6 +104,71 @@ Deno.test("derived selection keeps malformed model planning private while explai
   );
 });
 
+Deno.test("independent area card proof removes only an inseparable model-only hard measurement", () => {
+  const customer =
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
+  const destination = {
+    key: "destination",
+    caption: "Назначение",
+    values: [
+      { value: "для гостиной" },
+      { value: "для спальни" },
+    ],
+  };
+  const args = {
+    reasoning:
+      "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+    retrieval_query: "4000 лм светильник",
+    measurement_scope: "per_product",
+    compatible_classifications: [],
+    excluded_classifications: [],
+    required_facet_values: [],
+    explicit_customer_classifications: [],
+  };
+  const proof = { place: "гостиной", minimumAreaM2: 30 };
+  const resolve = (
+    reasoning: string,
+    query = customer,
+    facets = [destination],
+    certified: typeof proof | null = proof,
+  ) => resolveDerivedSelectionReasoning(
+    { ...args, reasoning },
+    facets,
+    query,
+    "Светильники",
+    null,
+    { independentDestinationAreaProof: certified },
+  );
+  const safe = resolve(args.reasoning);
+  assertEquals(safe?.text, "Проверяю карточки по назначению и площади освещения.");
+  assertEquals(safe?.measurementEvidence, safe?.text);
+  assertEquals(safe?.retrievalQuery, null);
+  assertEquals(safe?.requiredFacetValues, []);
+  assertEquals(resolve(args.reasoning, customer, [destination], null), null);
+
+  const color = {
+    key: "body_color",
+    caption: "Цвет корпуса",
+    values: [{ value: "черный" }],
+  };
+  assertEquals(resolve(
+    "Для гостиной 30 м², цвет корпуса черный: каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} Нужен черный корпус.`,
+    [destination, color],
+  ), null);
+  assertEquals(resolve(
+    "Для гостиной 30 м² до 4000 тенге каждый светильник обязан иметь не менее 5000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} Цена до 4000 тенге.`,
+  ), null);
+  assertEquals(resolve(
+    "Для спальни 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+  ), null);
+  assertEquals(resolve(
+    "Для гостиной 30 м² каждый светильник обязан иметь не менее 5000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} И световой поток не менее 4000 лм.`,
+  ), null);
+});
+
 Deno.test("public explanation renders same-facet exact alternatives as one OR clause", () => {
   const publicExplanation = buildDerivedSelectionPublicExplanation({
     productClass: "Прожекторы",

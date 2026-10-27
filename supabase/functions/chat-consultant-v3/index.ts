@@ -9456,6 +9456,20 @@ async function runExpertLoop(
     serverVerifiedPriorQueriesNewestFirst,
     serverVerifiedCurrentRequest: rawCurrentUserMessage,
   });
+  const currentDestinationFit = !serverRenderedBaseRequest &&
+      destinationAreaCoverage.covered
+    ? verifyReplacementDestinationFit(rawCurrentUserMessage, [])
+    : null;
+  const independentFirstTurnDestinationAreaProof =
+    currentDestinationFit?.required && currentDestinationFit.place &&
+      currentDestinationFit.minimum_area_m2 !== null &&
+      currentDestinationFit.minimum_area_m2 ===
+        destinationAreaCoverage.minimumAreaM2
+      ? {
+        place: currentDestinationFit.place,
+        minimumAreaM2: currentDestinationFit.minimum_area_m2,
+      }
+      : null;
   let destinationAreaCoverageLogged = false;
   let destinationAreaCoverageApplied = false;
   const cardMeasurementScope = () =>
@@ -12641,6 +12655,8 @@ async function runExpertLoop(
                 currentUserMessage: rawCurrentUserMessage,
                 trustedBaseRequest: trustedAppearanceBaseRequest,
                 trustedActiveProductTarget: trustedAppearanceTarget(),
+                independentDestinationAreaProof:
+                  independentFirstTurnDestinationAreaProof,
               },
             );
           };

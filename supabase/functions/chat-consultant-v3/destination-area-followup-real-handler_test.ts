@@ -868,7 +868,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "first-turn area proof does not accept a model-invented lumen threshold",
+  name: "first-turn area keeps model reasoning but strips its invented hard lumen threshold",
   permissions: { read: true, env: false, net: false },
   async fn() {
     try {
@@ -878,22 +878,26 @@ Deno.test({
         includeAreaFacet: false,
         rawReasoning:
           "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+        retrievalQuery: "4000 лм светильник",
       });
-      assert(result.correctionRequests > 0, JSON.stringify(result.steps));
+      assertEquals(result.correctionRequests, 0, JSON.stringify(result.steps));
       assert(
-        result.steps.some(({ step }) =>
-          step === "v3_derived_selection_reasoning_contract_rejected"
+        result.steps.some(({ step, meta }) =>
+          step === "v3_destination_area_card_proof_covers_measurement" &&
+          meta?.source === "server_current_request_and_fresh_card_gate"
         ),
         JSON.stringify(result.steps),
       );
-      assertEquals(blocks(result.events).length, 0, JSON.stringify(result.steps));
-      assertEquals(
-        result.steps.some(({ step }) =>
-          step === "v3_destination_area_card_proof_covers_measurement"
-        ),
-        false,
-        JSON.stringify(result.steps),
-      );
+      const rendered = blocks(result.events);
+      assert(rendered.length > 0, JSON.stringify(result.steps));
+      assert(rendered.every(({ markdown }) =>
+        !markdown?.includes("/office/") && !markdown?.includes("/small/")
+      ));
+      assertEquals(/4000\s*лм/iu.test(publicText(result.events)), false);
+      assertEquals(result.steps.some(({ step, meta }) =>
+        step === "v3_tool_call" && meta?.tool === "search_catalog" &&
+        /4000\s*лм/iu.test(JSON.stringify(meta.args ?? {}))
+      ), false);
     } finally {
       restoreOfflineModuleSetup();
     }

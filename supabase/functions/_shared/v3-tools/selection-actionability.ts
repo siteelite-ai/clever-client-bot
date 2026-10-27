@@ -1,5 +1,6 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import {
+  CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
   isPhysicalMeasurementUnit,
   joinMeasurementEvidenceSegments,
@@ -34,7 +35,10 @@ import {
   normalizeKey,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
-import { extractCustomerApplicationContexts } from "./selection-contract.ts";
+import {
+  extractCustomerApplicationContexts,
+  verifyReplacementDestinationFit,
+} from "./selection-contract.ts";
 import {
   customerOwnsAbsentFacetValue,
   isAbsenceOrUnknownFacetValue,
@@ -488,6 +492,10 @@ function scrubUnsupportedPerProductMeasuredClaims(
   measurementScope: string,
   pairedObjectReference: PairedObjectReference | null,
   productClass = "",
+  independentDestinationAreaProof: {
+    place: string;
+    minimumAreaM2: number;
+  } | null = null,
 ): string | null {
   if (!customerEvidence.trim()) return reasoning;
   const liveMeasuredFacets = facets.map((facet) => ({
@@ -578,6 +586,26 @@ function scrubUnsupportedPerProductMeasuredClaims(
   const clauseSeparator =
     /,\s*(?:(?:при\s+этом|а\s+также|кроме\s+того|но|и|а)\s+)|;\s*|\s+(?:(?:и|а\s+также|при\s+этом))\s+|\s+при\s+/giu;
   const customerQuantities = extractClientQuantities(customerEvidence);
+  const physicalCustomerQuantities = customerQuantities.filter(({ unit }) =>
+    isPhysicalMeasurementUnit(unit)
+  );
+  const destinationProof = independentDestinationAreaProof &&
+      verifyReplacementDestinationFit(customerEvidence, []);
+  const provedPlace = normalizeLiteralEvidence(
+    independentDestinationAreaProof?.place ?? "",
+  );
+  const independentlyCoveredDestination = Boolean(
+    independentDestinationAreaProof && destinationProof?.required &&
+      !customerEvidence.includes(CUSTOMER_TURN_BOUNDARY) &&
+      physicalCustomerQuantities.length === 1 &&
+      physicalCustomerQuantities[0].unit === "м²" &&
+      physicalCustomerQuantities[0].value ===
+        independentDestinationAreaProof.minimumAreaM2 &&
+      destinationProof.minimum_area_m2 ===
+        independentDestinationAreaProof.minimumAreaM2 &&
+      normalizeLiteralEvidence(destinationProof.place ?? "") === provedPlace &&
+      provedPlace,
+  );
   const containsCustomerQuantity = (
     text: string,
     physicalOnly: boolean,
@@ -653,7 +681,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
         end > clause.start && end <= clause.end
       );
       if (containsRejected) {
-        const otherFacetVisible = facets.some((facet) => {
+        const otherFacetMatches = facets.flatMap((facet) => {
           const facetNames = [facet.key, facet.caption].map((value) =>
             normalizeKey(String(value ?? ""))
           );
@@ -661,16 +689,39 @@ function scrubUnsupportedPerProductMeasuredClaims(
             overlapping.some((claim) =>
               facetNames.includes(normalizeKey(claim.criterion.key))
             )
-          ) return false;
-          return (facet.values ?? []).some(({ value }) => {
+          ) return [];
+          return (facet.values ?? []).flatMap(({ value }) => {
             const visible = visibleFacetText(String(value ?? ""));
             return visible.length >= 3 &&
               (` ${normalizeLiteralEvidence(text)} `).includes(
                 ` ${normalizeLiteralEvidence(visible)} `,
-              );
+              ) ? [{ facet, visible }] : [];
           });
         });
-        if (otherFacetVisible) return null;
+        if (otherFacetMatches.length > 0) {
+          // Normally a live value sharing the rejected clause makes deletion
+          // unsafe. A server-certified destination/area final-card gate is the
+          // sole exception: it independently enforces this same customer
+          // place, so no product constraint is lost when the model-invented
+          // number is removed together with the mixed sentence.
+          const otherCustomerNumberInClause = extractClientQuantities(text)
+            .some(({ value, unit }) =>
+              customerQuantities.some((customer) =>
+                customer.value === value && customer.unit === unit
+              ) && !(unit === "м²" &&
+                value === independentDestinationAreaProof?.minimumAreaM2)
+            );
+          const onlyCoveredDestination = independentlyCoveredDestination &&
+            !otherCustomerNumberInClause &&
+            otherFacetMatches.every(({ facet, visible }) =>
+              /(?:назначен|помещен|комнат|место\s+применен|область\s+применен|использован)/iu
+                .test(normalizeKey(`${facet.caption ?? ""} ${facet.key ?? ""}`)) &&
+              (` ${normalizeLiteralEvidence(visible)} `).includes(
+                ` ${provedPlace} `,
+              )
+            );
+          if (!onlyCoveredDestination) return null;
+        }
         continue;
       }
       if (text.length < 6) continue;
@@ -2597,6 +2648,10 @@ export function resolveDerivedSelectionReasoning(
     currentUserMessage?: string;
     trustedBaseRequest?: string | null;
     trustedActiveProductTarget?: string | null;
+    independentDestinationAreaProof?: {
+      place: string;
+      minimumAreaM2: number;
+    } | null;
   } = {},
 ): ResolvedDerivedSelectionReasoning | null {
   // Aggregated customer history remains useful for measured engineering
@@ -2685,6 +2740,7 @@ export function resolveDerivedSelectionReasoning(
     measurementScope,
     pairedObjectReference,
     productClass,
+    appearanceScope.independentDestinationAreaProof,
   );
   if (!scopeConsistentReasoning) return null;
   const rawRetrievalQuery = visibleFacetText(
