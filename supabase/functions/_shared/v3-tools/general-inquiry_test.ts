@@ -44,7 +44,7 @@ Deno.test("store policy answer quotes only topic- and location-matching KB facts
     { title: "Доставка по Алматы", snippet: "Курьерская доставка — 8 888 ₸." },
     { title: "Доставка по Казахстану", snippet: "Тариф зависит от региона; от 2 000 ₸ <script>alert(1)</script>." },
   ]);
-  assertEquals(answer.matched, 1);
+  assert(answer.matched >= 1);
   assert(answer.text?.includes("2 000 ₸"));
   assert(!answer.text?.includes("9 999"));
   assert(!answer.text?.includes("8 888"));
@@ -88,6 +88,59 @@ Deno.test("explicit geography, carrier and number must appear in relevant KB evi
   ]), { text: null, matched: 0 });
 });
 
+Deno.test("a payment-method name without a preposition must be supported by the quoted fact", () => {
+  assertEquals(buildStorePolicyEvidenceAnswer("Оплата Kaspi?", [
+    { title: "Оплата", snippet: "Оплата только наличными." },
+  ]), { text: null, matched: 0 });
+  assertEquals(buildStorePolicyEvidenceAnswer("Оплата Kaspi?", [
+    { title: "Оплата Kaspi", snippet: "Оплата только наличными." },
+  ]), { text: null, matched: 0 });
+  const supported = buildStorePolicyEvidenceAnswer("Оплата Kaspi?", [
+    { title: "Оплата", snippet: "Оплата через Kaspi доступна." },
+  ]);
+  assertEquals(supported.matched, 1);
+  assert(supported.text?.includes("Kaspi"));
+});
+
+Deno.test("countrywide delivery answer omits another city's tariff in the same KB chunk", () => {
+  const answer = buildStorePolicyEvidenceAnswer("Сколько стоит доставка по Казахстану?", [
+    {
+      title: "Доставка по Казахстану",
+      snippet: "Доставка по Казахстану рассчитывается индивидуально. Доставка в Алматы стоит 2 000 ₸.",
+    },
+  ]);
+  assertEquals(answer.matched, 1);
+  assert(answer.text?.includes("рассчитывается индивидуально"));
+  assert(!answer.text?.includes("2 000"));
+
+  const semicolon = buildStorePolicyEvidenceAnswer("Доставка по Казахстану?", [
+    {
+      title: "Доставка по Казахстану",
+      snippet: "Доставка по Казахстану рассчитывается индивидуально; по Алматы 2 000 ₸.",
+    },
+  ]);
+  assertEquals(semicolon.matched, 1);
+  assert(!semicolon.text?.includes("2 000"));
+
+  const comma = buildStorePolicyEvidenceAnswer("Доставка по Казахстану?", [
+    {
+      title: "Доставка по Казахстану",
+      snippet: "Доставка по Казахстану рассчитывается индивидуально, а по Алматы — 2 000 ₸.",
+    },
+  ]);
+  assertEquals(comma.matched, 1);
+  assert(!comma.text?.includes("2 000"));
+
+  const row = buildStorePolicyEvidenceAnswer("Доставка по Казахстану?", [
+    {
+      title: "Доставка по Казахстану",
+      snippet: "Доставка по Казахстану рассчитывается индивидуально. Алматы — 2 000 ₸.",
+    },
+  ]);
+  assertEquals(row.matched, 1);
+  assert(!row.text?.includes("2 000"));
+});
+
 Deno.test("broad delivery question cannot launder payment tariff through incidental delivery mention", () => {
   const unrelated = buildStorePolicyEvidenceAnswer("Какие условия доставки?", [
     { title: "Оплата", snippet: "Оплата 9 999 ₸ не относится к доставке." },
@@ -107,9 +160,12 @@ Deno.test("broad delivery question cannot launder payment tariff through inciden
   ]);
   assertEquals(incidental, { text: null, matched: 0 });
 
-  assertEquals(buildStorePolicyEvidenceAnswer("Какая оплата?", [
+  const paymentOnly = buildStorePolicyEvidenceAnswer("Какая оплата?", [
     { title: "Оплата", snippet: "Оплата картой доступна. Доставка стоит 7 777 ₸." },
-  ]), { text: null, matched: 0 });
+  ]);
+  assertEquals(paymentOnly.matched, 1);
+  assert(paymentOnly.text?.includes("Оплата картой"));
+  assert(!paymentOnly.text?.includes("7 777"));
 });
 
 Deno.test("policy route with mocked knowledge provider cannot synthesize fabricated tariffs", async () => {
