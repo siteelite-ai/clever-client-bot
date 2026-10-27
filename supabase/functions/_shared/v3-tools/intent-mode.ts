@@ -31,14 +31,19 @@ export function isStorePolicyInquiry(message: string): boolean {
   if (/(?:на|для|у)\s+(?:эт\p{L}*|данн\p{L}*|указанн\p{L}*|конкретн\p{L}*)\s+\p{L}+/u.test(normalized)) {
     return false;
   }
+  if (/(?:вернут\p{L}*|обмен\p{L}*|гарант\p{L}*)\s+(?:эт\p{L}*|данн\p{L}*|указанн\p{L}*|конкретн\p{L}*)\s+\p{L}+/u.test(normalized)) {
+    return false;
+  }
 
   const policyObject = /(?:^|[^\p{L}])(?:услови\p{L}*|правил\p{L}*|тариф\p{L}*|стоимост\p{L}*|срок\p{L}*|способ\p{L}*|порядок|вариант\p{L}*)(?:\s+\p{L}+)?\s+(?:доставк\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)/u;
   const asksPolicyAction = /(?:^|[^\p{L}])(?:как|когда|где|сколько)\s+(?:\p{L}+\s+){0,2}(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*)/u;
+  const servicePermission = /(?:^|[^\p{L}])(?:можно|могу\s+ли|можем\s+ли|возможн\p{L}*)\s+(?:ли\s+)?(?:\p{L}+\s+){0,2}(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*)/u;
   const directAvailability = /(?:^|[^\p{L}])(?:есть\s+ли|возможн\p{L}*\s+ли)\s+(?:у\s+вас\s+)?(?:доставк\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)/u;
   const asksToLearn = /(?:хоч\p{L}*\s+узнат\p{L}*|расскаж\p{L}*|объясн\p{L}*|уточн\p{L}*)\s+(?:(?:мне|пожалуйста|про|об|о)\s+){0,3}(?:доставк\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*|скидк\p{L}*|акци\p{L}*)/u;
   const directTopic = /^(?:а\s+)?(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)(?=$|[^\p{L}])/u;
   const policyQuestion = policyObject.test(normalized) ||
-    asksPolicyAction.test(normalized) || directAvailability.test(normalized) ||
+    asksPolicyAction.test(normalized) || servicePermission.test(normalized) ||
+    directAvailability.test(normalized) ||
     asksToLearn.test(normalized) || directTopic.test(normalized);
   if (!policyQuestion) return false;
 

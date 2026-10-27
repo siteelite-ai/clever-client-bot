@@ -13,6 +13,8 @@ Deno.test("store policy questions require knowledge evidence across service topi
     "А гарантия?",
     "Доставка по Казахстану",
     "Оплата Kaspi",
+    "Можно оплатить через Kaspi?",
+    "Можно ли вернуть товар?",
   ]) {
     assertEquals(isStorePolicyInquiry(question), true, question);
   }
@@ -30,6 +32,8 @@ Deno.test("service mentions do not hijack product selection or availability", ()
     "Как выбрать кабель с доставкой?",
     "Какой срок гарантии на эту модель?",
     "Гарантия на эту лампу?",
+    "Можно ли вернуть эту лампу?",
+    "Можно ли обменять эту розетку?",
     "Расскажите про лампы со скидкой",
   ]) {
     assertEquals(isStorePolicyInquiry(question), false, question);
