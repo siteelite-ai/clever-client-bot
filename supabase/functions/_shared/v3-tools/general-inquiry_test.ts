@@ -124,6 +124,43 @@ Deno.test("payment on receipt does not inherit an online-only KB policy", () => 
   assert(supported.text?.includes("При получении"));
 });
 
+Deno.test("policy questions require the requested time, cost or method fact", () => {
+  assertEquals(buildStorePolicyEvidenceAnswer("Когда доставят заказ?", [
+    { title: "Доставка", snippet: "Доставка стоит 2 000 ₸." },
+  ]), { text: null, matched: 0 });
+  assertEquals(buildStorePolicyEvidenceAnswer("Какая цена доставки?", [
+    { title: "Доставка", snippet: "Срок доставки — 3 дня." },
+  ]), { text: null, matched: 0 });
+  assertEquals(buildStorePolicyEvidenceAnswer("Как оплатить заказ?", [
+    { title: "Оплата", snippet: "Срок оплаты — 3 дня." },
+  ]), { text: null, matched: 0 });
+
+  const when = buildStorePolicyEvidenceAnswer("Когда доставят заказ?", [
+    { title: "Доставка", snippet: "Доставка стоит 2 000 ₸. Срок доставки — 3 дня." },
+  ]);
+  assertEquals(when.matched, 1);
+  assert(when.text?.includes("3 дня"));
+  assert(!when.text?.includes("2 000"));
+
+  const price = buildStorePolicyEvidenceAnswer("Какая цена доставки?", [
+    { title: "Доставка", snippet: "Доставка стоит 2 000 ₸." },
+  ]);
+  assertEquals(price.matched, 1);
+  assert(price.text?.includes("2 000 ₸"));
+});
+
+Deno.test("KB fact splitting preserves decimals and city abbreviations", () => {
+  const answer = buildStorePolicyEvidenceAnswer("Какая цена доставки по Алматы?", [
+    {
+      title: "Доставка",
+      snippet: "Доставка по г. Алматы стоит 2 500.00 ₸. Срок доставки — 2 дня.",
+    },
+  ]);
+  assertEquals(answer.matched, 1);
+  assert(answer.text?.includes("г. Алматы стоит 2 500.00 ₸"));
+  assert(!answer.text?.includes("Срок доставки"));
+});
+
 Deno.test("countrywide delivery answer omits another city's tariff in the same KB chunk", () => {
   const answer = buildStorePolicyEvidenceAnswer("Сколько стоит доставка по Казахстану?", [
     {

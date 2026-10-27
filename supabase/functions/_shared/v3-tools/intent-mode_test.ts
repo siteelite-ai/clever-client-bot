@@ -5,6 +5,7 @@ Deno.test("store policy questions require knowledge evidence across service topi
   for (const question of [
     "Какие у вас условия доставки по Казахстану?",
     "Сколько стоит доставка до двери?",
+    "Какая цена доставки?",
     "Есть ли у вас самовывоз?",
     "Как оплатить заказ?",
     "Расскажите о рассрочке",
@@ -69,6 +70,8 @@ Deno.test("compound product and store-policy tasks keep product selection route"
     assertEquals(hasMixedProductPolicyRequest(question), false, question);
   }
   assertEquals(isStorePolicyInquiry("Какие у вас условия доставки по Казахстану?"), true);
+  assertEquals(isStorePolicyInquiry("Какая цена доставки?"), true);
+  assertEquals(detectUserIntentMode("Какая цена доставки?"), "inquire");
   assertEquals(detectUserIntentMode("Расскажи, чем хороша серия Галант"), "inquire");
 });
 

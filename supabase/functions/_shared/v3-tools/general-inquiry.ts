@@ -109,8 +109,67 @@ function plainEvidence(value: string): string {
 function policyFacts(snippet: string): string[] {
   // A retrieved chunk may concatenate several independent policies. Never
   // transfer a city's price from one sentence/clause to another's geography.
-  return snippet.split(/(?:[.!?;]\s*|,\s*(?=(?:(?:а|но|и)\s+)?(?:по|в|во|из|до|для)\s+))/u)
-    .map((fact) => fact.trim()).filter(Boolean).slice(0, 12);
+  // A literal dot is not always a boundary: 2 500.00 ₸ and г. Алматы must
+  // remain intact so the shown fact stays an exact extract from the KB.
+  const facts: string[] = [];
+  let start = 0;
+  const push = (end: number) => {
+    const fact = snippet.slice(start, end).trim();
+    if (fact && facts.length < 12) facts.push(fact);
+    start = end + 1;
+  };
+  for (let i = 0; i < snippet.length && facts.length < 12; i++) {
+    const mark = snippet[i];
+    const next = snippet[i + 1] ?? "";
+    if (mark === ".") {
+      if (/\d/u.test(snippet[i - 1] ?? "") && /\d/u.test(next)) continue;
+      if (/(?:^|[^\p{L}])г$/u.test(snippet.slice(0, i)) && /\s/u.test(next)) continue;
+    }
+    if (/[.!?;]/u.test(mark) && (!next || /\s/u.test(next) || mark === ";")) {
+      push(i);
+      continue;
+    }
+    if (mark === "," && /^\s*(?:(?:а|но|и)\s+)?(?:по|в|во|из|до|для)\s+/u.test(snippet.slice(i + 1))) {
+      push(i);
+    }
+  }
+  if (facts.length < 12) {
+    const finalFact = snippet.slice(start).trim();
+    if (finalFact) facts.push(finalFact);
+  }
+  return facts;
+}
+
+type PolicyFacet = "time" | "cost" | "method";
+
+function requestedPolicyFacets(message: string): PolicyFacet[] {
+  const query = message.toLocaleLowerCase("ru").replace(/ё/gu, "е");
+  const facets: PolicyFacet[] = [];
+  if (/(?:^|[^\p{L}])(?:когда|срок\p{L}*|врем\p{L}*|дн(?:и|я|ей)|час\p{L}*|сколько\s+(?:ждать|идет|длится))(?=$|[^\p{L}])/u.test(query)) {
+    facets.push("time");
+  }
+  if (/(?:^|[^\p{L}])(?:цен\p{L}*|стоимост\p{L}*|тариф\p{L}*|почем|бесплатн\p{L}*|платн\p{L}*|сколько\s+сто\p{L}*)(?=$|[^\p{L}])/u.test(query)) {
+    facets.push("cost");
+  }
+  if (/(?:^|[^\p{L}])(?:способ\p{L}*|как\s+(?:оплат\p{L}*|достав\p{L}*|отправ\p{L}*)|чем\s+оплат\p{L}*)(?=$|[^\p{L}])/u.test(query)) {
+    facets.push("method");
+  }
+  return facets;
+}
+
+function factSupportsPolicyFacet(fact: string, facet: PolicyFacet, topic: RegExp): boolean {
+  const text = fact.toLocaleLowerCase("ru").replace(/ё/gu, "е");
+  if (facet === "time") {
+    return /(?:^|[^\p{L}])(?:срок\p{L}*|врем\p{L}*|дн(?:и|я|ей|ь)\p{L}*|час\p{L}*|недел\p{L}*|месяц\p{L}*|завтра|послезавтра)(?=$|[^\p{L}])/u.test(text);
+  }
+  if (facet === "cost") {
+    return /(?:^|[^\p{L}])(?:цен\p{L}*|стоимост\p{L}*|тариф\p{L}*|бесплатн\p{L}*|рассчит\p{L}*|стоит|тенг\p{L}*)(?=$|[^\p{L}])/u.test(text) || text.includes("₸");
+  }
+  if (topic === POLICY_TOPICS[1]) {
+    return explicitPolicyScope(fact).some((scope) => scope.kind === "method") ||
+      /(?:^|[^\p{L}])(?:перевод\p{L}*|терминал\p{L}*|qr)(?=$|[^\p{L}])/u.test(text);
+  }
+  return /(?:^|[^\p{L}])(?:курьер\p{L}*|самовывоз\p{L}*|почт\p{L}*|пункт\p{L}*\s+выдач\p{L}*|до\s+двер\p{L}*|транспортн\p{L}*\s+компан\p{L}*)(?=$|[^\p{L}])/u.test(text);
 }
 
 /**
@@ -127,8 +186,9 @@ export function buildStorePolicyEvidenceAnswer(
   const topics = POLICY_TOPICS.filter((topic) => topic.test(queryText));
   if (topics.length === 0) return { text: null, matched: 0 };
   const scope = explicitPolicyScope(userMessage);
+  const requestedFacets = requestedPolicyFacets(userMessage);
   const seen = new Set<string>();
-  const passagesByTopic = new Map(topics.map((topic) => [topic, [] as string[]]));
+  const passagesByTopic = new Map(topics.map((topic) => [topic, [] as Array<{ text: string; facets: PolicyFacet[] }>]));
   for (const hit of hits) {
     const title = plainEvidence(hit.title);
     const snippet = plainEvidence(hit.snippet);
@@ -150,6 +210,8 @@ export function buildStorePolicyEvidenceAnswer(
       if (factTopicMentions.length === 0 && sourceTopics.length > 1) continue;
       const passageTopic = factTopicMentions[0]?.topic ?? sourceTopics[0];
       if (!topics.includes(passageTopic) || !sourceTopics.includes(passageTopic)) continue;
+      const factFacets = requestedFacets.filter((facet) => factSupportsPolicyFacet(fact, facet, passageTopic));
+      if (requestedFacets.length > 0 && factFacets.length === 0) continue;
       const words = policyWords(`${title} ${fact}`);
       const evidenceScopes = explicitPolicyScope(`${title} ${fact}`);
       if (!scope.every((requested) => requested.kind === "method"
@@ -172,14 +234,17 @@ export function buildStorePolicyEvidenceAnswer(
       })) continue;
       if (seen.has(fact)) continue;
       seen.add(fact);
-      passagesByTopic.get(passageTopic)?.push(`${title ? `${title}: ` : ""}${fact}`);
+      passagesByTopic.get(passageTopic)?.push({
+        text: `${title ? `${title}: ` : ""}${fact}`,
+        facets: factFacets,
+      });
     }
   }
   // A query for delivery AND payment must not quietly return only delivery.
   if (topics.some((topic) => !passagesByTopic.get(topic)?.length)) {
     return { text: null, matched: 0 };
   }
-  const passages: string[] = [];
+  const passages: Array<{ text: string; facets: PolicyFacet[] }> = [];
   for (let position = 0; position < 3 && passages.length < 6; position++) {
     for (const topic of topics) {
       const passage = passagesByTopic.get(topic)?.[position];
@@ -187,8 +252,11 @@ export function buildStorePolicyEvidenceAnswer(
       if (passages.length === 6) break;
     }
   }
+  if (requestedFacets.some((facet) => !passages.some((passage) => passage.facets.includes(facet)))) {
+    return { text: null, matched: 0 };
+  }
   return {
-    text: `Найденные фрагменты условий магазина (не полный перечень):\n${passages.map((passage) => `• ${passage}`).join("\n")}`,
+    text: `Найденные фрагменты условий магазина (не полный перечень):\n${passages.map((passage) => `• ${passage.text}`).join("\n")}`,
     matched: passages.length,
   };
 }
