@@ -34,6 +34,11 @@ export function isStorePolicyInquiry(message: string): boolean {
   if (/(?:вернут\p{L}*|обмен\p{L}*|гарант\p{L}*)\s+(?:эт\p{L}*|данн\p{L}*|указанн\p{L}*|конкретн\p{L}*)\s+\p{L}+/u.test(normalized)) {
     return false;
   }
+  if (/(?:гарант\p{L}*|возврат\p{L}*|обмен\p{L}*)[^.!?]{0,100}(?:на|для|у)\s+\p{L}+\s+(?:[А-ЯЁA-Z][\p{L}\p{N}-]+|[a-z]{3,})/u.test(message)) {
+    // "Гарантия на светильник Gauss" is an item-specific question even
+    // without an article or numeric model code.
+    return false;
+  }
 
   const policyObject = /(?:^|[^\p{L}])(?:услови\p{L}*|правил\p{L}*|тариф\p{L}*|стоимост\p{L}*|срок\p{L}*|способ\p{L}*|порядок|вариант\p{L}*)(?:\s+\p{L}+)?\s+(?:доставк\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|рассрочк\p{L}*|возврат\p{L}*|обмен\p{L}*|гарант\p{L}*)/u;
   const asksPolicyAction = /(?:^|[^\p{L}])(?:как|когда|где|сколько)\s+(?:\p{L}+\s+){0,2}(?:доставк\p{L}*|доставля\p{L}*|самовывоз\p{L}*|отправк\p{L}*|оплат\p{L}*|оплати\p{L}*|возврат\p{L}*|возвращ\p{L}*|вернут\p{L}*|обмен\p{L}*)/u;
@@ -48,6 +53,15 @@ export function isStorePolicyInquiry(message: string): boolean {
   if (!policyQuestion) return false;
 
   const productSelection = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+  const clauses = normalized.split(/\s+(?:и|потом|также)\s+|[,;]/u);
+  if (clauses.some((clause) =>
+    productSelection.test(clause) && !policyObject.test(clause) &&
+    !asksToLearn.test(clause)
+  ) && clauses.some((clause) => service.test(clause))) {
+    // The query contains both a product task and a store-policy task. A
+    // policy-only answer would silently discard the requested product.
+    return false;
+  }
   if (productSelection.test(normalized) && !policyObject.test(normalized) &&
     !asksToLearn.test(normalized)) return false;
   // "Есть ли кабель с доставкой?" asks about product availability, unlike

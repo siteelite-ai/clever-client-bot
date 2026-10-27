@@ -34,10 +34,16 @@ Deno.test("service mentions do not hijack product selection or availability", ()
     "Гарантия на эту лампу?",
     "Можно ли вернуть эту лампу?",
     "Можно ли обменять эту розетку?",
+    "Какие сроки гарантии на светильник Gauss?",
+    "Какие сроки гарантии на светильник gauss?",
+    "Подбери светильник и расскажи условия доставки",
+    "Расскажи условия доставки и подбери светильник",
+    "Найди лампу, потом расскажи про доставку",
     "Расскажите про лампы со скидкой",
   ]) {
     assertEquals(isStorePolicyInquiry(question), false, question);
   }
+  assertEquals(isStorePolicyInquiry("Покажи способы оплаты и доставки"), true);
 });
 
 Deno.test("suitability questions are inquiry mode", () => {

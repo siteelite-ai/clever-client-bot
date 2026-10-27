@@ -488,10 +488,8 @@ import {
 import { buildMeasuredBreakerGuidance } from "../_shared/v3-tools/measured-breaker-guidance.ts";
 import {
   buildGeneralInquiryMessages,
-  buildStorePolicyKnowledgeMessages,
   GENERAL_INQUIRY_UNAVAILABLE_TEXT,
-  STORE_POLICY_LOOKUP_FAILED_TEXT,
-  STORE_POLICY_UNAVAILABLE_TEXT,
+  resolveStorePolicyKnowledgeAnswer,
   shouldAnswerGeneralInquiryDirectly,
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
@@ -28318,7 +28316,7 @@ Deno.serve(async (req) => {
               productsCount = 0;
             } else if (storePolicyInquiry) {
               // Store conditions are not catalog facets and must never be
-              // answered by the tool-free general inquiry model from memory.
+              // answered by a model from memory or free-form paraphrase.
               const knowledgeStarted = Date.now();
               send({
                 type: "tool_event",
@@ -28326,82 +28324,35 @@ Deno.serve(async (req) => {
                 phase: "start",
                 summary: "Проверяю условия магазина…",
               });
-              let knowledge: Awaited<ReturnType<typeof executeLookupKnowledge>> | null = null;
-              try {
-                knowledge = await executeLookupKnowledge(
+              const policyAnswer = await resolveStorePolicyKnowledgeAnswer(
+                userMessage,
+                () => executeLookupKnowledge(
                   { query: userMessage, top_k: 5 },
                   supabase,
                   settings.openrouter_api_key!,
                   INTEGRATION_SECRETS_MODE,
-                );
-              } catch {
-                // A private integration-secret failure cannot fall through to
-                // an ungrounded response about store rules.
-              }
+                ),
+              );
               send({
                 type: "tool_event",
                 tool: "lookup_knowledge",
                 phase: "result",
                 duration_ms: Date.now() - knowledgeStarted,
-                summary: knowledge
-                  ? summariseToolResult("lookup_knowledge", knowledge)
-                  : "Не удалось проверить условия",
+                summary: policyAnswer.status === "answered"
+                  ? `Проверено фрагментов: ${policyAnswer.matched}`
+                  : "Подтверждённых условий не найдено",
               });
-              const hits = knowledge?.ok ? knowledge.hits : [];
               steps.push({
                 step: "v3_store_policy_knowledge_lookup",
                 ms: Date.now() - t0,
                 meta: {
-                  ok: Boolean(knowledge?.ok),
-                  hits: hits.length,
+                  status: policyAnswer.status,
+                  hits: policyAnswer.hits,
+                  matched: policyAnswer.matched,
                   duration_ms: Date.now() - knowledgeStarted,
                 },
               });
-              let answered = false;
-              if (hits.length > 0) {
-                try {
-                  const inquiry = await callOpenRouter(
-                    settings.openrouter_api_key!,
-                    buildStorePolicyKnowledgeMessages(userMessage, hits),
-                    executionController.signal,
-                    LLM_TIMEOUT_TOOL_DECISION_MS,
-                    "tool_decision",
-                    [],
-                    null,
-                    0.15,
-                    [],
-                    1400,
-                    GENERAL_INQUIRY_MODEL_ROUTING,
-                  );
-                  const guarded = sanitizeIntermediateReasoning(inquiry.text);
-                  // The catalog-fact sanitizer also strips ₸ amounts; using it
-                  // here would delete KB-grounded delivery tariffs.
-                  const visible = guarded.suppressed ? "" : guarded.text.trim();
-                  if (visible) {
-                    send({ type: "delta", content: visible });
-                    answered = true;
-                    steps.push({
-                      step: "v3_store_policy_knowledge_answer",
-                      ms: Date.now() - t0,
-                      meta: { chars: visible.length, hits: hits.length },
-                    });
-                  }
-                } catch (error) {
-                  steps.push({
-                    step: "v3_store_policy_knowledge_answer_failed",
-                    ms: Date.now() - t0,
-                    meta: { error: String((error as Error)?.message ?? error) },
-                  });
-                }
-              }
-              if (!answered) {
-                send({
-                  type: "delta",
-                  content: knowledge?.ok
-                    ? STORE_POLICY_UNAVAILABLE_TEXT
-                    : STORE_POLICY_LOOKUP_FAILED_TEXT,
-                });
-              }
+              send({ type: "delta", content: policyAnswer.text });
               productsCount = 0;
             } else if (generalInquiryDirect) {
               let answered = false;
