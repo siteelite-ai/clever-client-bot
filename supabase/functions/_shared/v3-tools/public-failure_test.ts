@@ -1,15 +1,31 @@
-import { assert, assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   classifyPublicFailure,
   isConfirmedTransientUpstreamHttp5xx,
+  isPrimaryUnusableCompletionEnvelope,
   retryConfirmedUpstreamHttp5xxOnce,
+  retryProductMeasurementUpstreamOnce,
   upstreamFailureDiagnosticMeta,
   UpstreamHttpError,
 } from "./public-failure.ts";
 
-function assertPublicOutputIsSafe(value: ReturnType<typeof classifyPublicFailure>) {
+function assertPublicOutputIsSafe(
+  value: ReturnType<typeof classifyPublicFailure>,
+) {
   const publicOutput = JSON.stringify(value);
-  for (const forbidden of ["openrouter", "workspaces/default/keys", "secret-key-fingerprint", "переформулируйте"]) {
+  for (
+    const forbidden of [
+      "openrouter",
+      "workspaces/default/keys",
+      "secret-key-fingerprint",
+      "переформулируйте",
+    ]
+  ) {
     assert(!publicOutput.toLocaleLowerCase("ru-RU").includes(forbidden));
   }
 }
@@ -29,7 +45,9 @@ Deno.test("quota response keeps raw detail in the server error but exposes only 
 });
 
 Deno.test("rate limiting is safe and retryable", () => {
-  const failure = classifyPublicFailure(new UpstreamHttpError(429, "too many requests"));
+  const failure = classifyPublicFailure(
+    new UpstreamHttpError(429, "too many requests"),
+  );
   assertEquals(failure.kind, "upstream_rate_limit");
   assertEquals(failure.public_code, "upstream_rate_limited");
   assertEquals(failure.retryable, true);
@@ -37,7 +55,9 @@ Deno.test("rate limiting is safe and retryable", () => {
 });
 
 Deno.test("provider outage is safe and retryable", () => {
-  const failure = classifyPublicFailure(new UpstreamHttpError(503, "private upstream diagnostics"));
+  const failure = classifyPublicFailure(
+    new UpstreamHttpError(503, "private upstream diagnostics"),
+  );
   assertEquals(failure.kind, "upstream_unavailable");
   assertEquals(failure.retryable, true);
   assert(!JSON.stringify(failure).includes("private upstream diagnostics"));
@@ -94,37 +114,188 @@ Deno.test("an unusable HTTP 200 completion keeps synthetic 502 separate from obs
 });
 
 Deno.test("only a confirmed real HTTP 5xx is eligible for the narrow correction retry", () => {
-  assertEquals(isConfirmedTransientUpstreamHttp5xx(
-    new UpstreamHttpError(502, "provider unavailable", {
-      origin: "http_response",
-      observedHttpStatus: 502,
-    }),
-  ), true);
-  for (const error of [
-    new UpstreamHttpError(502, "unusable HTTP 200", {
-      origin: "completion_envelope",
-      observedHttpStatus: 200,
-    }),
-    new UpstreamHttpError(502, "mismatched status", {
-      origin: "http_response",
-      observedHttpStatus: 200,
-    }),
-    new UpstreamHttpError(402, "quota"),
-    new UpstreamHttpError(403, "access"),
-    new UpstreamHttpError(429, "rate limit"),
-    ...[200, 402, 403, 429].map((primaryStatus) =>
-      new UpstreamHttpError(502, "fallback down after primary failure", {
+  assertEquals(
+    isConfirmedTransientUpstreamHttp5xx(
+      new UpstreamHttpError(502, "provider unavailable", {
         origin: "http_response",
         observedHttpStatus: 502,
-        primaryStatus,
-        failedOver: true,
-      })
+      }),
     ),
-    new UpstreamHttpError(600, "invalid status"),
+    true,
+  );
+  for (
+    const error of [
+      new UpstreamHttpError(502, "unusable HTTP 200", {
+        origin: "completion_envelope",
+        observedHttpStatus: 200,
+      }),
+      new UpstreamHttpError(502, "mismatched status", {
+        origin: "http_response",
+        observedHttpStatus: 200,
+      }),
+      new UpstreamHttpError(402, "quota"),
+      new UpstreamHttpError(403, "access"),
+      new UpstreamHttpError(429, "rate limit"),
+      ...[200, 402, 403, 429].map((primaryStatus) =>
+        new UpstreamHttpError(502, "fallback down after primary failure", {
+          origin: "http_response",
+          observedHttpStatus: 502,
+          primaryStatus,
+          failedOver: true,
+        })
+      ),
+      new UpstreamHttpError(600, "invalid status"),
+      new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"),
+      new DOMException("aborted", "AbortError"),
+    ]
+  ) {
+    assertEquals(isConfirmedTransientUpstreamHttp5xx(error), false);
+  }
+});
+
+Deno.test("only a primary unusable HTTP 200 envelope qualifies for its separate retry", () => {
+  const envelope = (
+    diagnostics: ConstructorParameters<typeof UpstreamHttpError>[2] = {},
+  ) =>
+    new UpstreamHttpError(502, "unusable completion", {
+      origin: "completion_envelope",
+      observedHttpStatus: 200,
+      provider: "openrouter",
+      failedOver: false,
+      primaryStatus: null,
+      primarySkipped: false,
+      ...diagnostics,
+    });
+  assertEquals(isPrimaryUnusableCompletionEnvelope(envelope()), true);
+  for (
+    const error of [
+      envelope({ origin: "http_response" }),
+      envelope({ observedHttpStatus: 502 }),
+      envelope({ failedOver: true }),
+      envelope({ primaryStatus: 200 }),
+      envelope({ primaryStatus: 503 }),
+      envelope({ primarySkipped: true }),
+      new UpstreamHttpError(502, "missing failover provenance", {
+        origin: "completion_envelope",
+        observedHttpStatus: 200,
+      }),
+      new UpstreamHttpError(403, "access denied", {
+        origin: "completion_envelope",
+        observedHttpStatus: 200,
+        failedOver: false,
+        primaryStatus: null,
+        primarySkipped: false,
+      }),
+      new UpstreamHttpError(429, "rate limited"),
+      new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"),
+      new DOMException("aborted", "AbortError"),
+    ]
+  ) {
+    assertEquals(isPrimaryUnusableCompletionEnvelope(error), false);
+  }
+});
+
+Deno.test("unusable primary HTTP 200 gets one correction retry even with real-HTTP opt-in off", async () => {
+  const malformed = new UpstreamHttpError(502, "unusable HTTP 200", {
+    origin: "completion_envelope",
+    observedHttpStatus: 200,
+    failedOver: false,
+    primaryStatus: null,
+    primarySkipped: false,
+  });
+  const calls: number[] = [];
+  const retryOrigins: string[] = [];
+  const result = await retryProductMeasurementUpstreamOnce({
+    attempt: async (timeoutMs) => {
+      calls.push(timeoutMs);
+      if (calls.length === 1) throw malformed;
+      return "valid second contract";
+    },
+    initialTimeoutMs: 8_000,
+    retryTimeoutMs: () => 3_000,
+    signal: new AbortController().signal,
+    retryRealHttp5xx: false,
+    retryUnusableEnvelope: true,
+    onRetry: (error) => retryOrigins.push(error.origin),
+    now: () => 0,
+  });
+  assertEquals(result, "valid second contract");
+  assertEquals(calls, [8_000, 3_000]);
+  assertEquals(retryOrigins, ["completion_envelope"]);
+});
+
+Deno.test("envelope retry is final after second failure and respects abort and budget", async () => {
+  const malformed = new UpstreamHttpError(502, "unusable HTTP 200", {
+    origin: "completion_envelope",
+    observedHttpStatus: 200,
+    failedOver: false,
+    primaryStatus: null,
+    primarySkipped: false,
+  });
+  for (
+    const [remaining, abortTurn, expectedCalls] of [
+      [3_000, false, 2],
+      [2_499, false, 1],
+      [3_000, true, 1],
+    ] as const
+  ) {
+    const controller = new AbortController();
+    if (abortTurn) controller.abort();
+    let calls = 0;
+    await assertRejects(async () => {
+      await retryProductMeasurementUpstreamOnce({
+        attempt: async () => {
+          calls++;
+          throw malformed;
+        },
+        initialTimeoutMs: 8_000,
+        retryTimeoutMs: () => remaining,
+        signal: controller.signal,
+        retryRealHttp5xx: false,
+        retryUnusableEnvelope: true,
+        now: () => 0,
+      });
+    }, UpstreamHttpError);
+    assertEquals(calls, expectedCalls);
+  }
+});
+
+Deno.test("envelope-only retry never repeats quota, access, rate limit, timeout or failover", async () => {
+  const invalidFailures: unknown[] = [
+    new UpstreamHttpError(402, "quota"),
+    new UpstreamHttpError(403, "access"),
+    new UpstreamHttpError(429, "rate"),
+    new UpstreamHttpError(503, "real HTTP outage", {
+      origin: "http_response",
+      observedHttpStatus: 503,
+    }),
+    new UpstreamHttpError(502, "fallback unusable", {
+      origin: "completion_envelope",
+      observedHttpStatus: 200,
+      failedOver: true,
+      primaryStatus: 503,
+      primarySkipped: false,
+    }),
     new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"),
     new DOMException("aborted", "AbortError"),
-  ]) {
-    assertEquals(isConfirmedTransientUpstreamHttp5xx(error), false);
+  ];
+  for (const failure of invalidFailures) {
+    let calls = 0;
+    await assertRejects(async () => {
+      await retryProductMeasurementUpstreamOnce({
+        attempt: async () => {
+          calls++;
+          throw failure;
+        },
+        initialTimeoutMs: 8_000,
+        retryTimeoutMs: () => 3_000,
+        signal: new AbortController().signal,
+        retryRealHttp5xx: false,
+        retryUnusableEnvelope: true,
+        now: () => 0,
+      });
+    });
+    assertEquals(calls, 1);
   }
 });
 
@@ -183,7 +354,10 @@ Deno.test("second HTTP failure is final: never issue a third correction call", a
   }
   assertEquals(calls, 2);
   assertEquals(caught, second);
-  assertEquals(upstreamFailureDiagnosticMeta(caught).upstream_provider, "lovable");
+  assertEquals(
+    upstreamFailureDiagnosticMeta(caught).upstream_provider,
+    "lovable",
+  );
 });
 
 Deno.test("synthetic 502, quotas, aborts, timeouts and insufficient time never start a second paid call", async () => {
@@ -191,21 +365,33 @@ Deno.test("synthetic 502, quotas, aborts, timeouts and insufficient time never s
     origin: "http_response",
     observedHttpStatus: 502,
   });
-  for (const [failure, remaining, elapsed, abortTurn] of [
-    [new UpstreamHttpError(502, "HTTP 200 envelope", {
-      origin: "completion_envelope",
-      observedHttpStatus: 200,
-    }), 3_000, 0, false],
-    [new UpstreamHttpError(402, "quota"), 3_000, 0, false],
-    [new UpstreamHttpError(403, "access"), 3_000, 0, false],
-    [new UpstreamHttpError(429, "rate"), 3_000, 0, false],
-    [new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"), 3_000, 0, false],
-    [new DOMException("aborted", "AbortError"), 3_000, 0, false],
-    [real502, 2_499, 0, false],
-    [real502, null, 0, false],
-    [real502, 3_000, 8_000, false],
-    [real502, 3_000, 0, true],
-  ] as const) {
+  for (
+    const [failure, remaining, elapsed, abortTurn] of [
+      [
+        new UpstreamHttpError(502, "HTTP 200 envelope", {
+          origin: "completion_envelope",
+          observedHttpStatus: 200,
+        }),
+        3_000,
+        0,
+        false,
+      ],
+      [new UpstreamHttpError(402, "quota"), 3_000, 0, false],
+      [new UpstreamHttpError(403, "access"), 3_000, 0, false],
+      [new UpstreamHttpError(429, "rate"), 3_000, 0, false],
+      [
+        new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError"),
+        3_000,
+        0,
+        false,
+      ],
+      [new DOMException("aborted", "AbortError"), 3_000, 0, false],
+      [real502, 2_499, 0, false],
+      [real502, null, 0, false],
+      [real502, 3_000, 8_000, false],
+      [real502, 3_000, 0, true],
+    ] as const
+  ) {
     const controller = new AbortController();
     if (abortTurn) controller.abort();
     let calls = 0;
@@ -272,17 +458,22 @@ Deno.test("completion caller and correction log record bounded provenance only",
 
 Deno.test("timeouts and aborts receive explicit public codes", () => {
   assertEquals(
-    classifyPublicFailure(new DOMException("llm_call_timeout:intro", "TimeoutError")).public_code,
+    classifyPublicFailure(
+      new DOMException("llm_call_timeout:intro", "TimeoutError"),
+    ).public_code,
     "request_timeout",
   );
   assertEquals(
-    classifyPublicFailure(new DOMException("request aborted", "AbortError")).public_code,
+    classifyPublicFailure(new DOMException("request aborted", "AbortError"))
+      .public_code,
     "request_aborted",
   );
 });
 
 Deno.test("arbitrary internal errors never echo their message", () => {
-  const failure = classifyPublicFailure(new Error("database-password=do-not-leak"));
+  const failure = classifyPublicFailure(
+    new Error("database-password=do-not-leak"),
+  );
   assertEquals(failure.public_code, "internal_error");
   assert(!JSON.stringify(failure).includes("database-password"));
   assertPublicOutputIsSafe(failure);

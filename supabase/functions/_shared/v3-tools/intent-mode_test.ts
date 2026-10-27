@@ -1,5 +1,92 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { detectUserIntentMode, extractNamedSeriesToken, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+import { detectUserIntentMode, extractNamedSeriesToken, hasMixedProductPolicyRequest, isStorePolicyInquiry, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+
+Deno.test("store policy questions require knowledge evidence across service topics", () => {
+  for (const question of [
+    "Какие у вас условия доставки по Казахстану?",
+    "Сколько стоит доставка до двери?",
+    "Какая цена доставки?",
+    "Есть ли у вас самовывоз?",
+    "Как оплатить заказ?",
+    "Расскажите о рассрочке",
+    "Какие сроки возврата товара?",
+    "Покажи способы оплаты",
+    "А гарантия?",
+    "Доставка по Казахстану",
+    "Оплата Kaspi",
+    "Можно оплатить через Kaspi?",
+    "Можно ли вернуть товар?",
+  ]) {
+    assertEquals(isStorePolicyInquiry(question), true, question);
+  }
+});
+
+Deno.test("service mentions do not hijack product selection or availability", () => {
+  for (const question of [
+    "Найди кабель ВВГ с доставкой в Алматы",
+    "Предложи варианты ламп с доставкой",
+    "Покажи автоматы со скидкой",
+    "Есть ли кабель ВВГ с доставкой?",
+    "Какие кабели есть с гарантией?",
+    "Нужен светильник с бесплатной доставкой",
+    "Доставьте мне кабель ВВГ 3×1,5",
+    "Как выбрать кабель с доставкой?",
+    "Какой срок гарантии на эту модель?",
+    "Гарантия на эту лампу?",
+    "Можно ли вернуть эту лампу?",
+    "Можно ли обменять эту розетку?",
+    "Какие сроки гарантии на светильник Gauss?",
+    "Какие сроки гарантии на светильник gauss?",
+    "Подбери светильник и расскажи условия доставки",
+    "Расскажи условия доставки и подбери светильник",
+    "Найди лампу, потом расскажи про доставку",
+    "Расскажите про лампы со скидкой",
+  ]) {
+    assertEquals(isStorePolicyInquiry(question), false, question);
+  }
+  assertEquals(isStorePolicyInquiry("Покажи способы оплаты и доставки"), true);
+});
+
+Deno.test("compound product and store-policy tasks keep product selection route", () => {
+  for (const question of [
+    "Подбери светильник и расскажи условия доставки",
+    "Расскажи условия доставки и подбери светильник",
+    "Найди кабель, потом расскажи про доставку",
+    "Хочу лампу; сколько стоит доставка?",
+    "Подбери кабель и расскажи условия доставки",
+    "Нужен удлинитель с доставкой и расскажи условия оплаты",
+    "Хочу лампу с доставкой и расскажи условия оплаты",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), true, question);
+    assertEquals(isStorePolicyInquiry(question), false, question);
+    assertEquals(detectUserIntentMode(question), "select", question);
+  }
+  for (const question of [
+    "Какие у вас условия доставки по Казахстану?",
+    "Покажи способы оплаты и доставки",
+    "Нужен светильник с доставкой",
+    "Расскажи, чем хороша серия Галант",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), false, question);
+  }
+  assertEquals(isStorePolicyInquiry("Какие у вас условия доставки по Казахстану?"), true);
+  assertEquals(isStorePolicyInquiry("Какая цена доставки?"), true);
+  assertEquals(detectUserIntentMode("Какая цена доставки?"), "inquire");
+  assertEquals(detectUserIntentMode("Расскажи, чем хороша серия Галант"), "inquire");
+});
+
+Deno.test("desire for store services alone is never a product-selection clause", () => {
+  for (const question of [
+    "Нужна доставка и оплата",
+    "Хочу доставку и оплату",
+    "Нужна доставка и гарантия",
+    "Нужна быстрая доставка и оплата",
+  ]) {
+    assertEquals(hasMixedProductPolicyRequest(question), false, question);
+    assertEquals(isStorePolicyInquiry(question), true, question);
+    assertEquals(detectUserIntentMode(question), "inquire", question);
+  }
+});
 
 Deno.test("suitability questions are inquiry mode", () => {
   assertEquals(detectUserIntentMode("Подойдёт или нет?"), "inquire");

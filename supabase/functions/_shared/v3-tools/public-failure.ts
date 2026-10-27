@@ -95,24 +95,41 @@ export function isConfirmedTransientUpstreamHttp5xx(
         error.primary_status >= 500 && error.primary_status <= 599);
 }
 
-/** At most one extra attempt, with a fresh caller-supplied deadline budget.
- * Never start a second paid call after the first call's timeout or turn abort.
- * The same `attempt` closure keeps messages, tool schema, and model identical. */
-export async function retryConfirmedUpstreamHttp5xxOnce<T>(input: {
+/** A syntactically successful primary HTTP response without a usable choice.
+ * Keep this distinct from a real HTTP 502 and from any provider failover: a
+ * fallback response must not reopen the correction call budget. */
+export function isPrimaryUnusableCompletionEnvelope(
+  error: unknown,
+): error is UpstreamHttpError {
+  return error instanceof UpstreamHttpError &&
+    error.status === 502 &&
+    error.origin === "completion_envelope" &&
+    error.observed_http_status === 200 &&
+    error.failed_over === false &&
+    error.primary_status === null &&
+    error.primary_skipped === false;
+}
+
+type BoundedRetryInput<T> = {
   attempt: (timeoutMs: number) => Promise<T>;
   initialTimeoutMs: number;
   retryTimeoutMs: () => number | null;
   signal: AbortSignal;
   onRetry?: (error: UpstreamHttpError, timeoutMs: number) => void;
   now?: () => number;
-}): Promise<T> {
+};
+
+async function retryEligibleUpstreamFailureOnce<T>(
+  input: BoundedRetryInput<T>,
+  eligible: (error: unknown) => error is UpstreamHttpError,
+): Promise<T> {
   const now = input.now ?? (() => performance.now());
   const startedAt = now();
   try {
     return await input.attempt(input.initialTimeoutMs);
   } catch (error) {
     if (
-      !isConfirmedTransientUpstreamHttp5xx(error) || input.signal.aborted ||
+      !eligible(error) || input.signal.aborted ||
       !Number.isFinite(input.initialTimeoutMs) ||
       !Number.isFinite(startedAt)
     ) throw error;
@@ -128,8 +145,38 @@ export async function retryConfirmedUpstreamHttp5xxOnce<T>(input: {
     ) throw error;
     input.onRetry?.(error, retryTimeoutMs);
     if (input.signal.aborted) throw error;
+    // A second failure is final, even if it would independently be eligible.
     return await input.attempt(retryTimeoutMs);
   }
+}
+
+/** One bounded correction retry for an exact primary HTTP-200 envelope fault.
+ * Real HTTP 5xx remains an explicit, independent opt-in. */
+export function retryProductMeasurementUpstreamOnce<T>(
+  input: BoundedRetryInput<T> & {
+    retryRealHttp5xx: boolean;
+    retryUnusableEnvelope: boolean;
+  },
+): Promise<T> {
+  return retryEligibleUpstreamFailureOnce(
+    input,
+    (error): error is UpstreamHttpError =>
+      (input.retryRealHttp5xx && isConfirmedTransientUpstreamHttp5xx(error)) ||
+      (input.retryUnusableEnvelope &&
+        isPrimaryUnusableCompletionEnvelope(error)),
+  );
+}
+
+/** At most one extra attempt, with a fresh caller-supplied deadline budget.
+ * Never start a second paid call after the first call's timeout or turn abort.
+ * The same `attempt` closure keeps messages, tool schema, and model identical. */
+export function retryConfirmedUpstreamHttp5xxOnce<T>(
+  input: BoundedRetryInput<T>,
+): Promise<T> {
+  return retryEligibleUpstreamFailureOnce(
+    input,
+    isConfirmedTransientUpstreamHttp5xx,
+  );
 }
 
 const TEMPORARILY_UNAVAILABLE =
@@ -146,7 +193,10 @@ const INTERNAL_FAILURE =
 
 function namedError(error: unknown): { name: string; message: string } {
   if (error instanceof Error || error instanceof DOMException) {
-    return { name: String(error.name ?? ""), message: String(error.message ?? "") };
+    return {
+      name: String(error.name ?? ""),
+      message: String(error.message ?? ""),
+    };
   }
   return { name: "", message: String(error ?? "") };
 }
@@ -156,7 +206,10 @@ export function classifyPublicFailure(error: unknown): PublicFailure {
   const named = namedError(error);
   const normalizedName = named.name.toLocaleLowerCase("en-US");
   const normalizedMessage = named.message.toLocaleLowerCase("en-US");
-  if (normalizedName === "aborterror" || /\babort(?:ed)?\b/u.test(normalizedMessage)) {
+  if (
+    normalizedName === "aborterror" ||
+    /\babort(?:ed)?\b/u.test(normalizedMessage)
+  ) {
     return {
       kind: "request_aborted",
       public_code: "request_aborted",
@@ -164,7 +217,10 @@ export function classifyPublicFailure(error: unknown): PublicFailure {
       retryable: true,
     };
   }
-  if (normalizedName === "timeouterror" || normalizedMessage.includes("llm_call_timeout")) {
+  if (
+    normalizedName === "timeouterror" ||
+    normalizedMessage.includes("llm_call_timeout")
+  ) {
     return {
       kind: "request_timeout",
       public_code: "request_timeout",
@@ -175,7 +231,9 @@ export function classifyPublicFailure(error: unknown): PublicFailure {
 
   if (error instanceof UpstreamHttpError) {
     const body = error.response_body.toLocaleLowerCase("en-US");
-    const quota = /(?:quota|limit exceeded|credit|budget|insufficient)/u.test(body);
+    const quota = /(?:quota|limit exceeded|credit|budget|insufficient)/u.test(
+      body,
+    );
     if (error.status === 402 || (error.status === 403 && quota)) {
       return {
         kind: "upstream_quota",

@@ -13,6 +13,8 @@ import {
 export interface LookupKnowledgeInput {
   query: string;
   top_k?: number;
+  /** Skip paid embeddings for one bounded full-text policy recovery pass. */
+  fts_only?: boolean;
 }
 
 interface HybridRow {
@@ -113,7 +115,9 @@ export async function executeLookupKnowledge(
   try {
     // Generate query embedding for hybrid (FTS + vector) search.
     // Returns null on failure; RPC then runs FTS-only path.
-    const queryEmbedding = await generateQueryEmbedding(q, supabase, openrouterApiKey, secretMode);
+    const queryEmbedding = input.fts_only
+      ? null
+      : await generateQueryEmbedding(q, supabase, openrouterApiKey, secretMode);
     console.log(`[lookup_knowledge] query="${q}" embedding=${queryEmbedding ? "yes" : "no"}`);
 
     // 1) Chunk-level RPC (preferred — focused snippets).

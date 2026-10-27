@@ -1,6 +1,5 @@
-// The real HTTP/SSE handler must persist the provenance of two different
-// provider failures during a product-measurement correction. All outbound
-// traffic is replaced with fixture responses; no paid request is made.
+// The real HTTP/SSE handler distinguishes a provider HTTP failure from an
+// unusable HTTP 200 and retries only the latter once, without paid traffic.
 import {
   assert,
   assertEquals,
@@ -12,7 +11,7 @@ import {
 import "./index.ts";
 
 type Step = { step?: string; meta?: Record<string, unknown> };
-type Variant = "http_502" | "unusable_http_200";
+type Variant = "http_502" | "unusable_http_200" | "unusable_then_valid";
 
 const category = "ИБП";
 const message = "Нужен ИБП для оборудования мощностью 250 Вт";
@@ -30,9 +29,10 @@ function sseEvents(text: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
 }
 
-async function runFailure(variant: Variant): Promise<{
+async function runScenario(variant: Variant): Promise<{
   steps: Step[];
   events: Array<Record<string, unknown>>;
+  declarationRequests: number;
   correctionRequests: number;
   catalogProductRequests: number;
 }> {
@@ -108,9 +108,14 @@ async function runFailure(variant: Variant): Promise<{
         }
         if (url.pathname === "/api/products") {
           catalogProductRequests++;
-          throw new Error(
-            "Correction failure must stop before catalog product search",
-          );
+          if (variant !== "unusable_then_valid") {
+            throw new Error(
+              "Correction failure must stop before catalog product search",
+            );
+          }
+          return json({
+            data: { results: [], pagination: { total: 0 } },
+          });
         }
       }
       if (url.toString() === "https://openrouter.ai/api/v1/chat/completions") {
@@ -128,9 +133,36 @@ async function runFailure(variant: Variant): Promise<{
           ) ?? false;
           if (correction) {
             correctionRequests++;
-            return variant === "http_502"
-              ? json({ error: "fixture provider failure" }, 502)
-              : json({ choices: [] }, 200);
+            if (variant === "http_502") {
+              return json({ error: "fixture provider failure" }, 502);
+            }
+            if (variant === "unusable_then_valid" && correctionRequests === 2) {
+              return json({
+                choices: [{
+                  finish_reason: "tool_calls",
+                  message: {
+                    content: null,
+                    tool_calls: [{
+                      id: "offline-corrected-declaration",
+                      type: "function",
+                      function: {
+                        name: "declare_selection_reasoning",
+                        arguments: JSON.stringify({
+                          reasoning:
+                            "Для оборудования суммарной мощностью 250 Вт проверю потребность системы, затем отдельно проверю параметры каждого ИБП по карточке каталога.",
+                          measurement_scope: "system_total",
+                          compatible_classifications: [],
+                          excluded_classifications: [],
+                          required_facet_values: [],
+                          explicit_customer_classifications: [],
+                        }),
+                      },
+                    }],
+                  },
+                }],
+              });
+            }
+            return json({ choices: [] }, 200);
           }
           return json({
             choices: [{
@@ -196,6 +228,17 @@ async function runFailure(variant: Variant): Promise<{
             }],
           });
         }
+        if (variant === "unusable_then_valid") {
+          return json({
+            choices: [{
+              finish_reason: "stop",
+              message: {
+                content: "В каталоге нет подтверждённых вариантов.",
+                tool_calls: [],
+              },
+            }],
+          });
+        }
         throw new Error("Unexpected model phase before measurement correction");
       }
       throw new Error(`Unexpected outbound request: ${request.method} ${url}`);
@@ -218,8 +261,18 @@ async function runFailure(variant: Variant): Promise<{
     );
     assertEquals(response.status, 200);
     const events = sseEvents(await response.text());
-    assertEquals(declarationRequests, 2, JSON.stringify(steps));
-    return { steps, events, correctionRequests, catalogProductRequests };
+    assertEquals(
+      declarationRequests,
+      variant === "http_502" ? 2 : 3,
+      JSON.stringify(steps),
+    );
+    return {
+      steps,
+      events,
+      declarationRequests,
+      correctionRequests,
+      catalogProductRequests,
+    };
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
@@ -229,12 +282,12 @@ async function runFailure(variant: Variant): Promise<{
 
 Deno.test({
   name:
-    "real handler records HTTP 502 versus unusable HTTP 200 correction origin without an OFF retry",
+    "real handler leaves real HTTP 502 un-retried but retries malformed HTTP 200 once and fails closed on repeat",
   permissions: { read: true, env: false, net: false },
   async fn() {
     try {
       for (const variant of ["http_502", "unusable_http_200"] as const) {
-        const result = await runFailure(variant);
+        const result = await runScenario(variant);
         const failure = result.steps.find(({ step }) =>
           step === "v3_product_measurement_correction_failed"
         );
@@ -250,13 +303,30 @@ Deno.test({
         );
         assertEquals(failure.meta?.upstream_provider, "openrouter");
         assertEquals(failure.meta?.provider_failed_over, false);
-        assertEquals(result.correctionRequests, 1);
+        assertEquals(
+          result.correctionRequests,
+          variant === "http_502" ? 1 : 2,
+        );
         assertEquals(result.catalogProductRequests, 0);
+        const gap = result.steps.find(({ step }) =>
+          step === "v3_product_measurement_gap_before_repair"
+        );
+        assert(gap, JSON.stringify(result.steps));
+        assertEquals(gap.meta?.gap, "unprojectable_criterion");
+        assertEquals(gap.meta?.destination_area_covered, false);
+        assertEquals(typeof gap.meta?.model_physical_count_capped, "number");
+        assertEquals(Array.isArray(gap.meta?.model_physical_categories), true);
         assertEquals(
           result.steps.some(({ step }) =>
             step === "v3_product_measurement_correction_http_retry"
           ),
           false,
+        );
+        assertEquals(
+          result.steps.filter(({ step }) =>
+            step === "v3_product_measurement_correction_envelope_retry"
+          ).length,
+          variant === "http_502" ? 0 : 1,
         );
         assert(
           result.steps.some(({ step }) =>
@@ -274,6 +344,29 @@ Deno.test({
           !JSON.stringify(result.events).includes("fixture provider failure"),
         );
       }
+      const recovered = await runScenario("unusable_then_valid");
+      assertEquals(recovered.correctionRequests, 2);
+      assertEquals(recovered.declarationRequests, 3);
+      assertEquals(
+        recovered.steps.filter(({ step }) =>
+          step === "v3_product_measurement_correction_envelope_retry"
+        ).length,
+        1,
+      );
+      assertEquals(
+        recovered.steps.some(({ step }) =>
+          step === "v3_product_measurement_correction_failed"
+        ),
+        false,
+        JSON.stringify(recovered.steps),
+      );
+      assert(
+        recovered.steps.some(({ step, meta }) =>
+          step === "v3_derived_selection_measurement_retry" &&
+          meta?.recovered === true
+        ),
+        JSON.stringify(recovered.steps),
+      );
     } finally {
       restoreOfflineModuleSetup();
     }

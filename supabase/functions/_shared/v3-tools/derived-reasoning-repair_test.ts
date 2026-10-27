@@ -474,7 +474,7 @@ Deno.test("measurement terminal precedes search and correction failure preserves
   );
 });
 
-Deno.test("real HTTP retry is confined to product-measurement correction and the same proof call", async () => {
+Deno.test("transport retry is confined to product-measurement correction and the same proof call", async () => {
   const source = await Deno.readTextFile(
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
   );
@@ -493,6 +493,10 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
       .test(correctionCall),
     true,
   );
+  assertStringIncludes(
+    correctionCall,
+    "envelopeRetryEnabled:",
+  );
   assertStringIncludes(correctionCall, "attempt: correctionAttempt,");
   assertStringIncludes(correctionCall, "initialTimeoutMs: correctionTimeout,");
   assertStringIncludes(correctionCall, "DERIVED_REASONING_SOFT_DEADLINE_MS,");
@@ -509,9 +513,18 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
   const optIn = source.slice(optInStart, optInEnd);
   assertStringIncludes(
     optIn,
-    'input.repairReason === "product_measurement" && input.retryEnabled',
+    'input.repairReason === "product_measurement" &&',
   );
-  assertStringIncludes(optIn, "retryConfirmedUpstreamHttp5xxOnce(input)");
+  assertStringIncludes(
+    optIn,
+    "input.retryEnabled || input.envelopeRetryEnabled",
+  );
+  assertStringIncludes(optIn, "retryProductMeasurementUpstreamOnce({");
+  assertStringIncludes(optIn, "retryRealHttp5xx: input.retryEnabled,");
+  assertStringIncludes(
+    optIn,
+    "retryUnusableEnvelope: input.envelopeRetryEnabled === true,",
+  );
   assertStringIncludes(optIn, "input.attempt(input.initialTimeoutMs)");
   for (
     const mandatoryArg of [
@@ -527,7 +540,7 @@ Deno.test("real HTTP retry is confined to product-measurement correction and the
     assertStringIncludes(correctionCall, mandatoryArg);
   }
   assertEquals(
-    source.match(/retryConfirmedUpstreamHttp5xxOnce\(input\)/gu)?.length,
+    source.match(/retryProductMeasurementUpstreamOnce\(\{/gu)?.length,
     1,
   );
 });

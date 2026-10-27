@@ -98,3 +98,49 @@ Deno.test("OFF preserves one paid correction call; ON adds at most one real-HTTP
   assertEquals(calls, 1);
   assertEquals(retryNotices, 0);
 });
+
+Deno.test("the malformed HTTP-200 retry is limited to product measurement", async () => {
+  const malformed = new UpstreamHttpError(502, "unusable HTTP 200", {
+    origin: "completion_envelope",
+    observedHttpStatus: 200,
+    failedOver: false,
+    primaryStatus: null,
+    primarySkipped: false,
+  });
+  for (
+    const [reason, expectedCalls] of [
+      ["product_measurement", 2],
+      ["invalid_declaration", 1],
+      ["paired_fit", 1],
+      ["environmental_protection", 1],
+    ] as const
+  ) {
+    let calls = 0;
+    const attempt = async () => {
+      calls++;
+      if (calls === 1) throw malformed;
+      return "valid second contract";
+    };
+    const input = {
+      repairReason: reason,
+      retryEnabled: false,
+      envelopeRetryEnabled: true,
+      attempt,
+      initialTimeoutMs: 8_000,
+      retryTimeoutMs: () => 3_000,
+      signal: new AbortController().signal,
+    };
+    if (expectedCalls === 2) {
+      assertEquals(
+        await runProductMeasurementCorrection(input),
+        "valid second contract",
+      );
+    } else {
+      await assertRejects(
+        () => runProductMeasurementCorrection(input),
+        UpstreamHttpError,
+      );
+    }
+    assertEquals(calls, expectedCalls);
+  }
+});
