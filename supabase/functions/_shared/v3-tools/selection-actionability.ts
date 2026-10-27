@@ -606,6 +606,27 @@ function scrubUnsupportedPerProductMeasuredClaims(
       normalizeLiteralEvidence(destinationProof.place ?? "") === provedPlace &&
       provedPlace,
   );
+  const soleUnqualifiedReplacementRequest = (() => {
+    if (!independentlyCoveredDestination) return false;
+    // A lexical comparison cannot prove that a mixed sentence contains no
+    // other customer condition: Russian inflection and synonyms defeat it.
+    // Accept only this closed, product-agnostic replacement form. A mounting,
+    // colour, technology or other adjective anywhere in the request makes
+    // clause deletion fail closed, even when the live schema omits that facet.
+    const normalizedRequest = normalizeLiteralEvidence(customerEvidence);
+    const area = independentDestinationAreaProof?.minimumAreaM2;
+    if (typeof area !== "number" || !Number.isInteger(area)) return false;
+    const match = normalizedRequest.match(new RegExp(
+      `^(?:хочу )?заменить [а-я]+ на ([а-я]+) в ${provedPlace} ${area} м2(?: что подойдет)?$`,
+      "iu",
+    ));
+    if (!match) return false;
+    return normalizeLiteralEvidence(productClass).split(" ")
+      .filter((word) => word.length >= 6)
+      .some((word) =>
+        match[1].startsWith(word.slice(0, Math.max(5, word.length - 3)))
+      );
+  })();
   const containsCustomerQuantity = (
     text: string,
     physicalOnly: boolean,
@@ -712,6 +733,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
                 value === independentDestinationAreaProof?.minimumAreaM2)
             );
           const onlyCoveredDestination = independentlyCoveredDestination &&
+            soleUnqualifiedReplacementRequest &&
             !otherCustomerNumberInClause &&
             otherFacetMatches.every(({ facet, visible }) =>
               /(?:назначен|помещен|комнат|место\s+применен|область\s+применен|использован)/iu

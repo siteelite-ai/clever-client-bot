@@ -106,7 +106,7 @@ Deno.test("derived selection keeps malformed model planning private while explai
 
 Deno.test("independent area card proof removes only an inseparable model-only hard measurement", () => {
   const customer =
-    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?";
+    "Хочу заменить люстру на светильник в гостиной 30 м². Что подойдет?";
   const destination = {
     key: "destination",
     caption: "Назначение",
@@ -145,6 +145,10 @@ Deno.test("independent area card proof removes only an inseparable model-only ha
   assertEquals(safe?.retrievalQuery, null);
   assertEquals(safe?.requiredFacetValues, []);
   assertEquals(resolve(args.reasoning, customer, [destination], null), null);
+  assertEquals(resolve(
+    args.reasoning,
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что подойдет?",
+  ), null);
 
   const color = {
     key: "body_color",
@@ -155,6 +159,18 @@ Deno.test("independent area card proof removes only an inseparable model-only ha
     "Для гостиной 30 м², цвет корпуса черный: каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
     `${customer} Нужен черный корпус.`,
     [destination, color],
+  ), null);
+  assertEquals(resolve(
+    "Для гостиной 30 м² каждый накладной светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} Нужен накладной монтаж.`,
+  ), null);
+  assertEquals(resolve(
+    "Для гостиной 30 м² требуется накладная установка, каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} Нужен накладной монтаж.`,
+  ), null);
+  assertEquals(resolve(
+    "Для гостиной 30 м² каждый потолочный светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
+    `${customer} Нужен потолочный монтаж.`,
   ), null);
   assertEquals(resolve(
     "Для гостиной 30 м² до 4000 тенге каждый светильник обязан иметь не менее 5000 лм. Проверяю карточки по назначению и площади освещения.",

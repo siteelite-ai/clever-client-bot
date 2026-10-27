@@ -874,7 +874,8 @@ Deno.test({
     try {
       const result = await runFollowup({
         freshTurn: true,
-        followupMessage: base,
+        followupMessage:
+          "Хочу заменить люстру на светильник в гостиной 30 м². Что подойдет?",
         includeAreaFacet: false,
         rawReasoning:
           "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.",
