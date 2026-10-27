@@ -178,7 +178,7 @@ export function safeGemini38CorrectionTelemetry(input: {
     http_status: httpCode(input.httpStatus),
     envelope_status: input.envelopeStatus,
     choice_error_type: safeErrorType(errorMetadata?.error_type),
-    choice_error_code: httpCode(errorMetadata?.code),
+    choice_error_code: httpCode(error?.code) ?? httpCode(errorMetadata?.code),
     choice_provider_code: safeProviderCode(errorMetadata?.provider_code),
     finish_reason: safeFinish,
     tool_call_count: Array.isArray(calls) ? Math.min(calls.length, 20) : 0,

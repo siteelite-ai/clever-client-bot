@@ -14,6 +14,8 @@ type CorrectionCall = {
   model: unknown;
   provider: unknown;
   metadataHeader: string | null;
+  hasTemperature: boolean;
+  temperature: unknown;
 };
 const canarySession = "0439c735-1e87-4a32-8a6f-4f2a71986292";
 
@@ -115,6 +117,7 @@ async function runCase(
         const body = await request.json() as {
           model?: string;
           provider?: unknown;
+          temperature?: number;
           tool_choice?: { function?: { name?: string } };
           tools?: Array<{ function?: { name?: string } }>;
           messages?: Array<{ content?: string }>;
@@ -130,6 +133,8 @@ async function runCase(
               model: body.model,
               provider: body.provider,
               metadataHeader: request.headers.get("X-OpenRouter-Metadata"),
+              hasTemperature: "temperature" in body,
+              temperature: body.temperature,
             });
             return json(
               {
@@ -263,6 +268,7 @@ Deno.test({
           "google/gemini-3.8-flash",
         );
         assertEquals(result.correctionCalls[0].metadataHeader, "enabled");
+        assertEquals(result.correctionCalls[0].hasTemperature, false);
         assertEquals(result.correctionCalls[0].provider, {
           require_parameters: true,
           order: ["google-ai-studio", "google-vertex/global"],
@@ -303,6 +309,8 @@ Deno.test({
       );
       assertEquals(baseline.correctionCalls[0].metadataHeader, null);
       assertEquals(baseline.correctionCalls[0].provider, undefined);
+      assertEquals(baseline.correctionCalls[0].hasTemperature, true);
+      assertEquals(baseline.correctionCalls[0].temperature, 0);
       assert(
         !baseline.steps.some(({ step }) =>
           step === "v3_product_measurement_gemini38_canary_route" ||

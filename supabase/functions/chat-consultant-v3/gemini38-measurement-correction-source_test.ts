@@ -50,6 +50,7 @@ Deno.test("Gemini 3.8 bad forced-tool envelope fails closed without a catalog pa
   );
   assert(request.includes('"X-OpenRouter-Metadata": "enabled"'));
   assert(request.includes("require_parameters: true"));
+  assert(request.includes("...(canaryTelemetry ? {} : { temperature })"));
   assert(
     request.includes('order: ["google-ai-studio", "google-vertex/global"]'),
   );

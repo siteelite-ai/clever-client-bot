@@ -3722,7 +3722,9 @@ async function callOpenRouter(
             },
           }
           : {}),
-        temperature,
+        // Vertex/global supports this forced tool but not temperature. Do not
+        // exclude it when require_parameters is enabled for the canary.
+        ...(canaryTelemetry ? {} : { temperature }),
         max_tokens: maxTokens,
         messages,
         ...(availableTools.length > 0

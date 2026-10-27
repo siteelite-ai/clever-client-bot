@@ -139,7 +139,11 @@ Deno.test("Gemini 3.8 telemetry strips all model/provider text and arbitrary met
   const topLevelError = safeGemini38CorrectionTelemetry({
     payload: {
       id: "gen-abcdef1234567890",
-      error: { metadata: { error_type: "provider_unavailable", code: 503 } },
+      error: {
+        code: 503,
+        message: secret,
+        metadata: { error_type: "provider_unavailable" },
+      },
     },
     generationId: null,
     httpStatus: 503,
@@ -149,4 +153,5 @@ Deno.test("Gemini 3.8 telemetry strips all model/provider text and arbitrary met
   assertEquals(topLevelError.generation_id, "gen-abcdef1234567890");
   assertEquals(topLevelError.choice_error_type, "provider_unavailable");
   assertEquals(topLevelError.choice_error_code, 503);
+  assert(!JSON.stringify(topLevelError).includes(secret));
 });
