@@ -142,19 +142,41 @@ function policyFacts(snippet: string): string[] {
 
 type PolicyFacet = "time" | "cost" | "method";
 
-function requestedPolicyFacets(message: string): PolicyFacet[] {
+const POLICY_FACET_PATTERNS: Array<{ facet: PolicyFacet; pattern: RegExp }> = [
+  { facet: "time", pattern: /(?:^|[^\p{L}])(?:когда|срок\p{L}*|врем\p{L}*|дн(?:и|я|ей)|час\p{L}*|сколько\s+(?:ждать|идет|длится))(?=$|[^\p{L}])/u },
+  { facet: "cost", pattern: /(?:^|[^\p{L}])(?:цен\p{L}*|стоимост\p{L}*|тариф\p{L}*|почем|бесплатн\p{L}*|платн\p{L}*|сколько\s+сто\p{L}*)(?=$|[^\p{L}])/u },
+  { facet: "method", pattern: /(?:^|[^\p{L}])(?:способ\p{L}*|как\s+(?:оплат\p{L}*|достав\p{L}*|отправ\p{L}*)|чем\s+оплат\p{L}*)(?=$|[^\p{L}])/u },
+];
+
+function requestedPolicyFacetsByTopic(message: string, topics: RegExp[]): Map<RegExp, PolicyFacet[]> {
   const query = message.toLocaleLowerCase("ru").replace(/ё/gu, "е");
-  const facets: PolicyFacet[] = [];
-  if (/(?:^|[^\p{L}])(?:когда|срок\p{L}*|врем\p{L}*|дн(?:и|я|ей)|час\p{L}*|сколько\s+(?:ждать|идет|длится))(?=$|[^\p{L}])/u.test(query)) {
-    facets.push("time");
+  const byTopic = new Map(topics.map((topic) => [topic, [] as PolicyFacet[]]));
+  const mentions = topics.flatMap((topic) =>
+    [...query.matchAll(new RegExp(topic.source, "gu"))].map((match) => ({
+      topic,
+      position: match.index + match[0].length / 2,
+    }))
+  );
+  const facetMentions = POLICY_FACET_PATTERNS.flatMap(({ facet, pattern }) =>
+    [...query.matchAll(new RegExp(pattern.source, "gu"))].map((match) => ({
+      facet,
+      position: match.index + match[0].length / 2,
+    }))
+  );
+  for (const { facet, position } of facetMentions) {
+    // One shared qualifier in "способы оплаты и доставки" applies to both
+    // services. With several qualifiers, bind each to its nearest service:
+    // "когда доставка и какие способы оплаты" must not borrow payment time.
+    const closest = facetMentions.length === 1
+      ? Infinity
+      : Math.min(...mentions.map((mention) => Math.abs(mention.position - position)));
+    for (const mention of mentions) {
+      if (Math.abs(mention.position - position) !== closest && closest !== Infinity) continue;
+      const facets = byTopic.get(mention.topic);
+      if (facets && !facets.includes(facet)) facets.push(facet);
+    }
   }
-  if (/(?:^|[^\p{L}])(?:цен\p{L}*|стоимост\p{L}*|тариф\p{L}*|почем|бесплатн\p{L}*|платн\p{L}*|сколько\s+сто\p{L}*)(?=$|[^\p{L}])/u.test(query)) {
-    facets.push("cost");
-  }
-  if (/(?:^|[^\p{L}])(?:способ\p{L}*|как\s+(?:оплат\p{L}*|достав\p{L}*|отправ\p{L}*)|чем\s+оплат\p{L}*)(?=$|[^\p{L}])/u.test(query)) {
-    facets.push("method");
-  }
-  return facets;
+  return byTopic;
 }
 
 function factSupportsPolicyFacet(fact: string, facet: PolicyFacet, topic: RegExp): boolean {
@@ -193,7 +215,7 @@ export function buildStorePolicyEvidenceAnswer(
   const topics = POLICY_TOPICS.filter((topic) => topic.test(queryText));
   if (topics.length === 0) return { text: null, matched: 0 };
   const scope = explicitPolicyScope(userMessage);
-  const requestedFacets = requestedPolicyFacets(userMessage);
+  const requestedFacetsByTopic = requestedPolicyFacetsByTopic(userMessage, topics);
   const seen = new Set<string>();
   const passagesByTopic = new Map(topics.map((topic) => [topic, [] as Array<{ text: string; facets: PolicyFacet[] }>]));
   for (const hit of hits) {
@@ -219,6 +241,7 @@ export function buildStorePolicyEvidenceAnswer(
       if (factTopicMentions.length === 0 && sourceTopics.length > 1) continue;
       const passageTopic = factTopicMentions[0]?.topic ?? sourceTopics[0];
       if (!topics.includes(passageTopic) || !sourceTopics.includes(passageTopic)) continue;
+      const requestedFacets = requestedFacetsByTopic.get(passageTopic) ?? [];
       const factFacets = requestedFacets.filter((facet) => factSupportsPolicyFacet(fact, facet, passageTopic));
       if (requestedFacets.length > 0 && factFacets.length === 0) continue;
       const words = policyWords(`${title} ${fact}`);
@@ -253,15 +276,16 @@ export function buildStorePolicyEvidenceAnswer(
   if (topics.some((topic) => !passagesByTopic.get(topic)?.length)) {
     return { text: null, matched: 0 };
   }
-  const passages: Array<{ text: string; facets: PolicyFacet[] }> = [];
+  const passages: Array<{ text: string; topic: RegExp; facets: PolicyFacet[] }> = [];
   for (let position = 0; position < 3 && passages.length < 6; position++) {
     for (const topic of topics) {
       const passage = passagesByTopic.get(topic)?.[position];
-      if (passage) passages.push(passage);
+      if (passage) passages.push({ ...passage, topic });
       if (passages.length === 6) break;
     }
   }
-  if (requestedFacets.some((facet) => !passages.some((passage) => passage.facets.includes(facet)))) {
+  if (topics.some((topic) => (requestedFacetsByTopic.get(topic) ?? []).some((facet) =>
+    !passages.some((passage) => passage.topic === topic && passage.facets.includes(facet))))) {
     return { text: null, matched: 0 };
   }
   return {

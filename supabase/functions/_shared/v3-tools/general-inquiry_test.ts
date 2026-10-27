@@ -67,6 +67,39 @@ Deno.test("delivery and payment request uses separate KB passages without treati
   ]), { text: null, matched: 0 });
 });
 
+Deno.test("a time fact about payment cannot satisfy a requested delivery time", () => {
+  const hits = [
+    { title: "Доставка", snippet: "Доставка по Казахстану оформляется на сайте." },
+    { title: "Оплата", snippet: "Срок оплаты — 20 минут. Способы оплаты: банковской картой." },
+  ];
+  assertEquals(buildStorePolicyEvidenceAnswer("Когда доставка и какие способы оплаты?", hits), {
+    text: null,
+    matched: 0,
+  });
+
+  const supported = buildStorePolicyEvidenceAnswer("Когда доставка и какие способы оплаты?", [
+    { title: "Доставка", snippet: "Срок доставки — 3 дня." },
+    ...hits.slice(1),
+  ]);
+  assertEquals(supported.matched, 2);
+  assert(supported.text?.includes("Срок доставки — 3 дня"));
+  assert(supported.text?.includes("банковской картой"));
+  assert(!supported.text?.includes("Срок оплаты — 20 минут"));
+});
+
+Deno.test("one shared facet requires evidence for each requested policy topic", () => {
+  assertEquals(buildStorePolicyEvidenceAnswer("Какие способы оплаты и доставки?", [
+    { title: "Оплата", snippet: "Оплата банковской картой доступна." },
+    { title: "Доставка", snippet: "Доставка оформляется на сайте." },
+  ]), { text: null, matched: 0 });
+
+  const supported = buildStorePolicyEvidenceAnswer("Какие способы оплаты и доставки?", [
+    { title: "Оплата", snippet: "Оплата банковской картой доступна." },
+    { title: "Доставка", snippet: "Доставка курьером доступна." },
+  ]);
+  assertEquals(supported.matched, 2);
+});
+
 Deno.test("explicit geography, carrier and number must appear in relevant KB evidence", () => {
   assertEquals(buildStorePolicyEvidenceAnswer("Какие условия доставки по Казахстану?", [
     { title: "Доставка", snippet: "Доставка по Алматы стоит 2 000 ₸." },
