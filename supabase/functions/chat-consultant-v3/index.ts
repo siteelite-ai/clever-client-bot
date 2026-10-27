@@ -737,6 +737,12 @@ import {
   upstreamFailureDiagnosticMeta,
 } from "../_shared/v3-tools/public-failure.ts";
 import {
+  gemini38ForcedToolStatus,
+  gemini38MeasurementCohort,
+  safeGemini38CorrectionTelemetry,
+  type Gemini38EnvelopeStatus,
+} from "../_shared/v3-tools/product-measurement-gemini38-canary.ts";
+import {
   type ChatV3AdmissionResult,
   type ChatV3AdmissionScope,
   admissionDiagnosticError,
@@ -919,6 +925,10 @@ const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
     Deno.env.get("OPENROUTER_GENERAL_INQUIRY_FALLBACK_MODELS"),
   ),
 );
+// Only measured-product correction in a deterministic production canary uses
+// this model. The primary agent, general inquiry and other repairs are intact.
+const PRODUCT_MEASUREMENT_GEMINI38_MODEL = "google/gemini-3.8-flash";
+const PRODUCT_MEASUREMENT_GEMINI38_BUCKETS_PER_10K = 1;
 const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
 const TURN_TIMEOUT_MS = 32_000;
@@ -1185,6 +1195,8 @@ interface ToolContext {
   lovableApiKey: string | null;
   selectionReasoningModel: string;
   sessionId: string;
+  /** Incoming ID, before any new-task boundary rotates the active session. */
+  originalSessionId: string;
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
   observeCatalogToolResult?: (result: ToolResult) => void;
@@ -3614,6 +3626,7 @@ async function callOpenRouter(
   maxTokens = 4000,
   modelRouting: OpenRouterModelRouting = AGENT_MODEL_ROUTING,
   providerRoute: LLMProviderRoute = "configured",
+  canaryTelemetry?: (meta: Record<string, unknown>) => void,
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -3644,6 +3657,21 @@ async function callOpenRouter(
       finish_reason?: string;
     }>;
   };
+  const upstreamStarted = Date.now();
+  const emitCanaryTelemetry = (
+    payload: unknown,
+    response: Response,
+    envelopeStatus: Gemini38EnvelopeStatus | null,
+  ) => {
+    if (!canaryTelemetry) return;
+    canaryTelemetry(safeGemini38CorrectionTelemetry({
+      payload,
+      generationId: response.headers.get("X-Generation-Id"),
+      httpStatus: response.status,
+      elapsedMs: Date.now() - upstreamStarted,
+      envelopeStatus,
+    }));
+  };
   try {
     const availableTools = toolSchemas.filter((schema) =>
       availableToolNames.includes(schema.function.name)
@@ -3653,6 +3681,9 @@ async function callOpenRouter(
       throw new Error("derived_reasoning_lovable_retry_unavailable");
     }
     const completion = await fetchChatCompletionWithFailover({
+      // A canary provider failure must not populate or consume the shared
+      // OpenRouter cooldown used by all established production routes.
+      quotaCooldown: canaryTelemetry ? null : undefined,
       primary: providerRoute === "lovable_only"
         ? {
           id: "lovable",
@@ -3667,6 +3698,9 @@ async function callOpenRouter(
           headers: {
             "HTTP-Referer": "https://chat-volt.testdevops.ru",
             "X-Title": "220volt-chat-consultant-v3",
+            ...(canaryTelemetry
+              ? { "X-OpenRouter-Metadata": "enabled" }
+              : {}),
           },
         },
       fallback: providerRoute === "configured" && LOVABLE_API_KEY
@@ -3679,6 +3713,15 @@ async function callOpenRouter(
         : null,
       body: {
         ...modelRouting,
+        ...(canaryTelemetry
+          ? {
+            provider: {
+              require_parameters: true,
+              order: ["google-ai-studio", "google-vertex/global"],
+              only: ["google-ai-studio", "google-vertex/global"],
+            },
+          }
+          : {}),
         temperature,
         max_tokens: maxTokens,
         messages,
@@ -3707,17 +3750,62 @@ async function callOpenRouter(
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new UpstreamHttpError(res.status, errText, {
-        ...providerDiagnostics,
-        origin: "http_response",
-        observedHttpStatus: res.status,
-      });
+      if (canaryTelemetry) {
+        let errorPayload: unknown = null;
+        try {
+          errorPayload = JSON.parse(errText);
+        } catch { /* no body log */ }
+        emitCanaryTelemetry(errorPayload, res, null);
+      }
+      throw new UpstreamHttpError(
+        res.status,
+        canaryTelemetry ? "canary correction upstream HTTP failure" : errText,
+        {
+          ...providerDiagnostics,
+          origin: "http_response",
+          observedHttpStatus: res.status,
+        },
+      );
     }
 
     // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
     // Таймер держим живым до полного парсинга, иначе один медленный ответ
     // (типичный для reasoning-моделей) съедает весь бюджет хода.
-    data = await res.json() as typeof data;
+    try {
+      data = await res.json() as typeof data;
+    } catch (error) {
+      if (canaryTelemetry && error instanceof SyntaxError) {
+        emitCanaryTelemetry(null, res, "invalid_json");
+        throw new UpstreamHttpError(
+          502,
+          "canary completion returned invalid JSON",
+          {
+            ...providerDiagnostics,
+            origin: "completion_envelope",
+            observedHttpStatus: res.status,
+          },
+        );
+      }
+      throw error;
+    }
+    if (canaryTelemetry) {
+      const shape = gemini38ForcedToolStatus(
+        data,
+        forcedToolName ?? "",
+      );
+      emitCanaryTelemetry(data, res, shape);
+      if (shape !== "usable") {
+        throw new UpstreamHttpError(
+          502,
+          "canary completion returned unusable forced tool",
+          {
+            ...providerDiagnostics,
+            origin: "completion_envelope",
+            observedHttpStatus: res.status,
+          },
+        );
+      }
+    }
     if (
       !data?.choices?.[0] ||
       isProviderErrorFinishReason(data.choices[0].finish_reason)
@@ -12999,34 +13087,68 @@ async function runExpertLoop(
                     : "configured",
                 );
               };
+              const gemini38Canary = repairReason === "product_measurement" &&
+                ADMISSION_SCOPE === "production" &&
+                gemini38MeasurementCohort(
+                  ctx.originalSessionId,
+                  PRODUCT_MEASUREMENT_GEMINI38_BUCKETS_PER_10K,
+                );
               try {
-                structuredReasoning = await runProductMeasurementCorrection({
-                  repairReason,
-                  retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
-                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
-                  attempt: correctionAttempt,
-                  initialTimeoutMs: correctionTimeout,
-                  retryTimeoutMs: () =>
-                    boundedAgentStepTimeout(
-                      LLM_TIMEOUT_DERIVED_RETRY_MS,
-                      now(),
-                      DERIVED_REASONING_SOFT_DEADLINE_MS,
-                      MIN_AGENT_STEP_BUDGET_MS,
-                    ),
-                  signal: turnController.signal,
-                  onRetry: (httpError, retryTimeoutMs) => {
-                    steps.push({
-                      step: "v3_product_measurement_correction_http_retry",
+                if (gemini38Canary) {
+                  steps.push({
+                    step: "v3_product_measurement_gemini38_canary_route",
+                    ms: now(),
+                    meta: { model: PRODUCT_MEASUREMENT_GEMINI38_MODEL },
+                  });
+                  derivedReasoningProviderAttempts += 1;
+                  structuredReasoning = await callOpenRouter(
+                    apiKey,
+                    correctionMessages,
+                    turnController.signal,
+                    correctionTimeout,
+                    "derived_reasoning",
+                    ["declare_selection_reasoning"],
+                    "declare_selection_reasoning",
+                    0,
+                    [reasoningToolSchema],
+                    1200,
+                    { model: PRODUCT_MEASUREMENT_GEMINI38_MODEL },
+                    "openrouter_only",
+                    (meta) => steps.push({
+                      step: "v3_product_measurement_gemini38_upstream",
                       ms: now(),
-                      meta: {
-                        upstream_status: httpError.status,
-                        ...upstreamFailureDiagnosticMeta(httpError),
-                        initial_timeout_ms: correctionTimeout,
-                        retry_timeout_ms: retryTimeoutMs,
-                      },
-                    });
-                  },
-                });
+                      meta,
+                    }),
+                  );
+                } else {
+                  structuredReasoning = await runProductMeasurementCorrection({
+                    repairReason,
+                    retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
+                      !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                    attempt: correctionAttempt,
+                    initialTimeoutMs: correctionTimeout,
+                    retryTimeoutMs: () =>
+                      boundedAgentStepTimeout(
+                        LLM_TIMEOUT_DERIVED_RETRY_MS,
+                        now(),
+                        DERIVED_REASONING_SOFT_DEADLINE_MS,
+                        MIN_AGENT_STEP_BUDGET_MS,
+                      ),
+                    signal: turnController.signal,
+                    onRetry: (httpError, retryTimeoutMs) => {
+                      steps.push({
+                        step: "v3_product_measurement_correction_http_retry",
+                        ms: now(),
+                        meta: {
+                          upstream_status: httpError.status,
+                          ...upstreamFailureDiagnosticMeta(httpError),
+                          initial_timeout_ms: correctionTimeout,
+                          retry_timeout_ms: retryTimeoutMs,
+                        },
+                      });
+                    },
+                  });
+                }
               } catch (correctionError) {
                 const correctionFailure = classifyPublicFailure(correctionError);
                 // A cancelled turn is not a failed declaration. Let the outer
@@ -13092,7 +13214,9 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   repair_reason: repairReason,
-                  retry_model: GENERAL_INQUIRY_MODEL,
+                  retry_model: gemini38Canary
+                    ? PRODUCT_MEASUREMENT_GEMINI38_MODEL
+                    : GENERAL_INQUIRY_MODEL,
                   timeout_ms: correctionTimeout,
                   recovered: Boolean(
                     declaration?.text.trim() &&
@@ -27228,6 +27352,7 @@ Deno.serve(async (req) => {
               lovableApiKey: LOVABLE_API_KEY,
               selectionReasoningModel: settings.classifier_model,
               sessionId: effectiveSessionId,
+              originalSessionId: sessionId,
               jargonCategoryContextEnabled:
                 settings.v3_jargon_category_context_enabled,
               jargonAxialModifiersEnabled:
