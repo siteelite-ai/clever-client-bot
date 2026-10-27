@@ -29,17 +29,46 @@ const POLICY_TOPICS = [
   /скид\p{L}*|акци\p{L}*/u,
   /оферт\p{L}*/u,
 ];
-const POLICY_QUERY_WORDS = new Set([
-  "какие", "какой", "какая", "какое", "сколько", "стоит", "можно", "могу",
-  "условия", "условий", "условиях", "сроки", "сроков", "способы", "способ",
-  "стоимость", "правила", "правило", "порядок", "варианты", "вариант",
-  "расскажите", "расскажи", "объясните", "хочу", "узнать", "через",
-  "товар", "товара", "заказ", "заказа", "магазина", "магазин", "вас",
-]);
-
 function policyWords(value: string): string[] {
   return value.toLocaleLowerCase("ru").replace(/ё/gu, "е")
     .match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/**
+ * Only typed, explicitly expressed constraints may narrow a store-policy
+ * answer. Arbitrary long words in the question are not evidence constraints:
+ * e.g. "Нужна доставка и оплата" asks about two topics, not the word "нужна".
+ *
+ * A prepositional service scope ("по Казахстану", "до двери", "через Kaspi")
+ * and an explicit number must also occur in the source. Unknown scopes fail
+ * closed; we do not guess a city, carrier or tariff from model knowledge.
+ */
+type PolicyScope = { kind: "po" | "v" | "iz" | "do" | "carrier" | "number"; value: string };
+
+function explicitPolicyScope(message: string): PolicyScope[] {
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/gu, "е");
+  const scopes = new Map<string, PolicyScope>();
+  for (const match of normalized.matchAll(/(?:^|[^\p{L}])(по|в|во|из|до|через|службой|компанией|перевозчиком)\s+(?:г\.\s*)?([\p{L}][\p{L}-]*)/gu)) {
+    const word = match[2];
+    // The service itself is a topic, not a geographical/carrier qualifier:
+    // "условия по доставке" and "оплата в рассрочку" have no extra scope.
+    if (POLICY_TOPICS.some((topic) => topic.test(word))) continue;
+    const kind = (["через", "службой", "компанией", "перевозчиком"].includes(match[1])
+      ? "carrier"
+      : match[1] === "во" ? "v" : match[1]) as PolicyScope["kind"];
+    // Keep the full lexical root except one case ending. A generic five-
+    // letter prefix could confuse unrelated places or carrier names.
+    const value = word.length > 4 ? word.slice(0, -1) : word;
+    scopes.set(`${kind}:${value}`, { kind, value });
+  }
+  for (const number of normalized.match(/\d+/gu) ?? []) {
+    scopes.set(`number:${number}`, { kind: "number", value: number });
+  }
+  return [...scopes.values()];
+}
+
+function scopeWordMatches(scope: PolicyScope, word: string): boolean {
+  return scope.kind === "number" ? word === scope.value : word.startsWith(scope.value);
 }
 
 function plainEvidence(value: string): string {
@@ -66,13 +95,9 @@ export function buildStorePolicyEvidenceAnswer(
   const queryText = queryWords.join(" ");
   const topics = POLICY_TOPICS.filter((topic) => topic.test(queryText));
   if (topics.length === 0) return { text: null, matched: 0 };
-  const scope = queryWords
-    .filter((word) => (word.length >= 5 || /^\d+$/u.test(word)) &&
-      !POLICY_QUERY_WORDS.has(word) &&
-      !POLICY_TOPICS.some((topic) => topic.test(word)))
-    .map((word) => /^\d+$/u.test(word) ? word : word.slice(0, 5));
+  const scope = explicitPolicyScope(userMessage);
   const seen = new Set<string>();
-  const passages: string[] = [];
+  const passagesByTopic = new Map(topics.map((topic) => [topic, [] as string[]]));
   for (const hit of hits) {
     const title = plainEvidence(hit.title);
     const snippet = plainEvidence(hit.snippet);
@@ -91,19 +116,40 @@ export function buildStorePolicyEvidenceAnswer(
     }).sort((a, b) => a.position - b.position);
     if (snippetTopicMentions.length > 0 &&
       !topics.includes(snippetTopicMentions[0].topic)) continue;
+    // Do not quote an entire mixed-topic snippet for a single-topic query:
+    // an incidental tariff in its later sentence would otherwise leak into
+    // the answer despite a correctly classified first sentence.
+    if (snippetTopicMentions.some(({ topic }) => !topics.includes(topic))) continue;
     if (snippetTopicMentions.length === 0 && sourceTopics.length > 1) continue;
+    const passageTopic = snippetTopicMentions[0]?.topic ?? sourceTopics[0];
+    if (!topics.includes(passageTopic) || !sourceTopics.includes(passageTopic)) continue;
     const words = policyWords(`${title} ${snippet}`);
     const body = words.join(" ");
     if (!topics.some((topic) => topic.test(body))) continue;
-    if (!scope.every((anchor) => words.some((word) =>
-      /^\d+$/u.test(anchor) ? word === anchor : word.startsWith(anchor)
-    ))) continue;
+    if (!scope.every((requested) => words.some((word) => scopeWordMatches(requested, word)))) continue;
+    const snippetScopes = explicitPolicyScope(snippet);
+    if (scope.some((requested) => {
+      // A heading can supply context, but a contradictory detail in the
+      // passage itself must never be quoted as answering that heading.
+      const sameKind = snippetScopes.filter((candidate) => candidate.kind === requested.kind);
+      return sameKind.length > 0 && !sameKind.some((candidate) => candidate.value === requested.value);
+    })) continue;
     if (seen.has(snippet)) continue;
     seen.add(snippet);
-    passages.push(`${title ? `${title}: ` : ""}${snippet}`);
-    if (passages.length === 3) break;
+    passagesByTopic.get(passageTopic)?.push(`${title ? `${title}: ` : ""}${snippet}`);
   }
-  if (passages.length === 0) return { text: null, matched: 0 };
+  // A query for delivery AND payment must not quietly return only delivery.
+  if (topics.some((topic) => !passagesByTopic.get(topic)?.length)) {
+    return { text: null, matched: 0 };
+  }
+  const passages: string[] = [];
+  for (let position = 0; position < 3 && passages.length < 6; position++) {
+    for (const topic of topics) {
+      const passage = passagesByTopic.get(topic)?.[position];
+      if (passage) passages.push(passage);
+      if (passages.length === 6) break;
+    }
+  }
   return {
     text: `Найденные фрагменты условий магазина (не полный перечень):\n${passages.map((passage) => `• ${passage}`).join("\n")}`,
     matched: passages.length,

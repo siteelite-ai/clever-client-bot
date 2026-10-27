@@ -51,6 +51,43 @@ Deno.test("store policy answer quotes only topic- and location-matching KB facts
   assert(!answer.text?.includes("<script>"));
 });
 
+Deno.test("delivery and payment request uses separate KB passages without treating ordinary words as constraints", () => {
+  const answer = buildStorePolicyEvidenceAnswer("Нужна доставка и оплата", [
+    { title: "Доставка", snippet: "Доставка по Казахстану рассчитывается при оформлении заказа." },
+    { title: "Оплата", snippet: "Оплата банковской картой доступна при оформлении заказа." },
+  ]);
+  assertEquals(answer.matched, 2);
+  assert(answer.text?.includes("Доставка по Казахстану"));
+  assert(answer.text?.includes("Оплата банковской картой"));
+
+  // A multi-topic answer is incomplete when the KB has only one topic.
+  assertEquals(buildStorePolicyEvidenceAnswer("Нужна доставка и оплата", [
+    { title: "Доставка", snippet: "Доставка по Казахстану рассчитывается при оформлении заказа." },
+  ]), { text: null, matched: 0 });
+});
+
+Deno.test("explicit geography, carrier and number must appear in relevant KB evidence", () => {
+  assertEquals(buildStorePolicyEvidenceAnswer("Какие условия доставки по Казахстану?", [
+    { title: "Доставка", snippet: "Доставка по Алматы стоит 2 000 ₸." },
+  ]), { text: null, matched: 0 });
+
+  assertEquals(buildStorePolicyEvidenceAnswer("Сколько стоит доставка до двери через СДЭК?", [
+    { title: "Доставка до двери", snippet: "Доставка до двери стоит 2 000 ₸." },
+  ]), { text: null, matched: 0 });
+
+  assertEquals(buildStorePolicyEvidenceAnswer("Какая доставка за 3 дня?", [
+    { title: "Доставка", snippet: "Доставка занимает 5 дней." },
+  ]), { text: null, matched: 0 });
+
+  // A matching heading cannot authorize contradictory details in its body.
+  assertEquals(buildStorePolicyEvidenceAnswer("Доставка за 3 дня?", [
+    { title: "Доставка за 3 дня", snippet: "Доставка занимает 5 дней." },
+  ]), { text: null, matched: 0 });
+  assertEquals(buildStorePolicyEvidenceAnswer("Доставка по Казахстану?", [
+    { title: "Доставка по Казахстану", snippet: "Доставка по Алматы стоит 2 000 ₸." },
+  ]), { text: null, matched: 0 });
+});
+
 Deno.test("broad delivery question cannot launder payment tariff through incidental delivery mention", () => {
   const unrelated = buildStorePolicyEvidenceAnswer("Какие условия доставки?", [
     { title: "Оплата", snippet: "Оплата 9 999 ₸ не относится к доставке." },
@@ -64,6 +101,15 @@ Deno.test("broad delivery question cannot launder payment tariff through inciden
   assertEquals(mixedSource.matched, 1);
   assert(mixedSource.text?.includes("Доставка по Казахстану"));
   assert(!mixedSource.text?.includes("9 999"));
+
+  const incidental = buildStorePolicyEvidenceAnswer("Какая оплата?", [
+    { title: "Доставка и оплата", snippet: "Доставка стоит 7 777 ₸, оплата производится картой." },
+  ]);
+  assertEquals(incidental, { text: null, matched: 0 });
+
+  assertEquals(buildStorePolicyEvidenceAnswer("Какая оплата?", [
+    { title: "Оплата", snippet: "Оплата картой доступна. Доставка стоит 7 777 ₸." },
+  ]), { text: null, matched: 0 });
 });
 
 Deno.test("policy route with mocked knowledge provider cannot synthesize fabricated tariffs", async () => {
