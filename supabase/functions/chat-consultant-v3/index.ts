@@ -733,7 +733,7 @@ import {
   isConfirmedTransientUpstreamHttp5xx,
   type UpstreamFailureDiagnostics,
   UpstreamHttpError,
-  retryConfirmedUpstreamHttp5xxOnce,
+  retryProductMeasurementUpstreamOnce,
   upstreamFailureDiagnosticMeta,
 } from "../_shared/v3-tools/public-failure.ts";
 import {
@@ -854,19 +854,27 @@ export function taxonomyOutageExactLookupEnabled(
   return readEnv("VOLT220_TAXONOMY_OUTAGE_EXACT_LOOKUP_ENABLED") === "true";
 }
 
-/** One correction call is the legacy behavior. The second paid attempt is
- * reachable only for a measured-product gap on an explicitly opted-in lane. */
+/** One correction call is the legacy behavior. An extra call is restricted to
+ * a measured-product gap, a proven transport fault, and the same turn budget.
+ * Real HTTP 5xx remains server-opted-in; malformed primary HTTP 200 is retried
+ * once by default because it contains no usable model answer. */
 export function runProductMeasurementCorrection<T>(input: {
   repairReason: string;
   retryEnabled: boolean;
+  envelopeRetryEnabled?: boolean;
   attempt: (timeoutMs: number) => Promise<T>;
   initialTimeoutMs: number;
   retryTimeoutMs: () => number | null;
   signal: AbortSignal;
   onRetry?: (error: UpstreamHttpError, timeoutMs: number) => void;
 }): Promise<T> {
-  return input.repairReason === "product_measurement" && input.retryEnabled
-    ? retryConfirmedUpstreamHttp5xxOnce(input)
+  return input.repairReason === "product_measurement" &&
+      (input.retryEnabled || input.envelopeRetryEnabled)
+    ? retryProductMeasurementUpstreamOnce({
+      ...input,
+      retryRealHttp5xx: input.retryEnabled,
+      retryUnusableEnvelope: input.envelopeRetryEnabled === true,
+    })
     : input.attempt(input.initialTimeoutMs);
 }
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
@@ -13004,6 +13012,8 @@ async function runExpertLoop(
                   repairReason,
                   retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
                     !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                  envelopeRetryEnabled:
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
                   attempt: correctionAttempt,
                   initialTimeoutMs: correctionTimeout,
                   retryTimeoutMs: () =>
@@ -13016,7 +13026,9 @@ async function runExpertLoop(
                   signal: turnController.signal,
                   onRetry: (httpError, retryTimeoutMs) => {
                     steps.push({
-                      step: "v3_product_measurement_correction_http_retry",
+                      step: httpError.origin === "completion_envelope"
+                        ? "v3_product_measurement_correction_envelope_retry"
+                        : "v3_product_measurement_correction_http_retry",
                       ms: now(),
                       meta: {
                         upstream_status: httpError.status,
