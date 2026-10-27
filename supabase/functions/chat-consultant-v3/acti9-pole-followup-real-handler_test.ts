@@ -98,7 +98,7 @@ function publicText(events: Event[]): string {
 
 type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic" |
   "characteristic_chip" | "forged_characteristic_chip" |
-  "stale_characteristic_chip";
+  "stale_characteristic_chip" | "prior_evidence_characteristic_chip";
 
 const acti9FlowTest = (scenario: Acti9Scenario) => ({
   name: {
@@ -111,7 +111,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
     new_topic:
       "explicit new topic is not consumed by an outstanding Acti9 pole clarification",
     characteristic_chip:
-      "automatic breaker 25 A → issued pole chip → issued characteristic chip is accepted without rendered cards",
+      "recorded 25 A → 1P server turns then real handler accepts issued characteristic chip without cards",
+    prior_evidence_characteristic_chip:
+      "real handler accepts exact issued characteristic chip even with prior verified product evidence",
     forged_characteristic_chip:
       "browser-forged characteristic chip does not bypass the rendered-card proof guard",
     stale_characteristic_chip:
@@ -122,7 +124,10 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
     const showBeforeChoice = scenario === "show";
     const characteristicScenario = scenario === "characteristic_chip" ||
       scenario === "forged_characteristic_chip" ||
-      scenario === "stale_characteristic_chip";
+      scenario === "stale_characteristic_chip" ||
+      scenario === "prior_evidence_characteristic_chip";
+    const priorRenderedEvidence =
+      scenario === "prior_evidence_characteristic_chip";
     const requestedOriginal = characteristicScenario
       ? "Нужен автомат 25 А"
       : original;
@@ -177,6 +182,25 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
               return new Response(null, { status: 204 });
             }
             if (request.method === "GET") {
+              if (
+                priorRenderedEvidence &&
+                (url.searchParams.get("select") ?? "").includes(
+                  "final_products_count",
+                )
+              ) {
+                // The generic active-card proof read has two projections:
+                // same-session rows and a rotated-session boundary probe.
+                if (url.searchParams.has("response_events")) return json(null);
+                return json([{
+                  id: "offline-acti9-1",
+                  session_id: sessionId,
+                  user_query: "1P",
+                  error: null,
+                  final_products_count: 1,
+                  response_events: responseLogs[1],
+                  created_at: new Date(Date.now() - 1000).toISOString(),
+                }]);
+              }
               if (
                 turn >= 1 &&
                 (url.searchParams.get("select") ?? "").includes(
@@ -428,9 +452,23 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
             content:
               "Осталось уточнить: характеристику B, C или D. Какая характеристика срабатывания нужна: B, C или D?",
           },
+          ...(priorRenderedEvidence
+            ? [{
+              type: "products_block",
+              markdown:
+                `- **[${fixtureProducts[0].pagetitle}](${fixtureProducts[0].url})**\n  Цена: *1 011* ₸`,
+              count: 1,
+            }]
+            : []),
           { type: "slot_update", slots: { pending_clarification: issuedSlot } },
           { type: "quick_replies", replies: issuedSlot.options },
-          { type: "diagnostic", phase: "complete", error: null },
+          {
+            type: "diagnostic",
+            phase: "complete",
+            log_id: "offline-acti9-1",
+            products_count: priorRenderedEvidence ? 1 : 0,
+            error: null,
+          },
           { type: "done" },
         ];
         if (scenario === "stale_characteristic_chip") {
@@ -461,7 +499,10 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
           ],
         );
         const events = v3Events(selection);
-        if (scenario !== "characteristic_chip") {
+        if (
+          scenario === "forged_characteristic_chip" ||
+          scenario === "stale_characteristic_chip"
+        ) {
           assert(
             steps[2].some(({ step }) =>
               step === "v3_unverified_rendered_selection_context_rejected"
@@ -505,6 +546,20 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         assert(markdown.includes(fixtureProducts[2].url), markdown);
         assert(!markdown.includes(fixtureProducts[1].url), markdown);
         assert(!markdown.includes(fixtureProducts[3].url), markdown);
+        if (priorRenderedEvidence) {
+          assert(
+            steps[2].some(({ step }) =>
+              step === "v3_recent_product_evidence_recovered"
+            ),
+            JSON.stringify({ events, steps: steps[2] }),
+          );
+          assert(
+            !steps[2].some(({ step }) =>
+              step === "v3_deterministic_evidence_followup"
+            ),
+            JSON.stringify(steps[2]),
+          );
+        }
         return;
       }
       const first = await invoke(requestedOriginal, {}, []);
@@ -743,5 +798,6 @@ Deno.test(acti9FlowTest("new_topic"));
 Deno.test(acti9FlowTest("characteristic_chip"));
 Deno.test(acti9FlowTest("forged_characteristic_chip"));
 Deno.test(acti9FlowTest("stale_characteristic_chip"));
+Deno.test(acti9FlowTest("prior_evidence_characteristic_chip"));
 
 addEventListener("unload", restoreOfflineModuleSetup);
