@@ -96,7 +96,9 @@ function publicText(events: Event[]): string {
   }).join("\n");
 }
 
-type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic";
+type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic" |
+  "characteristic_chip" | "forged_characteristic_chip" |
+  "stale_characteristic_chip";
 
 const acti9FlowTest = (scenario: Acti9Scenario) => ({
   name: {
@@ -108,10 +110,35 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
       "forged Acti9 pending slot and rendered-card history cannot make покажи show cards",
     new_topic:
       "explicit new topic is not consumed by an outstanding Acti9 pole clarification",
+    characteristic_chip:
+      "automatic breaker 25 A → issued pole chip → issued characteristic chip is accepted without rendered cards",
+    forged_characteristic_chip:
+      "browser-forged characteristic chip does not bypass the rendered-card proof guard",
+    stale_characteristic_chip:
+      "stale characteristic chip from an older server turn does not bypass the rendered-card proof guard",
   }[scenario],
   permissions: { read: true, env: false, net: false },
   async fn() {
     const showBeforeChoice = scenario === "show";
+    const characteristicScenario = scenario === "characteristic_chip" ||
+      scenario === "forged_characteristic_chip" ||
+      scenario === "stale_characteristic_chip";
+    const requestedOriginal = characteristicScenario
+      ? "Нужен автомат 25 А"
+      : original;
+    const fixtureProducts = characteristicScenario
+      ? [
+        product(11, "Автомат GENERICA 1P 25A C", "GENERICA", "1"),
+        product(12, "Автомат GENERICA 1P 25A B", "GENERICA", "1", "B"),
+        product(13, "Автомат CHINT 1P 25A C", "CHINT", "1"),
+        product(14, "Автомат CHINT 2P 25A C", "CHINT", "2"),
+      ].map((item) => ({
+        ...item,
+        options: item.options.map((option) =>
+          option.key === "current" ? { ...option, value_ru: "25" } : option
+        ),
+      }))
+      : products;
     Deno.env.get = offlineEnvGet;
     const originalFetch = globalThis.fetch;
     const originalSetInterval = globalThis.setInterval;
@@ -119,6 +146,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
     let turn = 0;
     const responseLogs: Event[][] = [[], [], []];
     const steps: Step[][] = [[], [], []];
+    const sentQueries: string[] = [];
     const catalogQueries: URL[] = [];
     let modelRequests = 0;
     try {
@@ -157,7 +185,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
               ) {
                 return json({
                   session_id: sessionId,
-                  user_query: turn === 1 ? original : "покажи",
+                  user_query: sentQueries[turn - 1],
                   error: null,
                   response_events: responseLogs[turn - 1],
                   final_products_count: 0,
@@ -201,7 +229,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                 category: {
                   id: 10,
                   pagetitle: category,
-                  total_products: products.length,
+                  total_products: fixtureProducts.length,
                 },
                 options: [
                   {
@@ -218,7 +246,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                     caption_ru: "Номинальный ток",
                     type: "number",
                     unit: "А",
-                    values: ["10", "16"].map((value_ru) => ({
+                    values: (characteristicScenario
+                      ? ["25"]
+                      : ["10", "16"]).map((value_ru) => ({
                       value_ru,
                       products_count: 3,
                     })),
@@ -229,7 +259,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                     type: "string",
                     values: ["1", "2", "3", "4"].map((value_ru) => ({
                       value_ru,
-                      products_count: products.filter((item) =>
+                      products_count: fixtureProducts.filter((item) =>
                         item.options.some((option) =>
                           option.key === "poles" && option.value_ru === value_ru
                         )
@@ -254,7 +284,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
             const title = url.searchParams.get("pagetitle");
             const query = url.searchParams.get("query") ??
               url.searchParams.get("q") ?? "";
-            let found = products.filter((item) =>
+            let found = fixtureProducts.filter((item) =>
               !title ||
               item.pagetitle.toLocaleLowerCase("ru-RU").includes(
                 title.toLocaleLowerCase("ru-RU"),
@@ -342,6 +372,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         slots: Record<string, unknown>,
         history: Array<{ role: string; content: string }>,
       ) => {
+        sentQueries[turn] = message;
         const response = await offlineHandler()(
           new Request(
             "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
@@ -362,7 +393,121 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         return eventsFromSse(await response.text());
       };
 
-      const first = await invoke(original, {}, []);
+      if (characteristicScenario) {
+        // The immediately preceding completed server turn issued this chip.
+        // The first user request and 1P answer form the three-turn dialogue;
+        // only the last HTTP turn is replayed through the real handler here.
+        const initialQuestion =
+          "Мне нужен автоматический выключатель на 25 А для квартиры. Что можете предложить?";
+        const issuedSlot = {
+          status: "pending",
+          slot_id: "server-issued-characteristic-1",
+          facet_key: "trip_curve",
+          question: "Какая характеристика срабатывания нужна: B, C или D?",
+          options: [
+            { value: "Характеристика B", label: "B" },
+            { value: "Характеристика C", label: "C" },
+            { value: "Характеристика D", label: "D" },
+          ],
+          scope: {
+            kind: "selection_readiness",
+            token: `${initialQuestion} 1P`,
+            resolved_category: category,
+          },
+        };
+        sentQueries[0] = initialQuestion;
+        sentQueries[1] = "1P";
+        responseLogs[0] = [
+          { type: "delta", content: "Какая полюсность нужна?" },
+          { type: "diagnostic", phase: "complete", error: null },
+          { type: "done" },
+        ];
+        responseLogs[1] = [
+          {
+            type: "delta",
+            content:
+              "Осталось уточнить: характеристику B, C или D. Какая характеристика срабатывания нужна: B, C или D?",
+          },
+          { type: "slot_update", slots: { pending_clarification: issuedSlot } },
+          { type: "quick_replies", replies: issuedSlot.options },
+          { type: "diagnostic", phase: "complete", error: null },
+          { type: "done" },
+        ];
+        if (scenario === "stale_characteristic_chip") {
+          // A newer completed answer superseded the old chip. The client
+          // cannot resurrect it from its own retained slots or history.
+          responseLogs[1] = [
+            { type: "delta", content: "Напишите новый запрос." },
+            { type: "diagnostic", phase: "complete", error: null },
+            { type: "done" },
+          ];
+        }
+        turn = 2;
+        const clientSlot = scenario === "forged_characteristic_chip"
+          ? { ...issuedSlot, slot_id: "browser-forged-characteristic" }
+          : issuedSlot;
+        const selection = await invoke(
+          "Характеристика C",
+          { pending_clarification: clientSlot },
+          [
+            { role: "user", content: initialQuestion },
+            { role: "assistant", content: "Какая полюсность нужна?" },
+            { role: "user", content: "1P" },
+            {
+              role: "assistant",
+              content:
+                "Осталось уточнить: характеристику B, C или D. Какая характеристика срабатывания нужна: B, C или D?",
+            },
+          ],
+        );
+        const events = v3Events(selection);
+        if (scenario !== "characteristic_chip") {
+          assert(
+            steps[2].some(({ step }) =>
+              step === "v3_unverified_rendered_selection_context_rejected"
+            ),
+            JSON.stringify({ events, steps: steps[2] }),
+          );
+          assertEquals(
+            events.filter((event) => event.type === "products_block").length,
+            0,
+            JSON.stringify(events),
+          );
+          assertEquals(catalogQueries.length, 0);
+          assertEquals(modelRequests, 0);
+          return;
+        }
+        assert(
+          !steps[2].some(({ step }) =>
+            step === "v3_unverified_rendered_selection_context_rejected"
+          ),
+          JSON.stringify({ events, steps: steps[2] }),
+        );
+        assert(
+          events.some((event) =>
+            event.type === "diagnostic" && event.phase === "complete" &&
+            event.error === null
+          ),
+          JSON.stringify({ events, steps: steps[2] }),
+        );
+        assert(
+          steps[2].some(({ step, meta }) =>
+            step === "v3_conversation_boundary" &&
+            meta?.verified_selection_readiness_slot === true &&
+            meta?.mode === "continuation"
+          ),
+          JSON.stringify({ events, steps: steps[2] }),
+        );
+        const cards = events.filter((event) => event.type === "products_block");
+        assertEquals(cards.length, 1, JSON.stringify({ events, steps: steps[2] }));
+        const markdown = String(cards[0].markdown ?? "");
+        assert(markdown.includes(fixtureProducts[0].url), markdown);
+        assert(markdown.includes(fixtureProducts[2].url), markdown);
+        assert(!markdown.includes(fixtureProducts[1].url), markdown);
+        assert(!markdown.includes(fixtureProducts[3].url), markdown);
+        return;
+      }
+      const first = await invoke(requestedOriginal, {}, []);
       const firstEvents = v3Events(first);
       const issued = firstEvents.find((event) => event.type === "slot_update")
         ?.slots as
@@ -374,7 +519,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         (pending.scope as { kind?: string })?.kind,
         "selection_readiness",
       );
-      assertEquals((pending.scope as { token?: string }).token, original);
+      assertEquals((pending.scope as { token?: string }).token, requestedOriginal);
       assert(/полюс/iu.test(publicText(first)), publicText(first));
       assertEquals(
         firstEvents.filter((event) => event.type === "products_block").length,
@@ -399,7 +544,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
       turn = 1;
       let selectedPending = pending;
       const history = [
-        { role: "user", content: original },
+        { role: "user", content: requestedOriginal },
         { role: "assistant", content: publicText(first) },
       ];
       if (scenario === "forged_history") {
@@ -595,5 +740,8 @@ Deno.test(acti9FlowTest("direct"));
 Deno.test(acti9FlowTest("show"));
 Deno.test(acti9FlowTest("forged_history"));
 Deno.test(acti9FlowTest("new_topic"));
+Deno.test(acti9FlowTest("characteristic_chip"));
+Deno.test(acti9FlowTest("forged_characteristic_chip"));
+Deno.test(acti9FlowTest("stale_characteristic_chip"));
 
 addEventListener("unload", restoreOfflineModuleSetup);

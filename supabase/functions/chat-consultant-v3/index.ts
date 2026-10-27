@@ -26645,7 +26645,8 @@ Deno.serve(async (req) => {
                 userMessage,
               );
             const pendingReadinessPreflight =
-              pendingProgressRequest && clientSelectionReadinessScope
+              (pendingProgressRequest || requestedEvidence) &&
+                clientSelectionReadinessScope
                 ? await loadVerifiedSelectionReadinessPending(
                   supabase,
                   sessionId,
@@ -26662,8 +26663,23 @@ Deno.serve(async (req) => {
                   slots,
                 )
                 : null;
+            // A server-issued option may overlap a rendered-card evidence
+            // phrase. Only an exact option of the immediately preceding
+            // completed server-issued slot wins here;
+            // the browser slot alone (or a free-text slot) is never proof.
+            const verifiedIssuedReadinessChip = Boolean(
+              requestedEvidence &&
+                Array.isArray(pendingReadinessPreflight?.slot?.options) &&
+                pendingReadinessPreflight.slot.options.length > 0 &&
+                isVerifiedReadinessScopeReply(
+                  userMessage,
+                  pendingReadinessPreflight.slot,
+                  false,
+                ),
+            );
             const verifiedPendingQuestionProgress = Boolean(
-              pendingReadinessPreflight?.slot || pendingCutoutPreflight?.slot,
+              (pendingProgressRequest && pendingReadinessPreflight?.slot) ||
+                verifiedIssuedReadinessChip || pendingCutoutPreflight?.slot,
             );
             const renderedReferenceRequested =
               !verifiedPendingQuestionProgress &&
@@ -28395,6 +28411,7 @@ Deno.serve(async (req) => {
             } else if (
               recentProductEvidence.length > 0 &&
               isEvidenceOnlyFollowup(userMessage) &&
+              !verifiedIssuedReadinessChip &&
               !constrainedRecentPriceFollowup &&
               !(namedSeriesSelectionToken && !pureNamedSeriesBrowse)
             ) {
