@@ -768,6 +768,75 @@ Deno.test("candidate coverage is partial after an early OR stop", async () => {
   assertEquals(result.candidate_coverage, "partial");
 });
 
+Deno.test("internal complete-alternatives search queries every bounded OR branch after the page fills", async () => {
+  const requested: string[] = [];
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Fixtures",
+    options: { power: ["10", "20"] },
+    per_page: 2,
+    require_complete_option_alternatives: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const value = new URL(String(input)).searchParams.get("options[power][]") ?? "";
+      requested.push(value);
+      const results = value === "10" ? [1, 2].map((index) => ({
+        id: `${value}-${index}`,
+        pagetitle: `Fixture ${value}-${index}`,
+        price: 100,
+        url: `https://220volt.kz/catalog/light/fixtures/item-${value}-${index}/`,
+        options: [],
+      })) : [];
+      return Promise.resolve(new Response(JSON.stringify({
+        data: { results, pagination: { total: results.length } },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(requested, ["10", "20"]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["10-1", "10-2"]);
+  assertEquals(result.candidate_coverage, "complete_query_window");
+});
+
+Deno.test("internal complete-alternatives search keeps coverage partial when a later OR branch fails", async () => {
+  const requested: string[] = [];
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Fixtures",
+    options: { power: ["10", "20"] },
+    per_page: 2,
+    require_complete_option_alternatives: true,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: (input) => {
+      const value = new URL(String(input)).searchParams.get("options[power][]") ?? "";
+      requested.push(value);
+      if (value === "20") return Promise.resolve(new Response("", { status: 503 }));
+      const results = [1, 2].map((index) => ({
+        id: `${value}-${index}`,
+        pagetitle: `Fixture ${value}-${index}`,
+        price: 100,
+        url: `https://220volt.kz/catalog/light/fixtures/item-${value}-${index}/`,
+        options: [],
+      }));
+      return Promise.resolve(new Response(JSON.stringify({
+        data: { results, pagination: { total: results.length } },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    },
+  }, new Map());
+
+  assertEquals(requested, ["10", "20"]);
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((product) => product.id), ["10-1", "10-2"]);
+  assertEquals(result.candidate_coverage, "partial");
+});
+
 Deno.test("sorted candidate coverage is separate from price-order coverage", async () => {
   const products = [30, 10, 20].map((price) => ({
     id: String(price),

@@ -1,7 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
+  isGroundingPresenceFreeformAnswer,
   measuredLoadGuidanceCanProceed,
+  parseGroundingPresenceDecision,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
   resolveServerIssuedSelectionReadinessPending,
@@ -52,11 +55,18 @@ Deno.test("every readiness profile leaves its opening facet after a valid first 
   }
 });
 
-Deno.test("selection readiness allows a completed pump-cable context", () => {
+Deno.test("pump cable needs nameplate current even when load power is known", () => {
   assertEquals(
     selectReadinessClarification(
       "Мне нужен кабель для насоса",
       "Насос 2 кВт, линия 35 м, 380 В три фазы, стационарно на улице",
+    )?.facet_key,
+    "load_current",
+  );
+  assertEquals(
+    selectReadinessClarification(
+      "Мне нужен кабель для насоса",
+      "Насос 2 кВт, рабочий ток 6 А, линия 35 м, 380 В три фазы, стационарно на улице",
     ),
     null,
   );
@@ -137,7 +147,7 @@ Deno.test("readiness isolates cross-turn amperes but accepts same-turn multiline
     "А. Мне нужен кабель для насоса, линия 35 м, 380 В, стационарно на улице";
   assertEquals(
     selectReadinessClarification(current, "Ток 7")?.facet_key,
-    "selection_requirement_0",
+    "load_current",
   );
   assertEquals(
     selectReadinessClarification(`Ток 7\n${current}`),
@@ -724,7 +734,7 @@ Deno.test("breaker pole chip advances to curve chips", () => {
   );
 });
 
-Deno.test("pump phase and length chips lead to exact power rather than stale phase", () => {
+Deno.test("pump phase and length chips lead to nameplate current rather than stale phase", () => {
   const request = "Мне нужен кабель для насоса";
   const afterPhase = selectReadinessClarification(
     `${request}\nУточнение клиента: 220 В, 1 фаза`,
@@ -738,14 +748,167 @@ Deno.test("pump phase and length chips lead to exact power rather than stale pha
     { progressive: true },
   );
   assertEquals(afterLength?.facet_key, "installation_method");
-  const exactPower = selectReadinessClarification(
+  const exactCurrent = selectReadinessClarification(
     `${request}\nУточнение клиента: 220 В, 1 фаза\nУточнение клиента: До 25 м\nУточнение клиента: Стационарно на улице`,
     `${request}\n220 В, 1 фаза\nДо 25 м\nСтационарно на улице`,
     { progressive: true },
   );
-  assertEquals(exactPower?.facet_key, "selection_requirement_0");
-  assertEquals(exactPower?.options, []);
-  assertEquals(/мощност|ток/iu.test(exactPower?.question ?? ""), true);
+  assertEquals(exactCurrent?.facet_key, "load_current");
+  assertEquals(exactCurrent?.options, []);
+  assertEquals(/ток.*шильдик/iu.test(exactCurrent?.question ?? ""), true);
+});
+
+Deno.test("motor load power never impersonates the nameplate current", () => {
+  const request = "Подберите автомат для двигателя асинхронный 3 кВт";
+  const afterStart = `${request}\nУточнение клиента: 380 В, 3 фазы\nУточнение клиента: Прямой пуск`;
+  assertEquals(
+    selectReadinessClarification(afterStart, afterStart, { progressive: true })
+      ?.facet_key,
+    "load_current",
+  );
+  assertEquals(
+    selectReadinessClarification(
+      `${afterStart}\nУточнение клиента: 6 А`,
+      `${afterStart}\n6 А`,
+      { progressive: true },
+    ),
+    null,
+  );
+});
+
+Deno.test("bare product amperes do not impersonate a connected load's current", () => {
+  const request =
+    "Подберите автомат 16 А для двигателя 3 кВт, 380 В, прямой пуск";
+  assertEquals(selectReadinessClarification(request)?.facet_key, "load_current");
+  for (const productRating of [
+    "Номинальный ток автомата 16 А",
+    "Автомат с номинальным током 16 А",
+  ]) {
+    assertEquals(
+      selectReadinessClarification(
+        `Подберите автомат для двигателя 3 кВт, 380 В, прямой пуск. ${productRating}`,
+      )?.facet_key,
+      "load_current",
+      productRating,
+    );
+  }
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен кабель для насоса 7 кВт, 220 В, 35 м, на улице. Номинальный ток кабеля 16 А",
+    )?.facet_key,
+    "load_current",
+  );
+  assertEquals(extractNominalLoadCurrent(request), null);
+  assertEquals(
+    extractNominalLoadCurrent(
+      "Подберите автомат для двигателя 3 кВт, 380 В, прямой пуск. Ток двигателя 6 А; номинальный ток автомата 16 А",
+    ),
+    6,
+  );
+  assertEquals(
+    extractNominalLoadCurrent(
+      `${request}\nУточнение клиента: 6 А`,
+    ),
+    6,
+  );
+});
+
+Deno.test("nameplate-current ownership follows the measured object, not the nearest noun", () => {
+  for (const productCurrent of [
+    "Подберите автомат для двигателя на номинальный ток 16 А",
+    "Подберите автомат для двигателя на рабочий ток 16 А",
+    "Подберите автомат для двигателя на ток 16 А",
+    "Подберите автомат для двигателя. Ток 16 А",
+    "Подберите автомат для двигателя, номинальный ток автомата 16 А",
+    "Нужен кабель для насоса с допустимым током 16 А",
+    "Нужен кабель для насоса, номинальный ток кабеля 16 А",
+    "Нужен насос, ток насоса 16 А",
+    "Нужен асинхронный двигатель с рабочим током 16 А",
+  ]) {
+    assertEquals(extractNominalLoadCurrent(productCurrent), null, productCurrent);
+  }
+  assertEquals(
+    selectReadinessClarification(
+      "Подберите автомат для двигателя, 380 В, 3 фазы, прямой пуск, на номинальный ток 16 А",
+    )?.facet_key,
+    "load_current",
+  );
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен кабель для насоса, 220 В, 1 фаза, 25 м, стационарно на улице, с допустимым током 16 А",
+    )?.facet_key,
+    "load_current",
+  );
+  for (const [loadCurrent, expected] of [
+    ["Подберите автомат для двигателя, ток двигателя по шильдику 6 А", 6],
+    ["Подберите автомат для двигателя, его ток 6 А", 6],
+    ["Нужен кабель для насоса, рабочий ток насоса 8 А", 8],
+    ["Подберите защиту для нагрузки, ток 10 А", 10],
+    ["Ток 7 А. Нужен кабель для насоса", 7],
+    [joinCustomerTurns([
+      "Подберите автомат для двигателя, 380 В, прямой пуск",
+      "Уточнение клиента: 6 А",
+    ]), 6],
+  ] as const) {
+    assertEquals(extractNominalLoadCurrent(loadCurrent), expected, loadCurrent);
+  }
+});
+
+Deno.test("load-current corrections replace or withdraw old measurements across customer turns", () => {
+  for (const [message, expected] of [
+    ["Подберите автомат для двигателя: ток двигателя 6 А, точнее 8 А", 8],
+    ["Нужен кабель для насоса: рабочий ток насоса 6 А, вернее 8,5 А", 8.5],
+    ["Подберите автомат для двигателя: ток двигателя 6 А, нет, ошибся — ток двигателя 8 А", 8],
+    ["Нужен кабель для насоса: ток насоса 6 А, поправка: ток насоса 9 А", 9],
+    [joinCustomerTurns([
+      "Подберите автомат для двигателя. Ток двигателя 6 А",
+      "Точнее 8 А",
+    ]), 8],
+    [joinCustomerTurns([
+      "Нужен кабель для насоса. Рабочий ток насоса 6 А",
+      "Нет, ошибся: ток насоса 8 А",
+    ]), 8],
+    [joinCustomerTurns([
+      "Подберите автомат для двигателя. Ток двигателя 6 А",
+      "Заземления нет, длина неизвестна",
+    ]), 6],
+    ["Подберите автомат для двигателя. Ток двигателя 6 А, но длина кабеля неизвестна", 6],
+  ] as const) {
+    assertEquals(extractNominalLoadCurrent(message), expected, message);
+  }
+  for (const message of [
+    "Подберите автомат для двигателя: ток двигателя 6 А, нет, ошибся — 8 А",
+    "Нужен кабель для насоса: ток насоса 6 А, но это неверно, ток пока неизвестен",
+    "Подберите автомат для двигателя: ток двигателя 6 А, точнее номинальный ток автомата 8 А",
+    joinCustomerTurns([
+      "Подберите автомат для двигателя. Ток двигателя 6 А",
+      "Нет, ошибся — 8 А",
+    ]),
+    joinCustomerTurns([
+      "Нужен кабель для насоса. Ток насоса 6 А",
+      "Ток не знаю",
+    ]),
+    joinCustomerTurns([
+      "Подберите автомат для двигателя. Ток двигателя 6 А",
+      "Ток двигателя пока неизвестен",
+    ]),
+    joinCustomerTurns([
+      "Нужен кабель для насоса. Рабочий ток насоса 6 А",
+      "Не знаю, какой ток",
+    ]),
+    joinCustomerTurns([
+      "Нужен кабель для насоса. Ток насоса 6 А; ток кабеля 10 А",
+      "Точнее 8 А",
+    ]),
+  ]) {
+    assertEquals(extractNominalLoadCurrent(message), null, message);
+  }
+  assertEquals(
+    selectReadinessClarification(
+      "Подберите автомат для двигателя, 380 В, прямой пуск. Ток двигателя 6 А, но это неверно, ток пока неизвестен",
+    )?.facet_key,
+    "load_current",
+  );
 });
 
 Deno.test("unknown engineering facts never satisfy a safety-sensitive profile", () => {
@@ -912,6 +1075,65 @@ Deno.test("underground cable needs phase chip, load, core count and PE separatel
   assertEquals(progressiveReadiness(
     request, "В трубе/ПНД", "220 В, 1 фаза", "5 кВт", "С заземлением", "3 жилы",
   ), null);
+});
+
+Deno.test("grounding answers are explicit, can be affirmative or negative, and never inferred from a question", () => {
+  for (const message of [
+    "Да, одна из трёх жил — защитная PE",
+    "Заземление есть",
+    "Есть защитная жила",
+    "PE предусмотрен",
+  ]) {
+    assertEquals(parseGroundingPresenceDecision(message), "present", message);
+    assertEquals(isGroundingPresenceFreeformAnswer(message), true, message);
+  }
+  for (const message of [
+    "Заземления нет",
+    "Без заземления",
+    "PE нет",
+    "Не нужна защитная жила",
+  ]) {
+    assertEquals(parseGroundingPresenceDecision(message), "absent", message);
+    assertEquals(isGroundingPresenceFreeformAnswer(message), true, message);
+  }
+  for (const message of [
+    "PE?", "Заземление есть?", "Не знаю, есть ли заземление",
+    "Заземление есть или нет", "Заземление есть и нет",
+    "Заземление есть, найди прожектор", "PEN есть", "Без PEN",
+  ]) {
+    assertEquals(isGroundingPresenceFreeformAnswer(message), false, message);
+  }
+  assertEquals(parseGroundingPresenceDecision("PEN есть"), null);
+  assertEquals(
+    parseGroundingPresenceDecision(
+      "Нужен кабель прямо в земле, 220 В, 16 А, 3 жилы, PE есть, какой выбрать?",
+    ),
+    "present",
+  );
+});
+
+Deno.test("underground cable PE decision completes only its actual missing axis", () => {
+  const request = "Какой кабель подойдет для прокладки в земле?";
+  const answers = ["Прямо в земле", "220 В, 1 фаза", "16 А", "3 жилы"];
+  assertEquals(progressiveReadiness(request, ...answers)?.facet_key, "grounding_presence");
+  for (const decision of [
+    "Да, одна из трёх жил — защитная PE",
+    "Заземление есть",
+    "Заземления нет",
+  ]) {
+    assertEquals(progressiveReadiness(request, ...answers, decision), null, decision);
+  }
+  for (const unknown of ["PE?", "Не знаю, есть ли заземление"]) {
+    assertEquals(
+      progressiveReadiness(request, ...answers, unknown)?.facet_key,
+      "grounding_presence",
+      unknown,
+    );
+  }
+  assertEquals(
+    progressiveReadiness(request, ...answers, "Да, одна из четырёх жил — защитная PE")?.facet_key,
+    "grounding_presence",
+  );
 });
 
 Deno.test("floodlight cable length never masquerades as mounting height", () => {

@@ -12,6 +12,7 @@ import {
   mayBeActivePrepositionalRefinement,
   mayBeNominalRefinement,
   productMatchesActiveSection,
+  requiresProvenProductContext,
   scopeFromCompletedServerLog,
   stripClientActiveSelectionScope,
   trustedActiveSelectionScope,
@@ -362,6 +363,72 @@ Deno.test("free-form answer protection needs a genuine pending question and neve
     false,
     "issued chips are handled by exact chip matching, not free-form suppression",
   );
+});
+
+Deno.test("grounding facts continue only the server-verified free-form PE question", () => {
+  const slot = {
+    status: "pending",
+    slot_id: "server-grounding-1",
+    question: "Укажите наличие защитной жилы/заземления конкретным значением.",
+    facet_key: "grounding_presence",
+    options: [],
+    scope: {
+      kind: "selection_readiness",
+      token: "Какой кабель подойдет для прокладки в земле?",
+    },
+  };
+  for (const message of [
+    "Да, одна из трёх жил — защитная PE",
+    "Заземление есть",
+    "Заземления нет",
+    "Без PE",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), true, message);
+  }
+  for (const message of [
+    "Заземление есть?",
+    "Не знаю, есть ли заземление",
+    "Заземление есть, найди прожектор",
+    "Новая тема: заземление есть",
+  ]) {
+    assertEquals(isVerifiedFreeformReadinessAnswer(message, slot), false, message);
+  }
+  assertEquals(isVerifiedFreeformReadinessAnswer("Заземление есть", null), false);
+  assertEquals(isVerifiedFreeformReadinessAnswer("Заземление есть", {
+    ...slot,
+    options: [{ label: "Да", value: "Да" }],
+  }), false);
+  assertEquals(isVerifiedFreeformReadinessAnswer("Заземление есть", {
+    ...slot,
+    facet_key: "core_count",
+  }), false);
+});
+
+Deno.test("a verified free-form answer bypasses stale-card hints, not actual references or unverified slots", () => {
+  const signals = {
+    renderedReferenceRequested: false,
+    browserHasRenderedCard: false,
+    staleCachePresent: true,
+    localFollowupReference: true,
+    ellipticalAttributeFollowup: false,
+    verifiedFreeformReadinessAnswer: true,
+  };
+  assertEquals(requiresProvenProductContext(signals), false);
+  assertEquals(requiresProvenProductContext({
+    ...signals,
+    verifiedFreeformReadinessAnswer: false,
+  }), true);
+  assertEquals(requiresProvenProductContext({
+    ...signals,
+    renderedReferenceRequested: true,
+  }), true);
+  assertEquals(requiresProvenProductContext({
+    ...signals,
+    verifiedFreeformReadinessAnswer: false,
+    staleCachePresent: false,
+    localFollowupReference: false,
+    ellipticalAttributeFollowup: true,
+  }), true);
 });
 
 Deno.test("a progressive multi-facet question accepts a partial conductor answer without changing product class", () => {

@@ -163,6 +163,8 @@ export interface SearchCatalogInput {
   min_price?: number;
   max_price?: number;
   options?: Record<string, string[]>;
+  /** Internal-only: inspect every bounded exact by_filter OR variant even if the result page fills. */
+  require_complete_option_alternatives?: boolean;
   page?: number;
   per_page?: number;
   sort_cheapest?: boolean;
@@ -865,9 +867,8 @@ export async function executeSearchCatalog(
     // Exact alternatives are intentionally executed one variant at a time.
     // Bursting a dozen live values at once causes catalog 429 responses and a
     // false empty result. Stop once enough unique cards are collected for the
-    // requested page; all completed variants remain exact evidence. A sorted
-    // request must inspect every variant: a later one may contain the global
-    // cheapest/most expensive product even after the page is already full.
+    // requested page unless the internal caller requires every bounded exact
+    // alternative to run. All completed variants remain exact evidence.
     const collected = new Set<string>();
     const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
     for (const variant of optionVariants) {
@@ -879,7 +880,7 @@ export async function executeSearchCatalog(
       for (const result of batch) {
         if (result.ok) result.results.forEach((product) => collected.add(product.id));
       }
-      if (collected.size >= requestedPerPage) break;
+      if (!input.require_complete_option_alternatives && collected.size >= requestedPerPage) break;
     }
   } else {
     settled.push(...await Promise.all(

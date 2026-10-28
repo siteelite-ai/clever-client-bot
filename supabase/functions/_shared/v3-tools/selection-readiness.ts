@@ -1,5 +1,8 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
-import { joinCustomerTurns } from "./criteria-consistency.ts";
+import {
+  CUSTOMER_TURN_BOUNDARY,
+  joinCustomerTurns,
+} from "./criteria-consistency.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
@@ -387,9 +390,86 @@ function hasUndergroundCoreCount(evidence: string): boolean {
     /(?:двух|трех|трёх|четырех|четырёх|пяти)жильн\p{L}*/iu.test(evidence);
 }
 
+export type GroundingPresenceDecision = "present" | "absent";
+
+/** A grounding decision must be stated by the customer, not inferred from
+ * the number of cores or from the word «заземление» in our question. */
+export function parseGroundingPresenceDecision(
+  statement: string,
+): GroundingPresenceDecision | null {
+  const text = String(statement ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/[—–-]/gu, " ")
+    .replace(/\s+/gu, " ").trim()
+    // A selection question may follow an asserted PE fact in the same turn;
+    // a question *about* PE itself remains unanswered.
+    .replace(/,\s*(?:какой|какая|какие|что|как)(?!\p{L})[^?]*\?$/iu, "");
+  if (!text || text.length > 500 || text.includes("?")) return null;
+  if (
+    /(?:^|[^\p{L}\p{N}])(?:не\s+знаю|не\s+уверен\p{L}*|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)(?=$|[^\p{L}\p{N}])/iu
+      .test(text) ||
+    /(?:^|[^\p{L}\p{N}])(?:есть|нет)\s+(?:или|и)\s+(?:есть|нет)(?=$|[^\p{L}\p{N}])/iu
+      .test(text)
+  ) return null;
+  // PEN combines neutral and protection; it is not proof of a separate PE
+  // core and must not answer the slot asking for one.
+  const target = String.raw`(?:заземл\p{L}*|защитн\p{L}*\s+жил\p{L}*|pe)`;
+  const positive = new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}])(?:с|есть|имеется|предусмотрен\p{L}*)\s+${target}(?=$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])${target}\s+(?:есть|имеется|предусмотрен\p{L}*)(?=$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])(?:одна|1)\s+из\s+(?:\d+|двух|трех|четырех|пяти)\s+жил\p{L}*\s+(?:это\s+)?защитн\p{L}*(?:\s+жил\p{L}*)?(?:\s+pe)?(?=$|[^\p{L}\p{N}])`,
+    "iu",
+  ).test(text);
+  const negative = new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}])(?:без|нет|не\s+нужн\p{L}*|не\s+предусмотрен\p{L}*)\s+${target}(?=$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])${target}\s+(?:нет|не\s+предусмотрен\p{L}*|не\s+нужн\p{L}*)(?=$|[^\p{L}\p{N}])`,
+    "iu",
+  ).test(text);
+  if (positive === negative) return null;
+  return positive ? "present" : "absent";
+}
+
+/** Free-form PE answers may inherit only an immediately server-verified
+ * grounding_presence slot. This grammar rejects a second product request. */
+export function isGroundingPresenceFreeformAnswer(message: string): boolean {
+  const raw = String(message ?? "").trim();
+  if (!raw || raw.length > 160 || !parseGroundingPresenceDecision(raw)) {
+    return false;
+  }
+  const words = raw.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.length <= 14 && words.every((word) =>
+    /^(?:да|нет|а|ну|у|меня|нас|одна|это|из|двух|трех|четырех|пяти|с|со|без|не|есть|имеется|предусмотрен\p{L}*|нужн\p{L}*|заземл\p{L}*|защитн\p{L}*|жил\p{L}*|pe|[1-9]\d?)$/u
+      .test(word)
+  );
+}
+
 function hasGroundingDecision(evidence: string): boolean {
-  return /(?:с|без|есть|нет)\s+(?:защитн\p{L}*\s+жил\p{L}*|заземл\p{L}*|PE)(?=$|[^\p{L}\p{N}])|(?:PE|PEN)\s+(?:есть|нет|предусмотрен\p{L}*)/iu
-    .test(evidence);
+  const lines = String(evidence ?? "").split(CUSTOMER_TURN_BOUNDARY)
+    .flatMap((turn) => turn.split(/\n+/u));
+  const coreNumber = (word: string): number | null => {
+    const normalized = word.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
+    const words: Record<string, number> = {
+      двух: 2,
+      трех: 3,
+      четырех: 4,
+      пяти: 5,
+    };
+    return words[normalized] ?? (/^\d+$/u.test(normalized) ? Number(normalized) : null);
+  };
+  const mentionedCores = /(?:^|[^\p{L}\p{N}])(\d+|двух|трех|трёх|четырех|четырёх|пяти)\s+жил\p{L}*/giu;
+  let independentCoreCount: number | null = null;
+  for (const line of lines) {
+    for (const match of line.matchAll(mentionedCores)) {
+      const before = line.slice(0, match.index ?? 0);
+      if (!/(?:^|[^\p{L}])из\s*$/iu.test(before)) {
+        independentCoreCount = coreNumber(match[1]);
+      }
+    }
+  }
+  const apposition = /(?:одна|1)\s+из\s+(\d+|двух|трех|трёх|четырех|четырёх|пяти)\s+жил\p{L}*\s+(?:это\s+)?защитн\p{L}*(?:\s+жил\p{L}*)?(?:\s+pe)?/iu;
+  if (independentCoreCount !== null && lines.some((line) => {
+    const match = line.replace(/[—–-]/gu, " ").match(apposition);
+    return match && coreNumber(match[1]) !== independentCoreCount;
+  })) return false;
+  return lines.some((line) => parseGroundingPresenceDecision(line) !== null);
 }
 
 function hasKgPurpose(evidence: string): boolean {
@@ -402,6 +482,143 @@ function hasKgPurpose(evidence: string): boolean {
     !/^(?:кабел|кг|замен|подключ|проклад|подвиж|стационар|гибк|использован|чего|какого|этого|него)/iu
       .test(match[1])
   );
+}
+
+/**
+ * Power describes the connected load, not the nominal current that must be
+ * checked against a motor protector or used to size its supply cable. Accept
+ * a current only when the customer names that role, or when a short answer
+ * follows an issued engineering clarification. A bare product rating such as
+ * «автомат 16 А» must not silently become the motor's nameplate current.
+ */
+export function extractNominalLoadCurrent(evidence: string): number | null {
+  const current = String(evidence ?? "").toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е");
+  const amperes = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(?:а|a|ампер\p{L}*)(?=$|[^\p{L}\p{N}])`,
+    "giu",
+  );
+  const connectedLoad = /(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*/iu;
+  const selectedProduct = /(?:автомат|выключател|кабел|провод|предохранител|розетк|контактор|пускател|реле)\p{L}*/iu;
+  // A later correction or withdrawal revokes the previous load-side current,
+  // even if the replacement number is bare or belongs to the selected SKU.
+  // Only an explicit new load-side fact (or the narrow «точнее 8 А» ellipsis)
+  // can establish another current. This also applies across customer turns.
+  const corrections = [...current.matchAll(
+    /(?<!\p{L})(?:точнее|вернее|поправка|исправля\p{L}*|поправля\p{L}*|ошиб(?:ся|лась|лись)|неверн\p{L}*|неправильн\p{L}*|отменя\p{L}*)(?!\p{L})|(?:^|[.!?;,\n])\s*нет\s*[,!;:—–-]|(?<!\p{L})(?:ток\p{L}*(?:\s+(?:двигател|мотор|насос|нагрузк)\p{L}*)?(?:\s+пока)?\s+(?:не\s+знаю|неизвест\p{L}*)|не\s+знаю\s*[,;:]?\s*(?:(?:какой|точн\p{L}*)\s+)?ток\p{L}*)(?!\p{L})/giu,
+  )].map((match) => ({
+    index: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+    elliptical: /^(?:точнее|вернее)$/iu.test(match[0]),
+  }));
+  let latest: number | null = null;
+  let priorAmpEnd = 0;
+  let priorAmpWasLoadCurrent = false;
+  let correctionIndex = 0;
+  for (const match of current.matchAll(amperes)) {
+    const value = Number(match[1].replace(",", "."));
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const at = match.index ?? 0;
+    let ellipticalCorrectionEnd: number | null = null;
+    while (
+      correctionIndex < corrections.length &&
+      corrections[correctionIndex].index < at
+    ) {
+      const cue = corrections[correctionIndex++];
+      ellipticalCorrectionEnd = cue.elliptical && priorAmpWasLoadCurrent &&
+          latest !== null && cue.index >= priorAmpEnd
+        ? cue.end
+        : null;
+      latest = null;
+      priorAmpWasLoadCurrent = false;
+    }
+    const turnStart = current.lastIndexOf(CUSTOMER_TURN_BOUNDARY, at);
+    const turnEnd = current.indexOf(CUSTOMER_TURN_BOUNDARY, at);
+    const before = current.slice(
+      turnStart < 0 ? 0 : turnStart + CUSTOMER_TURN_BOUNDARY.length,
+      at,
+    );
+    const after = current.slice(
+      at + match[0].length,
+      turnEnd < 0 ? undefined : turnEnd,
+    );
+    const local = before.slice(Math.max(
+      before.lastIndexOf("."),
+      before.lastIndexOf("!"),
+      before.lastIndexOf("?"),
+      before.lastIndexOf(";"),
+      before.lastIndexOf("\n"),
+    ) + 1);
+    const forConnectedLoad = /(?:для|под)\s+(?:\p{L}{3,}\s+){0,3}?(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*/iu
+      .test(before);
+    const issuedAnswer = /(?:^|\n)уточнение\s+клиента\s*:\s*(?:ток\p{L}*\s*)?$/iu
+      .test(before);
+    if (issuedAnswer) {
+      latest = value;
+      priorAmpWasLoadCurrent = true;
+      priorAmpEnd = at + match[0].length;
+      continue;
+    }
+    // Product-side grammar wins over a nearby purpose relation. «Для
+    // двигателя на номинальный ток 16 А» specifies the breaker, not the
+    // motor's nameplate. An ambiguous bare nominal current remains missing.
+    const productRating =
+      /на\s+(?:(?:номинальн\p{L}*|рабоч\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+)?ток\p{L}*\s*$/iu
+        .test(local) ||
+      /с\s+(?:номинальн\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+ток\p{L}*\s*$/iu
+        .test(local) ||
+      /ток\p{L}*\s+(?:автомат|выключател|кабел|провод|предохранител|розетк|контактор|пускател|реле)\p{L}*\s*$/iu
+        .test(local);
+    if (productRating) {
+      priorAmpWasLoadCurrent = false;
+      priorAmpEnd = at + match[0].length;
+      continue;
+    }
+    const selectedEquipment = /(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|ищ\p{L}*|хоч\p{L}*)\s+(?:(?!(?:для|под)(?:\s|$))\p{L}{3,}\s+){0,3}?(?:двигател|мотор|насос|котл|компрессор|вентилятор)\p{L}*/iu
+      .test(before);
+    if (selectedEquipment) {
+      priorAmpWasLoadCurrent = false;
+      priorAmpEnd = at + match[0].length;
+      continue;
+    }
+    const explicitLoadOwner =
+      /ток\p{L}*\s+(?:подключенн\p{L}*\s+)?(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
+        .test(local) ||
+      /(?:потребля\p{L}*|потреблен\p{L}*)\s*$/iu.test(local) ||
+      forConnectedLoad && /(?:его|ее|её|их)\s+ток\p{L}*\s*$/iu.test(local);
+    // A bare «ток 16 А» after a product request has no proven owner: it may
+    // be the requested product rating. Require a load-side qualifier here.
+    const contextualLoadCurrent = forConnectedLoad &&
+      /(?:^|[,\s])рабоч\p{L}*\s+ток\p{L}*\s*$/iu.test(local);
+    // A standalone engineering fact may name the load first ("Насос 2 кВт,
+    // рабочий ток 6 А"). Do not infer the same from a request to buy that
+    // very device ("Нужен насос с рабочим током 6 А").
+    const standaloneLoadFact = connectedLoad.test(before) &&
+      !selectedProduct.test(before) &&
+      /(?:^|[,\s])(?:рабоч\p{L}*\s+)?ток\p{L}*\s*$/iu.test(local);
+    const earlyLoadCurrent = /^\s*ток\p{L}*\s*$/iu.test(local) &&
+      !selectedProduct.test(before) && connectedLoad.test(after);
+    if (
+      explicitLoadOwner || contextualLoadCurrent || standaloneLoadFact ||
+      earlyLoadCurrent ||
+      (ellipticalCorrectionEnd !== null &&
+        /^[\s,;:—–-]*$/u.test(current.slice(ellipticalCorrectionEnd, at)))
+    ) {
+      latest = value;
+      priorAmpWasLoadCurrent = true;
+    } else {
+      priorAmpWasLoadCurrent = false;
+    }
+    priorAmpEnd = at + match[0].length;
+  }
+  if (corrections.slice(correctionIndex).some((cue) => cue.index >= priorAmpEnd)) {
+    return null;
+  }
+  return latest;
+}
+
+function hasNominalLoadCurrent(evidence: string): boolean {
+  return extractNominalLoadCurrent(evidence) !== null;
 }
 
 function hasKgCoreAndSection(evidence: string): boolean {
@@ -483,18 +700,19 @@ const PROFILES: ReadinessProfile[] = [
     id: "pump_cable",
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
     required: [
-      /\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])/iu,
+      hasNominalLoadCurrent,
       /\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²])|\d+(?:[.,]\d+)?\s*[–-]\s*\d+(?:[.,]\d+)?\s*м(?=$|[^\p{L}\p{N}²])/iu,
       /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|[13]\s*фаз\p{L}*|\b(?:220|230|380|400)\s*в(?=$|[^\p{L}\p{N}]))/iu,
       /(?:на\s+улиц\p{L}*|в\s+помещен\p{L}*|перенос\p{L}*|стационар\p{L}*|подзем\p{L}*|в\s+(?:труб\p{L}*|земл\p{L}*))/iu,
     ],
     primary_requirement_index: 2,
     missing_labels: [
-      "мощность или рабочий ток насоса",
+      "номинальный рабочий ток насоса по шильдику в амперах",
       "длину линии/расстояние",
       "напряжение и число фаз",
       "способ прокладки",
     ],
+    freeform_facets: { 0: "load_current" },
     follow_ups: [
       {
         requirement_index: 2,
@@ -527,7 +745,7 @@ const PROFILES: ReadinessProfile[] = [
       },
     ],
     question:
-      "Чтобы безопасно подобрать кабель для насоса, уточните, пожалуйста: мощность или рабочий ток насоса; длину линии/расстояние; напряжение и число фаз; способ прокладки — в помещении, на улице, стационарно или как переносное подключение. С чего начнём?",
+      "Чтобы безопасно подобрать кабель для насоса, уточните, пожалуйста: номинальный рабочий ток насоса по шильдику; длину линии/расстояние; напряжение и число фаз; способ прокладки — в помещении, на улице, стационарно или как переносное подключение. С чего начнём?",
     facet_key: "supply_phase",
     options: [
       { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
@@ -575,16 +793,17 @@ const PROFILES: ReadinessProfile[] = [
     id: "motor_breaker",
     applies: /автомат\p{L}*[^.!?\n]{0,60}(?:для\s+)?двигател\p{L}*/iu,
     required: [
-      /\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])/iu,
+      hasNominalLoadCurrent,
       /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|[13]\s*фаз\p{L}*|\b(?:220|230|380|400)\s*в(?=$|[^\p{L}\p{N}]))/iu,
       /(?:прям\p{L}*\s+пуск|частотник\p{L}*|софтстартер\p{L}*|плавн\p{L}*\s+пуск|(?:характерист\p{L}*|крив\p{L}*)\s*[:–-]?\s*[bcdвсд](?=$|[^\p{L}\p{N}]))/iu,
     ],
     primary_requirement_index: 1,
     missing_labels: [
-      "мощность либо номинальный рабочий ток по шильдику",
+      "номинальный рабочий ток двигателя по шильдику в амперах",
       "напряжение и число фаз",
       "условия пуска и требуемую характеристику срабатывания",
     ],
+    freeform_facets: { 0: "load_current" },
     follow_ups: [
       {
         requirement_index: 2,
@@ -601,7 +820,7 @@ const PROFILES: ReadinessProfile[] = [
       },
     ],
     question:
-      "Для выбора автомата двигателя нужны мощность или рабочий ток, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
+      "Для выбора автомата двигателя нужны номинальный рабочий ток по шильдику, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
     facet_key: "supply_phase",
     options: [
       { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },

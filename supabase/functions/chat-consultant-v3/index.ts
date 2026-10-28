@@ -327,6 +327,7 @@ import {
   mayBeActivePrepositionalRefinement,
   mayBeNominalRefinement,
   productMatchesActiveSection,
+  requiresProvenProductContext,
   scopeFromCompletedServerLog,
   stripClientActiveSelectionScope,
   trustedActiveSelectionScope,
@@ -685,6 +686,7 @@ import {
   type ProposeClarificationInput,
 } from "../_shared/v3-tools/propose-clarification.ts";
 import {
+  extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
   resolveScopedCatalogSelectionContinuation,
   resolveSelectionReadinessRequest,
@@ -695,6 +697,12 @@ import {
   selectReadinessClarification,
   verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
+import {
+  certificateCoversSoleUnprojectedMeasurement,
+  compileMeasuredPointRangeRelation,
+  productProvesMeasuredPointRangeRelation,
+  type MeasuredPointRangeCertificate,
+} from "../_shared/v3-tools/measured-point-range-relation.ts";
 import {
   buildVisibleRequestContract,
   productSupportsVisibleRequestContract,
@@ -1201,6 +1209,8 @@ interface ToolContext {
   jargonCategoryContextEnabled: boolean;
   jargonAxialModifiersEnabled: boolean;
   observeCatalogToolResult?: (result: ToolResult) => void;
+  /** Request-local hard card proof, including terminal and recovery renders. */
+  verifyMeasuredPointRangeRenderIds?: (ids: string[]) => boolean;
   /** Per-turn provenance boundary shared by every catalog and jargon route. */
   catalogAppearanceGuard?: (
     name: "search_catalog" | "jargon_recover_catalog",
@@ -1292,6 +1302,20 @@ async function runTool(
     );
   }
   if (name === "render_products") {
+    const renderIds = Array.isArray(args.product_ids)
+      ? args.product_ids.map(String)
+      : [];
+    if (
+      ctx.verifyMeasuredPointRangeRenderIds &&
+      !ctx.verifyMeasuredPointRangeRenderIds(renderIds)
+    ) {
+      return {
+        tool: "render_products",
+        ok: false,
+        error_code: "bad_input",
+        message: "A rendered product lacks the verified load-to-setting range",
+      };
+    }
     return executeRenderProducts(
       args as unknown as RenderProductsInput,
       ctx.cache,
@@ -9554,6 +9578,8 @@ async function runExpertLoop(
       const facet = facets.find((candidate) => candidate.key === key);
       const retained = rawValues.map(String).filter((value) =>
         certifiedCapacityOptions[key]?.includes(value) ||
+        (certifiedMeasuredPointRange?.facetKey === key &&
+          certifiedMeasuredPointRange.acceptedValues.includes(value)) ||
         scopeCardCriteria([{
           key: facet?.caption || key,
           op: "eq",
@@ -10572,6 +10598,16 @@ async function runExpertLoop(
   let derivedStructuredSearchPairedCompatibility = false;
   let derivedStructuredSearchGuidedByVisibleReasoning = false;
   let certifiedEnvironmentalRange: EnvironmentalProtectionRange | null = null;
+  // Load measurements are not exact product ratings. This separate,
+  // server-compiled relation is rechecked at catalog I/O and card egress.
+  let certifiedMeasuredPointRange: MeasuredPointRangeCertificate | null = null;
+  ctx.verifyMeasuredPointRangeRenderIds = (ids) =>
+    !certifiedMeasuredPointRange || ids.every((id) =>
+      productProvesMeasuredPointRangeRelation(
+        ctx.cache.get(id),
+        certifiedMeasuredPointRange!,
+      )
+    );
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
     | null = null;
@@ -11538,8 +11574,27 @@ async function runExpertLoop(
         },
       });
     }
+    const pointRangeSafe = certifiedMeasuredPointRange
+      ? finalFacetGate.products.filter((product) =>
+        productProvesMeasuredPointRangeRelation(
+          product,
+          certifiedMeasuredPointRange!,
+        )
+      )
+      : finalFacetGate.products;
+    if (pointRangeSafe.length < finalFacetGate.products.length) {
+      steps.push({
+        step: "v3_measured_point_range_card_proof_rejected",
+        ms: now(),
+        meta: {
+          before: finalFacetGate.products.length,
+          after: pointRangeSafe.length,
+          facet: certifiedMeasuredPointRange?.facetKey ?? null,
+        },
+      });
+    }
     const classPriority = preferCustomerGroundedLiveClassification(
-      finalFacetGate.products,
+      pointRangeSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -12810,6 +12865,18 @@ async function runExpertLoop(
               competingThresholds: hasCompetingMeasuredSelectionTiers(
                 declaration.measurementEvidence,
               ) || recommendedExact.reason === "competing_values",
+              // The certificate is valid only for the customer load point and
+              // carries its own strict per-SKU gate. It can discharge only
+              // that current-range obligation, never another unprojectable
+              // voltage, power, dimension or product-current requirement.
+              independentCardProofCoversRequiredMeasurement:
+                certifiedMeasuredPointRange
+                  ? certificateCoversSoleUnprojectedMeasurement({
+                    certificate: certifiedMeasuredPointRange,
+                    measurementEvidence: declaration.measurementEvidence,
+                    requiredFacetValues: declaration.requiredFacetValues,
+                  })
+                  : false,
             };
             const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
             if (uncoveredGap !== "unprojectable_criterion") return uncoveredGap;
@@ -13550,7 +13617,28 @@ async function runExpertLoop(
             effectiveDeclaredMeasurementScope,
             lastDiscover?.facets ?? [],
           );
-          const derivedMandatoryCriteria = scopedDerivedMandatory.criteria;
+          // This criterion is constructed from a verified customer-load point
+          // and a unique live setting-range facet, AFTER the model-derived
+          // criteria filter. The separate certificate still owns strict card
+          // proof; generic range overlap alone is not sufficient.
+          const certifiedPointCriterion: Criterion[] =
+            certifiedMeasuredPointRange
+              ? [{
+                key: certifiedMeasuredPointRange.facetCaption,
+                op: "range",
+                value: [
+                  certifiedMeasuredPointRange.value,
+                  certifiedMeasuredPointRange.value,
+                ],
+                unit: certifiedMeasuredPointRange.unit,
+                level: "A",
+                evidence: "derived_required",
+              }]
+              : [];
+          const derivedMandatoryCriteria = [
+            ...scopedDerivedMandatory.criteria,
+            ...certifiedPointCriterion,
+          ];
           // A model may mention protection in a provisional B-level class,
           // while the frozen A-level plan still contains no such guard. The
           // product claim is only safe once the exact live protection value
@@ -13598,6 +13686,11 @@ async function runExpertLoop(
             derivedMandatoryCriteria,
             lastDiscover.facets ?? [],
           );
+          if (certifiedMeasuredPointRange) {
+            derivedFacetProjection.options[
+              certifiedMeasuredPointRange.facetKey
+            ] = [...certifiedMeasuredPointRange.acceptedValues];
+          }
           // The generic exact matcher is intentionally permissive for many
           // human labels. An environmental OR is stricter: intersect with the
           // complete atomic values independently enumerated from the live IP
@@ -18948,6 +19041,85 @@ async function runExpertLoop(
             }
           }
         }
+        if (
+          tc.name === "search_catalog" && certifiedMeasuredPointRange &&
+          gateShortCircuit === null && lastDiscover
+        ) {
+          const certified = certifiedMeasuredPointRange;
+          const live = compileMeasuredPointRangeRelation({
+            point: {
+              value: certified.value,
+              unit: certified.unit,
+              source: "customer_load",
+            },
+            facets: lastDiscover.facets,
+          });
+          const sameValues = Boolean(
+            live && live.facetKey === certified.facetKey &&
+              live.facetCaption === certified.facetCaption &&
+              live.acceptedValues.length === certified.acceptedValues.length &&
+              live.acceptedValues.every((value) =>
+                certified.acceptedValues.includes(value)
+              ),
+          );
+          if (
+            !sameValues ||
+            (runArgs.mode !== "by_filter" && runArgs.mode !== "by_query")
+          ) {
+            gateShortCircuit = {
+              tool: "search_catalog",
+              ok: false,
+              error_code: "bad_input",
+              message: "Verified load-to-setting range changed before search",
+            };
+          } else {
+            const currentOptions = runArgs.options &&
+                typeof runArgs.options === "object"
+              ? runArgs.options as Record<string, string[]>
+              : {};
+            runArgs.options = overlayMandatoryFacetOptions(
+              { [certified.facetKey]: certified.acceptedValues },
+              currentOptions,
+            );
+            const exactBranches = expandOptionAlternatives(
+              runArgs as unknown as SearchCatalogInput,
+            );
+            const hasAlternativeOptions = Object.values(
+              runArgs.options as Record<string, string[]>,
+            ).some((values) => values.length > 1);
+            if (
+              hasAlternativeOptions &&
+              (runArgs.mode !== "by_filter" || exactBranches.length === 1)
+            ) {
+              gateShortCircuit = {
+                tool: "search_catalog",
+                ok: false,
+                error_code: "bad_input",
+                message: "Verified load-to-setting range cannot be searched completely",
+              };
+            }
+          }
+          steps.push({
+            step: gateShortCircuit
+              ? "v3_measured_point_range_search_rejected"
+              : "v3_measured_point_range_search_enforced",
+            ms: now(),
+            meta: {
+              facet: certified.facetKey,
+              accepted_values: certified.acceptedValues.length,
+              mode: runArgs.mode,
+            },
+          });
+        }
+        if (
+          tc.name === "search_catalog" && gateShortCircuit === null &&
+          certifiedMeasuredPointRange
+        ) {
+          // Exhaust only the newly certified load-to-setting alternatives.
+          // Existing environmental and ordinary searches retain their
+          // previous early-page behavior to avoid a latency regression.
+          runArgs.require_complete_option_alternatives = true;
+        }
         let selectedSearchRecoveryAttempt:
           | SelectionSearchRecoveryAttempt
           | null = null;
@@ -21238,12 +21410,38 @@ async function runExpertLoop(
             whitelistNorm.clear();
             if (!result.ok) {
               lastDiscover = null;
+              certifiedMeasuredPointRange = null;
               setActiveCatalogFacetSchema(ctx.cache, []);
             }
           }
           if (result.ok) {
+            // Keep the previous certificate while the previous discovery is
+            // still active. A failed rediscovery must not drop its search and
+            // final-card gates while retaining lastDiscover.
+            certifiedMeasuredPointRange = null;
             lastDiscover = result as unknown as DiscoverCategoryOk;
             setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
+            const loadCurrent = extractNominalLoadCurrent(userMessage);
+            if (loadCurrent !== null) {
+              certifiedMeasuredPointRange = compileMeasuredPointRangeRelation({
+                point: {
+                  value: loadCurrent,
+                  unit: "A",
+                  source: "customer_load",
+                },
+                facets: lastDiscover.facets,
+              });
+              steps.push({
+                step: "v3_measured_point_range_relation_checked",
+                ms: now(),
+                meta: {
+                  certified: Boolean(certifiedMeasuredPointRange),
+                  facet: certifiedMeasuredPointRange?.facetKey ?? null,
+                  accepted_values:
+                    certifiedMeasuredPointRange?.acceptedValues.length ?? 0,
+                },
+              });
+            }
             selectionDiscoveries.push(lastDiscover);
             if (selectionDiscoveries.length > 8) selectionDiscoveries.shift();
             addToWhitelist(lastDiscover.category?.pagetitle);
@@ -23245,6 +23443,16 @@ async function runExpertLoop(
         ? guardJargonAxisSplitSections(sections, guardScopedSplitIds)
         : sections;
       if (!safeSections) return false;
+      // This independent-axis renderer intentionally bypasses the ordinary
+      // combined-card gate. It still cannot bypass a server-certified
+      // load-to-setting obligation: reject the whole split if any section
+      // contains an unproven SKU.
+      if (
+        ctx.verifyMeasuredPointRangeRenderIds &&
+        safeSections.some((section) =>
+          !ctx.verifyMeasuredPointRangeRenderIds!(section.ids)
+        )
+      ) return false;
 
       const markdownSections: string[] = [];
       let renderedCount = 0;
@@ -26644,8 +26852,12 @@ Deno.serve(async (req) => {
               !/(?:^|[^\p{L}])(?:их|эти|те)(?:$|[^\p{L}])/iu.test(
                 userMessage,
               );
+            const pendingFreeformAnswerCandidate =
+              clientSelectionReadinessScope &&
+              isVerifiedFreeformReadinessAnswer(userMessage, pendingRecord);
             const pendingReadinessPreflight =
-              (pendingProgressRequest || requestedEvidence) &&
+              (pendingProgressRequest || requestedEvidence ||
+                pendingFreeformAnswerCandidate) &&
                 clientSelectionReadinessScope
                 ? await loadVerifiedSelectionReadinessPending(
                   supabase,
@@ -26677,9 +26889,17 @@ Deno.serve(async (req) => {
                   false,
                 ),
             );
+            const verifiedIssuedFreeformAnswer = Boolean(
+              pendingFreeformAnswerCandidate &&
+                isVerifiedFreeformReadinessAnswer(
+                  userMessage,
+                  pendingReadinessPreflight?.slot ?? null,
+                ),
+            );
             const verifiedPendingQuestionProgress = Boolean(
               (pendingProgressRequest && pendingReadinessPreflight?.slot) ||
-                verifiedIssuedReadinessChip || pendingCutoutPreflight?.slot,
+                verifiedIssuedReadinessChip || verifiedIssuedFreeformAnswer ||
+                pendingCutoutPreflight?.slot,
             );
             const renderedReferenceRequested =
               !verifiedPendingQuestionProgress &&
@@ -27388,10 +27608,16 @@ Deno.serve(async (req) => {
                 supabase,
                 effectiveSessionId,
               );
-              const referencedContext = renderedReferenceRequested ||
-                browserHasRenderedCard || staleRows.length > 0 ||
-                boundary.reason === "local_followup_reference" ||
-                isEllipticalAttributeFollowup(userMessage);
+              const referencedContext = requiresProvenProductContext({
+                renderedReferenceRequested,
+                browserHasRenderedCard,
+                staleCachePresent: staleRows.length > 0,
+                localFollowupReference:
+                  boundary.reason === "local_followup_reference",
+                ellipticalAttributeFollowup:
+                  isEllipticalAttributeFollowup(userMessage),
+                verifiedFreeformReadinessAnswer,
+              });
               if (referencedContext) {
                 send({
                   type: "delta",
@@ -27502,11 +27728,16 @@ Deno.serve(async (req) => {
                 supabase,
                 effectiveSessionId,
               );
-              if (
-                browserHasRenderedCard || staleRows.length > 0 ||
-                boundary.reason === "local_followup_reference" ||
-                isEllipticalAttributeFollowup(userMessage)
-              ) {
+              if (requiresProvenProductContext({
+                renderedReferenceRequested,
+                browserHasRenderedCard,
+                staleCachePresent: staleRows.length > 0,
+                localFollowupReference:
+                  boundary.reason === "local_followup_reference",
+                ellipticalAttributeFollowup:
+                  isEllipticalAttributeFollowup(userMessage),
+                verifiedFreeformReadinessAnswer,
+              })) {
                 send({
                   type: "delta",
                   content:
