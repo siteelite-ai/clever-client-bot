@@ -563,9 +563,9 @@ export function extractNominalLoadCurrent(evidence: string): number | null {
     // двигателя на номинальный ток 16 А» specifies the breaker, not the
     // motor's nameplate. An ambiguous bare nominal current remains missing.
     const productRating =
-      /на\s+(?:(?:номинальн\p{L}*|рабоч\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+)?ток\p{L}*\s*$/iu
+      /на\s+(?:(?:номинальн\p{L}*|рабоч\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+)*(?:ток\p{L}*)(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
         .test(local) ||
-      /с\s+(?:номинальн\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+ток\p{L}*\s*$/iu
+      /с\s+(?:номинальн\p{L}*|допустим\p{L}*|предельн\p{L}*)(?:\s+рабоч\p{L}*)?\s+ток\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
         .test(local) ||
       /ток\p{L}*\s+(?:автомат|выключател|кабел|провод|предохранител|розетк|контактор|пускател|реле)\p{L}*\s*$/iu
         .test(local);
@@ -589,13 +589,15 @@ export function extractNominalLoadCurrent(evidence: string): number | null {
     // A bare «ток 16 А» after a product request has no proven owner: it may
     // be the requested product rating. Require a load-side qualifier here.
     const contextualLoadCurrent = forConnectedLoad &&
-      /(?:^|[,\s])рабоч\p{L}*\s+ток\p{L}*\s*$/iu.test(local);
+      /(?:^|[,\s])(?:номинальн\p{L}*\s+)?рабоч\p{L}*\s+ток\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
+        .test(local);
     // A standalone engineering fact may name the load first ("Насос 2 кВт,
     // рабочий ток 6 А"). Do not infer the same from a request to buy that
     // very device ("Нужен насос с рабочим током 6 А").
     const standaloneLoadFact = connectedLoad.test(before) &&
       !selectedProduct.test(before) &&
-      /(?:^|[,\s])(?:рабоч\p{L}*\s+)?ток\p{L}*\s*$/iu.test(local);
+      /(?:^|[,\s])(?:номинальн\p{L}*\s+)?(?:рабоч\p{L}*\s+)?ток\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
+        .test(local);
     const earlyLoadCurrent = /^\s*ток\p{L}*\s*$/iu.test(local) &&
       !selectedProduct.test(before) && connectedLoad.test(after);
     if (

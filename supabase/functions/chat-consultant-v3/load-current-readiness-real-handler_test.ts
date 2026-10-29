@@ -30,6 +30,19 @@ const motorCategory = "Автоматы защиты двигателя";
 const motorSettingCaption = "Диапазон уставки тока расцепления, А";
 const motorProducts = [
   {
+    id: 100,
+    pagetitle: "Автомат защиты двигателя 4–6 А",
+    url: "https://220volt.kz/catalog/electric/motor-protection/motor-lower-bound/",
+    category: motorCategory,
+    price: 2300,
+    warehouses: [{ city: "Караганда", amount: 2 }],
+    options: [{
+      key: "thermal_trip_setting",
+      caption_ru: motorSettingCaption,
+      value_ru: "4–6 А",
+    }],
+  },
+  {
     id: 101,
     pagetitle: "Автомат защиты двигателя 6–10 А",
     url: "https://220volt.kz/catalog/electric/motor-protection/motor-good/",
@@ -275,7 +288,7 @@ async function runDialogue({
                   caption_ru: motorSettingCaption,
                   type: "string",
                   unit: "А",
-                  values: ["6–10 А", "7–10 А"].map((value_ru) => ({
+                  values: ["4–6 А", "6–10 А", "7–10 А"].map((value_ru) => ({
                     value_ru,
                     products_count: 1,
                   })),
@@ -355,8 +368,8 @@ async function runDialogue({
             ) correctionRequests++;
             return toolReply("declare_selection_reasoning", {
               reasoning: terminalMode === "motor_voltage_refusal"
-                ? "Диапазон уставки тока расцепления 6–10 А покрывает рабочий ток 6 А. Номинальное напряжение каждого автомата должно быть не менее 380 В."
-                : "Диапазон уставки тока расцепления 6–10 А покрывает рабочий ток 6 А.",
+                ? "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А. Номинальное напряжение каждого автомата должно быть не менее 380 В."
+                : "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.",
               retrieval_query: "автомат защиты двигателя",
               measurement_scope: "per_product",
               compatible_classifications: [],
@@ -457,14 +470,15 @@ async function runDialogue({
           );
           const markdown = String(cards[0].markdown ?? "");
           assert(markdown.includes(motorProducts[0].url), markdown);
-          assert(!markdown.includes(motorProducts[1].url), markdown);
-          assertEquals(row.final_products_count, 1);
+          assert(markdown.includes(motorProducts[1].url), markdown);
+          assert(!markdown.includes(motorProducts[2].url), markdown);
+          assertEquals(row.final_products_count, 2);
           assert(
             row.steps.some(({ step, meta }) =>
               step === "v3_measured_point_range_relation_checked" &&
               meta?.certified === true &&
               meta?.facet === "thermal_trip_setting" &&
-              meta?.accepted_values === 1
+              meta?.accepted_values === 2
             ),
             `${label}: no certified load-to-range relation: ${
               JSON.stringify(row.steps)
@@ -646,19 +660,13 @@ async function runDialogue({
           0,
           `${label}: valid range should not repair`,
         );
-        const rangeSearch = catalogProductRequests.find((url) =>
+        const searchedValues = new Set(catalogProductRequests.flatMap((url) =>
           url.searchParams.getAll("options[thermal_trip_setting][]")
-            .includes("6–10 А")
-        );
+        ));
+        assert(searchedValues.has("4–6 А"), `${label}: no 4–6 A search`);
+        assert(searchedValues.has("6–10 А"), `${label}: no 6–10 A search`);
         assert(
-          rangeSearch,
-          `${label}: no constrained catalog search: ${
-            catalogProductRequests.map(String)
-          }`,
-        );
-        assert(
-          !rangeSearch.searchParams.getAll("options[thermal_trip_setting][]")
-            .includes("7–10 А"),
+          !searchedValues.has("7–10 А"),
           `${label}: incompatible 7–10 A option entered search`,
         );
         return;
@@ -830,7 +838,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "motor nameplate 6 A searches one live setting range and never renders 7–10 A",
+    "motor nameplate 6 A searches both live setting ranges and never renders 7–10 A",
   permissions: { read: true, env: false, net: false },
   fn: () =>
     runDialogue({

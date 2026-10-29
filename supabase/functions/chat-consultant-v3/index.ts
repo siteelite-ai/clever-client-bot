@@ -12875,6 +12875,7 @@ async function runExpertLoop(
                     certificate: certifiedMeasuredPointRange,
                     measurementEvidence: declaration.measurementEvidence,
                     requiredFacetValues: declaration.requiredFacetValues,
+                    customerEvidence: verifiedCustomerMeasurementEvidence,
                   })
                   : false,
             };

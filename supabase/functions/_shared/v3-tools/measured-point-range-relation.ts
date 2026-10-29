@@ -188,6 +188,8 @@ interface SoleUnprojectedMeasurementInput {
   certificate: MeasuredPointRangeCertificate;
   measurementEvidence: string;
   requiredFacetValues: ReadonlyArray<{ key: string; value: string }>;
+  /** Server-verified customer turns, never model-authored measurements. */
+  customerEvidence?: string;
 }
 
 const COVERAGE_WORD =
@@ -245,15 +247,64 @@ function stripCertifiedPoint(
   clause: string,
   certificate: MeasuredPointRangeCertificate,
 ): string {
-  return clause.replace(
-    new RegExp(
-      String
-        .raw`(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*${AMPERE_TOKEN}(?![\p{L}])`,
-      "giu",
-    ),
-    (matched, number: string) =>
-      Number(number.replace(",", ".")) === certificate.value ? " " : matched,
+  const coverageAt = clause.search(COVERAGE_WORD);
+  if (coverageAt < 0) return clause;
+  const point = new RegExp(
+    String
+      .raw`(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*${AMPERE_TOKEN}(?![\p{L}])`,
+    "giu",
   );
+  const matches = [...clause.matchAll(point)].filter((match) =>
+    Number(match[1].replace(",", ".")) === certificate.value
+  );
+  // A certificate discharges one customer load point, not every identical
+  // ampere figure in the sentence. Prefer the first point after the explicit
+  // coverage relation; a point immediately before "входит в диапазон" is
+  // the only supported reverse-order form. All other values remain visible.
+  const after = matches.find((match) =>
+    (match.index ?? -1) >= coverageAt &&
+    (match.index ?? Infinity) - coverageAt <= 100
+  );
+  const before = matches.filter((match) =>
+    (match.index ?? Infinity) < coverageAt &&
+    coverageAt - ((match.index ?? 0) + match[0].length) <= 100
+  ).at(-1);
+  const selected = after ?? before;
+  if (selected?.index === undefined) return clause;
+  return clause.slice(0, selected.index) + " " +
+    clause.slice(selected.index + selected[0].length);
+}
+
+/** Only an unambiguous, leading customer-load preface can be discounted.
+ * Commas, symbolic ratings, inequalities and any number after the product
+ * selector remain independent requirements even when their values happen to
+ * match the customer's load. */
+function stripVerifiedSourceFacts(
+  clause: string,
+  customerEvidence: string,
+): string {
+  const selector = clause.match(
+    /(?:нуж(?:ен|на|но|ны)|необходим\p{L}*|требуется)\s+(?:автомат|выключател|товар|издели|модел|светильник|кабел)\p{L}*/iu,
+  );
+  if (selector?.index === undefined) return clause;
+  const prefix = clause.slice(0, selector.index);
+  if (
+    !/^\s*для\s+(?:(?:асинхронного|однофазного|трехфазного|трёхфазного)\s+)?(?:двигателя|насоса|нагрузки|потребителя|оборудования)\s+\d+(?:[.,]\d+)?\s*(?:кВт|Вт)(?:\s+при\s+\d+(?:[.,]\d+)?\s*(?:В|кВ))?\s*$/iu
+      .test(prefix)
+  ) return clause;
+  const quantity = /(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*([\p{L}²]+)(?![\p{L}])/giu;
+  const identity = (value: string, unit: string) =>
+    `${Number(value.replace(",", "."))}:${unit.normalize("NFKC").toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")}`;
+  const verified = new Set(
+    [...String(customerEvidence ?? "").matchAll(quantity)].map((match) =>
+      identity(match[1], match[2])
+    ),
+  );
+  const facts = [...prefix.matchAll(quantity)];
+  if (facts.length === 0 || facts.some((match) =>
+    !verified.has(identity(match[1], match[2]))
+  )) return clause;
+  return prefix.replace(quantity, " ") + clause.slice(selector.index);
 }
 
 /**
@@ -308,14 +359,42 @@ export function certificateCoversSoleUnprojectedMeasurement(
   let covered = false;
   for (const clause of clauses) {
     const coverageClause = isCertifiedSettingCoverageClause(clause);
+    const sourceSafe = stripVerifiedSourceFacts(
+      coverageClause ? stripCertifiedRanges(clause, certificate) : clause,
+      input.customerEvidence ?? "",
+    );
     if (!coverageClause) {
-      if (hasMeasuredSelectionRequirement(clause)) return false;
+      // A model may list the two *already certified* live alternatives in a
+      // following catalogue-enumeration clause. It is not a second product
+      // threshold. Preserve the original strict check for every standalone
+      // range assertion, nominal value, or clause with another number.
+      const enumRemainder = stripCertifiedRanges(sourceSafe, certificate);
+      if (
+        covered && enumRemainder !== sourceSafe &&
+        /(?:в\s+каталог|значени|вариант|перечисл)/iu.test(sourceSafe) &&
+        !/(?:номинальн|долж|треб|нуж|не\s+менее|не\s+более|минимум|максимум)/iu
+          .test(sourceSafe) &&
+        !/\d/u.test(enumRemainder)
+      ) continue;
+      if (hasMeasuredSelectionRequirement(sourceSafe)) return false;
+      if (
+        /(?:^|[^\p{L}])(?:U|P|У|Р)(?:ном|nom|rated)?\s*[<>≤≥=]\s*\d/u
+          .test(sourceSafe)
+      ) return false;
+      // A bare product property ("напряжение 380 В") can lack directional
+      // wording and evade the generic requirement detector. It still cannot
+      // borrow a matching customer supply value as card proof.
+      if (
+        input.customerEvidence?.trim() && /\d/u.test(sourceSafe) &&
+        /(?:напряжен|мощност|ток|длин|ширин|высот|диаметр|сечен|частот|температур|voltage|power|current|length|width|height|diameter|section|temperature)/iu
+          .test(sourceSafe)
+      ) return false;
       // The shared detector treats descriptive load/supply facts as context.
       // An unqualified nominal or setting value is nevertheless a product-
       // side assertion and cannot be waived by a different coverage clause.
       if (
         /(?:номинальн|уставк|регулировк|расцеплен|срабатыван|setting|trip)/iu
-          .test(clause) && /\d/u.test(clause)
+          .test(sourceSafe) && /\d/u.test(sourceSafe)
       ) return false;
       continue;
     }
@@ -325,7 +404,7 @@ export function certificateCoversSoleUnprojectedMeasurement(
       return false;
     }
     const remainder = stripCertifiedPoint(
-      stripCertifiedRanges(clause, certificate),
+      sourceSafe,
       certificate,
     );
     // Any other number in this same claim could be a second product-side

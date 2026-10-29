@@ -317,6 +317,72 @@ Deno.test("separate descriptive load and supply facts need no product-side waive
   );
 });
 
+Deno.test("two certified 6 A ranges coexist with same-clause customer load facts only", () => {
+  const certificate = compile([{
+    ...setting,
+    values: [
+      { value: "4–6 А" },
+      { value: "6–10 А" },
+      { value: "7–10 А" },
+    ],
+  }], { ...point, value: 6 }) as MeasuredPointRangeCertificate;
+  assertEquals(certificate.acceptedValues, ["4–6 А", "6–10 А"]);
+  const source = "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.";
+  const customerEvidence = "Подберите автомат для двигателя 3 кВт, 380 В, 3 фазы, рабочий ток 6 А";
+  const covers = (measurementEvidence: string, trusted = customerEvidence) =>
+    certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence,
+      requiredFacetValues: [],
+      customerEvidence: trusted,
+    });
+  assertEquals(covers(source), true);
+  assertEquals(covers(source, ""), false);
+  assertEquals(covers(`${source} Номинальное напряжение каждого автомата должно быть не менее 380 В.`), false);
+  assertEquals(covers(`${source} Диапазон уставки 6–10 А.`), false);
+  assertEquals(covers(`${source} В каталоге это также 7–10 А.`), false);
+  assertEquals(
+    covers(
+      "Диапазон уставки тока 4–6 А покрывает рабочий ток 6 А двигателя 380 В, номинальное напряжение 380 В.",
+      "Двигатель 380 В, рабочий ток 6 А",
+    ),
+    false,
+  );
+  assertEquals(
+    covers(
+      "Диапазон уставки тока 4–6 А покрывает рабочий ток 6 А двигателя 3 кВт и рассчитан на мощность 3 кВт.",
+      "Двигатель 3 кВт, рабочий ток 6 А",
+    ),
+    false,
+  );
+  assertEquals(
+    covers(
+      "Диапазон уставки тока 4–6 А покрывает рабочий ток 6 А. Автомат защиты двигателя, напряжение 380 В.",
+    ),
+    false,
+  );
+  assertEquals(
+    covers(
+      "Для двигателя 3 кВт при 380 В, Uном ≥ 380 В; диапазон уставки тока 4–6 А покрывает ток 6 А.",
+      "Двигатель 3 кВт, 380 В, рабочий ток 6 А",
+    ),
+    false,
+  );
+  assertEquals(
+    covers(
+      "Для двигателя 3 кВт при 380 В, P≥3 кВт; диапазон уставки тока 4–6 А покрывает ток 6 А.",
+      "Двигатель 3 кВт, 380 В, рабочий ток 6 А",
+    ),
+    false,
+  );
+  assertEquals(
+    covers(
+      "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока 4–6 А, покрывающим рабочие 6 А, и с током отключения 6 А.",
+    ),
+    false,
+  );
+});
+
 Deno.test("one mixed clause cannot hide voltage, power or dimension obligations", () => {
   const certificate = compile() as MeasuredPointRangeCertificate;
   for (

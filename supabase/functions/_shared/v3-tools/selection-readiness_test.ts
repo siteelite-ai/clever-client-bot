@@ -854,6 +854,53 @@ Deno.test("nameplate-current ownership follows the measured object, not the near
   }
 });
 
+Deno.test("nameplate qualifiers between load current and amperes retain the load owner", () => {
+  for (const [message, expected] of [
+    [
+      "Подберите автомат для двигателя 3 кВт, 380 В, прямой пуск. Номинальный рабочий ток по шильдику 6 А",
+      6,
+    ],
+    [
+      "Нужен кабель для насоса 220 В, линия 25 м, стационарно на улице. Номинальный рабочий ток по шильдику 8,5 А",
+      8.5,
+    ],
+    ["Двигатель 3 кВт, номинальный рабочий ток по шильдику 6 А", 6],
+    ["Насос 2 кВт, рабочий ток по шильдику 8 А", 8],
+  ] as const) {
+    assertEquals(extractNominalLoadCurrent(message), expected, message);
+  }
+  assertEquals(
+    selectReadinessClarification(
+      "Подберите автомат для двигателя 3 кВт, 380 В, 3 фазы, прямой пуск. Номинальный рабочий ток по шильдику 6 А",
+    ),
+    null,
+  );
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен кабель для насоса 220 В, 1 фаза, линия 25 м, стационарно на улице. Номинальный рабочий ток по шильдику 8,5 А",
+    ),
+    null,
+  );
+});
+
+Deno.test("nameplate wording cannot turn product ratings into load measurements", () => {
+  for (const productCurrent of [
+    "Подберите автомат для двигателя на номинальный рабочий ток по шильдику 16 А",
+    "Подберите автомат для двигателя 3 кВт. Автомат с номинальным рабочим током по шильдику 16 А",
+    "Подберите автомат для двигателя 3 кВт. Номинальный рабочий ток автомата по шильдику 16 А",
+    "Нужен кабель для насоса на номинальный рабочий ток по шильдику 16 А",
+    "Нужен насос с номинальным рабочим током по шильдику 16 А",
+  ]) {
+    assertEquals(extractNominalLoadCurrent(productCurrent), null, productCurrent);
+  }
+  assertEquals(
+    extractNominalLoadCurrent(
+      "Подберите автомат для двигателя: номинальный рабочий ток по шильдику 6 А; номинальный ток автомата 16 А",
+    ),
+    6,
+  );
+});
+
 Deno.test("load-current corrections replace or withdraw old measurements across customer turns", () => {
   for (const [message, expected] of [
     ["Подберите автомат для двигателя: ток двигателя 6 А, точнее 8 А", 8],
