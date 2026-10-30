@@ -507,6 +507,8 @@ async function runDialogue({
             }`,
           );
         } else if (terminalMode === "motor_voltage_refusal") {
+          assert(!publicText(events).includes("https://220volt.kz/catalog/"),
+            `${label}: private candidate link leaked into public prose`);
           assertEquals(
             row.error,
             null,
@@ -684,11 +686,16 @@ async function runDialogue({
           correctionRequests >= 1,
           `${label}: unprojected voltage did not enter repair`,
         );
-        assertEquals(
-          catalogProductRequests.length,
-          0,
-          `${label}: no product search before resolving voltage obligation`,
-        );
+        assertEquals(catalogProductRequests.length, 2,
+          `${label}: only the two bounded private range probes may run`);
+        const privateProbe = logs.at(-1)?.steps.find(({ step }) =>
+          step === "v3_private_candidate_measurement_probe");
+        assertEquals(privateProbe?.meta?.renderable, false);
+        assertEquals(privateProbe?.meta?.shared_cache, false);
+        const sampledValues = new Set(catalogProductRequests.flatMap(url =>
+          url.searchParams.getAll("options[thermal_trip_setting][]")));
+        assert(sampledValues.has("4–6 А") && sampledValues.has("6–10 А"));
+        assert(!sampledValues.has("7–10 А"));
         return;
       } else if (terminalMode === "pe_answer") {
         assert(
