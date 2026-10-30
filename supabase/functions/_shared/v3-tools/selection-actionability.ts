@@ -969,9 +969,13 @@ function derivedRequiredFacetChoices(
   const normalizedEvidence = normalizeLiteralEvidence(customerEvidence);
   const evidenceTokens = new Set(normalizedEvidence.split(" ").filter(Boolean));
   const exactNumericEvidence = customerExactNumericEvidence(customerEvidence);
-  const exactNumericTokens = new Set(
-    normalizeLiteralEvidence(exactNumericEvidence).split(" ").filter(Boolean),
-  );
+  const exactNumericValues = new Set([...exactNumericEvidence.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?![\p{L}\p{N}])/gu)]
+    .map(match => Number(match[0].replace(",", "."))));
+  const measuredFacets = facets.map(f => ({
+    key: String(f.key || f.caption || ""), caption: String(f.caption || f.key || ""),
+    type: String(f.type || ""), unit: f.unit ?? null,
+    values: (f.values ?? []).map(v => ({ value: String(v.value ?? "") })),
+  }));
   const customerQuantities = extractClientQuantities(exactNumericEvidence)
     .map((quantity) => ({
       value: quantity.value,
@@ -1010,8 +1014,12 @@ function derivedRequiredFacetChoices(
       if (constrainToCustomerEvidence) {
         const normalizedValue = normalizeLiteralEvidence(choice.value);
         const valueTokens = normalizedValue.split(" ").filter(Boolean);
-        const bareNumericValue = /^\d+(?:[.,]\d+)?$/u.test(normalizedValue);
-        const exactPhrase = !bareNumericValue && normalizedValue.length >= 2 &&
+        // Lexical normalization deliberately splits punctuation. Never use
+        // those tokens for numeric ownership: 6.3 is not either 6 or 3, and
+        // one endpoint of an interval is not an exact request for that range.
+        const bareNumericValue = /^\s*\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+        const intervalValue = /^\s*\d+(?:[.,]\d+)?\s*[-–—]\s*\d+(?:[.,]\d+)?(?:\s*[a-zа-я°²³]+)?\s*$/iu.test(choice.value);
+        const exactPhrase = !bareNumericValue && !intervalValue && normalizedValue.length >= 2 &&
           (` ${normalizedEvidence} `).includes(` ${normalizedValue} `);
         const compactIdentifier = valueTokens.length === 1 &&
           /(?=.*[a-zа-я])(?=.*\d)/iu.test(valueTokens[0]) &&
@@ -1030,8 +1038,8 @@ function derivedRequiredFacetChoices(
             choiceQuantities.map((quantity) => quantity.unit).filter(Boolean),
           ),
         ];
-        const numericLiteral = valueTokens.some((token) => {
-          if (!/^\d+(?:[.,]\d+)?$/u.test(token)) return false;
+        const numericTokens = [...choice.value.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?![\p{L}\p{N}])/gu)].map(match => match[0]);
+        const numericLiteral = !intervalValue && numericTokens.some((token) => {
           const value = Number(token.replace(",", "."));
           if (!Number.isFinite(value)) return false;
           const choiceUnits = choiceQuantities
@@ -1046,14 +1054,23 @@ function derivedRequiredFacetChoices(
             ? [declaredUnit]
             : [];
           if (expectedUnits.length === 0) {
-            return exactNumericTokens.has(token) &&
+            return exactNumericValues.has(value) &&
               customerNamesRequiredFacetAxisNearValue(
                 choice,
                 exactNumericEvidence,
               );
           }
-          return customerQuantities.some((quantity) =>
+          const sameQuantity = customerQuantities.some((quantity) =>
             quantity.value === value && expectedUnits.includes(quantity.unit)
+          );
+          if (!sameQuantity) return false;
+          if (!expectedUnits.some(isPhysicalMeasurementUnit)) return true;
+          // Unit/number overlap is necessary but not sufficient: a measured
+          // connected load is not an exact rating of the requested product.
+          return customerOwnsDerivedExactFacetValue(
+            { key: facetName, op: "eq", value: choice.value, level: "A" },
+            customerEvidence, customerEvidence,
+            measuredFacets,
           );
         });
         // A long bare number is not a distinctive identifier. In particular,
@@ -1066,6 +1083,7 @@ function derivedRequiredFacetChoices(
           token.length >= 4 && /[a-zа-я]/iu.test(token) &&
           evidenceTokens.has(token)
         );
+        if (requiredChoiceHasDeclaredPhysicalUnit(choice) && !numericLiteral) continue;
         if (
           !exactPhrase && !compactIdentifier && !numericLiteral &&
           !distinctiveLiteral
@@ -1105,7 +1123,7 @@ function requiredChoiceMeasuresPhysicalQuantity(
   if (sourceUnit && isPhysicalMeasurementUnit(sourceUnit)) {
     return true;
   }
-  const numericValue = /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+  const numericValue = /^\s*[+-]?\d+(?:[.,]\d+)?(?:\s*[-–—]\s*\d+(?:[.,]\d+)?)?\s*$/u.test(choice.value);
   const normalizedCaptionUnit = normalizeUnit(captionUnit);
   if (
     numericValue && normalizedCaptionUnit &&
@@ -1119,7 +1137,14 @@ function requiredChoiceMeasuresPhysicalQuantity(
 function requiredChoiceIsBareScalar(
   choice: DerivedRequiredFacetChoice,
 ): boolean {
-  return /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+  return /^\s*[+-]?\d+(?:[.,]\d+)?(?:\s*[-–—]\s*\d+(?:[.,]\d+)?)?\s*$/u.test(choice.value);
+}
+
+/** A declared unit is stronger evidence than an arbitrary last word of a
+ * caption. Keep count/morphology handling (e.g. "Количество жил") unchanged. */
+function requiredChoiceHasDeclaredPhysicalUnit(choice: DerivedRequiredFacetChoice): boolean {
+  const captionUnit = choice.facet.match(/[,;:(/]\s*([a-zа-я°]{1,8}(?:[²³]|\d)?(?:\/[a-zа-я°]{1,8})?)\s*\)?$/iu)?.[1];
+  return [choice.sourceUnit, captionUnit].some(raw => Boolean(raw?.trim()) && isPhysicalMeasurementUnit(normalizeUnit(raw!)));
 }
 
 /** The reasoning model may choose a derived qualitative technical value (for
@@ -3247,13 +3272,14 @@ export function resolveDerivedSelectionReasoning(
     // for the product by the customer remains binding.
     if (coveredByVisibleRange || directionalCustomerCapacity) continue;
     if (
-      !customerOwned && !declaredRequiredIds.has(choice.id) &&
+      !customerOwned &&
+      (requiredChoiceHasDeclaredPhysicalUnit(choice) ||
+        !declaredRequiredIds.has(choice.id) && !projectedChoiceVisible) &&
       !requiredChoiceAvailableToReasoning(
         choice,
         customerOwnedRequiredIds,
         customerEvidence,
-      ) &&
-      !projectedChoiceVisible
+      )
     ) continue;
     const identity = captionKey.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
       .trim();
