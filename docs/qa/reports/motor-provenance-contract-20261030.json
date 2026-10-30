@@ -1,0 +1,196 @@
+{
+  "suite_file": "motor-v232-one-shot.json",
+  "suite_version": 3,
+  "suite_sha256": "07a0a1031afe9caafe6b9a2670bfd41b258c9f2e4572de689e56c9bb019ce5ae",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-30T16:22:01.370Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "motor-v232-3kw-6a": 1
+  },
+  "cases": [
+    {
+      "id": "motor-v232-3kw-6a",
+      "title": "Motor breaker: 3 kW, 380 V, three phases, 6 A nameplate current",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "session_38ad1f5b-ef79-4355-a152-ee8cfa587e60",
+          "turns": [
+            {
+              "message": "Подберите автомат для асинхронного двигателя 3 кВт, 380 В, 3 фазы, прямой пуск, номинальный рабочий ток по шильдику 6 А.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 14393,
+              "network_attempts": 1,
+              "log_id": "14cf5afe-0280-432b-9acb-e89ca13f1544",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/avtomat-zashhityi-dvigatelya-va-431-3p-4,0-6,3a-100ka-21228dek",
+                  "verified": true,
+                  "sku": "Ем000022736",
+                  "name": "Автомат защиты двигателя ВА-431 3P 4,0-6,3A 100кА /21228DEK/",
+                  "facets": {
+                    "Категория": "Автоматы защиты двигателя",
+                    "Номинальная откл способность,кА": "100",
+                    "Объем, м3": "0.000265",
+                    "Бренд": "Dekraft",
+                    "Код ТН ВЭД": "8536201007",
+                    "Диапазон рабочих температур": "-5 +40 °C",
+                    "Код НКТ": "0200182548042",
+                    "Степень защиты, IP": "20",
+                    "Количество полюсов": "3",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, мм": "68",
+                    "Страна происхождения": "КИТАЙ",
+                    "Высота, мм": "90",
+                    "Номин раб напряжение, В": "690",
+                    "Ширина, мм": "45",
+                    "Номинальный ток, А": "6.3",
+                    "Гарантийный срок, лет": "2",
+                    "Способ монтажа": "на DIN-рейку",
+                    "Диапазон уставки тока расцепления,А": "4-6.3",
+                    "Срок службы, лет": "15",
+                    "Тип расцепителя": "термомагнитный",
+                    "Единица измерения": "шт",
+                    "Тип подключения": "винтовое соединение",
+                    "Вес, кг.": "0.29"
+                  },
+                  "offerPrice": 5895,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/avtomat-zashhityi-dvigatelya-va-431-3p-4,0-6,3a-100ka-21228dek/",
+                  "description_excerpt": "Автоматические выключатели защиты двигателя серии ВА-430 предназначены для управления и защиты трехфазных асинхронных электродвигателей от короткого замыкания, перегрузки и выпадения фазы. Автоматические выключатели защиты двигателя серии ВА-430 предназначены для использования в электрических цепях переменного тока напряжением до 690 В для систем вентиляции и кондиционирования, небольших генераторных установок и систем водоснабжения, упаковочных линий. Применяются на производственных площадках, "
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Автомат защиты двигателя ВА-431 3P 4,0-6,3A 100кА /21228DEK/",
+                  "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/avtomat-zashhityi-dvigatelya-va-431-3p-4,0-6,3a-100ka-21228dek/",
+                  "price": 5895,
+                  "stockLine": "Астана (1 шт)",
+                  "cardText": "- **[Автомат защиты двигателя ВА-431 3P 4,0-6,3A 100кА /21228DEK/](https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/avtomat-zashhityi-dvigatelya-va-431-3p-4,0-6,3a-100ka-21228dek/)**\n  Цена: *5 895* ₸\n  Бренд: Dekraft\n  Наличие: Астана (1 шт)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Автоматы защиты двигателя». Сверяю заявленные условия с характеристиками каталога.\n\nВ выполненном поиске удалось подтвердить 1 вариант. Если хотите больше вариантов, скажите, какое условие можно изменить; без вашего согласия я не расширю подбор.",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_38ad1f5b-ef79-4355-a152-ee8cfa587e60"
+              },
+              "selection_contract": {
+                "hash": "selection-811c9dc5",
+                "mandatory_criteria": [],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Автоматы защиты двигателя»: 67 тов., фасетов 33, листьев 1",
+                  "duration_ms": 3180
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=1; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 8",
+                  "duration_ms": 294
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "catalog_preflight": {
+    "ok": true,
+    "status": "ready",
+    "http_status": 200,
+    "checks": {
+      "categories": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "products": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "facets": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "article_filter": {
+        "status": "ok",
+        "http_status": 200
+      }
+    },
+    "duration_ms": 4260
+  },
+  "finished_at": "2026-10-30T16:22:21.826Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "14cf5afe-0280-432b-9acb-e89ca13f1544"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 1,
+    "verified": 1,
+    "unverified": 0
+  },
+  "passed": true
+}
