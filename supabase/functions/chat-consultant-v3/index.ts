@@ -12797,6 +12797,8 @@ async function runExpertLoop(
                   independentFirstTurnDestinationAreaProof,
               },
               reason => { declarationRejectionReason = reason; },
+              structuredMeasurementMode && certifiedMeasuredPointRange
+                ? { measuredPointRange: certifiedMeasuredPointRange } : undefined,
             );
           };
           const cleanResolvedDeclaration = (

@@ -73,3 +73,23 @@ Deno.test("structured migration is private and cannot change public or paired-fi
   assert(source.includes('const structuredMeasurementMode = CLOSURE_TEST_MARKER === "closure_preview" &&'));
   assert(source.includes("Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference"));
 });
+
+Deno.test("server-owned proof survives ambiguous same-unit facets; identical model quantities do not inherit ownership", () => {
+  const liveLikeFacets = [...facets,
+    {key:"nominal",caption:"Номинальный ток, А",unit:"А",values:[{value:"6.3"},{value:"10"}]},
+    {key:"breaking",caption:"Ток отключения, А",unit:"А",values:[{value:"6"},{value:"10"}]},
+  ];
+  const trusted=verifiedMeasuredPointRangeEvidence(certificate)!;
+  const m=materializeStructuredMeasurementDeclaration({product_requirements:["Нужно проверить исполнение изделия."],measurement_scope:"per_product"},trusted)!;
+  const liveCustomer="Подберите автомат для асинхронного двигателя 3 кВт, 380 В, 3 фазы, прямой пуск, номинальный рабочий ток по шильдику 6 А.";
+  const withoutProvenance=resolveDerivedSelectionReasoning(m.args,liveLikeFacets,liveCustomer,"Автоматы защиты двигателя");
+  assertEquals(withoutProvenance?.measurementEvidence.includes(trusted),false);
+  const resolved=resolveDerivedSelectionReasoning(m.args,liveLikeFacets,liveCustomer,"Автоматы защиты двигателя",null,{},undefined,{measuredPointRange:certificate});
+  assert(resolved);
+  assert(resolved.measurementEvidence.includes(trusted));
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:resolved.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),true);
+  const other=materializeStructuredMeasurementDeclaration({product_requirements:["Номинальный ток 6 А."],measurement_scope:"per_product"},trusted)!;
+  const withExtra=resolveDerivedSelectionReasoning(other.args,liveLikeFacets,customer,"Автоматы защиты двигателя",null,{},undefined,{measuredPointRange:certificate});
+  assert(withExtra);
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:withExtra.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),false);
+});

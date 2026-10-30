@@ -45,6 +45,7 @@ import {
 } from "./facet-value-semantics.ts";
 import { visibleSystemTotalHasProvenance } from "./system-total-capacity.ts";
 import { MEASUREMENT_OWNERSHIP_POLICY } from "./derived-reasoning-repair.ts";
+import { type MeasuredPointRangeCertificate, verifiedMeasuredPointRangeEvidence } from "./measured-point-range-relation.ts";
 
 /**
  * Whether the consultant has already produced enough machine-checkable
@@ -497,6 +498,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
     place: string;
     minimumAreaM2: number;
   } | null = null,
+  serverVerifiedMeasurementEvidence: string | null = null,
 ): string | null {
   if (!customerEvidence.trim()) return reasoning;
   const liveMeasuredFacets = facets.map((facet) => ({
@@ -536,6 +538,16 @@ function scrubUnsupportedPerProductMeasuredClaims(
     liveMeasuredFacets,
     measurementScope,
   ).filter((claim) => {
+    // Only the exact evidence span compiled from the server certificate is
+    // server-owned. Identical numeric values in another property gain no
+    // authority, and no request or tool field can opt into this provenance.
+    if (serverVerifiedMeasurementEvidence) {
+      let start = reasoning.indexOf(serverVerifiedMeasurementEvidence);
+      while (start >= 0) {
+        if (claim.start >= start && claim.end <= start + serverVerifiedMeasurementEvidence.length) return false;
+        start = reasoning.indexOf(serverVerifiedMeasurementEvidence, start + serverVerifiedMeasurementEvidence.length);
+      }
+    }
     // The paired-fit protocol proves only strict comparisons against the
     // measured object itself. It cannot license a different model-supplied
     // size merely because the claim names the same before/after facet.
@@ -2706,6 +2718,7 @@ export function resolveDerivedSelectionReasoning(
     | "insufficient_grounded_reasoning"
     | "system_total_reconciliation_failed"
     | "unsupported_per_product_claims") => void,
+  serverRelations?: { measuredPointRange: MeasuredPointRangeCertificate },
 ): ResolvedDerivedSelectionReasoning | null {
   const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0]) => {
     try { observeRejection?.(reason); } catch { /* observational only */ }
@@ -2798,6 +2811,7 @@ export function resolveDerivedSelectionReasoning(
     pairedObjectReference,
     productClass,
     appearanceScope.independentDestinationAreaProof,
+    serverRelations ? verifiedMeasuredPointRangeEvidence(serverRelations.measuredPointRange) : null,
   );
   if (!scopeConsistentReasoning) return reject("unsupported_per_product_claims");
   const rawRetrievalQuery = visibleFacetText(
