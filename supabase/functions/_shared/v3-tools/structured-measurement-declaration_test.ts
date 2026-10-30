@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { materializeStructuredMeasurementDeclaration, structuredMeasurementTool } from "./structured-measurement-declaration.ts";
 import { buildDerivedSelectionReasoningToolSchema, resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
-import { certificateCoversSoleUnprojectedMeasurement, compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
+import { certificateCoversSoleUnprojectedMeasurement, compileMeasuredPointRangeRelation, verifiedMeasuredPointRangeEvidence } from "./measured-point-range-relation.ts";
 
 const facets = [{key:"setting",caption:"Диапазон уставки тока расцепления, А",unit:"А",values:[{value:"4–6 А"},{value:"6–10 А"},{value:"7–10 А"}]}];
 const customer = "Автомат для двигателя 3 кВт, 380 В, рабочий ток по шильдику 6 А";
@@ -49,6 +49,23 @@ Deno.test("source facts cannot license another same-valued product rating in a s
     const m=materializeStructuredMeasurementDeclaration({product_requirements:[relation,extra]})!;
     assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:String(m.args.reasoning),requiredFacetValues:[],customerEvidence:customer}),false,extra);
   }
+});
+
+Deno.test("server relation survives model prose cleanup without waiving any other obligation", () => {
+  const trusted=verifiedMeasuredPointRangeEvidence(certificate);
+  assert(trusted);
+  const args={product_requirements:["Проверяю совместимое исполнение изделия."],measurement_scope:"per_product",required_facet_values:[]};
+  const m=materializeStructuredMeasurementDeclaration(args,trusted)!;
+  const resolved=resolveDerivedSelectionReasoning(m.args,facets,customer,"Автоматы защиты двигателя");
+  assert(resolved);
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:resolved.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),true);
+  const extra=materializeStructuredMeasurementDeclaration({...args,product_requirements:["Напряжение каждого изделия должно быть не менее 380 В."]},trusted)!;
+  assert(String(extra.args.reasoning).includes("380 В"));
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:String(extra.args.reasoning),requiredFacetValues:[],customerEvidence:customer}),false);
+  assertEquals(verifiedMeasuredPointRangeEvidence({...certificate,value:100}),null);
+  // An identically named tool field is untrusted and cannot supply evidence.
+  const forged=materializeStructuredMeasurementDeclaration({...args,serverVerifiedRelationEvidence:trusted})!;
+  assertEquals(String(forged.args.reasoning).includes(trusted),false);
 });
 
 Deno.test("structured migration is private and cannot change public or paired-fit entrypoints", async () => {

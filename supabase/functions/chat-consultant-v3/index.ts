@@ -712,6 +712,7 @@ import {
   compileMeasuredPointRangeRelation,
   productProvesMeasuredPointRangeRelation,
   type MeasuredPointRangeCertificate,
+  verifiedMeasuredPointRangeEvidence,
 } from "../_shared/v3-tools/measured-point-range-relation.ts";
 import {
   buildVisibleRequestContract,
@@ -12762,13 +12763,15 @@ async function runExpertLoop(
           ) => {
             declarationRejectionReason = null;
             if (structuredMeasurementMode) {
-              const structured = materializeStructuredMeasurementDeclaration(args);
+              const relationEvidence = certifiedMeasuredPointRange
+                ? verifiedMeasuredPointRangeEvidence(certifiedMeasuredPointRange) : null;
+              const structured = materializeStructuredMeasurementDeclaration(args, relationEvidence);
               if (!structured) {
                 declarationRejectionReason = "invalid_structured_measurement_declaration";
                 return null;
               }
               args = structured.args;
-              steps.push({step:"v3_structured_measurement_declaration",ms:now(),meta:{requirements:structured.requirementCount,source_facts:"server_request_state",proof_gates:"unchanged"}});
+              steps.push({step:"v3_structured_measurement_declaration",ms:now(),meta:{requirements:structured.requirementCount,server_relation_retained:Boolean(relationEvidence),source_facts:"server_request_state",proof_gates:"unchanged"}});
             }
             const pair = pairedDeclarationDecision(args);
             return resolveDerivedSelectionReasoning(

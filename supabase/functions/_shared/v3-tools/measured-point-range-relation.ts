@@ -194,6 +194,14 @@ interface SoleUnprojectedMeasurementInput {
   customerEvidence?: string;
 }
 
+/** Canonical executable evidence for a relation already certified by the
+ * server. It is not copied from model prose and proves no other property. */
+export function verifiedMeasuredPointRangeEvidence(certificate: MeasuredPointRangeCertificate): string | null {
+  const evidence = `Диапазон уставки тока должен включать рабочий ток ${certificate.value} А.`;
+  return certificateCoversSoleUnprojectedMeasurement({certificate, measurementEvidence:evidence, requiredFacetValues:[]})
+    ? evidence : null;
+}
+
 /** Technical scalars only: never raw sentences, identifiers, contact data or
  * arbitrary units. A matching customer quantity is overlap, NOT ownership. */
 export function measurementQuantityDiagnostics(
