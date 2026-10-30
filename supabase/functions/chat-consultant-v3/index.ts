@@ -221,6 +221,11 @@ import {
   type RequiredProductMeasurementGap,
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
 import {
+  materializeStructuredMeasurementDeclaration,
+  structuredMeasurementTool,
+  STRUCTURED_MEASUREMENT_DECLARATION_POLICY,
+} from "../_shared/v3-tools/structured-measurement-declaration.ts";
+import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
 } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
@@ -12565,11 +12570,19 @@ async function runExpertLoop(
               }`,
             };
           }
-          const reasoningToolSchema = buildDerivedSelectionReasoningToolSchema(
+          // Migrate only a relation-backed, closed-preview derivation first.
+          // Public, replacements, paired-fit and system-total routes retain
+          // their current contracts. No request parameter can opt into this.
+          const structuredMeasurementMode = CLOSURE_TEST_MARKER === "closure_preview" &&
+            Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference;
+          if (structuredMeasurementMode) derivedMessages[0].content += `\n\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}`;
+          const baseReasoningToolSchema = buildDerivedSelectionReasoningToolSchema(
             lastDiscover.facets ?? [],
             userMessage,
             presearchPairedObjectReference,
           );
+          const reasoningToolSchema = structuredMeasurementMode
+            ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
           let closureRetryOutcomePending: {
@@ -12748,6 +12761,15 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) => {
             declarationRejectionReason = null;
+            if (structuredMeasurementMode) {
+              const structured = materializeStructuredMeasurementDeclaration(args);
+              if (!structured) {
+                declarationRejectionReason = "invalid_structured_measurement_declaration";
+                return null;
+              }
+              args = structured.args;
+              steps.push({step:"v3_structured_measurement_declaration",ms:now(),meta:{requirements:structured.requirementCount,source_facts:"server_request_state",proof_gates:"unchanged"}});
+            }
             const pair = pairedDeclarationDecision(args);
             return resolveDerivedSelectionReasoning(
               args,
@@ -13240,7 +13262,7 @@ async function runExpertLoop(
                   ...correctionMessages[0],
                   content: `${
                     correctionMessages[0].content
-                  }\n\n<correction>${correction}</correction>`,
+                  }\n\n<correction>${correction}</correction>${structuredMeasurementMode ? `\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}` : ""}`,
                 };
                 if (previousReasoning && correctionMessages[1]?.role === "user") {
                   correctionMessages[1] = {
