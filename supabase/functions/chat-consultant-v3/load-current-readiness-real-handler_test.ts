@@ -125,6 +125,7 @@ async function runDialogue({
     | "pe_answer"
     | "card_reference"
     | "motor_selection"
+    | "motor_measurement_repair"
     | "motor_voltage_refusal"
     | null;
 }): Promise<void> {
@@ -262,7 +263,7 @@ async function runDialogue({
         }
       }
       if (
-        (terminalMode === "motor_selection" ||
+        (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" ||
           terminalMode === "motor_voltage_refusal") &&
         currentTurn === messages.length - 1
       ) {
@@ -361,13 +362,19 @@ async function runDialogue({
             body.tool_choice?.function?.name === "declare_selection_reasoning"
           ) {
             declarationRequests++;
+            const isCorrection = body.messages?.some(({ content }) => content?.includes("<correction>"));
+            const context = body.messages?.map(m => m.content ?? "").join("\n") ?? "";
+            assert(context.includes("verified_measurement_relations"), `${label}: certified relation was not handed to reasoning`);
+            assert(context.includes("product_adjustable_range_contains_object_quantity"));
             if (
               body.messages?.some(({ content }) =>
                 content?.includes("<correction>")
               )
             ) correctionRequests++;
             return toolReply("declare_selection_reasoning", {
-              reasoning: terminalMode === "motor_voltage_refusal"
+              reasoning: terminalMode === "motor_measurement_repair" && !isCorrection
+                ? "Для двигателя 3 кВт при 380 В проверяю диапазон регулировки выбранного аппарата и его исполнение."
+                : terminalMode === "motor_voltage_refusal"
                 ? "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А. Номинальное напряжение каждого автомата должно быть не менее 380 В."
                 : "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.",
               retrieval_query: "автомат защиты двигателя",
@@ -454,7 +461,7 @@ async function runDialogue({
       const row = logs[turn];
       assert(row, `${label}: missing server log for turn ${turn}`);
       if (terminalMode && turn === messages.length - 1) {
-        if (terminalMode === "motor_selection") {
+        if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
           assertEquals(
             row.error,
             null,
@@ -499,7 +506,7 @@ async function runDialogue({
             }`,
           );
           assert(
-            !row.steps.some(({ step }) =>
+            terminalMode === "motor_measurement_repair" || !row.steps.some(({ step }) =>
               step === "v3_product_measurement_gap_before_repair"
             ),
             `${label}: certified range coverage was not discharged: ${
@@ -646,7 +653,7 @@ async function runDialogue({
     }
 
     if (terminalMode) {
-      if (terminalMode === "motor_selection") {
+      if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
         assertEquals(
           externalRequests,
           0,
@@ -659,8 +666,8 @@ async function runDialogue({
         assert(declarationRequests >= 1, `${label}: no derived declaration`);
         assertEquals(
           correctionRequests,
-          0,
-          `${label}: valid range should not repair`,
+          terminalMode === "motor_measurement_repair" ? 1 : 0,
+          `${label}: only an invalid hypothesis should repair once`,
         );
         const searchedValues = new Set(catalogProductRequests.flatMap((url) =>
           url.searchParams.getAll("options[thermal_trip_setting][]")
@@ -885,6 +892,21 @@ Deno.test({
       expectedProfile: "motor_breaker",
       terminalMode: "motor_voltage_refusal",
     }),
+});
+
+Deno.test({
+  name: "an incomplete relation repaired against server evidence advances to strict per-card load proof",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "repair incomplete compatibility relation",
+    messages: [
+      "Подберите автомат для двигателя асинхронный 3 кВТ",
+      "380 В, 3 фазы", "Прямой пуск", "6 А",
+    ],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: "motor_measurement_repair",
+  }),
 });
 
 addEventListener("unload", restoreOfflineModuleSetup);

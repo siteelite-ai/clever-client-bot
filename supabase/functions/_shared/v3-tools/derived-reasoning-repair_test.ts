@@ -6,6 +6,8 @@ import {
   chooseDerivedReasoningRepair,
   classifyRequiredProductMeasurementGap,
   INVALID_DERIVED_DECLARATION_CORRECTION,
+  MEASUREMENT_OWNERSHIP_POLICY,
+  PRODUCT_MEASUREMENT_CORRECTION,
 } from "./derived-reasoning-repair.ts";
 import {
   compileMeasuredReasoningSearchContract,
@@ -17,7 +19,27 @@ import {
   retryConfirmedUpstreamHttp5xxOnce,
   UpstreamHttpError,
 } from "./public-failure.ts";
-import { resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
+import { buildDerivedSelectionReasoningMessages, resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
+
+Deno.test("initial reasoning and correction share category-neutral ownership instead of requiring one numeric property", () => {
+  for (const category of ["Автоматы", "Кабели", "Светильники", "Произвольные изделия"]) {
+    const system = buildDerivedSelectionReasoningMessages("Объект 12 мм, нужна совместимость", category, [])[0].content;
+    assertStringIncludes(system, MEASUREMENT_OWNERSHIP_POLICY);
+  }
+  assertStringIncludes(PRODUCT_MEASUREMENT_CORRECTION, "несколько");
+  assertStringIncludes(PRODUCT_MEASUREMENT_CORRECTION, "Отзови неподтверждённое модельное равенство");
+  assertEquals(PRODUCT_MEASUREMENT_CORRECTION.includes("6 А"), false);
+  assertEquals(PRODUCT_MEASUREMENT_CORRECTION.includes("6,3"), false);
+});
+
+Deno.test("resolver rejection codes are bounded and observational, including throwing observers", () => {
+  const args = { reasoning: "Коротко" };
+  const observed: string[] = [];
+  const baseline = resolveDerivedSelectionReasoning(args, []);
+  assertEquals(resolveDerivedSelectionReasoning(args, [], "", "", null, {}, code => observed.push(code)), baseline);
+  assertEquals(observed, ["insufficient_grounded_reasoning"]);
+  assertEquals(resolveDerivedSelectionReasoning(args, [], "", "", null, {}, () => { throw new Error("log failure"); }), baseline);
+});
 
 Deno.test("a rejected declaration gets one bounded retry without a safety-specific gap", () => {
   const unresolved = resolveDerivedSelectionReasoning(

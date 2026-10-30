@@ -44,6 +44,7 @@ import {
   isAbsenceOrUnknownFacetValue,
 } from "./facet-value-semantics.ts";
 import { visibleSystemTotalHasProvenance } from "./system-total-capacity.ts";
+import { MEASUREMENT_OWNERSHIP_POLICY } from "./derived-reasoning-repair.ts";
 
 /**
  * Whether the consultant has already produced enough machine-checkable
@@ -2675,7 +2676,16 @@ export function resolveDerivedSelectionReasoning(
       minimumAreaM2: number;
     } | null;
   } = {},
+  observeRejection?: (reason:
+    | "incompatible_paired_range"
+    | "insufficient_grounded_reasoning"
+    | "system_total_reconciliation_failed"
+    | "unsupported_per_product_claims") => void,
 ): ResolvedDerivedSelectionReasoning | null {
+  const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0]) => {
+    try { observeRejection?.(reason); } catch { /* observational only */ }
+    return null;
+  };
   // Aggregated customer history remains useful for measured engineering
   // constraints, but it cannot establish a current shape/style preference.
   // The caller supplies only the current turn and a server-verified base.
@@ -2710,7 +2720,7 @@ export function resolveDerivedSelectionReasoning(
       verifiedRangeReasoning,
       incompatiblePairedRanges,
     )
-  ) return null;
+  ) return reject("incompatible_paired_range");
   const originalReasoning = omitUnverifiedPresearchPairedClaims(
     verifiedRangeReasoning,
     facets,
@@ -2718,7 +2728,7 @@ export function resolveDerivedSelectionReasoning(
     customerEvidence,
     productClass,
   );
-  if (originalReasoning.length < 20) return null;
+  if (originalReasoning.length < 20) return reject("insufficient_grounded_reasoning");
   const pairedObjectRangeIds = new Set(
     pairedObjectRanges.map(({ id }) => id),
   );
@@ -2747,7 +2757,7 @@ export function resolveDerivedSelectionReasoning(
   const reconciledScopeReasoning = computedSystemTotal
     ? reconcileComputedTotalReasoning(originalReasoning, customerEvidence)
     : originalReasoning;
-  if (!reconciledScopeReasoning) return null;
+  if (!reconciledScopeReasoning) return reject("system_total_reconciliation_failed");
   const aggregateSafeReasoning = measurementScope === "system_total"
     ? demoteUnsupportedSystemTotalClaims(
       reconciledScopeReasoning,
@@ -2764,7 +2774,7 @@ export function resolveDerivedSelectionReasoning(
     productClass,
     appearanceScope.independentDestinationAreaProof,
   );
-  if (!scopeConsistentReasoning) return null;
+  if (!scopeConsistentReasoning) return reject("unsupported_per_product_claims");
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);
@@ -3712,6 +3722,7 @@ export function buildDerivedSelectionReasoningMessages(
   // for a hard catalog filter or a mandatory per-card claim.
   messages[0].content +=
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани обе обязательные границы совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
+  messages[0].content += ` ${MEASUREMENT_OWNERSHIP_POLICY}`;
   return messages;
 }
 
