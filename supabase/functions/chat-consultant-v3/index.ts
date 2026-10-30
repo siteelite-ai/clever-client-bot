@@ -84,6 +84,7 @@ import {
   mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
+  normalizeKey,
   overlayMandatoryFacetOptions,
   preferClosestPassingNumericTier,
   projectAdvisoryCriteriaFacetOptions,
@@ -700,6 +701,8 @@ import {
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
+  type CoverageDiagnostic,
+  measurementQuantityDiagnostics,
   compileMeasuredPointRangeRelation,
   productProvesMeasuredPointRangeRelation,
   type MeasuredPointRangeCertificate,
@@ -12805,7 +12808,7 @@ async function runExpertLoop(
             userMessage,
             lastDiscover?.facets ?? [],
           );
-          const requiredProductMeasurementGap = () => {
+          const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
@@ -12849,6 +12852,7 @@ async function runExpertLoop(
                 lastDiscover?.facets ?? [],
               ).criteria.length > 0
               : false;
+            let coverageDiagnostic: CoverageDiagnostic | null = null;
             const gapInput = {
               required: unresolvedProductMeasurementRequired,
               measurementScope,
@@ -12877,11 +12881,37 @@ async function runExpertLoop(
                     measurementEvidence: declaration.measurementEvidence,
                     requiredFacetValues: declaration.requiredFacetValues,
                     customerEvidence: verifiedCustomerMeasurementEvidence,
-                  })
+                  }, diagnosticStage ? diagnostic => { coverageDiagnostic = diagnostic; } : undefined)
                   : false,
             };
+            const recordGap = (gap: RequiredProductMeasurementGap | null) => {
+              if (diagnosticStage) {
+                steps.push({ step: "v3_product_measurement_projection_diagnostic", ms: now(), meta: {
+                  diagnostic_version: 1, stage: diagnosticStage, gap,
+                  measurement_scope: measurementScope,
+                  scalar_projection_allowed: gapInput.scalarProjectionAllowed,
+                  mandatory_projected_count: compiled.mandatory_criteria.length,
+                  recommended_projection_reason: recommendedExact.reason,
+                  recommended_projection_certified: certifiedRecommendedExact,
+                  competing_thresholds: gapInput.competingThresholds,
+                  independent_coverage: coverageDiagnostic ?? { code: "no_certificate" },
+                  customer_quantities: measurementQuantityDiagnostics(verifiedCustomerMeasurementEvidence, verifiedCustomerMeasurementEvidence),
+                  declared_quantities: measurementQuantityDiagnostics(declaration!.measurementEvidence, verifiedCustomerMeasurementEvidence),
+                  declared_facet_requirements: declaration!.requiredFacetValues.slice(0, 16).map(item => {
+                    const facet = lastDiscover?.facets.find(f => normalizeKey(f.key) === normalizeKey(item.key) || normalizeKey(f.caption) === normalizeKey(item.key));
+                    const exact = facet?.values.find(v => v.value === item.value);
+                    return { facet_key: facet?.key ?? null, live_facet_found: Boolean(facet),
+                      live_enum_value: exact?.value.slice(0, 100) ?? null,
+                      quantities: measurementQuantityDiagnostics(`${item.value} ${facet?.unit ?? ""}`, verifiedCustomerMeasurementEvidence),
+                      evidence_origin: "model_declaration",
+                      explicit_customer_mapping: declaration!.explicitCustomerMappings.some(m => m.key === item.key && m.value === item.value) };
+                  }),
+                } });
+              }
+              return gap;
+            };
             const uncoveredGap = classifyRequiredProductMeasurementGap(gapInput);
-            if (uncoveredGap !== "unprojectable_criterion") return uncoveredGap;
+            if (uncoveredGap !== "unprojectable_criterion") return recordGap(uncoveredGap);
             // The server-verified customer request and fresh per-card
             // destination gate discharge only this customer area. The model
             // need not repeat its unit after classification prose is cleaned;
@@ -12898,7 +12928,7 @@ async function runExpertLoop(
               );
             if (!destinationAreaCoverage.covered ||
               !noConflictingModelMeasurement) {
-              return uncoveredGap;
+              return recordGap(uncoveredGap);
             }
             destinationAreaCoverageApplied = true;
             if (!destinationAreaCoverageLogged) {
@@ -12914,10 +12944,10 @@ async function runExpertLoop(
               });
               destinationAreaCoverageLogged = true;
             }
-            return classifyRequiredProductMeasurementGap({
+            return recordGap(classifyRequiredProductMeasurementGap({
               ...gapInput,
               independentCardProofCoversRequiredMeasurement: true,
-            });
+            }));
           };
           const missingRequiredProductMeasurement = () =>
             requiredProductMeasurementGap() !== null;
@@ -13101,7 +13131,7 @@ async function runExpertLoop(
               step: "v3_product_measurement_gap_before_repair",
               ms: now(),
               meta: {
-                gap: requiredProductMeasurementGap(),
+                gap: requiredProductMeasurementGap("before_repair"),
                 destination_area_covered: destinationAreaCoverage.covered,
                 model_physical_count_capped: Math.min(modelUnits.length, 9),
                 model_physical_categories: [...new Set(modelUnits.map(({ unit }) =>
@@ -13313,6 +13343,7 @@ async function runExpertLoop(
                   resolvePairedDeclaration(declarationCall.args),
                 )
                 : null;
+              if (repairReason === "product_measurement") requiredProductMeasurementGap("after_repair");
               steps.push({
                 step: repairReason === "invalid_declaration"
                   ? "v3_derived_selection_reasoning_contract_retry"
@@ -13341,7 +13372,7 @@ async function runExpertLoop(
           if (!declaration?.text.trim()) {
             return stopForInvalidDerivedDeclaration();
           }
-          const productMeasurementGap = requiredProductMeasurementGap();
+          const productMeasurementGap = requiredProductMeasurementGap("terminal");
           if (productMeasurementGap) {
             return stopForUnverifiedProductMeasurement(productMeasurementGap);
           }

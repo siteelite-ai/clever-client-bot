@@ -455,7 +455,7 @@ Deno.test("measurement terminal precedes search and correction failure preserves
   assertStringIncludes(source, "correction_service_failure");
   assertStringIncludes(source, "public_error: correctionFailure.public_code");
   const terminalStart = source.indexOf(
-    "const productMeasurementGap = requiredProductMeasurementGap();",
+    'const productMeasurementGap = requiredProductMeasurementGap("terminal");',
     catchEnd,
   );
   const searchStart = source.indexOf(

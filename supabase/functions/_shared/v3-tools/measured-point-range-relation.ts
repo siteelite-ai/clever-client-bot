@@ -1,6 +1,8 @@
 import type { ProductFull } from "./types.ts";
 import { normalizeKey } from "./criteria-gate.ts";
 import { hasMeasuredSelectionRequirement } from "./criteria-reasoning.ts";
+import { canonicalMeasurementUnit } from "./criteria-reasoning.ts";
+import { extractClientQuantities } from "./criteria-consistency.ts";
 
 /** A server-verified customer load, not a number inferred from model prose. */
 export interface TrustedCustomerLoadPoint {
@@ -192,6 +194,66 @@ interface SoleUnprojectedMeasurementInput {
   customerEvidence?: string;
 }
 
+/** Technical scalars only: never raw sentences, identifiers, contact data or
+ * arbitrary units. A matching customer quantity is overlap, NOT ownership. */
+export function measurementQuantityDiagnostics(
+  text: string,
+  customerText = "",
+) {
+  const allowed = new Set([
+    "а",
+    "ма",
+    "в",
+    "кв",
+    "вт",
+    "квт",
+    "мм",
+    "см",
+    "м",
+    "км",
+    "м²",
+    "мм²",
+    "лм",
+    "лк",
+    "гц",
+  ]);
+  const parse = (value: string) =>
+    extractClientQuantities(value).flatMap((q) => {
+      const unit = canonicalMeasurementUnit(q.unit);
+      return allowed.has(unit) && Number.isFinite(q.value) &&
+          Math.abs(q.value) <= 1e9
+        ? [{ value: q.value, unit }]
+        : [];
+    });
+  const customer = parse(customerText);
+  return parse(text).slice(0, 16).map((q) => ({
+    ...q,
+    matches_customer_quantity: customer.some((c) =>
+      c.value === q.value && c.unit === q.unit
+    ),
+  }));
+}
+
+export type CoverageDiagnostic = {
+  code:
+    | "invalid_certificate"
+    | "unaccepted_facet_value"
+    | "separate_numeric_facet"
+    | "unprojected_measured_requirement"
+    | "symbolic_product_threshold"
+    | "unscoped_physical_property"
+    | "nominal_or_setting_assertion"
+    | "negated_coverage"
+    | "separate_nominal_current"
+    | "other_number_in_coverage_clause"
+    | "coverage_relation_missing"
+    | "covered";
+  clause_index?: number;
+  facet_index?: number;
+  quantities?: ReturnType<typeof measurementQuantityDiagnostics>;
+  remaining_digits_capped?: number;
+};
+
 const COVERAGE_WORD =
   /(?:покрыва|перекрыва|охватыва|включа|попада|входи|укладыва|подходи|соответств|cover|within|include|contain|encompass|fit)/iu;
 const STRONG_COVERAGE_WORD =
@@ -292,18 +354,22 @@ function stripVerifiedSourceFacts(
     !/^\s*для\s+(?:(?:асинхронного|однофазного|трехфазного|трёхфазного)\s+)?(?:двигателя|насоса|нагрузки|потребителя|оборудования)\s+\d+(?:[.,]\d+)?\s*(?:кВт|Вт)(?:\s+при\s+\d+(?:[.,]\d+)?\s*(?:В|кВ))?\s*$/iu
       .test(prefix)
   ) return clause;
-  const quantity = /(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*([\p{L}²]+)(?![\p{L}])/giu;
+  const quantity =
+    /(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*([\p{L}²]+)(?![\p{L}])/giu;
   const identity = (value: string, unit: string) =>
-    `${Number(value.replace(",", "."))}:${unit.normalize("NFKC").toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")}`;
+    `${Number(value.replace(",", "."))}:${
+      unit.normalize("NFKC").toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    }`;
   const verified = new Set(
     [...String(customerEvidence ?? "").matchAll(quantity)].map((match) =>
       identity(match[1], match[2])
     ),
   );
   const facts = [...prefix.matchAll(quantity)];
-  if (facts.length === 0 || facts.some((match) =>
-    !verified.has(identity(match[1], match[2]))
-  )) return clause;
+  if (
+    facts.length === 0 ||
+    facts.some((match) => !verified.has(identity(match[1], match[2])))
+  ) return clause;
   return prefix.replace(quantity, " ") + clause.slice(selector.index);
 }
 
@@ -316,7 +382,38 @@ function stripVerifiedSourceFacts(
  */
 export function certificateCoversSoleUnprojectedMeasurement(
   input: SoleUnprojectedMeasurementInput,
+  observe?: (diagnostic: CoverageDiagnostic) => void,
 ): boolean {
+  // Diagnostics must never influence eligibility, even if a logger throws.
+  const report = (data: CoverageDiagnostic) => {
+    try {
+      observe?.(data);
+    } catch { /* observational only */ }
+  };
+  const reject = (
+    code: CoverageDiagnostic["code"],
+    clause?: string,
+    clauseIndex?: number,
+    facetIndex?: number,
+  ): false => {
+    if (!observe) return false;
+    report({
+      code,
+      ...(clauseIndex === undefined ? {} : { clause_index: clauseIndex }),
+      ...(facetIndex === undefined ? {} : { facet_index: facetIndex }),
+      ...(clause === undefined ? {} : {
+        quantities: measurementQuantityDiagnostics(
+          clause,
+          input.customerEvidence,
+        ),
+        remaining_digits_capped: Math.min(
+          (clause.match(/\d/gu) ?? []).length,
+          9,
+        ),
+      }),
+    });
+    return false;
+  };
   const { certificate, measurementEvidence, requiredFacetValues } = input;
   if (
     certificate?.source !== "customer_load" || certificate.unit !== "A" ||
@@ -330,17 +427,19 @@ export function certificateCoversSoleUnprojectedMeasurement(
       return range && range.lower <= certificate.value &&
         certificate.value <= range.upper;
     }) || !Array.isArray(requiredFacetValues)
-  ) return false;
+  ) return reject("invalid_certificate");
 
   const ownKeys = new Set([
     normalizeKey(certificate.facetKey),
     normalizeKey(certificate.facetCaption),
   ]);
-  for (const item of requiredFacetValues) {
+  for (const [facetIndex, item] of requiredFacetValues.entries()) {
     const key = String(item?.key ?? "");
     const value = String(item?.value ?? "");
     if (ownKeys.has(normalizeKey(key))) {
-      if (!certificate.acceptedValues.includes(value)) return false;
+      if (!certificate.acceptedValues.includes(value)) {
+        return reject("unaccepted_facet_value", value, undefined, facetIndex);
+      }
       continue;
     }
     // A separate numeric or explicitly physical facet is not proven by the
@@ -350,14 +449,14 @@ export function certificateCoversSoleUnprojectedMeasurement(
       /\d/u.test(value) ||
       /(?:напряжен|мощност|ток|частот|температур|длин|ширин|высот|диаметр|сечен|вольт|ватт|ампер|voltage|power|current|frequency|length|width|height|diameter|section|temperature)/iu
         .test(key)
-    ) return false;
+    ) return reject("separate_numeric_facet", value, undefined, facetIndex);
   }
 
   const clauses = String(measurementEvidence ?? "")
     .split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
     .map((clause) => clause.trim()).filter(Boolean);
   let covered = false;
-  for (const clause of clauses) {
+  for (const [clauseIndex, clause] of clauses.entries()) {
     const coverageClause = isCertifiedSettingCoverageClause(clause);
     const sourceSafe = stripVerifiedSourceFacts(
       coverageClause ? stripCertifiedRanges(clause, certificate) : clause,
@@ -376,11 +475,17 @@ export function certificateCoversSoleUnprojectedMeasurement(
           .test(sourceSafe) &&
         !/\d/u.test(enumRemainder)
       ) continue;
-      if (hasMeasuredSelectionRequirement(sourceSafe)) return false;
+      if (hasMeasuredSelectionRequirement(sourceSafe)) {
+        return reject(
+          "unprojected_measured_requirement",
+          sourceSafe,
+          clauseIndex,
+        );
+      }
       if (
         /(?:^|[^\p{L}])(?:U|P|У|Р)(?:ном|nom|rated)?\s*[<>≤≥=]\s*\d/u
           .test(sourceSafe)
-      ) return false;
+      ) return reject("symbolic_product_threshold", sourceSafe, clauseIndex);
       // A bare product property ("напряжение 380 В") can lack directional
       // wording and evade the generic requirement detector. It still cannot
       // borrow a matching customer supply value as card proof.
@@ -388,20 +493,26 @@ export function certificateCoversSoleUnprojectedMeasurement(
         input.customerEvidence?.trim() && /\d/u.test(sourceSafe) &&
         /(?:напряжен|мощност|ток|длин|ширин|высот|диаметр|сечен|частот|температур|voltage|power|current|length|width|height|diameter|section|temperature)/iu
           .test(sourceSafe)
-      ) return false;
+      ) return reject("unscoped_physical_property", sourceSafe, clauseIndex);
       // The shared detector treats descriptive load/supply facts as context.
       // An unqualified nominal or setting value is nevertheless a product-
       // side assertion and cannot be waived by a different coverage clause.
       if (
         /(?:номинальн|уставк|регулировк|расцеплен|срабатыван|setting|trip)/iu
           .test(sourceSafe) && /\d/u.test(sourceSafe)
-      ) return false;
+      ) return reject("nominal_or_setting_assertion", sourceSafe, clauseIndex);
       continue;
     }
     if (
       NEGATED_COVERAGE.test(clause) || SEPARATE_NOMINAL_CURRENT.test(clause)
     ) {
-      return false;
+      return reject(
+        NEGATED_COVERAGE.test(clause)
+          ? "negated_coverage"
+          : "separate_nominal_current",
+        clause,
+        clauseIndex,
+      );
     }
     const remainder = stripCertifiedPoint(
       sourceSafe,
@@ -410,8 +521,11 @@ export function certificateCoversSoleUnprojectedMeasurement(
     // Any other number in this same claim could be a second product-side
     // constraint, even if its unit is omitted or the generic extractor misses
     // the spelling. Fail closed instead of guessing which one was descriptive.
-    if (/\d/u.test(remainder)) return false;
+    if (/\d/u.test(remainder)) {
+      return reject("other_number_in_coverage_clause", remainder, clauseIndex);
+    }
     covered = true;
   }
+  report({ code: covered ? "covered" : "coverage_relation_missing" });
   return covered;
 }

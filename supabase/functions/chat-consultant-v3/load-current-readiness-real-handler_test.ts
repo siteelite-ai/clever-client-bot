@@ -696,6 +696,12 @@ async function runDialogue({
           url.searchParams.getAll("options[thermal_trip_setting][]")));
         assert(sampledValues.has("4–6 А") && sampledValues.has("6–10 А"));
         assert(!sampledValues.has("7–10 А"));
+        const diagnostics = logs.at(-1)?.steps.filter(({ step }) => step === "v3_product_measurement_projection_diagnostic") ?? [];
+        assertEquals(diagnostics.map(d => d.meta?.stage), ["before_repair", "after_repair", "terminal"]);
+        for (const diagnostic of diagnostics) {
+          assertEquals(diagnostic.meta?.gap, "unprojectable_criterion");
+          assert(!JSON.stringify(diagnostic.meta).includes("Для двигателя"), `${label}: raw model prose leaked into diagnostic`);
+        }
         return;
       } else if (terminalMode === "pe_answer") {
         assert(

@@ -2,8 +2,10 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   compileMeasuredPointRangeRelation,
+  type CoverageDiagnostic,
   type LiveAdjustableRangeFacet,
   type MeasuredPointRangeCertificate,
+  measurementQuantityDiagnostics,
   productProvesMeasuredPointRangeRelation,
   type TrustedCustomerLoadPoint,
 } from "./measured-point-range-relation.ts";
@@ -327,8 +329,10 @@ Deno.test("two certified 6 A ranges coexist with same-clause customer load facts
     ],
   }], { ...point, value: 6 }) as MeasuredPointRangeCertificate;
   assertEquals(certificate.acceptedValues, ["4–6 А", "6–10 А"]);
-  const source = "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.";
-  const customerEvidence = "Подберите автомат для двигателя 3 кВт, 380 В, 3 фазы, рабочий ток 6 А";
+  const source =
+    "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.";
+  const customerEvidence =
+    "Подберите автомат для двигателя 3 кВт, 380 В, 3 фазы, рабочий ток 6 А";
   const covers = (measurementEvidence: string, trusted = customerEvidence) =>
     certificateCoversSoleUnprojectedMeasurement({
       certificate,
@@ -338,7 +342,12 @@ Deno.test("two certified 6 A ranges coexist with same-clause customer load facts
     });
   assertEquals(covers(source), true);
   assertEquals(covers(source, ""), false);
-  assertEquals(covers(`${source} Номинальное напряжение каждого автомата должно быть не менее 380 В.`), false);
+  assertEquals(
+    covers(
+      `${source} Номинальное напряжение каждого автомата должно быть не менее 380 В.`,
+    ),
+    false,
+  );
   assertEquals(covers(`${source} Диапазон уставки 6–10 А.`), false);
   assertEquals(covers(`${source} В каталоге это также 7–10 А.`), false);
   assertEquals(
@@ -546,5 +555,74 @@ Deno.test("unitless live enum requires an explicit ampere suffix in model eviden
       requiredFacetValues: [],
     }),
     false,
+  );
+});
+
+Deno.test("coverage diagnostics identify the exact reject branch without changing eligibility", () => {
+  const certificate = compile() as MeasuredPointRangeCertificate;
+  const base = {
+    certificate,
+    requiredFacetValues: [],
+    customerEvidence: "Двигатель 3 кВт, 380 В, 10 А",
+  };
+  const examples = [
+    {
+      text: "Диапазон уставки тока 6–10 А покрывает ток 10 А.",
+      code: "covered",
+      allowed: true,
+    },
+    {
+      text:
+        "Диапазон уставки тока 6–10 А покрывает ток 10 А, напряжение 380 В.",
+      code: "other_number_in_coverage_clause",
+      allowed: false,
+    },
+    {
+      text: "Диапазон уставки тока 6–10 А не покрывает ток 10 А.",
+      code: "negated_coverage",
+      allowed: false,
+    },
+    {
+      text:
+        "Диапазон уставки тока 6–10 А покрывает ток 10 А; номинальный ток 10 А.",
+      code: "unscoped_physical_property",
+      allowed: false,
+    },
+  ];
+  for (const example of examples) {
+    let result: CoverageDiagnostic | undefined;
+    const input = { ...base, measurementEvidence: example.text };
+    assertEquals(
+      certificateCoversSoleUnprojectedMeasurement(input),
+      example.allowed,
+    );
+    assertEquals(
+      certificateCoversSoleUnprojectedMeasurement(input, (d) => {
+        result = d;
+      }),
+      example.allowed,
+    );
+    assertEquals(result?.code, example.code);
+    assertEquals(
+      certificateCoversSoleUnprojectedMeasurement(input, () => {
+        throw new Error("broken logger");
+      }),
+      example.allowed,
+    );
+    assertEquals(JSON.stringify(result).includes(example.text), false);
+  }
+});
+
+Deno.test("diagnostic quantities are bounded technical scalars, never arbitrary text or units", () => {
+  const text =
+    "secret-sk-token email@example.com 123 supersecretunit 380 В 10 А 3 кВт";
+  assertEquals(measurementQuantityDiagnostics(text, "380 В"), [
+    { value: 380, unit: "в", matches_customer_quantity: true },
+    { value: 10, unit: "а", matches_customer_quantity: false },
+    { value: 3, unit: "квт", matches_customer_quantity: false },
+  ]);
+  assertEquals(
+    measurementQuantityDiagnostics(Array(40).fill("10 А").join(" ")).length,
+    16,
   );
 });
