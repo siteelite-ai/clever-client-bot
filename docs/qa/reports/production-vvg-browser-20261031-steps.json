@@ -1,0 +1,41 @@
+[
+  {
+    "id": "7d17759a-46f2-4135-a6f4-ca6da870fcc6",
+    "user_query": "Новая тема. Найди кабель ВВГ 2*1,5 самый дешевый",
+    "error": null,
+    "total_ms": 3984,
+    "final_products_count": 1,
+    "created_at": "2026-10-31 06:46:16.50574+00",
+    "diagnostics": [
+      {
+        "meta": {
+          "mode": "new_task",
+          "reason": "local_explicit_new_task",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "new_task",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": false,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": false,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      }
+    ]
+  }
+]

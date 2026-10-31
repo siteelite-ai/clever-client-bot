@@ -1,0 +1,45 @@
+{
+  "suite_file": "customer-acceptance-cases.json",
+  "suite_version": 2,
+  "suite_sha256": "549600818c83cb1813d05bba2e32316f71b42059596c973d5b814356d129b366",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-31T06:46:01.647Z",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "customer-vvg-exact-cheapest": 1
+  },
+  "cases": [],
+  "catalog_preflight": {
+    "ok": false,
+    "status": "unavailable",
+    "classification": "config",
+    "duration_ms": 0
+  },
+  "status": "not_run",
+  "reason": "infrastructure_unavailable",
+  "infrastructure_status": "infrastructure_unavailable",
+  "selected_case_ids": [
+    "customer-vvg-exact-cheapest"
+  ],
+  "finished_at": "2026-10-31T06:46:01.652Z",
+  "completeness": {
+    "complete": false,
+    "planned_cases": 1,
+    "recorded_cases": 0,
+    "planned_runs": 1,
+    "recorded_runs": 0,
+    "planned_turns": 1,
+    "recorded_turns": 0
+  },
+  "log_ids": [],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

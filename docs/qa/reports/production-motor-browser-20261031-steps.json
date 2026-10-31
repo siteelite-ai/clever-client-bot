@@ -1,0 +1,362 @@
+[
+  {
+    "id": "6298604c-1322-45f3-9ca9-5c88ad379477",
+    "user_query": "Подберите автомат для двигателя асинхронный 3 кВт",
+    "error": null,
+    "total_ms": 2544,
+    "final_products_count": 0,
+    "created_at": "2026-10-31 06:43:54.487593+00",
+    "diagnostics": [
+      {
+        "meta": {
+          "mode": "new_task",
+          "reason": "local_complete_request",
+          "source": "local",
+          "confidence": 0.97,
+          "classifier_mode": "new_task",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": false,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": false,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      }
+    ]
+  },
+  {
+    "id": "858c11c2-28c3-4c2c-af93-12dd338622be",
+    "user_query": "380 В, 3 фазы",
+    "error": null,
+    "total_ms": 1102,
+    "final_products_count": 0,
+    "created_at": "2026-10-31 06:44:25.310101+00",
+    "diagnostics": [
+      {
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": true,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      }
+    ]
+  },
+  {
+    "id": "570c9b61-eaa3-4634-98fe-2c3113c2f44f",
+    "user_query": "Прямой пуск",
+    "error": null,
+    "total_ms": 997,
+    "final_products_count": 0,
+    "created_at": "2026-10-31 06:45:03.057484+00",
+    "diagnostics": [
+      {
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": true,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      }
+    ]
+  },
+  {
+    "id": "c8928690-7fe4-42f3-b6e3-6cfe0dd93d29",
+    "user_query": "6 А",
+    "error": null,
+    "total_ms": 12971,
+    "final_products_count": 1,
+    "created_at": "2026-10-31 06:45:41.251397+00",
+    "diagnostics": [
+      {
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": false,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": true,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "meta": {
+          "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "certified": true,
+          "accepted_values": 2
+        },
+        "step": "v3_measured_point_range_relation_checked"
+      },
+      {
+        "meta": {
+          "proof_gates": "unchanged",
+          "requirements": 4,
+          "source_facts": "server_request_state",
+          "server_relation_retained": true
+        },
+        "step": "v3_structured_measurement_declaration"
+      },
+      {
+        "meta": {
+          "gap": "unprojectable_criterion",
+          "stage": "before_repair",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "other_number_in_coverage_clause",
+            "quantities": [
+              {
+                "unit": "квт",
+                "value": 3,
+                "matches_customer_quantity": true
+              },
+              {
+                "unit": "в",
+                "value": 380,
+                "matches_customer_quantity": true
+              }
+            ],
+            "clause_index": 1,
+            "remaining_digits_capped": 5
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "meta": {
+          "proof_gates": "unchanged",
+          "requirements": 4,
+          "source_facts": "server_request_state",
+          "server_relation_retained": true
+        },
+        "step": "v3_structured_measurement_declaration"
+      },
+      {
+        "meta": {
+          "gap": null,
+          "stage": "after_repair",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "covered"
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "meta": {
+          "gap": null,
+          "stage": "terminal",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "covered"
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "meta": {
+          "mode": "by_filter",
+          "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "accepted_values": 2
+        },
+        "step": "v3_measured_point_range_search_enforced"
+      }
+    ]
+  }
+]
