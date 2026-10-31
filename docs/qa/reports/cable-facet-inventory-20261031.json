@@ -1,0 +1,235 @@
+{
+  "source": "live public search-products category_facets; no products or secret values retained",
+  "checked_at": "2026-10-31T07:40:06.585Z",
+  "categories": [
+    {
+      "category": "Кабель ВВГ",
+      "http_status": 502,
+      "facet_count": 0,
+      "facets": []
+    },
+    {
+      "category": "Кабель КГ",
+      "http_status": 502,
+      "facet_count": 0,
+      "facets": []
+    },
+    {
+      "category": "Кабель и провод разного назначения",
+      "http_status": 200,
+      "facet_count": 36,
+      "facets": [
+        {
+          "key": "brend__brend",
+          "caption": "Бренд",
+          "unit": null,
+          "value_count": 22
+        },
+        {
+          "key": "bronirovannyy__sauytty",
+          "caption": "Бронированный",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "diapazon_rabochih_temperatur__ghұmys_temperaturalarynyң_diapozony",
+          "caption": "Диапазон рабочих температур",
+          "unit": null,
+          "value_count": 16
+        },
+        {
+          "key": "edinica_izmereniya__Өlsheu_bіrlіgі",
+          "caption": "Единица измерения",
+          "unit": null,
+          "value_count": 3
+        },
+        {
+          "key": "ekranirovannyy__ekrandalғan",
+          "caption": "Экранированный",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "fayl",
+          "caption": "Файл",
+          "unit": null,
+          "value_count": 31
+        },
+        {
+          "key": "garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_",
+          "caption": "Гарантийный срок, лет",
+          "unit": null,
+          "value_count": 5
+        },
+        {
+          "key": "identifikator_sayta__sayt_identifikatory",
+          "caption": "Идентификатор сайта",
+          "unit": null,
+          "value_count": 111
+        },
+        {
+          "key": "izolyaciya__oқshaulau",
+          "caption": "Изоляция",
+          "unit": null,
+          "value_count": 5
+        },
+        {
+          "key": "kodnomenklatury",
+          "caption": "КодНоменклатуры",
+          "unit": null,
+          "value_count": 112
+        },
+        {
+          "key": "kod_tn_ved__seҚ_tn_kody",
+          "caption": "Код ТН ВЭД",
+          "unit": null,
+          "value_count": 5
+        },
+        {
+          "key": "kolichestvo_ghil__taram_sany",
+          "caption": "Количество жил",
+          "unit": null,
+          "value_count": 6
+        },
+        {
+          "key": "material_provodnika__Өtkіzgіsh_materialy",
+          "caption": "Материал проводника",
+          "unit": null,
+          "value_count": 4
+        },
+        {
+          "key": "naimenovanie_na_kazahskom_yazyke",
+          "caption": "Наименование на казахском языке",
+          "unit": null,
+          "value_count": 112
+        },
+        {
+          "key": "narughnyy_diametr_kabelya__mm__kabelydің_syrtқy_diametrі__mm",
+          "caption": "Наружный диаметр кабеля, мм",
+          "unit": null,
+          "value_count": 65
+        },
+        {
+          "key": "naznachenie__maқsaty_",
+          "caption": "Назначение",
+          "unit": null,
+          "value_count": 15
+        },
+        {
+          "key": "negoryuchesty__ghanatyn_қasietі_ghoқ",
+          "caption": "Негорючесть",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "nominalynoe_napryaghenie__kv__nominaldy_kerneuі__kb",
+          "caption": "Номинальное напряжение, кВ",
+          "unit": null,
+          "value_count": 6
+        },
+        {
+          "key": "novinka__ghaңa",
+          "caption": "Новинка",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "obolochka__Қabyқsha",
+          "caption": "Оболочка",
+          "unit": null,
+          "value_count": 13
+        },
+        {
+          "key": "obyem__kөlemі",
+          "caption": "Объем",
+          "unit": null,
+          "value_count": 68
+        },
+        {
+          "key": "opisaniefayla",
+          "caption": "ОписаниеФайла",
+          "unit": null,
+          "value_count": 14
+        },
+        {
+          "key": "opisanie_na_kazahskom_yazyke",
+          "caption": "Описание на казахском языке",
+          "unit": null,
+          "value_count": 24
+        },
+        {
+          "key": "poiskovyy_zapros",
+          "caption": "Поисковый запрос",
+          "unit": null,
+          "value_count": 106
+        },
+        {
+          "key": "populyarnyy__dәrіptі",
+          "caption": "Популярный",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "prodaetsya_tolyko_v_gruppovoy_upakovke__toptyқ_ghiyntyғynda_ғana_satylady",
+          "caption": "Продается только в групповой упаковке",
+          "unit": null,
+          "value_count": 2
+        },
+        {
+          "key": "sechenie_kabelya__mm2__kabely_қimasy__mm2",
+          "caption": "Сечение кабеля, мм2",
+          "unit": null,
+          "value_count": 24
+        },
+        {
+          "key": "srok_slughby__mes__Қyzmet_kөrsetu_merzіmі__ay",
+          "caption": "Срок службы, мес",
+          "unit": null,
+          "value_count": 5
+        },
+        {
+          "key": "strana_proishoghdeniya__Өndіrіlgen_memleketі_",
+          "caption": "Страна происхождения",
+          "unit": null,
+          "value_count": 4
+        },
+        {
+          "key": "temperatura_montagha__montagh_temperaturasy",
+          "caption": "Температура монтажа",
+          "unit": null,
+          "value_count": 13
+        },
+        {
+          "key": "tovar_internet_magazina",
+          "caption": "Товар интернет-магазина",
+          "unit": null,
+          "value_count": 1
+        },
+        {
+          "key": "ves__salmaғy",
+          "caption": "Вес",
+          "unit": null,
+          "value_count": 69
+        },
+        {
+          "key": "kod_nkt__Ұtk_kody",
+          "caption": "Код НКТ",
+          "unit": null,
+          "value_count": 65
+        },
+        {
+          "key": "soputstvuyuschiytovar",
+          "caption": "СопутствующийТовар",
+          "unit": null,
+          "value_count": 9
+        },
+        {
+          "key": "kolichestvo_v_gruppovoy_upakovke__toptyқ_ghiyntyқtaғy_sany",
+          "caption": "Количество в групповой упаковке",
+          "unit": null,
+          "value_count": 2
+        }
+      ]
+    }
+  ]
+}

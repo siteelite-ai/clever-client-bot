@@ -1,0 +1,39 @@
+{
+  "schema_version": 3,
+  "source": "Bounded PR142 live preview check: help handoff, explicit specification lookup, independent motor clarification. One catalog-search turn; help turns must not use paid generation.",
+  "default_expectations": {
+    "forbid_assistant_text": ["ошибка соединения", "Ответ получен не полностью", "Заявка отправлена"],
+    "max_duration_ms": 10000
+  },
+  "cases": [
+    {
+      "id": "pump-help-to-explicit-specification",
+      "repeat": 1,
+      "turns": [
+        {"message": "Мне нужен кабель для насоса", "expect": {"max_products": 0, "require_clarification_facet_key": "specification_status", "require_clarification_option_values": ["Да, укажу марку и сечение", "Нет, нужна помощь"]}},
+        {"message": "Нет, нужна помощь", "expect": {"max_products": 0, "require_previous_quick_reply": {"facet_key": "specification_status", "value": "Нет, нужна помощь"}, "require_clarification_facet_key": "supply_phase"}},
+        {"message": "220 В, 1 фаза", "expect": {"max_products": 0, "require_previous_quick_reply": {"facet_key": "supply_phase", "value": "220 В, 1 фаза"}, "require_clarification_facet_key": "line_length"}},
+        {"message": "До 25 м", "expect": {"max_products": 0, "require_previous_quick_reply": {"facet_key": "line_length", "value": "До 25 м"}, "require_clarification_facet_key": "installation_method"}},
+        {"message": "Стационарно на улице", "expect": {"max_products": 0, "require_previous_quick_reply": {"facet_key": "installation_method", "value": "Стационарно на улице"}, "require_clarification_facet_key": "load_current"}},
+        {"message": "6 А", "expect": {"max_products": 0, "require_previous_freeform_slot": "load_current", "require_clarification_facet_key": "engineering_specification", "require_text_groups": [["Заявка автоматически не отправлялась"], ["Запрос для технического специалиста"], ["220 В"], ["25 м"], ["6 А"]]}},
+        {"message": "ВВГ 3*1,5", "expect": {"max_products": 0, "require_previous_freeform_slot": "engineering_specification", "require_clarification_facet_key": "specification_lookup_confirmation", "require_clarification_option_values": ["Новая тема. Найди кабель ВВГ 3*1,5", "Указать другую спецификацию"]}},
+        {"message": "Новая тема. Найди кабель ВВГ 3*1,5", "expect": {"max_duration_ms": 45000, "require_previous_quick_reply": {"facet_key": "specification_lookup_confirmation", "value": "Новая тема. Найди кабель ВВГ 3*1,5"}, "min_products": 1, "max_products": 10, "require_every_product_title_groups": [["ВВГ"], ["3*1,5", "3х1,5", "3x1,5", "3×1,5"]]}}
+      ]
+    },
+    {
+      "id": "underground-known-conditions-handoff",
+      "repeat": 1,
+      "turns": [
+        {"message": "Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.", "expect": {"max_products": 0, "require_clarification_facet_key": "specification_status"}},
+        {"message": "Нет, нужна помощь", "expect": {"max_products": 0, "require_previous_quick_reply": {"facet_key": "specification_status", "value": "Нет, нужна помощь"}, "require_clarification_facet_key": "engineering_specification", "require_text_groups": [["Заявка автоматически не отправлялась"], ["Запрос для технического специалиста"], ["PE"], ["25 м"]]}}
+      ]
+    },
+    {
+      "id": "unchanged-motor-initial-question",
+      "repeat": 1,
+      "turns": [
+        {"message": "Подберите автомат для двигателя асинхронный 3 кВт", "expect": {"max_products": 0, "require_clarification_facet_key": "supply_phase", "require_clarification_option_values": ["220 В, 1 фаза", "380 В, 3 фазы"]}}
+      ]
+    }
+  ]
+}

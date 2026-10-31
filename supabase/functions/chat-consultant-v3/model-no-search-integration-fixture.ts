@@ -10,9 +10,13 @@ const values: Record<string, string> = {
   OPENROUTER_API_KEY: "offline-openrouter",
   VOLT220_API_TOKEN: "offline-catalog",
   CHAT_V3_ADMISSION_MODE: "off",
+  VOLT220_SPECIFICATION_ASSISTANCE_ENABLED: "false",
 };
 
 const originalGet = Deno.env.get;
+export function setSpecificationAssistanceInOfflineFixture(enabled: boolean): void {
+  values.VOLT220_SPECIFICATION_ASSISTANCE_ENABLED = String(enabled);
+}
 const originalServe = Deno.serve;
 let handler: ((request: Request) => Promise<Response>) | null = null;
 

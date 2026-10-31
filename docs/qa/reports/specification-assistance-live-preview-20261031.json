@@ -1,0 +1,523 @@
+{
+  "suite_file": "specification-assistance-preview-20261031.json",
+  "suite_version": 3,
+  "suite_sha256": "10d5337009cbbcd0fc04a01f3ecd311fa954ae06d8a03907781d1b8be0ac5191",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-31T10:39:00.569Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "pump-help-to-explicit-specification": 1,
+    "underground-known-conditions-handoff": 1,
+    "unchanged-motor-initial-question": 1
+  },
+  "cases": [
+    {
+      "id": "pump-help-to-explicit-specification",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "session_9ec54538-e28f-494f-9431-320a534e2643",
+          "turns": [
+            {
+              "message": "Мне нужен кабель для насоса",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1671,
+              "network_attempts": 1,
+              "log_id": "df8bd8bb-04d3-4bbe-a5de-4134eb88cd26",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Марка, число жил и сечение кабеля уже определены в паспорте оборудования или проекте?",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_b675f8c1-dda4-4236-95e5-4361d6052f83"
+              },
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Нет, нужна помощь",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1528,
+              "network_attempts": 1,
+              "log_id": "b6ac139b-ea7a-4d71-b3d3-409d8ff2e6de",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Чтобы безопасно подобрать кабель для насоса, уточните, пожалуйста: номинальный рабочий ток насоса по шильдику; длину линии/расстояние; напряжение и число фаз; способ прокладки — в помещении, на улице, стационарно или как переносное подключение. С чего начнём? Если параметр неизвестен, ответьте «Не знаю» — отмечу это для специалиста.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "supply_phase",
+                "options_count": 3,
+                "values": [
+                  "220 В, 1 фаза",
+                  "380 В, 3 фазы",
+                  "Не знаю"
+                ]
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "220 В, 1 фаза",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1149,
+              "network_attempts": 1,
+              "log_id": "949f9aae-f224-4247-988e-4d22b7f03aff",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: номинальный рабочий ток насоса по шильдику в амперах; длину линии/расстояние; способ прокладки. Какая длина линии от источника питания до насоса? Если параметр неизвестен, ответьте «Не знаю» — отмечу это для специалиста.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "line_length",
+                "options_count": 4,
+                "values": [
+                  "До 25 м",
+                  "25–50 м",
+                  "Более 50 м",
+                  "Не знаю"
+                ]
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "supply_phase",
+                "options_count": 3,
+                "values": [
+                  "220 В, 1 фаза",
+                  "380 В, 3 фазы",
+                  "Не знаю"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "До 25 м",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1242,
+              "network_attempts": 1,
+              "log_id": "86514d58-9aaf-4609-9208-6cd636639cbd",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: номинальный рабочий ток насоса по шильдику в амперах; способ прокладки. Как будет проложен кабель к насосу? Если параметр неизвестен, ответьте «Не знаю» — отмечу это для специалиста.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "installation_method",
+                "options_count": 4,
+                "values": [
+                  "Стационарно в помещении",
+                  "Стационарно на улице",
+                  "Переносное подключение",
+                  "Не знаю"
+                ]
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "line_length",
+                "options_count": 4,
+                "values": [
+                  "До 25 м",
+                  "25–50 м",
+                  "Более 50 м",
+                  "Не знаю"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Стационарно на улице",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 829,
+              "network_attempts": 1,
+              "log_id": "b7a55ea1-7c7c-4b79-8ad1-26e2b26bda52",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: номинальный рабочий ток насоса по шильдику в амперах. Укажите номинальный рабочий ток насоса по шильдику в амперах конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением. Если параметр неизвестен, ответьте «Не знаю» — отмечу это для специалиста.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "load_current",
+                "options_count": 0
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "installation_method",
+                "options_count": 4,
+                "values": [
+                  "Стационарно в помещении",
+                  "Стационарно на улице",
+                  "Переносное подключение",
+                  "Не знаю"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "6 А",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1351,
+              "network_attempts": 1,
+              "log_id": "f33f84be-379f-4a36-9306-1ab546fb71f2",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Известные условия собраны. Марку и сечение нужно подтвердить у технического специалиста. Скопируйте сводку для обращения к менеджеру. Когда параметры будут определены, я найду товары и сравню цены. Заявка автоматически не отправлялась.\n\nЗапрос для технического специалиста. Марка и сечение кабеля ещё не подтверждены.\n\nМне нужен кабель для насоса\nУточнение клиента: 220 В, 1 фаза\nУточнение клиента: До 25 м\nУточнение клиента: Стационарно на улице\nУточнение клиента: 6 А\n\nУкажите марку, число жил и сечение, когда они будут известны.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "engineering_specification",
+                "options_count": 0
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "ВВГ 3*1,5",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1512,
+              "network_attempts": 1,
+              "log_id": "afb009d6-912c-4199-b7f3-528555cfb039",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Проверю наличие и цены по вашей маркировке «ВВГ 3*1,5». Это не подтверждает расчёт сечения или пригодность для подключения. Запустить отдельный поиск в каталоге?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_lookup_confirmation",
+                "options_count": 2,
+                "values": [
+                  "Новая тема. Найди кабель ВВГ 3*1,5",
+                  "Указать другую спецификацию"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Новая тема. Найди кабель ВВГ 3*1,5",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 2871,
+              "network_attempts": 1,
+              "log_id": "1cb5aefe-357e-4bfb-b8ee-71dcbf76290c",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Кабель ВВГ 3*1,5 ГОСТ IK",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik/",
+                  "price": 301,
+                  "stockLine": "Караганда (98 м)",
+                  "cardText": "- **[Кабель ВВГ 3*1,5 ГОСТ IK](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gost-ik/)**\n  Цена: *301* ₸/м\n  Наличие: Караганда (98 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг 3*1,5 ГОСТ IK",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gost-ik/",
+                  "price": 314,
+                  "stockLine": "Караганда (135 м)",
+                  "cardText": "- **[Кабель ВВГ нг 3*1,5 ГОСТ IK](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gost-ik/)**\n  Цена: *314* ₸/м\n  Наличие: Караганда (135 м)"
+                },
+                {
+                  "title": "Кабель ВВГ 3*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gk-gost/",
+                  "price": 453,
+                  "stockLine": "Караганда (25514 м), Алматы (256 м), Актобе (26 м)",
+                  "cardText": "- **[Кабель ВВГ 3*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-3*1,5-gk-gost/)**\n  Цена: *453* ₸/м\n  Наличие: Караганда (25514 м), Алматы (256 м), Актобе (26 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг 3*1,5 ГК ГОСТ(зеленый)",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost%28zelenyij%29/",
+                  "price": 456,
+                  "stockLine": "Актобе (2400 м), Астана (2079 м), Шымкент (273 м)",
+                  "cardText": "- **[Кабель ВВГ нг 3*1,5 ГК ГОСТ(зеленый)](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5-gk-gost%28zelenyij%29/)**\n  Цена: *456* ₸/м\n  Наличие: Актобе (2400 м), Астана (2079 м), Шымкент (273 м)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 3*1,5», цены и единицы продажи; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_9ec54538-e28f-494f-9431-320a534e2643"
+              },
+              "selection_contract": {
+                "hash": "selection-9f8755a0",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "3×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_lookup_confirmation",
+                "options_count": 2,
+                "values": [
+                  "Новая тема. Найди кабель ВВГ 3*1,5",
+                  "Указать другую спецификацию"
+                ]
+              },
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Exact compound marking: подтверждено 4",
+                  "duration_ms": 2270
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "underground-known-conditions-handoff",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_underground-known-conditions-handoff_base_1793443156966_1",
+          "turns": [
+            {
+              "message": "Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 733,
+              "network_attempts": 1,
+              "log_id": "3e10cd7e-7399-4948-887f-99cff3787574",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Марка, число жил и сечение кабеля уже определены в паспорте оборудования или проекте?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Нет, нужна помощь",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1534,
+              "network_attempts": 1,
+              "log_id": "d77d36f5-e612-441a-82c6-faf203930bf3",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Осталось уточнить: наличие защитной жилы/заземления. Укажите наличие защитной жилы/заземления конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением. Если параметр неизвестен, ответьте «Не знаю» — отмечу это для специалиста.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "grounding_presence",
+                "options_count": 0
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "tool_events": [],
+              "passed": false,
+              "failures": [
+                "clarification facet grounding_presence != engineering_specification",
+                "assistant text misses one or more required groups: [Заявка автоматически не отправлялась] [Запрос для технического специалиста] [PE] [25 м]"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "catalog_preflight": {
+    "ok": true,
+    "status": "ready",
+    "http_status": 200,
+    "checks": {
+      "categories": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "products": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "facets": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "article_filter": {
+        "status": "ok",
+        "http_status": 200
+      }
+    },
+    "duration_ms": 4216
+  },
+  "finished_at": "2026-10-31T10:39:19.236Z",
+  "completeness": {
+    "complete": false,
+    "planned_cases": 3,
+    "recorded_cases": 2,
+    "planned_runs": 3,
+    "recorded_runs": 2,
+    "planned_turns": 11,
+    "recorded_turns": 10
+  },
+  "log_ids": [
+    "df8bd8bb-04d3-4bbe-a5de-4134eb88cd26",
+    "b6ac139b-ea7a-4d71-b3d3-409d8ff2e6de",
+    "949f9aae-f224-4247-988e-4d22b7f03aff",
+    "86514d58-9aaf-4609-9208-6cd636639cbd",
+    "b7a55ea1-7c7c-4b79-8ad1-26e2b26bda52",
+    "f33f84be-379f-4a36-9306-1ab546fb71f2",
+    "afb009d6-912c-4199-b7f3-528555cfb039",
+    "1cb5aefe-357e-4bfb-b8ee-71dcbf76290c",
+    "3e10cd7e-7399-4948-887f-99cff3787574",
+    "d77d36f5-e612-441a-82c6-faf203930bf3"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}
