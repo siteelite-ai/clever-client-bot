@@ -1,5 +1,7 @@
 # Cable selection: evidence audit and safe next boundary
 
+**Follow-up:** the user subsequently selected the bounded MVP and approved the assistance flow. See [implementation and verification](specification-assistance-mvp-20261031.md). The pending-decision language below is retained as the historical audit, not the current product decision. Neither draft was published to production by this work.
+
 ## Scope
 
 Requested on 2026-10-31: work through blocker #2, pump and underground cable selection. Baseline is published main `ad2773a93b0c9daefc814af940a4f86e53922228`, public V3 v659. Changes are prepared only in `fix/engineering-evidence-boundary-20261031`; no deployment, database/secret update, model switch, frontend change or migration.

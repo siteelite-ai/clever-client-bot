@@ -177,6 +177,10 @@ export function verifiedReadinessReplayInput(
       ...(typeof scoped.resolved_category === "string"
         ? { resolved_category: scoped.resolved_category }
         : {}),
+      ...(scoped.assistance && typeof scoped.assistance === "object" &&
+          (scoped.assistance as { version?: unknown }).version === 1
+        ? { assistance: scoped.assistance as { version: 1; summary?: string; deferred_facets?: string[] } }
+        : {}),
     },
   };
 }
@@ -257,6 +261,7 @@ export interface SelectionReadinessClarification
 
 interface ReadinessProfile {
   id: string;
+  specification_assistance?: boolean;
   applies: RegExp;
   required: Array<RegExp | ((evidence: string) => boolean)>;
   /** Requirement answered by the opening chip axis, not by the whole prose. */
@@ -727,6 +732,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "pump_cable",
+    specification_assistance: true,
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
     required: [
       hasNominalLoadCurrent,
@@ -783,6 +789,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "underground_cable",
+    specification_assistance: true,
     applies:
       /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}земл\p{L}*/iu,
     required: [
@@ -1088,10 +1095,26 @@ const PROFILES: ReadinessProfile[] = [
   },
 ];
 
+export function specificationAssistanceProfile(message: string): string | null {
+  return PROFILES.find(profile => profile.specification_assistance && profile.applies.test(message))?.id ?? null;
+}
+
+function readinessRequirementFacet(profile: ReadinessProfile, index: number): string {
+  return profile.freeform_facets?.[index] ?? profile.follow_ups?.find(follow => follow.requirement_index === index)?.facet_key ??
+    (index === profile.primary_requirement_index ? profile.facet_key : `selection_requirement_${index}`);
+}
+
+export function readinessRequirementLabel(profileId: string, facet: string): string | null {
+  const profile = PROFILES.find(candidate => candidate.id === profileId);
+  if (!profile) return null;
+  const index = profile.required.findIndex((_, index) => readinessRequirementFacet(profile, index) === facet);
+  return profile.missing_labels[index] ?? null;
+}
+
 export function selectReadinessClarification(
   currentMessage: string,
   dialogueEvidence = "",
-  options: { progressive?: boolean } = {},
+  options: { progressive?: boolean; /** Collection for a human only; never a fit certificate. */ deferredForHandoffOnly?: readonly string[] } = {},
 ): SelectionReadinessClarification | null {
   const current = String(currentMessage ?? "").trim();
   if (!current) return null;
@@ -1116,6 +1139,7 @@ export function selectReadinessClarification(
   if (measuredLoadGuidanceCanProceed(current)) return null;
   const missing = profile.required
     .map((requirement, index) => {
+      if (options.deferredForHandoffOnly?.includes(readinessRequirementFacet(profile, index))) return -1;
       // Two side lengths are area evidence, never mounting-height evidence.
       const axisEvidence = requirement === hasCableRouteLength ? rawEvidence : index === 1 &&
           (profile.id === "outdoor_floodlight" ||

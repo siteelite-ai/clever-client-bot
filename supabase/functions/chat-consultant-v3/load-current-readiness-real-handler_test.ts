@@ -8,6 +8,7 @@ import {
 import {
   offlineHandler,
   restoreOfflineModuleSetup,
+  setSpecificationAssistanceInOfflineFixture,
 } from "./model-no-search-integration-fixture.ts";
 import "./index.ts";
 
@@ -115,11 +116,13 @@ async function runDialogue({
   expectedFacets,
   expectedProfile,
   terminalMode = null,
+  expectedFinalOptions = 0,
 }: {
   label: string;
   messages: string[];
   expectedFacets: string[];
   expectedProfile: string;
+  expectedFinalOptions?: number;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -746,10 +749,12 @@ async function runDialogue({
     const last = logs.at(-1);
     assert(last);
     assertEquals(last.final_products_count, 0);
-    assertEquals((pending?.options as unknown[]).length, 0);
+    assertEquals((pending?.options as unknown[]).length, expectedFinalOptions);
     const finalAxis = expectedFacets.at(-1);
     assert(
-      (finalAxis === "line_length" ? /(?:длин|метр)/iu : /(?:ток|ампер|шильдик)/iu)
+      (finalAxis === "line_length" ? /(?:длин|метр)/iu :
+        finalAxis === "engineering_specification" ? /(?:марку|сечение)/iu :
+        finalAxis === "specification_lookup_confirmation" ? /(?:маркировке|каталоге)/iu : /(?:ток|ампер|шильдик)/iu)
         .test(String(pending?.question ?? "")),
       `${label}: exact ${finalAxis} question missing: ${
         JSON.stringify(pending)
@@ -953,3 +958,38 @@ Deno.test({
 });
 
 addEventListener("unload", restoreOfflineModuleSetup);
+
+for (const scenario of [
+  {
+    label:"pump assistance handoff",
+    messages:["Мне нужен кабель для насоса","Нет, нужна помощь","220 В, 1 фаза","До 25 м","Стационарно на улице","6 А"],
+    expectedFacets:["specification_status","supply_phase","line_length","installation_method","load_current","engineering_specification"],
+    expectedProfile:"pump_cable",
+  },
+  {
+    label:"unknown pump facts remain unknown in a specialist handoff",
+    messages:["Мне нужен кабель для насоса","Нет, нужна помощь","Не знаю","Не знаю","Не знаю","Не знаю"],
+    expectedFacets:["specification_status","supply_phase","line_length","installation_method","load_current","engineering_specification"],
+    expectedProfile:"pump_cable",
+  },
+  {
+    label:"underground assistance handoff",
+    messages:["Какой кабель подойдет для прокладки в земле?","Нет, нужна помощь","Прямо в земле","220 В, 1 фаза","16 А","3 жилы","Да, одна из трёх жил — защитная PE","25 м"],
+    expectedFacets:["specification_status","installation_method","supply_phase","load_power","core_count","grounding_presence","line_length","engineering_specification"],
+    expectedProfile:"underground_cable",
+  },
+  {
+    label:"customer specification lookup confirmation",
+    messages:["Мне нужен кабель для насоса","Да, укажу марку и сечение","ВВГнг(А)-LS 3*2,5"],
+    expectedFacets:["specification_status","engineering_specification","specification_lookup_confirmation"],
+    expectedProfile:"pump_cable",expectedFinalOptions:2,
+  },
+]) Deno.test({
+  name:`MVP real handler: ${scenario.label} uses server context and no model/catalog calls`,
+  permissions:{read:true,env:false,net:false},
+  fn:async()=>{
+    setSpecificationAssistanceInOfflineFixture(true);
+    try { await runDialogue(scenario); }
+    finally { setSpecificationAssistanceInOfflineFixture(false); }
+  },
+});

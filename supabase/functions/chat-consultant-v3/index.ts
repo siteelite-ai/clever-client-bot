@@ -705,6 +705,7 @@ import {
   selectReadinessClarification,
   verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
+import { resolveSpecificationAssistance } from "../_shared/v3-tools/specification-assistance.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type CoverageDiagnostic,
@@ -28092,7 +28093,12 @@ Deno.serve(async (req) => {
                 additionalSelectionRequest || matchedVerifiedBroadSelection ||
                 freeformCandidate
               ? null
-              : selectReadinessClarification(
+              : resolveSpecificationAssistance({
+                  message: userMessage,
+                  verifiedSlot: verifiedReadinessState.slot,
+                  newTask: startsNewTask,
+                  enabled: Deno.env.get("VOLT220_SPECIFICATION_ASSISTANCE_ENABLED") !== "false",
+                }) ?? selectReadinessClarification(
                 scopedSelectionRequest.message,
                 selectionReadinessEvidenceFromHistory(
                   effectiveHistory.slice(-8),
