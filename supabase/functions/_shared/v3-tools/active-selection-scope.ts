@@ -1,4 +1,5 @@
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
+import { isGroundingPresenceFreeformAnswer } from "./selection-readiness.ts";
 
 /**
  * A completed server response, not widget history or client slots, owns the
@@ -579,6 +580,12 @@ export function isVerifiedFreeformReadinessAnswer(
     /^(?:найди\p{L}*|подбери\p{L}*|покажи\p{L}*|предложи\p{L}*|посоветуй\p{L}*|ищу|хочу|купить)(?:\s|$)/u
       .test(withoutFiller)
   ) return false;
+  // This value comes from the immediately preceding *server-issued* slot.
+  // A positive or negative PE statement is an answer to that exact axis, not
+  // a new product request or a reference to previously rendered cards.
+  if (verifiedSlot.facet_key === "grounding_presence") {
+    return isGroundingPresenceFreeformAnswer(raw);
+  }
   const answer = scopedSelectionObject(value);
   const words = answer.split(" ").filter(Boolean);
   if (!answer || words.length > 9) return false;
@@ -703,6 +710,23 @@ export function isVerifiedFreeformReadinessAnswer(
     facts++;
   }
   return facts > 0;
+}
+
+/** A verified answer to the current pending question needs no historical
+ * product batch. A real request about earlier cards (or an unverified slot)
+ * still requires server-owned product proof before any model/catalog route. */
+export function requiresProvenProductContext(input: {
+  renderedReferenceRequested: boolean;
+  browserHasRenderedCard: boolean;
+  staleCachePresent: boolean;
+  localFollowupReference: boolean;
+  ellipticalAttributeFollowup: boolean;
+  verifiedFreeformReadinessAnswer: boolean;
+}): boolean {
+  if (input.renderedReferenceRequested) return true;
+  if (input.verifiedFreeformReadinessAnswer) return false;
+  return input.browserHasRenderedCard || input.staleCachePresent ||
+    input.localFollowupReference || input.ellipticalAttributeFollowup;
 }
 
 export function productMatchesActiveSection(

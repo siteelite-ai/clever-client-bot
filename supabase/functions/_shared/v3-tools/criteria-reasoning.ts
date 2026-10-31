@@ -23,6 +23,7 @@ import {
   projectCriteriaFacetOptions,
 } from "./criteria-gate.ts";
 import {
+  CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
   isPhysicalMeasurementUnit,
   normalizeMeasurementText,
@@ -981,6 +982,102 @@ function customerMeasurementOperator(
   return { op: "eq", exclusive: false };
 }
 
+/** A current read from the connected load's nameplate is an input to product
+ * sizing, not the selected product's exact rated current. Keep the ownership
+ * decision on each occurrence and each customer turn: a later explicit
+ * product-current request must still survive even if the same number was
+ * previously stated for the load. This applies to every catalog branch with
+ * current-valued facets, without naming any product or SKU. */
+function customerCurrentOwnedByConnectedLoad(
+  customerText: string,
+  value: number,
+  unit: string,
+): boolean {
+  if (!/^(?:а|ма|ка)$/u.test(unit)) return false;
+  const turns = normalizeMeasurementText(String(customerText ?? ""))
+    .split(CUSTOMER_TURN_BOUNDARY);
+  const selectionVerb =
+    /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)(?=$|[^\p{L}])/giu;
+  // A purpose relation to a room, yard or other place does not identify an
+  // electrical load. Only a connected consumer/equipment role can transfer
+  // the current to the application side.
+  const connectedLoadRelation =
+    /(?:^|[^\p{L}])(?:для|под)\s+(?:\p{L}{3,}\s+){0,3}?(?:двигател\p{L}*|мотор\p{L}*|насос\p{L}*|котл\p{L}*|нагрузк\p{L}*|потребител\p{L}*|оборудован\p{L}*|устройств\p{L}*|электроприемник\p{L}*|прибор\p{L}*|станк\p{L}*|компрессор\p{L}*|вентилятор\p{L}*|агрегат\p{L}*|обогревател\p{L}*)/giu;
+  const lastIndex = (source: string, pattern: RegExp): number =>
+    [...source.matchAll(pattern)].at(-1)?.index ?? -1;
+  const currentQuantity = new RegExp(
+    String.raw`(?<![a-zа-я0-9])(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  let loadOccurrences = 0;
+  for (const [turnIndex, turn] of turns.entries()) {
+    currentQuantity.lastIndex = 0;
+    for (let match; (match = currentQuantity.exec(turn)) !== null;) {
+      if (
+        Number(match[1].replace(",", ".")) !== value ||
+        canonicalMeasurementUnit(match[2]) !== unit
+      ) continue;
+      const before = turn.slice(0, match.index);
+      const relation = lastIndex(before, connectedLoadRelation);
+      const selection = lastIndex(before, selectionVerb);
+      const localBefore = before.slice(
+        Math.max(
+          before.lastIndexOf("."),
+          before.lastIndexOf("!"),
+          before.lastIndexOf("?"),
+          before.lastIndexOf(";"),
+          before.lastIndexOf(","),
+        ) + 1,
+      );
+      const directlySpecifiedProduct = selection >= 0 && selection > relation &&
+          /(?:^|\s)(?:на\s*|с\s+(?:(?:номинальн\p{L}*|допустим\p{L}*|рабоч\p{L}*)\s+)?ток\p{L}*\s*)$/iu
+            .test(before) ||
+        /(?:^|[^\p{L}])на\s+(?:(?:номинальн\p{L}*|рабоч\p{L}*|допустим\p{L}*|предельн\p{L}*)\s+)?ток\p{L}*\s*$/iu
+          .test(localBefore) ||
+        /(?:допустим\p{L}*|предельн\p{L}*)\s+ток\p{L}*\s*$/iu
+          .test(localBefore) ||
+        /(?:ток\p{L}*|шильдик\p{L}*)\s+(?:автомат|выключател|кабел|провод|предохранител|розетк|контактор|пускател|реле)\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
+          .test(localBefore);
+      if (directlySpecifiedProduct) return false;
+      const unambiguousLoadOwner =
+        /(?:ток\p{L}*|потреблен\p{L}*|потребля\p{L}*|шильдик\p{L}*)\s+(?:(?:подключенн\p{L}*|питаем\p{L}*)\s+)?(?:нагрузк\p{L}*|потребител\p{L}*|подключенн\p{L}*\s+(?:оборудован\p{L}*|устройств\p{L}*|агрегат\p{L}*))\s*$/iu
+          .test(localBefore) ||
+        /(?:потребля\p{L}*|потреблен\p{L}*)\s*$/iu.test(localBefore);
+      const namedConnectedItem =
+        /(?:ток\p{L}*|шильдик\p{L}*)\s+(?:подключенн\p{L}*\s+)?(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор|электроприемник|станк|обогревател)\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu
+          .test(localBefore) && (relation >= 0 || selection < 0);
+      const pronounOwnedByConnectedLoad = relation >= 0 &&
+        /(?:его|ее|их)\s+ток\p{L}*\s*$/iu.test(localBefore);
+      const standaloneLoadFact = selection < 0 &&
+        /(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*/iu
+          .test(before) &&
+        /(?:^|[,\s])(?:рабоч\p{L}*\s+)?ток\p{L}*\s*$/iu
+          .test(localBefore);
+      const scopedCurrentAnswer =
+        /^\s*уточнение клиента\s*:\s*(?:ток\p{L}*\s*)?$/iu
+          .test(before) &&
+        turnIndex > 0 &&
+        turns.slice(0, turnIndex).some((prior) =>
+          lastIndex(prior, selectionVerb) >= 0 &&
+          lastIndex(prior, connectedLoadRelation) >= 0
+        );
+      if (
+        unambiguousLoadOwner || namedConnectedItem ||
+        pronounOwnedByConnectedLoad || standaloneLoadFact ||
+        relation >= 0 && selection >= 0 && relation > selection ||
+        scopedCurrentAnswer
+      ) {
+        loadOccurrences++;
+      } else {
+        // A second occurrence may explicitly set the product's own current;
+        // do not let a previous load reading claim that occurrence as well.
+        return false;
+      }
+    }
+  }
+  return loadOccurrences > 0;
+}
+
 function voltageMeasurementRole(text: string): string {
   if (/(?:изоляц|insulat|dielectric)/iu.test(text)) return "insulation";
   if (/(?:выходн|output)/iu.test(text)) return "output";
@@ -1004,6 +1101,14 @@ function customerMeasurementEvidence(
   facets: MeasurementFacet[],
 ): "match" | "conflict" | "absent" {
   const unit = measurement.unit;
+  if (
+    criterion.op === "eq" && measurement.values.length === 1 &&
+    customerCurrentOwnedByConnectedLoad(
+      customerText,
+      measurement.values[0],
+      unit,
+    )
+  ) return "conflict";
   const labels = measurementAxisLabels(criterion, facets);
   const axisStems = measurementAxisStems(labels);
 
@@ -2576,6 +2681,13 @@ export function projectLiteralMeasuredCriteria(
   for (const quantity of quantities) {
     const unit = canonicalMeasurementUnit(quantity.unit);
     if (!unit) continue;
+    if (
+      customerCurrentOwnedByConnectedLoad(
+        customerText,
+        quantity.value,
+        unit,
+      )
+    ) continue;
     const directServiceCapacities = /^(?:м²|м³)$/u.test(unit)
       ? (facets ?? []).filter((facet) =>
         customerOwnsDirectionalServiceCapacityMinimum(

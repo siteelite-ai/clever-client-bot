@@ -1,0 +1,123 @@
+{
+  "suite_file": "motor-v232-one-shot.json",
+  "suite_version": 3,
+  "suite_sha256": "07a0a1031afe9caafe6b9a2670bfd41b258c9f2e4572de689e56c9bb019ce5ae",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-30T13:37:05.401Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "motor-v232-3kw-6a": 1
+  },
+  "cases": [
+    {
+      "id": "motor-v232-3kw-6a",
+      "title": "Motor breaker: 3 kW, 380 V, three phases, 6 A nameplate current",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "session_4c742b3f-4fa9-402f-b4f7-81b8a0c17783",
+          "turns": [
+            {
+              "message": "Подберите автомат для асинхронного двигателя 3 кВт, 380 В, 3 фазы, прямой пуск, номинальный рабочий ток по шильдику 6 А.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 17770,
+              "network_attempts": 1,
+              "log_id": "2f7f635b-82bd-4e7c-be41-c70ce4e5c76e",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Не удалось надёжно проверить условия подбора по характеристикам товаров. Не буду показывать неподтверждённые варианты; повторите запрос или уточните условия подбора.",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_4c742b3f-4fa9-402f-b4f7-81b8a0c17783"
+              },
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Автоматы защиты двигателя»: 67 тов., фасетов 33, листьев 1",
+                  "duration_ms": 4181
+                }
+              ],
+              "passed": false,
+              "failures": [
+                "products 0 < 1"
+              ]
+            }
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "catalog_preflight": {
+    "ok": true,
+    "status": "ready",
+    "http_status": 200,
+    "checks": {
+      "categories": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "products": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "facets": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "article_filter": {
+        "status": "ok",
+        "http_status": 200
+      }
+    },
+    "duration_ms": 4323
+  },
+  "finished_at": "2026-10-30T13:37:27.511Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 1,
+    "recorded_turns": 1
+  },
+  "log_ids": [
+    "2f7f635b-82bd-4e7c-be41-c70ce4e5c76e"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": false
+}

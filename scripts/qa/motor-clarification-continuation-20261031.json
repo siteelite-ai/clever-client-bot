@@ -1,0 +1,60 @@
+{
+  "schema_version": 3,
+  "source": "Targeted closed-preview release check: actual clarification selections followed by numeric nameplate answer",
+  "default_expectations": {
+    "forbid_assistant_text": ["ошибка соединения", "Не удалось надёжно проверить", "Не удалось однозначно проверить", "Ответ получен не полностью"]
+  },
+  "cases": [
+    {
+      "id": "motor-clarification-continuation-6a",
+      "title": "Motor 3 kW → supply choice → start-method choice → nameplate current → catalog cards",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Подберите автомат для двигателя асинхронный 3 кВт",
+          "expect": {
+            "max_products": 0,
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "supply_phase",
+            "require_clarification_option_values": ["220 В, 1 фаза", "380 В, 3 фазы"],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "380 В, 3 фазы",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_previous_quick_reply": {"facet_key": "supply_phase", "value": "380 В, 3 фазы"},
+            "require_clarification_choice": "options",
+            "require_clarification_facet_key": "motor_start_method",
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "Прямой пуск",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_previous_quick_reply": {"facet_key": "motor_start_method", "value": "Прямой пуск"},
+            "require_clarification_choice": "freeform",
+            "require_clarification_facet_key": "load_current",
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "6 А",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_previous_freeform_slot": "load_current",
+            "min_products": 1,
+            "max_products": 5,
+            "require_every_product_page": {"name": {"require_any": ["автомат", "выключатель"]}},
+            "require_selection_criteria_evidence": true,
+            "max_duration_ms": 45000
+          }
+        }
+      ]
+    }
+  ]
+}

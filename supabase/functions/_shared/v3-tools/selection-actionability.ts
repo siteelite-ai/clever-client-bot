@@ -44,6 +44,8 @@ import {
   isAbsenceOrUnknownFacetValue,
 } from "./facet-value-semantics.ts";
 import { visibleSystemTotalHasProvenance } from "./system-total-capacity.ts";
+import { MEASUREMENT_OWNERSHIP_POLICY } from "./derived-reasoning-repair.ts";
+import { type MeasuredPointRangeCertificate, verifiedMeasuredPointRangeEvidence } from "./measured-point-range-relation.ts";
 
 /**
  * Whether the consultant has already produced enough machine-checkable
@@ -496,6 +498,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
     place: string;
     minimumAreaM2: number;
   } | null = null,
+  serverVerifiedMeasurementEvidence: string | null = null,
 ): string | null {
   if (!customerEvidence.trim()) return reasoning;
   const liveMeasuredFacets = facets.map((facet) => ({
@@ -535,6 +538,16 @@ function scrubUnsupportedPerProductMeasuredClaims(
     liveMeasuredFacets,
     measurementScope,
   ).filter((claim) => {
+    // Only the exact evidence span compiled from the server certificate is
+    // server-owned. Identical numeric values in another property gain no
+    // authority, and no request or tool field can opt into this provenance.
+    if (serverVerifiedMeasurementEvidence) {
+      let start = reasoning.indexOf(serverVerifiedMeasurementEvidence);
+      while (start >= 0) {
+        if (claim.start >= start && claim.end <= start + serverVerifiedMeasurementEvidence.length) return false;
+        start = reasoning.indexOf(serverVerifiedMeasurementEvidence, start + serverVerifiedMeasurementEvidence.length);
+      }
+    }
     // The paired-fit protocol proves only strict comparisons against the
     // measured object itself. It cannot license a different model-supplied
     // size merely because the claim names the same before/after facet.
@@ -968,9 +981,13 @@ function derivedRequiredFacetChoices(
   const normalizedEvidence = normalizeLiteralEvidence(customerEvidence);
   const evidenceTokens = new Set(normalizedEvidence.split(" ").filter(Boolean));
   const exactNumericEvidence = customerExactNumericEvidence(customerEvidence);
-  const exactNumericTokens = new Set(
-    normalizeLiteralEvidence(exactNumericEvidence).split(" ").filter(Boolean),
-  );
+  const exactNumericValues = new Set([...exactNumericEvidence.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?![\p{L}\p{N}])/gu)]
+    .map(match => Number(match[0].replace(",", "."))));
+  const measuredFacets = facets.map(f => ({
+    key: String(f.key || f.caption || ""), caption: String(f.caption || f.key || ""),
+    type: String(f.type || ""), unit: f.unit ?? null,
+    values: (f.values ?? []).map(v => ({ value: String(v.value ?? "") })),
+  }));
   const customerQuantities = extractClientQuantities(exactNumericEvidence)
     .map((quantity) => ({
       value: quantity.value,
@@ -1009,8 +1026,12 @@ function derivedRequiredFacetChoices(
       if (constrainToCustomerEvidence) {
         const normalizedValue = normalizeLiteralEvidence(choice.value);
         const valueTokens = normalizedValue.split(" ").filter(Boolean);
-        const bareNumericValue = /^\d+(?:[.,]\d+)?$/u.test(normalizedValue);
-        const exactPhrase = !bareNumericValue && normalizedValue.length >= 2 &&
+        // Lexical normalization deliberately splits punctuation. Never use
+        // those tokens for numeric ownership: 6.3 is not either 6 or 3, and
+        // one endpoint of an interval is not an exact request for that range.
+        const bareNumericValue = /^\s*\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+        const intervalValue = /^\s*\d+(?:[.,]\d+)?\s*[-–—]\s*\d+(?:[.,]\d+)?(?:\s*[a-zа-я°²³]+)?\s*$/iu.test(choice.value);
+        const exactPhrase = !bareNumericValue && !intervalValue && normalizedValue.length >= 2 &&
           (` ${normalizedEvidence} `).includes(` ${normalizedValue} `);
         const compactIdentifier = valueTokens.length === 1 &&
           /(?=.*[a-zа-я])(?=.*\d)/iu.test(valueTokens[0]) &&
@@ -1029,8 +1050,8 @@ function derivedRequiredFacetChoices(
             choiceQuantities.map((quantity) => quantity.unit).filter(Boolean),
           ),
         ];
-        const numericLiteral = valueTokens.some((token) => {
-          if (!/^\d+(?:[.,]\d+)?$/u.test(token)) return false;
+        const numericTokens = [...choice.value.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?![\p{L}\p{N}])/gu)].map(match => match[0]);
+        const numericLiteral = !intervalValue && numericTokens.some((token) => {
           const value = Number(token.replace(",", "."));
           if (!Number.isFinite(value)) return false;
           const choiceUnits = choiceQuantities
@@ -1045,14 +1066,23 @@ function derivedRequiredFacetChoices(
             ? [declaredUnit]
             : [];
           if (expectedUnits.length === 0) {
-            return exactNumericTokens.has(token) &&
+            return exactNumericValues.has(value) &&
               customerNamesRequiredFacetAxisNearValue(
                 choice,
                 exactNumericEvidence,
               );
           }
-          return customerQuantities.some((quantity) =>
+          const sameQuantity = customerQuantities.some((quantity) =>
             quantity.value === value && expectedUnits.includes(quantity.unit)
+          );
+          if (!sameQuantity) return false;
+          if (!expectedUnits.some(isPhysicalMeasurementUnit)) return true;
+          // Unit/number overlap is necessary but not sufficient: a measured
+          // connected load is not an exact rating of the requested product.
+          return customerOwnsDerivedExactFacetValue(
+            { key: facetName, op: "eq", value: choice.value, level: "A" },
+            customerEvidence, customerEvidence,
+            measuredFacets,
           );
         });
         // A long bare number is not a distinctive identifier. In particular,
@@ -1065,6 +1095,7 @@ function derivedRequiredFacetChoices(
           token.length >= 4 && /[a-zа-я]/iu.test(token) &&
           evidenceTokens.has(token)
         );
+        if (requiredChoiceHasDeclaredPhysicalUnit(choice) && !numericLiteral) continue;
         if (
           !exactPhrase && !compactIdentifier && !numericLiteral &&
           !distinctiveLiteral
@@ -1104,7 +1135,7 @@ function requiredChoiceMeasuresPhysicalQuantity(
   if (sourceUnit && isPhysicalMeasurementUnit(sourceUnit)) {
     return true;
   }
-  const numericValue = /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+  const numericValue = /^\s*[+-]?\d+(?:[.,]\d+)?(?:\s*[-–—]\s*\d+(?:[.,]\d+)?)?\s*$/u.test(choice.value);
   const normalizedCaptionUnit = normalizeUnit(captionUnit);
   if (
     numericValue && normalizedCaptionUnit &&
@@ -1118,7 +1149,14 @@ function requiredChoiceMeasuresPhysicalQuantity(
 function requiredChoiceIsBareScalar(
   choice: DerivedRequiredFacetChoice,
 ): boolean {
-  return /^\s*[+-]?\d+(?:[.,]\d+)?\s*$/u.test(choice.value);
+  return /^\s*[+-]?\d+(?:[.,]\d+)?(?:\s*[-–—]\s*\d+(?:[.,]\d+)?)?\s*$/u.test(choice.value);
+}
+
+/** A declared unit is stronger evidence than an arbitrary last word of a
+ * caption. Keep count/morphology handling (e.g. "Количество жил") unchanged. */
+function requiredChoiceHasDeclaredPhysicalUnit(choice: DerivedRequiredFacetChoice): boolean {
+  const captionUnit = choice.facet.match(/[,;:(/]\s*([a-zа-я°]{1,8}(?:[²³]|\d)?(?:\/[a-zа-я°]{1,8})?)\s*\)?$/iu)?.[1];
+  return [choice.sourceUnit, captionUnit].some(raw => Boolean(raw?.trim()) && isPhysicalMeasurementUnit(normalizeUnit(raw!)));
 }
 
 /** The reasoning model may choose a derived qualitative technical value (for
@@ -2675,7 +2713,17 @@ export function resolveDerivedSelectionReasoning(
       minimumAreaM2: number;
     } | null;
   } = {},
+  observeRejection?: (reason:
+    | "incompatible_paired_range"
+    | "insufficient_grounded_reasoning"
+    | "system_total_reconciliation_failed"
+    | "unsupported_per_product_claims") => void,
+  serverRelations?: { measuredPointRange: MeasuredPointRangeCertificate },
 ): ResolvedDerivedSelectionReasoning | null {
+  const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0]) => {
+    try { observeRejection?.(reason); } catch { /* observational only */ }
+    return null;
+  };
   // Aggregated customer history remains useful for measured engineering
   // constraints, but it cannot establish a current shape/style preference.
   // The caller supplies only the current turn and a server-verified base.
@@ -2710,7 +2758,7 @@ export function resolveDerivedSelectionReasoning(
       verifiedRangeReasoning,
       incompatiblePairedRanges,
     )
-  ) return null;
+  ) return reject("incompatible_paired_range");
   const originalReasoning = omitUnverifiedPresearchPairedClaims(
     verifiedRangeReasoning,
     facets,
@@ -2718,7 +2766,7 @@ export function resolveDerivedSelectionReasoning(
     customerEvidence,
     productClass,
   );
-  if (originalReasoning.length < 20) return null;
+  if (originalReasoning.length < 20) return reject("insufficient_grounded_reasoning");
   const pairedObjectRangeIds = new Set(
     pairedObjectRanges.map(({ id }) => id),
   );
@@ -2747,7 +2795,7 @@ export function resolveDerivedSelectionReasoning(
   const reconciledScopeReasoning = computedSystemTotal
     ? reconcileComputedTotalReasoning(originalReasoning, customerEvidence)
     : originalReasoning;
-  if (!reconciledScopeReasoning) return null;
+  if (!reconciledScopeReasoning) return reject("system_total_reconciliation_failed");
   const aggregateSafeReasoning = measurementScope === "system_total"
     ? demoteUnsupportedSystemTotalClaims(
       reconciledScopeReasoning,
@@ -2763,8 +2811,9 @@ export function resolveDerivedSelectionReasoning(
     pairedObjectReference,
     productClass,
     appearanceScope.independentDestinationAreaProof,
+    serverRelations ? verifiedMeasuredPointRangeEvidence(serverRelations.measuredPointRange) : null,
   );
-  if (!scopeConsistentReasoning) return null;
+  if (!scopeConsistentReasoning) return reject("unsupported_per_product_claims");
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);
@@ -3237,13 +3286,14 @@ export function resolveDerivedSelectionReasoning(
     // for the product by the customer remains binding.
     if (coveredByVisibleRange || directionalCustomerCapacity) continue;
     if (
-      !customerOwned && !declaredRequiredIds.has(choice.id) &&
+      !customerOwned &&
+      (requiredChoiceHasDeclaredPhysicalUnit(choice) ||
+        !declaredRequiredIds.has(choice.id) && !projectedChoiceVisible) &&
       !requiredChoiceAvailableToReasoning(
         choice,
         customerOwnedRequiredIds,
         customerEvidence,
-      ) &&
-      !projectedChoiceVisible
+      )
     ) continue;
     const identity = captionKey.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
       .trim();
@@ -3712,6 +3762,7 @@ export function buildDerivedSelectionReasoningMessages(
   // for a hard catalog filter or a mandatory per-card claim.
   messages[0].content +=
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани обе обязательные границы совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
+  messages[0].content += ` ${MEASUREMENT_OWNERSHIP_POLICY}`;
   return messages;
 }
 

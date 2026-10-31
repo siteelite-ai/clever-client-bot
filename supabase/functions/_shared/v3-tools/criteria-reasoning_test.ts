@@ -36,6 +36,8 @@ import {
   subsumeCriteriaProvenByCompatibility,
   subsumePairedStateCriteria,
 } from "./compatibility-contract.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
+import { extractNominalLoadCurrent } from "./selection-readiness.ts";
 import {
   extractSchemaBackedMeasuredReference,
   terminalPairedFitDecision,
@@ -3502,6 +3504,147 @@ Deno.test("application load after for-clause cannot bind a unitless product face
     }],
   );
   assertEquals(projected.added, []);
+});
+
+Deno.test("connected-load current does not become an exact product-current filter", () => {
+  const facets = [{
+    key: "rated_current",
+    caption: "Номинальный ток, А",
+    type: "checkbox",
+    unit: "А",
+    values: [{ value: "6" }, { value: "16" }],
+  }];
+  const loadRequests = [
+    "Подберите автомат для асинхронного двигателя, ток двигателя 6 А",
+    "Нужен кабель для насоса; рабочий ток насоса 6 А",
+    "Подберите защиту для нагрузки с рабочим током 6 А",
+    joinCustomerTurns([
+      "Подберите автомат для двигателя мощностью 3 кВт",
+      "Уточнение клиента: 6 А",
+    ]),
+    joinCustomerTurns([
+      "Нужен кабель для насоса на улице",
+      "Уточнение клиента: ток 6 А",
+    ]),
+  ];
+  for (const customer of loadRequests) {
+    const projected = projectLiteralMeasuredCriteria(
+      [],
+      customer,
+      customer,
+      facets,
+    );
+    assertEquals(projected.added, [], customer);
+    assertEquals(projected.matched, [], customer);
+    const existing: Criterion = {
+      key: "Номинальный ток, А",
+      op: "eq",
+      value: "6",
+      unit: "А",
+      level: "A",
+    };
+    assertEquals(
+      filterPerProductMeasuredCriteria(
+        [existing],
+        customer,
+        customer,
+        null,
+        facets,
+      ).criteria,
+      [],
+      customer,
+    );
+  }
+});
+
+Deno.test("nameplate-current facts retain load ownership across readiness and catalog criteria", () => {
+  const facets = [{
+    key: "rated_current",
+    caption: "Номинальный ток, А",
+    type: "checkbox",
+    unit: "А",
+    values: [{ value: "6" }, { value: "16" }],
+  }];
+  const loadFacts = [
+    "Насос 2 кВт, рабочий ток 6 А; нужен кабель для насоса",
+    "ток двигателя по шильдику 6 А",
+    "для двигателя, его ток 6 А",
+    joinCustomerTurns([
+      "Подберите автомат для двигателя",
+      "Уточнение клиента: 6 А",
+    ]),
+  ];
+  for (const customer of loadFacts) {
+    assertEquals(extractNominalLoadCurrent(customer), 6, customer);
+    assertEquals(
+      projectLiteralMeasuredCriteria([], customer, customer, facets).added,
+      [],
+      customer,
+    );
+    assertEquals(
+      filterPerProductMeasuredCriteria([{
+        key: "Номинальный ток, А",
+        op: "eq",
+        value: "6",
+        unit: "А",
+        level: "A",
+      }], customer, customer, null, facets).criteria,
+      [],
+      customer,
+    );
+  }
+});
+
+Deno.test("explicit product current still projects in a load-related conversation", () => {
+  const facets = [{
+    key: "rated_current",
+    caption: "Номинальный ток, А",
+    type: "checkbox",
+    unit: "А",
+    values: [{ value: "6" }, { value: "16" }],
+  }];
+  const directRequests = [
+    "Подберите автомат для двигателя на номинальный ток 16 А",
+    "Нужен автомат для двигателя, ток автомата по шильдику 16 А",
+    "Найди автомат на 16 А для двигателя",
+    "Для насоса нужен кабель с допустимым током 16 А",
+    "Нужен кабель для насоса с допустимым током 16 А",
+    "Нужен насос с номинальным током 16 А",
+    "Найди выключатель для ванной на 16 А",
+    "Нужен насос для ванной с номинальным током 16 А",
+    "Ток двигателя 6 А. Нужен автомат на 6 А",
+    joinCustomerTurns([
+      "Подберите автомат для двигателя",
+      "Найди автомат на 16 А",
+    ]),
+  ];
+  for (const customer of directRequests) {
+    const value = customer.includes("на 6 А") ? "6" : "16";
+    const projected = projectLiteralMeasuredCriteria(
+      [],
+      customer,
+      customer,
+      facets,
+    );
+    assertEquals(projected.added, [{
+      key: "Номинальный ток, А",
+      op: "eq",
+      value,
+      unit: "А",
+      level: "A",
+    }], customer);
+    assertEquals(
+      filterPerProductMeasuredCriteria(
+        projected.added,
+        customer,
+        customer,
+        null,
+        facets,
+      ).criteria,
+      projected.added,
+      customer,
+    );
+  }
 });
 
 Deno.test("application height cannot become a unitless product facet with the same scalar", () => {

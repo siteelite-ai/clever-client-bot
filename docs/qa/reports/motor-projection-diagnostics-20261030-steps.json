@@ -1,0 +1,187 @@
+{
+  "request_id": "f6b669ab-ccfa-4853-89d8-bf4abbb3704e",
+  "candidate_commit": "2ca2c54b",
+  "status": "failed_customer_acceptance",
+  "entries": [
+    {
+      "step_no": 6,
+      "step": "v3_customer_measurement_evidence_resolved",
+      "meta": {
+        "new_task": true,
+        "lookup_failed": false,
+        "server_prior_turns": 0,
+        "prior_context_available": false
+      }
+    },
+    {
+      "step_no": 15,
+      "step": "v3_product_measurement_projection_diagnostic",
+      "meta": {
+        "gap": "unprojectable_criterion",
+        "stage": "before_repair",
+        "measurement_scope": "per_product",
+        "diagnostic_version": 1,
+        "customer_quantities": [
+          {
+            "unit": "квт",
+            "value": 3,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "в",
+            "value": 380,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "а",
+            "value": 6,
+            "matches_customer_quantity": true
+          }
+        ],
+        "declared_quantities": [
+          {
+            "unit": "квт",
+            "value": 3,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "в",
+            "value": 380,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "а",
+            "value": 6,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "а",
+            "value": 6,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "а",
+            "value": 6.3,
+            "matches_customer_quantity": false
+          },
+          {
+            "unit": "а",
+            "value": 10,
+            "matches_customer_quantity": false
+          },
+          {
+            "unit": "а",
+            "value": 10,
+            "matches_customer_quantity": false
+          },
+          {
+            "unit": "а",
+            "value": 10,
+            "matches_customer_quantity": false
+          },
+          {
+            "unit": "квт",
+            "value": 3,
+            "matches_customer_quantity": true
+          },
+          {
+            "unit": "квт",
+            "value": 3,
+            "matches_customer_quantity": true
+          }
+        ],
+        "competing_thresholds": false,
+        "independent_coverage": {
+          "code": "separate_numeric_facet",
+          "quantities": [],
+          "facet_index": 1,
+          "remaining_digits_capped": 2
+        },
+        "mandatory_projected_count": 0,
+        "scalar_projection_allowed": true,
+        "declared_facet_requirements": [
+          {
+            "facet_key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+            "quantities": [],
+            "evidence_origin": "model_declaration",
+            "live_enum_value": "4-6.3",
+            "live_facet_found": true,
+            "explicit_customer_mapping": false
+          },
+          {
+            "facet_key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+            "quantities": [],
+            "evidence_origin": "model_declaration",
+            "live_enum_value": "6.3",
+            "live_facet_found": true,
+            "explicit_customer_mapping": false
+          }
+        ],
+        "recommended_projection_reason": "not_recommended",
+        "recommended_projection_certified": false
+      }
+    },
+    {
+      "step_no": 16,
+      "step": "v3_product_measurement_gap_before_repair",
+      "meta": {
+        "gap": "unprojectable_criterion",
+        "destination_area_covered": false,
+        "model_physical_categories": [
+          "current",
+          "other",
+          "power",
+          "voltage"
+        ],
+        "model_physical_count_capped": 9
+      }
+    },
+    {
+      "step_no": 17,
+      "step": "v3_private_candidate_measurement_probe",
+      "meta": {
+        "status": "ready",
+        "candidates": 4,
+        "renderable": false,
+        "shared_cache": false
+      }
+    },
+    {
+      "step_no": 18,
+      "step": "v3_derived_selection_measurement_retry",
+      "meta": {
+        "recovered": false,
+        "timeout_ms": 8000,
+        "retry_model": "google/gemini-2.5-flash",
+        "repair_reason": "product_measurement"
+      }
+    },
+    {
+      "step_no": 19,
+      "step": "v3_derived_selection_reasoning_contract_rejected",
+      "meta": {
+        "finish": "tool_calls",
+        "array_sizes": {
+          "required_facet_values": 1,
+          "excluded_classifications": 0,
+          "compatible_classifications": 3,
+          "explicit_customer_classifications": 0
+        },
+        "tool_call_names": [
+          "declare_selection_reasoning"
+        ],
+        "declaration_keys": [
+          "compatible_classifications",
+          "excluded_classifications",
+          "explicit_customer_classifications",
+          "measurement_scope",
+          "reasoning",
+          "required_facet_values"
+        ],
+        "declaration_found": true,
+        "response_text_chars": 0,
+        "declaration_reasoning_chars": 395
+      }
+    }
+  ]
+}

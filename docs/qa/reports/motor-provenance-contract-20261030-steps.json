@@ -1,0 +1,83 @@
+[
+  {
+    "step_no": 11,
+    "step_name": "v3_measured_point_range_relation_checked",
+    "meta": {
+      "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+      "certified": true,
+      "accepted_values": 2
+    }
+  },
+  {
+    "step_no": 15,
+    "step_name": "v3_structured_measurement_declaration",
+    "meta": {
+      "proof_gates": "unchanged",
+      "requirements": 4,
+      "source_facts": "server_request_state",
+      "server_relation_retained": true
+    }
+  },
+  {
+    "step_no": 16,
+    "step_name": "v3_structured_measurement_declaration",
+    "meta": {
+      "proof_gates": "unchanged",
+      "requirements": 3,
+      "source_facts": "server_request_state",
+      "server_relation_retained": true
+    }
+  },
+  {
+    "step_no": 18,
+    "step_name": "v3_product_measurement_projection_diagnostic",
+    "meta": {
+      "gap": null,
+      "stage": "terminal",
+      "measurement_scope": "per_product",
+      "diagnostic_version": 1,
+      "customer_quantities": [
+        {
+          "unit": "квт",
+          "value": 3,
+          "matches_customer_quantity": true
+        },
+        {
+          "unit": "в",
+          "value": 380,
+          "matches_customer_quantity": true
+        },
+        {
+          "unit": "а",
+          "value": 6,
+          "matches_customer_quantity": true
+        }
+      ],
+      "declared_quantities": [
+        {
+          "unit": "а",
+          "value": 6,
+          "matches_customer_quantity": true
+        }
+      ],
+      "competing_thresholds": false,
+      "independent_coverage": {
+        "code": "covered"
+      },
+      "mandatory_projected_count": 0,
+      "scalar_projection_allowed": true,
+      "declared_facet_requirements": [],
+      "recommended_projection_reason": "not_recommended",
+      "recommended_projection_certified": false
+    }
+  },
+  {
+    "step_no": 22,
+    "step_name": "v3_measured_point_range_search_enforced",
+    "meta": {
+      "mode": "by_filter",
+      "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+      "accepted_values": 2
+    }
+  }
+]

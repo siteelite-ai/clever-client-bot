@@ -1,0 +1,98 @@
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { materializeStructuredMeasurementDeclaration, structuredMeasurementTool } from "./structured-measurement-declaration.ts";
+import { buildDerivedSelectionReasoningToolSchema, resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
+import { certificateCoversSoleUnprojectedMeasurement, compileMeasuredPointRangeRelation, verifiedMeasuredPointRangeEvidence } from "./measured-point-range-relation.ts";
+
+const facets = [{key:"setting",caption:"Диапазон уставки тока расцепления, А",unit:"А",values:[{value:"4–6 А"},{value:"6–10 А"},{value:"7–10 А"}]}];
+const customer = "Автомат для двигателя 3 кВт, 380 В, рабочий ток по шильдику 6 А";
+const relation = "Диапазон уставки тока должен включать рабочий ток 6 А.";
+const certificate = compileMeasuredPointRangeRelation({point:{value:6,unit:"A",source:"customer_load"},facets})!;
+
+Deno.test("structured tool keeps the legacy schema immutable and separates executable requirements from prose", () => {
+  const base=buildDerivedSelectionReasoningToolSchema(facets,customer);
+  const structured=structuredMeasurementTool(base);
+  assert("reasoning" in (base.function.parameters.properties as object));
+  assert(!("reasoning" in (structured.function.parameters.properties as object)));
+  assert((structured.function.parameters.required as string[]).includes("product_requirements"));
+  assert(!(structured.function.parameters.required as string[]).includes("reasoning"));
+  assertEquals(structured.function.parameters.additionalProperties,false);
+});
+
+Deno.test("every structured obligation survives materialization, with no truncation or silent dropped property", () => {
+  const requirements=[relation,"Напряжение каждого изделия должно быть не менее 380 В."];
+  const materialized=materializeStructuredMeasurementDeclaration({product_requirements:requirements,measurement_scope:"per_product"});
+  assert(materialized);
+  assertEquals(materialized.requirementCount,2);
+  assertEquals(materialized.args.reasoning,requirements.join("\n"));
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:String(materialized.args.reasoning),requiredFacetValues:[],customerEvidence:customer}),false);
+});
+
+Deno.test("structured relation passes the existing resolver and certificate without source-preface parsing", () => {
+  const materialized=materializeStructuredMeasurementDeclaration({product_requirements:[relation],measurement_scope:"per_product",required_facet_values:[]})!;
+  const resolved=resolveDerivedSelectionReasoning(materialized.args,facets,customer,"Автоматы защиты двигателя");
+  assert(resolved);
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:resolved.measurementEvidence,requiredFacetValues:resolved.requiredFacetValues,customerEvidence:customer}),true);
+});
+
+Deno.test("invalid, mixed legacy, oversized or truncated declarations never become a partial plan", () => {
+  for(const args of [
+    {},{product_requirements:[]},{product_requirements:[relation,42]},
+    {product_requirements:[relation],reasoning:"untrusted second channel"},
+    {product_requirements:Array(9).fill(relation)},
+    {product_requirements:["a".repeat(301)]},
+    {product_requirements:Array(8).fill("a".repeat(210))},
+  ]) assertEquals(materializeStructuredMeasurementDeclaration(args),null);
+});
+
+Deno.test("source facts cannot license another same-valued product rating in a structured declaration", () => {
+  for(const extra of ["Номинальный ток должен быть 6 А.","Ток отключения должен быть 6 А.","Мощность изделия должна быть 3 кВт."]) {
+    const m=materializeStructuredMeasurementDeclaration({product_requirements:[relation,extra]})!;
+    assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:String(m.args.reasoning),requiredFacetValues:[],customerEvidence:customer}),false,extra);
+  }
+});
+
+Deno.test("server relation survives model prose cleanup without waiving any other obligation", () => {
+  const trusted=verifiedMeasuredPointRangeEvidence(certificate);
+  assert(trusted);
+  const args={product_requirements:["Проверяю совместимое исполнение изделия."],measurement_scope:"per_product",required_facet_values:[]};
+  const m=materializeStructuredMeasurementDeclaration(args,trusted)!;
+  const resolved=resolveDerivedSelectionReasoning(m.args,facets,customer,"Автоматы защиты двигателя");
+  assert(resolved);
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:resolved.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),true);
+  const extra=materializeStructuredMeasurementDeclaration({...args,product_requirements:["Напряжение каждого изделия должно быть не менее 380 В."]},trusted)!;
+  assert(String(extra.args.reasoning).includes("380 В"));
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:String(extra.args.reasoning),requiredFacetValues:[],customerEvidence:customer}),false);
+  assertEquals(verifiedMeasuredPointRangeEvidence({...certificate,value:100}),null);
+  // An identically named tool field is untrusted and cannot supply evidence.
+  const forged=materializeStructuredMeasurementDeclaration({...args,serverVerifiedRelationEvidence:trusted})!;
+  assertEquals(String(forged.args.reasoning).includes(trusted),false);
+});
+
+Deno.test("released structured mode requires a server certificate, excludes paired-fit and replacement, and is independent of QA authentication", async () => {
+  const source=await Deno.readTextFile(new URL("../../chat-consultant-v3/index.ts",import.meta.url));
+  const mode=source.match(/const structuredMeasurementMode\s*=([^;]+);/u)?.[1];
+  assert(mode);
+  assert(mode.includes("Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference"));
+  assert(!mode.includes("CLOSURE_TEST_MARKER"));
+  assert(!mode.includes("Deno.env"));
+});
+
+Deno.test("server-owned proof survives ambiguous same-unit facets; identical model quantities do not inherit ownership", () => {
+  const liveLikeFacets = [...facets,
+    {key:"nominal",caption:"Номинальный ток, А",unit:"А",values:[{value:"6.3"},{value:"10"}]},
+    {key:"breaking",caption:"Ток отключения, А",unit:"А",values:[{value:"6"},{value:"10"}]},
+  ];
+  const trusted=verifiedMeasuredPointRangeEvidence(certificate)!;
+  const m=materializeStructuredMeasurementDeclaration({product_requirements:["Нужно проверить исполнение изделия."],measurement_scope:"per_product"},trusted)!;
+  const liveCustomer="Подберите автомат для асинхронного двигателя 3 кВт, 380 В, 3 фазы, прямой пуск, номинальный рабочий ток по шильдику 6 А.";
+  const withoutProvenance=resolveDerivedSelectionReasoning(m.args,liveLikeFacets,liveCustomer,"Автоматы защиты двигателя");
+  assertEquals(withoutProvenance?.measurementEvidence.includes(trusted),false);
+  const resolved=resolveDerivedSelectionReasoning(m.args,liveLikeFacets,liveCustomer,"Автоматы защиты двигателя",null,{},undefined,{measuredPointRange:certificate});
+  assert(resolved);
+  assert(resolved.measurementEvidence.includes(trusted));
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:resolved.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),true);
+  const other=materializeStructuredMeasurementDeclaration({product_requirements:["Номинальный ток 6 А."],measurement_scope:"per_product"},trusted)!;
+  const withExtra=resolveDerivedSelectionReasoning(other.args,liveLikeFacets,customer,"Автоматы защиты двигателя",null,{},undefined,{measuredPointRange:certificate});
+  assert(withExtra);
+  assertEquals(certificateCoversSoleUnprojectedMeasurement({certificate,measurementEvidence:withExtra.measurementEvidence,requiredFacetValues:[],customerEvidence:customer}),false);
+});
