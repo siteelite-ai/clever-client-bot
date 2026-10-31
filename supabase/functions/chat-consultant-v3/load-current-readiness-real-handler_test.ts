@@ -984,6 +984,12 @@ for (const scenario of [
     expectedFacets:["specification_status","engineering_specification","specification_lookup_confirmation"],
     expectedProfile:"pump_cable",expectedFinalOptions:2,
   },
+  {
+    label:"independent selection question does not erase supplied PE and other handoff conditions",
+    messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.","Нет, нужна помощь"],
+    expectedFacets:["specification_status","engineering_specification"],
+    expectedProfile:"underground_cable",
+  },
 ]) Deno.test({
   name:`MVP real handler: ${scenario.label} uses server context and no model/catalog calls`,
   permissions:{read:true,env:false,net:false},

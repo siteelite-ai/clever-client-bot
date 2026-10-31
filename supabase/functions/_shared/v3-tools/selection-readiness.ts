@@ -429,14 +429,22 @@ export type GroundingPresenceDecision = "present" | "absent";
 export function parseGroundingPresenceDecision(
   statement: string,
 ): GroundingPresenceDecision | null {
-  const text = String(statement ?? "").toLocaleLowerCase("ru-RU")
+  const normalized = String(statement ?? "").toLocaleLowerCase("ru-RU")
     .replace(/ё/gu, "е")
     .replace(/[—–-]/gu, " ")
     .replace(/\s+/gu, " ").trim()
     // A selection question may follow an asserted PE fact in the same turn;
     // a question *about* PE itself remains unanswered.
     .replace(/,\s*(?:какой|какая|какие|что|как)(?!\p{L})[^?]*\?$/iu, "");
-  if (!text || text.length > 500 || text.includes("?")) return null;
+  if (!normalized || normalized.length > 500) return null;
+  // An independent product-selection question is not evidence about PE, but
+  // must not invalidate a subsequent explicit customer assertion either.
+  // Keep questions mentioning this axis: they remain unresolved, not facts.
+  const groundingMention = /(?:заземл\p{L}*|защитн\p{L}*|(?<![\p{L}\p{N}])pe(?:n)?(?![\p{L}\p{N}]))/iu;
+  const text = (normalized.match(/[^!?]+[!?]?/gu) ?? [])
+    .filter((sentence) => !sentence.endsWith("?") || groundingMention.test(sentence))
+    .join(" ").trim();
+  if (!text || text.includes("?")) return null;
   if (
     /(?:^|[^\p{L}\p{N}])(?:не\s+знаю|не\s+уверен\p{L}*|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)(?=$|[^\p{L}\p{N}])/iu
       .test(text) ||
@@ -446,7 +454,8 @@ export function parseGroundingPresenceDecision(
   // PEN combines neutral and protection; it is not proof of a separate PE
   // core and must not answer the slot asking for one.
   const target = String.raw`(?:заземл\p{L}*|защитн\p{L}*\s+жил\p{L}*|pe)`;
-  const positive = new RegExp(
+  const explicitCorePredicate = /(?:^|[^\p{L}\p{N}])жил\p{L}*\s+(?:это\s+)?(?:защитн\p{L}*(?:\s+pe)?|pe)(?=$|[^\p{L}\p{N}])/iu.test(text);
+  const positive = explicitCorePredicate || new RegExp(
     String.raw`(?:^|[^\p{L}\p{N}])(?:с|есть|имеется|предусмотрен\p{L}*)\s+${target}(?=$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])${target}\s+(?:есть|имеется|предусмотрен\p{L}*)(?=$|[^\p{L}\p{N}])|(?:^|[^\p{L}\p{N}])(?:одна|1)\s+из\s+(?:\d+|двух|трех|четырех|пяти)\s+жил\p{L}*\s+(?:это\s+)?защитн\p{L}*(?:\s+жил\p{L}*)?(?:\s+pe)?(?=$|[^\p{L}\p{N}])`,
     "iu",
   ).test(text);

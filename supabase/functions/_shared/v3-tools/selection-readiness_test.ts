@@ -1187,6 +1187,18 @@ Deno.test("underground cable PE decision completes only its actual missing axis"
   );
 });
 
+Deno.test("grounding facts survive an unrelated selection question and subject-predicate word order", () => {
+  for (const fact of ["Одна жила защитная PE", "Жила защитная", "Жила PE", "Одна жила — защитная PE"]) {
+    assertEquals(parseGroundingPresenceDecision(fact), "present", fact);
+    const request = `Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, ${fact}; длина линии 25 м.`;
+    assertEquals(selectReadinessClarification(request), null, request);
+  }
+  for (const fact of ["Одна жила защитная PE?", "Одна жила не защитная", "Жила PEN", "Жила PE, но не знаю", "Жила PE и PE нет"]) {
+    assertEquals(parseGroundingPresenceDecision(fact), null, fact);
+  }
+  assertEquals(parseGroundingPresenceDecision("Есть ли PE? PE есть"), null);
+});
+
 Deno.test("floodlight cable length never masquerades as mounting height", () => {
   for (const request of [
     "Нужен прожектор на улицу для двора 100 м², кабель до розетки 10 м",
