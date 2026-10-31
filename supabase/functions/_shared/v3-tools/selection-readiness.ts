@@ -390,6 +390,33 @@ function hasUndergroundCoreCount(evidence: string): boolean {
     /(?:двух|трех|трёх|четырех|четырёх|пяти)жильн\p{L}*/iu.test(evidence);
 }
 
+/** A route length is a customer input, not an ampacity/voltage-drop proof.
+ * Share its ownership rule across line-selection profiles. Never borrow a
+ * height/diameter, a unit from another turn or one endpoint of an invalid
+ * interval. Existing issued distance bands remain planning inputs only. */
+function hasCableRouteLength(evidence: string): boolean {
+  const lengths = /(?<![\p{L}\p{N}.,+\-−–—])([+−-]?\d+(?:[.,]\d+)?)(?:\s*[-–—]\s*([+−-]?\d+(?:[.,]\d+)?))?\s*м(?:етр\p{L}*)?(?![\p{L}\p{N}²³])/giu;
+  let known = false;
+  for (const turn of evidence.split(CUSTOMER_TURN_BOUNDARY)) {
+    if (/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*)[^,;.!?\n]{0,45}(?:не\s+знаю|неизвест\p{L}*|нет\s+данных|не\s+определ\p{L}*)/iu.test(turn)) known = false;
+    for (const match of turn.matchAll(lengths)) {
+      const prefix = turn.slice(0, match.index).split(/[,;!?\n]/u).at(-1)!
+        .replace(/^\s*Уточнение клиента:\s*/iu, "").trim();
+      const routeLabel = [...prefix.matchAll(/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*|кабел\p{L}*)/giu)].at(-1);
+      const otherLabel = [...prefix.matchAll(/(?:высот\p{L}*|глубин\p{L}*|диаметр\p{L}*|ширин\p{L}*|толщин\p{L}*)/giu)].at(-1);
+      const owned = /^(?:(?:до|более|около|примерно)\s*)?$/iu.test(prefix) ||
+        Boolean(routeLabel && (!otherLabel || routeLabel.index! > otherLabel.index!));
+      if (!owned) continue;
+      const lower = Number(match[1].replace(",", ".").replace("−", "-"));
+      const upper = match[2] ? Number(match[2].replace(",", ".").replace("−", "-")) : lower;
+      // The latest owned declaration wins, including an invalid correction.
+      known = Number.isFinite(lower) && Number.isFinite(upper) &&
+        lower > 0 && upper >= lower;
+    }
+  }
+  return known;
+}
+
 export type GroundingPresenceDecision = "present" | "absent";
 
 /** A grounding decision must be stated by the customer, not inferred from
@@ -703,7 +730,7 @@ const PROFILES: ReadinessProfile[] = [
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
     required: [
       hasNominalLoadCurrent,
-      /\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²])|\d+(?:[.,]\d+)?\s*[–-]\s*\d+(?:[.,]\d+)?\s*м(?=$|[^\p{L}\p{N}²])/iu,
+      hasCableRouteLength,
       /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|[13]\s*фаз\p{L}*|\b(?:220|230|380|400)\s*в(?=$|[^\p{L}\p{N}]))/iu,
       /(?:на\s+улиц\p{L}*|в\s+помещен\p{L}*|перенос\p{L}*|стационар\p{L}*|подзем\p{L}*|в\s+(?:труб\p{L}*|земл\p{L}*))/iu,
     ],
@@ -714,7 +741,7 @@ const PROFILES: ReadinessProfile[] = [
       "напряжение и число фаз",
       "способ прокладки",
     ],
-    freeform_facets: { 0: "load_current" },
+    freeform_facets: { 0: "load_current", 1: "line_length" },
     follow_ups: [
       {
         requirement_index: 2,
@@ -764,6 +791,7 @@ const PROFILES: ReadinessProfile[] = [
       /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|[13]\s*фаз\p{L}*|\b(?:220|230|380|400)\s*в(?=$|[^\p{L}\p{N}]))/iu,
       hasUndergroundCoreCount,
       hasGroundingDecision,
+      hasCableRouteLength,
     ],
     primary_requirement_index: 0,
     missing_labels: [
@@ -772,8 +800,9 @@ const PROFILES: ReadinessProfile[] = [
       "напряжение и число фаз",
       "число жил",
       "наличие защитной жилы/заземления",
+      "длину кабельной линии в метрах",
     ],
-    freeform_facets: { 1: "load_power", 3: "core_count", 4: "grounding_presence" },
+    freeform_facets: { 1: "load_power", 3: "core_count", 4: "grounding_presence", 5: "line_length" },
     follow_ups: [{
       requirement_index: 2,
       question: "Какое питание у подземной линии?",
@@ -784,7 +813,7 @@ const PROFILES: ReadinessProfile[] = [
       ],
     }],
     question:
-      "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил и наличие заземления. Как планируется прокладка?",
+      "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил, наличие заземления и длину линии. Как планируется прокладка?",
     facet_key: "installation_method",
     options: [
       { value: "В трубе/ПНД", label: "В трубе/ПНД" },
@@ -1068,9 +1097,10 @@ export function selectReadinessClarification(
   if (!current) return null;
   // A label in a customer's question is not a supplied value.  In particular,
   // "площадь не знаю, высота 4 м" must not make both geometry axes complete.
-  const evidence = joinCustomerTurns(
+  const rawEvidence = joinCustomerTurns(
     [String(dialogueEvidence ?? "").trim(), current].filter(Boolean),
-  ).replace(
+  );
+  const evidence = rawEvidence.replace(
     /(?:площад\p{L}*|размер\p{L}*|высот\p{L}*|мощн\p{L}*|ток\p{L}*|длин\p{L}*|расстоян\p{L}*|напряж\p{L}*|фаз\p{L}*|проклад\p{L}*|жил\p{L}*|заземл\p{L}*|цокол\p{L}*|форм\p{L}*|питан\p{L}*)[^,;.!?\n]{0,30}(?:не\s+знаю|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)/giu,
     "",
   );
@@ -1087,7 +1117,7 @@ export function selectReadinessClarification(
   const missing = profile.required
     .map((requirement, index) => {
       // Two side lengths are area evidence, never mounting-height evidence.
-      const axisEvidence = index === 1 &&
+      const axisEvidence = requirement === hasCableRouteLength ? rawEvidence : index === 1 &&
           (profile.id === "outdoor_floodlight" ||
             profile.id === "parking_floodlight")
         ? evidence.replace(

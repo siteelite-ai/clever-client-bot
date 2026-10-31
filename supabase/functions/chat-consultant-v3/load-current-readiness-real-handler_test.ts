@@ -747,9 +747,11 @@ async function runDialogue({
     assert(last);
     assertEquals(last.final_products_count, 0);
     assertEquals((pending?.options as unknown[]).length, 0);
+    const finalAxis = expectedFacets.at(-1);
     assert(
-      /(?:ток|ампер|шильдик)/iu.test(String(pending?.question ?? "")),
-      `${label}: exact load-current question missing: ${
+      (finalAxis === "line_length" ? /(?:длин|метр)/iu : /(?:ток|ампер|шильдик)/iu)
+        .test(String(pending?.question ?? "")),
+      `${label}: exact ${finalAxis} question missing: ${
         JSON.stringify(pending)
       }`,
     );
@@ -819,7 +821,7 @@ Deno.test({
     runDialogue({
       label: "earth cable",
       messages: [
-        "Какой кабель подойдет для прокладки в земле?",
+        "Какой кабель подойдет для прокладки в земле? Длина линии 25 м",
         "Прямо в земле",
         "220 В, 1 фаза",
         "16 А",
@@ -836,6 +838,38 @@ Deno.test({
       expectedProfile: "underground_cable",
       terminalMode: "pe_answer",
     }),
+});
+
+Deno.test({
+  name: "underground cable without route length asks that axis after PE without model or catalog calls",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "earth missing length",
+    messages: [
+      "Какой кабель подойдет для прокладки в земле?",
+      "Прямо в земле", "220 В, 1 фаза", "16 А", "3 жилы",
+      "Да, одна из трёх жил — защитная PE",
+    ],
+    expectedFacets: ["installation_method", "supply_phase", "load_power", "core_count", "grounding_presence", "line_length"],
+    expectedProfile: "underground_cable",
+  }),
+});
+
+Deno.test({
+  name: "answering the newly issued underground length slot advances without losing PE or resurrecting old cards",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "earth length continuation",
+    messages: [
+      "Какой кабель подойдет для прокладки в земле?",
+      "Прямо в земле", "220 В, 1 фаза", "16 А", "3 жилы",
+      "Да, одна из трёх жил — защитная PE", "25 м",
+    ],
+    expectedFacets: ["installation_method", "supply_phase", "load_power", "core_count", "grounding_presence", "line_length"],
+    expectedProfile: "underground_cable",
+    // Synthetic outage after readiness: proves continuation, not SKU fit.
+    terminalMode: "pe_answer",
+  }),
 });
 
 Deno.test({
