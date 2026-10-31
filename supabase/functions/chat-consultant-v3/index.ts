@@ -12571,10 +12571,11 @@ async function runExpertLoop(
               }`,
             };
           }
-          // Migrate only a relation-backed, closed-preview derivation first.
-          // Public, replacements, paired-fit and system-total routes retain
-          // their current contracts. No request parameter can opt into this.
-          const structuredMeasurementMode = CLOSURE_TEST_MARKER === "closure_preview" &&
+          // Released for server-certified relations only, independently of
+          // closure QA authentication. Replacements, paired-fit and routes
+          // without a compiled relation retain their existing contracts.
+          // No request field or temporary QA credential can enable this mode.
+          const structuredMeasurementMode =
             Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference;
           if (structuredMeasurementMode) derivedMessages[0].content += `\n\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}`;
           const baseReasoningToolSchema = buildDerivedSelectionReasoningToolSchema(

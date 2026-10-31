@@ -68,10 +68,13 @@ Deno.test("server relation survives model prose cleanup without waiving any othe
   assertEquals(String(forged.args.reasoning).includes(trusted),false);
 });
 
-Deno.test("structured migration is private and cannot change public or paired-fit entrypoints", async () => {
+Deno.test("released structured mode requires a server certificate, excludes paired-fit and replacement, and is independent of QA authentication", async () => {
   const source=await Deno.readTextFile(new URL("../../chat-consultant-v3/index.ts",import.meta.url));
-  assert(source.includes('const structuredMeasurementMode = CLOSURE_TEST_MARKER === "closure_preview" &&'));
-  assert(source.includes("Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference"));
+  const mode=source.match(/const structuredMeasurementMode\s*=([^;]+);/u)?.[1];
+  assert(mode);
+  assert(mode.includes("Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference"));
+  assert(!mode.includes("CLOSURE_TEST_MARKER"));
+  assert(!mode.includes("Deno.env"));
 });
 
 Deno.test("server-owned proof survives ambiguous same-unit facets; identical model quantities do not inherit ownership", () => {

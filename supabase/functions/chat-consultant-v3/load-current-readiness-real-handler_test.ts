@@ -366,17 +366,26 @@ async function runDialogue({
             const context = body.messages?.map(m => m.content ?? "").join("\n") ?? "";
             assert(context.includes("verified_measurement_relations"), `${label}: certified relation was not handed to reasoning`);
             assert(context.includes("product_adjustable_range_contains_object_quantity"));
+            // This fixture imports the ordinary production entrypoint with no
+            // closure marker or QA secrets. Prove rollout uses the same
+            // structured contract as the positively tested closed preview.
+            const properties = (body.tools as unknown as Array<{
+              function: { name: string; parameters: { properties: Record<string, unknown> } };
+            }>).find(tool => tool.function.name === "declare_selection_reasoning")!
+              .function.parameters.properties;
+            assert("product_requirements" in properties);
+            assert(!("reasoning" in properties));
             if (
               body.messages?.some(({ content }) =>
                 content?.includes("<correction>")
               )
             ) correctionRequests++;
             return toolReply("declare_selection_reasoning", {
-              reasoning: terminalMode === "motor_measurement_repair" && !isCorrection
-                ? "Для двигателя 3 кВт при 380 В проверяю диапазон регулировки выбранного аппарата и его исполнение."
+              product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
+                ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal"
-                ? "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А. Номинальное напряжение каждого автомата должно быть не менее 380 В."
-                : "Для двигателя 3 кВт при 380 В нужен автомат с диапазоном уставки тока, покрывающим рабочие 6 А; в каталоге это 4–6 А и 6–10 А.",
+                ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
+                : ["Диапазон уставки тока должен включать рабочий ток 6 А."],
               retrieval_query: "автомат защиты двигателя",
               measurement_scope: "per_product",
               compatible_classifications: [],
@@ -895,7 +904,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "an incomplete relation repaired against server evidence advances to strict per-card load proof",
+  name: "an invalid structured declaration repaired against server evidence advances to strict per-card load proof",
   permissions: { read: true, env: false, net: false },
   fn: () => runDialogue({
     label: "repair incomplete compatibility relation",
