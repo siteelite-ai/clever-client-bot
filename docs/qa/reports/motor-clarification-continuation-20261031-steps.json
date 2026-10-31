@@ -1,0 +1,406 @@
+[
+  {
+    "id": "912e4cc7-3a21-40d4-be58-3e39d58b5be5",
+    "user_query": "Подберите автомат для двигателя асинхронный 3 кВт",
+    "error": null,
+    "final_products_count": 0,
+    "agent_llm_steps": 0,
+    "selected_steps": [
+      {
+        "ms": 1166,
+        "meta": {
+          "mode": "new_task",
+          "reason": "local_complete_request",
+          "source": "local",
+          "confidence": 0.97,
+          "classifier_mode": "new_task",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": false,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": false,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "ms": 1253,
+        "meta": {
+          "profile": "motor_breaker",
+          "facet_key": "supply_phase",
+          "choice_count": 2
+        },
+        "step": "v3_selection_readiness_clarification"
+      }
+    ]
+  },
+  {
+    "id": "db1551db-b79e-4aef-9589-49f840ff8d2f",
+    "user_query": "380 В, 3 фазы",
+    "error": null,
+    "final_products_count": 0,
+    "agent_llm_steps": 0,
+    "selected_steps": [
+      {
+        "ms": 524,
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": true,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "ms": 722,
+        "meta": {
+          "profile": "motor_breaker",
+          "facet_key": "motor_start_method",
+          "choice_count": 2
+        },
+        "step": "v3_selection_readiness_clarification"
+      }
+    ]
+  },
+  {
+    "id": "f3e04b6c-723d-423f-a581-6c424b753ae7",
+    "user_query": "Прямой пуск",
+    "error": null,
+    "final_products_count": 0,
+    "agent_llm_steps": 0,
+    "selected_steps": [
+      {
+        "ms": 288,
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": true,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": false,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "ms": 475,
+        "meta": {
+          "profile": "motor_breaker",
+          "facet_key": "load_current",
+          "choice_count": 0
+        },
+        "step": "v3_selection_readiness_clarification"
+      }
+    ]
+  },
+  {
+    "id": "52a35174-b255-4bc9-9993-8aee157949cf",
+    "user_query": "6 А",
+    "error": null,
+    "final_products_count": 1,
+    "agent_llm_steps": 2,
+    "selected_steps": [
+      {
+        "ms": 357,
+        "meta": {
+          "mode": "continuation",
+          "reason": "local_server_scoped_clarification",
+          "source": "local",
+          "confidence": 1,
+          "classifier_mode": "continuation",
+          "history_echo_removed": false,
+          "catalog_slot_lookup_failed": false,
+          "readiness_slot_lookup_failed": false,
+          "references_rendered_products": false,
+          "matched_pending_clarification": false,
+          "active_selection_class_changed": false,
+          "catalog_slot_validation_failed": false,
+          "pending_broad_assortment_scope": null,
+          "active_selection_entity_changed": false,
+          "verified_active_selection_scope": false,
+          "verified_broad_assortment_choice": false,
+          "verified_replacement_cutout_slot": false,
+          "verified_replacement_cutout_reply": false,
+          "verified_selection_readiness_slot": true,
+          "verified_freeform_readiness_answer": true,
+          "active_selection_scope_lookup_failed": false,
+          "verified_freeform_broad_assortment_leaf": false,
+          "readiness_question_superseded_by_verified_section": false,
+          "readiness_independent_overridden_by_verified_answer": false
+        },
+        "step": "v3_conversation_boundary"
+      },
+      {
+        "ms": 711,
+        "meta": {
+          "new_task": false,
+          "lookup_failed": false,
+          "server_prior_turns": 2,
+          "prior_context_available": true
+        },
+        "step": "v3_customer_measurement_evidence_resolved"
+      },
+      {
+        "ms": 4810,
+        "meta": {
+          "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "certified": true,
+          "accepted_values": 2
+        },
+        "step": "v3_measured_point_range_relation_checked"
+      },
+      {
+        "ms": 10734,
+        "meta": {
+          "proof_gates": "unchanged",
+          "requirements": 4,
+          "source_facts": "server_request_state",
+          "server_relation_retained": true
+        },
+        "step": "v3_structured_measurement_declaration"
+      },
+      {
+        "ms": 10905,
+        "meta": {
+          "gap": "unprojectable_criterion",
+          "stage": "before_repair",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "other_number_in_coverage_clause",
+            "quantities": [
+              {
+                "unit": "квт",
+                "value": 3,
+                "matches_customer_quantity": true
+              },
+              {
+                "unit": "в",
+                "value": 380,
+                "matches_customer_quantity": true
+              }
+            ],
+            "clause_index": 1,
+            "remaining_digits_capped": 5
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "ms": 12477,
+        "meta": {
+          "proof_gates": "unchanged",
+          "requirements": 4,
+          "source_facts": "server_request_state",
+          "server_relation_retained": true
+        },
+        "step": "v3_structured_measurement_declaration"
+      },
+      {
+        "ms": 12555,
+        "meta": {
+          "gap": null,
+          "stage": "after_repair",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "covered"
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "ms": 12574,
+        "meta": {
+          "gap": null,
+          "stage": "terminal",
+          "measurement_scope": "per_product",
+          "diagnostic_version": 1,
+          "customer_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "в",
+              "value": 380,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "квт",
+              "value": 3,
+              "matches_customer_quantity": true
+            }
+          ],
+          "declared_quantities": [
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            },
+            {
+              "unit": "а",
+              "value": 6,
+              "matches_customer_quantity": true
+            }
+          ],
+          "competing_thresholds": false,
+          "independent_coverage": {
+            "code": "covered"
+          },
+          "mandatory_projected_count": 0,
+          "scalar_projection_allowed": true,
+          "declared_facet_requirements": [],
+          "recommended_projection_reason": "not_recommended",
+          "recommended_projection_certified": false
+        },
+        "step": "v3_product_measurement_projection_diagnostic"
+      },
+      {
+        "ms": 12727,
+        "meta": {
+          "mode": "by_filter",
+          "facet": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "accepted_values": 2
+        },
+        "step": "v3_measured_point_range_search_enforced"
+      }
+    ]
+  }
+]
