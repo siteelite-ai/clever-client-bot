@@ -8,6 +8,28 @@ const customer = "Автомат для двигателя 3 кВт, 380 В, р�
 const relation = "Диапазон уставки тока должен включать рабочий ток 6 А.";
 const certificate = compileMeasuredPointRangeRelation({point:{value:6,unit:"A",source:"customer_load"},facets})!;
 
+Deno.test("atomic area obligations preserve destination and technology without adopting model-only lumen math", () => {
+  const request = "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?";
+  const destinationFacets = [{key:"destination",caption:"Назначение",values:[{value:"для гостиной"},{value:"для офиса"}]}];
+  const materialized = materializeStructuredMeasurementDeclaration({
+    product_requirements: ["Назначение светильника: для гостиной.", "Светильник должен быть светодиодным.",
+      "Световой поток каждого изделия не менее 4000 лм.", "Проверяю площадь освещения по карточке."],
+    measurement_scope: "per_product", required_facet_values: [], compatible_classifications:["f0v0"],
+  })!;
+  const resolved = resolveDerivedSelectionReasoning(materialized.args, destinationFacets, request, "Светильники", null,
+    {independentDestinationAreaProof:{place:"гостиной",minimumAreaM2:25}});
+  assert(resolved);
+  assert(resolved.measurementEvidence.includes("гостиной"), JSON.stringify(resolved));
+  assert(resolved.measurementEvidence.includes("светодиодным"));
+  assert(!resolved.measurementEvidence.includes("4000"));
+  // An explicit customer threshold remains an obligation, never discarded by
+  // the adapter just because an independent area proof is available.
+  const explicit = resolveDerivedSelectionReasoning(materialized.args, destinationFacets,
+    request + " Световой поток каждого изделия не менее 4000 лм.", "Светильники", null,
+    {independentDestinationAreaProof:{place:"гостиной",minimumAreaM2:25}});
+  assert(explicit?.measurementEvidence.includes("4000"));
+});
+
 Deno.test("structured tool keeps the legacy schema immutable and separates executable requirements from prose", () => {
   const base=buildDerivedSelectionReasoningToolSchema(facets,customer);
   const structured=structuredMeasurementTool(base);

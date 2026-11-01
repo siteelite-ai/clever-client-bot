@@ -27953,6 +27953,20 @@ Deno.serve(async (req) => {
               | null = ellipticalBaseRequest
                 ? { baseUserMessage: ellipticalBaseRequest }
                 : null;
+            // Restore the omitted grammatical head only from the complete,
+            // freshly rehydrated server batch, never from browser prose or a
+            // guessed category. Mixed-category batches remain unexpanded.
+            const ellipticalBatchProducts = ellipticalContinuation &&
+                isShortAttributeSelectionFollowup(userMessage)
+              ? recentProductEvidence.map(({ id }) => ctx.cache.get(id))
+              : [];
+            const ellipticalLeaves = [...new Set(ellipticalBatchProducts
+              .map((product) => String(product?.leaf_category ?? "").trim()).filter(Boolean))];
+            const ellipticalCurrentRequest = ellipticalBatchProducts.length > 0 &&
+                ellipticalBatchProducts.every(Boolean) && ellipticalLeaves.length === 1 &&
+                ellipticalBatchProducts.every((product) => product?.leaf_category === ellipticalLeaves[0])
+              ? `${userMessage} ${ellipticalLeaves[0]}`
+              : userMessage;
             if (ellipticalContinuation) {
               steps.push({
                 step: "v3_elliptical_selection_context_resolved",
@@ -29191,8 +29205,13 @@ Deno.serve(async (req) => {
                 );
               }
             } else {
-              const combinedSelectionRequest = additionalSelectionRequest
-                ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
+              // Ordinary short refinements need the same server-owned base
+              // as "more options": taxonomy alone is not enough. Supplying
+              // only the adjective loses identity and can skip the criteria
+              // contract entirely. rawCurrentUserMessage remains separate for
+              // current-axis overrides and appearance ownership below.
+              const combinedSelectionRequest = ellipticalBaseRequest
+                ? joinCustomerTurns([ellipticalBaseRequest, ellipticalCurrentRequest])
                 : scopedSelectionRequest.message;
               const needsServerAreaProof = additionalSelectionRequest &&
                 verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
@@ -29244,7 +29263,9 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                customerMeasurementEvidence.text,
+                ellipticalAttributeFollowup && activeRenderedProof
+                  ? joinCustomerTurns([...activeRenderedProof.priorQueriesNewestFirst].reverse().concat(userMessage))
+                  : customerMeasurementEvidence.text,
                 recentProductEvidence,
                 [],
                 null,
@@ -29252,8 +29273,12 @@ Deno.serve(async (req) => {
                 priorShownProductUrls,
                 null,
                 Boolean(replacementEgressRequest),
-                verifiedAdditionalSelection?.baseRequest ?? null,
-                customerMeasurementEvidence.priorQueriesNewestFirst,
+                ellipticalAttributeFollowup
+                  ? ellipticalBaseRequest
+                  : verifiedAdditionalSelection?.baseRequest ?? null,
+                ellipticalAttributeFollowup && activeRenderedProof
+                  ? activeRenderedProof.priorQueriesNewestFirst
+                  : customerMeasurementEvidence.priorQueriesNewestFirst,
                 userMessage,
               );
               productsCount = out.productsRendered;

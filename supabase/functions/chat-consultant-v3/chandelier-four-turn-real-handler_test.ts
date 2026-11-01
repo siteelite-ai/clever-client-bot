@@ -11,6 +11,7 @@ import {
 } from "./model-no-search-integration-fixture.ts";
 import { latestRenderedSelectionRequest } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { resolveServerRenderedSelectionProof } from "../_shared/v3-tools/server-rendered-continuation.ts";
+import { resetDiscoverCategoryCacheForTest } from "../_shared/v3-tools/discover-category.ts";
 import "./index.ts";
 
 const offlineEnvGet = Deno.env.get;
@@ -157,16 +158,26 @@ async function runFourTurnScenario(input: {
   envGet: typeof Deno.env.get;
   preview?: boolean;
   fourthMessage?: string;
+  prefacedAreaFirstTurn?: boolean;
 }): Promise<void> {
   Deno.env.get = input.envGet;
+  resetDiscoverCategoryCacheForTest();
+  const category = input.prefacedAreaFirstTurn ? "Светильники" : "Люстры";
   const scenarioMessages = [...messages];
+  if (input.prefacedAreaFirstTurn) {
+    scenarioMessages.splice(0, 4,
+      "Новая тема. Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?");
+  }
   if (input.fourthMessage) scenarioMessages[3] = input.fourthMessage;
   const allProducts = [
     ...firstBatch,
     ...freshBatch,
     ...(input.newCapacity ? capacityFreshBatch : []),
     ...distractors,
-  ];
+  ].map((item) => input.prefacedAreaFirstTurn ? {
+    ...item, category, pagetitle: item.pagetitle.replace(/^Люстра/u, "Светильник"),
+    url: item.url.replace("/lyustryi/", "/svetilniki/"),
+  } : item);
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -330,7 +341,7 @@ async function runFourTurnScenario(input: {
           // that a plural category query ("Люстры") matches singular product
           // titles ("Люстра"). A verified category browse must still work.
           const available = turn === 0
-            ? [...firstBatch, ...distractors]
+            ? allProducts.filter(({ id }) => [...firstBatch, ...distractors].some((item) => item.id === id))
             : allProducts;
           const categoryFilter = url.searchParams.get("category");
           const categoryIn = url.searchParams.getAll("category_in[]");
@@ -367,7 +378,7 @@ async function runFourTurnScenario(input: {
       ) {
         const body = await request.json() as {
           tool_choice?: { function?: { name?: string } };
-          tools?: Array<{ function?: { name?: string } }>;
+          tools?: Array<{ function?: { name?: string; parameters?: { properties?: Record<string, unknown> } } }>;
           messages?: Array<{ content?: string }>;
           response_format?: { type?: string };
         };
@@ -411,6 +422,9 @@ async function runFourTurnScenario(input: {
           if (turn === 3) fourthTurnDeclarationRequests++;
           const correction = turn === 3 && fourthTurnDeclarationRequests > 1;
           if (turn === 3 && correction) fourthTurnCorrectionRequests++;
+          if (input.prefacedAreaFirstTurn) {
+            throw new Error("A control prefix must not divert a proven direct request into paid reasoning");
+          }
           return modelTool("declare_selection_reasoning", {
             // Deliberately wrong shape inference: the customer specified
             // square metres, never a square-shaped chandelier.
@@ -430,7 +444,7 @@ async function runFourTurnScenario(input: {
           });
         }
         if (body.tool_choice?.function?.name === "discover_category") {
-          return modelTool("discover_category", { noun: "люстра" });
+          return modelTool("discover_category", { noun: input.prefacedAreaFirstTurn ? "светильник" : "люстра" });
         }
         if (body.tool_choice?.function?.name === "propose_candidates") {
           return modelTool("propose_candidates", { candidates: ["люстра"] });
@@ -518,9 +532,16 @@ async function runFourTurnScenario(input: {
       JSON.stringify({ first, steps: logs[0].steps.map(({ step }) => step) }),
     );
     assert(
-      first.every((url) => firstBatch.some((product) => product.url === url)),
+      first.every((url) => allProducts.some((product) => firstBatch.some(({id}) => id === product.id) && product.url === url)),
       JSON.stringify(first),
     );
+    if (input.prefacedAreaFirstTurn) {
+      assert(logs[0].steps.some(({ step }) => step === "v3_measured_replacement_rendered"));
+      assert(!modelTools[0].includes("declare_selection_reasoning"));
+      assert(!publicText(turns[0]).includes("4000"), publicText(turns[0]));
+      assert(first.every((url) => !distractors.some((product) => product.url === url)), JSON.stringify(first));
+      return;
+    }
     assert(
       logs[0].steps.some(({ step }) => step === "v3_user_constraints_frozen"),
       JSON.stringify(logs[0].steps),
@@ -709,6 +730,15 @@ async function runFourTurnScenario(input: {
     restoreOfflineModuleSetup();
   }
 }
+
+Deno.test({
+  name: "topic-prefaced measured selection retains proven LED, destination and area gates without paid derivation",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runFourTurnScenario({
+    newCapacity: false, handler: offlineHandler(), envGet: offlineEnvGet,
+    prefacedAreaFirstTurn: true,
+  }),
+});
 
 Deno.test({
   name:

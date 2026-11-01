@@ -6,6 +6,7 @@ import { executeDiscoverCategory } from "./discover-category.ts";
 import { executeSearchCatalog } from "./search-catalog.ts";
 import { verifyReplacementDestinationFit } from "./selection-contract.ts";
 import type { ProductCache, ProductFull } from "./types.ts";
+import { stripExplicitNewTaskPreface } from "./request-preface.ts";
 
 export interface MeasuredSourceClassRecoveryRequest {
   source_class: string;
@@ -27,7 +28,7 @@ export interface MeasuredExplicitTargetClassRequest
 function parseMeasuredReplacementBase(
   message: string,
 ): MeasuredSourceClassRecoveryRequest | null {
-  const request = String(message ?? "").replace(/\s+/gu, " ").trim();
+  const request = stripExplicitNewTaskPreface(message).replace(/\s+/gu, " ").trim();
   const relation = request.match(
     /(?:^|[^\p{L}])(?:замен|поменя|смен)\p{L}*\s+((?:[\p{L}-]+\s+){0,3}[\p{L}-]+)\s+на\s+([^.!?\n]{3,100})/iu,
   );
@@ -151,7 +152,10 @@ function admitMeasuredDirectRoute(
   explicitTarget: boolean,
 ): boolean {
   if (!parsed) return false;
-  const request = String(message ?? "").replace(/\s+/gu, " ").trim();
+  // A leading dialogue command is not an uncovered product obligation.
+  // Strip only the shared, explicitly recognised control preface; every
+  // remaining word/symbol still passes the unchanged strict admission gate.
+  const request = stripExplicitNewTaskPreface(message).replace(/\s+/gu, " ").trim();
   const relation = request.match(
     /(?:^|[^\p{L}])(?:замен|поменя|смен)\p{L}*\s+((?:[\p{L}-]+\s+){0,3}[\p{L}-]+)\s+на\s+/iu,
   );

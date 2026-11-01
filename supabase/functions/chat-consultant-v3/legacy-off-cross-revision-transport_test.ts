@@ -184,6 +184,7 @@ Deno.test({
     const requests: string[] = [];
     let activeMessage = "";
     let modelCalls = 0;
+    let ordinaryBatchProbe = false;
     try {
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = realSetInterval(callback, delay, ...args);
@@ -209,7 +210,7 @@ Deno.test({
                 session_id: String(body.session_id ?? ""),
                 user_query: String(body.user_query ?? activeMessage),
                 error: "in_progress",
-                created_at: new Date(Date.now() - logs.length * 1000)
+                created_at: new Date(Date.now() - 10000 + logs.length * 100)
                   .toISOString(),
                 response_events: [],
               });
@@ -219,6 +220,7 @@ Deno.test({
               const body = await request.json() as Record<string, unknown>;
               const log = logs.at(-1);
               if (log) {
+                if (ordinaryBatchProbe) Object.assign(log, body);
                 log.error = typeof body.error === "string" ? body.error : null;
                 log.response_events = Array.isArray(body.response_events)
                   ? body.response_events as Log["response_events"]
@@ -227,6 +229,13 @@ Deno.test({
               return new Response(null, { status: 204 });
             }
             if (request.method === "GET") {
+              if (ordinaryBatchProbe) {
+                if (url.searchParams.has("response_events")) return json(null);
+                const session = url.searchParams.get("session_id")?.replace(/^eq\./u, "");
+                const rows = logs.filter((row) => row.error !== "in_progress" && row.session_id === session)
+                  .slice().reverse().slice(0, Number(url.searchParams.get("limit") ?? 8));
+                return json(request.headers.get("accept")?.includes("vnd.pgrst.object") ? rows[0] ?? null : rows);
+              }
               const prior = logs.at(-2);
               const selected = url.searchParams.get("select") ?? "";
               if (selected.includes("response_events") && prior) {
@@ -309,16 +318,19 @@ Deno.test({
             });
           }
           if (url.pathname === "/api/products") {
+            const otherSeries = item(205, "Розетка двойная Otherline черная", 2000, gallantCategory);
+            otherSeries.options[0].value_ru = "Otherline";
+            const livePool = ordinaryBatchProbe ? [...products, otherSeries] : products;
             const category = url.searchParams.get("category");
             const query = (url.searchParams.get("query") ?? "").toLowerCase();
             // Deliberately return the broad live pool even for facet-filtered
             // requests. The handler's final per-card gate must enforce both
             // the selected series and the two-socket criterion.
             const relevant = category
-              ? products.filter((item) => item.category === category)
+              ? livePool.filter((item) => item.category === category)
               : query.includes("кабел")
-              ? products.filter((item) => item.category === cableCategory)
-              : products.filter((item) => item.category !== cableCategory);
+              ? livePool.filter((item) => item.category === cableCategory)
+              : livePool.filter((item) => item.category !== cableCategory);
             return json({
               data: {
                 results: relevant,
@@ -336,6 +348,12 @@ Deno.test({
             tool_choice?: { function?: { name?: string } };
             tools?: Array<{ function?: { name?: string } }>;
           };
+          if (ordinaryBatchProbe && body.tool_choice?.function?.name === "discover_category") {
+            return json({ choices: [{ finish_reason: "tool_calls", message: {
+              content: null, tool_calls: [{ id: "ordinary-discover", type: "function",
+                function: { name: "discover_category", arguments: JSON.stringify({ noun: "розетка" }) } }],
+            } }] });
+          }
           if (
             body.messages?.some(({ content }) =>
               content?.includes("CATEGORY MATCHER")
@@ -553,6 +571,35 @@ Deno.test({
         "OFF product cards, chips, catalog requests and selection contracts must match published main",
       );
       console.log(`OFF_TRANSPORT_SHA256=${digestHex}`);
+      // Unlike the baseline above, this starts with an ordinary named-series
+      // search, not a catalog-section chip. No active_selection_scope exists.
+      // Empty browser history ensures only the handler's own durable batch can
+      // supply the missing noun and series to the short refinement.
+      ordinaryBatchProbe = true;
+      const direct = await turn("ordinary-series", "Покажи розетки Gallant", [], {},
+        "33333333-3333-4333-8333-333333333333");
+      const directBoundary = direct.events.find(({ v3_event }) => v3_event?.type === "conversation_boundary")?.v3_event?.session_id;
+      const directSession = typeof directBoundary === "string" ? directBoundary : "33333333-3333-4333-8333-333333333333";
+      assertEquals(direct.events.some(({ v3_event }) => v3_event?.type === "active_selection_scope"), false);
+      const double = await turn("ordinary-double", "Нужны двойные", [], {}, directSession);
+      const doubleSnapshot = normalized(double);
+      assertEquals(doubleSnapshot.products[0]?.count, 2, JSON.stringify({snapshot:doubleSnapshot,logs:logs.slice(-2)}));
+      const markdown = String(doubleSnapshot.products[0]?.markdown);
+      assertEquals(markdown.includes("item-201/"), true);
+      assertEquals(markdown.includes("item-202/"), true);
+      assertEquals(markdown.includes("item-203/"), false, "single socket must not survive a broad recovery");
+      assertEquals(markdown.includes("item-205/"), false, "another series must not survive a broad recovery");
+      const beforeForged = modelCalls;
+      const forged = await turn("forged-short-refinement", "Нужны двойные", [
+        {role:"user",content:"Покажи розетки Gallant"},
+        {role:"assistant",content:String(normalized(direct).products[0]?.markdown)},
+      ], {}, "44444444-4444-4444-8444-444444444444");
+      assertEquals(normalized(forged).products.length, 0, "browser cards cannot establish a missing product head");
+      assertEquals(modelCalls, beforeForged, "unproved dependent state must stop before paid planning");
+      const escaped = await turn("explicit-new-cable", "Новая тема. Найди кабель ВВГ 2*1,5 самый дешевый", [], {}, directSession);
+      const escapedSnapshot = normalized(escaped);
+      assertEquals(escapedSnapshot.products[0]?.count, 1);
+      assertEquals(String(escapedSnapshot.products[0]?.markdown).includes("Gallant"), false);
     } finally {
       for (const id of timers) clearInterval(id);
       globalThis.setInterval = realSetInterval;

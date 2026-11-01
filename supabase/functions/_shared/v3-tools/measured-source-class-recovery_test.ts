@@ -15,6 +15,16 @@ const request =
 const explicitRequest =
   "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?";
 
+Deno.test("topic control prefixes preserve direct-route meaning without licensing extra product constraints", () => {
+  for (const prefix of ["Новая тема. ", "Новый вопрос: ", "НОВАЯ ТЕМА — "]) {
+    assertEquals(admitMeasuredSourceClassDirectRoute(prefix + request), true, prefix);
+    assertEquals(admitMeasuredExplicitTargetDirectRoute(prefix + explicitRequest), true, prefix);
+    for (const extra of [" Белого цвета.", " До 4000 тенге.", " Только два варианта.", " Для натяжного потолка."]) {
+      assertEquals(admitMeasuredExplicitTargetDirectRoute(prefix + explicitRequest + extra), false, prefix + extra);
+    }
+  }
+});
+
 function product(
   id: string,
   title: string,
