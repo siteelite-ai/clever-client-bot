@@ -13,6 +13,7 @@ import {
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
 import "./index.ts";
+import { resetDiscoverCategoryCacheForTest } from "../_shared/v3-tools/discover-category.ts";
 
 const fakeSupabase = "https://fixture.supabase.invalid";
 const fakeCatalog = "https://fixture.catalog.invalid/api";
@@ -49,7 +50,13 @@ interface FixtureResult {
   modelCalls: number;
 }
 
-async function runOfflineTurn(message: string): Promise<FixtureResult> {
+async function runOfflineTurn(message: string, scenario: {
+  category?: string; clarification?: unknown; planningClarification?: boolean;
+  competingSearch?: boolean;
+  discoveryFailure?: boolean;
+} = {}): Promise<FixtureResult> {
+  resetDiscoverCategoryCacheForTest();
+  const leaf = scenario.category ?? catalogLeaf;
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -116,15 +123,16 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
         if (url.pathname === "/api/categories") {
           return json({
             data: {
-              results: [{ id: 1, pagetitle: catalogLeaf, children: [] }],
+              results: [{ id: 1, pagetitle: leaf, children: [] }],
               pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
             },
           });
         }
         if (url.pathname === "/api/categories/options") {
+          if (scenario.discoveryFailure) return json({ error: "offline unavailable" }, 503);
           return json({
             data: {
-              category: { id: 1, pagetitle: catalogLeaf, total_products: 3 },
+              category: { id: 1, pagetitle: leaf, total_products: 3 },
               options: [{
                 key: "tip",
                 caption_ru: "Тип",
@@ -136,11 +144,11 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
         }
         if (url.pathname === "/api/products") {
           if (!message.includes("аналоги")) {
-            assertEquals(url.searchParams.get("category"), catalogLeaf);
+            assertEquals(url.searchParams.get("category"), leaf);
           }
           return json({
             data: {
-              results: baseProducts,
+              results: baseProducts.map(product => ({ ...product, category: leaf })),
               pagination: { total: baseProducts.length },
             },
           });
@@ -155,6 +163,11 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
         if (
           body.tool_choice?.function?.name !== "declare_selection_reasoning"
         ) {
+          if (scenario.planningClarification) return json({ choices: [{
+            finish_reason: "tool_calls", message: { content: "Неподтверждённый текст рядом с вопросом", tool_calls: [{
+              id: "offline-question", type: "function", function: { name: "propose_clarification", arguments: JSON.stringify(scenario.clarification) },
+            }, ...(scenario.competingSearch ? [{ id: "must-not-run", type: "function", function: { name: "search_catalog", arguments: JSON.stringify({ mode: "by_query", query: "случайный товар" }) } }] : [])] },
+          }] });
           // A failed card proof may enter an ordinary terminal retry. It has
           // no catalog-grounded instruction in this fixture and cannot add a
           // card merely by naming one in untrusted model prose.
@@ -183,6 +196,7 @@ async function runOfflineTurn(message: string): Promise<FixtureResult> {
                 function: {
                   name: "declare_selection_reasoning",
                   arguments: JSON.stringify({
+                    ...(scenario.clarification !== undefined ? { clarification: scenario.clarification } : {}),
                     reasoning: message.includes("аналоги")
                       ? "Ищу электрические удлинители из каталога. Эти модели полностью взаимозаменяемы и дешевле исходной."
                       : message.includes("для дома")
@@ -403,6 +417,64 @@ Deno.test({
         );
       }
     }
+  },
+});
+
+const blockingFixture = {
+  question: "В каком материале нужно закрепить изделие?",
+  facet_key: "base_material", options: [],
+  blocking_input: { reason: "missing_customer_input", parameter: "Материал основания", impact: "От материала основания зависит совместимость крепления." },
+};
+
+for (const scenario of [
+  { name: "forced reasoning", message: "Подбери крепёжные анкеры для стены", category: "Крепёжные анкеры", clarification: blockingFixture },
+  { name: "ordinary planning", message: "Подбери электрический удлинитель", planningClarification: true, clarification: { ...blockingFixture, question: "Какая длина удлинителя вам нужна?", facet_key: "length" } },
+  { name: "blocking question beats a sibling search", message: "Подбери электрический удлинитель", planningClarification: true, competingSearch: true, clarification: { ...blockingFixture, question: "Какая длина удлинителя вам нужна?", facet_key: "length" } },
+]) Deno.test({
+  name: `shared missing-input exit through real handler: ${scenario.name}`,
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn(scenario.message, scenario);
+    const decision = result.steps.find(item => item.step === "v3_selection_input_decision");
+    assertEquals(decision?.meta?.decision, "clarify", JSON.stringify(result.steps));
+    assertEquals(result.modelCalls, 1, "no extra uncertainty-classifier or repair call");
+    assert(!result.steps.some(item => item.step === "v3_tool_call" && ["search_catalog", "render_products"].includes(String(item.meta?.tool))));
+    const events = result.events.map(event => event.v3_event as Record<string, unknown>).filter(Boolean);
+    assert(!events.some(event => event.type === "products_block"));
+    const slot = events.find(event => event.type === "slot_update" && (event.slots as Record<string, unknown>)?.pending_clarification);
+    assert(slot, "question must persist a server-issued pending slot");
+    const pending = (slot.slots as Record<string, unknown>).pending_clarification as Record<string, unknown>;
+    assertEquals((pending.scope as Record<string, unknown>).token, scenario.message);
+    assertEquals(pending.question, scenario.clarification.question);
+    assertEquals(pending.options, []);
+    const output = JSON.stringify(result.events);
+    assert(!output.includes("Неподтверждённый текст рядом с вопросом"));
+  },
+});
+
+Deno.test({
+  name: "invalid uncertainty declaration never falls into product search or guessed repair",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn("Подбери крепёжные анкеры для стены", { category: "Крепёжные анкеры", clarification: { ...blockingFixture, options: [{ value: "invented" }] } });
+    assertEquals(result.steps.find(item => item.step === "v3_selection_input_decision")?.meta?.decision, "invalid_clarification");
+    assertEquals(result.modelCalls, 1);
+    assert(!result.steps.some(item => item.step === "v3_tool_call" && item.meta?.tool === "search_catalog"));
+  },
+});
+
+Deno.test({
+  name: "catalog outage cannot be disguised as a question about missing customer input",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn("Подбери электрический удлинитель", {
+      planningClarification: true, discoveryFailure: true, clarification: blockingFixture,
+    });
+    assert(result.steps.some(item => item.step === "v3_catalog_transient_failure_seen"), JSON.stringify(result.steps));
+    assert(!result.steps.some(item => item.step === "v3_selection_input_decision" && item.meta?.decision === "clarify"));
+    const events = result.events.map(event => event.v3_event as Record<string, unknown>).filter(Boolean);
+    assert(!events.some(event => event.type === "quick_replies" || event.type === "products_block"));
+    assert(!JSON.stringify(result.events).includes(blockingFixture.question));
   },
 });
 

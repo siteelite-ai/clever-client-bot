@@ -693,6 +693,7 @@ import {
   priorVisibleQuestionMayDuplicateClarification,
   type ProposeClarificationInput,
 } from "../_shared/v3-tools/propose-clarification.ts";
+import { resolveSelectionClarification } from "../_shared/v3-tools/selection-clarification.ts";
 import {
   extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
@@ -10867,6 +10868,55 @@ async function runExpertLoop(
     });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
+  // One shared exit for ordinary planning and forced derived reasoning. A
+  // declaration of missing customer input is never fed to measurement repair
+  // or to search as if it were evidence of compatibility.
+  const finishWithSelectionClarification = (value: unknown, source: string) => {
+    if (transientCatalogFailureSeen) {
+      return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+    }
+    const clarification = resolveSelectionClarification(value, {
+      request: userMessage,
+      category: lastDiscover?.category?.pagetitle,
+      facets: lastDiscover?.facets ?? [],
+    });
+    // Keep the established preference policy and source-product proof gate.
+    // Neither a model-owned reason label nor a freeform question overrides it.
+    const optional = clarification && shouldContinueSelectionPastOptionalClarification({
+      intentMode, hasDiscovery: Boolean(lastDiscover), userMessage,
+      question: clarification.question, facetKey: clarification.facet_key,
+      options: clarification.options,
+    });
+    if (optional) return null;
+    const replacement = replacementIntent || isReplacementProofRequest(userMessage);
+    const verified = clarification && replacement
+      ? verifiedReplacementClarificationFromLiveFacets(clarification, lastDiscover?.facets ?? [])
+      : null;
+    const accepted = clarification && !productsRendered && (!replacement || verified)
+      ? executeProposeClarification({
+        ...clarification,
+        ...(verified ? { question: verified.question, facet_key: verified.facet_key, options: verified.options } : {}),
+      }, { allowFreeform: true })
+      : null;
+    const delivery = accepted?.ok ? acceptedClarificationDelivery(accepted) : null;
+    const question = delivery?.question ??
+      "Не удалось надёжно сформировать уточнение для подбора. Повторите запрос или обратитесь к менеджеру.";
+    send({ type: "delta", content: question, origin: "server" });
+    finalText += `${finalText ? "\n\n" : ""}${question}`;
+    if (accepted?.ok && delivery) emitSideEffects(accepted, send);
+    steps.push({ step: "v3_selection_input_decision", ms: now(), meta: {
+      source, decision: delivery ? "clarify" : "invalid_clarification",
+      reason: clarification?.blocking_input.reason ?? null,
+      parameter: clarification?.blocking_input.parameter ?? null,
+      facet_key: clarification?.facet_key ?? null,
+      freeform: delivery ? clarification!.options.length === 0 : null,
+      products_rendered: productsRendered,
+    } });
+    steps.push({ step: "v3_turn_end", ms: now(), meta: {
+      reason: delivery ? "selection_input_required" : "selection_input_contract_invalid",
+    } });
+    return { finalText, productsRendered, shownProductIds: [...shownIds] };
+  };
   let groundedCompoundSearchTerminal = false;
   type PendingJargonAxisSplit = {
     source: string;
@@ -12747,6 +12797,10 @@ async function runExpertLoop(
               toolCall.name === "declare_selection_reasoning"
             ),
           );
+          if (declarationCall && "clarification" in declarationCall.args) {
+            const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
+            if (outcome) return outcome;
+          }
           const pairedReference = extractSchemaBackedMeasuredReference(
             userMessage,
             lastDiscover?.facets ?? [],
@@ -13390,6 +13444,10 @@ async function runExpertLoop(
                   toolCall.name === "declare_selection_reasoning"
                 ),
               );
+              if (declarationCall && "clarification" in declarationCall.args) {
+                const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
+                if (outcome) return outcome;
+              }
               declaration = declarationCall
                 ? cleanResolvedDeclaration(
                   resolvePairedDeclaration(declarationCall.args),
@@ -14432,6 +14490,18 @@ async function runExpertLoop(
         } else {
           throw error;
         }
+      }
+      const inputQuestions = resp.toolCalls.filter(call =>
+        call.name === "propose_clarification" && "blocking_input" in call.args
+      );
+      if (inputQuestions.length) {
+        // A missing-input declaration wins over a conflicting search/render.
+        // Discard the entire model co-text and never execute sibling tools.
+        const outcome = finishWithSelectionClarification(
+          inputQuestions.length === 1 ? inputQuestions[0].args : null,
+          "agent_planning",
+        );
+        if (outcome) return outcome;
       }
       const clarificationBatch = classifyClarificationToolBatch(
         resp.toolCalls.map((toolCall) => toolCall.name),

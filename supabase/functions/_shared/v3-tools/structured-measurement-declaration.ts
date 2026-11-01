@@ -13,9 +13,9 @@ export function structuredMeasurementTool(base: DeclarationTool): DeclarationToo
   const properties = { ...(base.function.parameters.properties as Record<string, unknown>) };
   delete properties.reasoning;
   properties.product_requirements = {
-    type: "array", minItems: 1, maxItems: 8,
+    type: "array", minItems: 0, maxItems: 8,
     items: { type: "string", minLength: 10, maxLength: 300 },
-    description: "Отдельные проверяемые условия на товар. Один элемент — одно независимое свойство или отношение совместимости. Не пересказ исходных параметров объекта.",
+    description: "Отдельные проверяемые условия на товар. Один элемент — одно независимое свойство или отношение совместимости. Не пересказ исходных параметров объекта. Пусто допустимо только при заполненном clarification вместо подбора.",
   };
   return { ...base, function: { ...base.function, parameters: {
     ...base.function.parameters, properties,

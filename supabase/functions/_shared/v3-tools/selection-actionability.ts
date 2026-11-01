@@ -1,4 +1,5 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
+import { SELECTION_CLARIFICATION_SCHEMA, SELECTION_UNCERTAINTY_POLICY } from "./selection-clarification.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
@@ -1659,9 +1660,13 @@ export function buildDerivedSelectionReasoningToolSchema(
       parameters: {
         type: "object",
         properties: {
+          clarification: {
+            ...SELECTION_CLARIFICATION_SCHEMA,
+            description: "Вместо подбора: когда не хватает данных самого клиента, задай один конкретный вопрос. В этой ветке reasoning пусто, measurement_scope=not_applicable, списки критериев пусты. Не используй для ошибок сервиса или отсутствия данных о товарах.",
+          },
           reasoning: {
             type: "string",
-            minLength: 20,
+            minLength: 0,
             maxLength: 1600,
             description:
               "Короткое понятное клиенту обоснование с расчётом, единицами и критичными требованиями.",
@@ -3763,6 +3768,7 @@ export function buildDerivedSelectionReasoningMessages(
   messages[0].content +=
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани обе обязательные границы совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
   messages[0].content += ` ${MEASUREMENT_OWNERSHIP_POLICY}`;
+  messages[0].content += ` ${SELECTION_UNCERTAINTY_POLICY} Если требуется уточнение, заполни поле clarification инструмента declare_selection_reasoning; reasoning оставь пустым, measurement_scope=not_applicable, списки критериев пустыми. Контроллер задаст этот вопрос вместо расчёта и поиска. Если данных достаточно, не передавай clarification и заполни обоснование как обычно.`;
   return messages;
 }
 
