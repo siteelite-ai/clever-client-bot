@@ -94,8 +94,7 @@ Deno.test("released structured mode requires a server certificate, excludes pair
   const source=await Deno.readTextFile(new URL("../../chat-consultant-v3/index.ts",import.meta.url));
   const mode=source.match(/const structuredMeasurementMode\s*=([^;]+);/u)?.[1];
   assert(mode);
-  assert(mode.includes("certifiedMeasuredPointRange || independentFirstTurnDestinationAreaProof"));
-  assert(mode.includes("!replacementIntent && !presearchPairedObjectReference"));
+  assert(mode.includes("Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference"));
   assert(!mode.includes("CLOSURE_TEST_MARKER"));
   assert(!mode.includes("Deno.env"));
 });

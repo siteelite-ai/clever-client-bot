@@ -158,13 +158,13 @@ async function runFourTurnScenario(input: {
   envGet: typeof Deno.env.get;
   preview?: boolean;
   fourthMessage?: string;
-  atomicAreaFirstTurn?: boolean;
+  prefacedAreaFirstTurn?: boolean;
 }): Promise<void> {
   Deno.env.get = input.envGet;
   resetDiscoverCategoryCacheForTest();
-  const category = input.atomicAreaFirstTurn ? "Светильники" : "Люстры";
+  const category = input.prefacedAreaFirstTurn ? "Светильники" : "Люстры";
   const scenarioMessages = [...messages];
-  if (input.atomicAreaFirstTurn) {
+  if (input.prefacedAreaFirstTurn) {
     scenarioMessages.splice(0, 4,
       "Новая тема. Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?");
   }
@@ -174,7 +174,7 @@ async function runFourTurnScenario(input: {
     ...freshBatch,
     ...(input.newCapacity ? capacityFreshBatch : []),
     ...distractors,
-  ].map((item) => input.atomicAreaFirstTurn ? {
+  ].map((item) => input.prefacedAreaFirstTurn ? {
     ...item, category, pagetitle: item.pagetitle.replace(/^Люстра/u, "Светильник"),
     url: item.url.replace("/lyustryi/", "/svetilniki/"),
   } : item);
@@ -422,23 +422,8 @@ async function runFourTurnScenario(input: {
           if (turn === 3) fourthTurnDeclarationRequests++;
           const correction = turn === 3 && fourthTurnDeclarationRequests > 1;
           if (turn === 3 && correction) fourthTurnCorrectionRequests++;
-          if (input.atomicAreaFirstTurn) {
-            const properties = body.tools?.find(({ function: tool }) =>
-              tool?.name === "declare_selection_reasoning")?.function?.parameters?.properties;
-            assert(properties?.product_requirements, "independent area proof must request atomic obligations");
-            return modelTool("declare_selection_reasoning", {
-              product_requirements: [
-                "Назначение светильника: для гостиной.",
-                "Светильник должен быть светодиодным.",
-                // Deliberate, unowned model inference: no customer or card
-                // supplies this threshold. It must not become a hard filter.
-                "Световой поток каждого светильника не менее 4000 лм.",
-                "Проверяю площадь освещения каждого изделия по карточке.",
-              ],
-              measurement_scope: "per_product",
-              compatible_classifications: [], excluded_classifications: [],
-              required_facet_values: [], explicit_customer_classifications: [],
-            });
+          if (input.prefacedAreaFirstTurn) {
+            throw new Error("A control prefix must not divert a proven direct request into paid reasoning");
           }
           return modelTool("declare_selection_reasoning", {
             // Deliberately wrong shape inference: the customer specified
@@ -459,7 +444,7 @@ async function runFourTurnScenario(input: {
           });
         }
         if (body.tool_choice?.function?.name === "discover_category") {
-          return modelTool("discover_category", { noun: input.atomicAreaFirstTurn ? "светильник" : "люстра" });
+          return modelTool("discover_category", { noun: input.prefacedAreaFirstTurn ? "светильник" : "люстра" });
         }
         if (body.tool_choice?.function?.name === "propose_candidates") {
           return modelTool("propose_candidates", { candidates: ["люстра"] });
@@ -550,17 +535,17 @@ async function runFourTurnScenario(input: {
       first.every((url) => allProducts.some((product) => firstBatch.some(({id}) => id === product.id) && product.url === url)),
       JSON.stringify(first),
     );
-    assert(
-      logs[0].steps.some(({ step }) => step === "v3_user_constraints_frozen"),
-      JSON.stringify(logs[0].steps),
-    );
-    if (input.atomicAreaFirstTurn) {
-      assert(logs[0].steps.some(({ step }) => step === "v3_structured_measurement_declaration"));
-      assert(!logs[0].steps.some(({ step }) => step === "v3_derived_selection_reasoning_contract_retry"));
+    if (input.prefacedAreaFirstTurn) {
+      assert(logs[0].steps.some(({ step }) => step === "v3_measured_replacement_rendered"));
+      assert(!modelTools[0].includes("declare_selection_reasoning"));
       assert(!publicText(turns[0]).includes("4000"), publicText(turns[0]));
       assert(first.every((url) => !distractors.some((product) => product.url === url)), JSON.stringify(first));
       return;
     }
+    assert(
+      logs[0].steps.some(({ step }) => step === "v3_user_constraints_frozen"),
+      JSON.stringify(logs[0].steps),
+    );
     for (const index of [0, 3]) {
       const blocks = v3Events(turns[index]).filter(({ type }) =>
         type === "products_block"
@@ -747,11 +732,11 @@ async function runFourTurnScenario(input: {
 }
 
 Deno.test({
-  name: "atomic destination-area reasoning preserves LED selection and rejects office/undersized cards without invented lumen filters",
+  name: "topic-prefaced measured selection retains proven LED, destination and area gates without paid derivation",
   permissions: { read: true, env: false, net: false },
   fn: () => runFourTurnScenario({
     newCapacity: false, handler: offlineHandler(), envGet: offlineEnvGet,
-    atomicAreaFirstTurn: true,
+    prefacedAreaFirstTurn: true,
   }),
 });
 

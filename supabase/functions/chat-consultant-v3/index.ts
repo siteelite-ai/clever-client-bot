@@ -12576,14 +12576,12 @@ async function runExpertLoop(
               }`,
             };
           }
-          // Atomic declarations for independently certified measurement paths:
-          // point/range OR per-card destination/area. A model-only calculation
-          // must not swallow a valid qualitative requirement in one sentence.
-          // The adapter grants no proof; existing per-card and unsupported-
-          // measurement gates still apply. Other routes keep their contracts.
+          // Released for server-certified relations only, independently of
+          // closure QA authentication. Replacements, paired-fit and routes
+          // without a compiled relation retain their existing contracts.
           // No request field or temporary QA credential can enable this mode.
           const structuredMeasurementMode =
-            Boolean(certifiedMeasuredPointRange || independentFirstTurnDestinationAreaProof) && !replacementIntent && !presearchPairedObjectReference;
+            Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference;
           if (structuredMeasurementMode) derivedMessages[0].content += `\n\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}`;
           const baseReasoningToolSchema = buildDerivedSelectionReasoningToolSchema(
             lastDiscover.facets ?? [],
@@ -12770,14 +12768,7 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) => {
             declarationRejectionReason = null;
-            // Progressive schema migration for destination/area: an old-format
-            // response still goes through the unchanged legacy validator, not
-            // a new format-only refusal. Mixed fields remain invalid. The
-            // already released point/range route retains its strict adapter.
-            const legacyDestinationDeclaration = structuredMeasurementMode &&
-              independentFirstTurnDestinationAreaProof && !certifiedMeasuredPointRange &&
-              !("product_requirements" in args) && typeof args.reasoning === "string";
-            if (structuredMeasurementMode && !legacyDestinationDeclaration) {
+            if (structuredMeasurementMode) {
               const relationEvidence = certifiedMeasuredPointRange
                 ? verifiedMeasuredPointRangeEvidence(certifiedMeasuredPointRange) : null;
               const structured = materializeStructuredMeasurementDeclaration(args, relationEvidence);
