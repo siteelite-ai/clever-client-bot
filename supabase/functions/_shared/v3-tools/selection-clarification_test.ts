@@ -14,6 +14,7 @@ import {
 } from "./selection-readiness.ts";
 import {
   buildDerivedSelectionReasoningToolSchema,
+  buildDerivedSelectionReasoningMessages,
   shouldContinueSelectionPastOptionalClarification,
 } from "./selection-actionability.ts";
 import {
@@ -36,6 +37,21 @@ const context = {
   category: "Анкеры",
   facets: [],
 };
+
+Deno.test("forced reasoning receives exact opaque facet keys and a freeform escape, not just captions", () => {
+  const key = "substrate__Өңdeu_materialy";
+  const facets = [{ key, caption: "Материал основания", values: [{ value: "Бетон" }, { value: "Кирпич" }] }];
+  const tool = buildDerivedSelectionReasoningToolSchema(facets);
+  const properties = tool.function.parameters.properties as Record<string, Record<string, unknown>>;
+  const clarification = properties.clarification.properties as Record<string, Record<string, unknown>>;
+  assertEquals(clarification.facet_key.enum, ["customer_input", key]);
+  const messages = buildDerivedSelectionReasoningMessages("Подбери крепление", "Крепления", facets);
+  assert(messages.some(message => message.content.includes(JSON.stringify(key))));
+  let rejection: string | null = null;
+  assertEquals(resolveSelectionClarification({ ...question, facet_key: "Материал основания", options: [{ value: "Бетон" }, { value: "Кирпич" }] }, { ...context, facets }, reason => { rejection = reason; }), null);
+  assertEquals(rejection, "unknown_live_facet");
+  assert(resolveSelectionClarification({ ...question, facet_key: key, options: [{ value: "Бетон" }, { value: "Кирпич" }] }, { ...context, facets }));
+});
 
 Deno.test("shared uncertainty contract is independent of category and creates a scoped freeform turn", () => {
   for (

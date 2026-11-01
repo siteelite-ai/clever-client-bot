@@ -1662,6 +1662,14 @@ export function buildDerivedSelectionReasoningToolSchema(
         properties: {
           clarification: {
             ...SELECTION_CLARIFICATION_SCHEMA,
+            properties: {
+              ...SELECTION_CLARIFICATION_SCHEMA.properties,
+              facet_key: {
+                type: "string",
+                enum: [...new Set(["customer_input", ...facets.map(facet => facet.key).filter((key): key is string => Boolean(key))])],
+                description: "Точный key живого фасета, если вопрос предлагает его значения. Для отсутствующего факта клиента вне фасетов — customer_input и options=[]. Не переводи и не сокращай key.",
+              },
+            },
             description: "Вместо подбора: когда не хватает данных самого клиента, задай один конкретный вопрос. В этой ветке reasoning пусто, measurement_scope=not_applicable, списки критериев пусты. Не используй для ошибок сервиса или отсутствия данных о товарах.",
           },
           reasoning: {
@@ -3727,6 +3735,7 @@ export function buildDerivedSelectionReasoningMessages(
       facet,
       facetIndex,
     ) => ({
+      key: String(facet.key || "").slice(0, 200),
       name: String(facet.caption || facet.key || "").slice(0, 160),
       type: String(facet.type || "").slice(0, 40),
       unit: facet.unit == null ? null : String(facet.unit).slice(0, 30),

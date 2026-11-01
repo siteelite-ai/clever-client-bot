@@ -10875,11 +10875,12 @@ async function runExpertLoop(
     if (transientCatalogFailureSeen) {
       return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
     }
+    let clarificationRejection: string | null = null;
     const clarification = resolveSelectionClarification(value, {
       request: userMessage,
       category: lastDiscover?.category?.pagetitle,
       facets: lastDiscover?.facets ?? [],
-    });
+    }, reason => { clarificationRejection = reason; });
     // Keep the established preference policy and source-product proof gate.
     // Neither a model-owned reason label nor a freeform question overrides it.
     const optional = clarification && shouldContinueSelectionPastOptionalClarification({
@@ -10906,6 +10907,11 @@ async function runExpertLoop(
     if (accepted?.ok && delivery) emitSideEffects(accepted, send);
     steps.push({ step: "v3_selection_input_decision", ms: now(), meta: {
       source, decision: delivery ? "clarify" : "invalid_clarification",
+      rejection: clarificationRejection,
+      declared_question: value && typeof value === "object" && typeof (value as Record<string, unknown>).question === "string"
+        ? String((value as Record<string, unknown>).question).replace(/[\u0000-\u001f<>]/gu, " ").slice(0, 400) : null,
+      declared_facet_key: value && typeof value === "object" && typeof (value as Record<string, unknown>).facet_key === "string"
+        ? String((value as Record<string, unknown>).facet_key).replace(/[\u0000-\u001f<>]/gu, " ").slice(0, 128) : null,
       reason: clarification?.blocking_input.reason ?? null,
       parameter: clarification?.blocking_input.parameter ?? null,
       facet_key: clarification?.facet_key ?? null,

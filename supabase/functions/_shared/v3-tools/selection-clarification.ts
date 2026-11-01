@@ -91,34 +91,42 @@ export function resolveSelectionClarification(
       values?: readonly { value?: string }[];
     }[];
   },
+  observeRejection?: (reason: string) => void,
 ):
   | (ProposeClarificationInput & { blocking_input: BlockingSelectionInput })
   | null {
   const input = record(value);
   const blocking = parseBlockingSelectionInput(input?.blocking_input);
+  const reject = (reason: string) => {
+    try { observeRejection?.(reason); } catch { /* Observational only. */ }
+    return null;
+  };
+  if (!input || !blocking) return reject("invalid_blocking_input");
   if (
-    !input || !blocking || !bounded(input.question, 10, 400) ||
-    (input.question.match(/[?？]/gu) ?? []).length !== 1 ||
-    !bounded(input.facet_key, 1, 128) || !Array.isArray(input.options) ||
+    !bounded(input.question, 10, 400) ||
+    (input.question.match(/[?？]/gu) ?? []).length !== 1
+  ) return reject("invalid_question_shape");
+  if (!bounded(input.facet_key, 1, 128)) return reject("invalid_facet_key");
+  if (!Array.isArray(input.options) ||
     input.options.length === 1 || input.options.length > 5
-  ) return null;
+  ) return reject("invalid_options_count");
   const facet = context.facets.find((item) => item.key === input.facet_key);
+  if (input.options.length && !facet) return reject("unknown_live_facet");
   const values = new Set(facet?.values?.map((item) => item.value) ?? []);
   const unique = new Set<string>();
   const options: ProposeClarificationInput["options"] = [];
   for (const candidate of input.options) {
     const option = record(candidate);
-    if (
-      !option || !bounded(option.value, 1, 160) ||
-      (option.label !== undefined && option.label !== option.value) ||
-      !values.has(option.value) || unique.has(option.value)
-    ) return null;
+    if (!option || !bounded(option.value, 1, 160)) return reject("invalid_option_value");
+    if (option.label !== undefined && option.label !== option.value) return reject("option_label_mismatch");
+    if (!values.has(option.value)) return reject("option_not_live");
+    if (unique.has(option.value)) return reject("duplicate_option");
     unique.add(option.value);
     options.push({ value: option.value, label: option.value });
   }
   const request = context.request.trim();
   // Never silently drop customer constraints from the pending request.
-  if (!request || request.length > 500) return null;
+  if (!request || request.length > 500) return reject("invalid_request_scope");
   return {
     question: input.question,
     facet_key: input.facet_key,
