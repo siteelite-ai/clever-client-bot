@@ -1,5 +1,6 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
+import { isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
 
 export type ConversationMessage = {
   role: "user" | "assistant";
@@ -308,7 +309,11 @@ export function isReadinessQuestionSupersededByVerifiedSection(
 /** A structurally incomplete attribute change such as «а есть белые?». */
 export function isEllipticalAttributeFollowup(userMessage: string): boolean {
   const text = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
-  return Boolean(text && ELLIPTICAL_ATTRIBUTE_RE.test(text));
+  // Shared syntax for chip-established scopes and ordinary rendered batches.
+  // This recognises dependency only; the caller must still load a completed
+  // server batch before restoring a missing product head or prior constraint.
+  return Boolean(text && (ELLIPTICAL_ATTRIBUTE_RE.test(text) ||
+    isShortAttributeSelectionFollowup(text)));
 }
 
 function lexicalWords(value: string): string[] {

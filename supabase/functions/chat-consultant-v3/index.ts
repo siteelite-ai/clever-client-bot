@@ -12576,12 +12576,14 @@ async function runExpertLoop(
               }`,
             };
           }
-          // Released for server-certified relations only, independently of
-          // closure QA authentication. Replacements, paired-fit and routes
-          // without a compiled relation retain their existing contracts.
+          // Atomic declarations for independently certified measurement paths:
+          // point/range OR per-card destination/area. A model-only calculation
+          // must not swallow a valid qualitative requirement in one sentence.
+          // The adapter grants no proof; existing per-card and unsupported-
+          // measurement gates still apply. Other routes keep their contracts.
           // No request field or temporary QA credential can enable this mode.
           const structuredMeasurementMode =
-            Boolean(certifiedMeasuredPointRange) && !replacementIntent && !presearchPairedObjectReference;
+            Boolean(certifiedMeasuredPointRange || independentFirstTurnDestinationAreaProof) && !replacementIntent && !presearchPairedObjectReference;
           if (structuredMeasurementMode) derivedMessages[0].content += `\n\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}`;
           const baseReasoningToolSchema = buildDerivedSelectionReasoningToolSchema(
             lastDiscover.facets ?? [],
@@ -12768,7 +12770,14 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) => {
             declarationRejectionReason = null;
-            if (structuredMeasurementMode) {
+            // Progressive schema migration for destination/area: an old-format
+            // response still goes through the unchanged legacy validator, not
+            // a new format-only refusal. Mixed fields remain invalid. The
+            // already released point/range route retains its strict adapter.
+            const legacyDestinationDeclaration = structuredMeasurementMode &&
+              independentFirstTurnDestinationAreaProof && !certifiedMeasuredPointRange &&
+              !("product_requirements" in args) && typeof args.reasoning === "string";
+            if (structuredMeasurementMode && !legacyDestinationDeclaration) {
               const relationEvidence = certifiedMeasuredPointRange
                 ? verifiedMeasuredPointRangeEvidence(certifiedMeasuredPointRange) : null;
               const structured = materializeStructuredMeasurementDeclaration(args, relationEvidence);
@@ -27953,6 +27962,20 @@ Deno.serve(async (req) => {
               | null = ellipticalBaseRequest
                 ? { baseUserMessage: ellipticalBaseRequest }
                 : null;
+            // Restore the omitted grammatical head only from the complete,
+            // freshly rehydrated server batch, never from browser prose or a
+            // guessed category. Mixed-category batches remain unexpanded.
+            const ellipticalBatchProducts = ellipticalContinuation &&
+                isShortAttributeSelectionFollowup(userMessage)
+              ? recentProductEvidence.map(({ id }) => ctx.cache.get(id))
+              : [];
+            const ellipticalLeaves = [...new Set(ellipticalBatchProducts
+              .map((product) => String(product?.leaf_category ?? "").trim()).filter(Boolean))];
+            const ellipticalCurrentRequest = ellipticalBatchProducts.length > 0 &&
+                ellipticalBatchProducts.every(Boolean) && ellipticalLeaves.length === 1 &&
+                ellipticalBatchProducts.every((product) => product?.leaf_category === ellipticalLeaves[0])
+              ? `${userMessage} ${ellipticalLeaves[0]}`
+              : userMessage;
             if (ellipticalContinuation) {
               steps.push({
                 step: "v3_elliptical_selection_context_resolved",
@@ -29191,8 +29214,13 @@ Deno.serve(async (req) => {
                 );
               }
             } else {
-              const combinedSelectionRequest = additionalSelectionRequest
-                ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
+              // Ordinary short refinements need the same server-owned base
+              // as "more options": taxonomy alone is not enough. Supplying
+              // only the adjective loses identity and can skip the criteria
+              // contract entirely. rawCurrentUserMessage remains separate for
+              // current-axis overrides and appearance ownership below.
+              const combinedSelectionRequest = ellipticalBaseRequest
+                ? joinCustomerTurns([ellipticalBaseRequest, ellipticalCurrentRequest])
                 : scopedSelectionRequest.message;
               const needsServerAreaProof = additionalSelectionRequest &&
                 verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
@@ -29244,7 +29272,9 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                customerMeasurementEvidence.text,
+                ellipticalAttributeFollowup && activeRenderedProof
+                  ? joinCustomerTurns([...activeRenderedProof.priorQueriesNewestFirst].reverse().concat(userMessage))
+                  : customerMeasurementEvidence.text,
                 recentProductEvidence,
                 [],
                 null,
@@ -29252,8 +29282,12 @@ Deno.serve(async (req) => {
                 priorShownProductUrls,
                 null,
                 Boolean(replacementEgressRequest),
-                verifiedAdditionalSelection?.baseRequest ?? null,
-                customerMeasurementEvidence.priorQueriesNewestFirst,
+                ellipticalAttributeFollowup
+                  ? ellipticalBaseRequest
+                  : verifiedAdditionalSelection?.baseRequest ?? null,
+                ellipticalAttributeFollowup && activeRenderedProof
+                  ? activeRenderedProof.priorQueriesNewestFirst
+                  : customerMeasurementEvidence.priorQueriesNewestFirst,
                 userMessage,
               );
               productsCount = out.productsRendered;

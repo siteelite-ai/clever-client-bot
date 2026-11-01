@@ -98,6 +98,13 @@ Deno.test("local boundary classifier isolates complete requests without product 
 });
 
 Deno.test("local boundary classifier preserves references and short clarification answers", () => {
+  for (const message of ["Нужны двойные", "Мне нужны белые", "Двойные", "Подберите черные"]) {
+    assertEquals(classifyConversationBoundaryLocally(message), {
+      mode: "continuation",
+      confidence: 0.98,
+      reason: "local_elliptical_attribute",
+    }, message);
+  }
   assertEquals(classifyConversationBoundaryLocally("а есть белые?"), {
     mode: "continuation",
     confidence: 0.98,
@@ -878,7 +885,8 @@ Deno.test("classifier keeps a genuine follow-up and pending clarification contex
 
 Deno.test("classifier failure preserves context instead of causing a regression", async () => {
   const result = await classifyConversationBoundary(
-    "белые",
+    // A bare adjective is now a local dependency and needs no remote call.
+    "интересует другое исполнение",
     prior,
     {},
     {
