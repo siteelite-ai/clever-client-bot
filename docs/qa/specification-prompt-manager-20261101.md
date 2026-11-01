@@ -35,6 +35,9 @@ No secrets, database settings or production assets were modified.
 
 - Deno shared-tools and public-handler suite: 2,121 passed, 0 failed.
 - Embedded widget/session and loader contracts: 90 passed, 0 failed.
+- Full Node QA/evaluator suite: 451 passed, 0 failed. Its source-shape
+  assertion now explicitly requires the additional verified-specification
+  boundary alongside the unchanged entity/class boundaries.
 - React/Vitest: 16 passed, 0 failed.
 - TypeScript app check: passed.
 - Vite production build: passed (existing bundle-size warning).
@@ -44,6 +47,9 @@ No secrets, database settings or production assets were modified.
   “ВВГ 3*1,5” → existing catalog route → exact-size card; the deliberately
   wrong-core-count candidate is excluded. Zero model requests.
 - Other readiness/motor scenarios remain in the full suite.
+- Local Chrome desktop and mobile (390 × 844) visual checks: passed; one
+  manager contact link and no specification/copy buttons. Reload + reopen
+  restores the question and the same contact link. No call was initiated.
 
 The first new catalog fixture used a three-segment category-like URL, which the
 existing deep-card URL policy correctly excluded. Fixed the fixture to a deep
@@ -51,8 +57,6 @@ product URL; no catalog policy was relaxed.
 
 ## Still required before calling this published
 
-- Visual desktop/mobile browser verification. Chrome currently blocks page
-  automation because another extension UI is open. This is NOT a browser pass.
 - PR CI on the exact committed head.
 - Merge/deploy and actual pinned MODX asset publication, with a new backup of
   current public v663 / widget-3a881d860c27f8d0 before replacement.

@@ -145,8 +145,8 @@ test('a verified free-form readiness answer suppresses only a nominal class chan
   assert.match(classChange, /isIndependentNominalRequestOutsideActiveScope\(/);
   assert.match(classChange, /!\s*(?:isVerifiedFreeformReadinessAnswer\(|verifiedFreeformReadinessAnswer)/,
     'only a verified free-form answer can suppress a nominal class boundary');
-  assert.match(source, /const activeScopeExplicitBoundary = activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
-    'an explicit entity change must continue to create a new task');
+  assert.match(source, /const activeScopeExplicitBoundary = Boolean\(specificationLookupQuery\) \|\| activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
+    'verified specification lookup adds a boundary without suppressing entity or class changes');
   const sameSection = between(
     'const sameSectionScope =',
     'const readinessQuestionSuperseded =',
