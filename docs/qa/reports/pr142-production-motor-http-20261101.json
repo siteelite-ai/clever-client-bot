@@ -1,0 +1,16 @@
+{
+  "test": "published_motor_initial_HTTP_not_browser",
+  "status": 200,
+  "duration_ms": 3589,
+  "log_id": "431b8ec0-4fde-46d7-81eb-bfbd5acbfd7f",
+  "completed": true,
+  "terminal": true,
+  "error": null,
+  "facet": "supply_phase",
+  "options": [
+    "220 В, 1 фаза",
+    "380 В, 3 фазы"
+  ],
+  "text": "Для выбора автомата двигателя нужны номинальный рабочий ток по шильдику, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
+  "passed": true
+}

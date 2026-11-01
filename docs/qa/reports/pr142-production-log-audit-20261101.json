@@ -1,0 +1,59 @@
+{
+  "date": "2026-11-01T09:21:07.698Z",
+  "scope": "six ordinary-site browser turns and one direct public HTTP motor control; not a full customer regression",
+  "expected_logs": 7,
+  "returned_logs": 7,
+  "passed": true,
+  "llm_steps": 0,
+  "logs": [
+    {
+      "id": "246248ff-6bc3-4b38-9f55-a8c471db3397",
+      "error_present": false,
+      "total_ms": 480,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "3a230666-4615-4254-a59d-9b2064f6a411",
+      "error_present": false,
+      "total_ms": 2191,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "431b8ec0-4fde-46d7-81eb-bfbd5acbfd7f",
+      "error_present": false,
+      "total_ms": 2203,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "bb8295e4-d73d-4769-b284-93a25be85957",
+      "error_present": false,
+      "total_ms": 3365,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "cb0532fe-f4e4-4c73-bb28-94f409ae89b6",
+      "error_present": false,
+      "total_ms": 1739,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "d9de9664-5d2d-4094-a8c6-5c8e5c165fc8",
+      "error_present": false,
+      "total_ms": 1273,
+      "llm_steps": 0,
+      "terminal_complete": true
+    },
+    {
+      "id": "f9d6c279-6f30-4bb3-af49-42f982651e40",
+      "error_present": false,
+      "total_ms": 817,
+      "llm_steps": 0,
+      "terminal_complete": true
+    }
+  ]
+}
