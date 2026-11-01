@@ -705,7 +705,11 @@ import {
   selectReadinessClarification,
   verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
-import { resolveSpecificationAssistance } from "../_shared/v3-tools/specification-assistance.ts";
+import {
+  resolveSpecificationAssistance,
+  specificationCatalogQuery,
+} from "../_shared/v3-tools/specification-assistance.ts";
+import { lookupProductManagerPhone } from "../_shared/v3-tools/lookup-contacts.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type CoverageDiagnostic,
@@ -27221,6 +27225,23 @@ Deno.serve(async (req) => {
                 pending_clarification: verifiedReadinessState.slot ?? undefined,
               }
               : slots;
+            const proposedSpecificationQuery = specificationCatalogQuery({
+              message: userMessage,
+              verifiedSlot: verifiedReadinessState.slot,
+              newTask: /^\s*(?:новая тема|новый вопрос)(?:\s|[.!?:-])/iu.test(userMessage),
+              enabled: Deno.env.get("VOLT220_SPECIFICATION_ASSISTANCE_ENABLED") !== "false",
+            });
+            const proposedSpecificationMarking = proposedSpecificationQuery
+              ? classifyExactCompoundMarkingRequest(proposedSpecificationQuery)
+              : null;
+            const specificationLookupQuery = proposedSpecificationQuery &&
+                proposedSpecificationMarking && admitDirectSelectionRoute({
+                  route: "compound",
+                  userMessage: proposedSpecificationQuery,
+                  coveredCompound: proposedSpecificationMarking,
+                })
+              ? proposedSpecificationQuery
+              : null;
             // A broad slot is deliberately absent from boundary classification.
             // Otherwise the existing "server-scoped clarification" shortcut turns
             // even a complete unrelated request into a Gallant continuation.
@@ -27379,7 +27400,7 @@ Deno.serve(async (req) => {
                   activeScopeState.scope,
                 ),
             );
-            const activeScopeExplicitBoundary = activeScopeEntityChanged ||
+            const activeScopeExplicitBoundary = Boolean(specificationLookupQuery) || activeScopeEntityChanged ||
               activeScopeClassChanged;
             if (
               activePrepositionalRefinement === "ambiguous" &&
@@ -27438,7 +27459,9 @@ Deno.serve(async (req) => {
                   /^\s*(?:(?:около|примерно|приблизительно)\s+)?(?:отверстие|вырез|диаметр)?\s*[:=]?[Ø⌀]?\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?(?:\s*,?\s*(?:если верно|наверное|примерно))?[.!]?\s*$/iu
                     .test(userMessage)),
             );
-            const boundary = verifiedCutoutContinuation || dependentCutoutReply
+            const boundary = specificationLookupQuery
+              ? {mode:"new_task" as const,confidence:1,source:"local" as const,reason:"server_verified_specification_catalog_lookup"}
+              : verifiedCutoutContinuation || dependentCutoutReply
               ? {
                 mode: "continuation" as const,
                 confidence: 1,
@@ -27948,7 +27971,7 @@ Deno.serve(async (req) => {
             );
             const exactCompoundMarkingRequest =
               classifyExactCompoundMarkingRequest(
-                userMessage,
+                specificationLookupQuery ?? userMessage,
               );
             const explicitCompoundMarking = extractExplicitCompoundMarking(
               userMessage,
@@ -27978,7 +28001,7 @@ Deno.serve(async (req) => {
             const exactCompoundDirectAdmitted = Boolean(
               exactCompoundMarkingRequest && admitDirectSelectionRoute({
                 route: "compound",
-                userMessage,
+                userMessage: specificationLookupQuery ?? userMessage,
                 coveredCompound: exactCompoundMarkingRequest,
               }),
             );
@@ -28089,7 +28112,7 @@ Deno.serve(async (req) => {
               ) ??
                 extractBroadAssortmentScope(userMessage)
               : null;
-            const readinessClarification = storePolicyInquiry ||
+            const readinessClarification = specificationLookupQuery || storePolicyInquiry ||
                 additionalSelectionRequest || matchedVerifiedBroadSelection ||
                 freeformCandidate
               ? null
@@ -28105,6 +28128,13 @@ Deno.serve(async (req) => {
                 ),
                 { progressive: scopedSelectionRequest.scoped },
               );
+            if (readinessClarification?.scope?.assistance?.version === 1 && readinessClarification.facet_key === "engineering_specification") {
+              const phone = await lookupProductManagerPhone(supabase);
+              if (phone) readinessClarification.scope.assistance.manager_phone = phone;
+              readinessClarification.question += phone
+                ? `\n\nЕсли маркировка неизвестна, позвоните менеджеру: ${phone}.`
+                : "\n\nЕсли маркировка неизвестна, свяжитесь с менеджером. Телефон можно посмотреть на странице контактов.";
+            }
             // GUARD v3_meta_question_declined: вопрос про устройство сервиса
             // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
             // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -28747,7 +28777,7 @@ Deno.serve(async (req) => {
               const selectedProducts =
                 await selectVerifiedExactCompoundProducts(
                   exactCompoundMarkingRequest,
-                  userMessage,
+                  specificationLookupQuery ?? userMessage,
                   ctx,
                   send,
                   steps,

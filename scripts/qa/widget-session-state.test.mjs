@@ -3277,61 +3277,61 @@ test('a server topic boundary or expired original choice prevents restoration af
   }
 });
 
-function assistanceSse({complete=true, version=1}={}) {
-  const question='Марку и сечение нужно подтвердить у специалиста. Заявка автоматически не отправлялась.';
+function assistanceSse({complete=true, version=1, managerPhone='+77762206220'}={}) {
+  const question='Укажите, пожалуйста, марку, число жил и сечение кабеля.';
   const events=[
     {v3_event:{type:'diagnostic',log_id:'assistance-log',phase:'start'}},
     {choices:[{delta:{content:question}}]},
     {v3_event:{type:'slot_update',slots:{pending_clarification:{
       status:'pending',slot_id:'assistance-slot',facet_key:'engineering_specification',question,options:[],
-      scope:{kind:'selection_readiness',token:'Кабель для насоса',assistance:{version,summary:'Насос: 220 В; ток 6 А; линия 25 м; на улице.'}},
+      scope:{kind:'selection_readiness',token:'Кабель для насоса',assistance:{version,manager_phone:managerPhone,summary:'legacy summary must not be copied',contactUrl:'javascript:alert(1)'}},
     }}}},
     ...(complete?[{v3_event:{type:'diagnostic',log_id:'assistance-log',phase:'complete',products_count:0}}]:[]),
   ];
   return events.map(event=>`data: ${JSON.stringify(event)}`).concat('data: [DONE]','').join('\n\n');
 }
 
-test('assistance actions copy locally, use fixed contacts, preserve drafts and survive matching reload', async()=>{
-  let calls=0;const copied=[];
-  const dom=bootWidget({fetchImpl:async()=>{calls++;return new Response(assistanceSse(),{headers:{'Content-Type':'text/event-stream'}});}});
+test('specification is typed directly: only manager link, no copy/specify/status chips, matching reload', async()=>{
+  const payloads=[],copied=[];
+  const dom=bootWidget({fetchImpl:async(_url,init)=>{payloads.push(JSON.parse(init.body));return new Response(assistanceSse(),{headers:{'Content-Type':'text/event-stream'}});}});
   Object.defineProperty(dom.window.navigator,'clipboard',{value:{writeText:async text=>copied.push(text)},configurable:true});
   dom.window.document.querySelector('[aria-label="Открыть чат"]').click();
-  const input=dom.window.document.querySelector('#volt-widget-input');input.value='Нужен кабель для насоса';
+  dom.window.document.querySelector('#volt-widget-input').value='Нужен кабель для насоса';
   dom.window.document.querySelector('#volt-widget-send').click();
-  await waitForWidget(()=>dom.window.document.querySelectorAll('.volt-quick-replies button').length===2&&!dom.window.document.querySelector('#volt-widget-send').disabled,'assistance actions should finish');
+  await waitForWidget(()=>Boolean(dom.window.document.querySelector('.volt-quick-replies a'))&&!dom.window.document.querySelector('#volt-widget-send').disabled,'one manager link');
   const group=dom.window.document.querySelector('.volt-quick-replies');
-  assert.match(group.textContent,/Скопировать условия/);
-  assert.equal(group.querySelector('a').href,'https://220volt.kz/kontaktyi/');
-  assert.equal(group.querySelector('a').rel,'noopener noreferrer');
-  group.querySelector('button').click();
-  await waitForWidget(()=>group.querySelector('[role="status"]').textContent==='Условия скопированы','copy should report actual success');
-  assert.deepEqual(copied,['Насос: 220 В; ток 6 А; линия 25 м; на улице.']);
-  input.value='ВВГ 3*2,5';group.querySelector('.volt-custom-reply').click();
-  assert.equal(input.value,'ВВГ 3*2,5');assert.equal(dom.window.document.activeElement,input);assert.equal(calls,1);
+  assert.equal(group.querySelectorAll('button').length,0);
+  assert.equal(group.textContent,'Связаться с менеджером');
+  assert.equal(group.querySelector('a').href,'tel:+77762206220');
+  assert.deepEqual(copied,[]);assert.equal(payloads.length,1);
   const saved=readState(dom);dom.window.close();
   const reloaded=bootWidget({state:saved});
-  assert.match(reloaded.window.document.querySelector('.volt-quick-replies').textContent,/Скопировать условия/);
+  assert.equal(reloaded.window.document.querySelector('.volt-quick-replies').querySelectorAll('button').length,0);
+  assert.equal(reloaded.window.document.querySelector('.volt-quick-replies a').href,'tel:+77762206220');
   reloaded.window.close();
 });
 
-test('assistance clipboard denial is not reported as success or a submitted request',async()=>{
-  let calls=0;
-  const dom=bootWidget({fetchImpl:async()=>{calls++;return new Response(assistanceSse(),{headers:{'Content-Type':'text/event-stream'}});}});
-  Object.defineProperty(dom.window.navigator,'clipboard',{value:{writeText:async()=>{throw new Error('denied');}},configurable:true});
-  dom.window.document.querySelector('#volt-widget-input').value='Кабель для насоса';dom.window.document.querySelector('#volt-widget-send').click();
-  await waitForWidget(()=>Boolean(dom.window.document.querySelector('.volt-quick-replies [role="status"]')),'handoff should render');
-  const group=dom.window.document.querySelector('.volt-quick-replies');group.querySelector('button').click();
-  await waitForWidget(()=>group.querySelector('[role="status"]').textContent.includes('Не удалось'),'copy failure should be visible');
-  assert.equal(group.querySelector('[role="status"]').textContent.includes('Условия скопированы'),false);assert.equal(calls,1);
-  dom.window.close();
+test('missing or invalid phone offers fixed contacts without clipboard or fabricated number',async()=>{
+  for(const managerPhone of ['', 'javascript:alert(1)', '+77762206220?send=data']){
+    let calls=0;
+    const dom=bootWidget({fetchImpl:async()=>{calls++;return new Response(assistanceSse({managerPhone}),{headers:{'Content-Type':'text/event-stream'}});}});
+    dom.window.document.querySelector('#volt-widget-input').value='Кабель для насоса';dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(()=>Boolean(dom.window.document.querySelector('.volt-quick-replies a')),'contact fallback');
+    const group=dom.window.document.querySelector('.volt-quick-replies');
+    assert.equal(group.querySelectorAll('button').length,0);
+    assert.equal(group.querySelector('a').href,'https://220volt.kz/kontaktyi/');
+    assert.equal(group.querySelector('a').rel,'noopener noreferrer');assert.equal(calls,1);
+    dom.window.close();
+  }
 });
 
-test('incomplete or non-versioned assistance cannot offer copy actions',async()=>{
+test('incomplete or non-versioned assistance cannot offer manager actions',async()=>{
   for(const options of [{complete:false},{version:2}]){
     const dom=bootWidget({fetchImpl:async()=>new Response(assistanceSse(options),{headers:{'Content-Type':'text/event-stream'}})});
     dom.window.document.querySelector('#volt-widget-input').value='Кабель для насоса';dom.window.document.querySelector('#volt-widget-send').click();
     await waitForWidget(()=>!dom.window.document.querySelector('#volt-widget-new-chat').disabled,'turn should settle');
-    assert.equal([...dom.window.document.querySelectorAll('button')].some(b=>b.textContent==='Скопировать условия'),false);
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-replies a').length,0);
+    assert.equal([...dom.window.document.querySelectorAll('button')].some(b=>/Скопировать условия|Указать марку/.test(b.textContent)),false);
     dom.window.close();
   }
 });

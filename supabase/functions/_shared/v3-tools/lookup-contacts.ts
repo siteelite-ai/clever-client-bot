@@ -46,12 +46,13 @@ interface ParsedKb {
 // Загрузка сырых записей
 // ────────────────────────────────────────────────────────────────────────────
 
-async function loadContactsRaw(supabase: SupabaseClient): Promise<Array<{ title: string; content: string }>> {
-  const { data, error } = await supabase
+async function loadContactsRaw(supabase: SupabaseClient, signal?: AbortSignal): Promise<Array<{ title: string; content: string }>> {
+  const query = supabase
     .from("knowledge_entries")
     .select("title, content")
     .or("title.ilike.%контакт%,title.ilike.%филиал%,title.ilike.%адрес%,title.ilike.%график%,title.ilike.%телефон%,title.ilike.%режим работы%")
     .limit(20);
+  const { data, error } = await (signal ? query.abortSignal(signal) : query);
   if (error) throw new Error(error.message);
   return data ?? [];
 }
@@ -113,6 +114,25 @@ function parseHq(records: Array<{ title: string; content: string }>): HqContacts
   if (addr) hq.address = addr[1].trim();
 
   return hq;
+}
+
+/** Only a labelled product/retail contact from the existing KB, never a model
+ * invention, arbitrary branch number or client-provided URL. */
+export function productManagerPhoneFromRecords(records: Array<{title:string;content:string}>): string | null {
+  const hq = parseHq(records);
+  for (const label of ["Для вопросов по товарам и офлайн-продажам", "Розничный отдел"]) {
+    const value = hq.labeled_phones.find(phone => phone.label === label)?.phone;
+    const matches = value?.match(PHONE_RE) ?? [];
+    if (matches.length !== 1) continue;
+    const digits = normPhone(matches[0]);
+    if (/^[78]\d{10}$/u.test(digits)) return `+7${digits.slice(1)}`;
+  }
+  return null;
+}
+
+export async function lookupProductManagerPhone(supabase: SupabaseClient): Promise<string | null> {
+  try { return productManagerPhoneFromRecords(await loadContactsRaw(supabase, AbortSignal.timeout(1500))); }
+  catch { return null; }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -130,6 +130,7 @@ async function runDialogue({
     | "motor_selection"
     | "motor_measurement_repair"
     | "motor_voltage_refusal"
+    | "specification_lookup"
     | null;
 }): Promise<void> {
   Deno.env.get = offlineEnvGet;
@@ -219,6 +220,9 @@ async function runDialogue({
             );
           }
         }
+        if (url.pathname === "/rest/v1/knowledge_entries") {
+          return json([{title:"Контакты",content:"Телефон для вопросов по товарам и офлайн-продажам: +7 (776) 220-62-20"}]);
+        }
         if (url.pathname === "/rest/v1/app_settings") {
           return json({
             openrouter_api_key: "offline-openrouter",
@@ -264,6 +268,13 @@ async function runDialogue({
         if (request.method === "POST" && url.pathname.startsWith("/rest/v1/")) {
           return json({}, 201);
         }
+      }
+      if (terminalMode === "specification_lookup" && currentTurn === messages.length - 1 && url.origin === "https://fixture.catalog.invalid" && url.pathname === "/api/products") {
+        catalogProductRequests.push(url);
+        return json({data:{results:[
+          {id:200,pagetitle:"Кабель ВВГ 3*1,5 ГОСТ",url:"https://220volt.kz/catalog/cable/vvg/vvg-good/",category:"Кабель ВВГ",price:301,unit:"м",warehouses:[{city:"Караганда",amount:10}],options:[]},
+          {id:201,pagetitle:"Кабель ВВГ 2*1,5 ГОСТ",url:"https://220volt.kz/catalog/cable/vvg/vvg-wrong-size/",category:"Кабель ВВГ",price:201,unit:"м",warehouses:[{city:"Караганда",amount:10}],options:[]}
+        ],pagination:{total:2}}});
       }
       if (
         (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" ||
@@ -473,7 +484,16 @@ async function runDialogue({
       const row = logs[turn];
       assert(row, `${label}: missing server log for turn ${turn}`);
       if (terminalMode && turn === messages.length - 1) {
-        if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+        if (terminalMode === "specification_lookup") {
+          assertEquals(row.error,null,JSON.stringify(row.steps));
+          const cards=visible.filter(event=>event.type==="products_block");
+          assertEquals(cards.length,1,JSON.stringify({visible,steps:row.steps,catalogRequests:catalogProductRequests.map(String),externalRequests}));
+          const markdown=String(cards[0].markdown);
+          assert(markdown.includes("vvg-good"),markdown);assert(!markdown.includes("wrong-size"),markdown);
+          assertEquals(row.final_products_count,1);
+          assert(visible.some(event=>event.type==="conversation_boundary" && event.mode==="new_task"));
+          assert(!visible.some(event=>event.type==="quick_replies"));
+        } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
           assertEquals(
             row.error,
             null,
@@ -665,7 +685,12 @@ async function runDialogue({
     }
 
     if (terminalMode) {
-      if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+      if (terminalMode === "specification_lookup") {
+        assertEquals(modelRequests,0);assertEquals(externalRequests,0);
+        assert(catalogProductRequests.length>0);
+        assert(catalogProductRequests.every(url=>url.searchParams.get("query")?.includes("3*1,5")));
+        return;
+      } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
         assertEquals(
           externalRequests,
           0,
@@ -960,38 +985,13 @@ Deno.test({
 addEventListener("unload", restoreOfflineModuleSetup);
 
 for (const scenario of [
-  {
-    label:"pump assistance handoff",
-    messages:["Мне нужен кабель для насоса","Нет, нужна помощь","220 В, 1 фаза","До 25 м","Стационарно на улице","6 А"],
-    expectedFacets:["specification_status","supply_phase","line_length","installation_method","load_current","engineering_specification"],
-    expectedProfile:"pump_cable",
-  },
-  {
-    label:"unknown pump facts remain unknown in a specialist handoff",
-    messages:["Мне нужен кабель для насоса","Нет, нужна помощь","Не знаю","Не знаю","Не знаю","Не знаю"],
-    expectedFacets:["specification_status","supply_phase","line_length","installation_method","load_current","engineering_specification"],
-    expectedProfile:"pump_cable",
-  },
-  {
-    label:"underground assistance handoff",
-    messages:["Какой кабель подойдет для прокладки в земле?","Нет, нужна помощь","Прямо в земле","220 В, 1 фаза","16 А","3 жилы","Да, одна из трёх жил — защитная PE","25 м"],
-    expectedFacets:["specification_status","installation_method","supply_phase","load_power","core_count","grounding_presence","line_length","engineering_specification"],
-    expectedProfile:"underground_cable",
-  },
-  {
-    label:"customer specification lookup confirmation",
-    messages:["Мне нужен кабель для насоса","Да, укажу марку и сечение","ВВГнг(А)-LS 3*2,5"],
-    expectedFacets:["specification_status","engineering_specification","specification_lookup_confirmation"],
-    expectedProfile:"pump_cable",expectedFinalOptions:2,
-  },
-  {
-    label:"independent selection question does not erase supplied PE and other handoff conditions",
-    messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.","Нет, нужна помощь"],
-    expectedFacets:["specification_status","engineering_specification"],
-    expectedProfile:"underground_cable",
-  },
+  {label:"pump specification prompt",messages:["Мне нужен кабель для насоса"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable"},
+  {label:"unknown specification does not start condition collection",messages:["Мне нужен кабель для насоса","Не знаю"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable"},
+  {label:"underground specification prompt",messages:["Какой кабель подойдет для прокладки в земле?"],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
+  {label:"typing specification starts verified ordinary catalog lookup immediately",messages:["Мне нужен кабель для насоса","ВВГ 3*1,5"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
+  {label:"supplied PE and all conditions still need only specification, not a summary",messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м."],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
 ]) Deno.test({
-  name:`MVP real handler: ${scenario.label} uses server context and no model/catalog calls`,
+  name:"simple specification prompt real handler: "+scenario.label,
   permissions:{read:true,env:false,net:false},
   fn:async()=>{
     setSpecificationAssistanceInOfflineFixture(true);
