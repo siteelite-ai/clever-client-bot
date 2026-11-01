@@ -1,5 +1,38 @@
 # Shared customer-input clarification contract
 
+> **DO NOT MERGE: live acceptance failed on 2026-11-01.** The controller can
+> honor a declared clarification, but the model can still omit it and choose
+> an application-critical classification without customer evidence. A live
+> drill-bit query and its continuation both failed; exact VVG control passed.
+> Offline results below are not semantic live acceptance. Production unchanged.
+
+## Live acceptance follow-up
+
+Four messages were sent in the approved closed-preview budget. Initial head
+`19283c30`: clarification delivery failed. Head `eb069a59`: API facet keys are
+now exposed and constrained in the derived schema, with rejection diagnostics,
+but the model selected an advisory concrete bit without knowing wall material.
+The subsequent concrete/8 mm/SDS-plus reply was classified as continuation,
+yet no server-issued task question existed, so discovery lost the original
+product noun. Do not bypass the noun/source guard to make that test green.
+
+Request IDs: `8f5a00f4-e5a3-4392-a6ee-dfce5586774a` (initial failure),
+`69edd1c2-6556-414c-871a-debac304aa2e` (no question),
+`b3f2383a-d57e-454f-9e49-fcbd94cf6079` (continuation failure),
+`75099ad9-40cc-4478-a1ca-267cf66a4cff` (exact cable control).
+
+Required next design: mandatory readiness decision in the existing reasoning
+step; explicit separation of customer facts versus assumptions; server-owned
+task context before first render; preserve exact/browse paths and all product
+proof gates. This is not yet implemented or live-verified. Do not claim the
+current optional extension enforces clarification universally.
+
+The full local report and artifacts are in the parent workspace under
+`outputs/qa-pr145-preview-20261101/`. Cleanup of the expired QA secret records
+remains pending (Management DELETE 403 and disconnected browser). Local relay
+is stopped, expired access is independently denied, and local credential file
+is removed. User has explicitly authorized deletion of that exact pair.
+
 Base: `bc85aadbbe6d390043efe1fb5e555c493995d7f7` (released PR144).
 Branch: `feat/selection-uncertainty-contract-20261101`.
 
