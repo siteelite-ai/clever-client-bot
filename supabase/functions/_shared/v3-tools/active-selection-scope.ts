@@ -1,5 +1,6 @@
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
 import { isGroundingPresenceFreeformAnswer } from "./selection-readiness.ts";
+import { explicitCableSpecification } from "./specification-assistance.ts";
 
 /**
  * A completed server response, not widget history or client slots, owns the
@@ -585,6 +586,9 @@ export function isVerifiedFreeformReadinessAnswer(
   // a new product request or a reference to previously rendered cards.
   if (verifiedSlot.facet_key === "grounding_presence") {
     return isGroundingPresenceFreeformAnswer(raw);
+  }
+  if (verifiedSlot.facet_key === "engineering_specification") {
+    return explicitCableSpecification(raw) !== null;
   }
   const answer = scopedSelectionObject(value);
   const words = answer.split(" ").filter(Boolean);

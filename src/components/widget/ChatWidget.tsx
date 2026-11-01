@@ -3,6 +3,7 @@ import { MessageSquare, X, Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatMessage, Product, QuickReply } from '@/types';
 import ReactMarkdown from 'react-markdown';
+import { SpecificationActions, specificationAssistanceFromSlots } from './SpecificationActions';
 
 interface ChatWidgetProps {
   isPreview?: boolean;
@@ -326,6 +327,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     { id: mid('welcome'), role: 'assistant', content: WELCOME_MESSAGE, timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
   const conversationIdRef = useRef(crypto.randomUUID());
@@ -406,6 +408,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     // appending to the previous streaming one. Set by onTurnBreak /
     // onProductsBlock; cleared automatically once a new bubble is created.
     let bubbleSealed = false;
+    let specificationAssistance: ReturnType<typeof specificationAssistanceFromSlots> = null;
+    let assistanceTurnComplete = false;
 
     const upsertAssistant = (
       updater: (prev: ChatMessage[]) => ChatMessage[]
@@ -501,11 +505,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         else console.log(`[Widget v3] tool ${ev.tool} → ${ev.summary} (${ev.duration_ms}ms)`);
       },
       onDiagnostic: (ev) => {
+        assistanceTurnComplete = ev.phase === 'complete' && !ev.error;
         console.info(`[Widget v3] request=${ev.log_id ?? 'unavailable'} phase=${ev.phase} products=${ev.products_count ?? '?'}`);
       },
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
         setDialogSlots(updatedSlots);
+        specificationAssistance = specificationAssistanceFromSlots(updatedSlots);
       },
       onQuickReplies: (replies) => {
         console.log('[Widget] Received quick_replies:', JSON.stringify(replies));
@@ -557,7 +563,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }, 1000);
       },
       onDone: () => {
-        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
+        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')).map(m =>
+          assistanceTurnComplete && specificationAssistance && m.id === streamMsgId && m.content === specificationAssistance.question
+            ? {...m,specificationAssistance:{summary:specificationAssistance.summary}} : m));
         setIsLoading(false);
         sendingRef.current = false;
         setPendingQuickReply(null);
@@ -697,6 +705,11 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                     </div>
                   )}
 
+                  {message.role === 'assistant' && message.specificationAssistance &&
+                    message.id === messages.at(-1)?.id && !isLoading && <SpecificationActions
+                      summary={message.specificationAssistance.summary}
+                      onSpecify={() => inputRef.current?.focus()}
+                    />}
                   {message.role === 'assistant' && message.quickReplies && message.quickReplies.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
                       {message.quickReplies.map((qr, i) => {
@@ -751,6 +764,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           <div className="flex flex-col gap-1">
             <div className="flex gap-2">
               <input
+                ref={inputRef}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value.slice(0, 2000))}

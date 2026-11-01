@@ -19,6 +19,8 @@ export interface ProposeClarificationInput {
     token: string;
     /** Server-proven taxonomy context for the next dialogue turn. */
     resolved_category?: string;
+    /** Server-issued, non-calculating specification/handoff workflow. */
+    assistance?: { version: 1; summary?: string; deferred_facets?: string[] };
   };
 }
 

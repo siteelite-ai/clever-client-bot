@@ -1099,7 +1099,7 @@ Deno.test("KG mounting-mode chip cannot substitute for intended equipment", () =
   ), null);
 });
 
-Deno.test("underground cable needs phase chip, load, core count and PE separately", () => {
+Deno.test("underground cable needs phase chip, load, core count, PE and route length separately", () => {
   const request = "Какой кабель подойдет для прокладки в земле?";
   const phase = progressiveReadiness(request, "В трубе/ПНД");
   assertEquals(phase?.facet_key, "supply_phase");
@@ -1121,6 +1121,9 @@ Deno.test("underground cable needs phase chip, load, core count and PE separatel
   )?.facet_key, "grounding_presence");
   assertEquals(progressiveReadiness(
     request, "В трубе/ПНД", "220 В, 1 фаза", "5 кВт", "С заземлением", "3 жилы",
+  )?.facet_key, "line_length");
+  assertEquals(progressiveReadiness(
+    request, "В трубе/ПНД", "220 В, 1 фаза", "5 кВт", "С заземлением", "3 жилы", "25 м",
   ), null);
 });
 
@@ -1168,7 +1171,8 @@ Deno.test("underground cable PE decision completes only its actual missing axis"
     "Заземление есть",
     "Заземления нет",
   ]) {
-    assertEquals(progressiveReadiness(request, ...answers, decision), null, decision);
+    assertEquals(progressiveReadiness(request, ...answers, decision)?.facet_key, "line_length", decision);
+    assertEquals(progressiveReadiness(request, ...answers, decision, "25 м"), null, decision);
   }
   for (const unknown of ["PE?", "Не знаю, есть ли заземление"]) {
     assertEquals(
@@ -1181,6 +1185,18 @@ Deno.test("underground cable PE decision completes only its actual missing axis"
     progressiveReadiness(request, ...answers, "Да, одна из четырёх жил — защитная PE")?.facet_key,
     "grounding_presence",
   );
+});
+
+Deno.test("grounding facts survive an unrelated selection question and subject-predicate word order", () => {
+  for (const fact of ["Одна жила защитная PE", "Жила защитная", "Жила PE", "Одна жила — защитная PE"]) {
+    assertEquals(parseGroundingPresenceDecision(fact), "present", fact);
+    const request = `Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, ${fact}; длина линии 25 м.`;
+    assertEquals(selectReadinessClarification(request), null, request);
+  }
+  for (const fact of ["Одна жила защитная PE?", "Одна жила не защитная", "Жила PEN", "Жила PE, но не знаю", "Жила PE и PE нет"]) {
+    assertEquals(parseGroundingPresenceDecision(fact), null, fact);
+  }
+  assertEquals(parseGroundingPresenceDecision("Есть ли PE? PE есть"), null);
 });
 
 Deno.test("floodlight cable length never masquerades as mounting height", () => {

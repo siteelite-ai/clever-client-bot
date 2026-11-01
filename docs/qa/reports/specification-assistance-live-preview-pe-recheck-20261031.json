@@ -1,0 +1,195 @@
+{
+  "suite_file": "specification-assistance-preview-20261031.json",
+  "suite_version": 3,
+  "suite_sha256": "10d5337009cbbcd0fc04a01f3ecd311fa954ae06d8a03907781d1b8be0ac5191",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-31T10:43:33.865Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-closure-preview",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 2,
+  "requested_repetitions": {
+    "underground-known-conditions-handoff": 1,
+    "unchanged-motor-initial-question": 1
+  },
+  "cases": [
+    {
+      "id": "underground-known-conditions-handoff",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_underground-known-conditions-handoff_base_1793443417625_1",
+          "turns": [
+            {
+              "message": "Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1546,
+              "network_attempts": 1,
+              "log_id": "a7d53767-f558-4ad9-808e-98a042bfaf09",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Марка, число жил и сечение кабеля уже определены в паспорте оборудования или проекте?",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "Нет, нужна помощь",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1278,
+              "network_attempts": 1,
+              "log_id": "051c5a63-7499-4d17-b3c8-fdae496ecbb1",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Известные условия собраны. Марку и сечение нужно подтвердить у технического специалиста. Скопируйте сводку для обращения к менеджеру. Когда параметры будут определены, я найду товары и сравню цены. Заявка автоматически не отправлялась.\n\nЗапрос для технического специалиста. Марка и сечение кабеля ещё не подтверждены.\n\nКакой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м.\n\nУкажите марку, число жил и сечение, когда они будут известны.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "freeform",
+                "facet_key": "engineering_specification",
+                "options_count": 0
+              },
+              "previous_clarification_choice": {
+                "mode": "options",
+                "facet_key": "specification_status",
+                "options_count": 2,
+                "values": [
+                  "Да, укажу марку и сечение",
+                  "Нет, нужна помощь"
+                ]
+              },
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "unchanged-motor-initial-question",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "session_87e783a6-894d-4e15-9d0a-22f0b454ffef",
+          "turns": [
+            {
+              "message": "Подберите автомат для двигателя асинхронный 3 кВт",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 1187,
+              "network_attempts": 1,
+              "log_id": "636e5b08-118d-4ca8-9536-3b055e96e39b",
+              "diagnostic_error": null,
+              "products_count": 0,
+              "unique_products_count": 0,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [],
+              "text": "Для выбора автомата двигателя нужны номинальный рабочий ток по шильдику, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
+              "completed": true,
+              "conversation_boundary": {
+                "mode": "new_task",
+                "sessionId": "session_87e783a6-894d-4e15-9d0a-22f0b454ffef"
+              },
+              "selection_contract": null,
+              "clarification_choice": {
+                "mode": "options",
+                "facet_key": "supply_phase",
+                "options_count": 2,
+                "values": [
+                  "220 В, 1 фаза",
+                  "380 В, 3 фазы"
+                ]
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "catalog_preflight": {
+    "ok": true,
+    "status": "ready",
+    "http_status": 200,
+    "checks": {
+      "categories": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "products": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "facets": {
+        "status": "ok",
+        "http_status": 200
+      },
+      "article_filter": {
+        "status": "ok",
+        "http_status": 200
+      }
+    },
+    "duration_ms": 3758
+  },
+  "finished_at": "2026-10-31T10:43:41.649Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 2,
+    "recorded_cases": 2,
+    "planned_runs": 2,
+    "recorded_runs": 2,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "a7d53767-f558-4ad9-808e-98a042bfaf09",
+    "051c5a63-7499-4d17-b3c8-fdae496ecbb1",
+    "636e5b08-118d-4ca8-9536-3b055e96e39b"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}
