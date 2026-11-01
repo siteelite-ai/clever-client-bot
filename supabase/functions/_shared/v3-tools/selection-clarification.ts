@@ -90,6 +90,8 @@ export function resolveSelectionClarification(
       caption?: string;
       values?: readonly { value?: string }[];
     }[];
+    /** Server-only opt-in after a subject value was checked against live data. */
+    allowSingleLiveChoice?: boolean;
   },
   observeRejection?: (reason: string) => void,
 ):
@@ -108,7 +110,7 @@ export function resolveSelectionClarification(
   ) return reject("invalid_question_shape");
   if (!bounded(input.facet_key, 1, 128)) return reject("invalid_facet_key");
   if (!Array.isArray(input.options) ||
-    input.options.length === 1 || input.options.length > 5
+    (input.options.length === 1 && !context.allowSingleLiveChoice) || input.options.length > 5
   ) return reject("invalid_options_count");
   const facet = context.facets.find((item) => item.key === input.facet_key);
   if (input.options.length && !facet) return reject("unknown_live_facet");

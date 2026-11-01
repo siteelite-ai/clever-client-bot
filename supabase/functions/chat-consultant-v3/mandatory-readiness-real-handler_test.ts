@@ -66,8 +66,47 @@ async function scenario(
     | "specified"
     | "mislabelled_ready"
     | "browse"
-    | "replacement",
+    | "replacement"
+    | "subject"
+    | "subject_single"
+    | "subject_other"
+    | "subject_literal",
 ) {
+  const subjectMode = mode.startsWith("subject");
+  const subjectPhrase = mode === "subject_other" ? "фиксатор" : "сверло",
+    subjectClass = mode === "subject_other"
+      ? "распорный анкер"
+      : "бур по бетону",
+    siblingClass = mode === "subject_other" ? "заклёпка" : "сверло по металлу";
+  const subjectChoices = mode === "subject_literal" ? [] : [
+    { value_ru: subjectClass, products_count: 1 },
+    ...(mode === "subject_single"
+      ? []
+      : [{ value_ru: siblingClass, products_count: 1 }]),
+  ];
+  const scenarioLeaf = subjectMode
+    ? mode === "subject_other"
+      ? "Материалы для фиксации"
+      : "Материалы для сверления"
+    : leaf;
+  const scenarioProducts = subjectMode
+    ? products.map((p, i) => ({
+      ...p,
+      category: scenarioLeaf,
+      pagetitle: mode === "subject_literal"
+        ? "Сверло для стены Бетон Fixture " + p.id
+        : (i === 1 ? siblingClass : subjectClass) + " Fixture " + p.id,
+      options: [...p.options, {
+        key: "item_kind",
+        caption_ru: "Вид изделия",
+        value_ru: i === 1 ? siblingClass : subjectClass,
+      }, {
+        key: "diameter",
+        caption_ru: "Диаметр, мм",
+        value_ru: i === 2 ? "10" : "8",
+      }],
+    }))
+    : products;
   const previousFetch = globalThis.fetch,
     previousEnv = Deno.env.get,
     previousInterval = globalThis.setInterval;
@@ -150,7 +189,7 @@ async function scenario(
         if (url.pathname === "/api/categories") {
           return json({
             data: {
-              results: [{ id: 1, pagetitle: leaf, children: [] }],
+              results: [{ id: 1, pagetitle: scenarioLeaf, children: [] }],
               pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
             },
           });
@@ -158,20 +197,42 @@ async function scenario(
         if (url.pathname === "/api/categories/options") {
           return json({
             data: {
-              category: { id: 1, pagetitle: leaf, total_products: 3 },
-              options: [{
-                key: "base_material",
-                caption_ru: "Материал основания",
-                type: "string",
-                values: [{ value_ru: "Бетон", products_count: 3 }],
-              }],
+              category: { id: 1, pagetitle: scenarioLeaf, total_products: 3 },
+              options: [
+                {
+                  key: "base_material",
+                  caption_ru: "Материал основания",
+                  type: "string",
+                  values: [{ value_ru: "Бетон", products_count: 3 }],
+                },
+                ...(subjectMode && subjectChoices.length
+                  ? [{
+                    key: "item_kind",
+                    caption_ru: "Вид изделия",
+                    type: "string",
+                    values: subjectChoices,
+                  }]
+                  : []),
+                ...(subjectMode
+                  ? [{
+                    key: "diameter",
+                    caption_ru: "Диаметр, мм",
+                    type: "number",
+                    unit: "мм",
+                    values: [{ value_ru: "8", products_count: 2 }, {
+                      value_ru: "10",
+                      products_count: 1,
+                    }],
+                  }]
+                  : []),
+              ],
             },
           });
         }
         if (url.pathname === "/api/products") {
           return json({
             data: {
-              results: products,
+              results: scenarioProducts,
               pagination: { page: 1, pages: 1, total: 3 },
             },
           });
@@ -180,6 +241,22 @@ async function scenario(
       if (url.toString() === "https://openrouter.ai/api/v1/chat/completions") {
         modelCalls[turn]++;
         const body = await request.json();
+        if (
+          subjectMode &&
+          request.headers.get("X-Title") === "220volt-v3-category-resolver"
+        ) {
+          return json({
+            choices: [{
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({
+                  candidates: [{ pagetitle: scenarioLeaf, confidence: 0.99 }],
+                }),
+                tool_calls: [],
+              },
+            }],
+          });
+        }
         if (
           body.tool_choice?.function?.name !== "declare_selection_reasoning"
         ) {
@@ -204,9 +281,20 @@ async function scenario(
           "source replacement retains its own proof protocol",
         );
         const known = turn === 1 || mode === "specified" ||
-          mode === "unowned" || mode === "browse";
+          mode === "unowned" || mode === "browse" || subjectMode;
         const empty = (turn === 1 && mode === "new_topic") || mode === "browse";
         const args = {
+          ...(schema.required.includes("selection_subject")
+            ? {
+              selection_subject: {
+                customer_phrase: subjectMode
+                  ? subjectPhrase
+                  : "монтажные крепления",
+                catalog_classification_id:
+                  subjectMode && mode !== "subject_literal" ? "f1v0" : "",
+              },
+            }
+            : {}),
           ...(mode !== "missing" && mode !== "replacement"
             ? {
               selection_readiness: {
@@ -226,13 +314,25 @@ async function scenario(
           reasoning: empty || mode === "replacement"
             ? "Покажу монтажные крепления из каталога для выбора."
             : known
-            ? "Подбираю монтажные крепления для стены; Материал основания: Бетон указан клиентом."
+            ? subjectMode
+              ? `Подбираю ${
+                turn === 1 && mode !== "subject_literal"
+                  ? subjectClass
+                  : subjectPhrase
+              } для стены; Материал основания: Бетон указан клиентом. Диаметр изделия — 8 мм.`
+              : "Подбираю монтажные крепления для стены; Материал основания: Бетон указан клиентом."
             : "",
           retrieval_query: known || mode === "replacement"
-            ? "монтажные крепления"
+            ? subjectMode
+              ? turn === 1 && mode !== "subject_literal"
+                ? subjectClass
+                : subjectPhrase
+              : "монтажные крепления"
             : "",
-          measurement_scope: "not_applicable",
-          compatible_classifications: [],
+          measurement_scope: subjectMode ? "per_product" : "not_applicable",
+          compatible_classifications: subjectMode && mode !== "subject_literal"
+            ? ["f1v0"]
+            : [],
           excluded_classifications: [],
           required_facet_values: known && !empty
             ? (schema.properties.required_facet_values.items.enum ?? [])
@@ -263,16 +363,29 @@ async function scenario(
         ? "Предложи аналоги монтажного крепления Alpha 3 м"
         : mode === "browse"
         ? "Покажи монтажные крепления"
+        : subjectMode
+        ? `Подбери ${subjectPhrase} для стены. Бетон, диаметр ${subjectPhrase} 8 мм`
         : mode === "specified"
         ? `${initial}. Бетон`
         : initial,
     ];
-    if (["roundtrip", "forged", "new_topic", "progress"].includes(mode)) {
+    if (
+      [
+        "roundtrip",
+        "forged",
+        "new_topic",
+        "progress",
+        "subject",
+        "subject_single",
+      ].includes(mode)
+    ) {
       messages.push(
         mode === "new_topic"
           ? "Новая тема. Покажи монтажные крепления"
           : mode === "progress"
           ? "покажи"
+          : subjectMode
+          ? subjectClass
           : "Бетон",
       );
     }
@@ -281,7 +394,11 @@ async function scenario(
     for (turn = 0; turn < messages.length; turn++) {
       if (turn === 1) {
         const issued = pending(result[0]);
-        assert(issued, "first turn must issue a real pending question");
+        assert(
+          issued,
+          "first turn must issue a real pending question: " +
+            JSON.stringify(logs[0]?.steps),
+        );
         const echoed = structuredClone(issued);
         if (mode === "forged") echoed.slot_id = "forged-slot";
         slots = { pending_clarification: echoed };
@@ -361,6 +478,91 @@ Deno.test({
     assert(
       protocol(r.turns[1]).some((e) => e.type === "products_block"),
       JSON.stringify(r.logs[1].steps),
+    );
+  },
+});
+
+Deno.test({
+  name:
+    "strict HTTP: lexical category gap asks a live class and a verified choice reaches cards without a sibling or conflicting diameter",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject");
+    const issued = pending(s.turns[0]);
+    assert(issued);
+    assertEquals((issued.options as Event[]).map((o) => o.value), [
+      "бур по бетону",
+      "сверло по металлу",
+    ]);
+    assert(
+      !s.requests[0].some((u) => new URL(u).pathname === "/api/products"),
+      "unconfirmed class must not search products",
+    );
+    const cards = protocol(s.turns[1]).filter((e) =>
+      e.type === "products_block"
+    );
+    assert(cards.length > 0, JSON.stringify(s.logs[1].steps));
+    assertEquals(
+      cards.reduce((n, e) => n + Number(e.count), 0),
+      1,
+      JSON.stringify({
+        cards,
+        steps: s.logs[1].steps.filter((x) =>
+          /criteria|facet|subject|render/.test(x.step)
+        ),
+      }),
+    );
+    assert(
+      s.logs[1].steps.some((s) =>
+        s.step === "v3_selection_subject_decision" && s.meta?.status === "ready"
+      ),
+    );
+    assert(s.requests[1].some((u) => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name:
+    "strict HTTP: a subject declaration cannot override the earlier rejected category guard",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_other");
+    assert(
+      s.logs[0].steps.some((s) =>
+        s.step === "v3_discovery_result_target_mismatch"
+      ),
+    );
+    assert(
+      !s.logs[0].steps.some((s) => s.step === "v3_selection_subject_decision"),
+    );
+    assert(!protocol(s.turns[0]).some((e) => e.type === "products_block"));
+    assert(!s.requests[0].some((u) => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name:
+    "strict HTTP: singleton live class uses one real chip and completes the same verified subject roundtrip",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_single");
+    const issued = pending(s.turns[0]);
+    assert(issued, JSON.stringify(s.logs[0].steps));
+    assertEquals((issued.options as Event[]).length, 1);
+    assert(
+      protocol(s.turns[1]).some((e) => e.type === "products_block"),
+      JSON.stringify(s.logs[1].steps),
+    );
+  },
+});
+Deno.test({
+  name:
+    "strict HTTP: a literal customer class survives an unrelated category label without an alias or another question",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_literal");
+    assertEquals(pending(s.turns[0]), undefined);
+    assert(
+      protocol(s.turns[0]).some((e) => e.type === "products_block"),
+      JSON.stringify(s.logs[0].steps),
     );
   },
 });

@@ -6,6 +6,12 @@
 > drill-bit query and its continuation both failed; exact VVG control passed.
 > Offline results below are not semantic live acceptance. Production unchanged.
 
+Next candidate (2026-11-02) adds a separate subject decision only for the
+unresolved-target lane: literal extraction or confirmation of a real live class,
+then an independent class-facet card guard. It does not certify model aliases.
+See `selection-subject-contract-20261101.md`. Offline tests pass; this revision
+has not yet passed a live check. The b14b0282 FAIL below remains historical evidence.
+
 ### Mandatory candidate live follow-up (b14b0282)
 
 Exactly three newly authorized messages were tested. The first ambiguous task

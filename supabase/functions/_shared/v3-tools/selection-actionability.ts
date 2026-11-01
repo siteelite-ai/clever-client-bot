@@ -1,6 +1,7 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import { SELECTION_CLARIFICATION_SCHEMA, SELECTION_UNCERTAINTY_POLICY } from "./selection-clarification.ts";
 import { MANDATORY_SELECTION_READINESS_POLICY, SELECTION_READINESS_CONTRACT_SCHEMA } from "./selection-readiness-contract.ts";
+import { SELECTION_SUBJECT_POLICY, selectionSubjectSchema, type SubjectChoice } from "./selection-subject.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
@@ -1220,6 +1221,12 @@ function derivedClassificationChoices(
   return choices;
 }
 
+export function selectionSubjectChoices(facets: DerivedSelectionFacet[]): SubjectChoice[] {
+  return derivedClassificationChoices(facets).map(choice => ({
+    ...choice, key: facets[Number(choice.id.match(/^f(\d+)v/u)?.[1])]?.key ?? "",
+  }));
+}
+
 function classificationLexicalStem(token: string): string {
   const normalized = token.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
   if (/^[a-z0-9]+$/u.test(normalized)) return normalized;
@@ -1621,7 +1628,7 @@ export function buildDerivedSelectionReasoningToolSchema(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
   pairedObjectReference: PairedObjectReference | null = null,
-  policy: { requireReadiness?: boolean } = {},
+  policy: { requireReadiness?: boolean; requireSubject?: boolean } = {},
 ): {
   type: "function";
   function: {
@@ -1663,6 +1670,7 @@ export function buildDerivedSelectionReasoningToolSchema(
         type: "object",
         properties: {
           ...(policy.requireReadiness ? { selection_readiness: SELECTION_READINESS_CONTRACT_SCHEMA } : {}),
+          ...(policy.requireSubject ? { selection_subject: selectionSubjectSchema(selectionSubjectChoices(facets)) } : {}),
           clarification: {
             ...SELECTION_CLARIFICATION_SCHEMA,
             properties: {
@@ -1737,6 +1745,7 @@ export function buildDerivedSelectionReasoningToolSchema(
         },
         required: [
           ...(policy.requireReadiness ? ["selection_readiness"] : []),
+          ...(policy.requireSubject ? ["selection_subject"] : []),
           "reasoning",
           "measurement_scope",
           "compatible_classifications",
@@ -3727,7 +3736,7 @@ export function buildDerivedSelectionReasoningMessages(
   category: string,
   facets: DerivedSelectionFacet[],
   pairedObjectReference: PairedObjectReference | null = null,
-  policy: { requireReadiness?: boolean } = {},
+  policy: { requireReadiness?: boolean; requireSubject?: boolean } = {},
 ): Array<{ role: "system" | "user"; content: string }> {
   const classificationChoices = derivedClassificationChoices(facets);
   const requiredFacetChoices = derivedRequiredFacetChoices(facets, userMessage)
@@ -3792,6 +3801,7 @@ export function buildDerivedSelectionReasoningMessages(
     );
     messages[0].content += ` ${MANDATORY_SELECTION_READINESS_POLICY}`;
   }
+  if (policy.requireSubject) messages[0].content += ` ${SELECTION_SUBJECT_POLICY}`;
   return messages;
 }
 

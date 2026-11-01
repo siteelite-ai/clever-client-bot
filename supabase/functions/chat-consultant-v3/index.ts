@@ -199,6 +199,7 @@ import {
   hasUnresolvedEnvironmentalProtectionObligation,
   hasSelectionMeasurementContext,
   hasSelectionSuitabilityContext,
+  selectionSubjectChoices,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reconcileDerivedRequiredFacetSummary,
@@ -699,6 +700,7 @@ import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
 } from "../_shared/v3-tools/selection-readiness-contract.ts";
+import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
 import {
   extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
@@ -10877,6 +10879,7 @@ async function runExpertLoop(
   // One shared exit for ordinary planning and forced derived reasoning. A
   // declaration of missing customer input is never fed to measurement repair
   // or to search as if it were evidence of compatibility.
+  let resolvedSelectionSubject: SelectionSubject | null = null;
   const finishWithSelectionClarification = (value: unknown, source: string) => {
     if (transientCatalogFailureSeen) {
       return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
@@ -10886,6 +10889,7 @@ async function runExpertLoop(
       request: userMessage,
       category: lastDiscover?.category?.pagetitle,
       facets: lastDiscover?.facets ?? [],
+      allowSingleLiveChoice: source === "selection_subject",
     }, reason => { clarificationRejection = reason; });
     // Keep the established preference policy and source-product proof gate.
     // Neither a model-owned reason label nor a freeform question overrides it.
@@ -10903,7 +10907,7 @@ async function runExpertLoop(
       ? executeProposeClarification({
         ...clarification,
         ...(verified ? { question: verified.question, facet_key: verified.facet_key, options: verified.options } : {}),
-      }, { allowFreeform: true })
+      }, { allowFreeform: true, allowSingleChoice: source === "selection_subject" })
       : null;
     const delivery = accepted?.ok ? acceptedClarificationDelivery(accepted) : null;
     const question = delivery?.question ??
@@ -10929,7 +10933,7 @@ async function runExpertLoop(
     } });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
-  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string) => {
+  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string, requireSubject = false) => {
     const decision = resolveMandatorySelectionReadiness(args, {
       request: userMessage,
       // Only current + already verified task context, never model/catalog prose.
@@ -10944,7 +10948,34 @@ async function runExpertLoop(
       known:decision.status === "invalid" ? null : decision.known,
       missing:decision.status === "invalid" ? null : decision.missing,
     }});
-    if (decision.status === "ready") return null;
+    if (decision.status === "ready") {
+      if (!requireSubject) return null;
+      const subject = resolveSelectionSubject(args.selection_subject, {
+        request: userMessage, category: lastDiscover?.category?.pagetitle,
+        choices: selectionSubjectChoices(lastDiscover?.facets ?? []),
+      });
+      const changedSubject = subject.status === "ready" && resolvedSelectionSubject &&
+        subject.subject.target !== resolvedSelectionSubject.target;
+      steps.push({step:"v3_selection_subject_decision",ms:now(),meta:{
+        status:changedSubject ? "invalid" : subject.status, rejection:changedSubject ? "subject_changed_during_repair" : subject.status === "invalid" ? subject.reason : null,
+        target:subject.status === "ready" ? subject.subject.target : null,
+      }});
+      if (subject.status === "ready" && !changedSubject) {
+        resolvedSelectionSubject = subject.subject;
+        activeSelectionTarget = subject.subject.target;
+        // Only a customer-confirmed exact live type may stand in for the
+        // original class spelling. The independent class facet stays binding
+        // on final cards; numbers and other frozen criteria are untouched.
+        if (subject.subject.criterion) {
+          semanticallyMappedCustomerPhrases.add(subject.subject.customerPhrase);
+        }
+        return null;
+      }
+      if (subject.status === "needs_input") {
+        const outcome = finishWithSelectionClarification(subject.clarification, "selection_subject");
+        if (outcome) return outcome;
+      }
+    }
     if (decision.status === "needs_input") {
       const outcome = finishWithSelectionClarification(decision.clarification, source);
       if (outcome) return outcome;
@@ -11621,12 +11652,19 @@ async function runExpertLoop(
       "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ): string[] => {
+    const subjectCriterion = resolvedSelectionSubject?.criterion;
+    const subjectSafeIds = subjectCriterion ? (() => {
+      const report = applyCriteriaGate(ids.map(id => ctx.cache.get(id))
+        .filter((p): p is ProductFull => Boolean(p)), [subjectCriterion]);
+      steps.push({step:"v3_selection_subject_card_gate",ms:now(),meta:{before:ids.length,after:report.passed_ids.length}});
+      return ids.filter(id => report.passed_ids.includes(id));
+    })() : ids;
     const sectionSafeIds = activeSelectionScope
-      ? ids.filter((id) => productMatchesActiveSection(
+      ? subjectSafeIds.filter((id) => productMatchesActiveSection(
         ctx.cache.get(id)?.leaf_category,
         activeSelectionScope,
       ))
-      : ids;
+      : subjectSafeIds;
     // The active identity is an independent server-verified requirement. A
     // named token inferred from this turn or older prose must not replace it.
     const scopeSafeIds = activeSelectionScope
@@ -12338,6 +12376,8 @@ async function runExpertLoop(
       // do not reinterpret that established proof as missing customer input.
       const requireSelectionReadiness = SELECTION_READINESS_REQUIRED &&
         !replacementIntent && !isReplacementProofRequest(userMessage);
+      const requireSelectionSubject = requireSelectionReadiness && derivedReasoningStep &&
+        !ensureActiveSelectionTarget(userMessage, "pre_reasoning_subject");
       const timeoutDecision = agentStepTimeoutDecision({
         intentMode,
         phase: agentPhase,
@@ -12643,7 +12683,7 @@ async function runExpertLoop(
             lastDiscover.category?.pagetitle ?? "",
             lastDiscover.facets ?? [],
             presearchPairedObjectReference,
-            { requireReadiness: requireSelectionReadiness },
+            { requireReadiness: requireSelectionReadiness, requireSubject: requireSelectionSubject },
           );
           // Carry the already compiled server relation into BOTH model calls.
           // Do not force the model to rediscover it from a partial enum list,
@@ -12684,7 +12724,7 @@ async function runExpertLoop(
             lastDiscover.facets ?? [],
             userMessage,
             presearchPairedObjectReference,
-            { requireReadiness: requireSelectionReadiness },
+            { requireReadiness: requireSelectionReadiness, requireSubject: requireSelectionSubject },
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
@@ -12846,7 +12886,7 @@ async function runExpertLoop(
             ),
           );
           if (requireSelectionReadiness) {
-            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning");
+            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
             if (outcome) return outcome;
           } else if (declarationCall && "clarification" in declarationCall.args) {
             const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
@@ -13496,7 +13536,7 @@ async function runExpertLoop(
                 ),
               );
               if (requireSelectionReadiness) {
-                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair");
+                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
                 if (outcome) return outcome;
               } else if (declarationCall && "clarification" in declarationCall.args) {
                 const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
