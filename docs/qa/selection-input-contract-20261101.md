@@ -6,6 +6,30 @@
 > drill-bit query and its continuation both failed; exact VVG control passed.
 > Offline results below are not semantic live acceptance. Production unchanged.
 
+### Mandatory candidate live follow-up (b14b0282)
+
+Exactly three newly authorized messages were tested. The first ambiguous task
+now issued the material question (`d8cafb4f-5030-45d8-a438-018066409545`). The
+answer used a verified server pending slot and discovery received the original
+product request plus concrete/8 mm/SDS-plus (`2c1d4425-f5ba-4a6f-89ca-c0a407bcae45`).
+Readiness was ready (3 known), search returned one candidate, but final cards
+were still absent: **end-to-end FAIL**, not acceptance. The exact cable control
+passed (`0d1f126a-9862-4c0a-a399-c8d46d501adb`), complete price proof,301 ₸/m.
+
+The actual target bootstrap returns null for the complete scoped request and
+live category «Материалы для сверления». The terminal paths require a nonempty
+verified target, and the log has neither target bootstrap nor terminal gate
+summary. Next: preserve a separately verified customer product class throughout
+planning/search/render, without a category self-declaration, synonym dictionary,
+or bypass of product proof. The returned candidate's suitability is not proven.
+No further code change or paid test was performed for this new blocker.
+
+The new exact QA pair ending `1793564586_0e5ba518e3a5a92fb30a549bd1636db9`
+was removed after separate confirmation: metadata confirms zero temporary
+secrets, permanent metadata and public code/JWT unchanged. Removed-key probe403;
+local relay stopped and credential file removed. Full evidence is in parent
+workspace `outputs/qa-pr145-mandatory-live-20261101/REPORT.md`. Keep PR145 draft.
+
 ## Live acceptance follow-up
 
 Four messages were sent in the approved closed-preview budget. Initial head
