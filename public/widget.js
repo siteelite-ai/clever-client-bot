@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-3a881d860c27f8d0';
+  var WIDGET_VERSION = 'widget-bdc222dbbd5c4e7f';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -915,14 +915,6 @@
       cursor: pointer;
     }
 
-    .volt-quick-replies .volt-copy-status {
-      color: white;
-      font-size: 13px;
-      line-height: 1.35;
-      flex-basis: 100%;
-      overflow-wrap: anywhere;
-    }
-
     .volt-quick-replies a.volt-quick-reply {
       text-decoration: none;
       display: inline-flex;
@@ -1215,47 +1207,19 @@
     group.setAttribute('aria-label', boundState.mode === 'freeform'
       ? 'Ответить на уточнение' : 'Варианты ответа');
     var chosen = false;
-    // Local handoff actions are bound to the same completed visible turn as
-    // the existing choices. They never send a chat request or submit a lead.
+    // Specification is typed directly; only the manager contact is an action.
     var assistance = isPlainRecord(pending.scope) && pending.scope.assistance;
-    var assistanceSummary = isPlainRecord(assistance) && assistance.version === 1 &&
-      typeof assistance.summary === 'string' && assistance.summary.length > 0 &&
-      assistance.summary.length <= 4000 ? assistance.summary : null;
-    if (assistanceSummary && pending.facet_key === 'engineering_specification') {
-      var copyButton = document.createElement('button');
-      copyButton.type = 'button';
-      copyButton.className = 'volt-quick-reply';
-      copyButton.textContent = 'Скопировать условия';
-      var copyStatus = document.createElement('span');
-      copyStatus.className = 'volt-copy-status';
-      copyStatus.setAttribute('role', 'status');
-      copyButton.addEventListener('click', async function() {
-        if (isLoading || activeQuickRepliesGroup !== group || !group.isConnected ||
-            sessionId !== expectedSessionId || !choiceMatchesPendingSlot(boundState, dialogSlots)) return;
-        if (expireConversationIfNeeded(true)) return;
-        try {
-          if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('clipboard unavailable');
-          await navigator.clipboard.writeText(assistanceSummary);
-          if (group.isConnected) {
-            copyStatus.textContent = 'Условия скопированы';
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-          }
-        } catch(e) {
-          if (group.isConnected) {
-            copyStatus.textContent = 'Не удалось скопировать автоматически. Выделите сводку в сообщении.';
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-          }
-        }
-      });
-      group.appendChild(copyButton);
+    var specificationPrompt = isPlainRecord(assistance) && assistance.version === 1 &&
+      pending.facet_key === 'engineering_specification' && boundState.mode === 'freeform';
+    if (specificationPrompt) {
+      var managerPhone = typeof assistance.manager_phone === 'string' && /^\+7\d{10}$/.test(assistance.manager_phone)
+        ? assistance.manager_phone : null;
       var managerLink = document.createElement('a');
       managerLink.className = 'volt-quick-reply';
       managerLink.textContent = 'Связаться с менеджером';
-      managerLink.href = 'https://220volt.kz/kontaktyi/';
-      managerLink.target = '_blank';
-      managerLink.rel = 'noopener noreferrer';
+      managerLink.href = managerPhone ? 'tel:' + managerPhone : 'https://220volt.kz/kontaktyi/';
+      if (!managerPhone) { managerLink.target = '_blank'; managerLink.rel = 'noopener noreferrer'; }
       group.appendChild(managerLink);
-      group.appendChild(copyStatus);
     }
     boundState.replies.forEach(function(reply) {
       var chip = document.createElement('button');
@@ -1282,8 +1246,7 @@
     var customReply = document.createElement('button');
     customReply.type = 'button';
     customReply.className = 'volt-custom-reply';
-    customReply.textContent = isPlainRecord(assistance) && assistance.version === 1 &&
-      pending.facet_key === 'engineering_specification' ? 'Указать марку и сечение' : 'Напишу свой вариант';
+    customReply.textContent = 'Напишу свой вариант';
     customReply.addEventListener('click', function() {
       if (chosen || isLoading || activeQuickRepliesGroup !== group ||
           !group.isConnected || sessionId !== expectedSessionId) return;
@@ -1294,7 +1257,7 @@
       }
       if (isOpen) input.focus();
     });
-    group.appendChild(customReply);
+    if (!specificationPrompt) group.appendChild(customReply);
     messagesContainer.appendChild(group);
     activeQuickRepliesGroup = group;
     messagesContainer.scrollTop = messagesContainer.scrollHeight;

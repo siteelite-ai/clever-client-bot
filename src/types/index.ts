@@ -44,7 +44,7 @@ export interface ChatMessage {
   timestamp: Date;
   products?: Product[];
   quickReplies?: QuickReply[];
-  specificationAssistance?: { summary?: string };
+  specificationAssistance?: { managerPhone?: string };
 }
 
 // Product from 220volt API

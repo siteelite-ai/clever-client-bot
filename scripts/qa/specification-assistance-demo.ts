@@ -24,6 +24,10 @@ Deno.serve({hostname:"127.0.0.1",port:8766},async req=>{
   const supplied=body.dialogSlots?.pending_clarification;
   const verified=previous && supplied?.slot_id===previous.slot_id ? previous:null;
   const result=resolveSpecificationAssistance({message:String(body.message??""),verifiedSlot:verified,newTask:/^Новая тема[.!]/iu.test(body.message??""),enabled:true});
+  if(result?.scope?.assistance){
+    result.scope.assistance.manager_phone="+77762206220";
+    result.question+="\n\nЕсли маркировка неизвестна, позвоните менеджеру: +77762206220.";
+  }
   const id=crypto.randomUUID();
   const events:unknown[]=[{v3_event:{type:"diagnostic",log_id:id,phase:"start"}},{choices:[{delta:{content:result?.question??"Локальный симулятор не выполняет каталожный поиск. Поиск маркировки отдельно проверяется штатными тестами."}}]}];
   if(result){

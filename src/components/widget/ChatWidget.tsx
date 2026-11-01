@@ -327,7 +327,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     { id: mid('welcome'), role: 'assistant', content: WELCOME_MESSAGE, timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
   const conversationIdRef = useRef(crypto.randomUUID());
@@ -565,7 +564,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       onDone: () => {
         setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')).map(m =>
           assistanceTurnComplete && specificationAssistance && m.id === streamMsgId && m.content === specificationAssistance.question
-            ? {...m,specificationAssistance:{summary:specificationAssistance.summary}} : m));
+            ? {...m,specificationAssistance:{managerPhone:specificationAssistance.managerPhone}} : m));
         setIsLoading(false);
         sendingRef.current = false;
         setPendingQuickReply(null);
@@ -707,8 +706,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
                   {message.role === 'assistant' && message.specificationAssistance &&
                     message.id === messages.at(-1)?.id && !isLoading && <SpecificationActions
-                      summary={message.specificationAssistance.summary}
-                      onSpecify={() => inputRef.current?.focus()}
+                      managerPhone={message.specificationAssistance.managerPhone}
                     />}
                   {message.role === 'assistant' && message.quickReplies && message.quickReplies.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -764,7 +762,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           <div className="flex flex-col gap-1">
             <div className="flex gap-2">
               <input
-                ref={inputRef}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value.slice(0, 2000))}
