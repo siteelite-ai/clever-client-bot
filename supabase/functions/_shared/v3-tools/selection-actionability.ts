@@ -1,5 +1,6 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import { SELECTION_CLARIFICATION_SCHEMA, SELECTION_UNCERTAINTY_POLICY } from "./selection-clarification.ts";
+import { MANDATORY_SELECTION_READINESS_POLICY, SELECTION_READINESS_CONTRACT_SCHEMA } from "./selection-readiness-contract.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
@@ -1620,6 +1621,7 @@ export function buildDerivedSelectionReasoningToolSchema(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
   pairedObjectReference: PairedObjectReference | null = null,
+  policy: { requireReadiness?: boolean } = {},
 ): {
   type: "function";
   function: {
@@ -1660,6 +1662,7 @@ export function buildDerivedSelectionReasoningToolSchema(
       parameters: {
         type: "object",
         properties: {
+          ...(policy.requireReadiness ? { selection_readiness: SELECTION_READINESS_CONTRACT_SCHEMA } : {}),
           clarification: {
             ...SELECTION_CLARIFICATION_SCHEMA,
             properties: {
@@ -1733,6 +1736,7 @@ export function buildDerivedSelectionReasoningToolSchema(
           },
         },
         required: [
+          ...(policy.requireReadiness ? ["selection_readiness"] : []),
           "reasoning",
           "measurement_scope",
           "compatible_classifications",
@@ -3723,6 +3727,7 @@ export function buildDerivedSelectionReasoningMessages(
   category: string,
   facets: DerivedSelectionFacet[],
   pairedObjectReference: PairedObjectReference | null = null,
+  policy: { requireReadiness?: boolean } = {},
 ): Array<{ role: "system" | "user"; content: string }> {
   const classificationChoices = derivedClassificationChoices(facets);
   const requiredFacetChoices = derivedRequiredFacetChoices(facets, userMessage)
@@ -3778,6 +3783,15 @@ export function buildDerivedSelectionReasoningMessages(
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани обе обязательные границы совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
   messages[0].content += ` ${MEASUREMENT_OWNERSHIP_POLICY}`;
   messages[0].content += ` ${SELECTION_UNCERTAINTY_POLICY} Если требуется уточнение, заполни поле clarification инструмента declare_selection_reasoning; reasoning оставь пустым, measurement_scope=not_applicable, списки критериев пустыми. Контроллер задаст этот вопрос вместо расчёта и поиска. Если данных достаточно, не передавай clarification и заполни обоснование как обычно.`;
+  if (policy.requireReadiness) {
+    // Preserve the legacy policy byte-for-byte when OFF. In the new lane,
+    // eliminate (rather than merely append to) its conflicting instruction.
+    messages[0].content = messages[0].content.replace(
+      "выбери один обоснованный рекомендуемый вариант, назови только его обязательные параметры и, если для него существует общепринятая точная маркировка N×S, явно напиши её.",
+      "не выбирай исполнение по умолчанию, пока критичные исходные данные клиента неизвестны; сначала заполни selection_readiness и уточни неизвестный параметр. При полностью подтверждённых исходных данных обоснуй совместимый вариант и его параметры.",
+    );
+    messages[0].content += ` ${MANDATORY_SELECTION_READINESS_POLICY}`;
+  }
   return messages;
 }
 

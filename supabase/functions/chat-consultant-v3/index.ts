@@ -198,6 +198,7 @@ import {
   hasCompetingMeasuredSelectionTiers,
   hasUnresolvedEnvironmentalProtectionObligation,
   hasSelectionMeasurementContext,
+  hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reconcileDerivedRequiredFacetSummary,
@@ -695,6 +696,10 @@ import {
 } from "../_shared/v3-tools/propose-clarification.ts";
 import { resolveSelectionClarification } from "../_shared/v3-tools/selection-clarification.ts";
 import {
+  mandatorySelectionReadinessEnabled,
+  resolveMandatorySelectionReadiness,
+} from "../_shared/v3-tools/selection-readiness-contract.ts";
+import {
   extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
   resolveScopedCatalogSelectionContinuation,
@@ -948,6 +953,7 @@ const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
     Deno.env.get("OPENROUTER_AGENT_FALLBACK_MODELS"),
   ),
 );
+const SELECTION_READINESS_REQUIRED = mandatorySelectionReadinessEnabled();
 const GENERAL_INQUIRY_MODEL =
   Deno.env.get("OPENROUTER_GENERAL_INQUIRY_MODEL") ??
     "google/gemini-2.5-flash";
@@ -10923,6 +10929,35 @@ async function runExpertLoop(
     } });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
+  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string) => {
+    const decision = resolveMandatorySelectionReadiness(args, {
+      request: userMessage,
+      // Only current + already verified task context, never model/catalog prose.
+      customerEvidence: userMessage,
+      requiresApplicationInputs: hasSelectionSuitabilityContext(userMessage) || hasSelectionMeasurementContext(userMessage),
+      category: lastDiscover?.category?.pagetitle,
+      facets: lastDiscover?.facets ?? [],
+    });
+    steps.push({step:"v3_selection_readiness_decision",ms:now(),meta:{
+      source,status:decision.status,
+      rejection:decision.status === "invalid" ? decision.reason : null,
+      known:decision.status === "invalid" ? null : decision.known,
+      missing:decision.status === "invalid" ? null : decision.missing,
+    }});
+    if (decision.status === "ready") return null;
+    if (decision.status === "needs_input") {
+      const outcome = finishWithSelectionClarification(decision.clarification, source);
+      if (outcome) return outcome;
+      // A falsely declared optional preference is not a licence to search
+      // while a mandatory readiness declaration is unresolved.
+    }
+    if (transientCatalogFailureSeen) return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+    const notice = "Не удалось надёжно проверить исходные данные для подбора. Повторите запрос или обратитесь к менеджеру.";
+    send({type:"delta",content:notice,origin:"server"});
+    finalText += `${finalText ? "\n\n" : ""}${notice}`;
+    steps.push({step:"v3_turn_end",ms:now(),meta:{reason:"selection_readiness_contract_invalid"}});
+    return {finalText,productsRendered,shownProductIds:[...shownIds]};
+  };
   let groundedCompoundSearchTerminal = false;
   type PendingJargonAxisSplit = {
     source: string;
@@ -12298,6 +12333,11 @@ async function runExpertLoop(
       const ctxBytes = JSON.stringify(messages).length;
       const derivedReasoningStep = selectionReasoningOnlyRequired &&
         Boolean(lastDiscover);
+      // Source-product replacements already own a separate verified-facts /
+      // cut-out protocol. Catalog-owned source facts are not customer quotes;
+      // do not reinterpret that established proof as missing customer input.
+      const requireSelectionReadiness = SELECTION_READINESS_REQUIRED &&
+        !replacementIntent && !isReplacementProofRequest(userMessage);
       const timeoutDecision = agentStepTimeoutDecision({
         intentMode,
         phase: agentPhase,
@@ -12603,6 +12643,7 @@ async function runExpertLoop(
             lastDiscover.category?.pagetitle ?? "",
             lastDiscover.facets ?? [],
             presearchPairedObjectReference,
+            { requireReadiness: requireSelectionReadiness },
           );
           // Carry the already compiled server relation into BOTH model calls.
           // Do not force the model to rediscover it from a partial enum list,
@@ -12643,6 +12684,7 @@ async function runExpertLoop(
             lastDiscover.facets ?? [],
             userMessage,
             presearchPairedObjectReference,
+            { requireReadiness: requireSelectionReadiness },
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
@@ -12803,7 +12845,10 @@ async function runExpertLoop(
               toolCall.name === "declare_selection_reasoning"
             ),
           );
-          if (declarationCall && "clarification" in declarationCall.args) {
+          if (requireSelectionReadiness) {
+            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning");
+            if (outcome) return outcome;
+          } else if (declarationCall && "clarification" in declarationCall.args) {
             const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
             if (outcome) return outcome;
           }
@@ -13450,7 +13495,10 @@ async function runExpertLoop(
                   toolCall.name === "declare_selection_reasoning"
                 ),
               );
-              if (declarationCall && "clarification" in declarationCall.args) {
+              if (requireSelectionReadiness) {
+                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair");
+                if (outcome) return outcome;
+              } else if (declarationCall && "clarification" in declarationCall.args) {
                 const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
                 if (outcome) return outcome;
               }

@@ -10,6 +10,12 @@
   __VOLT220_CLOSURE_TEST_SCOPE__?: "closure_preview";
 }).__VOLT220_CLOSURE_TEST_SCOPE__ = "closure_preview";
 
+// Stage the new mandatory contract here before any public rollout. This is
+// isolate-local and cannot be switched on by a browser field or QA header.
+(globalThis as typeof globalThis & {
+  __VOLT220_SELECTION_READINESS_CONTRACT__?: "required";
+}).__VOLT220_SELECTION_READINESS_CONTRACT__ = "required";
+
 // Only this closed QA wrapper may opt the recoverable derived-reasoning retry
 // into an independent provider. The production and ordinary preview wrappers
 // do not set this isolate-local marker, regardless of project-wide env values.

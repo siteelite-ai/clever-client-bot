@@ -21,17 +21,58 @@ Request IDs: `8f5a00f4-e5a3-4392-a6ee-dfce5586774a` (initial failure),
 `b3f2383a-d57e-454f-9e49-fcbd94cf6079` (continuation failure),
 `75099ad9-40cc-4478-a1ca-267cf66a4cff` (exact cable control).
 
-Required next design: mandatory readiness decision in the existing reasoning
+The failed candidate required a mandatory readiness decision in the existing reasoning
 step; explicit separation of customer facts versus assumptions; server-owned
 task context before first render; preserve exact/browse paths and all product
-proof gates. This is not yet implemented or live-verified. Do not claim the
-current optional extension enforces clarification universally.
+proof gates. The next revision implements this contract as described below;
+it has not yet passed live acceptance. Do not claim universal clarification.
+
+## Mandatory revision — offline verified, live gate still open
+
+The existing derived reasoning call now requires a structured decision and a
+list of critical customer inputs in the closed preview. The controller rejects
+missing declarations and invented customer quotes. A declared unknown input
+forces one validated question even if the model labels the task ready. The
+existing server-issued pending slot links the answer to the original task;
+no arbitrary browser history becomes evidence. No extra classifier call is added.
+
+The rollout is isolate-local in `chat-consultant-v3-closure-preview` only.
+Public and ordinary preview defaults remain OFF; no project env was changed.
+The legacy prompt/schema remain unchanged when OFF, including transport test
+fingerprint `5c457500fd3a9a65a5c917d71ec1ff9a970bc913d816a72944574eeb525dfbba`.
+Source-product replacement requests retain their existing verified source-facts
+protocol: catalog-owned source facts are not reclassified as customer quotes.
+Exact retrieval, product proof and engineering-profile guards are not relaxed.
+
+Limits: the model still identifies which inputs are critical. Literal quote
+ownership does not prove semantic relevance or guarantee that no critical input
+was omitted. A malformed declaration stops safely with a notice; it is not a
+successful clarification. The existing 500-character pending scope limit remains.
+
+Latest local evidence (no live provider calls):
+
+- Full Deno regression: **2,153 passed, 0 failed**. The final source-replacement
+  exemption and additional HTTP case were subsequently checked in the target run.
+- Final mandatory contract and real HTTP/SSE handler tests: **20 passed, 0 failed**.
+  Covers question/answer through final cards, forged history/state, a new topic,
+  bare progress command, known input, plain browsing and source-proof preservation.
+- Final Deno typecheck passes.
+- Node QA suite, serial: **451 passed, 0 failed**. Earlier timing failures below
+  remain recorded; no widget timer or assertion was changed to obtain this result.
+
+Next gate: new ambiguous live task + answer + exact lookup control, tied to the
+new deployed source revision. Keep PR145 draft and production unchanged until
+that result is recorded. Offline fixtures are not semantic live acceptance.
 
 The full local report and artifacts are in the parent workspace under
-`outputs/qa-pr145-preview-20261101/`. Cleanup of the expired QA secret records
-remains pending (Management DELETE 403 and disconnected browser). Local relay
-is stopped, expired access is independently denied, and local credential file
-is removed. User has explicitly authorized deletion of that exact pair.
+`outputs/qa-pr145-preview-20261101/`. Cleanup initially failed (Management DELETE
+403 and disconnected browser). The restored browser session subsequently removed
+the exact authorized pair ending `1793556551_4d1e93566d8c949274eb696a7fbcb14a`.
+Independent Management metadata now confirms zero temporary QA secrets, all 23
+permanent secret metadata unchanged, and public code/JWT unchanged (v671,
+bundle `522237f2a785aee9adbcacf3a54ca6954c05f1d78904ceb9707840b68e7a6f69`).
+Version increased only with secret-triggered restarts. Local relay is stopped;
+expired access was independently denied and the local credential file removed.
 
 Base: `bc85aadbbe6d390043efe1fb5e555c493995d7f7` (released PR144).
 Branch: `feat/selection-uncertainty-contract-20261101`.

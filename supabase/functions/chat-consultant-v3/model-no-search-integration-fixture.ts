@@ -14,6 +14,10 @@ const values: Record<string, string> = {
 };
 
 const originalGet = Deno.env.get;
+/** Opt in before importing the real handler in the dedicated strict-lane test. */
+export function enableMandatoryReadinessInOfflineFixture(): void {
+  values.VOLT220_SELECTION_READINESS_REQUIRED = "true";
+}
 export function setSpecificationAssistanceInOfflineFixture(enabled: boolean): void {
   values.VOLT220_SPECIFICATION_ASSISTANCE_ENABLED = String(enabled);
 }
