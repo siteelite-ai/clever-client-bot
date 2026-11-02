@@ -75,3 +75,33 @@ Private boot/admission probe returns403 without a QA key, without paid calls.
 Public686 remains ACTIVE with the same522237f2… bundle/JWTfalse; permanent
 secret metadata unchanged, temporary names empty. These are deployment and
 access-control facts, not live selection acceptance of27d4bb0d.
+
+## Subsequent two-message live control: not a readiness PASS
+
+Exactly2 additionally approved messages were sent to runtime27d4bb0d:
+
+- Full request for a bore for a concrete wall,8mm,SDS-plus: FAIL,
+  request9507888e-28b4-472a-811d-33571624199b,7.4s. Initial live category
+  «Материалы для сверления» was rejected by the category/target guard. Model
+  rediscovery noun«бур» was then rejected as ungrounded, despite its literal
+  occurrence in the request. No product lookup or readiness declaration ran.
+- New-topic exact cable: PASS301KZT/m,98m,
+  request9fb80dd3-c1a7-4634-bc74-7587121c71f0,5.1s; complete18-match price proof.
+
+The lexical category guard ignores substantive words shorter than4 except
+uppercase acronyms; its parent-category relation is also lexical. That code
+was unchanged in27d4, and the new wire was never reached. Do not claim the
+first/rest representation or actual Gemini grammar compiler passed live QA.
+Do not call the generic no-products text proof that no products exist.
+
+Next design work must distinguish literal customer ownership, a live category
+candidate for clarification and an approved search/render class; use live type
+facets plus verified customer confirmation, not product alias lists or a broad
+lowering of guards. Application-object mentions must not authorize sibling
+types (cable for pump must not become pump search). No such additional code
+change has been made in this two-message test turn.
+
+Pair1793627698 was approved and both exact names verified removed. Old access
+returns403, local key file removed, relay stopped after2. Public689/preview302
+retain their previous code hashes/JWT; permanent secret metadata unchanged.
+Persistent live evidence: parent outputs/qa-pr145-two-controls-20261102/.
