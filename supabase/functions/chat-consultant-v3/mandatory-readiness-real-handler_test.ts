@@ -68,6 +68,8 @@ async function scenario(
     | "browse"
     | "replacement"
     | "subject"
+    | "subject_retry"
+    | "subject_oversized"
     | "subject_single"
     | "subject_other"
     | "subject_literal",
@@ -114,6 +116,7 @@ async function scenario(
     logs: Log[] = [],
     requests: string[][] = [[], []],
     modelCalls = [0, 0];
+  const declarationCalls = [0, 0];
   const result: Event[][] = [];
   let turn = 0;
   resetDiscoverCategoryCacheForTest();
@@ -275,6 +278,18 @@ async function scenario(
           });
         }
         const schema = body.tools?.[0]?.function?.parameters;
+        declarationCalls[turn]++;
+        if (mode === "subject_retry" && turn === 1) {
+          // Reproduce the actual transport path without waiting11.5s or
+          // contacting a provider: primary timeout → Gemini schema compiler.
+          if (declarationCalls[turn] === 1) {
+            throw new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError");
+          }
+          assertEquals(body.model, "google/gemini-2.5-flash");
+          if (JSON.stringify(schema).includes('"maxItems"')) {
+            return json({ error: "The specified schema produces a constraint that has too many states for serving." }, 400);
+          }
+        }
         assertEquals(
           schema.required.includes("selection_readiness"),
           mode !== "replacement",
@@ -331,7 +346,7 @@ async function scenario(
             : "",
           measurement_scope: subjectMode ? "per_product" : "not_applicable",
           compatible_classifications: subjectMode && mode !== "subject_literal"
-            ? ["f1v0"]
+            ? Array(mode === "subject_oversized" && turn === 1 ? 7 : 1).fill("f1v0")
             : [],
           excluded_classifications: [],
           required_facet_values: known && !empty
@@ -376,6 +391,8 @@ async function scenario(
         "new_topic",
         "progress",
         "subject",
+        "subject_retry",
+        "subject_oversized",
         "subject_single",
       ].includes(mode)
     ) {
@@ -432,7 +449,7 @@ async function scenario(
         ).map((line) => JSON.parse(line.slice(6))),
       );
     }
-    return { turns: result, logs, requests, modelCalls };
+    return { turns: result, logs, requests, modelCalls, declarationCalls };
   } finally {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = previousInterval;
@@ -518,6 +535,32 @@ Deno.test({
       ),
     );
     assert(s.requests[1].some((u) => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: confirmed class survives primary timeout and compact fallback reaches only the matching card",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_retry");
+    assert(pending(s.turns[0]));
+    assertEquals(s.declarationCalls, [1, 2], "no added repair or paid attempt");
+    assert(s.logs[1].steps.some(s => s.step === "v3_derived_selection_reasoning_retry"));
+    assert(s.logs[1].steps.some(s => s.step === "v3_selection_subject_decision" && s.meta?.status === "ready"));
+    const cards = protocol(s.turns[1]).filter(e => e.type === "products_block");
+    assertEquals(cards.reduce((n, e) => n + Number(e.count), 0), 1, JSON.stringify(s.logs[1].steps));
+    assert(s.requests[1].some(u => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: deferred array maximum rejects the entire declaration before readiness, search or another model call",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_oversized");
+    assert(pending(s.turns[0]));
+    assertEquals(s.declarationCalls, [1, 1]);
+    assert(s.logs[1].steps.some(s => s.step === "v3_derived_reasoning_array_bound_rejected" && s.meta?.reason === "maxItems"));
+    assert(!s.requests[1].some(u => new URL(u).pathname === "/api/products"));
+    assert(!protocol(s.turns[1]).some(e => e.type === "products_block"));
   },
 });
 Deno.test({

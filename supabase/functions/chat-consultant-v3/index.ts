@@ -227,6 +227,7 @@ import {
   structuredMeasurementTool,
   STRUCTURED_MEASUREMENT_DECLARATION_POLICY,
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
+import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -12728,6 +12729,17 @@ async function runExpertLoop(
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
+          // Only the opt-in readiness lane added the nested contract that hit
+          // the provider grammar limit. Keep the released OFF wire untouched.
+          // All attempts share one compact wire contract and one server guard.
+          const reasoningTransport = requireSelectionReadiness
+            ? compileToolArrayBounds(reasoningToolSchema) : null;
+          const providerReasoningToolSchema = reasoningTransport?.tool ?? reasoningToolSchema;
+          if (reasoningTransport) steps.push({
+            step: "v3_derived_reasoning_wire_contract",
+            ms: now(),
+            meta: { format: "server_array_bounds_v1", deferred_array_bounds: reasoningTransport.deferredCount },
+          });
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
           let closureRetryOutcomePending: {
@@ -12749,7 +12761,7 @@ async function runExpertLoop(
               ["declare_selection_reasoning"],
               "declare_selection_reasoning",
               0,
-              [reasoningToolSchema],
+              [providerReasoningToolSchema],
               1200,
               buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
               DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -12814,7 +12826,7 @@ async function runExpertLoop(
               ["declare_selection_reasoning"],
               "declare_selection_reasoning",
               0,
-              [reasoningToolSchema],
+              [providerReasoningToolSchema],
               1200,
               GENERAL_INQUIRY_MODEL_ROUTING,
               DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -12866,6 +12878,13 @@ async function runExpertLoop(
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
             if (!call) return undefined;
+            const boundsFailure = reasoningTransport?.validate(call.args);
+            if (boundsFailure) {
+              // Reject the whole declaration before readiness/subject/search.
+              // Never slice away a later safety condition to fit a limit.
+              steps.push({ step: "v3_derived_reasoning_array_bound_rejected", ms: now(), meta: boundsFailure });
+              return undefined;
+            }
             const cleaned = stripMalformedModelSentences(
               String(call.args.reasoning ?? ""),
             );
@@ -13442,7 +13461,7 @@ async function runExpertLoop(
                   ["declare_selection_reasoning"],
                   "declare_selection_reasoning",
                   0,
-                  [reasoningToolSchema],
+                  [providerReasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
                   DERIVED_REASONING_LOVABLE_RETRY_ENABLED

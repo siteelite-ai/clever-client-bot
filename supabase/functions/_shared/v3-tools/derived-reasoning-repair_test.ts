@@ -555,12 +555,16 @@ Deno.test("transport retry is confined to product-measurement correction and the
       '"derived_reasoning",',
       '["declare_selection_reasoning"],',
       '"declare_selection_reasoning",',
-      "[reasoningToolSchema],",
+      "[providerReasoningToolSchema],",
       "GENERAL_INQUIRY_MODEL_ROUTING,",
     ]
   ) {
     assertStringIncludes(correctionCall, mandatoryArg);
   }
+  // The repair uses exactly the same wire adapter and deferred bound guard as
+  // primary/fallback; the OFF lane still passes through its canonical schema.
+  assertStringIncludes(source, "reasoningTransport?.tool ?? reasoningToolSchema");
+  assertStringIncludes(source, "reasoningTransport?.validate(call.args)");
   assertEquals(
     source.match(/retryProductMeasurementUpstreamOnce\(\{/gu)?.length,
     1,
