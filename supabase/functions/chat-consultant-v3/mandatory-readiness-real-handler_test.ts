@@ -70,6 +70,8 @@ async function scenario(
     | "browse"
     | "replacement"
     | "subject"
+    | "subject_short_head"
+    | "subject_literal_missing"
     | "subject_missing_id"
     | "subject_rendered_parameters"
     | "subject_retry"
@@ -80,7 +82,7 @@ async function scenario(
     | "subject_literal",
 ) {
   const subjectMode = mode.startsWith("subject");
-  const subjectPhrase = mode === "subject_other" ? "фиксатор" : "сверло",
+  const subjectPhrase = mode === "subject_other" ? "фиксатор" : mode === "subject_short_head" ? "бур" : "сверло",
     subjectClass = mode === "subject_other"
       ? "распорный анкер"
       : "бур по бетону",
@@ -305,9 +307,9 @@ async function scenario(
         );
         const known = turn === 1 || mode === "specified" ||
           mode === "unowned" || mode === "browse" || mode === "unrendered" || mode === "label_ready" || subjectMode;
-        const empty = (turn === 1 && mode === "new_topic") || mode === "browse";
+        const empty = (turn === 1 && mode === "new_topic") || mode === "browse" || mode === "subject_literal_missing";
         const args = {
-          ...(schema.required.includes("selection_subject")
+          ...(schema.required.includes("selection_subject") && mode !== "subject_literal_missing"
             ? {
               selection_subject: {
                 customer_phrase: mode === "subject_rendered_parameters" && turn >= 2
@@ -398,6 +400,8 @@ async function scenario(
         ? "Предложи аналоги монтажного крепления Alpha 3 м"
         : mode === "browse"
         ? "Покажи монтажные крепления"
+        : mode === "subject_literal_missing"
+        ? "Покажи бур по бетону"
         : subjectMode
         ? `Подбери ${subjectPhrase} для стены. Бетон, диаметр ${subjectPhrase} 8 мм`
         : mode === "specified"
@@ -412,6 +416,7 @@ async function scenario(
         "new_topic",
         "progress",
         "subject",
+        "subject_short_head",
         "subject_missing_id",
         "subject_rendered_parameters",
         "subject_retry",
@@ -485,6 +490,35 @@ async function scenario(
   }
 }
 
+Deno.test({
+  name: "strict HTTP: literal live type membership cannot skip subject validation in a non-measured request",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s=await scenario("subject_literal_missing");
+    assert(s.logs[0].steps.some(s=>s.step==="v3_live_type_discovery_identity_proven"));
+    assertEquals(s.declarationCalls[0],1);
+    assert(s.logs[0].steps.some(s=>s.step==="v3_selection_subject_decision" && s.meta?.status==="invalid"));
+    assert(!s.requests[0].some(u=>new URL(u).pathname==="/api/products"));
+    assert(!protocol(s.turns[0]).some(e=>e.type==="products_block"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: a literal live type head asks before a disjoint taxonomy and confirmed type completes with original diameter",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_short_head");
+    const issued = pending(s.turns[0]);
+    assert(issued, JSON.stringify(s.logs[0].steps));
+    assertEquals((issued.options as Event[]).map(o => o.value), ["бур по бетону"]);
+    assertEquals(s.declarationCalls[0], 0, "candidate question requires no extra model call");
+    assert(!s.requests[0].some(u => new URL(u).pathname === "/api/products"));
+    assert(!protocol(s.turns[0]).some(e => e.type === "products_block"));
+    assert(s.logs[1].steps.some(s => s.step === "v3_live_type_discovery_identity_proven"));
+    const cards = protocol(s.turns[1]).filter(e => e.type === "products_block");
+    assertEquals(cards.reduce((n, e) => n + Number(e.count), 0), 1, JSON.stringify(s.logs[1].steps));
+    assertEquals(s.declarationCalls[1], 1);
+  },
+});
 Deno.test({
   name:
     "strict HTTP: question and server-owned reply restore the original product before catalog search",

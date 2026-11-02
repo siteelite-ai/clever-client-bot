@@ -705,6 +705,7 @@ import {
 } from "../_shared/v3-tools/selection-readiness-contract.ts";
 import { resolveUnrenderedSelectionContext } from "../_shared/v3-tools/unrendered-selection-context.ts";
 import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
+import { resolveLiveTypeDiscovery } from "../_shared/v3-tools/live-type-discovery.ts";
 import {
   extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
@@ -9461,6 +9462,7 @@ async function runExpertLoop(
   serverRenderedBaseRequest: string | null = null,
   serverVerifiedPriorQueriesNewestFirst: readonly string[] = [],
   rawCurrentUserMessage = userMessage,
+  verifiedReadinessChoiceFacet: string | null = null,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -10896,6 +10898,7 @@ async function runExpertLoop(
   // declaration of missing customer input is never fed to measurement repair
   // or to search as if it were evidence of compatibility.
   let resolvedSelectionSubject: SelectionSubject | null = null;
+  let discoveryLiteralTypeTarget: string | null = null;
   const finishWithSelectionClarification = (value: unknown, source: string) => {
     if (transientCatalogFailureSeen) {
       return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
@@ -10971,14 +10974,17 @@ async function runExpertLoop(
         request: userMessage, category: lastDiscover?.category?.pagetitle,
         choices: selectionSubjectChoices(lastDiscover?.facets ?? []),
       });
-      const changedSubject = subject.status === "ready" && resolvedSelectionSubject &&
-        subject.subject.target !== resolvedSelectionSubject.target;
+      const changedSubject = subject.status === "ready" && (
+        resolvedSelectionSubject && subject.subject.target !== resolvedSelectionSubject.target ||
+        discoveryLiteralTypeTarget && subject.subject.target !== discoveryLiteralTypeTarget
+      );
       steps.push({step:"v3_selection_subject_decision",ms:now(),meta:{
         status:changedSubject ? "invalid" : subject.status, rejection:changedSubject ? "subject_changed_during_repair" : subject.status === "invalid" ? subject.reason : null,
         target:subject.status === "ready" ? subject.subject.target : null,
       }});
       if (subject.status === "ready" && !changedSubject) {
         resolvedSelectionSubject = subject.subject;
+        discoveryLiteralTypeTarget = null;
         activeSelectionTarget = subject.subject.target;
         // Only a customer-confirmed exact live type may stand in for the
         // original class spelling. The independent class facet stays binding
@@ -12394,7 +12400,7 @@ async function runExpertLoop(
       const requireSelectionReadiness = SELECTION_READINESS_REQUIRED &&
         !replacementIntent && !isReplacementProofRequest(userMessage);
       const requireSelectionSubject = requireSelectionReadiness && derivedReasoningStep &&
-        !ensureActiveSelectionTarget(userMessage, "pre_reasoning_subject");
+        (Boolean(discoveryLiteralTypeTarget) || !ensureActiveSelectionTarget(userMessage, "pre_reasoning_subject"));
       const timeoutDecision = agentStepTimeoutDecision({
         intentMode,
         phase: agentPhase,
@@ -19887,18 +19893,46 @@ async function runExpertLoop(
               ),
             )
           ) {
-            result = {
-              tool: "discover_category",
-              ok: false,
-              error_code: "category_not_found",
-              message:
-                "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
-            } as unknown as ToolResult;
-            steps.push({
-              step: "v3_discovery_result_target_mismatch",
-              ms: now(),
-              meta: { requested: requestedNoun, resolved: resolvedCategory },
-            });
+            const liveType = SELECTION_READINESS_REQUIRED && !replacementIntent &&
+                !isReplacementProofRequest(userMessage) && !activeSelectionTarget && !productsRendered
+              ? resolveLiveTypeDiscovery({ currentMessage: rawCurrentUserMessage, request: userMessage,
+                category: resolvedCategory, choices: selectionSubjectChoices((result as DiscoverCategoryOk).facets ?? []),
+                verifiedChoiceFacet: verifiedReadinessChoiceFacet })
+              : { status: "unproven" as const };
+            if (liveType.status === "needs_input") {
+              // A rejected taxonomy candidate may supply ONLY a real type
+              // question, never a search scope or a card. Its current live
+              // facets validate that exact question through the old protocol.
+              lastDiscover = result as DiscoverCategoryOk;
+              const outcome = finishWithSelectionClarification(liveType.clarification, "selection_subject");
+              if (outcome) {
+                steps.push({ step: "v3_live_type_discovery_candidate_question", ms: now(), meta: { category: resolvedCategory, choices: liveType.clarification.options.length } });
+                return outcome;
+              }
+            }
+            if (liveType.status === "literal_type") {
+              // Full customer-owned selecting identity + exact live type is
+              // category membership evidence, not a proof of physical fit.
+              // Keep that very same type as a mandatory final-card criterion.
+              // Do not activate a render target at the taxonomy stage. The
+              // established readiness/subject phase must still validate it;
+              // early activation changes qualifier handling in older routes.
+              discoveryLiteralTypeTarget = liveType.subject.target;
+              steps.push({ step: "v3_live_type_discovery_identity_proven", ms: now(), meta: { category: resolvedCategory, target: liveType.subject.target, criterion: liveType.subject.criterion } });
+            } else {
+              result = {
+                tool: "discover_category",
+                ok: false,
+                error_code: "category_not_found",
+                message:
+                  "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
+              } as unknown as ToolResult;
+              steps.push({
+                step: "v3_discovery_result_target_mismatch",
+                ms: now(),
+                meta: { requested: requestedNoun, resolved: resolvedCategory },
+              });
+            }
           }
         }
 
@@ -22114,6 +22148,7 @@ async function runExpertLoop(
                 });
               }
               if (
+                Boolean(discoveryLiteralTypeTarget) ||
                 (provisionalCustomerMeasurementScope === "system_total" &&
                   !catalogSearchAttempted) ||
                 shouldRequireDerivedSelectionReasoning({
@@ -29542,6 +29577,9 @@ Deno.serve(async (req) => {
                   ? activeRenderedProof.priorQueriesNewestFirst
                   : customerMeasurementEvidence.priorQueriesNewestFirst,
                 userMessage,
+                !startsNewTask && !readinessQuestionSuperseded && readinessScopeReply &&
+                    typeof verifiedReadinessState.slot?.facet_key === "string"
+                  ? verifiedReadinessState.slot.facet_key : null,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
