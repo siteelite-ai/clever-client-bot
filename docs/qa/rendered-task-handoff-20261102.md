@@ -68,3 +68,35 @@ ownership is not complete semantic value proof. Question/answer source roles
 and general critical-input completeness remain open. This revision does not
 add a product dictionary, material guess, or universal-coverage claim. Real
 Gemini fallback400 closure also remains unverified.
+
+## Verified result, 2026-11-02
+
+Runtime commit: `551b53293ab0ed224b84e426279a9fe7f4550da3`.
+
+- Full local regression: **2186 passed, 0 failed** (3m8s); external model,
+  catalog and DB traffic mocked in the HTTP fixtures.
+- Both new HTTP regression cases fail against downloaded runtime8226df37
+  and pass after the correction. Typecheck passes.
+- Existing OFF transport fingerprint remains
+  `5c457500fd3a9a65a5c917d71ec1ff9a970bc913d816a72944574eeb525dfbba`.
+- All four GitHub checks for the runtime commit pass: two Edge checks and
+  two widget-contract/production-Vite-build checks (push and PR workflows).
+- Only closed preview deployed: version295, JWT verification enabled.
+  Downloaded115 TypeScript files match the worktree byte for byte.
+- Public function remains version683 with unchanged bundle SHA256
+  `522237f2a785aee9adbcacf3a54ca6954c05f1d78904ceb9707840b68e7a6f69`.
+- Permanent secret metadata unchanged; no temporary QA names remain.
+  Exact deletion of the approved1793618813 pair was completed and verified
+  before this deployment. No relay is running and the local key file is gone.
+- Free private-admission probe returns403. That is an access-control/boot
+  observation, **not** a successful selection test.
+
+No additional paid requests were sent: the previously authorized four were
+fully consumed by runtime8226df37. Runtime551b has no live provider acceptance
+yet; PR145 stays draft and production is not released. The semantic source-role
+and critical-input coverage limitations above remain open. Unit-choice UI and
+real Gemini fallback400 acceptance are not closed by this revision either.
+
+Persistent evidence: `outputs/qa-pr145-role-handoff-20261102/` in the parent
+project workspace; prior live failures remain separately recorded in
+`outputs/qa-pr145-context-live-20261102/`.
