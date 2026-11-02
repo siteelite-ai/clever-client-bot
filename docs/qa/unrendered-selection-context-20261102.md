@@ -57,8 +57,37 @@ On the candidate both reach the intended question/card path. Model/catalog/DB
 responses are mocked; this is not real-provider acceptance. Full local run:
 2182 PASS/0 FAIL; OFF transport fingerprint unchanged
 `5c457500fd3a9a65a5c917d71ec1ff9a970bc913d816a72944574eeb525dfbba`.
-The final full regression/typecheck/CI/deployment result is appended after
-completion. No fresh credentials or paid requests yet in this revision.
+Final full regression including the500-character guard:2182/2182 PASS
+(2m56s), Edge and new test typechecks PASS; all4 CI checks PASS.
+Only closed preview deployed,291/JWT=true/ACTIVE, bundle
+`28622621b17b537fcf8aee8363fd60db75f773538781a58f5e20dd9ab651c110`;
+115/115 downloaded TS files match runtime8226df37.
+
+## Authorized live follow-up: acceptance still FAIL
+
+Exactly4 messages after fresh pair/max4 approval; no repeat, relay stopped.
+QA-secret write moved versions to public681/preview292, not code changes.
+
+-16ce400b-02b6-4365-9c39-8626ea28623c: subject question with actual5 types
+  now works. Diagnostic exposes wrong readiness proof: «Материал стены»
+  answered by literal quote «стены», known1/ready. Literal ownership does
+  not establish that the quote supplies the parameter's value.
+-8cf315e0-0be5-4257-abe8-a731431cd0be: real type chip preserves original
+  request;4 cards of that type. Model then used «бур по бетону», an answer
+  to the product-type question, as the object's material. Type confirmation
+  PASS is not complete engineering readiness PASS.
+-e5f67330-37a7-49df-8a62-22bc93a82794: explicit material/diameter/tool
+  refinement FAIL. Classifier continuation0.95 and full rendered rehydrate
+  succeeded, but ordinary discover again received only latest parameters.
+  Unrendered fallback intentionally did not replace the stronger rendered
+  path; the same context handoff gap remains there beyond the old syntax.
+-04b24d48-8a3d-4b93-b779-3859575ee303: exact cable/new-topic PASS301₸/m,98m.
+
+No actual Gemini fallback was called. Live closure of its prior400 and live
+coverage of the unrendered fallback itself remain UNVERIFIED. No public
+release. Current secret pair suffix1793618813_ccac12a80cd8a1d2e9bc21b195b815cb
+is pending separately requested deletion confirmation. Full own evidence in
+parent `outputs/qa-pr145-context-live-20261102/REPORT.md`. Old failures retained.
 
 The local bounded QA harness now follows actual issued chips on either middle
 turn. An out-of-scenario click is still blocked without upstream work, but
