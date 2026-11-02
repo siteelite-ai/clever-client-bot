@@ -45,8 +45,27 @@ The application still owns validation of the generated values.
 - Adapter tests: immutable canonical schema, retained enums/types/required,
   exact cardinality edges, nested min/max, atomic measurement requirements,
   fail-closed unsupported schema shapes. Initial focused run21/21 PASS.
-- Edge and new test type checks PASS. Broader regression and live check are
-  recorded separately after completion; do not infer them from these results.
+- Edge and new test type checks PASS. Final full offline regression:2173
+  passed,0 failed (3m6s). The first broad run had2172 PASS and one source-text
+  assertion referencing the old local variable name. That assertion was
+  updated to the new shared wire variable and strengthened with checks for
+  the OFF passthrough and bound guard, then the entire suite reran green.
+- Default-OFF transport fingerprint is unchanged:
+  `5c457500fd3a9a65a5c917d71ec1ff9a970bc913d816a72944574eeb525dfbba`.
+- All four GitHub CI checks for runtime84fa0e82 passed: Edge checks and
+  widget-contract/production Vite builds on both branch/PR events.
+
+## Closed deployment, not live acceptance
+
+Only closed preview was deployed: version287, JWT=true, ACTIVE,
+SHA256 `4148b2ae1180a3e162698745829cc03f87398398fb636867b64df1f5bd206c06`.
+Downloaded114/114 TypeScript files match runtime84fa0e82 exactly.
+Management attestation: permanent-secret metadata unchanged, no temporary
+QA keys present, public code/JWT unchanged (public version677, ACTIVE).
+
+No paid requests in this revision. A fresh temporary-pair/max4-message approval
+has been requested and is pending; no new credentials were created. Live
+provider acceptance and the final product response are NOT yet verified.
 
 ## Release and rollback
 
