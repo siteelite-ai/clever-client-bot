@@ -89,9 +89,14 @@ was locally blocked by the QA relay's completed-sequence guard (browser log
 proxy HTTP403 at127.0.0.1:8768; no backend row), not a production outage.
 Separate observed UX debt: unit alternatives include the already active unit.
 No unit-transition implementation/testing change or product-specific rule was
-made in this run. Relay stopped after3 messages. Only temporary pair suffix
-`1793616584_70430f2886b0efff253b4c4bca249e67` remains pending separately requested
-deletion approval. Permanent metadata and public code/JWT unchanged.
+made in this run. Relay stopped after3 messages. Following separate explicit
+user confirmation, both temporary secrets with suffix
+`1793616584_70430f2886b0efff253b4c4bca249e67` were permanently deleted. UI and
+Management API confirm no temporary secrets; removed key returns HTTP403
+without a model call. Local credential file removed, pair bindings cleared.
+Permanent metadata and public/preview code hashes/JWT unchanged; versions
+680/290 reflect secret deletion, not a code deployment. FAIL/UNVERIFIED
+acceptance conclusions above remain unchanged.
 Full own SSE, logs and screenshots in parent workspace
 `outputs/qa-pr145-wire-live-20261102/REPORT.md`.
 
