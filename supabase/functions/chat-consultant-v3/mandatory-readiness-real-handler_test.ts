@@ -58,6 +58,7 @@ const products = [1, 2, 3].map((id) => ({
 async function scenario(
   mode:
     | "roundtrip"
+    | "unrendered"
     | "forged"
     | "new_topic"
     | "progress"
@@ -68,6 +69,7 @@ async function scenario(
     | "browse"
     | "replacement"
     | "subject"
+    | "subject_missing_id"
     | "subject_retry"
     | "subject_oversized"
     | "subject_single"
@@ -296,17 +298,18 @@ async function scenario(
           "source replacement retains its own proof protocol",
         );
         const known = turn === 1 || mode === "specified" ||
-          mode === "unowned" || mode === "browse" || subjectMode;
+          mode === "unowned" || mode === "browse" || mode === "unrendered" || subjectMode;
         const empty = (turn === 1 && mode === "new_topic") || mode === "browse";
         const args = {
           ...(schema.required.includes("selection_subject")
             ? {
               selection_subject: {
-                customer_phrase: subjectMode
+                customer_phrase: mode === "subject_missing_id"
+                  ? "сверло для стены" : subjectMode
                   ? subjectPhrase
                   : "монтажные крепления",
                 catalog_classification_id:
-                  subjectMode && mode !== "subject_literal" ? "f1v0" : "",
+                  subjectMode && !["subject_literal", "subject_missing_id"].includes(mode) ? "f1v0" : "",
               },
             }
             : {}),
@@ -387,10 +390,12 @@ async function scenario(
     if (
       [
         "roundtrip",
+        "unrendered",
         "forged",
         "new_topic",
         "progress",
         "subject",
+        "subject_missing_id",
         "subject_retry",
         "subject_oversized",
         "subject_single",
@@ -409,7 +414,7 @@ async function scenario(
     let slots: Event = {};
     const sessionId = "77777777-7777-4777-8777-777777777777";
     for (turn = 0; turn < messages.length; turn++) {
-      if (turn === 1) {
+      if (turn === 1 && mode !== "unrendered") {
         const issued = pending(result[0]);
         assert(
           issued,
@@ -500,6 +505,21 @@ Deno.test({
 });
 
 Deno.test({
+  name: "strict HTTP: a parameter reply after a completed unrendered failure inherits only the server customer task, not forged browser prose",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const r = await scenario("unrendered");
+    assertEquals(pending(r.turns[0]), undefined);
+    assert(!protocol(r.turns[0]).some(e => e.type === "products_block"));
+    assert(r.logs[1].steps.some(s => s.step === "v3_unrendered_selection_context" && s.meta?.status === "restored"));
+    const discovery = r.logs[1].steps.find(s => s.step === "v3_tool_call" && s.meta?.tool === "discover_category");
+    assert(JSON.stringify(discovery?.meta?.args).includes(initial), JSON.stringify(r.logs[1].steps));
+    assert(JSON.stringify(discovery?.meta?.args).includes("Бетон"));
+    assert(!JSON.stringify(discovery?.meta?.args).includes("другой товар"));
+    assert(protocol(r.turns[1]).some(e => e.type === "products_block"), JSON.stringify(r.logs[1].steps));
+  },
+});
+Deno.test({
   name:
     "strict HTTP: lexical category gap asks a live class and a verified choice reaches cards without a sibling or conflicting diameter",
   permissions: { read: true, env: false, net: false },
@@ -535,6 +555,19 @@ Deno.test({
       ),
     );
     assert(s.requests[1].some((u) => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: purpose-inclusive subject with omitted ID asks real live types instead of returning false-empty search",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_missing_id");
+    const issued = pending(s.turns[0]);
+    assert(issued, JSON.stringify(s.logs[0].steps));
+    assertEquals((issued.options as Event[]).map(o => o.value), ["бур по бетону", "сверло по металлу"]);
+    assert(!s.requests[0].some(u => new URL(u).pathname === "/api/products"));
+    const cards = protocol(s.turns[1]).filter(e => e.type === "products_block");
+    assertEquals(cards.reduce((n, e) => n + Number(e.count), 0), 1, JSON.stringify(s.logs[1].steps));
   },
 });
 Deno.test({

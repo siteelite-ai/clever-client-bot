@@ -104,7 +104,10 @@ export function resolveSelectionSubject(
     typeof row.catalog_classification_id !== "string"
   ) return invalid("invalid_subject");
   if (!affirmed(phrase, context.request)) return invalid("unowned_subject");
-  if (!row.catalog_classification_id) {
+  const liveTypes = context.choices.filter(c => /^(?:тип|вид)\s+(?:изделия|товара|продукции)(?:\s|$|\/)/iu.test(c.facet));
+  const exact = liveTypes.filter(c => c.value.normalize("NFKC").toLocaleLowerCase("ru-RU") === phrase.normalize("NFKC").toLocaleLowerCase("ru-RU"));
+  const chosenId = row.catalog_classification_id || (exact.length === 1 ? exact[0].id : "");
+  if (!chosenId && liveTypes.length === 0) {
     // This is a literal extraction, not an alias bridge. Existing title,
     // category and card guards must still prove this exact customer class.
     return {
@@ -112,9 +115,11 @@ export function resolveSelectionSubject(
       subject: { target: phrase, customerPhrase: phrase, criterion: null },
     };
   }
-  const choice = context.choices.find((c) =>
-    c.id === row.catalog_classification_id
-  );
+  // An empty model ID is not evidence that the whole phrase is a catalog
+  // class. If a real product-type facet exists, ask before freezing a literal
+  // target which may include purpose/installation text and reject every card.
+  // Never use a shank/material/application facet for this deterministic exit.
+  const choice = chosenId ? context.choices.find(c => c.id === chosenId) : liveTypes[0];
   if (
     !choice || !choice.key || !choice.value ||
     /[<>\p{Cc}]|https?:\/\//iu.test(choice.value)

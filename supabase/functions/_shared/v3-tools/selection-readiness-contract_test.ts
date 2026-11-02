@@ -6,6 +6,7 @@ import {
   customerOwnsReadinessQuote,
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
+  selectionReadinessInputDiagnostics,
 } from "./selection-readiness-contract.ts";
 import {
   buildDerivedSelectionReasoningMessages,
@@ -28,6 +29,19 @@ const unknown = {
 };
 const args = (decision: string, critical_inputs: unknown[]) => ({
   selection_readiness: { decision, critical_inputs },
+});
+Deno.test("readiness diagnostics show declared input ownership without logging private reasoning", () => {
+  const value = { ...args("ready", [{ parameter: "Материал", customer_quote: "стены", question: "" }, { parameter: "Соединение", customer_quote: "SDS Plus", question: "" }]), reasoning: "private planning must not be logged" };
+  assertEquals(selectionReadinessInputDiagnostics(value, context.customerEvidence), [
+    { parameter: "Материал", customer_quote: "стены", quote_owned: true, question: "" },
+    { parameter: "Соединение", customer_quote: "SDS Plus", quote_owned: false, question: "" },
+  ]);
+  assertEquals(selectionReadinessInputDiagnostics({}, ""), []);
+  const bounded = selectionReadinessInputDiagnostics(args("ready", Array(12).fill({ parameter: "x".repeat(200), customer_quote: "<quote>\n", question: "q".repeat(500) })), "");
+  assertEquals(bounded.length, 8);
+  assertEquals(bounded[0].parameter?.length, 100);
+  assertEquals(bounded[0].question?.length, 400);
+  assertEquals(bounded[0].customer_quote?.includes("<"), false);
 });
 
 Deno.test("mandatory decision cannot be omitted or bypassed by a ready label and an unknown input", () => {

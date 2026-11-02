@@ -90,6 +90,16 @@ Deno.test("subject: invented quotes, arbitrary IDs, markup and hidden fields are
       .includes("f0v0"),
   );
 });
+Deno.test("subject: an omitted model ID cannot turn purpose prose into a catalog class when live product types exist", () => {
+  const result = resolveSelectionSubject({ customer_phrase: "крепления для стены", catalog_classification_id: "" }, context);
+  assertEquals(result.status, "needs_input");
+  if (result.status === "needs_input") assertEquals(result.clarification.options.map(o => o.value), ["Анкер", "Заклёпка"]);
+  const exact = resolveSelectionSubject({ customer_phrase: "Анкер", catalog_classification_id: "" }, { ...context, request: "Подбери Анкер" });
+  assertEquals(exact.status, "ready");
+  if (exact.status === "ready") assertEquals(exact.subject.criterion?.value, "Анкер");
+  // A technical property is not a product identity slot.
+  assertEquals(resolveSelectionSubject({ customer_phrase: "крепления", catalog_classification_id: "" }, { ...context, choices: [{ id: "p0", key: "shank", facet: "Тип хвостовика", value: "SDS Plus" }] }).status, "ready");
+});
 Deno.test("subject: a rejected class in customer wording is not affirmative identity evidence", () => {
   const result = resolveSelectionSubject(declaration, {
     ...context,

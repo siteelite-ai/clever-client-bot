@@ -73,6 +73,24 @@ const unknownQuote = (value: string) =>
   /(?:^|[^\p{L}\p{N}])(?:не\s+знаю|не\s+уверен\p{L}*|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)(?=$|[^\p{L}\p{N}])/iu
     .test(value);
 
+/** Bounded diagnostic facts, not private reasoning prose or proof of fit. */
+export function selectionReadinessInputDiagnostics(args: Record<string, unknown>, evidence: string) {
+  const rows = object(args.selection_readiness)?.critical_inputs;
+  if (!Array.isArray(rows)) return [];
+  const clean = (value: unknown, maximum: number): string | null =>
+    typeof value === "string" ? value.replace(/[<>\p{Cc}]/gu, " ").slice(0, maximum) : null;
+  return rows.slice(0, 8).map(entry => {
+    const input = object(entry);
+    const quote = clean(input?.customer_quote, 240);
+    return {
+      parameter: clean(input?.parameter, 100),
+      customer_quote: quote,
+      quote_owned: Boolean(quote && customerOwnsReadinessQuote(quote, evidence)),
+      question: clean(input?.question, 400),
+    };
+  });
+}
+
 /** A quote is evidence only from trusted customer text, not catalog/model prose.
  * The semantic choice of which inputs matter remains the model's responsibility. */
 export function customerOwnsReadinessQuote(

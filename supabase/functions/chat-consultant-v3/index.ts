@@ -700,7 +700,9 @@ import { resolveSelectionClarification } from "../_shared/v3-tools/selection-cla
 import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
+  selectionReadinessInputDiagnostics,
 } from "../_shared/v3-tools/selection-readiness-contract.ts";
+import { resolveUnrenderedSelectionContext } from "../_shared/v3-tools/unrendered-selection-context.ts";
 import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
 import {
   extractNominalLoadCurrent,
@@ -10948,6 +10950,7 @@ async function runExpertLoop(
       rejection:decision.status === "invalid" ? decision.reason : null,
       known:decision.status === "invalid" ? null : decision.known,
       missing:decision.status === "invalid" ? null : decision.missing,
+      inputs: selectionReadinessInputDiagnostics(args, userMessage),
     }});
     if (decision.status === "ready") {
       if (!requireSubject) return null;
@@ -29393,13 +29396,40 @@ Deno.serve(async (req) => {
               // only the adjective loses identity and can skip the criteria
               // contract entirely. rawCurrentUserMessage remains separate for
               // current-axis overrides and appearance ownership below.
-              const combinedSelectionRequest = ellipticalBaseRequest
+              const baseSelectionRequest = ellipticalBaseRequest
                 ? joinCustomerTurns([ellipticalBaseRequest, ellipticalCurrentRequest])
                 : scopedSelectionRequest.message;
-              const needsServerAreaProof = additionalSelectionRequest &&
-                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
               const customerMeasurementEvidence =
                 await verifiedCustomerMeasurementEvidence();
+              const unrenderedContext = resolveUnrenderedSelectionContext({
+                current: userMessage,
+                enabled: SELECTION_READINESS_REQUIRED,
+                boundary,
+                newTask: startsNewTask,
+                strongerContext: Boolean(activeRenderedProof || scopedSelectionRequest.scoped ||
+                  ellipticalBaseRequest || reissuedSelectionScope || matchedPendingClarification || pendingBroadAssortmentScope ||
+                  slots.pending_clarification),
+                replacement: Boolean(replacementEgressRequest),
+                lookupFailed: customerMeasurementEvidence.lookupFailed,
+                serverQueriesNewestFirst: customerMeasurementEvidence.priorQueriesNewestFirst,
+              });
+              if (unrenderedContext.status !== "unchanged") {
+                steps.push({ step: "v3_unrendered_selection_context", ms: Date.now() - t0, meta: {
+                  status: unrenderedContext.status,
+                  source: "completed_server_customer_queries",
+                  source_count: unrenderedContext.status === "restored" ? unrenderedContext.sourceCount : 0,
+                  reason: unrenderedContext.status === "needs_input" ? unrenderedContext.reason : null,
+                } });
+              }
+              if (unrenderedContext.status === "needs_input") {
+                send({type:"delta",origin:"server",content:unrenderedContext.message});
+                productsCount = 0;
+                return;
+              }
+              const combinedSelectionRequest = unrenderedContext.status === "restored"
+                ? unrenderedContext.message : baseSelectionRequest;
+              const needsServerAreaProof = additionalSelectionRequest &&
+                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
               const verifiedAreaContinuation = !needsServerAreaProof ||
                 verifiedRenderedDestinationContextUnchanged({
                   selectionRequest: combinedSelectionRequest,
