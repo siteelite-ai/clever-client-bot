@@ -1,8 +1,34 @@
 # Product subject across readiness, search and render
 
-Status: candidate for PR145; **no live acceptance yet, no public release**.
+Status: candidate for PR145; **live end-to-end acceptance blocked by provider
+schema rejection, no public release**. Runtime `0de8791d` checked 2026-11-02.
 Base: `ce9121bf` / tested runtime `b14b0282`. Previous live FAIL remains recorded
 in `selection-input-contract-20261101.md`.
+
+## Live follow-up of 0de8791d
+
+Exactly four authorized messages: material question PASS, actual live type
+chips PASS, selected type restored the full task and all three frozen criteria
+(diameter8, SDS Plus, concrete bit), exact cable control PASS (301 ₸/m,98m).
+But **no final bit card was verified**: after the primary11.5s attempt the
+existing Gemini fallback returned actual HTTP400, schema grammar too complex.
+This is not evidence of quota/rate-limit exhaustion and not a product-empty
+result. The failing schema's individual offending element is not established.
+
+Request IDs: `124879dd-12cb-4fb5-a29a-150345013f08`,
+`06877f35-51f9-4fec-9928-ab0274ae5baf`,
+`24377f87-9ca9-4b08-9046-9f205d25f3ed` (schema failure),
+`325f528f-28bf-4c42-b5b5-b4168bc90619` (exact cable).
+Next: test/simplify provider wire-schema complexity without dropping server
+validators or adding paid retries. Reference:
+[Gemini structured-output limitations](https://ai.google.dev/gemini-api/docs/structured-output#limitations).
+No such code change or paid repeat was made in this live run.
+
+Relay stopped after4 messages. Cleanup requested separately for the exact
+temporary pair ending `1793609771_36dab5d872b0222392eed61b4f7a7ff2`; at this
+checkpoint deletion is pending, not claimed complete. Permanent-secret metadata
+and public code/JWT remain unchanged. Full local evidence is in parent workspace
+`outputs/qa-pr145-subject-live-20261102/REPORT.md`.
 
 ## Root and bounded design
 
