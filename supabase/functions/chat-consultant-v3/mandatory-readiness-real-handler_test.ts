@@ -73,6 +73,7 @@ async function scenario(
     | "subject_missing_id"
     | "subject_rendered_parameters"
     | "subject_retry"
+    | "subject_retry_empty"
     | "subject_oversized"
     | "subject_single"
     | "subject_other"
@@ -283,13 +284,16 @@ async function scenario(
         }
         const schema = body.tools?.[0]?.function?.parameters;
         declarationCalls[turn]++;
-        if (mode === "subject_retry" && turn === 1) {
+        if (mode.startsWith("subject_retry") && turn === 1) {
           // Reproduce the actual transport path without waiting11.5s or
           // contacting a provider: primary timeout → Gemini schema compiler.
           if (declarationCalls[turn] === 1) {
             throw new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError");
           }
           assertEquals(body.model, "google/gemini-2.5-flash");
+          const inputs = schema.properties.selection_readiness.properties.critical_inputs;
+          assertEquals(inputs.type, "object", "application inputs cannot be empty on the fallback wire");
+          assertEquals(inputs.required, ["first", "rest"]);
           if (JSON.stringify(schema).includes('"maxItems"')) {
             return json({ error: "The specified schema produces a constraint that has too many states for serving." }, 400);
           }
@@ -360,6 +364,16 @@ async function scenario(
             : [],
           explicit_customer_classifications: [],
         };
+        if (mode.startsWith("subject_retry")) {
+          const readiness = args.selection_readiness!;
+          const rows = readiness.critical_inputs;
+          // The fixture follows the actual provider schema, not a canned
+          // canonical-array result that can hide a wire/decoder mismatch.
+          if (schema.properties.selection_readiness.properties.critical_inputs.type === "object") {
+            (readiness as unknown as Event).critical_inputs = mode === "subject_retry_empty" && turn === 1
+              ? { rest: [] } : { first: rows[0], rest: rows.slice(1) };
+          }
+        }
         return json({
           choices: [{
             finish_reason: "tool_calls",
@@ -401,6 +415,7 @@ async function scenario(
         "subject_missing_id",
         "subject_rendered_parameters",
         "subject_retry",
+        "subject_retry_empty",
         "subject_oversized",
         "subject_single",
       ].includes(mode)
@@ -612,9 +627,25 @@ Deno.test({
     assertEquals(s.declarationCalls, [1, 2], "no added repair or paid attempt");
     assert(s.logs[1].steps.some(s => s.step === "v3_derived_selection_reasoning_retry"));
     assert(s.logs[1].steps.some(s => s.step === "v3_selection_subject_decision" && s.meta?.status === "ready"));
+    assert(s.logs[1].steps.findIndex(s => s.step === "v3_derived_selection_reasoning_retry_recovered") >
+      s.logs[1].steps.findIndex(s => s.step === "v3_selection_readiness_decision"), "HTTP200 is not a verified recovery");
     const cards = protocol(s.turns[1]).filter(e => e.type === "products_block");
     assertEquals(cards.reduce((n, e) => n + Number(e.count), 0), 1, JSON.stringify(s.logs[1].steps));
     assert(s.requests[1].some(u => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: empty fallback readiness head never searches, repairs, or logs recovery",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_retry_empty");
+    assert(pending(s.turns[0]));
+    assertEquals(s.declarationCalls, [1, 2]);
+    assert(s.logs[1].steps.some(s => s.step === "v3_derived_reasoning_required_input_wire_rejected"));
+    assert(s.logs[1].steps.some(s => s.step === "v3_derived_selection_reasoning_retry_contract_unverified"));
+    assert(!s.logs[1].steps.some(s => s.step === "v3_derived_selection_reasoning_retry_recovered"));
+    assert(!s.requests[1].some(u => new URL(u).pathname === "/api/products"));
+    assert(!protocol(s.turns[1]).some(e => e.type === "products_block"));
   },
 });
 Deno.test({

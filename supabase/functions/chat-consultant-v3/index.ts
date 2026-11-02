@@ -228,6 +228,7 @@ import {
   STRUCTURED_MEASUREMENT_DECLARATION_POLICY,
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
+import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -12744,11 +12745,20 @@ async function runExpertLoop(
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
+          // Match the wire to the existing server requirement, for every
+          // application/measurement selection, not particular products. A
+          // required first object is representable by both providers without
+          // the nested bounded-array grammar that Gemini previously rejected.
+          const requiredReadinessInput = requireSelectionReadiness &&
+            (hasSelectionSuitabilityContext(userMessage) || hasSelectionMeasurementContext(userMessage))
+            ? compileToolRequiredArrayHead(reasoningToolSchema, ["selection_readiness", "critical_inputs"]) : null;
+          if (requiredReadinessInput) derivedMessages[0].content +=
+            " В ЭТОЙ задаче сервер требует непустые исходные данные подбора. В selection_readiness.critical_inputs заполни обязательный объект first и массив rest для остальных параметров. Не оставляй first пустым и не выдумывай факты: неизвестное значение обозначь пустой customer_quote и конкретным question. rest=[] допустим только если других критичных параметров нет.";
           // Only the opt-in readiness lane added the nested contract that hit
           // the provider grammar limit. Keep the released OFF wire untouched.
           // All attempts share one compact wire contract and one server guard.
           const reasoningTransport = requireSelectionReadiness
-            ? compileToolArrayBounds(reasoningToolSchema) : null;
+            ? compileToolArrayBounds(requiredReadinessInput?.tool ?? reasoningToolSchema) : null;
           const providerReasoningToolSchema = reasoningTransport?.tool ?? reasoningToolSchema;
           if (reasoningTransport) steps.push({
             step: "v3_derived_reasoning_wire_contract",
@@ -12849,12 +12859,12 @@ async function runExpertLoop(
                 : "configured",
             );
             derivedReasoningProviderAttempts += 1;
-            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED || requireSelectionReadiness) {
               // A provider HTTP 200 is not yet a usable selection contract.
               // Record success only after resolving and validating the forced
               // declaration below, never merely after a named tool call.
               closureRetryOutcomePending = {
-                model: LOVABLE_AGENT_MODEL,
+                model: DERIVED_REASONING_LOVABLE_RETRY_ENABLED ? LOVABLE_AGENT_MODEL : GENERAL_INQUIRY_MODEL,
                 provider: structuredReasoning.provider ?? "unknown",
                 timeoutMs: retryTimeout,
               };
@@ -12900,6 +12910,14 @@ async function runExpertLoop(
               steps.push({ step: "v3_derived_reasoning_array_bound_rejected", ms: now(), meta: boundsFailure });
               return undefined;
             }
+            if (requiredReadinessInput) {
+              const decoded = requiredReadinessInput.decode(call.args);
+              if (!decoded) {
+                steps.push({ step: "v3_derived_reasoning_required_input_wire_rejected", ms: now(), meta: { reason: "invalid_required_first_input" } });
+                return undefined;
+              }
+              call = { ...call, args: decoded };
+            }
             const cleaned = stripMalformedModelSentences(
               String(call.args.reasoning ?? ""),
             );
@@ -12921,7 +12939,11 @@ async function runExpertLoop(
           );
           if (requireSelectionReadiness) {
             const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
-            if (outcome) return outcome;
+            if (outcome) {
+              const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
+              recordClosureRetryOutcome(reason === "selection_input_required", reason);
+              return outcome;
+            }
           } else if (declarationCall && "clarification" in declarationCall.args) {
             const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
             if (outcome) return outcome;
