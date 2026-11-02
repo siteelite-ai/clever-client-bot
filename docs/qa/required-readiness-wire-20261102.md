@@ -64,3 +64,14 @@ remains522237f2a785aee9adbcacf3a54ca6954c05f1d78904ceb9707840b68e7a6f69.
 Preview rollback is runtime551b5329 (or docs-onlyd927c08b with identical code),
 deploying only chat-consultant-v3-closure-preview with JWT verification kept on.
 Do not deploy the public function or restore/delete unrelated secrets.
+
+## Closed deployment verified
+
+Runtime27d4bb0d, closed preview299 ACTIVE, JWT=true; bundle
+6208922b2681e98414d3a9f6a9788e53364ba0dac9b6b6577d81215148fc0b5e.
+Downloaded116 TypeScript files match this worktree byte for byte. All4 CI
+checks for the runtime commit pass (2 Edge,2 widget-contract/Vite).
+Private boot/admission probe returns403 without a QA key, without paid calls.
+Public686 remains ACTIVE with the same522237f2… bundle/JWTfalse; permanent
+secret metadata unchanged, temporary names empty. These are deployment and
+access-control facts, not live selection acceptance of27d4bb0d.
