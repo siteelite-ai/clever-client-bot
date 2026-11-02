@@ -71,5 +71,24 @@ No new catalog call, model, retry, budget, secret or database schema added.
 No paid requests during implementation; previous QA pairs remain deleted.
 Local results and preview runtime identity are appended after verification.
 
-Final focused suite:28/28 PASS. The first full intermediate revision passed
-2196 tests; final locked full regression is separate and still must finish.
+Final focused suite:28/28 PASS. Final locked full regression: **2197 passed,
+0 failed (2m11s)**. Typecheck passed. OFF transport fingerprint unchanged:
+5c457500fd3a9a65a5c917d71ec1ff9a970bc913d816a72944574eeb525dfbba.
+
+## Verified closed deployment
+
+Runtimea08b6522 deployed ONLY to chat-consultant-v3-closure-preview, version303,
+ACTIVE, JWT=true; bundle234354453f8ec91f9a285a981c7ba800c6d94dc8eda1d3cd33ba9249a0263a9f.
+Downloaded117/117 TypeScript files match the worktree. All4 runtime CI checks
+passed (2 Edge and2 widget-contract/Vite). Free boot/private-admission probe
+returns403 without QA credentials; this is NOT a functional selection PASS.
+
+Public689 remains ACTIVE with unchanged522237f2a785aee9adbcacf3a54ca6954c05f1d78904ceb9707840b68e7a6f69
+bundle/JWTfalse. Permanent secret metadata unchanged, temporary names empty;
+no relay running, no new paid request, no public merge/deploy.
+
+Rollback:27d4bb0d (or its docs-only0bb50ae9) deployed only to the preview with
+JWT verification on. Do not roll back the public function or unrelated keys.
+Live acceptance ofa08b6522 remains outstanding; neither local mocks nor old
+public QA-page responses prove this new path. No universal source-role or
+critical-input-completeness claim is made.
