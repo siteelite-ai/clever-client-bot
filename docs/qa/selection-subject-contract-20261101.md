@@ -24,10 +24,14 @@ validators or adding paid retries. Reference:
 [Gemini structured-output limitations](https://ai.google.dev/gemini-api/docs/structured-output#limitations).
 No such code change or paid repeat was made in this live run.
 
-Relay stopped after4 messages. Cleanup requested separately for the exact
-temporary pair ending `1793609771_36dab5d872b0222392eed61b4f7a7ff2`; at this
-checkpoint deletion is pending, not claimed complete. Permanent-secret metadata
-and public code/JWT remain unchanged. Full local evidence is in parent workspace
+Relay stopped after4 messages. Following the user's separate confirmation,
+both temporary secrets ending `1793609771_36dab5d872b0222392eed61b4f7a7ff2`
+were permanently deleted on 2026-11-02. UI and management metadata show no
+temporary secrets; the removed access key receives HTTP403 without an LLM
+call. The local credential file was removed. Permanent-secret metadata and
+public/preview code hashes and JWT settings remain unchanged by cleanup.
+Public/preview versions became677/286 after secret deletion, not a code deploy.
+Full local evidence is in parent workspace
 `outputs/qa-pr145-subject-live-20261102/REPORT.md`.
 
 ## Root and bounded design
