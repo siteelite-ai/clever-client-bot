@@ -66,5 +66,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Test widget state and server-choice round trips
+        run: node --test --test-concurrency=1 --test-timeout=60000 scripts/qa/widget-session-state.test.mjs scripts/qa/gallant-scope-widget.test.mjs
+
       - name: Build production frontend
         run: npm run build

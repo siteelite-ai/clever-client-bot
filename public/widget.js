@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-bdc222dbbd5c4e7f';
+  var WIDGET_VERSION = 'widget-26ebaed1b19f076d';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -285,7 +285,10 @@
   function normalizeQuickRepliesEvent(event) {
     if (!isPlainRecord(event) || typeof event.facet_key !== 'string' ||
         !event.facet_key.trim() || event.facet_key.length > 128 ||
-        !Array.isArray(event.replies) || event.replies.length < 2 ||
+        // The server may ask to confirm a single catalog-backed candidate.
+        // Cardinality is not authority: exact pending-slot binding is still
+        // required before rendering, persisting or sending any option.
+        !Array.isArray(event.replies) || event.replies.length < 1 ||
         event.replies.length > 5) return null;
     var replies = [];
     var values = new Set();

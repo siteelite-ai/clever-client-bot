@@ -198,6 +198,8 @@ import {
   hasCompetingMeasuredSelectionTiers,
   hasUnresolvedEnvironmentalProtectionObligation,
   hasSelectionMeasurementContext,
+  hasSelectionSuitabilityContext,
+  selectionSubjectChoices,
   measuredSelectionContractEvidence,
   preferCustomerGroundedLiveClassification,
   reconcileDerivedRequiredFacetSummary,
@@ -225,6 +227,8 @@ import {
   structuredMeasurementTool,
   STRUCTURED_MEASUREMENT_DECLARATION_POLICY,
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
+import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
+import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -693,6 +697,15 @@ import {
   priorVisibleQuestionMayDuplicateClarification,
   type ProposeClarificationInput,
 } from "../_shared/v3-tools/propose-clarification.ts";
+import { resolveSelectionClarification } from "../_shared/v3-tools/selection-clarification.ts";
+import {
+  mandatorySelectionReadinessEnabled,
+  resolveMandatorySelectionReadiness,
+  selectionReadinessInputDiagnostics,
+} from "../_shared/v3-tools/selection-readiness-contract.ts";
+import { resolveUnrenderedSelectionContext } from "../_shared/v3-tools/unrendered-selection-context.ts";
+import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
+import { resolveLiveTypeDiscovery } from "../_shared/v3-tools/live-type-discovery.ts";
 import {
   extractNominalLoadCurrent,
   isUnansweredReadinessProgressRequest,
@@ -947,6 +960,7 @@ const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
     Deno.env.get("OPENROUTER_AGENT_FALLBACK_MODELS"),
   ),
 );
+const SELECTION_READINESS_REQUIRED = mandatorySelectionReadinessEnabled();
 const GENERAL_INQUIRY_MODEL =
   Deno.env.get("OPENROUTER_GENERAL_INQUIRY_MODEL") ??
     "google/gemini-2.5-flash";
@@ -9448,6 +9462,7 @@ async function runExpertLoop(
   serverRenderedBaseRequest: string | null = null,
   serverVerifiedPriorQueriesNewestFirst: readonly string[] = [],
   rawCurrentUserMessage = userMessage,
+  verifiedReadinessChoiceFacet: string | null = null,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -9471,10 +9486,22 @@ async function runExpertLoop(
   // A short attribute-only answer may rely on the last completed server
   // selection. Bind its taxonomy evidence to that exact verified leaf, never
   // to a client-provided slot or a model-suggested category.
+  const verifiedRenderedLeafEvidence = SELECTION_READINESS_REQUIRED &&
+      verifiedInitialDiscoveryLeaf && serverRenderedBaseRequest &&
+      ellipticalContinuation?.baseUserMessage === serverRenderedBaseRequest &&
+      recentProductEvidence.length > 0 && recentProductEvidence.every(({ id }) =>
+        ctx.cache.get(id)?.leaf_category === verifiedInitialDiscoveryLeaf)
+    ? verifiedInitialDiscoveryLeaf : "";
   const verifiedActiveLeafEvidence = verifiedInitialDiscoveryLeaf &&
       activeSelectionScope?.leaf === verifiedInitialDiscoveryLeaf
     ? activeSelectionScope.leaf
-    : "";
+    : verifiedRenderedLeafEvidence;
+  if (verifiedRenderedLeafEvidence) steps.push({
+    step: "v3_verified_rendered_leaf_evidence", ms: now(), meta: {
+      leaf: verifiedRenderedLeafEvidence, source: "complete_fresh_server_batch",
+      products: recentProductEvidence.length,
+    },
+  });
   // Category scope comes from the request that produced the latest rendered
   // batch; constraints are compiled separately below so the current attribute
   // can replace, rather than be ANDed with, the previous value of that facet.
@@ -10867,6 +10894,124 @@ async function runExpertLoop(
     });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
+  // One shared exit for ordinary planning and forced derived reasoning. A
+  // declaration of missing customer input is never fed to measurement repair
+  // or to search as if it were evidence of compatibility.
+  let resolvedSelectionSubject: SelectionSubject | null = null;
+  let discoveryLiteralTypeTarget: string | null = null;
+  const finishWithSelectionClarification = (value: unknown, source: string) => {
+    if (transientCatalogFailureSeen) {
+      return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+    }
+    let clarificationRejection: string | null = null;
+    const clarification = resolveSelectionClarification(value, {
+      request: userMessage,
+      category: lastDiscover?.category?.pagetitle,
+      facets: lastDiscover?.facets ?? [],
+      allowSingleLiveChoice: source === "selection_subject",
+    }, reason => { clarificationRejection = reason; });
+    // Keep the established preference policy and source-product proof gate.
+    // Neither a model-owned reason label nor a freeform question overrides it.
+    const optional = clarification && shouldContinueSelectionPastOptionalClarification({
+      intentMode, hasDiscovery: Boolean(lastDiscover), userMessage,
+      question: clarification.question, facetKey: clarification.facet_key,
+      options: clarification.options,
+    });
+    if (optional) return null;
+    const replacement = replacementIntent || isReplacementProofRequest(userMessage);
+    const verified = clarification && replacement
+      ? verifiedReplacementClarificationFromLiveFacets(clarification, lastDiscover?.facets ?? [])
+      : null;
+    const accepted = clarification && !productsRendered && (!replacement || verified)
+      ? executeProposeClarification({
+        ...clarification,
+        ...(verified ? { question: verified.question, facet_key: verified.facet_key, options: verified.options } : {}),
+      }, { allowFreeform: true, allowSingleChoice: source === "selection_subject" })
+      : null;
+    const delivery = accepted?.ok ? acceptedClarificationDelivery(accepted) : null;
+    const question = delivery?.question ??
+      "Не удалось надёжно сформировать уточнение для подбора. Повторите запрос или обратитесь к менеджеру.";
+    send({ type: "delta", content: question, origin: "server" });
+    finalText += `${finalText ? "\n\n" : ""}${question}`;
+    if (accepted?.ok && delivery) emitSideEffects(accepted, send);
+    steps.push({ step: "v3_selection_input_decision", ms: now(), meta: {
+      source, decision: delivery ? "clarify" : "invalid_clarification",
+      rejection: clarificationRejection,
+      declared_question: value && typeof value === "object" && typeof (value as Record<string, unknown>).question === "string"
+        ? String((value as Record<string, unknown>).question).replace(/[\u0000-\u001f<>]/gu, " ").slice(0, 400) : null,
+      declared_facet_key: value && typeof value === "object" && typeof (value as Record<string, unknown>).facet_key === "string"
+        ? String((value as Record<string, unknown>).facet_key).replace(/[\u0000-\u001f<>]/gu, " ").slice(0, 128) : null,
+      reason: clarification?.blocking_input.reason ?? null,
+      parameter: clarification?.blocking_input.parameter ?? null,
+      facet_key: clarification?.facet_key ?? null,
+      freeform: delivery ? clarification!.options.length === 0 : null,
+      products_rendered: productsRendered,
+    } });
+    steps.push({ step: "v3_turn_end", ms: now(), meta: {
+      reason: delivery ? "selection_input_required" : "selection_input_contract_invalid",
+    } });
+    return { finalText, productsRendered, shownProductIds: [...shownIds] };
+  };
+  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string, requireSubject = false) => {
+    const decision = resolveMandatorySelectionReadiness(args, {
+      request: userMessage,
+      // Only current + already verified task context, never model/catalog prose.
+      customerEvidence: userMessage,
+      requiresApplicationInputs: hasSelectionSuitabilityContext(userMessage) || hasSelectionMeasurementContext(userMessage),
+      category: lastDiscover?.category?.pagetitle,
+      facets: lastDiscover?.facets ?? [],
+    });
+    steps.push({step:"v3_selection_readiness_decision",ms:now(),meta:{
+      source,status:decision.status,
+      rejection:decision.status === "invalid" ? decision.reason : null,
+      known:decision.status === "invalid" ? null : decision.known,
+      missing:decision.status === "invalid" ? null : decision.missing,
+      inputs: selectionReadinessInputDiagnostics(args, userMessage),
+    }});
+    if (decision.status === "ready") {
+      if (!requireSubject) return null;
+      const subject = resolveSelectionSubject(args.selection_subject, {
+        request: userMessage, category: lastDiscover?.category?.pagetitle,
+        choices: selectionSubjectChoices(lastDiscover?.facets ?? []),
+      });
+      const changedSubject = subject.status === "ready" && (
+        resolvedSelectionSubject && subject.subject.target !== resolvedSelectionSubject.target ||
+        discoveryLiteralTypeTarget && subject.subject.target !== discoveryLiteralTypeTarget
+      );
+      steps.push({step:"v3_selection_subject_decision",ms:now(),meta:{
+        status:changedSubject ? "invalid" : subject.status, rejection:changedSubject ? "subject_changed_during_repair" : subject.status === "invalid" ? subject.reason : null,
+        target:subject.status === "ready" ? subject.subject.target : null,
+      }});
+      if (subject.status === "ready" && !changedSubject) {
+        resolvedSelectionSubject = subject.subject;
+        discoveryLiteralTypeTarget = null;
+        activeSelectionTarget = subject.subject.target;
+        // Only a customer-confirmed exact live type may stand in for the
+        // original class spelling. The independent class facet stays binding
+        // on final cards; numbers and other frozen criteria are untouched.
+        if (subject.subject.criterion) {
+          semanticallyMappedCustomerPhrases.add(subject.subject.customerPhrase);
+        }
+        return null;
+      }
+      if (subject.status === "needs_input") {
+        const outcome = finishWithSelectionClarification(subject.clarification, "selection_subject");
+        if (outcome) return outcome;
+      }
+    }
+    if (decision.status === "needs_input") {
+      const outcome = finishWithSelectionClarification(decision.clarification, source);
+      if (outcome) return outcome;
+      // A falsely declared optional preference is not a licence to search
+      // while a mandatory readiness declaration is unresolved.
+    }
+    if (transientCatalogFailureSeen) return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
+    const notice = "Не удалось надёжно проверить исходные данные для подбора. Повторите запрос или обратитесь к менеджеру.";
+    send({type:"delta",content:notice,origin:"server"});
+    finalText += `${finalText ? "\n\n" : ""}${notice}`;
+    steps.push({step:"v3_turn_end",ms:now(),meta:{reason:"selection_readiness_contract_invalid"}});
+    return {finalText,productsRendered,shownProductIds:[...shownIds]};
+  };
   let groundedCompoundSearchTerminal = false;
   type PendingJargonAxisSplit = {
     source: string;
@@ -11530,12 +11675,19 @@ async function runExpertLoop(
       "productClass" | "taxonomyClass" | "verifiedPairedFitReference"
     > = {},
   ): string[] => {
+    const subjectCriterion = resolvedSelectionSubject?.criterion;
+    const subjectSafeIds = subjectCriterion ? (() => {
+      const report = applyCriteriaGate(ids.map(id => ctx.cache.get(id))
+        .filter((p): p is ProductFull => Boolean(p)), [subjectCriterion]);
+      steps.push({step:"v3_selection_subject_card_gate",ms:now(),meta:{before:ids.length,after:report.passed_ids.length}});
+      return ids.filter(id => report.passed_ids.includes(id));
+    })() : ids;
     const sectionSafeIds = activeSelectionScope
-      ? ids.filter((id) => productMatchesActiveSection(
+      ? subjectSafeIds.filter((id) => productMatchesActiveSection(
         ctx.cache.get(id)?.leaf_category,
         activeSelectionScope,
       ))
-      : ids;
+      : subjectSafeIds;
     // The active identity is an independent server-verified requirement. A
     // named token inferred from this turn or older prose must not replace it.
     const scopeSafeIds = activeSelectionScope
@@ -12242,6 +12394,13 @@ async function runExpertLoop(
       const ctxBytes = JSON.stringify(messages).length;
       const derivedReasoningStep = selectionReasoningOnlyRequired &&
         Boolean(lastDiscover);
+      // Source-product replacements already own a separate verified-facts /
+      // cut-out protocol. Catalog-owned source facts are not customer quotes;
+      // do not reinterpret that established proof as missing customer input.
+      const requireSelectionReadiness = SELECTION_READINESS_REQUIRED &&
+        !replacementIntent && !isReplacementProofRequest(userMessage);
+      const requireSelectionSubject = requireSelectionReadiness && derivedReasoningStep &&
+        (Boolean(discoveryLiteralTypeTarget) || !ensureActiveSelectionTarget(userMessage, "pre_reasoning_subject"));
       const timeoutDecision = agentStepTimeoutDecision({
         intentMode,
         phase: agentPhase,
@@ -12547,6 +12706,7 @@ async function runExpertLoop(
             lastDiscover.category?.pagetitle ?? "",
             lastDiscover.facets ?? [],
             presearchPairedObjectReference,
+            { requireReadiness: requireSelectionReadiness, requireSubject: requireSelectionSubject },
           );
           // Carry the already compiled server relation into BOTH model calls.
           // Do not force the model to rediscover it from a partial enum list,
@@ -12587,9 +12747,30 @@ async function runExpertLoop(
             lastDiscover.facets ?? [],
             userMessage,
             presearchPairedObjectReference,
+            { requireReadiness: requireSelectionReadiness, requireSubject: requireSelectionSubject },
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
+          // Match the wire to the existing server requirement, for every
+          // application/measurement selection, not particular products. A
+          // required first object is representable by both providers without
+          // the nested bounded-array grammar that Gemini previously rejected.
+          const requiredReadinessInput = requireSelectionReadiness &&
+            (hasSelectionSuitabilityContext(userMessage) || hasSelectionMeasurementContext(userMessage))
+            ? compileToolRequiredArrayHead(reasoningToolSchema, ["selection_readiness", "critical_inputs"]) : null;
+          if (requiredReadinessInput) derivedMessages[0].content +=
+            " В ЭТОЙ задаче сервер требует непустые исходные данные подбора. В selection_readiness.critical_inputs заполни обязательный объект first и массив rest для остальных параметров. Не оставляй first пустым и не выдумывай факты: неизвестное значение обозначь пустой customer_quote и конкретным question. rest=[] допустим только если других критичных параметров нет.";
+          // Only the opt-in readiness lane added the nested contract that hit
+          // the provider grammar limit. Keep the released OFF wire untouched.
+          // All attempts share one compact wire contract and one server guard.
+          const reasoningTransport = requireSelectionReadiness
+            ? compileToolArrayBounds(requiredReadinessInput?.tool ?? reasoningToolSchema) : null;
+          const providerReasoningToolSchema = reasoningTransport?.tool ?? reasoningToolSchema;
+          if (reasoningTransport) steps.push({
+            step: "v3_derived_reasoning_wire_contract",
+            ms: now(),
+            meta: { format: "server_array_bounds_v1", deferred_array_bounds: reasoningTransport.deferredCount },
+          });
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
           let closureRetryOutcomePending: {
@@ -12611,7 +12792,7 @@ async function runExpertLoop(
               ["declare_selection_reasoning"],
               "declare_selection_reasoning",
               0,
-              [reasoningToolSchema],
+              [providerReasoningToolSchema],
               1200,
               buildOpenRouterModelRouting(ctx.selectionReasoningModel, [MODEL]),
               DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -12676,7 +12857,7 @@ async function runExpertLoop(
               ["declare_selection_reasoning"],
               "declare_selection_reasoning",
               0,
-              [reasoningToolSchema],
+              [providerReasoningToolSchema],
               1200,
               GENERAL_INQUIRY_MODEL_ROUTING,
               DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -12684,12 +12865,12 @@ async function runExpertLoop(
                 : "configured",
             );
             derivedReasoningProviderAttempts += 1;
-            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED) {
+            if (DERIVED_REASONING_LOVABLE_RETRY_ENABLED || requireSelectionReadiness) {
               // A provider HTTP 200 is not yet a usable selection contract.
               // Record success only after resolving and validating the forced
               // declaration below, never merely after a named tool call.
               closureRetryOutcomePending = {
-                model: LOVABLE_AGENT_MODEL,
+                model: DERIVED_REASONING_LOVABLE_RETRY_ENABLED ? LOVABLE_AGENT_MODEL : GENERAL_INQUIRY_MODEL,
                 provider: structuredReasoning.provider ?? "unknown",
                 timeoutMs: retryTimeout,
               };
@@ -12728,6 +12909,21 @@ async function runExpertLoop(
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
             if (!call) return undefined;
+            const boundsFailure = reasoningTransport?.validate(call.args);
+            if (boundsFailure) {
+              // Reject the whole declaration before readiness/subject/search.
+              // Never slice away a later safety condition to fit a limit.
+              steps.push({ step: "v3_derived_reasoning_array_bound_rejected", ms: now(), meta: boundsFailure });
+              return undefined;
+            }
+            if (requiredReadinessInput) {
+              const decoded = requiredReadinessInput.decode(call.args);
+              if (!decoded) {
+                steps.push({ step: "v3_derived_reasoning_required_input_wire_rejected", ms: now(), meta: { reason: "invalid_required_first_input" } });
+                return undefined;
+              }
+              call = { ...call, args: decoded };
+            }
             const cleaned = stripMalformedModelSentences(
               String(call.args.reasoning ?? ""),
             );
@@ -12747,6 +12943,17 @@ async function runExpertLoop(
               toolCall.name === "declare_selection_reasoning"
             ),
           );
+          if (requireSelectionReadiness) {
+            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
+            if (outcome) {
+              const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
+              recordClosureRetryOutcome(reason === "selection_input_required", reason);
+              return outcome;
+            }
+          } else if (declarationCall && "clarification" in declarationCall.args) {
+            const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning");
+            if (outcome) return outcome;
+          }
           const pairedReference = extractSchemaBackedMeasuredReference(
             userMessage,
             lastDiscover?.facets ?? [],
@@ -13297,7 +13504,7 @@ async function runExpertLoop(
                   ["declare_selection_reasoning"],
                   "declare_selection_reasoning",
                   0,
-                  [reasoningToolSchema],
+                  [providerReasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
                   DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -13390,6 +13597,13 @@ async function runExpertLoop(
                   toolCall.name === "declare_selection_reasoning"
                 ),
               );
+              if (requireSelectionReadiness) {
+                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
+                if (outcome) return outcome;
+              } else if (declarationCall && "clarification" in declarationCall.args) {
+                const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
+                if (outcome) return outcome;
+              }
               declaration = declarationCall
                 ? cleanResolvedDeclaration(
                   resolvePairedDeclaration(declarationCall.args),
@@ -14432,6 +14646,18 @@ async function runExpertLoop(
         } else {
           throw error;
         }
+      }
+      const inputQuestions = resp.toolCalls.filter(call =>
+        call.name === "propose_clarification" && "blocking_input" in call.args
+      );
+      if (inputQuestions.length) {
+        // A missing-input declaration wins over a conflicting search/render.
+        // Discard the entire model co-text and never execute sibling tools.
+        const outcome = finishWithSelectionClarification(
+          inputQuestions.length === 1 ? inputQuestions[0].args : null,
+          "agent_planning",
+        );
+        if (outcome) return outcome;
       }
       const clarificationBatch = classifyClarificationToolBatch(
         resp.toolCalls.map((toolCall) => toolCall.name),
@@ -19667,18 +19893,46 @@ async function runExpertLoop(
               ),
             )
           ) {
-            result = {
-              tool: "discover_category",
-              ok: false,
-              error_code: "category_not_found",
-              message:
-                "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
-            } as unknown as ToolResult;
-            steps.push({
-              step: "v3_discovery_result_target_mismatch",
-              ms: now(),
-              meta: { requested: requestedNoun, resolved: resolvedCategory },
-            });
+            const liveType = SELECTION_READINESS_REQUIRED && !replacementIntent &&
+                !isReplacementProofRequest(userMessage) && !activeSelectionTarget && !productsRendered
+              ? resolveLiveTypeDiscovery({ currentMessage: rawCurrentUserMessage, request: userMessage,
+                category: resolvedCategory, choices: selectionSubjectChoices((result as DiscoverCategoryOk).facets ?? []),
+                verifiedChoiceFacet: verifiedReadinessChoiceFacet })
+              : { status: "unproven" as const };
+            if (liveType.status === "needs_input") {
+              // A rejected taxonomy candidate may supply ONLY a real type
+              // question, never a search scope or a card. Its current live
+              // facets validate that exact question through the old protocol.
+              lastDiscover = result as DiscoverCategoryOk;
+              const outcome = finishWithSelectionClarification(liveType.clarification, "selection_subject");
+              if (outcome) {
+                steps.push({ step: "v3_live_type_discovery_candidate_question", ms: now(), meta: { category: resolvedCategory, choices: liveType.clarification.options.length } });
+                return outcome;
+              }
+            }
+            if (liveType.status === "literal_type") {
+              // Full customer-owned selecting identity + exact live type is
+              // category membership evidence, not a proof of physical fit.
+              // Keep that very same type as a mandatory final-card criterion.
+              // Do not activate a render target at the taxonomy stage. The
+              // established readiness/subject phase must still validate it;
+              // early activation changes qualifier handling in older routes.
+              discoveryLiteralTypeTarget = liveType.subject.target;
+              steps.push({ step: "v3_live_type_discovery_identity_proven", ms: now(), meta: { category: resolvedCategory, target: liveType.subject.target, criterion: liveType.subject.criterion } });
+            } else {
+              result = {
+                tool: "discover_category",
+                ok: false,
+                error_code: "category_not_found",
+                message:
+                  "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
+              } as unknown as ToolResult;
+              steps.push({
+                step: "v3_discovery_result_target_mismatch",
+                ms: now(),
+                meta: { requested: requestedNoun, resolved: resolvedCategory },
+              });
+            }
           }
         }
 
@@ -21894,6 +22148,7 @@ async function runExpertLoop(
                 });
               }
               if (
+                Boolean(discoveryLiteralTypeTarget) ||
                 (provisionalCustomerMeasurementScope === "system_total" &&
                   !catalogSearchAttempted) ||
                 shouldRequireDerivedSelectionReasoning({
@@ -29210,13 +29465,55 @@ Deno.serve(async (req) => {
               // only the adjective loses identity and can skip the criteria
               // contract entirely. rawCurrentUserMessage remains separate for
               // current-axis overrides and appearance ownership below.
-              const combinedSelectionRequest = ellipticalBaseRequest
+              const baseSelectionRequest = ellipticalBaseRequest
                 ? joinCustomerTurns([ellipticalBaseRequest, ellipticalCurrentRequest])
                 : scopedSelectionRequest.message;
-              const needsServerAreaProof = additionalSelectionRequest &&
-                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
               const customerMeasurementEvidence =
                 await verifiedCustomerMeasurementEvidence();
+              const unrenderedContext = resolveUnrenderedSelectionContext({
+                current: userMessage,
+                enabled: SELECTION_READINESS_REQUIRED,
+                boundary,
+                newTask: startsNewTask,
+                strongerContext: Boolean(scopedSelectionRequest.scoped ||
+                  ellipticalBaseRequest || reissuedSelectionScope || matchedPendingClarification || pendingBroadAssortmentScope ||
+                  slots.pending_clarification),
+                replacement: Boolean(replacementEgressRequest),
+                lookupFailed: customerMeasurementEvidence.lookupFailed,
+                serverQueriesNewestFirst: customerMeasurementEvidence.priorQueriesNewestFirst,
+                verifiedRenderedBase: activeRenderedProof && recentProductEvidence.length > 0
+                  ? activeRenderedProof.baseRequest : null,
+              });
+              if (unrenderedContext.status !== "unchanged") {
+                steps.push({ step: "v3_unrendered_selection_context", ms: Date.now() - t0, meta: {
+                  status: unrenderedContext.status,
+                  source: unrenderedContext.status === "restored" ? unrenderedContext.source : null,
+                  source_count: unrenderedContext.status === "restored" ? unrenderedContext.sourceCount : 0,
+                  reason: unrenderedContext.status === "needs_input" ? unrenderedContext.reason : null,
+                } });
+              }
+              if (unrenderedContext.status === "needs_input") {
+                send({type:"delta",origin:"server",content:unrenderedContext.message});
+                productsCount = 0;
+                return;
+              }
+              const combinedSelectionRequest = unrenderedContext.status === "restored"
+                ? unrenderedContext.message : baseSelectionRequest;
+              const restoredRenderedBase = unrenderedContext.status === "restored" &&
+                unrenderedContext.source === "completed_server_products_block"
+                ? unrenderedContext.baseRequest ?? null : null;
+              const expertContinuation = ellipticalContinuation ??
+                (restoredRenderedBase ? { baseUserMessage: restoredRenderedBase } : null);
+              const restoredBatchProducts = restoredRenderedBase
+                ? recentProductEvidence.map(({ id }) => ctx.cache.get(id)) : [];
+              const restoredLeaves = [...new Set(restoredBatchProducts.map(product =>
+                String(product?.leaf_category ?? "").trim()).filter(Boolean))];
+              const restoredDiscoveryLeaf = restoredBatchProducts.length > 0 &&
+                restoredBatchProducts.every(Boolean) && restoredLeaves.length === 1 &&
+                restoredBatchProducts.every(product => product?.leaf_category === restoredLeaves[0])
+                ? restoredLeaves[0] : null;
+              const needsServerAreaProof = additionalSelectionRequest &&
+                verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
               const verifiedAreaContinuation = !needsServerAreaProof ||
                 verifiedRenderedDestinationContextUnchanged({
                   selectionRequest: combinedSelectionRequest,
@@ -29269,17 +29566,20 @@ Deno.serve(async (req) => {
                 recentProductEvidence,
                 [],
                 null,
-                ellipticalContinuation,
+                expertContinuation,
                 priorShownProductUrls,
-                null,
+                restoredDiscoveryLeaf,
                 Boolean(replacementEgressRequest),
-                ellipticalAttributeFollowup
+                restoredRenderedBase ?? (ellipticalAttributeFollowup
                   ? ellipticalBaseRequest
-                  : verifiedAdditionalSelection?.baseRequest ?? null,
-                ellipticalAttributeFollowup && activeRenderedProof
+                  : verifiedAdditionalSelection?.baseRequest ?? null),
+                (ellipticalAttributeFollowup || restoredRenderedBase) && activeRenderedProof
                   ? activeRenderedProof.priorQueriesNewestFirst
                   : customerMeasurementEvidence.priorQueriesNewestFirst,
                 userMessage,
+                !startsNewTask && !readinessQuestionSuperseded && readinessScopeReply &&
+                    typeof verifiedReadinessState.slot?.facet_key === "string"
+                  ? verifiedReadinessState.slot.facet_key : null,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

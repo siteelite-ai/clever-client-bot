@@ -68,6 +68,7 @@ export function acceptedClarificationDelivery(
 
 export function executeProposeClarification(
   input: ProposeClarificationInput,
+  policy: { allowFreeform?: boolean; allowSingleChoice?: boolean } = {},
 ):
   | (ProposeClarificationOk & { tool: "propose_clarification" })
   | (ToolError & { tool: "propose_clarification" }) {
@@ -77,7 +78,7 @@ export function executeProposeClarification(
 
   if (
     !question || !facet_key || facet_key.length > 128 ||
-    opts.length < 2 || opts.length > 5
+    (opts.length < 2 && !(policy.allowFreeform && opts.length === 0) && !(policy.allowSingleChoice && opts.length === 1)) || opts.length > 5
   ) {
     return {
       tool: "propose_clarification",

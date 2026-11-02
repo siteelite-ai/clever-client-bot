@@ -2871,6 +2871,76 @@ test('quick-reply labels are inert text and free-text follow-up removes the chip
   dom.window.close();
 });
 
+test('one to five server-bound choices render, survive reload and send exactly the selected value', async () => {
+  for (const count of [1, 2, 5]) {
+    const replies = Array.from({ length: count }, (_, index) => ({
+      value: `catalog-value-${index}`, label: `Catalog label ${index}`,
+    }));
+    const dom = bootWidget({
+      fetchImpl: async () => new Response(clarificationSse({ replies }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Choose a catalog type';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => !dom.window.document.querySelector('#volt-widget-new-chat').disabled &&
+      visibleMessages(dom).includes('Какое питание у оборудования?'), 'clarification should finish');
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, count);
+    assert.equal(dom.window.document.querySelectorAll('.volt-custom-reply').length, 1);
+    const saved = readState(dom);
+    dom.window.close();
+
+    const payloads = [];
+    const restored = bootWidget({
+      state: saved,
+      fetchImpl: async (_url, init) => {
+        payloads.push(JSON.parse(init.body));
+        return new Response([
+          { v3_event: { type: 'diagnostic', log_id: 'choice-result', phase: 'start' } },
+          { choices: [{ delta: { content: 'Choice accepted.' } }] },
+          { v3_event: { type: 'slot_update', slots: {} } },
+          { v3_event: { type: 'diagnostic', log_id: 'choice-result', phase: 'complete', products_count: 0 } },
+        ].map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n'), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+    });
+    const chips = [...restored.window.document.querySelectorAll('.volt-quick-reply')];
+    assert.deepEqual(chips.map((chip) => chip.textContent), replies.map((reply) => reply.label));
+    chips[0].click();
+    chips[0].click();
+    await waitForWidget(() => visibleMessages(restored).includes('Choice accepted.'), 'choice should finish');
+    assert.equal(payloads.length, 1, 'double click must not duplicate the request');
+    assert.equal(payloads[0].message, replies[0].value);
+    assert.deepEqual(payloads[0].dialogSlots.pending_clarification.options, replies);
+    assert.equal(restored.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+    restored.window.close();
+  }
+});
+
+test('single choices still require exact slot binding and a complete turn', async () => {
+  const replies = [{ value: 'catalog-value', label: 'Catalog label' }];
+  for (const override of [
+    { slotFacetKey: 'other_facet' },
+    { slotReplies: [{ value: 'other-value', label: 'Catalog label' }] },
+    { slotReplies: [{ value: 'catalog-value', label: 'Other label' }] },
+    { slotReplies: [] },
+    { complete: false },
+  ]) {
+    const dom = bootWidget({
+      fetchImpl: async () => new Response(clarificationSse({ replies, ...override }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    });
+    dom.window.document.querySelector('#volt-widget-input').value = 'Choose a catalog type';
+    dom.window.document.querySelector('#volt-widget-send').click();
+    await waitForWidget(() => !dom.window.document.querySelector('#volt-widget-new-chat').disabled &&
+      visibleMessages(dom).includes('Какое питание у оборудования?'), 'invalid choice turn should settle');
+    assert.equal(dom.window.document.querySelectorAll('.volt-quick-reply').length, 0);
+    dom.window.close();
+  }
+});
+
 test('quick replies require a matching active pending slot and are hidden on partial turns', async () => {
   const replies = [
     { value: 'Однофазное', label: 'Однофазное' },
@@ -2880,7 +2950,9 @@ test('quick replies require a matching active pending slot and are hidden on par
     { facetKey: 'other_phase', slotFacetKey: 'power_phase' },
     { slotReplies: [replies[0], { value: 'Другое', label: 'Другое' }] },
     { replies: [{ value: 'Однофазное', label: 'Первый' }, { value: 'Однофазное', label: 'Повтор' }] },
-    { replies: [{ value: 'Однофазное', label: 'Первый' }] },
+    { replies: [{ value: 'Однофазное', label: 'Первый' }], slotReplies: replies },
+    { replies: [], slotReplies: [] },
+    { replies: Array.from({ length: 6 }, (_, i) => ({ value: `value-${i}`, label: `Label ${i}` })) },
   ];
   for (const mismatch of mismatches) {
     const dom = bootWidget({

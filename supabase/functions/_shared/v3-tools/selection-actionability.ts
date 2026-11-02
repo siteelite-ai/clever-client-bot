@@ -1,4 +1,7 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
+import { SELECTION_CLARIFICATION_SCHEMA, SELECTION_UNCERTAINTY_POLICY } from "./selection-clarification.ts";
+import { MANDATORY_SELECTION_READINESS_POLICY, SELECTION_READINESS_CONTRACT_SCHEMA } from "./selection-readiness-contract.ts";
+import { SELECTION_SUBJECT_POLICY, selectionSubjectSchema, type SubjectChoice } from "./selection-subject.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
   extractClientQuantities,
@@ -1218,6 +1221,12 @@ function derivedClassificationChoices(
   return choices;
 }
 
+export function selectionSubjectChoices(facets: DerivedSelectionFacet[]): SubjectChoice[] {
+  return derivedClassificationChoices(facets).map(choice => ({
+    ...choice, key: facets[Number(choice.id.match(/^f(\d+)v/u)?.[1])]?.key ?? "",
+  }));
+}
+
 function classificationLexicalStem(token: string): string {
   const normalized = token.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е");
   if (/^[a-z0-9]+$/u.test(normalized)) return normalized;
@@ -1619,6 +1628,7 @@ export function buildDerivedSelectionReasoningToolSchema(
   facets: DerivedSelectionFacet[],
   customerEvidence = "",
   pairedObjectReference: PairedObjectReference | null = null,
+  policy: { requireReadiness?: boolean; requireSubject?: boolean } = {},
 ): {
   type: "function";
   function: {
@@ -1659,9 +1669,23 @@ export function buildDerivedSelectionReasoningToolSchema(
       parameters: {
         type: "object",
         properties: {
+          ...(policy.requireReadiness ? { selection_readiness: SELECTION_READINESS_CONTRACT_SCHEMA } : {}),
+          ...(policy.requireSubject ? { selection_subject: selectionSubjectSchema(selectionSubjectChoices(facets)) } : {}),
+          clarification: {
+            ...SELECTION_CLARIFICATION_SCHEMA,
+            properties: {
+              ...SELECTION_CLARIFICATION_SCHEMA.properties,
+              facet_key: {
+                type: "string",
+                enum: [...new Set(["customer_input", ...facets.map(facet => facet.key).filter((key): key is string => Boolean(key))])],
+                description: "Точный key живого фасета, если вопрос предлагает его значения. Для отсутствующего факта клиента вне фасетов — customer_input и options=[]. Не переводи и не сокращай key.",
+              },
+            },
+            description: "Вместо подбора: когда не хватает данных самого клиента, задай один конкретный вопрос. В этой ветке reasoning пусто, measurement_scope=not_applicable, списки критериев пусты. Не используй для ошибок сервиса или отсутствия данных о товарах.",
+          },
           reasoning: {
             type: "string",
-            minLength: 20,
+            minLength: 0,
             maxLength: 1600,
             description:
               "Короткое понятное клиенту обоснование с расчётом, единицами и критичными требованиями.",
@@ -1720,6 +1744,8 @@ export function buildDerivedSelectionReasoningToolSchema(
           },
         },
         required: [
+          ...(policy.requireReadiness ? ["selection_readiness"] : []),
+          ...(policy.requireSubject ? ["selection_subject"] : []),
           "reasoning",
           "measurement_scope",
           "compatible_classifications",
@@ -3710,6 +3736,7 @@ export function buildDerivedSelectionReasoningMessages(
   category: string,
   facets: DerivedSelectionFacet[],
   pairedObjectReference: PairedObjectReference | null = null,
+  policy: { requireReadiness?: boolean; requireSubject?: boolean } = {},
 ): Array<{ role: "system" | "user"; content: string }> {
   const classificationChoices = derivedClassificationChoices(facets);
   const requiredFacetChoices = derivedRequiredFacetChoices(facets, userMessage)
@@ -3722,6 +3749,7 @@ export function buildDerivedSelectionReasoningMessages(
       facet,
       facetIndex,
     ) => ({
+      key: String(facet.key || "").slice(0, 200),
       name: String(facet.caption || facet.key || "").slice(0, 160),
       type: String(facet.type || "").slice(0, 40),
       unit: facet.unit == null ? null : String(facet.unit).slice(0, 30),
@@ -3763,6 +3791,17 @@ export function buildDerivedSelectionReasoningMessages(
   messages[0].content +=
     " Уточнение для всех расчётных порогов: число или коэффициент, который ты выбрал сам и которого клиент не задавал, может быть только условным ориентиром с явным допущением. Покажи полезную формулу и объясни зависимость, но не называй её результат обязательным минимумом товара, не пиши для него «не менее», «требуется» или «должен быть» и не передавай его как обязательное значение фасета. Жёсткий числовой порог допустим, когда он прямо задан клиентом для выбираемого товара или проверяемое отношение к его измеренному объекту доказывает эту границу; для парных размеров сохрани обе обязательные границы совместимости. Если безопасная граница зависит от недостающей нормы или параметра, назови именно его и оставь расчёт условным; уточняющий вопрос сформирует следующий этап диалога.";
   messages[0].content += ` ${MEASUREMENT_OWNERSHIP_POLICY}`;
+  messages[0].content += ` ${SELECTION_UNCERTAINTY_POLICY} Если требуется уточнение, заполни поле clarification инструмента declare_selection_reasoning; reasoning оставь пустым, measurement_scope=not_applicable, списки критериев пустыми. Контроллер задаст этот вопрос вместо расчёта и поиска. Если данных достаточно, не передавай clarification и заполни обоснование как обычно.`;
+  if (policy.requireReadiness) {
+    // Preserve the legacy policy byte-for-byte when OFF. In the new lane,
+    // eliminate (rather than merely append to) its conflicting instruction.
+    messages[0].content = messages[0].content.replace(
+      "выбери один обоснованный рекомендуемый вариант, назови только его обязательные параметры и, если для него существует общепринятая точная маркировка N×S, явно напиши её.",
+      "не выбирай исполнение по умолчанию, пока критичные исходные данные клиента неизвестны; сначала заполни selection_readiness и уточни неизвестный параметр. При полностью подтверждённых исходных данных обоснуй совместимый вариант и его параметры.",
+    );
+    messages[0].content += ` ${MANDATORY_SELECTION_READINESS_POLICY}`;
+  }
+  if (policy.requireSubject) messages[0].content += ` ${SELECTION_SUBJECT_POLICY}`;
   return messages;
 }
 
