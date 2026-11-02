@@ -1,7 +1,8 @@
-/** A continuation is a routing decision, not proof of a previous product.
- * Before any cards or pending question exist, recover only customer requests
- * read from this active session's completed server logs. Never browser prose,
- * model answers, cached products or a guessed catalog noun. */
+/** Shared task handoff for semantic continuations outside established routes.
+ * A routing decision is not product proof: prefer the fully rehydrated server
+ * batch's base; before cards exist use completed active-session customer logs.
+ * Never browser prose, stale product cache, model answers or a guessed noun.
+ * The original export name is retained for the initial unrendered contract. */
 import type { ConversationBoundaryResult } from "./conversation-boundary.ts";
 import {
   extractClientQuantities,
@@ -12,7 +13,15 @@ import { hasExplicitNewTaskPreface } from "./request-preface.ts";
 
 export type UnrenderedSelectionContext =
   | { status: "unchanged"; message: string }
-  | { status: "restored"; message: string; sourceCount: number }
+  | {
+    status: "restored";
+    message: string;
+    sourceCount: number;
+    source:
+      | "completed_server_customer_queries"
+      | "completed_server_products_block";
+    baseRequest?: string;
+  }
   | {
     status: "needs_input";
     message: string;
@@ -35,6 +44,8 @@ export function resolveUnrenderedSelectionContext(input: {
   lookupFailed: boolean;
   /** Supplied only by the bounded completed-log loader, newest first. */
   serverQueriesNewestFirst: readonly string[];
+  /** Only after the ENTIRE server batch was freshly rehydrated by the caller. */
+  verifiedRenderedBase?: string | null;
 }): UnrenderedSelectionContext {
   const unchanged = { status: "unchanged" as const, message: input.current };
   if (
@@ -54,6 +65,23 @@ export function resolveUnrenderedSelectionContext(input: {
     message: UNRENDERED_SELECTION_CONTEXT_QUESTION,
     reason,
   });
+  if (input.verifiedRenderedBase) {
+    // Stronger than raw history. The caller also passes this exact certificate
+    // into the existing rendered-axis override/criteria engine. Do not use
+    // the conservative unrendered quantity merge in place of that engine.
+    const message = joinCustomerTurns([
+      input.verifiedRenderedBase,
+      input.current,
+    ]);
+    if (message.length > 500) return missing("context_limit");
+    return {
+      status: "restored",
+      message,
+      sourceCount: 1,
+      source: "completed_server_products_block",
+      baseRequest: input.verifiedRenderedBase,
+    };
+  }
   if (input.lookupFailed || !input.serverQueriesNewestFirst.length) {
     return missing("missing_server_context");
   }
@@ -95,5 +123,10 @@ export function resolveUnrenderedSelectionContext(input: {
   // A later clarification may carry this task in the existing500-character
   // readiness scope. Do not allow its serializer to truncate a safety fact.
   if (message.length > 500) return missing("context_limit");
-  return { status: "restored", message, sourceCount: queries.length };
+  return {
+    status: "restored",
+    message,
+    sourceCount: queries.length,
+    source: "completed_server_customer_queries",
+  };
 }

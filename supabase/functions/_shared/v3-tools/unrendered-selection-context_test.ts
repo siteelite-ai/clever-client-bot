@@ -20,6 +20,7 @@ Deno.test("unrendered context: restore the server task, not a missing catalog no
   assertEquals(resolveUnrenderedSelectionContext(base), {
     status: "restored",
     sourceCount: 1,
+    source: "completed_server_customer_queries",
     message: joinCustomerTurns([
       base.serverQueriesNewestFirst[0],
       base.current,
@@ -38,6 +39,30 @@ Deno.test("unrendered context: restore the server task, not a missing catalog no
       joinCustomerTurns([other.serverQueriesNewestFirst[0], other.current]),
     );
   }
+});
+Deno.test("selection context: a fully rehydrated rendered base wins over raw customer logs without an adjective-only heuristic", () => {
+  const rendered = "Подбери бур по бетону диаметром 10 мм";
+  const result = resolveUnrenderedSelectionContext({
+    ...base,
+    verifiedRenderedBase: rendered,
+    serverQueriesNewestFirst: ["Неподтверждённая другая задача"],
+    lookupFailed: true,
+  });
+  assertEquals(result, {
+    status: "restored",
+    message: joinCustomerTurns([rendered, base.current]),
+    sourceCount: 1,
+    source: "completed_server_products_block",
+    baseRequest: rendered,
+  });
+  assertEquals(
+    resolveUnrenderedSelectionContext({
+      ...base,
+      verifiedRenderedBase: rendered,
+      newTask: true,
+    }),
+    { status: "unchanged", message: base.current },
+  );
 });
 Deno.test("unrendered context: OFF, new topic, replacement and established scope remain on their old paths", () => {
   for (
@@ -99,8 +124,8 @@ Deno.test("unrendered context: overlong task is rejected without deleting an old
     const queries of [
       Array(9).fill("задача"),
       ["x".repeat(3001)],
-    Array(3).fill("x".repeat(2900)),
-    ["x".repeat(500)],
+      Array(3).fill("x".repeat(2900)),
+      ["x".repeat(500)],
     ]
   ) {
     const result = resolveUnrenderedSelectionContext({

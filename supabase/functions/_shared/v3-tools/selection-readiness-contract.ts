@@ -73,6 +73,15 @@ const unknownQuote = (value: string) =>
   /(?:^|[^\p{L}\p{N}])(?:не\s+знаю|не\s+уверен\p{L}*|неизвестн\p{L}*|нет\s+данных|не\s+определ\p{L}*)(?=$|[^\p{L}\p{N}])/iu
     .test(value);
 
+/** Naming the object/axis is not supplying its categorical value. This is a
+ * necessary structural check, not a universal semantic validator. Numeric
+ * values are retained even when the label happens to repeat the number. */
+export function readinessQuoteOnlyNamesParameter(quote: string, parameter: string): boolean {
+  const words = normalize(quote).match(/[\p{L}\p{N}]+/gu) ?? [];
+  const label = new Set(normalize(parameter).match(/[\p{L}\p{N}]+/gu) ?? []);
+  return words.length > 0 && !words.some(word => /\p{N}/u.test(word)) && words.every(word => label.has(word));
+}
+
 /** Bounded diagnostic facts, not private reasoning prose or proof of fit. */
 export function selectionReadinessInputDiagnostics(args: Record<string, unknown>, evidence: string) {
   const rows = object(args.selection_readiness)?.critical_inputs;
@@ -162,8 +171,9 @@ export function resolveMandatorySelectionReadiness(
   if (!inputs.length && context.requiresApplicationInputs) {
     return invalid("application_inputs_omitted");
   }
+  const labelOnly = (input: CriticalInput) => readinessQuoteOnlyNamesParameter(input.customer_quote, input.parameter);
   const missing = inputs.filter((input) =>
-    !input.customer_quote || unknownQuote(input.customer_quote)
+    !input.customer_quote || unknownQuote(input.customer_quote) || labelOnly(input)
   );
   if (
     inputs.some((input) =>
@@ -186,7 +196,10 @@ export function resolveMandatorySelectionReadiness(
   }
   const first = missing[0];
   const canonical = {
-    question: first.question,
+    // A falsely 'ready' model may leave the question blank. The server knows
+    // the declared axis but not its answer: ask that axis, never guess a value.
+    question: first.question || (labelOnly(first)
+      ? `Какое значение указать для параметра «${first.parameter.replace(/[?？]/gu, "")}»?` : ""),
     facet_key: "customer_input",
     options: [],
     blocking_input: {

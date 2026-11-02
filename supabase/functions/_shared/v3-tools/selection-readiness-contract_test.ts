@@ -7,6 +7,7 @@ import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
   selectionReadinessInputDiagnostics,
+  readinessQuoteOnlyNamesParameter,
 } from "./selection-readiness-contract.ts";
 import {
   buildDerivedSelectionReasoningMessages,
@@ -59,6 +60,25 @@ Deno.test("mandatory decision cannot be omitted or bypassed by a ready label and
   assertEquals(decision.clarification.scope?.token, context.request);
   assertEquals(decision.clarification.options, []);
   assertEquals(decision.missing, 1);
+});
+Deno.test("readiness: an object's name repeated in the parameter label is not its value, across unrelated domains", () => {
+  for (const [parameter, quote, request] of [
+    ["Материал стены", "стены", "Подбери сверло для стены"],
+    ["Мощность двигателя", "двигателя", "Подбери автомат для двигателя"],
+    ["Диаметр кабеля", "кабеля", "Подбери крепление для кабеля"],
+  ]) {
+    assertEquals(readinessQuoteOnlyNamesParameter(quote, parameter), true);
+    const r = resolveMandatorySelectionReadiness(args("ready", [{ ...unknown, parameter, customer_quote: quote, question: "" }]),
+      { ...context, request, customerEvidence: request });
+    assertEquals(r.status, "needs_input");
+    if (r.status === "needs_input") {
+      assert(r.clarification.question.includes(parameter));
+      assertEquals(r.known, 0);
+      assertEquals(r.missing, 1);
+    }
+  }
+  assertEquals(readinessQuoteOnlyNamesParameter("Бетон", "Материал стены"), false);
+  assertEquals(readinessQuoteOnlyNamesParameter("8 мм", "Диаметр, 8 мм"), false);
 });
 
 Deno.test("catalog/model assumptions are not customer facts even when plausible", () => {

@@ -59,6 +59,7 @@ async function scenario(
   mode:
     | "roundtrip"
     | "unrendered"
+    | "label_ready"
     | "forged"
     | "new_topic"
     | "progress"
@@ -70,6 +71,7 @@ async function scenario(
     | "replacement"
     | "subject"
     | "subject_missing_id"
+    | "subject_rendered_parameters"
     | "subject_retry"
     | "subject_oversized"
     | "subject_single"
@@ -298,13 +300,14 @@ async function scenario(
           "source replacement retains its own proof protocol",
         );
         const known = turn === 1 || mode === "specified" ||
-          mode === "unowned" || mode === "browse" || mode === "unrendered" || subjectMode;
+          mode === "unowned" || mode === "browse" || mode === "unrendered" || mode === "label_ready" || subjectMode;
         const empty = (turn === 1 && mode === "new_topic") || mode === "browse";
         const args = {
           ...(schema.required.includes("selection_subject")
             ? {
               selection_subject: {
-                customer_phrase: mode === "subject_missing_id"
+                customer_phrase: mode === "subject_rendered_parameters" && turn >= 2
+                  ? subjectClass : mode === "subject_missing_id"
                   ? "сверло для стены" : subjectMode
                   ? subjectPhrase
                   : "монтажные крепления",
@@ -320,8 +323,8 @@ async function scenario(
                   ? "ready"
                   : "needs_input",
                 critical_inputs: empty ? [] : [{
-                  parameter: "Материал основания",
-                  customer_quote: known ? "Бетон" : "",
+                  parameter: mode === "label_ready" ? "Материал стены" : "Материал основания",
+                  customer_quote: mode === "label_ready" ? "стены" : known ? "Бетон" : "",
                   question: known ? "" : question,
                   impact:
                     "От материала основания зависит физическая совместимость крепления.",
@@ -334,7 +337,7 @@ async function scenario(
             : known
             ? subjectMode
               ? `Подбираю ${
-                turn === 1 && mode !== "subject_literal"
+                turn >= 1 && mode !== "subject_literal"
                   ? subjectClass
                   : subjectPhrase
               } для стены; Материал основания: Бетон указан клиентом. Диаметр изделия — 8 мм.`
@@ -342,7 +345,7 @@ async function scenario(
             : "",
           retrieval_query: known || mode === "replacement"
             ? subjectMode
-              ? turn === 1 && mode !== "subject_literal"
+              ? turn >= 1 && mode !== "subject_literal"
                 ? subjectClass
                 : subjectPhrase
               : "монтажные крепления"
@@ -396,6 +399,7 @@ async function scenario(
         "progress",
         "subject",
         "subject_missing_id",
+        "subject_rendered_parameters",
         "subject_retry",
         "subject_oversized",
         "subject_single",
@@ -411,9 +415,12 @@ async function scenario(
           : "Бетон",
       );
     }
+    if (mode === "subject_rendered_parameters") messages.push("Бетон, диаметр 8 мм");
     let slots: Event = {};
     const sessionId = "77777777-7777-4777-8777-777777777777";
     for (turn = 0; turn < messages.length; turn++) {
+      if (turn >= modelCalls.length) { requests.push([]); modelCalls.push(0); declarationCalls.push(0); }
+      if (turn >= 2) slots = {};
       if (turn === 1 && mode !== "unrendered") {
         const issued = pending(result[0]);
         assert(
@@ -555,6 +562,32 @@ Deno.test({
       ),
     );
     assert(s.requests[1].some((u) => new URL(u).pathname === "/api/products"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: literal object label cannot discharge a critical value or enter search under a ready decision",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("label_ready");
+    assert(pending(s.turns[0])?.question?.toString().includes("Материал стены"), JSON.stringify(s.logs[0].steps));
+    assert(!s.requests[0].some(u => new URL(u).pathname === "/api/products"));
+    assertEquals(s.declarationCalls[0], 1);
+    assert(!protocol(s.turns[0]).some(e => e.type === "products_block"));
+  },
+});
+Deno.test({
+  name: "strict HTTP: several parameter fragments after real cards retain the verified product base without an adjective-only heuristic",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const s = await scenario("subject_rendered_parameters");
+    assert(protocol(s.turns[1]).some(e => e.type === "products_block"));
+    assert(s.logs[2].steps.some(s => s.step === "v3_recent_product_evidence_recovered"), JSON.stringify(s.logs[2].steps));
+    assert(s.logs[2].steps.some(s => s.step === "v3_unrendered_selection_context" && s.meta?.source === "completed_server_products_block"), JSON.stringify(s.logs[2].steps));
+    assert(s.logs[2].steps.some(s => s.step === "v3_verified_rendered_leaf_evidence" && s.meta?.source === "complete_fresh_server_batch"), JSON.stringify(s.logs[2].steps));
+    const discovery = s.logs[2].steps.find(s => s.step === "v3_tool_call" && s.meta?.tool === "discover_category");
+    assert(JSON.stringify(discovery?.meta?.args).includes("Материалы для сверления"), JSON.stringify(s.logs[2].steps));
+    assert(s.logs[2].steps.some(s => s.step === "v3_user_constraints_frozen" && JSON.stringify(s.meta).includes("бур по бетону")), JSON.stringify(s.logs[2].steps));
+    assert(protocol(s.turns[2]).some(e => e.type === "products_block"), JSON.stringify(s.logs[2].steps));
   },
 });
 Deno.test({

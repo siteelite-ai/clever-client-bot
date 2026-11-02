@@ -9483,10 +9483,22 @@ async function runExpertLoop(
   // A short attribute-only answer may rely on the last completed server
   // selection. Bind its taxonomy evidence to that exact verified leaf, never
   // to a client-provided slot or a model-suggested category.
+  const verifiedRenderedLeafEvidence = SELECTION_READINESS_REQUIRED &&
+      verifiedInitialDiscoveryLeaf && serverRenderedBaseRequest &&
+      ellipticalContinuation?.baseUserMessage === serverRenderedBaseRequest &&
+      recentProductEvidence.length > 0 && recentProductEvidence.every(({ id }) =>
+        ctx.cache.get(id)?.leaf_category === verifiedInitialDiscoveryLeaf)
+    ? verifiedInitialDiscoveryLeaf : "";
   const verifiedActiveLeafEvidence = verifiedInitialDiscoveryLeaf &&
       activeSelectionScope?.leaf === verifiedInitialDiscoveryLeaf
     ? activeSelectionScope.leaf
-    : "";
+    : verifiedRenderedLeafEvidence;
+  if (verifiedRenderedLeafEvidence) steps.push({
+    step: "v3_verified_rendered_leaf_evidence", ms: now(), meta: {
+      leaf: verifiedRenderedLeafEvidence, source: "complete_fresh_server_batch",
+      products: recentProductEvidence.length,
+    },
+  });
   // Category scope comes from the request that produced the latest rendered
   // batch; constraints are compiled separately below so the current attribute
   // can replace, rather than be ANDed with, the previous value of that facet.
@@ -29406,17 +29418,19 @@ Deno.serve(async (req) => {
                 enabled: SELECTION_READINESS_REQUIRED,
                 boundary,
                 newTask: startsNewTask,
-                strongerContext: Boolean(activeRenderedProof || scopedSelectionRequest.scoped ||
+                strongerContext: Boolean(scopedSelectionRequest.scoped ||
                   ellipticalBaseRequest || reissuedSelectionScope || matchedPendingClarification || pendingBroadAssortmentScope ||
                   slots.pending_clarification),
                 replacement: Boolean(replacementEgressRequest),
                 lookupFailed: customerMeasurementEvidence.lookupFailed,
                 serverQueriesNewestFirst: customerMeasurementEvidence.priorQueriesNewestFirst,
+                verifiedRenderedBase: activeRenderedProof && recentProductEvidence.length > 0
+                  ? activeRenderedProof.baseRequest : null,
               });
               if (unrenderedContext.status !== "unchanged") {
                 steps.push({ step: "v3_unrendered_selection_context", ms: Date.now() - t0, meta: {
                   status: unrenderedContext.status,
-                  source: "completed_server_customer_queries",
+                  source: unrenderedContext.status === "restored" ? unrenderedContext.source : null,
                   source_count: unrenderedContext.status === "restored" ? unrenderedContext.sourceCount : 0,
                   reason: unrenderedContext.status === "needs_input" ? unrenderedContext.reason : null,
                 } });
@@ -29428,6 +29442,19 @@ Deno.serve(async (req) => {
               }
               const combinedSelectionRequest = unrenderedContext.status === "restored"
                 ? unrenderedContext.message : baseSelectionRequest;
+              const restoredRenderedBase = unrenderedContext.status === "restored" &&
+                unrenderedContext.source === "completed_server_products_block"
+                ? unrenderedContext.baseRequest ?? null : null;
+              const expertContinuation = ellipticalContinuation ??
+                (restoredRenderedBase ? { baseUserMessage: restoredRenderedBase } : null);
+              const restoredBatchProducts = restoredRenderedBase
+                ? recentProductEvidence.map(({ id }) => ctx.cache.get(id)) : [];
+              const restoredLeaves = [...new Set(restoredBatchProducts.map(product =>
+                String(product?.leaf_category ?? "").trim()).filter(Boolean))];
+              const restoredDiscoveryLeaf = restoredBatchProducts.length > 0 &&
+                restoredBatchProducts.every(Boolean) && restoredLeaves.length === 1 &&
+                restoredBatchProducts.every(product => product?.leaf_category === restoredLeaves[0])
+                ? restoredLeaves[0] : null;
               const needsServerAreaProof = additionalSelectionRequest &&
                 verifyReplacementDestinationFit(combinedSelectionRequest, []).required;
               const verifiedAreaContinuation = !needsServerAreaProof ||
@@ -29482,14 +29509,14 @@ Deno.serve(async (req) => {
                 recentProductEvidence,
                 [],
                 null,
-                ellipticalContinuation,
+                expertContinuation,
                 priorShownProductUrls,
-                null,
+                restoredDiscoveryLeaf,
                 Boolean(replacementEgressRequest),
-                ellipticalAttributeFollowup
+                restoredRenderedBase ?? (ellipticalAttributeFollowup
                   ? ellipticalBaseRequest
-                  : verifiedAdditionalSelection?.baseRequest ?? null,
-                ellipticalAttributeFollowup && activeRenderedProof
+                  : verifiedAdditionalSelection?.baseRequest ?? null),
+                (ellipticalAttributeFollowup || restoredRenderedBase) && activeRenderedProof
                   ? activeRenderedProof.priorQueriesNewestFirst
                   : customerMeasurementEvidence.priorQueriesNewestFirst,
                 userMessage,
