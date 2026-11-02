@@ -85,8 +85,12 @@ QA-secret write moved versions to public681/preview292, not code changes.
 
 No actual Gemini fallback was called. Live closure of its prior400 and live
 coverage of the unrendered fallback itself remain UNVERIFIED. No public
-release. Current secret pair suffix1793618813_ccac12a80cd8a1d2e9bc21b195b815cb
-is pending separately requested deletion confirmation. Full own evidence in
+release. After separate user confirmation both secrets with suffix
+1793618813_ccac12a80cd8a1d2e9bc21b195b815cb were permanently deleted. UI and
+Management API show no temporary secrets; removed key returns403 before any
+model call. Local credential file removed and pair bindings cleared.
+Public683/preview294 ACTIVE with unchanged hashes/JWT/permanent keys; version
+increments from deletion, not code deployment. Full own evidence in
 parent `outputs/qa-pr145-context-live-20261102/REPORT.md`. Old failures retained.
 
 The local bounded QA harness now follows actual issued chips on either middle
