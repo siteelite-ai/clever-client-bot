@@ -63,9 +63,37 @@ Downloaded114/114 TypeScript files match runtime84fa0e82 exactly.
 Management attestation: permanent-secret metadata unchanged, no temporary
 QA keys present, public code/JWT unchanged (public version677, ACTIVE).
 
-No paid requests in this revision. A fresh temporary-pair/max4-message approval
-has been requested and is pending; no new credentials were created. Live
-provider acceptance and the final product response are NOT yet verified.
+## Subsequent authorized live check
+
+After separate user approval a fresh20-minute pair was created. Exactly3
+backend messages were sent (within the max4 budget), with no repeats. The
+actual type-choice step was skipped because no type question was issued.
+
+- `f6dda1cb-f0e5-43b5-b971-a794ca63c63c`: initial wall/drill query FAIL.
+  Primary model accepted the wire schema but declared ready/known1 without
+  asking. Subject became the whole phrase «сверло для стены»;15 search
+  candidates,0 passed target gate, empty answer.
+- `d783bcdc-4252-401d-8aca-c1aeee21346e`: explicit material/diameter/tool
+  reply FAIL. Classifier correctly said continuation, but discover received
+  only the latest parameter reply. The earlier noun was then rejected as
+  ungrounded. There was no verified pending slot to restore the original task.
+- `822d0148-5cbd-4e37-bb6e-54d52e916e5d`: exact new-topic VVG control PASS,
+ 301₸/m,98m; complete price proof retained.
+
+No real Gemini fallback was reached: live closure of its earlier HTTP400 is
+still UNVERIFIED. Do not substitute the mocked compiler test for that fact.
+General readiness/subject/context acceptance remains FAIL; no public release.
+
+The user's additional meter-chip attempt `e30d237a-1d2b-42d9-a5df-ea53e4672b36`
+was locally blocked by the QA relay's completed-sequence guard (browser log
+proxy HTTP403 at127.0.0.1:8768; no backend row), not a production outage.
+Separate observed UX debt: unit alternatives include the already active unit.
+No unit-transition implementation/testing change or product-specific rule was
+made in this run. Relay stopped after3 messages. Only temporary pair suffix
+`1793616584_70430f2886b0efff253b4c4bca249e67` remains pending separately requested
+deletion approval. Permanent metadata and public code/JWT unchanged.
+Full own SSE, logs and screenshots in parent workspace
+`outputs/qa-pr145-wire-live-20261102/REPORT.md`.
 
 ## Release and rollback
 
