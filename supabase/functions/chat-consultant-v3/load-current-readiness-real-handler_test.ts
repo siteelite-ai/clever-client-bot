@@ -7,10 +7,13 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   offlineHandler,
+  enableMandatoryReadinessInOfflineFixture,
   restoreOfflineModuleSetup,
   setSpecificationAssistanceInOfflineFixture,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+// Exercise the released production flag, not just the older OFF contract.
+enableMandatoryReadinessInOfflineFixture();
+await import("./index.ts");
 
 const offlineEnvGet = Deno.env.get;
 
@@ -395,6 +398,16 @@ async function runDialogue({
               )
             ) correctionRequests++;
             return toolReply("declare_selection_reasoning", {
+              selection_readiness: {
+                decision: "ready",
+                critical_inputs: {
+                  first: { parameter: "Ток нагрузки", customer_quote: "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  rest: [
+                    { parameter: "Питание", customer_quote: "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
+                    { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
+                  ],
+                },
+              },
               product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal"
@@ -546,6 +559,9 @@ async function runDialogue({
             }`,
           );
         } else if (terminalMode === "motor_voltage_refusal") {
+          assert(publicText(events).includes("исходные данные учтены"), publicText(events));
+          assert(publicText(events).includes("напряжение"), publicText(events));
+          assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));
           assert(!publicText(events).includes("https://220volt.kz/catalog/"),
             `${label}: private candidate link leaked into public prose`);
           assertEquals(
@@ -777,7 +793,8 @@ async function runDialogue({
     assertEquals((pending?.options as unknown[]).length, expectedFinalOptions);
     const finalAxis = expectedFacets.at(-1);
     assert(
-      (finalAxis === "line_length" ? /(?:длин|метр)/iu :
+      ((pending?.scope as { assistance?: { handoff?: boolean } })?.assistance?.handoff ? /менеджер/iu :
+        finalAxis === "line_length" ? /(?:длин|метр)/iu :
         finalAxis === "engineering_specification" ? /(?:марку|сечение)/iu :
         finalAxis === "specification_lookup_confirmation" ? /(?:маркировке|каталоге)/iu : /(?:ток|ампер|шильдик)/iu)
         .test(String(pending?.question ?? "")),
@@ -984,11 +1001,25 @@ Deno.test({
 
 addEventListener("unload", restoreOfflineModuleSetup);
 
+Deno.test({
+  name: "strict motor compound reply consumes start and nameplate current together before measured range search",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "compound engine answer",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы",
+      "Прямой пуск, номинальный рабочий ток по шильдику 6 А."],
+    expectedFacets: ["supply_phase", "motor_start_method"],
+    expectedProfile: "motor_breaker", terminalMode: "motor_selection",
+  }),
+});
+
 for (const scenario of [
   {label:"pump specification prompt",messages:["Мне нужен кабель для насоса"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable"},
   {label:"unknown specification does not start condition collection",messages:["Мне нужен кабель для насоса","Не знаю"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable"},
   {label:"underground specification prompt",messages:["Какой кабель подойдет для прокладки в земле?"],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
   {label:"typing specification starts verified ordinary catalog lookup immediately",messages:["Мне нужен кабель для насоса","ВВГ 3*1,5"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
+  {label:"source prose specification starts the same verified lookup",messages:["Мне нужен кабель для насоса","В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
+  {label:"a marking can still resume lookup after a manager handoff",messages:["Мне нужен кабель для насоса","Марку и сечение не знаю, нужна помощь.","По паспорту: ВВГ 3*1,5"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
   {label:"supplied PE and all conditions still need only specification, not a summary",messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м."],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
 ]) Deno.test({
   name:"simple specification prompt real handler: "+scenario.label,

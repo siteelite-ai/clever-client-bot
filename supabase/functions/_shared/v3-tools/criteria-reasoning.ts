@@ -1054,8 +1054,9 @@ function customerCurrentOwnedByConnectedLoad(
         /(?:^|[,\s])(?:рабоч\p{L}*\s+)?ток\p{L}*\s*$/iu
           .test(localBefore);
       const scopedCurrentAnswer =
-        /^\s*уточнение клиента\s*:\s*(?:ток\p{L}*\s*)?$/iu
-          .test(before) &&
+        (/^\s*уточнение клиента\s*:\s*(?:ток\p{L}*\s*)?$/iu.test(before) ||
+          /^\s*уточнение клиента\s*:/iu.test(before) &&
+          /(?:^|[,\s])(?:номинальн\p{L}*\s+)?рабоч\p{L}*\s+ток\p{L}*(?:\s+по\s+шильдик\p{L}*)?\s*$/iu.test(localBefore)) &&
         turnIndex > 0 &&
         turns.slice(0, turnIndex).some((prior) =>
           lastIndex(prior, selectionVerb) >= 0 &&

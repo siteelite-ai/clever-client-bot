@@ -7,6 +7,7 @@ import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
   selectionReadinessInputDiagnostics,
+  selectionReadinessInputIssues,
   readinessQuoteOnlyNamesParameter,
 } from "./selection-readiness-contract.ts";
 import {
@@ -30,6 +31,27 @@ const unknown = {
 };
 const args = (decision: string, critical_inputs: unknown[]) => ({
   selection_readiness: { decision, critical_inputs },
+});
+
+Deno.test("invalid input diagnostics identify shape errors without exposing model explanation text", () => {
+  const result = selectionReadinessInputIssues(args("ready", [{ ...unknown, impact: "private" }]));
+  assertEquals(result, [{ index: 0, field: "impact", type: "string", chars: 7 }]);
+  assert(!JSON.stringify(result).includes("private"));
+  assertEquals(selectionReadinessInputIssues(args("ready", [{ ...unknown, customer_quote: "Бетон", question: "", impact: "" }])), []);
+});
+
+Deno.test("a verified supplied fact does not require a second model explanation; unknown facts still do", () => {
+  const supplied = { parameter: "Материал основания", customer_quote: "Бетон", question: "", impact: "" };
+  assertEquals(resolveMandatorySelectionReadiness(args("ready", [supplied]), {
+    ...context, customerEvidence: "Подбери монтажные крепления. Бетон",
+  }), { status: "ready", known: 1, missing: 0 });
+  for (const input of [
+    { ...supplied, customer_quote: "" },
+    { ...supplied, customer_quote: "Нет данных" },
+    { ...supplied, customer_quote: "Бетон", impact: undefined },
+  ]) assertEquals(resolveMandatorySelectionReadiness(args("ready", [input]), context).status, "invalid");
+  assertEquals(resolveMandatorySelectionReadiness(args("ready", [{ ...supplied, customer_quote: "Кирпич" }]), context),
+    { status: "invalid", reason: "unowned_customer_quote" });
 });
 Deno.test("readiness diagnostics show declared input ownership without logging private reasoning", () => {
   const value = { ...args("ready", [{ parameter: "Материал", customer_quote: "стены", question: "" }, { parameter: "Соединение", customer_quote: "SDS Plus", question: "" }]), reasoning: "private planning must not be logged" };

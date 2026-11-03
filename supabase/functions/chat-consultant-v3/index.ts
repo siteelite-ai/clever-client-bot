@@ -702,6 +702,7 @@ import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
   selectionReadinessInputDiagnostics,
+  selectionReadinessInputIssues,
 } from "../_shared/v3-tools/selection-readiness-contract.ts";
 import { resolveUnrenderedSelectionContext } from "../_shared/v3-tools/unrendered-selection-context.ts";
 import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
@@ -723,6 +724,7 @@ import {
   specificationCatalogQuery,
 } from "../_shared/v3-tools/specification-assistance.ts";
 import { lookupProductManagerPhone } from "../_shared/v3-tools/lookup-contacts.ts";
+import { selectionVerificationNotice } from "../_shared/v3-tools/selection-verification-notice.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type CoverageDiagnostic,
@@ -10898,6 +10900,8 @@ async function runExpertLoop(
   // declaration of missing customer input is never fed to measurement repair
   // or to search as if it were evidence of compatibility.
   let resolvedSelectionSubject: SelectionSubject | null = null;
+  let customerInputsAccepted = false;
+  let unprovenMeasurementUnits: string[] = [];
   let discoveryLiteralTypeTarget: string | null = null;
   const finishWithSelectionClarification = (value: unknown, source: string) => {
     if (transientCatalogFailureSeen) {
@@ -10952,7 +10956,7 @@ async function runExpertLoop(
     } });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
-  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string, requireSubject = false) => {
+  const checkMandatorySelectionReadiness = async (args: Record<string, unknown>, source: string, requireSubject = false) => {
     const decision = resolveMandatorySelectionReadiness(args, {
       request: userMessage,
       // Only current + already verified task context, never model/catalog prose.
@@ -10967,8 +10971,10 @@ async function runExpertLoop(
       known:decision.status === "invalid" ? null : decision.known,
       missing:decision.status === "invalid" ? null : decision.missing,
       inputs: selectionReadinessInputDiagnostics(args, userMessage),
+      input_issues: decision.status === "invalid" ? selectionReadinessInputIssues(args) : [],
     }});
     if (decision.status === "ready") {
+      customerInputsAccepted = true;
       if (!requireSubject) return null;
       const subject = resolveSelectionSubject(args.selection_subject, {
         request: userMessage, category: lastDiscover?.category?.pagetitle,
@@ -11006,7 +11012,9 @@ async function runExpertLoop(
       // while a mandatory readiness declaration is unresolved.
     }
     if (transientCatalogFailureSeen) return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
-    const notice = "Не удалось надёжно проверить исходные данные для подбора. Повторите запрос или обратитесь к менеджеру.";
+    const notice = selectionVerificationNotice({ customerInputsAccepted,
+      uncoveredUnits: unprovenMeasurementUnits,
+      managerPhone: await lookupProductManagerPhone(ctx.supabase) });
     send({type:"delta",content:notice,origin:"server"});
     finalText += `${finalText ? "\n\n" : ""}${notice}`;
     steps.push({step:"v3_turn_end",ms:now(),meta:{reason:"selection_readiness_contract_invalid"}});
@@ -12944,7 +12952,7 @@ async function runExpertLoop(
             ),
           );
           if (requireSelectionReadiness) {
-            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
+            const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
             if (outcome) {
               const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
               recordClosureRetryOutcome(reason === "selection_input_required", reason);
@@ -13143,6 +13151,8 @@ async function runExpertLoop(
                   : false,
             };
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
+              if (gap && coverageDiagnostic) unprovenMeasurementUnits =
+                (coverageDiagnostic as CoverageDiagnostic).quantities?.map(item => item.unit) ?? [];
               if (diagnosticStage) {
                 steps.push({ step: "v3_product_measurement_projection_diagnostic", ms: now(), meta: {
                   diagnostic_version: 1, stage: diagnosticStage, gap,
@@ -13272,14 +13282,15 @@ async function runExpertLoop(
               shownProductIds: [...shownIds],
             };
           };
-          const stopForUnverifiedProductMeasurement = (
+          const stopForUnverifiedProductMeasurement = async (
             reason: RequiredProductMeasurementGap | null,
             correctionFailure: ReturnType<typeof classifyPublicFailure> | null =
               null,
           ) => {
             recordClosureRetryOutcome(false, "product_measurement_unverified");
-            const notice = correctionFailure?.customer_message ??
-              "Не удалось однозначно проверить обязательный числовой параметр товара по каталогу. Не буду показывать неподтверждённые варианты; уточните требование к товару или повторите запрос.";
+            const notice = correctionFailure?.customer_message ?? selectionVerificationNotice({
+              customerInputsAccepted, uncoveredUnits: unprovenMeasurementUnits,
+              managerPhone: await lookupProductManagerPhone(ctx.supabase) });
             send({ type: "delta", content: notice });
             finalText += `${finalText ? "\n\n" : ""}${notice}`;
             steps.push({
@@ -13598,7 +13609,7 @@ async function runExpertLoop(
                 ),
               );
               if (requireSelectionReadiness) {
-                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
+                const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
                 if (outcome) return outcome;
               } else if (declarationCall && "clarification" in declarationCall.args) {
                 const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
@@ -28238,39 +28249,42 @@ Deno.serve(async (req) => {
               userMessage,
               effectiveHistory,
             );
+            // Every competing compound route must inspect the same compiled
+            // marking answer. Source prose is not an extra product attribute.
+            const compoundSelectionMessage = specificationLookupQuery ?? userMessage;
             const exactCompoundMarkingRequest =
               classifyExactCompoundMarkingRequest(
-                specificationLookupQuery ?? userMessage,
+                compoundSelectionMessage,
               );
             const explicitCompoundMarking = extractExplicitCompoundMarking(
-              userMessage,
+              compoundSelectionMessage,
             );
             const semanticCompoundMarking =
-              detectUserIntentMode(userMessage) === "select" &&
+              detectUserIntentMode(compoundSelectionMessage) === "select" &&
                 explicitCompoundMarking &&
-                requiresSemanticCompoundEvidence(userMessage)
+                requiresSemanticCompoundEvidence(compoundSelectionMessage)
                 ? explicitCompoundMarking
                 : null;
             const semanticCompoundDirectAdmitted = Boolean(
               semanticCompoundMarking && admitDirectSelectionRoute({
                 route: "compound",
-                userMessage,
+                userMessage: compoundSelectionMessage,
                 coveredCompound: semanticCompoundMarking,
               }),
             );
             const semanticCompoundUnprovenSuperlative =
               mustStopUnprovenSemanticCompoundSuperlative(
                 Boolean(explicitCompoundMarking),
-                requiresSemanticCompoundEvidence(userMessage),
+                requiresSemanticCompoundEvidence(compoundSelectionMessage),
                 semanticCompoundSuperlativeIntent(
-                  userMessage,
-                  detectPriceDirection(userMessage),
+                  compoundSelectionMessage,
+                  detectPriceDirection(compoundSelectionMessage),
                 ),
               );
             const exactCompoundDirectAdmitted = Boolean(
               exactCompoundMarkingRequest && admitDirectSelectionRoute({
                 route: "compound",
-                userMessage: specificationLookupQuery ?? userMessage,
+                userMessage: compoundSelectionMessage,
                 coveredCompound: exactCompoundMarkingRequest,
               }),
             );
@@ -28401,7 +28415,7 @@ Deno.serve(async (req) => {
               const phone = await lookupProductManagerPhone(supabase);
               if (phone) readinessClarification.scope.assistance.manager_phone = phone;
               readinessClarification.question += phone
-                ? `\n\nЕсли маркировка неизвестна, позвоните менеджеру: ${phone}.`
+                ? `\n\n${readinessClarification.scope.assistance.handoff ? "Позвоните менеджеру" : "Если маркировка неизвестна, позвоните менеджеру"}: ${phone}.`
                 : "\n\nЕсли маркировка неизвестна, свяжитесь с менеджером. Телефон можно посмотреть на странице контактов.";
             }
             // GUARD v3_meta_question_declined: вопрос про устройство сервиса

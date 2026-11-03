@@ -591,7 +591,12 @@ export function extractNominalLoadCurrent(evidence: string): number | null {
       before.lastIndexOf("\n"),
     ) + 1);
     const forConnectedLoad = /(?:для|под)\s+(?:\p{L}{3,}\s+){0,3}?(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*/iu
-      .test(before);
+      .test(before) ||
+      // The owner belongs to the verified task, not necessarily the current
+      // sentence. A multi-fact reply may state start method AND nameplate
+      // current. Product-side/selected-equipment exclusions below still win.
+      (turnStart >= 0 && /^\s*уточнение\s+клиента\s*:/iu.test(before) &&
+        /(?:для|под)\s+(?:\p{L}{3,}\s+){0,3}?(?:двигател|мотор|насос|котл|нагрузк|потребител|оборудован|устройств|агрегат|компрессор|вентилятор)\p{L}*/iu.test(current.slice(0, turnStart)));
     const issuedAnswer = /(?:^|\n)уточнение\s+клиента\s*:\s*(?:ток\p{L}*\s*)?$/iu
       .test(before);
     if (issuedAnswer) {

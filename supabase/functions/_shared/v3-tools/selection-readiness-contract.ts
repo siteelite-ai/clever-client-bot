@@ -16,7 +16,9 @@ export const SELECTION_READINESS_CONTRACT_SCHEMA = {
           parameter: { type: "string", minLength: 2, maxLength: 100 },
           customer_quote: { type: "string", maxLength: 240 },
           question: { type: "string", maxLength: 400 },
-          impact: { type: "string", minLength: 10, maxLength: 300 },
+          // Explanation belongs to a missing-input question, not to the
+          // evidence proving an already supplied customer fact.
+          impact: { type: "string", maxLength: 300 },
         },
         required: ["parameter", "customer_quote", "question", "impact"],
         additionalProperties: false,
@@ -100,6 +102,25 @@ export function selectionReadinessInputDiagnostics(args: Record<string, unknown>
   });
 }
 
+/** Only field identities/types/lengths: never log model explanation prose. */
+export function selectionReadinessInputIssues(args: Record<string, unknown>) {
+  const rows = object(args.selection_readiness)?.critical_inputs;
+  if (!Array.isArray(rows)) return [];
+  return rows.slice(0, 8).flatMap((entry, index) => {
+    const input = object(entry);
+    if (!input) return [{ index, field: "input", type: typeof entry, chars: null }];
+    const unknown = typeof input.customer_quote === "string" && typeof input.parameter === "string" &&
+      (!input.customer_quote || unknownQuote(input.customer_quote) || readinessQuoteOnlyNamesParameter(input.customer_quote, input.parameter));
+    const fields = [["parameter", 2, 100], ["customer_quote", 0, 240], ["question", 0, 400], ["impact", unknown ? 10 : 0, 300]] as const;
+    const issues: Array<{ index: number; field: string; type: string; chars: number | null }> = fields.filter(([field, min, max]) => !text(input[field], min, max))
+      .map(([field]) => ({ index, field: field as string, type: typeof input[field], chars: typeof input[field] === "string" ? (input[field] as string).length : null }));
+    if (Object.keys(input).some(key => !fields.some(([field]) => field === key))) {
+      issues.push({ index, field: "shape", type: "unexpected_fields", chars: null });
+    }
+    return issues;
+  });
+}
+
 /** A quote is evidence only from trusted customer text, not catalog/model prose.
  * The semantic choice of which inputs matter remains the model's responsibility. */
 export function customerOwnsReadinessQuote(
@@ -157,7 +178,7 @@ export function resolveMandatorySelectionReadiness(
       ) ||
       !text(input.parameter, 2, 100) || !text(input.customer_quote, 0, 240) ||
       !text(input.question, 0, 400) ||
-      !text(input.impact, 10, 300)
+      !text(input.impact, 0, 300)
     ) {
       return invalid("invalid_critical_input");
     }
@@ -175,6 +196,11 @@ export function resolveMandatorySelectionReadiness(
   const missing = inputs.filter((input) =>
     !input.customer_quote || unknownQuote(input.customer_quote) || labelOnly(input)
   );
+  // Unknown inputs retain the existing explanation requirement. Known quotes
+  // still require ownership below, and READY supplies no product-fit proof.
+  if (missing.some(input => !text(input.impact, 10, 300))) {
+    return invalid("invalid_critical_input");
+  }
   if (
     inputs.some((input) =>
       input.customer_quote &&
