@@ -142,7 +142,7 @@ Deno.test("legacy help/status/summary slots migrate to one prompt, never collect
     })!;
     assertEquals(prompt.facet_key, "engineering_specification");
     assertEquals(prompt.options, []);
-    assertEquals(prompt.scope?.assistance, { version: 1 });
+    assertEquals(prompt.scope?.assistance, { version: 1, handoff: true });
   }
 });
 Deno.test("unknown specification remains a text prompt, not a questionnaire or a false empty catalog", () => {
@@ -218,4 +218,41 @@ Deno.test("compound grammar keeps family suffixes, core count and decimals atomi
   assertEquals(explicitCableSpecification("ВВГ12*1,5"), null);
   assertEquals(explicitCableSpecification("ПВ3 1*2,5"), "ПВ3 1*2,5");
   assertEquals(explicitCableSpecification("Лампа 3*1,5"), null);
+});
+
+Deno.test("an explicit specification answer accepts source prose across cable families, not just a bare token", () => {
+  for (const [message, marking] of [
+    ["В проекте указан КГ 3*1,5. Проверь наличие и цену.", "КГ 3*1,5"],
+    ["По паспорту: ВБШв 5×6 мм²", "ВБШв 5*6"],
+    ["Маркировка — ПВ3 1x2.5", "ПВ3 1*2,5"],
+    ["На шильдике написано: АБВ-нг 12*1,5.", "АБВ-нг 12*1,5"],
+  ]) {
+    assertEquals(explicitCableSpecification(message), marking, message);
+    assertEquals(specificationCatalogQuery({ message, verifiedSlot: issued(), newTask: false, enabled: true }),
+      `Найди кабель ${marking}`, message);
+  }
+});
+
+Deno.test("specification prose cannot erase a constraint, negation, alternative, uncertainty or another task", () => {
+  for (const message of [
+    "В проекте указан КГ 3*1,5, до 1000 тенге",
+    "В проекте указан не КГ 3*1,5",
+    "Возможно КГ 3*1,5",
+    "Подойдёт ли КГ 3*1,5?",
+    "Например КГ 3*1,5",
+    "КГ 3*1,5 или ВВГ 3*1,5",
+    "В проекте указан КГ 3*1,5. И лампа E27",
+    "Новая тема. В проекте указан КГ 3*1,5",
+  ]) assertEquals(explicitCableSpecification(message), null, message);
+});
+
+Deno.test("unknown specification becomes a manager handoff, not the same unanswered question", () => {
+  for (const message of ["Не знаю", "Марку и сечение не знаю, нужна помощь.", "Нет, нужна помощь"]) {
+    const prompt = resolveSpecificationAssistance({ message, verifiedSlot: issued(), newTask: false, enabled: true })!;
+    assert(!/Укажите|например|\?/u.test(prompt.question), prompt.question);
+    assert(/менеджер/iu.test(prompt.question));
+    assertEquals(prompt.options, []);
+    // Keep the verified scope so a later real marking can still be supplied.
+    assertEquals(prompt.scope?.token, pump);
+  }
 });

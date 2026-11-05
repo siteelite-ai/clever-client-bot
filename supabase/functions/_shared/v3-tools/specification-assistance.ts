@@ -7,8 +7,17 @@ const LIMIT = 4000;
 /** Syntax of a customer-owned cable specification, NOT engineering approval.
  * No catalog aliases/brand dictionary, inferred size or relaxed fit gate. */
 export function explicitCableSpecification(message: string): string | null {
-  const text = message.trim().replace(/^кабель\s+/iu, "");
-  if (text.length > 160) return null;
+  const raw = message.trim();
+  if (raw.length > 240 || /[?？]/u.test(raw)) return null;
+  // Accept a declared value with a source label, not a substring plucked from
+  // arbitrary prose. Full consumption is important: a second product, budget,
+  // negation or alternative must not disappear when compiling the lookup.
+  const text = raw.replace(
+    /^(?:(?:(?:в|по|из|согласно)\s+(?:проект\p{L}*|паспорт\p{L}*|спецификац\p{L}*|документ\p{L}*)|(?:на|в)\s+шильдик\p{L}*)(?:\s+(?:указан\p{L}*|записан\p{L}*|написан\p{L}*))?|(?:марк\p{L}*|маркировк\p{L}*))\s*[:—–-]?\s*/iu,
+    "",
+  ).replace(/^кабель\s+/iu, "")
+    .replace(/(?:[.!]\s*)?(?:проверь(?:те)?|покажи(?:те)?)\s+(?:наличие(?:\s+и\s+цен[уы])?|цен[уы](?:\s+и\s+наличие)?)[.!]?\s*$/iu, "")
+    .replace(/[.!]\s*$/u, "").trim();
   // Require the explicit family/size boundary: greedily splitting an attached
   // "ВВГ12*1,5" could turn 12 cores into a family suffix "1" and two cores.
   const m = text.match(
@@ -75,16 +84,18 @@ export function resolveSpecificationAssistance(
   const original = active ? scope!.token as string : input.message;
   const profile = specificationAssistanceProfile(original);
   if (!profile) return null;
+  const handoff = active && /(?:не\s+знаю|неизвестн\p{L}*|нет\s+(?:маркировк\p{L}*|проект\p{L}*|паспорт\p{L}*)|нужна\s+помощь)/iu.test(input.message);
   return {
     profile,
-    question:
-      "Укажите, пожалуйста, марку, число жил и сечение кабеля из паспорта или проекта, например «ВВГ 3*1,5». Проверю наличие и цены по маркировке, но не расчёт сечения для подключения.",
+    question: handoff
+      ? "Без маркировки из паспорта или проекта я не могу подтвердить подходящий кабель. С выбором марки и сечения поможет менеджер."
+      : "Укажите, пожалуйста, марку, число жил и сечение кабеля из паспорта или проекта, например «ВВГ 3*1,5». Проверю наличие и цены по маркировке, но не расчёт сечения для подключения.",
     facet_key: "engineering_specification",
     options: [],
     scope: {
       kind: "selection_readiness",
       token: original,
-      assistance: { version: 1 },
+      assistance: { version: 1, ...(handoff ? { handoff: true } : {}) },
     },
   };
 }

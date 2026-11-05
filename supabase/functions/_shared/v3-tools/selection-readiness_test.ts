@@ -883,6 +883,20 @@ Deno.test("nameplate qualifiers between load current and amperes retain the load
   );
 });
 
+Deno.test("a scoped compound clarification retains load ownership across turns and consumes all explicit answers", () => {
+  for (const [request, response, expected] of [
+    ["Подберите автомат для двигателя асинхронный 3 кВт", "Прямой пуск, номинальный рабочий ток по шильдику 6 А.", 6],
+    ["Нужен кабель для насоса", "Рабочий ток по шильдику 8,5 А, длина 25 м.", 8.5],
+  ] as const) {
+    const text = joinCustomerTurns([request, "Уточнение клиента: 380 В, 3 фазы", `Уточнение клиента: ${response}`]);
+    assertEquals(extractNominalLoadCurrent(text), expected, text);
+    if (/двигател/u.test(request)) assertEquals(selectReadinessClarification(text), null);
+  }
+  for (const response of ["Автомат с номинальным рабочим током 16 А", "Нужен насос с рабочим током 16 А", "Ток автомата по шильдику 16 А"]) {
+    assertEquals(extractNominalLoadCurrent(joinCustomerTurns(["Подберите автомат для двигателя 3 кВт", `Уточнение клиента: ${response}`])), null, response);
+  }
+});
+
 Deno.test("nameplate wording cannot turn product ratings into load measurements", () => {
   for (const productCurrent of [
     "Подберите автомат для двигателя на номинальный рабочий ток по шильдику 16 А",

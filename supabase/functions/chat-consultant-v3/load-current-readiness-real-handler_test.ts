@@ -7,10 +7,13 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   offlineHandler,
+  enableMandatoryReadinessInOfflineFixture,
   restoreOfflineModuleSetup,
   setSpecificationAssistanceInOfflineFixture,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+// Exercise the released production flag, not just the older OFF contract.
+enableMandatoryReadinessInOfflineFixture();
+await import("./index.ts");
 
 const offlineEnvGet = Deno.env.get;
 
@@ -70,6 +73,9 @@ const motorProducts = [
     }],
   },
 ];
+const liveMotorCatalog=JSON.parse(await Deno.readTextFile(new URL("./fixtures/motor-operating-domain-20261105.json",import.meta.url))) as {
+  options:Array<Record<string,unknown>>; products:Array<Record<string,unknown>>;
+};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -117,12 +123,16 @@ async function runDialogue({
   expectedProfile,
   terminalMode = null,
   expectedFinalOptions = 0,
+  useLiveVoltageSchema = false,
+  livePrimaryTypeEvidence = "owned",
 }: {
   label: string;
   messages: string[];
   expectedFacets: string[];
   expectedProfile: string;
   expectedFinalOptions?: number;
+  useLiveVoltageSchema?:boolean;
+  livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -130,6 +140,7 @@ async function runDialogue({
     | "motor_selection"
     | "motor_measurement_repair"
     | "motor_voltage_refusal"
+    | "motor_voltage_conjunction"
     | "specification_lookup"
     | null;
 }): Promise<void> {
@@ -148,6 +159,8 @@ async function runDialogue({
   let modelRequests = 0;
   let declarationRequests = 0;
   let correctionRequests = 0;
+  const voltageKey=useLiveVoltageSchema?"nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v":"working_voltage";
+  const settingKey=useLiveVoltageSchema?"diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a":"thermal_trip_setting";
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
@@ -278,7 +291,7 @@ async function runDialogue({
       }
       if (
         (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" ||
-          terminalMode === "motor_voltage_refusal") &&
+          terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction") &&
         currentTurn === messages.length - 1
       ) {
         if (url.origin === "https://fixture.catalog.invalid") {
@@ -298,7 +311,7 @@ async function runDialogue({
                   pagetitle: motorCategory,
                   total_products: motorProducts.length,
                 },
-                options: [{
+                options: useLiveVoltageSchema?liveMotorCatalog.options:[{
                   key: "thermal_trip_setting",
                   caption_ru: motorSettingCaption,
                   type: "string",
@@ -307,7 +320,10 @@ async function runDialogue({
                     value_ru,
                     products_count: 1,
                   })),
-                }],
+                }, ...(terminalMode === "motor_voltage_conjunction" ? [{
+                  key: "working_voltage", caption_ru: "Номинальное рабочее напряжение, В",
+                  type: "string", unit: "В", values: ["220", "380", "400", "690"].map(value_ru => ({value_ru,products_count:1})),
+                }] : [])],
               },
             });
           }
@@ -315,7 +331,17 @@ async function runDialogue({
             catalogProductRequests.push(url);
             const title = url.searchParams.get("pagetitle");
             const category = url.searchParams.get("category");
-            const candidates = motorProducts.filter((product) =>
+            const pool = useLiveVoltageSchema?liveMotorCatalog.products.map((product): Record<string,unknown> => ({
+              ...product,
+              ...(livePrimaryTypeEvidence === "missing" ? {content:null} : {}),
+              ...(livePrimaryTypeEvidence === "accessory" ? {pagetitle:`Крышка для ${product.pagetitle}`} : {}),
+            })):terminalMode === "motor_voltage_conjunction" ? [
+              ...motorProducts.map(product => ({...product,options:[...product.options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"380"}]})),
+              {...motorProducts[1],id:104,pagetitle:"Синтетический кандидат с неверным напряжением",url:"https://220volt.kz/catalog/electric/motor-protection/wrong-voltage/",options:[...motorProducts[1].options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"220"}]},
+              {...motorProducts[1],id:105,pagetitle:"Синтетический кандидат без напряжения",url:"https://220volt.kz/catalog/electric/motor-protection/missing-voltage/"},
+              {...motorProducts[1],id:106,pagetitle:"Синтетический кандидат с другим номиналом",url:"https://220volt.kz/catalog/electric/motor-protection/other-voltage/",options:[...motorProducts[1].options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"400"}]},
+            ] : motorProducts;
+            const candidates = pool.filter((product) =>
               (!title || product.pagetitle === title) &&
               (!category || product.category === category)
             );
@@ -395,9 +421,19 @@ async function runDialogue({
               )
             ) correctionRequests++;
             return toolReply("declare_selection_reasoning", {
+              selection_readiness: {
+                decision: "ready",
+                critical_inputs: {
+                  first: { parameter: "Ток нагрузки", customer_quote: "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  rest: [
+                    { parameter: "Питание", customer_quote: "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
+                    { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
+                  ],
+                },
+              },
               product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
-                : terminalMode === "motor_voltage_refusal"
+                : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
                 ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
                 : ["Диапазон уставки тока должен включать рабочий ток 6 А."],
               retrieval_query: "автомат защиты двигателя",
@@ -493,7 +529,7 @@ async function runDialogue({
           assertEquals(row.final_products_count,1);
           assert(visible.some(event=>event.type==="conversation_boundary" && event.mode==="new_task"));
           assert(!visible.some(event=>event.type==="quick_replies"));
-        } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+        } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" || terminalMode === "motor_voltage_conjunction") {
           assertEquals(
             row.error,
             null,
@@ -502,21 +538,46 @@ async function runDialogue({
           const cards = visible.filter((event) =>
             event.type === "products_block"
           );
+          if(useLiveVoltageSchema){
+            if (livePrimaryTypeEvidence !== "owned") {
+              assertEquals(cards.length,0,JSON.stringify({visible,steps:row.steps}));
+              assertEquals(row.final_products_count,0);
+              assert(!row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"));
+            } else {
+            assertEquals(cards.length,1,JSON.stringify({visible,steps:row.steps}));
+            assertEquals(row.final_products_count,4);
+            const markdown = String(cards[0].markdown);
+            const accepted = new Set([28903,28913,29287,29288]);
+            for (const product of liveMotorCatalog.products) {
+              assert(typeof product.url === "string" && product.url.length > 0);
+              const safeUrl = product.url.replace(/\(/g,"%28").replace(/\)/g,"%29");
+              assertEquals(markdown.includes(safeUrl),accepted.has(Number(product.id)),String(product.pagetitle));
+            }
+            assert(row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"),JSON.stringify(row.steps));
+            assert(!row.steps.some(s=>s.step==="v3_product_measurement_unverified"),JSON.stringify(row.steps));
+            const diagnosis=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
+            assertEquals(diagnosis?.meta?.gap,null);
+            }
+          }else{
           assertEquals(
             cards.length,
             1,
             `${label}: ${JSON.stringify({ visible, steps: row.steps })}`,
           );
           const markdown = String(cards[0].markdown ?? "");
-          assert(markdown.includes(motorProducts[0].url), markdown);
-          assert(markdown.includes(motorProducts[1].url), markdown);
-          assert(!markdown.includes(motorProducts[2].url), markdown);
+            assert(markdown.includes(motorProducts[0].url), markdown);
+            assert(markdown.includes(motorProducts[1].url), markdown);
+            assert(!markdown.includes(motorProducts[2].url), markdown);
+          if (terminalMode === "motor_voltage_conjunction") {
+            assert(!markdown.includes("wrong-voltage") && !markdown.includes("missing-voltage") && !markdown.includes("other-voltage"),markdown);
+          }
           assertEquals(row.final_products_count, 2);
+          }
           assert(
             row.steps.some(({ step, meta }) =>
               step === "v3_measured_point_range_relation_checked" &&
               meta?.certified === true &&
-              meta?.facet === "thermal_trip_setting" &&
+              meta?.facet === settingKey &&
               meta?.accepted_values === 2
             ),
             `${label}: no certified load-to-range relation: ${
@@ -546,6 +607,9 @@ async function runDialogue({
             }`,
           );
         } else if (terminalMode === "motor_voltage_refusal") {
+          assert(publicText(events).includes("исходные данные учтены"), publicText(events));
+          assert(publicText(events).includes("напряжение"), publicText(events));
+          assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));
           assert(!publicText(events).includes("https://220volt.kz/catalog/"),
             `${label}: private candidate link leaked into public prose`);
           assertEquals(
@@ -690,7 +754,7 @@ async function runDialogue({
         assert(catalogProductRequests.length>0);
         assert(catalogProductRequests.every(url=>url.searchParams.get("query")?.includes("3*1,5")));
         return;
-      } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+      } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" || terminalMode === "motor_voltage_conjunction") {
         assertEquals(
           externalRequests,
           0,
@@ -707,10 +771,14 @@ async function runDialogue({
           `${label}: only an invalid hypothesis should repair once`,
         );
         const searchedValues = new Set(catalogProductRequests.flatMap((url) =>
-          url.searchParams.getAll("options[thermal_trip_setting][]")
+          url.searchParams.getAll(`options[${settingKey}][]`)
         ));
-        assert(searchedValues.has("4–6 А"), `${label}: no 4–6 A search`);
-        assert(searchedValues.has("6–10 А"), `${label}: no 6–10 A search`);
+        assert(searchedValues.has(useLiveVoltageSchema?"4-6.3":"4–6 А"), `${label}: no lower interval search`);
+        assert(searchedValues.has(useLiveVoltageSchema?"6-10":"6–10 А"), `${label}: no upper interval search`);
+        if (terminalMode === "motor_voltage_conjunction") {
+          const voltages = new Set(catalogProductRequests.flatMap(url => url.searchParams.getAll(`options[${voltageKey}][]`)));
+          assertEquals([...voltages],[useLiveVoltageSchema?"230-690":"380"],"the customer working point must shape retrieval as well as final cards");
+        }
         assert(
           !searchedValues.has("7–10 А"),
           `${label}: incompatible 7–10 A option entered search`,
@@ -777,7 +845,8 @@ async function runDialogue({
     assertEquals((pending?.options as unknown[]).length, expectedFinalOptions);
     const finalAxis = expectedFacets.at(-1);
     assert(
-      (finalAxis === "line_length" ? /(?:длин|метр)/iu :
+      ((pending?.scope as { assistance?: { handoff?: boolean } })?.assistance?.handoff ? /менеджер/iu :
+        finalAxis === "line_length" ? /(?:длин|метр)/iu :
         finalAxis === "engineering_specification" ? /(?:марку|сечение)/iu :
         finalAxis === "specification_lookup_confirmation" ? /(?:маркировке|каталоге)/iu : /(?:ток|ампер|шильдик)/iu)
         .test(String(pending?.question ?? "")),
@@ -968,6 +1037,28 @@ Deno.test({
 });
 
 Deno.test({
+  name: "fully specified motor retains independent customer voltage in search and rejects wrong/missing card voltage",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "independent voltage conjunction",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],
+    expectedFacets: [], expectedProfile: "motor_breaker", terminalMode: "motor_voltage_conjunction",
+  }),
+});
+
+Deno.test({
+  name: "real catalog replay admits four same-card primary-type candidates only after independent numeric proof",
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:"real catalog operating domain replay",messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true}),
+});
+
+for (const livePrimaryTypeEvidence of ["missing", "accessory"] as const) Deno.test({
+  name: `real catalog replay cannot use numeric matches to rescue ${livePrimaryTypeEvidence} primary identity evidence`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`real catalog negative identity ${livePrimaryTypeEvidence}`,messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true,livePrimaryTypeEvidence}),
+});
+
+Deno.test({
   name: "an invalid structured declaration repaired against server evidence advances to strict per-card load proof",
   permissions: { read: true, env: false, net: false },
   fn: () => runDialogue({
@@ -984,11 +1075,25 @@ Deno.test({
 
 addEventListener("unload", restoreOfflineModuleSetup);
 
+Deno.test({
+  name: "strict motor compound reply consumes start and nameplate current together before measured range search",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "compound engine answer",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы",
+      "Прямой пуск, номинальный рабочий ток по шильдику 6 А."],
+    expectedFacets: ["supply_phase", "motor_start_method"],
+    expectedProfile: "motor_breaker", terminalMode: "motor_selection",
+  }),
+});
+
 for (const scenario of [
   {label:"pump specification prompt",messages:["Мне нужен кабель для насоса"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable"},
   {label:"unknown specification does not start condition collection",messages:["Мне нужен кабель для насоса","Не знаю"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable"},
   {label:"underground specification prompt",messages:["Какой кабель подойдет для прокладки в земле?"],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
   {label:"typing specification starts verified ordinary catalog lookup immediately",messages:["Мне нужен кабель для насоса","ВВГ 3*1,5"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
+  {label:"source prose specification starts the same verified lookup",messages:["Мне нужен кабель для насоса","В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
+  {label:"a marking can still resume lookup after a manager handoff",messages:["Мне нужен кабель для насоса","Марку и сечение не знаю, нужна помощь.","По паспорту: ВВГ 3*1,5"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
   {label:"supplied PE and all conditions still need only specification, not a summary",messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м."],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
 ]) Deno.test({
   name:"simple specification prompt real handler: "+scenario.label,

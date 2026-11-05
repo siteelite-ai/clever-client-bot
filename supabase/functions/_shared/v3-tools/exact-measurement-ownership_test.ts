@@ -4,6 +4,7 @@ import {
   buildDerivedSelectionReasoningToolSchema,
   resolveDerivedSelectionReasoning,
 } from "./selection-actionability.ts";
+import { joinCustomerTurns } from "./criteria-consistency.ts";
 
 function ids(facets: Parameters<typeof buildDerivedSelectionReasoningToolSchema>[0], customer: string): string[] {
   const properties = buildDerivedSelectionReasoningToolSchema(facets, customer).function.parameters.properties as Record<string, { items: { enum?: string[] } }>;
@@ -37,6 +38,16 @@ Deno.test("a load point cannot authorize an exact nominal product equality or on
     measurement_scope: "per_product", required_facet_values: ["f0v0", "f1v1"],
   }, facets, customer, "Автоматы защиты двигателя");
   assertEquals(declaration?.requiredFacetValues, []);
+});
+
+Deno.test("a compound scoped answer cannot make the load current into an exact product rating", () => {
+  const facets = [{ key: "rated", caption: "Номинальный ток, А", unit: "А", values: [{ value: "6" }, { value: "6.3" }] }];
+  const request = joinCustomerTurns([
+    "Подберите автомат для двигателя асинхронный 3 кВт",
+    "Уточнение клиента: 380 В, 3 фазы",
+    "Уточнение клиента: Прямой пуск, номинальный рабочий ток по шильдику 6 А.",
+  ]);
+  assertEquals(ids(facets, request), []);
 });
 
 Deno.test("an out-of-contract model ID cannot authorize a scalar absent from the customer request", () => {

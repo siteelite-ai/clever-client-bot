@@ -229,6 +229,8 @@ import {
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
+import { compileMeasuredRequirementConjunction } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
+import {productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -702,6 +704,7 @@ import {
   mandatorySelectionReadinessEnabled,
   resolveMandatorySelectionReadiness,
   selectionReadinessInputDiagnostics,
+  selectionReadinessInputIssues,
 } from "../_shared/v3-tools/selection-readiness-contract.ts";
 import { resolveUnrenderedSelectionContext } from "../_shared/v3-tools/unrendered-selection-context.ts";
 import { resolveSelectionSubject, type SelectionSubject } from "../_shared/v3-tools/selection-subject.ts";
@@ -723,6 +726,7 @@ import {
   specificationCatalogQuery,
 } from "../_shared/v3-tools/specification-assistance.ts";
 import { lookupProductManagerPhone } from "../_shared/v3-tools/lookup-contacts.ts";
+import { selectionVerificationNotice } from "../_shared/v3-tools/selection-verification-notice.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type CoverageDiagnostic,
@@ -10644,12 +10648,14 @@ async function runExpertLoop(
   // Load measurements are not exact product ratings. This separate,
   // server-compiled relation is rechecked at catalog I/O and card egress.
   let certifiedMeasuredPointRange: MeasuredPointRangeCertificate | null = null;
+  let certifiedOperatingPointDomains:OperatingPointDomain[]=[];
+  let certifiedMeasuredConjunctionComplete = false;
   ctx.verifyMeasuredPointRangeRenderIds = (ids) =>
-    !certifiedMeasuredPointRange || ids.every((id) =>
-      productProvesMeasuredPointRangeRelation(
+    ids.every((id) =>
+      (!certifiedMeasuredPointRange || productProvesMeasuredPointRangeRelation(
         ctx.cache.get(id),
         certifiedMeasuredPointRange!,
-      )
+      )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain))
     );
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
@@ -10898,6 +10904,8 @@ async function runExpertLoop(
   // declaration of missing customer input is never fed to measurement repair
   // or to search as if it were evidence of compatibility.
   let resolvedSelectionSubject: SelectionSubject | null = null;
+  let customerInputsAccepted = false;
+  let unprovenMeasurementUnits: string[] = [];
   let discoveryLiteralTypeTarget: string | null = null;
   const finishWithSelectionClarification = (value: unknown, source: string) => {
     if (transientCatalogFailureSeen) {
@@ -10952,7 +10960,7 @@ async function runExpertLoop(
     } });
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   };
-  const checkMandatorySelectionReadiness = (args: Record<string, unknown>, source: string, requireSubject = false) => {
+  const checkMandatorySelectionReadiness = async (args: Record<string, unknown>, source: string, requireSubject = false) => {
     const decision = resolveMandatorySelectionReadiness(args, {
       request: userMessage,
       // Only current + already verified task context, never model/catalog prose.
@@ -10967,8 +10975,10 @@ async function runExpertLoop(
       known:decision.status === "invalid" ? null : decision.known,
       missing:decision.status === "invalid" ? null : decision.missing,
       inputs: selectionReadinessInputDiagnostics(args, userMessage),
+      input_issues: decision.status === "invalid" ? selectionReadinessInputIssues(args) : [],
     }});
     if (decision.status === "ready") {
+      customerInputsAccepted = true;
       if (!requireSubject) return null;
       const subject = resolveSelectionSubject(args.selection_subject, {
         request: userMessage, category: lastDiscover?.category?.pagetitle,
@@ -11006,7 +11016,9 @@ async function runExpertLoop(
       // while a mandatory readiness declaration is unresolved.
     }
     if (transientCatalogFailureSeen) return finishWithCatalogTechnicalNotice("in_loop", "catalog_tool");
-    const notice = "Не удалось надёжно проверить исходные данные для подбора. Повторите запрос или обратитесь к менеджеру.";
+    const notice = selectionVerificationNotice({ customerInputsAccepted,
+      uncoveredUnits: unprovenMeasurementUnits,
+      managerPhone: await lookupProductManagerPhone(ctx.supabase) });
     send({type:"delta",content:notice,origin:"server"});
     finalText += `${finalText ? "\n\n" : ""}${notice}`;
     steps.push({step:"v3_turn_end",ms:now(),meta:{reason:"selection_readiness_contract_invalid"}});
@@ -11761,8 +11773,10 @@ async function runExpertLoop(
         },
       });
     }
+    const operatingPointSafe=pointRangeSafe.filter(product=>certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(product,domain)));
+    if(operatingPointSafe.length<pointRangeSafe.length)steps.push({step:"v3_operating_point_domain_card_proof_rejected",ms:now(),meta:{before:pointRangeSafe.length,after:operatingPointSafe.length,facets:certifiedOperatingPointDomains.map(d=>d.facetKey)}});
     const classPriority = preferCustomerGroundedLiveClassification(
-      pointRangeSafe,
+      operatingPointSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -12944,7 +12958,7 @@ async function runExpertLoop(
             ),
           );
           if (requireSelectionReadiness) {
-            const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
+            const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
             if (outcome) {
               const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
               recordClosureRetryOutcome(reason === "selection_input_required", reason);
@@ -13066,7 +13080,11 @@ async function runExpertLoop(
             userMessage,
             lastDiscover?.facets ?? [],
           );
+          let independentlyProvenMeasuredCriteria: Criterion[] = [];
           const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
+            independentlyProvenMeasuredCriteria = [];
+            certifiedOperatingPointDomains=[];
+            certifiedMeasuredConjunctionComplete = false;
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
@@ -13142,7 +13160,28 @@ async function runExpertLoop(
                   }, diagnosticStage ? diagnostic => { coverageDiagnostic = diagnostic; } : undefined)
                   : false,
             };
+            // Atomic declarations are a conjunction. One scalar or the
+            // current-range gate cannot license an unrelated property. Keep
+            // every independently compiled criterion for retrieval AND final
+            // card validation; do not merely turn the pre-search guard off.
+            const measuredConjunction = structuredMeasurementMode && certifiedMeasuredPointRange
+              ? compileMeasuredRequirementConjunction({
+                evidence: declaration.measurementEvidence,
+                customerText: verifiedCustomerMeasurementEvidence,
+                facets: lastDiscover?.facets ?? [], measurementScope,
+                certificate: certifiedMeasuredPointRange,
+                requiredFacetValues: declaration.requiredFacetValues,
+              }) : null;
+            if (structuredMeasurementMode && certifiedMeasuredPointRange) {
+              gapInput.mandatoryMeasuredCriterionProjected = false;
+              gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
+              independentlyProvenMeasuredCriteria = measuredConjunction?.criteria ?? [];
+              certifiedOperatingPointDomains=measuredConjunction?.operatingDomains??[];
+              certifiedMeasuredConjunctionComplete = Boolean(measuredConjunction);
+            }
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
+              if (gap && coverageDiagnostic) unprovenMeasurementUnits =
+                (coverageDiagnostic as CoverageDiagnostic).quantities?.map(item => item.unit) ?? [];
               if (diagnosticStage) {
                 steps.push({ step: "v3_product_measurement_projection_diagnostic", ms: now(), meta: {
                   diagnostic_version: 1, stage: diagnosticStage, gap,
@@ -13155,6 +13194,13 @@ async function runExpertLoop(
                   independent_coverage: coverageDiagnostic ?? { code: "no_certificate" },
                   customer_quantities: measurementQuantityDiagnostics(verifiedCustomerMeasurementEvidence, verifiedCustomerMeasurementEvidence),
                   declared_quantities: measurementQuantityDiagnostics(declaration!.measurementEvidence, verifiedCustomerMeasurementEvidence),
+                  independent_conjunction: structuredMeasurementMode ? {
+                    covered: Boolean(measuredConjunction),
+                    obligations: measuredConjunction?.obligations ?? null,
+                    retained_criteria: independentlyProvenMeasuredCriteria.length,
+                    customer_implications: measuredConjunction?.customerImplications ?? 0,
+                    operating_point_domains:certifiedOperatingPointDomains.map(d=>({facet:d.facetKey,point:d.point,unit:d.unit,accepted_values:d.acceptedValues})),
+                  } : null,
                   declared_facet_requirements: declaration!.requiredFacetValues.slice(0, 16).map(item => {
                     const facet = lastDiscover?.facets.find(f => normalizeKey(f.key) === normalizeKey(item.key) || normalizeKey(f.caption) === normalizeKey(item.key));
                     const exact = facet?.values.find(v => v.value === item.value);
@@ -13272,14 +13318,15 @@ async function runExpertLoop(
               shownProductIds: [...shownIds],
             };
           };
-          const stopForUnverifiedProductMeasurement = (
+          const stopForUnverifiedProductMeasurement = async (
             reason: RequiredProductMeasurementGap | null,
             correctionFailure: ReturnType<typeof classifyPublicFailure> | null =
               null,
           ) => {
             recordClosureRetryOutcome(false, "product_measurement_unverified");
-            const notice = correctionFailure?.customer_message ??
-              "Не удалось однозначно проверить обязательный числовой параметр товара по каталогу. Не буду показывать неподтверждённые варианты; уточните требование к товару или повторите запрос.";
+            const notice = correctionFailure?.customer_message ?? selectionVerificationNotice({
+              customerInputsAccepted, uncoveredUnits: unprovenMeasurementUnits,
+              managerPhone: await lookupProductManagerPhone(ctx.supabase) });
             send({ type: "delta", content: notice });
             finalText += `${finalText ? "\n\n" : ""}${notice}`;
             steps.push({
@@ -13598,7 +13645,7 @@ async function runExpertLoop(
                 ),
               );
               if (requireSelectionReadiness) {
-                const outcome = checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
+                const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
                 if (outcome) return outcome;
               } else if (declarationCall && "clarification" in declarationCall.args) {
                 const outcome = finishWithSelectionClarification(declarationCall.args.clarification, "derived_reasoning_repair");
@@ -13948,6 +13995,7 @@ async function runExpertLoop(
           // may itself contain punctuation that looks like clause boundaries.
           const proposedDerivedMandatoryCriteria = mergeMandatorySelectionCriteria([
             ...declaredClassificationCriteria,
+            ...independentlyProvenMeasuredCriteria,
             ...derivedExactFacetCriteria.filter((criterion) =>
               (criterion.level ?? "A") === "A"
             ),
@@ -21801,6 +21849,8 @@ async function runExpertLoop(
             if (!result.ok) {
               lastDiscover = null;
               certifiedMeasuredPointRange = null;
+              certifiedOperatingPointDomains=[];
+              certifiedMeasuredConjunctionComplete = false;
               setActiveCatalogFacetSchema(ctx.cache, []);
             }
           }
@@ -21809,6 +21859,8 @@ async function runExpertLoop(
             // still active. A failed rediscovery must not drop its search and
             // final-card gates while retaining lastDiscover.
             certifiedMeasuredPointRange = null;
+            certifiedOperatingPointDomains=[];
+            certifiedMeasuredConjunctionComplete = false;
             lastDiscover = result as unknown as DiscoverCategoryOk;
             setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
             const loadCurrent = extractNominalLoadCurrent(userMessage);
@@ -23484,21 +23536,46 @@ async function runExpertLoop(
       target: string,
       products: ProductRef[],
     ) => {
-      if (!verifiedApplicationSelectionContract || !terminalDiscover) {
+      // A complete independently compiled measurement conjunction is another
+      // server-owned contract, not permission inferred from a model's prose.
+      // Recheck all its raw SKU domains before allowing description evidence.
+      const measuredContract = !verifiedApplicationSelectionContract &&
+        certifiedMeasuredConjunctionComplete &&
+        Boolean(certifiedMeasuredPointRange) && derivedStructuredSearchFinalizationReady &&
+        terminalDiscover?.category.pagetitle ===
+          derivedStructuredSearchDiscovery?.category.pagetitle;
+      const mandatoryCriteria = verifiedApplicationSelectionContract?.criteria ??
+        (measuredContract ? derivedStructuredSearchProvenCriteria : null);
+      if (!mandatoryCriteria?.length || !terminalDiscover) {
         return verifySelectionTargetWithVisibleTitle(target, products);
       }
       const applicationGate = applyCriteriaGate(
-        products,
-        verifiedApplicationSelectionContract.criteria,
+        measuredContract
+          ? projectCatalogFilterEvidence(products, derivedStructuredSearchProvenCriteria)
+          : products,
+        mandatoryCriteria,
       );
-      return verifySelectionTargetWithExactLiveCategoryContract({
+      const report = verifySelectionTargetWithExactLiveCategoryContract({
         target,
         products,
         live_category: terminalDiscover.category.pagetitle,
-        mandatory_criteria: verifiedApplicationSelectionContract.criteria,
-        criteria_passed_ids: applicationGate.passed_ids,
+        mandatory_criteria: mandatoryCriteria,
+        criteria_passed_ids: applicationGate.passed_ids.filter((id) =>
+          !measuredContract || ctx.verifyMeasuredPointRangeRenderIds?.([id]) === true
+        ),
         contract_complete: true,
       });
+      if (report.primary_type_proven_ids?.length) {
+        steps.push({
+          step: "v3_catalog_primary_type_verified", ms: now(), meta: {
+            category: terminalDiscover.category.pagetitle,
+            target,
+            ids: report.primary_type_proven_ids,
+            source: "own_primary_series_assertion_and_exact_live_leaf",
+          },
+        });
+      }
+      return report;
     };
     const terminalPendingSelectionState = {
       products_rendered: productsRendered,
@@ -28238,39 +28315,42 @@ Deno.serve(async (req) => {
               userMessage,
               effectiveHistory,
             );
+            // Every competing compound route must inspect the same compiled
+            // marking answer. Source prose is not an extra product attribute.
+            const compoundSelectionMessage = specificationLookupQuery ?? userMessage;
             const exactCompoundMarkingRequest =
               classifyExactCompoundMarkingRequest(
-                specificationLookupQuery ?? userMessage,
+                compoundSelectionMessage,
               );
             const explicitCompoundMarking = extractExplicitCompoundMarking(
-              userMessage,
+              compoundSelectionMessage,
             );
             const semanticCompoundMarking =
-              detectUserIntentMode(userMessage) === "select" &&
+              detectUserIntentMode(compoundSelectionMessage) === "select" &&
                 explicitCompoundMarking &&
-                requiresSemanticCompoundEvidence(userMessage)
+                requiresSemanticCompoundEvidence(compoundSelectionMessage)
                 ? explicitCompoundMarking
                 : null;
             const semanticCompoundDirectAdmitted = Boolean(
               semanticCompoundMarking && admitDirectSelectionRoute({
                 route: "compound",
-                userMessage,
+                userMessage: compoundSelectionMessage,
                 coveredCompound: semanticCompoundMarking,
               }),
             );
             const semanticCompoundUnprovenSuperlative =
               mustStopUnprovenSemanticCompoundSuperlative(
                 Boolean(explicitCompoundMarking),
-                requiresSemanticCompoundEvidence(userMessage),
+                requiresSemanticCompoundEvidence(compoundSelectionMessage),
                 semanticCompoundSuperlativeIntent(
-                  userMessage,
-                  detectPriceDirection(userMessage),
+                  compoundSelectionMessage,
+                  detectPriceDirection(compoundSelectionMessage),
                 ),
               );
             const exactCompoundDirectAdmitted = Boolean(
               exactCompoundMarkingRequest && admitDirectSelectionRoute({
                 route: "compound",
-                userMessage: specificationLookupQuery ?? userMessage,
+                userMessage: compoundSelectionMessage,
                 coveredCompound: exactCompoundMarkingRequest,
               }),
             );
@@ -28401,7 +28481,7 @@ Deno.serve(async (req) => {
               const phone = await lookupProductManagerPhone(supabase);
               if (phone) readinessClarification.scope.assistance.manager_phone = phone;
               readinessClarification.question += phone
-                ? `\n\nЕсли маркировка неизвестна, позвоните менеджеру: ${phone}.`
+                ? `\n\n${readinessClarification.scope.assistance.handoff ? "Позвоните менеджеру" : "Если маркировка неизвестна, позвоните менеджеру"}: ${phone}.`
                 : "\n\nЕсли маркировка неизвестна, свяжитесь с менеджером. Телефон можно посмотреть на странице контактов.";
             }
             // GUARD v3_meta_question_declined: вопрос про устройство сервиса

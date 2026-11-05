@@ -8,12 +8,59 @@ export interface SelectionTargetReport {
   target: string;
   passed_ids: string[];
   rejected_ids: string[];
+  /** Same-card primary class assertion + bound series + exact live leaf.
+   * Absent on the ordinary title-only route. Never supplied by the model. */
+  primary_type_proven_ids?: string[];
   per_product: Array<{
     id: string;
     matched: string[];
     missing: string[];
     coverage: number;
   }>;
+}
+
+/** A description may state the primary type of a series whose commercial
+ * title uses another noun. Do not search arbitrary prose for a class word:
+ * require a leading positive subject, a series/model code bound to this title,
+ * and an explicit primary assertion. Accessory/compatibility subjects and
+ * titles cannot inherit the type of the equipment they mention. This is a
+ * conservative source grammar, not a synonym or product-family dictionary. */
+function ownPrimaryTypeProvesTarget(
+  product: ProductRef,
+  target: string,
+): boolean {
+  const description = String(product.description_excerpt ?? "").trim();
+  const declaration = description.match(
+    /^([\p{L}\s-]{3,100}?)\s+(?:серии|модели|series|model)\s+([a-zа-я0-9][a-zа-я0-9-]{2,31})\s+(?:предназнач\p{L}*|явля\p{L}*|представля\p{L}*|are|is)(?!\p{L})/iu,
+  );
+  if (!declaration) return false;
+  const subject = declaration[1];
+  const code = declaration[2].toLocaleLowerCase("ru-RU");
+  if (!/\p{L}/u.test(code) || !/\d/u.test(code)) return false;
+  const unsafeSubject =
+    /(?:^|\s)(?:не|нет|без|для|к|ко|под|not|no|without|for|to|аксессуар\p{L}*|принадлежност\p{L}*|запчаст\p{L}*|комплектующ\p{L}*|крышк\p{L}*|держател\p{L}*|креплен\p{L}*|адаптер\p{L}*|accessor\p{L}*|spare\p{L}*|cover\p{L}*|holder\p{L}*|adapter\p{L}*)(?:\s|$)/iu;
+  if (unsafeSubject.test(normalize(subject))) return false;
+  if (!selectionTargetIsDeclared(target, subject)) return false;
+  // The requested type must lead the assertion, not qualify another subject
+  // ("contactors, automatic ..." is not a primary assertion of "breaker").
+  if (
+    stem(meaningfulRawTokens(subject)[0] ?? "") !==
+      stem(meaningfulRawTokens(target)[0] ?? "")
+  ) return false;
+  // Refuse a later explicit contradiction too; the first sentence alone
+  // cannot override the source saying that this item is not that type.
+  if (
+    /(?:не\s+явля\p{L}*|не\s+предназнач\p{L}*|(?:is|are)\s+not)(?!\p{L})/iu
+      .test(description)
+  ) return false;
+  const title = product.pagetitle.toLocaleLowerCase("ru-RU");
+  const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const bound = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?=$|[\\s/()-])`, "iu")
+    .exec(title);
+  if (!bound) return false;
+  const titleHead = normalize(title.slice(0, bound.index));
+  return Boolean(titleHead) && titleHead.split(/\s+/u).length <= 6 &&
+    !unsafeSubject.test(titleHead);
 }
 
 export interface SelectionTargetProjection {
@@ -1477,7 +1524,9 @@ export function verifySelectionTargetWithVisibleTitle(
  * catalogued under extensions). A hidden category may bridge that lexical gap
  * only after a caller proves a complete mandatory selection contract and the
  * same card passes every criterion. The ordinary one-token title rule remains
- * unchanged for every other route.
+ * unchanged for every other route. A richer leaf may bridge a title mismatch
+ * only with an additional same-card primary-type assertion tied to the visible
+ * series/model. Taxonomy alone or a mention anywhere in prose is insufficient.
  */
 export function verifySelectionTargetWithExactLiveCategoryContract(input: {
   target: string;
@@ -1502,8 +1551,7 @@ export function verifySelectionTargetWithExactLiveCategoryContract(input: {
       !criterion.key?.trim() || criterion.value === undefined ||
       !criterionCanEnterMandatoryContract(criterion)
     ) ||
-    !selectionTargetIsDeclared(input.target, input.live_category) ||
-    !selectionTargetIsDeclared(input.live_category, input.target)
+    !selectionTargetIsDeclared(input.target, input.live_category)
   ) return ordinary;
 
   const ordinaryPassed = new Set(ordinary.passed_ids);
@@ -1511,21 +1559,43 @@ export function verifySelectionTargetWithExactLiveCategoryContract(input: {
   const categoryReport = verifySelectionTarget(input.target, input.products);
   const categoryPassed = new Set(categoryReport.passed_ids);
   const liveCategory = normalize(input.live_category);
+  const exactClassLeaf = selectionTargetIsDeclared(
+    input.live_category,
+    input.target,
+  );
+  const primaryTypePassed = new Set(
+    input.products.filter((product) =>
+      criteriaPassed.has(product.id) &&
+      normalize(product.leaf_category ?? "") === liveCategory &&
+      ownPrimaryTypeProvesTarget(product, input.target)
+    ).map((product) => product.id),
+  );
   const accepted = new Set(
     input.products.filter((product) =>
+      // Before the additional proof route, a richer category returned the
+      // ordinary report unchanged. Preserve that behavior for visible titles;
+      // only the newly admitted IDs require the additional conjunction.
+      (!exactClassLeaf && ordinaryPassed.has(product.id)) ||
       criteriaPassed.has(product.id) && (
-        ordinaryPassed.has(product.id) || (
-          categoryPassed.has(product.id) &&
-          normalize(product.leaf_category ?? "") === liveCategory
+          ordinaryPassed.has(product.id) || (
+            (exactClassLeaf || primaryTypePassed.has(product.id)) &&
+            categoryPassed.has(product.id) &&
+            normalize(product.leaf_category ?? "") === liveCategory
+          )
         )
-      )
     ).map((product) => product.id),
   );
   const categoryRows = new Map(
     categoryReport.per_product.map((row) => [row.id, row]),
   );
+  const newlyProvenIds = [...primaryTypePassed].filter((id) =>
+    !ordinaryPassed.has(id)
+  );
   return {
     target: ordinary.target,
+    ...(newlyProvenIds.length
+      ? { primary_type_proven_ids: newlyProvenIds }
+      : {}),
     passed_ids: input.products.filter((product) => accepted.has(product.id))
       .map((product) => product.id),
     rejected_ids: input.products.filter((product) => !accepted.has(product.id))
