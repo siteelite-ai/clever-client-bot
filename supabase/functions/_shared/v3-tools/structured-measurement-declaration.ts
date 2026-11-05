@@ -23,7 +23,7 @@ export function structuredMeasurementTool(base: DeclarationTool): DeclarationToo
   } } };
 }
 
-export function materializeStructuredMeasurementDeclaration(args: Record<string, unknown>, serverVerifiedRelationEvidence?: string | null): {
+export function materializeStructuredMeasurementDeclaration(args: Record<string, unknown>, serverVerifiedRelationEvidence?: string | null, serverVerifiedObligations: readonly string[] = []): {
   args: Record<string, unknown>;
   requirementCount: number;
 } | null {
@@ -31,11 +31,15 @@ export function materializeStructuredMeasurementDeclaration(args: Record<string,
   if ("reasoning" in args || !Array.isArray(requirements) || requirements.length === 0 || requirements.length > 8) return null;
   if (requirements.some(value => typeof value !== "string" || value.trim().length < 10 || value.trim().length > 300)) return null;
   const normalized = requirements.map(value => value.trim());
+  if (serverVerifiedObligations.length > 32 || serverVerifiedObligations.some(value => typeof value !== "string" || !value.trim() || value.length > 1600)) return null;
   // A server-owned compatibility obligation must not be rediscovered from
   // model prose. Keep it independently, AND retain every model obligation.
   // This parameter is supplied only by the internal relation compiler, never
   // by request/tool arguments. It cannot discharge another product property.
-  const reasoning = [serverVerifiedRelationEvidence ?? "", ...normalized.map(value => /[.!?…;]$/u.test(value) ? value : `${value}.`)].filter(Boolean).join("\n");
+  const punctuate = (value: string) => /[.!?…;]$/u.test(value) ? value : `${value}.`;
+  const originalReasoning = [serverVerifiedRelationEvidence ?? "", ...normalized.map(punctuate)].filter(Boolean).join("\n");
+  if (originalReasoning.length < 20 || originalReasoning.length > 1600) return null;
+  const reasoning = [...new Set([serverVerifiedRelationEvidence ?? "", ...serverVerifiedObligations.map(value => punctuate(value.trim())), ...normalized.map(punctuate)].filter(Boolean))].join("\n");
   // No partial truncation: it could delete a later safety obligation.
   if (reasoning.length < 20 || reasoning.length > 1600) return null;
   const { product_requirements: _requirements, ...rest } = args;

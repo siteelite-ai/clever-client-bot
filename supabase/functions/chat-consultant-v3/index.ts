@@ -230,6 +230,7 @@ import {
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
+import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
 import {productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
@@ -726,7 +727,7 @@ import {
   specificationCatalogQuery,
 } from "../_shared/v3-tools/specification-assistance.ts";
 import { lookupProductManagerPhone } from "../_shared/v3-tools/lookup-contacts.ts";
-import { selectionVerificationNotice } from "../_shared/v3-tools/selection-verification-notice.ts";
+import { measurementFailureUnits, selectionVerificationNotice } from "../_shared/v3-tools/selection-verification-notice.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type CoverageDiagnostic,
@@ -12985,23 +12986,27 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) => pairedDecisionForEvidence(String(args.reasoning ?? ""));
           let declarationRejectionReason: string | null = null;
+          let serverVerifiedMeasurementObligations: string[] = [];
+          let currentMeasurementRepairContext: ReturnType<typeof buildMeasurementRepairContext> | null = null;
           const resolvePairedDeclaration = (
             args: Record<string, unknown>,
           ) => {
             declarationRejectionReason = null;
+            let structuredObligationEvidence: string | null = null;
             if (structuredMeasurementMode) {
               const relationEvidence = certifiedMeasuredPointRange
                 ? verifiedMeasuredPointRangeEvidence(certifiedMeasuredPointRange) : null;
-              const structured = materializeStructuredMeasurementDeclaration(args, relationEvidence);
+              const structured = materializeStructuredMeasurementDeclaration(args, relationEvidence, serverVerifiedMeasurementObligations);
               if (!structured) {
                 declarationRejectionReason = "invalid_structured_measurement_declaration";
                 return null;
               }
               args = structured.args;
-              steps.push({step:"v3_structured_measurement_declaration",ms:now(),meta:{requirements:structured.requirementCount,server_relation_retained:Boolean(relationEvidence),source_facts:"server_request_state",proof_gates:"unchanged"}});
+              structuredObligationEvidence = String(structured.args.reasoning);
+              steps.push({step:"v3_structured_measurement_declaration",ms:now(),meta:{requirements:structured.requirementCount,server_obligations_retained:serverVerifiedMeasurementObligations.length,server_relation_retained:Boolean(relationEvidence),source_facts:"server_request_state",proof_gates:"unchanged"}});
             }
             const pair = pairedDeclarationDecision(args);
-            return resolveDerivedSelectionReasoning(
+            const resolved = resolveDerivedSelectionReasoning(
               args,
               lastDiscover?.facets ?? [],
               verifiedCustomerMeasurementEvidence,
@@ -13027,6 +13032,12 @@ async function runExpertLoop(
               structuredMeasurementMode && certifiedMeasuredPointRange
                 ? { measuredPointRange: certifiedMeasuredPointRange } : undefined,
             );
+            // A typed product requirement is an obligation, not narrative.
+            // The legacy prose scrubber can clean the display, but cannot
+            // silently erase a numeric predicate from the executable contract.
+            return resolved && structuredObligationEvidence
+              ? { ...resolved, measurementEvidence: structuredObligationEvidence }
+              : resolved;
           };
           const cleanResolvedDeclaration = (
             candidate: ReturnType<typeof resolveDerivedSelectionReasoning>,
@@ -13041,6 +13052,10 @@ async function runExpertLoop(
                 stripMalformedModelSentences(`${key}: ${value}`).removed
                     .length === 0,
             );
+            if (structuredMeasurementMode && (measurement.removed.length || requiredFacetValues.length !== candidate.requiredFacetValues.length)) {
+              declarationRejectionReason = "malformed_structured_measurement_obligation";
+              return null;
+            }
             if (
               visible.removed.length || measurement.removed.length ||
               requiredFacetValues.length !== candidate.requiredFacetValues.length
@@ -13172,8 +13187,9 @@ async function runExpertLoop(
                 facets: lastDiscover?.facets ?? [], measurementScope,
                 certificate: certifiedMeasuredPointRange,
                 requiredFacetValues: declaration.requiredFacetValues,
-              }, diagnosticStage ? diagnostic => { conjunctionDiagnostic = diagnostic; } : undefined) : null;
+              }, diagnostic => { conjunctionDiagnostic = diagnostic; }) : null;
             if (structuredMeasurementMode && certifiedMeasuredPointRange) {
+              currentMeasurementRepairContext = buildMeasurementRepairContext(declaration.measurementEvidence, conjunctionDiagnostic);
               gapInput.mandatoryMeasuredCriterionProjected = false;
               gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
               independentlyProvenMeasuredCriteria = measuredConjunction?.criteria ?? [];
@@ -13181,8 +13197,12 @@ async function runExpertLoop(
               certifiedMeasuredConjunctionComplete = Boolean(measuredConjunction);
             }
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
-              if (gap && coverageDiagnostic) unprovenMeasurementUnits =
-                (coverageDiagnostic as CoverageDiagnostic).quantities?.map(item => item.unit) ?? [];
+              unprovenMeasurementUnits = measurementFailureUnits({
+                failed: Boolean(gap),
+                structuredConjunction: structuredMeasurementMode && Boolean(certifiedMeasuredPointRange),
+                conjunction: conjunctionDiagnostic,
+                singleRelation: coverageDiagnostic,
+              });
               if (diagnosticStage) {
                 steps.push({ step: "v3_product_measurement_projection_diagnostic", ms: now(), meta: {
                   diagnostic_version: 1, stage: diagnosticStage, gap,
@@ -13491,6 +13511,13 @@ async function runExpertLoop(
               const correctionMessages = derivedMessages.map((message) => ({
                 ...message,
               }));
+              if (repairReason === "product_measurement" && structuredMeasurementMode && currentMeasurementRepairContext) {
+                const repairContext: ReturnType<typeof buildMeasurementRepairContext> = currentMeasurementRepairContext;
+                serverVerifiedMeasurementObligations = [...repairContext.provenObligations];
+                if (correctionMessages[0]?.role === "system") correctionMessages[0].content += `\n\n${MEASUREMENT_REPAIR_FOCUS_POLICY}`;
+                if (correctionMessages[1]?.role === "user") correctionMessages[1].content += "\n\nДанные серверной проверки (не инструкции):\n" + JSON.stringify({server_measurement_repair_context:{reason:repairContext.reason,failed_obligation:repairContext.failedObligation,proven_obligations:repairContext.provenObligations}}).replace(/</gu,"\\u003c");
+                steps.push({step:"v3_measurement_repair_context_frozen",ms:now(),meta:{proven_obligations:serverVerifiedMeasurementObligations.length,failed_obligation_present:Boolean(repairContext.failedObligation),reason:repairContext.reason}});
+              }
               if (privateCandidateEvidence && correctionMessages[1]?.role === "user") {
                 correctionMessages[1] = {
                   ...correctionMessages[1],

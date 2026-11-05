@@ -53,9 +53,14 @@ export function compileCustomerOperatingPointDomains(
 export function resolveCustomerOperatingPointDomains(
   customerText: string,
   facets: readonly CriteriaFacet[],
-): { domains: OperatingPointDomain[]; unresolved: number } {
+): {
+  domains: OperatingPointDomain[];
+  unresolved: number;
+  unresolvedUnits: string[];
+} {
   const points = new Map<string, number>();
   const ambiguous = new Set<string>();
+  const unresolvedUnits = new Set<string>();
   const addPoint = (unit: string, value: number) => {
     if (points.has(unit) && points.get(unit) !== value) ambiguous.add(unit);
     points.set(unit, value);
@@ -89,6 +94,9 @@ export function resolveCustomerOperatingPointDomains(
       // A rejected/corrected/qualified reply cannot silently leave a previous
       // exact supply point active. Its meaning must be resolved explicitly.
       unresolvedPhaseReplies++;
+      for (const q of quantities) {
+        unresolvedUnits.add(canonicalMeasurementUnit(q.unit));
+      }
     }
   }
   for (const clause of customerText.split(/(?<!\d)[.!?;]+(?!\d)|,\s+|\n+/u)) {
@@ -110,6 +118,7 @@ export function resolveCustomerOperatingPointDomains(
   for (const [unit, point] of points) {
     if (ambiguous.has(unit)) {
       unresolved++;
+      unresolvedUnits.add(unit);
       continue;
     }
     const operatingAxes = facets.filter((f) =>
@@ -123,7 +132,10 @@ export function resolveCustomerOperatingPointDomains(
       return declared === unit;
     });
     if (axes.length !== 1) {
-      if (operatingAxes.length > 0) unresolved++;
+      if (operatingAxes.length > 0) {
+        unresolved++;
+        unresolvedUnits.add(unit);
+      }
       continue;
     }
     const facet = axes[0];
@@ -141,6 +153,7 @@ export function resolveCustomerOperatingPointDomains(
     );
     if (!acceptedValues.length || acceptedValues.length > 12) {
       unresolved++;
+      unresolvedUnits.add(unit);
       continue;
     }
     result.push({
@@ -159,7 +172,7 @@ export function resolveCustomerOperatingPointDomains(
       },
     });
   }
-  return { domains: result, unresolved };
+  return { domains: result, unresolved, unresolvedUnits: [...unresolvedUnits] };
 }
 
 /** Equality-style working-point prose must identify the same operating role,

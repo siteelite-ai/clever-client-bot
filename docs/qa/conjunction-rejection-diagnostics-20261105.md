@@ -1,5 +1,9 @@
 # Shared conjunction rejection diagnostics — 2026-11-05
 
+Historical scope: the diagnostic-only implementation at `236258bd`.
+Subsequent live findings and corrective work are recorded in
+[proof-preserving-measurement-repair-20261105.md](proof-preserving-measurement-repair-20261105.md).
+
 ## Why this is needed
 
 The bounded live PR147 test at `7051eb00` ended in a voltage refusal (own request

@@ -126,6 +126,7 @@ async function runDialogue({
   useLiveVoltageSchema = false,
   livePrimaryTypeEvidence = "owned",
   rangeDeclaration = "working_load",
+  measurementRepairCase = null,
 }: {
   label: string;
   messages: string[];
@@ -135,6 +136,7 @@ async function runDialogue({
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   rangeDeclaration?: "working_load" | "nominal_load";
+  measurementRepairCase?: "omit_unproven" | "keep_unproven" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -422,6 +424,12 @@ async function runDialogue({
                 content?.includes("<correction>")
               )
             ) correctionRequests++;
+            if (measurementRepairCase && isCorrection) {
+              assert(context.includes("server_measurement_repair_context"));
+              assert(context.includes("failed_obligation"));
+              assert(context.includes("Количество дополнительных каналов должно быть 2 канала"));
+              assert(context.includes("proven_obligations"));
+            }
             return toolReply("declare_selection_reasoning", {
               selection_readiness: {
                 decision: "ready",
@@ -433,7 +441,11 @@ async function runDialogue({
                   ],
                 },
               },
-              product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
+              product_requirements: measurementRepairCase
+                ? (isCorrection
+                  ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", ...(measurementRepairCase === "keep_unproven" ? ["Количество дополнительных каналов должно быть 2 канала."] : [])]
+                  : ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Рабочее напряжение изделия должно соответствовать 380 В.", "Количество дополнительных каналов должно быть 2 канала."])
+                : terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
                 ? [rangeDeclaration === "nominal_load"
@@ -559,7 +571,7 @@ async function runDialogue({
             }
             assert(row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"),JSON.stringify(row.steps));
             assert(!row.steps.some(s=>s.step==="v3_product_measurement_unverified"),JSON.stringify(row.steps));
-            const diagnosis=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
+            const diagnosis=row.steps.filter(s=>s.step==="v3_product_measurement_projection_diagnostic").at(-1);
             assertEquals(diagnosis?.meta?.gap,null);
             const conjunction=diagnosis?.meta?.independent_conjunction as {diagnostic?:{code?:string;operating_domains_resolved?:number;operating_domains_projected?:number}} | undefined;
             assertEquals(conjunction?.diagnostic?.code,"covered");
@@ -607,7 +619,7 @@ async function runDialogue({
             }`,
           );
           assert(
-            terminalMode === "motor_measurement_repair" || !row.steps.some(({ step }) =>
+            terminalMode === "motor_measurement_repair" || measurementRepairCase || !row.steps.some(({ step }) =>
               step === "v3_product_measurement_gap_before_repair"
             ),
             `${label}: certified range coverage was not discharged: ${
@@ -619,7 +631,8 @@ async function runDialogue({
           const conjunction=refusalDiagnostic?.meta?.independent_conjunction as {diagnostic?:{code?:string}} | undefined;
           assert(typeof conjunction?.diagnostic?.code==="string" && conjunction.diagnostic.code!=="covered",JSON.stringify(row.steps));
           assert(publicText(events).includes("исходные данные учтены"), publicText(events));
-          assert(publicText(events).includes("напряжение"), publicText(events));
+          assert(publicText(events).includes(measurementRepairCase === "keep_unproven" ? "Не удалось подтвердить пригодность товаров" : "напряжение"), publicText(events));
+          if (measurementRepairCase === "keep_unproven") assert(!publicText(events).includes("напряжение"),publicText(events));
           assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));
           assert(!publicText(events).includes("https://220volt.kz/catalog/"),
             `${label}: private candidate link leaked into public prose`);
@@ -778,7 +791,7 @@ async function runDialogue({
         assert(declarationRequests >= 1, `${label}: no derived declaration`);
         assertEquals(
           correctionRequests,
-          terminalMode === "motor_measurement_repair" ? 1 : 0,
+          terminalMode === "motor_measurement_repair" || measurementRepairCase ? 1 : 0,
           `${label}: only an invalid hypothesis should repair once`,
         );
         const searchedValues = new Set(catalogProductRequests.flatMap((url) =>
@@ -789,6 +802,12 @@ async function runDialogue({
         if (terminalMode === "motor_voltage_conjunction") {
           const voltages = new Set(catalogProductRequests.flatMap(url => url.searchParams.getAll(`options[${voltageKey}][]`)));
           assertEquals([...voltages],[useLiveVoltageSchema?"230-690":"380"],"the customer working point must shape retrieval as well as final cards");
+        }
+        if (measurementRepairCase) {
+          const frozen=logs.at(-1)?.steps.find(s=>s.step==="v3_measurement_repair_context_frozen");
+          assert(Number(frozen?.meta?.proven_obligations)>0,JSON.stringify(logs.at(-1)?.steps));
+          assert(logs.at(-1)?.steps.some(s=>s.step==="v3_structured_measurement_declaration" && Number(s.meta?.server_obligations_retained)>0));
+          assertEquals(Object.keys(frozen?.meta??{}).sort(),["proven_obligations","failed_obligation_present","reason"].sort());
         }
         assert(
           !searchedValues.has("7–10 А"),
@@ -816,8 +835,8 @@ async function runDialogue({
         assertEquals(privateProbe?.meta?.renderable, false);
         assertEquals(privateProbe?.meta?.shared_cache, false);
         const sampledValues = new Set(catalogProductRequests.flatMap(url =>
-          url.searchParams.getAll("options[thermal_trip_setting][]")));
-        assert(sampledValues.has("4–6 А") && sampledValues.has("6–10 А"));
+          url.searchParams.getAll(`options[${settingKey}][]`)));
+        assert(sampledValues.has(useLiveVoltageSchema?"4-6.3":"4–6 А") && sampledValues.has(useLiveVoltageSchema?"6-10":"6–10 А"));
         assert(!sampledValues.has("7–10 А"));
         const diagnostics = logs.at(-1)?.steps.filter(({ step }) => step === "v3_product_measurement_projection_diagnostic") ?? [];
         assertEquals(diagnostics.map(d => d.meta?.stage), ["before_repair", "after_repair", "terminal"]);
@@ -1071,6 +1090,14 @@ for (const dialogue of [false,true]) Deno.test({
       : ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6А."],
     expectedFacets:dialogue ? ["supply_phase", "motor_start_method", "load_current"] : [],
     expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true,rangeDeclaration:"nominal_load"}),
+});
+
+// Synthetic independent clause, not an assertion about the unavailable raw
+// model clause from live QA. Exercise the repair transition and attribution.
+for (const keep of [false,true]) Deno.test({
+  name:`targeted measurement repair ${keep ? "reports the actual unproven property without blaming verified voltage" : "retains verified obligations when the model omits them"}`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`targeted proof-preserving repair ${keep}`,messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:keep?"motor_voltage_refusal":"motor_voltage_conjunction",useLiveVoltageSchema:true,measurementRepairCase:keep?"keep_unproven":"omit_unproven"}),
 });
 
 for (const livePrimaryTypeEvidence of ["missing", "accessory"] as const) Deno.test({

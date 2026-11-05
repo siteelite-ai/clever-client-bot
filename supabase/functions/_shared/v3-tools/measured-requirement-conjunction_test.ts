@@ -124,6 +124,7 @@ Deno.test("observing acceptance does not weaken or rewrite the compiled contract
     operating_domains_resolved: 1,
     operating_domains_unresolved: 0,
     operating_domains_projected: 1,
+    proven_clause_indices: [0, 1],
   }]);
 });
 
@@ -156,6 +157,7 @@ Deno.test("conjunction diagnostics never retain source prose, facet identifiers 
       "operating_domains_resolved",
       "operating_domains_unresolved",
       "operating_domains_projected",
+      "proven_clause_indices",
       "clause_index",
       "clause_quantities",
       "bound_operators",

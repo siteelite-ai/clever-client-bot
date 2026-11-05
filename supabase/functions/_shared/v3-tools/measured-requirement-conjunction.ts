@@ -50,6 +50,8 @@ export type MeasuredConjunctionDiagnostic = {
   operating_domains_resolved: number;
   operating_domains_unresolved: number;
   operating_domains_projected: number;
+  proven_clause_indices?: number[];
+  unresolved_operating_units?: string[];
   clause_index?: number;
   clause_quantities?: ReturnType<typeof measurementQuantityDiagnostics>;
   bound_operators?: Array<
@@ -86,6 +88,8 @@ export function compileMeasuredRequirementConjunction(input: {
   let operatingDomainsResolved = 0;
   let operatingDomainsUnresolved = 0;
   let operatingDomainsProjected = 0;
+  let unresolvedOperatingUnits: string[] = [];
+  const provenClauses: number[] = [];
   const report = (
     code: MeasuredConjunctionDiagnostic["code"],
     clauseIndex?: number,
@@ -102,6 +106,10 @@ export function compileMeasuredRequirementConjunction(input: {
       operating_domains_resolved: Math.min(operatingDomainsResolved, 16),
       operating_domains_unresolved: Math.min(operatingDomainsUnresolved, 16),
       operating_domains_projected: Math.min(operatingDomainsProjected, 16),
+      proven_clause_indices: provenClauses.slice(0, 32),
+      ...(unresolvedOperatingUnits.length
+        ? { unresolved_operating_units: unresolvedOperatingUnits.slice(0, 16) }
+        : {}),
       ...(clause === undefined ? {} : {
         clause_index: Math.min(clauseIndex!, 255),
         clause_quantities: measurementQuantityDiagnostics(
@@ -154,6 +162,7 @@ export function compileMeasuredRequirementConjunction(input: {
   );
   operatingDomainsResolved = operatingPointCompilation.domains.length;
   operatingDomainsUnresolved = operatingPointCompilation.unresolved;
+  unresolvedOperatingUnits = operatingPointCompilation.unresolvedUnits;
   if (operatingPointCompilation.unresolved > 0) {
     return reject("unresolved_customer_operating_point");
   }
@@ -192,6 +201,7 @@ export function compileMeasuredRequirementConjunction(input: {
     ) {
       relationCovered = true;
       obligations++;
+      provenClauses.push(clauseIndex);
       continue;
     }
     if (!hasMeasuredSelectionRequirement(clause)) {
@@ -235,6 +245,7 @@ export function compileMeasuredRequirementConjunction(input: {
     ) {
       criteria.push(literalDomain[0].criterion);
       retainedDomains.push(literalDomain[0]);
+      provenClauses.push(clauseIndex);
       continue;
     }
     // A clause with several physical quantities needs a richer relation;
@@ -254,6 +265,7 @@ export function compileMeasuredRequirementConjunction(input: {
       singleMeasuredObligation(clause)
     ) {
       criteria.push(...projected.mandatory_criteria);
+      provenClauses.push(clauseIndex);
       continue;
     }
     // A model-authored weaker bound must not overwrite an exact customer
@@ -360,6 +372,7 @@ export function compileMeasuredRequirementConjunction(input: {
       ),
     );
     customerImplications++;
+    provenClauses.push(clauseIndex);
   }
   if (!relationCovered || obligations === 0) {
     return reject("missing_coverage_relation");
