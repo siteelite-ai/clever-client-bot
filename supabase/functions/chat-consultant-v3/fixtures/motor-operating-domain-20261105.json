@@ -1,0 +1,586 @@
+{
+  "observed_at": "2026-11-05T07:24:29.102Z",
+  "source": "public search-products API; read-only; llm_calls=0",
+  "scope": "numeric facet and card excerpt, not a real model response",
+  "category": {
+    "id": 21952,
+    "pagetitle": "Автоматы защиты двигателя",
+    "total_products": 67
+  },
+  "options": [
+    {
+      "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+      "caption_ru": "Диапазон уставки тока расцепления,А",
+      "type": "string",
+      "unit": null,
+      "values": [
+        { "value_ru": "1.6-2.5", "products_count": 3 },
+        { "value_ru": "1-1.6", "products_count": 4 },
+        { "value_ru": "40-63", "products_count": 2 },
+        { "value_ru": "0.63-1", "products_count": 4 },
+        { "value_ru": "9-14", "products_count": 4 },
+        { "value_ru": "4-6.3", "products_count": 5 },
+        { "value_ru": "13-18", "products_count": 3 },
+        { "value_ru": "6-10", "products_count": 3 },
+        { "value_ru": "0.4-0.63", "products_count": 3 },
+        { "value_ru": "20-25", "products_count": 4 },
+        { "value_ru": "37-50", "products_count": 1 },
+        { "value_ru": "2.5-4", "products_count": 5 },
+        { "value_ru": "24-32", "products_count": 2 },
+        { "value_ru": "25-40", "products_count": 2 },
+        { "value_ru": "0.25-0.4", "products_count": 2 },
+        { "value_ru": "17-23", "products_count": 2 },
+        { "value_ru": "16-25", "products_count": 1 },
+        { "value_ru": "56-80", "products_count": 2 },
+        { "value_ru": "48-65", "products_count": 1 },
+        { "value_ru": "23-32", "products_count": 2 },
+        { "value_ru": "0.1-0.16", "products_count": 2 },
+        { "value_ru": "0.16-0.25", "products_count": 2 },
+        { "value_ru": "30-40", "products_count": 1 },
+        { "value_ru": "63-80", "products_count": 1 },
+        { "value_ru": "10-16", "products_count": 1 },
+        { "value_ru": "14.5-20", "products_count": 1 },
+        { "value_ru": "32-45", "products_count": 1 },
+        { "value_ru": "18-25", "products_count": 1 },
+        { "value_ru": "6.3-10", "products_count": 1 },
+        { "value_ru": "0.24-0.4", "products_count": 1 }
+      ]
+    },
+    {
+      "key": "kolichestvo_polyusov__polyuster_sany_",
+      "caption_ru": "Количество полюсов",
+      "type": "string",
+      "unit": null,
+      "values": [{ "value_ru": 3, "products_count": 67 }]
+    },
+    {
+      "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+      "caption_ru": "Номинальный ток, А",
+      "type": "string",
+      "unit": null,
+      "values": [
+        { "value_ru": 2.5, "products_count": 3 },
+        { "value_ru": 1.6, "products_count": 4 },
+        { "value_ru": 63, "products_count": 2 },
+        { "value_ru": 1, "products_count": 4 },
+        { "value_ru": 14, "products_count": 4 },
+        { "value_ru": 6.3, "products_count": 5 },
+        { "value_ru": 18, "products_count": 3 },
+        { "value_ru": 10, "products_count": 4 },
+        { "value_ru": 0.63, "products_count": 3 },
+        { "value_ru": 25, "products_count": 6 },
+        { "value_ru": 50, "products_count": 1 },
+        { "value_ru": 4, "products_count": 5 },
+        { "value_ru": 32, "products_count": 4 },
+        { "value_ru": 40, "products_count": 3 },
+        { "value_ru": 0.4, "products_count": 3 },
+        { "value_ru": 23, "products_count": 2 },
+        { "value_ru": 80, "products_count": 3 },
+        { "value_ru": 65, "products_count": 1 },
+        { "value_ru": 0.16, "products_count": 2 },
+        { "value_ru": 0.25, "products_count": 2 },
+        { "value_ru": 16, "products_count": 1 },
+        { "value_ru": 20, "products_count": 1 },
+        { "value_ru": 45, "products_count": 1 }
+      ]
+    },
+    {
+      "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+      "caption_ru": "Номин раб напряжение, В",
+      "type": "string",
+      "unit": null,
+      "values": [
+        { "value_ru": 660, "products_count": 14 },
+        { "value_ru": 690, "products_count": 13 },
+        { "value_ru": "230-690", "products_count": 40 }
+      ]
+    },
+    {
+      "key": "ogranichennyy_prosmotr",
+      "caption_ru": "Ограниченный просмотр",
+      "type": "string",
+      "unit": null,
+      "values": [{ "value_ru": "Нет", "products_count": 67 }]
+    },
+    {
+      "key": "ustavka_elektromagn_rascepitelya_a__elektrmagnittі_ayyrudyң_taғayyndamasy_a",
+      "caption_ru": "Уставка электромагн расцепителя,А",
+      "type": "string",
+      "unit": null,
+      "values": [
+        { "value_ru": 33.5, "products_count": 1 },
+        { "value_ru": 22.5, "products_count": 1 },
+        { "value_ru": 756, "products_count": 1 },
+        { "value_ru": 170, "products_count": 1 },
+        { "value_ru": 223, "products_count": 1 },
+        { "value_ru": 138, "products_count": 1 },
+        { "value_ru": 13, "products_count": 1 },
+        { "value_ru": 8, "products_count": 1 },
+        { "value_ru": 78, "products_count": 1 },
+        { "value_ru": 327, "products_count": 1 },
+        { "value_ru": 700, "products_count": 1 },
+        { "value_ru": 51, "products_count": 2 },
+        { "value_ru": 910, "products_count": 1 },
+        { "value_ru": 350, "products_count": 1 },
+        { "value_ru": 448, "products_count": 1 },
+        { "value_ru": 560, "products_count": 1 },
+        { "value_ru": 1120, "products_count": 1 },
+        { "value_ru": 480, "products_count": 1 },
+        { "value_ru": 416, "products_count": 1 },
+        { "value_ru": 108, "products_count": 1 },
+        { "value_ru": 52, "products_count": 1 },
+        { "value_ru": 260, "products_count": 1 },
+        { "value_ru": 585, "products_count": 1 },
+        { "value_ru": 82, "products_count": 1 },
+        { "value_ru": 325, "products_count": 1 },
+        { "value_ru": 130, "products_count": 1 },
+        { "value_ru": 960, "products_count": 1 },
+        { "value_ru": 5.2, "products_count": 1 }
+      ]
+    }
+  ],
+  "products": [
+    {
+      "id": 26797,
+      "pagetitle": "Автомат защиты двигателя ВА-431 3P 4,0-6,3A 100кА /21228DEK/",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/avtomat-zashhityi-dvigatelya-va-431-3p-4,0-6,3a-100ka-21228dek/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 5895,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 0 },
+        { "city": "Астана", "amount": 1 },
+        { "city": "Алматы", "amount": 0 },
+        { "city": "Караганда", "amount": 0 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 }
+      ],
+      "article": "21228DEK",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "4-6.3"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "6.3"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        }
+      ],
+      "content": "Автоматические выключатели защиты двигателя серии ВА-430 предназначены для управления и защиты трехфазных асинхронных электродвигателей от короткого замыкания, перегрузки и выпадения фазы. Автоматические выключатели защиты двигателя серии ВА-430 предназначены для использования в электрических цепях переменного тока напряжением до 690 В для систем вентиляции и кондиционирования, небольших генераторных установок и систем водоснабжения, упаковочных линий. Применяются на производственных площадках, на объектах сельского хозяйства, в жилых и административных помещениях."
+    },
+    {
+      "id": 28148,
+      "pagetitle": "Пускатель ПРК32-10 In=10A Ir=6-10A Ue 660В ИЭК",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-prk32-10-in10a-ir6-10a-ue-660v-iek/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 11756,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 10 },
+        { "city": "Астана", "amount": 0 },
+        { "city": "Алматы", "amount": 0 },
+        { "city": "Караганда", "amount": 0 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 73 },
+        { "city": "Алматы Чинт", "amount": 0 }
+      ],
+      "article": "DMS11-010",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "6-10"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "10"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "660"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        },
+        {
+          "key": "ustavka_elektromagn_rascepitelya_a__elektrmagnittі_ayyrudyң_taғayyndamasy_a",
+          "caption_ru": "Уставка электромагн расцепителя,А",
+          "value_ru": "138"
+        }
+      ],
+      "content": "Пускатели серии ПРК-32 торговой марки IEK предназначены для управления и защиты трехфазных асинхронных электродвигателей от перегрузки, коротких замыканий и неполнофазных режимов работы. Совмещают в себе несколько функций: функции \"Автомата защиты двигателя\" и функции ручного пускателя.<br>Применяются на промышленных объектах, в сельском хозяйстве, строительстве. Также возможно использование для местного управления отдельными электродвигателями, в автоматике жилых и административных сооружений.<br>Категория применения АС-3.<br>По своим конструктивным и техническим характеристикам пускатели кнопочные серии ПРК соответствуют требованиям российских и международных стандартов ГОСТ Р 50030.2-99, ГОСТ Р 50030.4.1-2002.<br>Пускатели кнопочные серии ПРК прошли сертификационные испытания и на их серийный выпуск получен сертификат соответствия РОСС С-МЕ01.В04759.<br>Типоисполнение реле РТИ-3353; РТИ-3355 РТИ-3357; РТИ-3359 РТИ-3361; РТИ-3363 РТИ-3365.<br>Высокая точность срабатывания.<br>Удобная регулировка."
+    },
+    {
+      "id": 28888,
+      "pagetitle": "Пускатель ПРК32-6,3 4-6,3А 660В ИЭК",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-prk32-6,3-4-6,3a-660v-iek/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 11687,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 10 },
+        { "city": "Астана", "amount": 0 },
+        { "city": "Алматы", "amount": 0 },
+        { "city": "Караганда", "amount": 0 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 }
+      ],
+      "article": "DMS11-D63",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "4-6.3"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "6.3"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "660"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        },
+        {
+          "key": "ustavka_elektromagn_rascepitelya_a__elektrmagnittі_ayyrudyң_taғayyndamasy_a",
+          "caption_ru": "Уставка электромагн расцепителя,А",
+          "value_ru": "78"
+        }
+      ],
+      "content": "Пускатели серии ПРК-32 торговой марки IEK предназначены для управления и защиты трехфазных асинхронных электродвигателей от перегрузки, коротких замыканий и неполнофазных режимов работы. Совмещают в себе несколько функций: функции \"Автомата защиты двигателя\" и функции ручного пускателя.<br>Применяются на промышленных объектах, в сельском хозяйстве, строительстве. Также возможно использование для местного управления отдельными электродвигателями, в автоматике жилых и административных сооружений.<br>Категория применения АС-3.<br>По своим конструктивным и техническим характеристикам пускатели кнопочные серии ПРК соответствуют требованиям российских и международных стандартов ГОСТ Р 50030.2-99, ГОСТ Р 50030.4.1-2002.<br>Пускатели кнопочные серии ПРК прошли сертификационные испытания и на их серийный выпуск получен сертификат соответствия РОСС С-МЕ01.В04759.<br>Типоисполнение реле РТИ-3353; РТИ-3355 РТИ-3357; РТИ-3359 РТИ-3361; РТИ-3363 РТИ-3365.<br>Высокая точность срабатывания.<br>Удобная регулировка."
+    },
+    {
+      "id": 28903,
+      "pagetitle": "Пускатель NS2-25 6-10A (R) (CHINT) 495081",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-ns2-25-6-10a-(r)-(chint)-495081/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 11360,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 19 },
+        { "city": "Астана", "amount": 31 },
+        { "city": "Алматы", "amount": 9 },
+        { "city": "Караганда", "amount": 88 },
+        { "city": "Шымкент", "amount": 11 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 496 }
+      ],
+      "article": "495081",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "6-10"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "10"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "230-690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        }
+      ],
+      "content": "Автоматические выключатели серии NS2 предназначены для применения в сетях переменного тока частотой 50/60 Гц напряжением до 690В и номинальным током до 80А для защиты от перегрузки, обрыва фазы, защиты от короткого замыкания и управления редкими пусками двигателей, а также может \nиспользоваться для защиты распределительных линий, трехфазных асинхронных двигателей с короткозамкнутым ротором и прочих нагрузок."
+    },
+    {
+      "id": 28913,
+      "pagetitle": "Пускатель NS2-25X 6-10A с поворотной ручкой (R) (CHINT) 495185",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-ns2-25x-6-10a-s-povorotnoj-ruchkoj-(r)-(chint)-495185/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 13589,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 0 },
+        { "city": "Астана", "amount": 3 },
+        { "city": "Алматы", "amount": 21 },
+        { "city": "Караганда", "amount": 22 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 145 }
+      ],
+      "article": "495185",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "6-10"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "10"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "230-690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        }
+      ],
+      "content": "Автоматические выключатели серии NS2 предназначены для применения в сетях переменного тока частотой 50/60 Гц напряжением до 690В и номинальным током до 80А для защиты от перегрузки, обрыва фазы, защиты от короткого замыкания и управления редкими пусками двигателей, а также может \nиспользоваться для защиты распределительных линий, трехфазных асинхронных двигателей с короткозамкнутым ротором и прочих нагрузок."
+    },
+    {
+      "id": 29287,
+      "pagetitle": "Пускатель NS2-25 4-6.3A (R) (CHINT) 495080",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-ns2-25-4-6.3a-(r)-(chint)-495080/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 11288,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 52 },
+        { "city": "Астана", "amount": 69 },
+        { "city": "Алматы", "amount": 19 },
+        { "city": "Караганда", "amount": 22 },
+        { "city": "Шымкент", "amount": 3 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 440 }
+      ],
+      "article": "495080",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "4-6.3"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "6.3"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "230-690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        }
+      ],
+      "content": "Автоматические выключатели серии NS2 предназначены для применения в сетях переменного тока частотой 50/60 Гц напряжением до 690В и номинальным током до 80А для защиты от перегрузки, обрыва фазы, защиты от короткого замыкания и управления редкими пусками двигателей, а также может \nиспользоваться для защиты распределительных линий, трехфазных асинхронных двигателей с короткозамкнутым ротором и прочих нагрузок."
+    },
+    {
+      "id": 29288,
+      "pagetitle": "Пускатель NS2-25X 4-6.3A с поворотной ручкой (R) (CHINT) 495184",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/puskatel-ns2-25x-4-6.3a-s-povorotnoj-ruchkoj-(r)-(chint)-495184/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 13478,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 10 },
+        { "city": "Астана", "amount": 15 },
+        { "city": "Алматы", "amount": 4 },
+        { "city": "Караганда", "amount": 46 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 395 }
+      ],
+      "article": "495184",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "4-6.3"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "6.3"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "230-690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        }
+      ],
+      "content": "Автоматические выключатели серии NS2 предназначены для применения в сетях переменного тока частотой 50/60 Гц напряжением до 690В и номинальным током до 80А для защиты от перегрузки, обрыва фазы, защиты от короткого замыкания и управления редкими пусками двигателей, а также может \nиспользоваться для защиты распределительных линий, трехфазных асинхронных двигателей с короткозамкнутым ротором и прочих нагрузок."
+    },
+    {
+      "id": 38824,
+      "pagetitle": "ARMAT Автоматический выключатель защиты двигателя A6 GV2P 4-6,3А IEK",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/armat-avtomaticheskij-vyiklyuchatel-zashhityi-dvigatelya-a6-gv2p-4-6,3a-iek/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 0,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 0 },
+        { "city": "Астана", "amount": 0 },
+        { "city": "Алматы", "amount": 0 },
+        { "city": "Караганда", "amount": 0 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 }
+      ],
+      "article": "AR-MPCB-A6B63",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "4-6.3"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "6.3"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        },
+        {
+          "key": "ustavka_elektromagn_rascepitelya_a__elektrmagnittі_ayyrudyң_taғayyndamasy_a",
+          "caption_ru": "Уставка электромагн расцепителя,А",
+          "value_ru": "82"
+        }
+      ],
+      "content": "Автоматический выключатель защиты двигателя типа GV2P серии ARMAT предназначен для управления электроприводами с трехфазными асинхронными электродвигателями и для защиты от перегрузки, коротких замыканий и неполнофазных режимов работы.<br>Выключатель защищает рабочие части электродвигателей от перегрузок во время запуска, поскольку пусковые токи при включении двигателя могут значительно превышать номинальные значения. Выключатель обеспечивает точную настройку и гибкую реакцию на пиковые пусковые токи. Эффективная защита от скачкового повышения тока при запуске электродвигателя способствует увеличению срока эксплуатации электроприборов.<br>По своим конструктивным и техническим характеристикам автоматический выключатель защиты двигателя типа GV2P серии ARMAT соответствует требованиям ТР ТС 004/2011, ТР ЕАЭС 037/2016.<br>Высокая отключающая способность, Icu – 100 кА.<br>Мостиковые контакты обеспечивают двойной разрыв при размыкании главных контактов.<br>Температурная компенсация до +60 °С."
+    },
+    {
+      "id": 38826,
+      "pagetitle": "ARMAT Автоматический выключатель защиты двигателя A6 GV2P 6,3-10А IEK",
+      "url": "https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/apparatyi-zashhityi/avtomatyi-zashhityi-dvigatelya/armat-avtomaticheskij-vyiklyuchatel-zashhityi-dvigatelya-a6-gv2p-6,3-10a-iek/",
+      "category": { "id": 21952, "pagetitle": "Автоматы защиты двигателя" },
+      "price": 0,
+      "warehouses": [
+        { "city": "Москва", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 },
+        { "city": "Актобе", "amount": 0 },
+        { "city": "Астана", "amount": 0 },
+        { "city": "Алматы", "amount": 0 },
+        { "city": "Караганда", "amount": 0 },
+        { "city": "Шымкент", "amount": 0 },
+        { "city": "Иргели", "amount": 0 },
+        { "city": "Алматы Чинт", "amount": 0 }
+      ],
+      "article": "AR-MPCB-A6C10",
+      "options": [
+        {
+          "key": "diapazon_ustavki_toka_rascepleniya_a__ayyru_toғynyң_ornatu_diapazony_a",
+          "caption_ru": "Диапазон уставки тока расцепления,А",
+          "value_ru": "6.3-10"
+        },
+        {
+          "key": "kolichestvo_polyusov__polyuster_sany_",
+          "caption_ru": "Количество полюсов",
+          "value_ru": "3"
+        },
+        {
+          "key": "nominalynyy_tok_ a__nominaldy_toқ_ a",
+          "caption_ru": "Номинальный ток, А",
+          "value_ru": "10"
+        },
+        {
+          "key": "nomin_rab_napryaghenie__v__nominaldy_ghұmys_kerneuі__v",
+          "caption_ru": "Номин раб напряжение, В",
+          "value_ru": "690"
+        },
+        {
+          "key": "ogranichennyy_prosmotr",
+          "caption_ru": "Ограниченный просмотр",
+          "value_ru": "Нет"
+        },
+        {
+          "key": "ustavka_elektromagn_rascepitelya_a__elektrmagnittі_ayyrudyң_taғayyndamasy_a",
+          "caption_ru": "Уставка электромагн расцепителя,А",
+          "value_ru": "130"
+        }
+      ]
+    }
+  ]
+}

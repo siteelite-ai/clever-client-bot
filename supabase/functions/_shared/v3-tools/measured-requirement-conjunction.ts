@@ -1,13 +1,22 @@
 import type { Criterion } from "./criteria-gate.ts";
-import { projectCriteriaFacetOptions } from "./criteria-gate.ts";
+import {
+  checkCriterion,
+  projectCriteriaFacetOptions,
+} from "./criteria-gate.ts";
 import {
   canonicalMeasurementUnit,
   compileMeasuredReasoningSearchContract,
+  extractReasoningBounds,
   filterPerProductMeasuredCriteria,
   hasMeasuredSelectionRequirement,
   projectLiteralMeasuredCriteria,
 } from "./criteria-reasoning.ts";
 import { extractClientQuantities } from "./criteria-consistency.ts";
+import {
+  clauseStatesOperatingPoint,
+  type OperatingPointDomain,
+  resolveCustomerOperatingPointDomains,
+} from "./operating-point-domain.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
   type MeasuredPointRangeCertificate,
@@ -30,7 +39,12 @@ export function compileMeasuredRequirementConjunction(input: {
   certificate: MeasuredPointRangeCertificate;
   requiredFacetValues: ReadonlyArray<{ key: string; value: string }>;
 }):
-  | { criteria: Criterion[]; obligations: number; customerImplications: number }
+  | {
+    criteria: Criterion[];
+    obligations: number;
+    customerImplications: number;
+    operatingDomains?: OperatingPointDomain[];
+  }
   | null {
   if (input.measurementScope !== "per_product") return null;
   const relation = verifiedMeasuredPointRangeEvidence(input.certificate);
@@ -44,7 +58,31 @@ export function compileMeasuredRequirementConjunction(input: {
   ) return null;
   const clauses = input.evidence.split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
     .map((clause) => clause.trim()).filter(Boolean);
-  const criteria: Criterion[] = [];
+  const operatingPointCompilation = resolveCustomerOperatingPointDomains(
+    input.customerText,
+    input.facets,
+  );
+  if (operatingPointCompilation.unresolved > 0) return null;
+  const operatingDomains = operatingPointCompilation.domains.filter(
+    (domain) => {
+      const projection = projectCriteriaFacetOptions(
+        [domain.criterion],
+        input.facets,
+      );
+      const values = projection.options[domain.facetKey];
+      return values?.length === domain.acceptedValues.length &&
+        values.every((v) => domain.acceptedValues.includes(v));
+    },
+  );
+  if (operatingDomains.length !== operatingPointCompilation.domains.length) {
+    return null;
+  }
+  // Customer-owned operating points survive even when model prose cleanup
+  // removes an unsupported equality. The LLM cannot delete this obligation.
+  const criteria: Criterion[] = operatingDomains.map((domain) =>
+    domain.criterion
+  );
+  const retainedDomains: OperatingPointDomain[] = [...operatingDomains];
   let obligations = 0;
   let customerImplications = 0;
   let relationCovered = false;
@@ -74,6 +112,19 @@ export function compileMeasuredRequirementConjunction(input: {
       continue;
     }
     obligations++;
+    const literalDomain = extractReasoningBounds(clause).length === 0
+      ? operatingDomains.filter((domain) =>
+        clauseStatesOperatingPoint(clause, domain)
+      )
+      : [];
+    if (
+      literalDomain.length === 1 &&
+      fullyProjected([literalDomain[0].criterion], input.facets)
+    ) {
+      criteria.push(literalDomain[0].criterion);
+      retainedDomains.push(literalDomain[0]);
+      continue;
+    }
     // A clause with several physical quantities needs a richer relation;
     // never let one successfully projected number stand in for the others.
     const projected = compileMeasuredReasoningSearchContract(
@@ -105,12 +156,19 @@ export function compileMeasuredRequirementConjunction(input: {
         input.customerText,
         input.customerText,
         input.facets,
-      ).matched,
+      ).matched.concat(operatingDomains.map((domain) => domain.criterion)),
       input.customerText,
       input.customerText,
       input.measurementScope,
       input.facets,
-    ).criteria;
+    ).criteria.filter((candidate, index, all) =>
+      all.findIndex((other) =>
+        other.key === candidate.key && other.op === candidate.op &&
+        String(other.value) === String(candidate.value) &&
+        canonicalMeasurementUnit(other.unit ?? "") ===
+          canonicalMeasurementUnit(candidate.unit ?? "")
+      ) === index
+    );
     const desired = compileMeasuredReasoningSearchContract(
       [],
       clause,
@@ -135,6 +193,24 @@ export function compileMeasuredRequirementConjunction(input: {
       }
       const projection = projectCriteriaFacetOptions([candidate], input.facets);
       const values = projection.options[key];
+      // One interval enum may contain both 380 and 400. Enum-set inclusion
+      // alone cannot prove 380 >= 400: check the source point against the
+      // model operator too. The separate SKU certificate proves its domain.
+      const point = {
+        id: "customer-point",
+        pagetitle: "",
+        vendor: null,
+        price: 1,
+        stock: "unknown" as const,
+        short_traits: [
+          `${candidate.key}: ${candidate.value} ${candidate.unit ?? ""}`,
+        ],
+      };
+      if (
+        !desired.mandatory_criteria.every((wanted) =>
+          checkCriterion(point, wanted).verdict === "pass"
+        )
+      ) return false;
       return projection.proven_criteria.length === 1 &&
         Object.keys(projection.options).length === 1 &&
         values?.length > 0 && values.every((value) =>
@@ -143,10 +219,35 @@ export function compileMeasuredRequirementConjunction(input: {
     });
     if (stronger.length !== 1) return null;
     criteria.push({ ...stronger[0], evidence: "user_explicit" });
+    retainedDomains.push(
+      ...operatingDomains.filter((domain) =>
+        domain.criterion.key === stronger[0].key &&
+        domain.criterion.value === stronger[0].value
+      ),
+    );
     customerImplications++;
   }
   return relationCovered && obligations > 0
-    ? { criteria, obligations, customerImplications }
+    ? {
+      criteria: criteria.filter((candidate, index, all) =>
+        all.findIndex((other) =>
+          other.key === candidate.key && other.op === candidate.op &&
+          String(other.value) === String(candidate.value)
+        ) === index
+      ),
+      obligations,
+      customerImplications,
+      ...(retainedDomains.length
+        ? {
+          operatingDomains: retainedDomains.filter((domain, index, all) =>
+            all.findIndex((other) =>
+              other.facetKey === domain.facetKey &&
+              other.point === domain.point && other.unit === domain.unit
+            ) === index
+          ),
+        }
+        : {}),
+    }
     : null;
 }
 

@@ -37,12 +37,17 @@ const base = {
 
 Deno.test("conjunction keeps the existing sole current-range certificate", () => {
   assertEquals(
-    compileMeasuredRequirementConjunction({ ...base, evidence: relation }),
+    compileMeasuredRequirementConjunction({
+      ...base,
+      customerText: "Рабочий ток по шильдику 6 А",
+      evidence: relation,
+    }),
     { criteria: [], obligations: 1, customerImplications: 0 },
   );
   assertEquals(
     compileMeasuredRequirementConjunction({
       ...base,
+      customerText: "Рабочий ток по шильдику 6 А",
       evidence: relation,
       requiredFacetValues: [{ key: "setting", value: "4–6 А" }, {
         key: "Цвет",
@@ -118,8 +123,8 @@ Deno.test("an exact customer value may prove a weaker model bound only while the
 Deno.test("a separately owned lower bound compiles independently of the current relation", () => {
   const result = compileMeasuredRequirementConjunction({
     ...base,
-    customerText: base.customerText +
-      ". Рабочее напряжение изделия не менее 380 В.",
+    customerText:
+      "Рабочий ток по шильдику 6 А. Рабочее напряжение изделия не менее 380 В.",
     evidence: relation +
       "\nРабочее напряжение изделия должно быть не менее 380 В.",
   });

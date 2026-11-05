@@ -230,6 +230,7 @@ import {
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import { compileMeasuredRequirementConjunction } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
+import {productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -10647,12 +10648,13 @@ async function runExpertLoop(
   // Load measurements are not exact product ratings. This separate,
   // server-compiled relation is rechecked at catalog I/O and card egress.
   let certifiedMeasuredPointRange: MeasuredPointRangeCertificate | null = null;
+  let certifiedOperatingPointDomains:OperatingPointDomain[]=[];
   ctx.verifyMeasuredPointRangeRenderIds = (ids) =>
-    !certifiedMeasuredPointRange || ids.every((id) =>
-      productProvesMeasuredPointRangeRelation(
+    ids.every((id) =>
+      (!certifiedMeasuredPointRange || productProvesMeasuredPointRangeRelation(
         ctx.cache.get(id),
         certifiedMeasuredPointRange!,
-      )
+      )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain))
     );
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
@@ -11770,8 +11772,10 @@ async function runExpertLoop(
         },
       });
     }
+    const operatingPointSafe=pointRangeSafe.filter(product=>certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(product,domain)));
+    if(operatingPointSafe.length<pointRangeSafe.length)steps.push({step:"v3_operating_point_domain_card_proof_rejected",ms:now(),meta:{before:pointRangeSafe.length,after:operatingPointSafe.length,facets:certifiedOperatingPointDomains.map(d=>d.facetKey)}});
     const classPriority = preferCustomerGroundedLiveClassification(
-      pointRangeSafe,
+      operatingPointSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -13078,6 +13082,7 @@ async function runExpertLoop(
           let independentlyProvenMeasuredCriteria: Criterion[] = [];
           const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
             independentlyProvenMeasuredCriteria = [];
+            certifiedOperatingPointDomains=[];
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
@@ -13169,6 +13174,7 @@ async function runExpertLoop(
               gapInput.mandatoryMeasuredCriterionProjected = false;
               gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
               independentlyProvenMeasuredCriteria = measuredConjunction?.criteria ?? [];
+              certifiedOperatingPointDomains=measuredConjunction?.operatingDomains??[];
             }
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
               if (gap && coverageDiagnostic) unprovenMeasurementUnits =
@@ -13190,6 +13196,7 @@ async function runExpertLoop(
                     obligations: measuredConjunction?.obligations ?? null,
                     retained_criteria: independentlyProvenMeasuredCriteria.length,
                     customer_implications: measuredConjunction?.customerImplications ?? 0,
+                    operating_point_domains:certifiedOperatingPointDomains.map(d=>({facet:d.facetKey,point:d.point,unit:d.unit,accepted_values:d.acceptedValues})),
                   } : null,
                   declared_facet_requirements: declaration!.requiredFacetValues.slice(0, 16).map(item => {
                     const facet = lastDiscover?.facets.find(f => normalizeKey(f.key) === normalizeKey(item.key) || normalizeKey(f.caption) === normalizeKey(item.key));
@@ -21839,6 +21846,7 @@ async function runExpertLoop(
             if (!result.ok) {
               lastDiscover = null;
               certifiedMeasuredPointRange = null;
+              certifiedOperatingPointDomains=[];
               setActiveCatalogFacetSchema(ctx.cache, []);
             }
           }
@@ -21847,6 +21855,7 @@ async function runExpertLoop(
             // still active. A failed rediscovery must not drop its search and
             // final-card gates while retaining lastDiscover.
             certifiedMeasuredPointRange = null;
+            certifiedOperatingPointDomains=[];
             lastDiscover = result as unknown as DiscoverCategoryOk;
             setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
             const loadCurrent = extractNominalLoadCurrent(userMessage);
