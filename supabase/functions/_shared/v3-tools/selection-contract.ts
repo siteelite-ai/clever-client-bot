@@ -1,4 +1,4 @@
-import type { ProductRef } from "./types.ts";
+import type { ProductFull, ProductRef } from "./types.ts";
 import {
   type Criterion,
   criterionCanEnterMandatoryContract,
@@ -1640,6 +1640,95 @@ export interface ReplacementDestinationFitReport {
   minimum_area_m2: number | null;
   passed_ids: string[];
   rejected_ids: string[];
+}
+
+/**
+ * Server-only certificate for a completed products_block. The caller must
+ * construct this from the exact ProductFull rows used to render its cards,
+ * after the final egress gate. It is not a model criterion, a client slot, or
+ * a substitute for rechecking fresh candidates on a later turn.
+ */
+export interface ServerDestinationFitProof {
+  kind: "replacement_destination_fit_v1";
+  selection_hash: string;
+  customer_request: string;
+  place: string;
+  minimum_area_m2: number;
+  rendered_cards: Array<{ id: string; url: string }>;
+}
+
+function destinationProofCatalogUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" || url.hostname !== "220volt.kz" ||
+      url.username || url.password || url.search || url.hash ||
+      !url.pathname.startsWith("/catalog/") || url.pathname === "/catalog/"
+    ) return null;
+    return `${url.origin}${url.pathname.replace(/\/+$/u, "")}/`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse a certificate if even one visible card lacks first-party room or
+ * measured-area proof. `renderedUrls` must be extracted from the final block,
+ * not from the search pool: a broader verified pool cannot authorize cards
+ * that were never displayed, or hide a displayed card that failed the gate.
+ */
+export function buildServerDestinationFitProof(input: {
+  customerRequest: string;
+  selectionHash: string;
+  renderedUrls: string[];
+  displayedProducts: ProductFull[];
+}): ServerDestinationFitProof | null {
+  const { customerRequest, selectionHash, renderedUrls, displayedProducts } =
+    input;
+  if (
+    typeof customerRequest !== "string" ||
+    !customerRequest.trim() || customerRequest.length > 2_000 ||
+    !/^selection-[0-9a-f]{8}$/u.test(selectionHash) ||
+    !Array.isArray(renderedUrls) || renderedUrls.length < 1 ||
+    renderedUrls.length > 10 ||
+    !Array.isArray(displayedProducts) ||
+    renderedUrls.length !== displayedProducts.length
+  ) return null;
+  const renderedCards = displayedProducts.map((product, index) => {
+    if (
+      !product || typeof product.id !== "string" ||
+      !product.id.trim() || product.id.length > 128 ||
+      typeof product.url !== "string" ||
+      typeof renderedUrls[index] !== "string"
+    ) return null;
+    const url = destinationProofCatalogUrl(product.url);
+    if (!url || url !== renderedUrls[index]) return null;
+    return { id: product.id, url };
+  });
+  if (
+    renderedCards.some((card) => !card) ||
+    new Set(renderedCards.map((card) => card?.id)).size !==
+      renderedCards.length ||
+    new Set(renderedUrls).size !== renderedUrls.length
+  ) return null;
+  const fit = verifyReplacementDestinationFit(
+    customerRequest,
+    displayedProducts,
+  );
+  if (
+    !fit.required || !fit.place || fit.minimum_area_m2 === null ||
+    fit.rejected_ids.length > 0 ||
+    fit.passed_ids.length !== displayedProducts.length ||
+    fit.passed_ids.some((id, index) => id !== displayedProducts[index].id)
+  ) return null;
+  return {
+    kind: "replacement_destination_fit_v1",
+    selection_hash: selectionHash,
+    customer_request: customerRequest,
+    place: fit.place,
+    minimum_area_m2: fit.minimum_area_m2,
+    rendered_cards: renderedCards as Array<{ id: string; url: string }>,
+  };
 }
 
 /**
