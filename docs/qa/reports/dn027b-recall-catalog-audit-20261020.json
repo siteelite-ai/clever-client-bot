@@ -1,0 +1,99 @@
+{
+  "kind": "read_only_catalog_recall_diagnostic",
+  "recorded_date_utc": "2026-10-20",
+  "scope": "DN027B G2 LED6/NW 7W source, one leaf category Светильники",
+  "source": {
+    "id": "20358",
+    "title": "929002070102/871869967897500 Св-к DN027B G2 LED6/NW 7W 220-240V D90 R",
+    "catalog_mount": "встраиваемый",
+    "catalog_explicit_mounting_cutout": null
+  },
+  "method": {
+    "script": "scripts/qa/diagnose-replacement-recall.mjs",
+    "public_endpoint": "search-products read-only proxy",
+    "model_calls": 0,
+    "catalog_http_calls_for_full_scan": 23,
+    "catalog_http_calls_for_supplemental_schema_check": 1,
+    "breakdown": "one exact-source lookup, one exact leaf facet-schema lookup, 21 sequential pages of the same leaf category; then one separate read-only facet-schema check of cutout-related caption names",
+    "page_size": 50,
+    "page_cap": 25,
+    "inter_page_pause_ms": 900,
+    "profile_and_card_gate": "Imported the production resolveStructuralReplacementProfile and evaluateStructuralReplacementCandidate functions; no runtime code was modified by this diagnostic.",
+    "strict_query_interpretation": "The public proxy cannot pass arbitrary options[] filters. Exact and reduced query matches were therefore computed locally on all raw same-leaf rows, not claimed as live upstream by_filter totals.",
+    "restricted_product_policy": "Restricted products are excluded before local profiling; no restricted or malformed products were observed in this page set.",
+    "pagination_integrity": "Every expected page returned the same reported total and expected row count; product IDs were unique across pages.",
+    "raw_payloads_saved": false,
+    "catalog_credentials_saved": false
+  },
+  "coverage": {
+    "reported_category_total": 1012,
+    "pages_expected": 21,
+    "pages_scanned": 21,
+    "raw_rows_seen": 1012,
+    "eligible_rows": 1012,
+    "complete_same_leaf_scan": true
+  },
+  "results": {
+    "exact_facet_AND_matches_in_category": 23,
+    "exact_facet_AND_matches_other_than_source": 22,
+    "reduced_optional_facet_matches_in_category": 34,
+    "reduced_optional_facet_matches_other_than_source": 33,
+    "structural_profile_matches_other_than_source": 2,
+    "structural_candidates": [
+      {
+        "id": "20208",
+        "title": "915005746001/5944431C3 Св-к 59444 MESON 080 6W 40K WH recesse",
+        "client_title_exclusion_applies": false,
+        "explicit_cutout_in_catalog_options": null,
+        "status": "shortlist candidate only; drop-in mounting fit unverified"
+      },
+      {
+        "id": "20470",
+        "title": "929002014902/871869964547200 Св-к DN027B LED6/NW L100 SQ RU",
+        "client_title_exclusion_applies": true,
+        "explicit_cutout_in_catalog_options": null,
+        "status": "same DN027B title family forbidden by the client oracle"
+      }
+    ],
+    "structural_candidates_after_client_DN027B_title_exclusion": 1,
+    "catalog_rows_with_explicit_cutout_option_under_diagnostic_caption_patterns": 0,
+    "source_has_explicit_cutout_option": false,
+    "category_facet_schema": {
+      "option_keys": 47,
+      "cutout_related_caption_candidates": 0,
+      "mount_related_captions": ["Способ монтажа"],
+      "checked_caption_families": [
+        "отверстие", "вырез", "врез", "посадочный", "cut-out",
+        "монтажный диаметр", "диаметр монтажа"
+      ]
+    },
+    "first_gate_rejections": {
+      "light_color_mismatch": 834,
+      "diameter_outside_window": 87,
+      "diameter_unverified": 83,
+      "power_outside_window": 5,
+      "source_itself": 1
+    },
+    "selected_all_axis_rejections_nonexclusive": {
+      "kind_mismatch": 956,
+      "power_outside_window": 949,
+      "mount_mismatch": 867,
+      "diameter_unverified": 546,
+      "diameter_outside_window": 413,
+      "flux_outside_window": 557
+    }
+  },
+  "acceptance_implication": {
+    "client_rule": "at least three analogues, no title containing DN027B",
+    "status": "not_met",
+    "reason": "Only one catalog-backed non-DN027B structural shortlist candidate exists in the complete scanned leaf category. Even that candidate has no catalog cutout proof, so interchangeability cannot be asserted.",
+    "unsafe_workaround_rejected": "Do not pad the answer with unrelated lights or relax the final compatibility gate to satisfy a count.",
+    "next_evidence_needed": "Add reliable mounting-cutout and other fit attributes for source and candidate products, identify genuine compatible SKUs from catalog owner, or explicitly revise the acceptance rule for an honest one-candidate answer."
+  },
+  "provenance_sha256": {
+    "diagnostic_script": "ffaaf620641d6fc62f377caa175c825e446827c02863896608071df569261f7d",
+    "structural_proof_runtime": "8a7074ebece90b0b16808e2389b554061e51f8a64554de40b4954a671f6c9370",
+    "catalog_adapter_runtime": "cd114af8a3870971a728d03e14f91852079b0cce4d272ec35bd10e69ce249f06",
+    "customer_acceptance_matrix": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7"
+  }
+}
