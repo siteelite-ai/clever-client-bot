@@ -1,0 +1,56 @@
+name: App settings grants PostgreSQL 16
+
+on:
+  push:
+    paths:
+      - 'supabase/migrations/20261020230000_app_settings_least_privilege.sql'
+      - 'docs/security/app-settings-grants-ci-schema.sql'
+      - 'docs/security/app-settings-grants-local-test.sql'
+      - '.github/workflows/app-settings-grants-postgres.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/20261020230000_app_settings_least_privilege.sql'
+      - 'docs/security/app-settings-grants-ci-schema.sql'
+      - 'docs/security/app-settings-grants-local-test.sql'
+      - '.github/workflows/app-settings-grants-postgres.yml'
+
+jobs:
+  privilege-sql:
+    name: disposable PostgreSQL 16 privilege and RLS tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: settings_grants_ci
+          POSTGRES_PASSWORD: settings-grants-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d settings_grants_ci"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGPASSWORD: settings-grants-ci-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Apply fixture and migration twice to check idempotence
+        run: |
+          psql -X -h 127.0.0.1 -U postgres -d settings_grants_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/app-settings-grants-ci-schema.sql
+          psql -X -h 127.0.0.1 -U postgres -d settings_grants_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020230000_app_settings_least_privilege.sql
+          psql -X -h 127.0.0.1 -U postgres -d settings_grants_ci -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261020230000_app_settings_least_privilege.sql
+
+      - name: Check grants, non-admin denial, and admin/service access
+        run: |
+          psql -X -h 127.0.0.1 -U postgres -d settings_grants_ci -v ON_ERROR_STOP=1 \
+            -f docs/security/app-settings-grants-local-test.sql
