@@ -56,6 +56,41 @@ export function resolveCustomerOperatingPointDomains(
 ): { domains: OperatingPointDomain[]; unresolved: number } {
   const points = new Map<string, number>();
   const ambiguous = new Set<string>();
+  const addPoint = (unit: string, value: number) => {
+    if (points.has(unit) && points.get(unit) !== value) ambiguous.add(unit);
+    points.set(unit, value);
+  };
+  // A standalone voltage+phase answer is a supply fact even without the
+  // repeated noun "питание". Preserve that physical role across server-joined
+  // customer turns; arbitrary prose, product ratings, output/coil/insulation
+  // fields and unfinished numbers must not inherit it.
+  let unresolvedPhaseReplies = 0;
+  for (const line of customerText.split(/\n+/u).map((text) => text.trim())) {
+    const reply = line.replace(/^уточнение\s+клиента\s*:\s*/iu, "");
+    const standalone =
+      /^(\d+(?:[.,]\d+)?)\s*(?:к?в|k?v)\s*[,;/]?\s*[1-9]\d*\s*(?:фаз\p{L}*|phases?)$/iu
+        .test(reply);
+    const quantities = extractClientQuantities(reply).filter((q) =>
+      /^(?:в|кв)$/u.test(canonicalMeasurementUnit(q.unit))
+    );
+    if (standalone && quantities.length === 1) {
+      addPoint(
+        canonicalMeasurementUnit(quantities[0].unit),
+        quantities[0].value,
+      );
+    } else if (
+      !supplyRole(line) &&
+      !/(?:изоляц|insulat|выходн|output|катуш|coil|управл|control|испыт)/iu
+        .test(line) &&
+      /(?:фаз\p{L}*|phases?)/iu.test(line) && quantities.length > 0 &&
+      /(?:^|[^\p{L}])(?:не|нет|кроме|точнее|поправк\p{L}*|исправ\p{L}*)(?!\p{L})|[<>≤≥]/iu
+        .test(line)
+    ) {
+      // A rejected/corrected/qualified reply cannot silently leave a previous
+      // exact supply point active. Its meaning must be resolved explicitly.
+      unresolvedPhaseReplies++;
+    }
+  }
   for (const clause of customerText.split(/(?<!\d)[.!?;]+(?!\d)|,\s+|\n+/u)) {
     if (
       !supplyRole(clause) ||
@@ -67,12 +102,11 @@ export function resolveCustomerOperatingPointDomains(
       if (
         !/^(?:в|кв)$/u.test(unit) || !Number.isFinite(q.value) || q.value <= 0
       ) continue;
-      if (points.has(unit) && points.get(unit) !== q.value) ambiguous.add(unit);
-      points.set(unit, q.value);
+      addPoint(unit, q.value);
     }
   }
   const result: OperatingPointDomain[] = [];
-  let unresolved = 0;
+  let unresolved = unresolvedPhaseReplies;
   for (const [unit, point] of points) {
     if (ambiguous.has(unit)) {
       unresolved++;

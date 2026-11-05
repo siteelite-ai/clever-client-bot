@@ -35,6 +35,22 @@ const base = {
   requiredFacetValues: [],
 };
 
+Deno.test("a nominal load fact and its range relation share one source role without waiving voltage", () => {
+  for (
+    const evidence of [
+      "Диапазон уставки тока должен включать номинальный ток двигателя 6А.",
+      "Номинальный ток двигателя 6А. Диапазон уставки тока должен включать рабочий ток 6А.",
+    ]
+  ) {
+    const result = compileMeasuredRequirementConjunction({ ...base, evidence });
+    assert(result, evidence);
+    assertEquals(
+      projectCriteriaFacetOptions(result.criteria, base.facets).options,
+      { voltage: ["380"] },
+    );
+  }
+});
+
 Deno.test("conjunction keeps the existing sole current-range certificate", () => {
   assertEquals(
     compileMeasuredRequirementConjunction({

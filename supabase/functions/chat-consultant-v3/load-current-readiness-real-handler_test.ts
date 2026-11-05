@@ -125,6 +125,7 @@ async function runDialogue({
   expectedFinalOptions = 0,
   useLiveVoltageSchema = false,
   livePrimaryTypeEvidence = "owned",
+  rangeDeclaration = "working_load",
 }: {
   label: string;
   messages: string[];
@@ -133,6 +134,7 @@ async function runDialogue({
   expectedFinalOptions?: number;
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
+  rangeDeclaration?: "working_load" | "nominal_load";
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -424,7 +426,7 @@ async function runDialogue({
               selection_readiness: {
                 decision: "ready",
                 critical_inputs: {
-                  first: { parameter: "Ток нагрузки", customer_quote: "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  first: { parameter: "Ток нагрузки", customer_quote: rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
                   rest: [
                     { parameter: "Питание", customer_quote: "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
                     { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
@@ -434,7 +436,9 @@ async function runDialogue({
               product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
-                ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
+                ? [rangeDeclaration === "nominal_load"
+                  ? "Диапазон уставки тока должен включать номинальный ток двигателя 6А."
+                  : "Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
                 : ["Диапазон уставки тока должен включать рабочий ток 6 А."],
               retrieval_query: "автомат защиты двигателя",
               measurement_scope: "per_product",
@@ -545,7 +549,7 @@ async function runDialogue({
               assert(!row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"));
             } else {
             assertEquals(cards.length,1,JSON.stringify({visible,steps:row.steps}));
-            assertEquals(row.final_products_count,4);
+            assertEquals(row.final_products_count,4,JSON.stringify({visible,steps:row.steps}));
             const markdown = String(cards[0].markdown);
             const accepted = new Set([28903,28913,29287,29288]);
             for (const product of liveMotorCatalog.products) {
@@ -1050,6 +1054,16 @@ Deno.test({
   name: "real catalog replay admits four same-card primary-type candidates only after independent numeric proof",
   permissions:{read:true,env:false,net:false},
   fn:()=>runDialogue({label:"real catalog operating domain replay",messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true}),
+});
+
+for (const dialogue of [false,true]) Deno.test({
+  name: `real catalog nominal-load role proof after ${dialogue ? "four-turn clarification ending in 6А" : "one complete message"}`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`nominal-load role ${dialogue ? "dialogue" : "complete"}`,
+    messages:dialogue ? ["Подберите автомат для двигателя асинхронный 3 кВТ", "380 В, 3 фазы", "Прямой пуск", "6А"]
+      : ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6А."],
+    expectedFacets:dialogue ? ["supply_phase", "motor_start_method", "load_current"] : [],
+    expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true,rangeDeclaration:"nominal_load"}),
 });
 
 for (const livePrimaryTypeEvidence of ["missing", "accessory"] as const) Deno.test({
