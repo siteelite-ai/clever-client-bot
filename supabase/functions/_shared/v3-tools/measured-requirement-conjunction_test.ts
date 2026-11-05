@@ -2,7 +2,10 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { compileMeasuredRequirementConjunction } from "./measured-requirement-conjunction.ts";
+import {
+  compileMeasuredRequirementConjunction,
+  type MeasuredConjunctionDiagnostic,
+} from "./measured-requirement-conjunction.ts";
 import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
 import { projectCriteriaFacetOptions } from "./criteria-gate.ts";
 
@@ -34,6 +37,132 @@ const base = {
   certificate,
   requiredFacetValues: [],
 };
+
+Deno.test("conjunction diagnostics retain a resolved source point when a later independent clause fails", () => {
+  const diagnostics: MeasuredConjunctionDiagnostic[] = [];
+  const input = {
+    ...base,
+    evidence: relation +
+      "\nРабочее напряжение изделия должно соответствовать 380 В.\nСветовой поток изделия должен быть не менее 2000 лм.",
+  };
+  assertEquals(compileMeasuredRequirementConjunction(input), null);
+  assertEquals(
+    compileMeasuredRequirementConjunction(input, (d) => diagnostics.push(d)),
+    null,
+  );
+  assertEquals(diagnostics.length, 1);
+  assertEquals(diagnostics[0].code, "unprojected_measured_clause");
+  assertEquals(diagnostics[0].clause_index, 2);
+  assertEquals(diagnostics[0].operating_domains_resolved, 1);
+  assertEquals(diagnostics[0].operating_domains_unresolved, 0);
+  assertEquals(diagnostics[0].operating_domains_projected, 1);
+  assertEquals(diagnostics[0].clause_quantities, [{
+    unit: "лм",
+    value: 2000,
+    matches_customer_quantity: false,
+  }]);
+  assertEquals(diagnostics[0].bound_operators, ["min_inclusive"]);
+});
+
+Deno.test("diagnostics separate unresolved supply, compound claims, symbolic comparison and missing relation", () => {
+  for (
+    const [input, code] of [
+      [{
+        ...base,
+        evidence: relation,
+        customerText: "Питание 380 В. Питание 220 В.",
+      }, "unresolved_customer_operating_point"],
+      [{
+        ...base,
+        evidence: relation +
+          "\nРабочее напряжение должно быть не менее 380 В и световой поток не менее 2000 лм.",
+      }, "compound_measured_clause"],
+      [{ ...base, evidence: relation + "\nU >= Uсети" }, "unscoped_comparison"],
+      [{
+        ...base,
+        evidence: "Рабочее напряжение изделия должно соответствовать 380 В.",
+      }, "missing_coverage_relation"],
+      [
+        { ...base, evidence: relation, measurementScope: "system_total" },
+        "unsupported_scope",
+      ],
+      [{
+        ...base,
+        evidence: relation,
+        requiredFacetValues: [{ key: "voltage", value: "690" }],
+      }, "invalid_load_relation"],
+    ] as const
+  ) {
+    let diagnostic: MeasuredConjunctionDiagnostic | undefined;
+    assertEquals(compileMeasuredRequirementConjunction(input), null, code);
+    assertEquals(
+      compileMeasuredRequirementConjunction(input, (d) => {
+        diagnostic = d;
+      }),
+      null,
+      code,
+    );
+    assertEquals(diagnostic?.code, code);
+  }
+});
+
+Deno.test("observing acceptance does not weaken or rewrite the compiled contract", () => {
+  const input = {
+    ...base,
+    evidence: relation +
+      "\nРабочее напряжение каждого изделия должно быть не менее 380 В.",
+  };
+  const diagnostics: MeasuredConjunctionDiagnostic[] = [];
+  const original = compileMeasuredRequirementConjunction(input);
+  assert(original);
+  assertEquals(
+    compileMeasuredRequirementConjunction(input, (d) => diagnostics.push(d)),
+    original,
+  );
+  assertEquals(diagnostics, [{
+    code: "covered",
+    operating_domains_resolved: 1,
+    operating_domains_unresolved: 0,
+    operating_domains_projected: 1,
+  }]);
+});
+
+Deno.test("conjunction diagnostics never retain source prose, facet identifiers or unbounded arrays", () => {
+  const privateMarker = "PRIVATE_MARKER_not_a_log_field@example.invalid";
+  let diagnostic: MeasuredConjunctionDiagnostic | undefined;
+  const input = {
+    ...base,
+    evidence: relation + "\n" + privateMarker + " Световой поток должен быть " +
+      Array.from({ length: 30 }, (_, i) => `не менее ${2000 + i} лм`).join(
+        " и ",
+      ),
+  };
+  assertEquals(
+    compileMeasuredRequirementConjunction(input, (d) => {
+      diagnostic = d;
+    }),
+    null,
+  );
+  assert(diagnostic);
+  assert(!JSON.stringify(diagnostic).includes(privateMarker));
+  assert(!JSON.stringify(diagnostic).includes("Световой поток"));
+  assert(!JSON.stringify(diagnostic).includes("voltage"));
+  assertEquals(diagnostic.clause_quantities?.length, 16);
+  assertEquals(diagnostic.bound_operators?.length, 16);
+  assertEquals(
+    Object.keys(diagnostic).sort(),
+    [
+      "code",
+      "operating_domains_resolved",
+      "operating_domains_unresolved",
+      "operating_domains_projected",
+      "clause_index",
+      "clause_quantities",
+      "bound_operators",
+      "projection",
+    ].sort(),
+  );
+});
 
 Deno.test("a nominal load fact and its range relation share one source role without waiving voltage", () => {
   for (

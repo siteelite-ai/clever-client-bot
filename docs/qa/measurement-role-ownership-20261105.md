@@ -2,9 +2,10 @@
 
 ## Status and scope
 
-Implementation and offline verification only. Public `chat-consultant-v3` remains
-at v704; no function deployment, model/settings change, secret mutation, catalog
-request or paid LLM request was made for this correction.
+Initial implementation and offline verification at `7051eb00` are recorded below.
+Subsequent authorised live preview QA **failed**; this document is not a green
+acceptance or release claim. See the update at the end and
+`conjunction-rejection-diagnostics-20261105.md`.
 
 Base: `7d6571b4c7a155377ff74164d46336473fb3b47f` (merged PR146).
 The previous complete-message production smoke passed, but did not cover the
@@ -100,3 +101,26 @@ by lower-level regressions. These are test values, not runtime exemptions.
    and record absence. No old QA credentials may be reused.
 4. Only after live results, decide on merge/publication separately. Preserve the
    current public version and its rollback evidence until then.
+
+## Live QA update — acceptance FAILED
+
+The authorised four-message browser dialogue ran on the exact `7051eb00`
+preview (official download: 120/120 files matched). All replies returned HTTP
+200 with no transport error. The final `6А` reply reached readiness with no
+missing inputs and a certified current range, but the independent measurement
+contract rejected a voltage clause. Final request:
+`e6f4f469-4cdf-4e98-b503-c5a755511eaa`; zero rendered products.
+
+The private probe found four preliminary candidates; these are not accepted
+cards. Exact rejected model wording is unavailable. Empty operating domains in
+the old failure diagnostic cannot establish whether source-point resolution
+failed, because any later conjunction rejection also clears the reported result.
+
+Relay stopped at four messages. The exact new temporary QA pair was deleted
+after user confirmation; absence was independently verified and the local
+credential file removed. Public source hash/auth stayed unchanged. Secret
+writes/deletions caused the documented restarts and raised deployment counters
+(public v707, preview v323), without publishing new public code.
+
+PR147 remains draft. No additional paid test, preview update, merge or public
+deployment is implied by the subsequent diagnostic-only implementation.

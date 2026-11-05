@@ -229,7 +229,7 @@ import {
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
-import { compileMeasuredRequirementConjunction } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
+import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import {productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
@@ -13164,6 +13164,7 @@ async function runExpertLoop(
             // current-range gate cannot license an unrelated property. Keep
             // every independently compiled criterion for retrieval AND final
             // card validation; do not merely turn the pre-search guard off.
+            let conjunctionDiagnostic: MeasuredConjunctionDiagnostic | null = null;
             const measuredConjunction = structuredMeasurementMode && certifiedMeasuredPointRange
               ? compileMeasuredRequirementConjunction({
                 evidence: declaration.measurementEvidence,
@@ -13171,7 +13172,7 @@ async function runExpertLoop(
                 facets: lastDiscover?.facets ?? [], measurementScope,
                 certificate: certifiedMeasuredPointRange,
                 requiredFacetValues: declaration.requiredFacetValues,
-              }) : null;
+              }, diagnosticStage ? diagnostic => { conjunctionDiagnostic = diagnostic; } : undefined) : null;
             if (structuredMeasurementMode && certifiedMeasuredPointRange) {
               gapInput.mandatoryMeasuredCriterionProjected = false;
               gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
@@ -13196,6 +13197,7 @@ async function runExpertLoop(
                   declared_quantities: measurementQuantityDiagnostics(declaration!.measurementEvidence, verifiedCustomerMeasurementEvidence),
                   independent_conjunction: structuredMeasurementMode ? {
                     covered: Boolean(measuredConjunction),
+                    diagnostic: conjunctionDiagnostic,
                     obligations: measuredConjunction?.obligations ?? null,
                     retained_criteria: independentlyProvenMeasuredCriteria.length,
                     customer_implications: measuredConjunction?.customerImplications ?? 0,

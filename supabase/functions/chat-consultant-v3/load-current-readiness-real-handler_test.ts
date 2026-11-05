@@ -561,6 +561,10 @@ async function runDialogue({
             assert(!row.steps.some(s=>s.step==="v3_product_measurement_unverified"),JSON.stringify(row.steps));
             const diagnosis=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
             assertEquals(diagnosis?.meta?.gap,null);
+            const conjunction=diagnosis?.meta?.independent_conjunction as {diagnostic?:{code?:string;operating_domains_resolved?:number;operating_domains_projected?:number}} | undefined;
+            assertEquals(conjunction?.diagnostic?.code,"covered");
+            assertEquals(conjunction?.diagnostic?.operating_domains_resolved,1);
+            assertEquals(conjunction?.diagnostic?.operating_domains_projected,1);
             }
           }else{
           assertEquals(
@@ -611,6 +615,9 @@ async function runDialogue({
             }`,
           );
         } else if (terminalMode === "motor_voltage_refusal") {
+          const refusalDiagnostic=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
+          const conjunction=refusalDiagnostic?.meta?.independent_conjunction as {diagnostic?:{code?:string}} | undefined;
+          assert(typeof conjunction?.diagnostic?.code==="string" && conjunction.diagnostic.code!=="covered",JSON.stringify(row.steps));
           assert(publicText(events).includes("исходные данные учтены"), publicText(events));
           assert(publicText(events).includes("напряжение"), publicText(events));
           assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));

@@ -19,13 +19,50 @@ import {
 } from "./operating-point-domain.ts";
 import {
   certificateCoversSoleUnprojectedMeasurement,
+  type CoverageDiagnostic,
   type MeasuredPointRangeCertificate,
+  measurementQuantityDiagnostics,
   verifiedMeasuredPointRangeEvidence,
 } from "./measured-point-range-relation.ts";
 
 type Facet = Parameters<
   typeof compileMeasuredReasoningSearchContract
 >[3][number];
+
+/** Fixed codes and bounded technical facts only. In particular, an empty
+ * returned contract must not erase evidence that a customer operating point
+ * was resolved before a later model clause failed. No sentences, facet names,
+ * identifiers or arbitrary model strings belong in this diagnostic. */
+export type MeasuredConjunctionDiagnostic = {
+  code:
+    | "unsupported_scope"
+    | "invalid_load_relation"
+    | "unresolved_customer_operating_point"
+    | "operating_domain_projection_mismatch"
+    | "unscoped_comparison"
+    | "uncovered_context_clause"
+    | "compound_measured_clause"
+    | "unprojected_measured_clause"
+    | "ambiguous_desired_facet"
+    | "customer_implication_not_proven"
+    | "missing_coverage_relation"
+    | "covered";
+  operating_domains_resolved: number;
+  operating_domains_unresolved: number;
+  operating_domains_projected: number;
+  clause_index?: number;
+  clause_quantities?: ReturnType<typeof measurementQuantityDiagnostics>;
+  bound_operators?: Array<
+    "min_inclusive" | "min_exclusive" | "max_inclusive" | "max_exclusive"
+  >;
+  source_coverage_code?: CoverageDiagnostic["code"];
+  projection?: {
+    mandatory: number;
+    proven: number;
+    unmatched: number;
+    facets: number;
+  };
+};
 
 /** A conjunction, not an "at least one numeric filter" readiness test.
  * The existing point/range certificate proves only its own clause. Every
@@ -38,7 +75,7 @@ export function compileMeasuredRequirementConjunction(input: {
   measurementScope: string | null | undefined;
   certificate: MeasuredPointRangeCertificate;
   requiredFacetValues: ReadonlyArray<{ key: string; value: string }>;
-}):
+}, observe?: (diagnostic: MeasuredConjunctionDiagnostic) => void):
   | {
     criteria: Criterion[];
     obligations: number;
@@ -46,7 +83,62 @@ export function compileMeasuredRequirementConjunction(input: {
     operatingDomains?: OperatingPointDomain[];
   }
   | null {
-  if (input.measurementScope !== "per_product") return null;
+  let operatingDomainsResolved = 0;
+  let operatingDomainsUnresolved = 0;
+  let operatingDomainsProjected = 0;
+  const report = (
+    code: MeasuredConjunctionDiagnostic["code"],
+    clauseIndex?: number,
+    criteria?: Criterion[],
+    sourceCoverageCode?: CoverageDiagnostic["code"],
+  ) => {
+    if (!observe) return;
+    const clause = clauseIndex === undefined ? undefined : clauses[clauseIndex];
+    const projection = criteria
+      ? projectCriteriaFacetOptions(criteria, input.facets)
+      : null;
+    observe({
+      code,
+      operating_domains_resolved: Math.min(operatingDomainsResolved, 16),
+      operating_domains_unresolved: Math.min(operatingDomainsUnresolved, 16),
+      operating_domains_projected: Math.min(operatingDomainsProjected, 16),
+      ...(clause === undefined ? {} : {
+        clause_index: Math.min(clauseIndex!, 255),
+        clause_quantities: measurementQuantityDiagnostics(
+          clause,
+          input.customerText,
+        ),
+        bound_operators: extractReasoningBounds(clause).slice(0, 16).map((b) =>
+          `${b.op}_${b.strict ? "exclusive" : "inclusive"}` as NonNullable<
+            MeasuredConjunctionDiagnostic["bound_operators"]
+          >[number]
+        ),
+      }),
+      ...(sourceCoverageCode
+        ? { source_coverage_code: sourceCoverageCode }
+        : {}),
+      ...(projection
+        ? {
+          projection: {
+            mandatory: Math.min(criteria!.length, 64),
+            proven: Math.min(projection.proven_criteria.length, 64),
+            unmatched: Math.min(projection.unmatched_keys.length, 64),
+            facets: Math.min(Object.keys(projection.options).length, 64),
+          },
+        }
+        : {}),
+    });
+  };
+  const reject = (...args: Parameters<typeof report>): null => {
+    report(...args);
+    return null;
+  };
+  // Defined before any diagnostic can run, including early scope rejection.
+  const clauses = input.evidence.split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
+    .map((clause) => clause.trim()).filter(Boolean);
+  if (input.measurementScope !== "per_product") {
+    return reject("unsupported_scope");
+  }
   const relation = verifiedMeasuredPointRangeEvidence(input.certificate);
   if (
     !relation || !certificateCoversSoleUnprojectedMeasurement({
@@ -55,14 +147,16 @@ export function compileMeasuredRequirementConjunction(input: {
       requiredFacetValues: input.requiredFacetValues,
       customerEvidence: input.customerText,
     })
-  ) return null;
-  const clauses = input.evidence.split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
-    .map((clause) => clause.trim()).filter(Boolean);
+  ) return reject("invalid_load_relation");
   const operatingPointCompilation = resolveCustomerOperatingPointDomains(
     input.customerText,
     input.facets,
   );
-  if (operatingPointCompilation.unresolved > 0) return null;
+  operatingDomainsResolved = operatingPointCompilation.domains.length;
+  operatingDomainsUnresolved = operatingPointCompilation.unresolved;
+  if (operatingPointCompilation.unresolved > 0) {
+    return reject("unresolved_customer_operating_point");
+  }
   const operatingDomains = operatingPointCompilation.domains.filter(
     (domain) => {
       const projection = projectCriteriaFacetOptions(
@@ -74,8 +168,9 @@ export function compileMeasuredRequirementConjunction(input: {
         values.every((v) => domain.acceptedValues.includes(v));
     },
   );
+  operatingDomainsProjected = operatingDomains.length;
   if (operatingDomains.length !== operatingPointCompilation.domains.length) {
-    return null;
+    return reject("operating_domain_projection_mismatch");
   }
   // Customer-owned operating points survive even when model prose cleanup
   // removes an unsupported equality. The LLM cannot delete this obligation.
@@ -86,7 +181,7 @@ export function compileMeasuredRequirementConjunction(input: {
   let obligations = 0;
   let customerImplications = 0;
   let relationCovered = false;
-  for (const clause of clauses) {
+  for (const [clauseIndex, clause] of clauses.entries()) {
     if (
       certificateCoversSoleUnprojectedMeasurement({
         certificate: input.certificate,
@@ -100,15 +195,32 @@ export function compileMeasuredRequirementConjunction(input: {
       continue;
     }
     if (!hasMeasuredSelectionRequirement(clause)) {
-      if (/[<>=≤≥]/u.test(clause)) return null;
+      if (/[<>=≤≥]/u.test(clause)) {
+        return reject("unscoped_comparison", clauseIndex);
+      }
+      let sourceCoverageCode: CoverageDiagnostic["code"] | undefined;
       if (
-        !certificateCoversSoleUnprojectedMeasurement({
-          certificate: input.certificate,
-          measurementEvidence: `${relation}\n${clause}`,
-          requiredFacetValues: [],
-          customerEvidence: input.customerText,
-        })
-      ) return null;
+        !certificateCoversSoleUnprojectedMeasurement(
+          {
+            certificate: input.certificate,
+            measurementEvidence: `${relation}\n${clause}`,
+            requiredFacetValues: [],
+            customerEvidence: input.customerText,
+          },
+          observe
+            ? (diagnostic) => {
+              sourceCoverageCode = diagnostic.code;
+            }
+            : undefined,
+        )
+      ) {
+        return reject(
+          "uncovered_context_clause",
+          clauseIndex,
+          undefined,
+          sourceCoverageCode,
+        );
+      }
       continue;
     }
     obligations++;
@@ -176,16 +288,32 @@ export function compileMeasuredRequirementConjunction(input: {
       input.facets,
       { measurementScope: input.measurementScope, customerText: clause },
     );
-    if (
-      !singleMeasuredObligation(clause) ||
-      !fullyProjected(desired.mandatory_criteria, input.facets)
-    ) return null;
+    if (!singleMeasuredObligation(clause)) {
+      return reject(
+        "compound_measured_clause",
+        clauseIndex,
+        desired.mandatory_criteria,
+      );
+    }
+    if (!fullyProjected(desired.mandatory_criteria, input.facets)) {
+      return reject(
+        "unprojected_measured_clause",
+        clauseIndex,
+        desired.mandatory_criteria,
+      );
+    }
     const desiredProjection = projectCriteriaFacetOptions(
       desired.mandatory_criteria,
       input.facets,
     );
     const keys = Object.keys(desiredProjection.options);
-    if (keys.length !== 1) return null;
+    if (keys.length !== 1) {
+      return reject(
+        "ambiguous_desired_facet",
+        clauseIndex,
+        desired.mandatory_criteria,
+      );
+    }
     const key = keys[0];
     const stronger = customer.filter((candidate) => {
       if (candidate.op !== "eq" || !fullyProjected([candidate], input.facets)) {
@@ -217,7 +345,13 @@ export function compileMeasuredRequirementConjunction(input: {
           desiredProjection.options[key].includes(value)
         );
     });
-    if (stronger.length !== 1) return null;
+    if (stronger.length !== 1) {
+      return reject(
+        "customer_implication_not_proven",
+        clauseIndex,
+        desired.mandatory_criteria,
+      );
+    }
     criteria.push({ ...stronger[0], evidence: "user_explicit" });
     retainedDomains.push(
       ...operatingDomains.filter((domain) =>
@@ -227,28 +361,30 @@ export function compileMeasuredRequirementConjunction(input: {
     );
     customerImplications++;
   }
-  return relationCovered && obligations > 0
-    ? {
-      criteria: criteria.filter((candidate, index, all) =>
-        all.findIndex((other) =>
-          other.key === candidate.key && other.op === candidate.op &&
-          String(other.value) === String(candidate.value)
-        ) === index
-      ),
-      obligations,
-      customerImplications,
-      ...(retainedDomains.length
-        ? {
-          operatingDomains: retainedDomains.filter((domain, index, all) =>
-            all.findIndex((other) =>
-              other.facetKey === domain.facetKey &&
-              other.point === domain.point && other.unit === domain.unit
-            ) === index
-          ),
-        }
-        : {}),
-    }
-    : null;
+  if (!relationCovered || obligations === 0) {
+    return reject("missing_coverage_relation");
+  }
+  report("covered");
+  return {
+    criteria: criteria.filter((candidate, index, all) =>
+      all.findIndex((other) =>
+        other.key === candidate.key && other.op === candidate.op &&
+        String(other.value) === String(candidate.value)
+      ) === index
+    ),
+    obligations,
+    customerImplications,
+    ...(retainedDomains.length
+      ? {
+        operatingDomains: retainedDomains.filter((domain, index, all) =>
+          all.findIndex((other) =>
+            other.facetKey === domain.facetKey &&
+            other.point === domain.point && other.unit === domain.unit
+          ) === index
+        ),
+      }
+      : {}),
+  };
 }
 
 function fullyProjected(criteria: Criterion[], facets: Facet[]): boolean {
