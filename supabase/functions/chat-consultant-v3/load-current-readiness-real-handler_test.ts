@@ -124,6 +124,7 @@ async function runDialogue({
   terminalMode = null,
   expectedFinalOptions = 0,
   useLiveVoltageSchema = false,
+  livePrimaryTypeEvidence = "owned",
 }: {
   label: string;
   messages: string[];
@@ -131,6 +132,7 @@ async function runDialogue({
   expectedProfile: string;
   expectedFinalOptions?: number;
   useLiveVoltageSchema?:boolean;
+  livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -329,7 +331,11 @@ async function runDialogue({
             catalogProductRequests.push(url);
             const title = url.searchParams.get("pagetitle");
             const category = url.searchParams.get("category");
-            const pool = useLiveVoltageSchema?liveMotorCatalog.products:terminalMode === "motor_voltage_conjunction" ? [
+            const pool = useLiveVoltageSchema?liveMotorCatalog.products.map((product): Record<string,unknown> => ({
+              ...product,
+              ...(livePrimaryTypeEvidence === "missing" ? {content:null} : {}),
+              ...(livePrimaryTypeEvidence === "accessory" ? {pagetitle:`Крышка для ${product.pagetitle}`} : {}),
+            })):terminalMode === "motor_voltage_conjunction" ? [
               ...motorProducts.map(product => ({...product,options:[...product.options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"380"}]})),
               {...motorProducts[1],id:104,pagetitle:"Синтетический кандидат с неверным напряжением",url:"https://220volt.kz/catalog/electric/motor-protection/wrong-voltage/",options:[...motorProducts[1].options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"220"}]},
               {...motorProducts[1],id:105,pagetitle:"Синтетический кандидат без напряжения",url:"https://220volt.kz/catalog/electric/motor-protection/missing-voltage/"},
@@ -533,17 +539,25 @@ async function runDialogue({
             event.type === "products_block"
           );
           if(useLiveVoltageSchema){
-            // Diagnostic replay, NOT successful customer acceptance. Four
-            // cards satisfy numeric constraints, but their titles use a
-            // different class noun. Do not waive the unchanged identity gate.
-            assertEquals(cards.length,0);
-            assertEquals(row.final_products_count,0);
-            const numeric=row.steps.find(s=>s.step==="v3_visible_reasoning_guided_render_empty");
-            assertEquals(numeric?.meta?.criteria_passed,4,JSON.stringify(row.steps));
-            assertEquals(numeric?.meta?.target_passed,1,JSON.stringify(row.steps));
+            if (livePrimaryTypeEvidence !== "owned") {
+              assertEquals(cards.length,0,JSON.stringify({visible,steps:row.steps}));
+              assertEquals(row.final_products_count,0);
+              assert(!row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"));
+            } else {
+            assertEquals(cards.length,1,JSON.stringify({visible,steps:row.steps}));
+            assertEquals(row.final_products_count,4);
+            const markdown = String(cards[0].markdown);
+            const accepted = new Set([28903,28913,29287,29288]);
+            for (const product of liveMotorCatalog.products) {
+              assert(typeof product.url === "string" && product.url.length > 0);
+              const safeUrl = product.url.replace(/\(/g,"%28").replace(/\)/g,"%29");
+              assertEquals(markdown.includes(safeUrl),accepted.has(Number(product.id)),String(product.pagetitle));
+            }
+            assert(row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"),JSON.stringify(row.steps));
             assert(!row.steps.some(s=>s.step==="v3_product_measurement_unverified"),JSON.stringify(row.steps));
             const diagnosis=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
             assertEquals(diagnosis?.meta?.gap,null);
+            }
           }else{
           assertEquals(
             cards.length,
@@ -1033,9 +1047,15 @@ Deno.test({
 });
 
 Deno.test({
-  name: "real catalog diagnostic replay proves four numeric candidates but preserves the separate title identity refusal",
+  name: "real catalog replay admits four same-card primary-type candidates only after independent numeric proof",
   permissions:{read:true,env:false,net:false},
   fn:()=>runDialogue({label:"real catalog operating domain replay",messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true}),
+});
+
+for (const livePrimaryTypeEvidence of ["missing", "accessory"] as const) Deno.test({
+  name: `real catalog replay cannot use numeric matches to rescue ${livePrimaryTypeEvidence} primary identity evidence`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`real catalog negative identity ${livePrimaryTypeEvidence}`,messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true,livePrimaryTypeEvidence}),
 });
 
 Deno.test({

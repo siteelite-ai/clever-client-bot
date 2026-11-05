@@ -10649,6 +10649,7 @@ async function runExpertLoop(
   // server-compiled relation is rechecked at catalog I/O and card egress.
   let certifiedMeasuredPointRange: MeasuredPointRangeCertificate | null = null;
   let certifiedOperatingPointDomains:OperatingPointDomain[]=[];
+  let certifiedMeasuredConjunctionComplete = false;
   ctx.verifyMeasuredPointRangeRenderIds = (ids) =>
     ids.every((id) =>
       (!certifiedMeasuredPointRange || productProvesMeasuredPointRangeRelation(
@@ -13083,6 +13084,7 @@ async function runExpertLoop(
           const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
             independentlyProvenMeasuredCriteria = [];
             certifiedOperatingPointDomains=[];
+            certifiedMeasuredConjunctionComplete = false;
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
@@ -13175,6 +13177,7 @@ async function runExpertLoop(
               gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
               independentlyProvenMeasuredCriteria = measuredConjunction?.criteria ?? [];
               certifiedOperatingPointDomains=measuredConjunction?.operatingDomains??[];
+              certifiedMeasuredConjunctionComplete = Boolean(measuredConjunction);
             }
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
               if (gap && coverageDiagnostic) unprovenMeasurementUnits =
@@ -21847,6 +21850,7 @@ async function runExpertLoop(
               lastDiscover = null;
               certifiedMeasuredPointRange = null;
               certifiedOperatingPointDomains=[];
+              certifiedMeasuredConjunctionComplete = false;
               setActiveCatalogFacetSchema(ctx.cache, []);
             }
           }
@@ -21856,6 +21860,7 @@ async function runExpertLoop(
             // final-card gates while retaining lastDiscover.
             certifiedMeasuredPointRange = null;
             certifiedOperatingPointDomains=[];
+            certifiedMeasuredConjunctionComplete = false;
             lastDiscover = result as unknown as DiscoverCategoryOk;
             setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
             const loadCurrent = extractNominalLoadCurrent(userMessage);
@@ -23531,21 +23536,46 @@ async function runExpertLoop(
       target: string,
       products: ProductRef[],
     ) => {
-      if (!verifiedApplicationSelectionContract || !terminalDiscover) {
+      // A complete independently compiled measurement conjunction is another
+      // server-owned contract, not permission inferred from a model's prose.
+      // Recheck all its raw SKU domains before allowing description evidence.
+      const measuredContract = !verifiedApplicationSelectionContract &&
+        certifiedMeasuredConjunctionComplete &&
+        Boolean(certifiedMeasuredPointRange) && derivedStructuredSearchFinalizationReady &&
+        terminalDiscover?.category.pagetitle ===
+          derivedStructuredSearchDiscovery?.category.pagetitle;
+      const mandatoryCriteria = verifiedApplicationSelectionContract?.criteria ??
+        (measuredContract ? derivedStructuredSearchProvenCriteria : null);
+      if (!mandatoryCriteria?.length || !terminalDiscover) {
         return verifySelectionTargetWithVisibleTitle(target, products);
       }
       const applicationGate = applyCriteriaGate(
-        products,
-        verifiedApplicationSelectionContract.criteria,
+        measuredContract
+          ? projectCatalogFilterEvidence(products, derivedStructuredSearchProvenCriteria)
+          : products,
+        mandatoryCriteria,
       );
-      return verifySelectionTargetWithExactLiveCategoryContract({
+      const report = verifySelectionTargetWithExactLiveCategoryContract({
         target,
         products,
         live_category: terminalDiscover.category.pagetitle,
-        mandatory_criteria: verifiedApplicationSelectionContract.criteria,
-        criteria_passed_ids: applicationGate.passed_ids,
+        mandatory_criteria: mandatoryCriteria,
+        criteria_passed_ids: applicationGate.passed_ids.filter((id) =>
+          !measuredContract || ctx.verifyMeasuredPointRangeRenderIds?.([id]) === true
+        ),
         contract_complete: true,
       });
+      if (report.primary_type_proven_ids?.length) {
+        steps.push({
+          step: "v3_catalog_primary_type_verified", ms: now(), meta: {
+            category: terminalDiscover.category.pagetitle,
+            target,
+            ids: report.primary_type_proven_ids,
+            source: "own_primary_series_assertion_and_exact_live_leaf",
+          },
+        });
+      }
+      return report;
     };
     const terminalPendingSelectionState = {
       products_rendered: productsRendered,
