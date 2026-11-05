@@ -133,6 +133,7 @@ async function runDialogue({
     | "motor_selection"
     | "motor_measurement_repair"
     | "motor_voltage_refusal"
+    | "motor_voltage_conjunction"
     | "specification_lookup"
     | null;
 }): Promise<void> {
@@ -281,7 +282,7 @@ async function runDialogue({
       }
       if (
         (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" ||
-          terminalMode === "motor_voltage_refusal") &&
+          terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction") &&
         currentTurn === messages.length - 1
       ) {
         if (url.origin === "https://fixture.catalog.invalid") {
@@ -310,7 +311,10 @@ async function runDialogue({
                     value_ru,
                     products_count: 1,
                   })),
-                }],
+                }, ...(terminalMode === "motor_voltage_conjunction" ? [{
+                  key: "working_voltage", caption_ru: "Номинальное рабочее напряжение, В",
+                  type: "string", unit: "В", values: ["220", "380", "400", "690"].map(value_ru => ({value_ru,products_count:1})),
+                }] : [])],
               },
             });
           }
@@ -318,7 +322,13 @@ async function runDialogue({
             catalogProductRequests.push(url);
             const title = url.searchParams.get("pagetitle");
             const category = url.searchParams.get("category");
-            const candidates = motorProducts.filter((product) =>
+            const pool = terminalMode === "motor_voltage_conjunction" ? [
+              ...motorProducts.map(product => ({...product,options:[...product.options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"380"}]})),
+              {...motorProducts[1],id:104,pagetitle:"Синтетический кандидат с неверным напряжением",url:"https://220volt.kz/catalog/electric/motor-protection/wrong-voltage/",options:[...motorProducts[1].options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"220"}]},
+              {...motorProducts[1],id:105,pagetitle:"Синтетический кандидат без напряжения",url:"https://220volt.kz/catalog/electric/motor-protection/missing-voltage/"},
+              {...motorProducts[1],id:106,pagetitle:"Синтетический кандидат с другим номиналом",url:"https://220volt.kz/catalog/electric/motor-protection/other-voltage/",options:[...motorProducts[1].options,{key:"working_voltage",caption_ru:"Номинальное рабочее напряжение, В",value_ru:"400"}]},
+            ] : motorProducts;
+            const candidates = pool.filter((product) =>
               (!title || product.pagetitle === title) &&
               (!category || product.category === category)
             );
@@ -410,7 +420,7 @@ async function runDialogue({
               },
               product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
-                : terminalMode === "motor_voltage_refusal"
+                : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
                 ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
                 : ["Диапазон уставки тока должен включать рабочий ток 6 А."],
               retrieval_query: "автомат защиты двигателя",
@@ -506,7 +516,7 @@ async function runDialogue({
           assertEquals(row.final_products_count,1);
           assert(visible.some(event=>event.type==="conversation_boundary" && event.mode==="new_task"));
           assert(!visible.some(event=>event.type==="quick_replies"));
-        } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+        } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" || terminalMode === "motor_voltage_conjunction") {
           assertEquals(
             row.error,
             null,
@@ -524,6 +534,9 @@ async function runDialogue({
           assert(markdown.includes(motorProducts[0].url), markdown);
           assert(markdown.includes(motorProducts[1].url), markdown);
           assert(!markdown.includes(motorProducts[2].url), markdown);
+          if (terminalMode === "motor_voltage_conjunction") {
+            assert(!markdown.includes("wrong-voltage") && !markdown.includes("missing-voltage") && !markdown.includes("other-voltage"),markdown);
+          }
           assertEquals(row.final_products_count, 2);
           assert(
             row.steps.some(({ step, meta }) =>
@@ -706,7 +719,7 @@ async function runDialogue({
         assert(catalogProductRequests.length>0);
         assert(catalogProductRequests.every(url=>url.searchParams.get("query")?.includes("3*1,5")));
         return;
-      } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair") {
+      } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" || terminalMode === "motor_voltage_conjunction") {
         assertEquals(
           externalRequests,
           0,
@@ -727,6 +740,10 @@ async function runDialogue({
         ));
         assert(searchedValues.has("4–6 А"), `${label}: no 4–6 A search`);
         assert(searchedValues.has("6–10 А"), `${label}: no 6–10 A search`);
+        if (terminalMode === "motor_voltage_conjunction") {
+          const voltages = new Set(catalogProductRequests.flatMap(url => url.searchParams.getAll("options[working_voltage][]")));
+          assertEquals([...voltages],["380"],"the stronger customer voltage must shape retrieval as well as final cards");
+        }
         assert(
           !searchedValues.has("7–10 А"),
           `${label}: incompatible 7–10 A option entered search`,
@@ -982,6 +999,16 @@ Deno.test({
       expectedProfile: "motor_breaker",
       terminalMode: "motor_voltage_refusal",
     }),
+});
+
+Deno.test({
+  name: "fully specified motor retains independent customer voltage in search and rejects wrong/missing card voltage",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "independent voltage conjunction",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],
+    expectedFacets: [], expectedProfile: "motor_breaker", terminalMode: "motor_voltage_conjunction",
+  }),
 });
 
 Deno.test({

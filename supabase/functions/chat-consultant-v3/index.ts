@@ -229,6 +229,7 @@ import {
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
+import { compileMeasuredRequirementConjunction } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -13074,7 +13075,9 @@ async function runExpertLoop(
             userMessage,
             lastDiscover?.facets ?? [],
           );
+          let independentlyProvenMeasuredCriteria: Criterion[] = [];
           const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
+            independentlyProvenMeasuredCriteria = [];
             // Replacement has its own source-product and candidate card proof
             // gate. A size in the source model is not automatically one new
             // scalar required of every alternative product.
@@ -13150,6 +13153,23 @@ async function runExpertLoop(
                   }, diagnosticStage ? diagnostic => { coverageDiagnostic = diagnostic; } : undefined)
                   : false,
             };
+            // Atomic declarations are a conjunction. One scalar or the
+            // current-range gate cannot license an unrelated property. Keep
+            // every independently compiled criterion for retrieval AND final
+            // card validation; do not merely turn the pre-search guard off.
+            const measuredConjunction = structuredMeasurementMode && certifiedMeasuredPointRange
+              ? compileMeasuredRequirementConjunction({
+                evidence: declaration.measurementEvidence,
+                customerText: verifiedCustomerMeasurementEvidence,
+                facets: lastDiscover?.facets ?? [], measurementScope,
+                certificate: certifiedMeasuredPointRange,
+                requiredFacetValues: declaration.requiredFacetValues,
+              }) : null;
+            if (structuredMeasurementMode && certifiedMeasuredPointRange) {
+              gapInput.mandatoryMeasuredCriterionProjected = false;
+              gapInput.independentCardProofCoversRequiredMeasurement = Boolean(measuredConjunction);
+              independentlyProvenMeasuredCriteria = measuredConjunction?.criteria ?? [];
+            }
             const recordGap = (gap: RequiredProductMeasurementGap | null) => {
               if (gap && coverageDiagnostic) unprovenMeasurementUnits =
                 (coverageDiagnostic as CoverageDiagnostic).quantities?.map(item => item.unit) ?? [];
@@ -13165,6 +13185,12 @@ async function runExpertLoop(
                   independent_coverage: coverageDiagnostic ?? { code: "no_certificate" },
                   customer_quantities: measurementQuantityDiagnostics(verifiedCustomerMeasurementEvidence, verifiedCustomerMeasurementEvidence),
                   declared_quantities: measurementQuantityDiagnostics(declaration!.measurementEvidence, verifiedCustomerMeasurementEvidence),
+                  independent_conjunction: structuredMeasurementMode ? {
+                    covered: Boolean(measuredConjunction),
+                    obligations: measuredConjunction?.obligations ?? null,
+                    retained_criteria: independentlyProvenMeasuredCriteria.length,
+                    customer_implications: measuredConjunction?.customerImplications ?? 0,
+                  } : null,
                   declared_facet_requirements: declaration!.requiredFacetValues.slice(0, 16).map(item => {
                     const facet = lastDiscover?.facets.find(f => normalizeKey(f.key) === normalizeKey(item.key) || normalizeKey(f.caption) === normalizeKey(item.key));
                     const exact = facet?.values.find(v => v.value === item.value);
@@ -13959,6 +13985,7 @@ async function runExpertLoop(
           // may itself contain punctuation that looks like clause boundaries.
           const proposedDerivedMandatoryCriteria = mergeMandatorySelectionCriteria([
             ...declaredClassificationCriteria,
+            ...independentlyProvenMeasuredCriteria,
             ...derivedExactFacetCriteria.filter((criterion) =>
               (criterion.level ?? "A") === "A"
             ),

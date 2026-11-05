@@ -1100,6 +1100,7 @@ function customerMeasurementEvidence(
   measurement: { values: number[]; unit: string },
   customerText: string,
   facets: MeasurementFacet[],
+  operatingSupply = false,
 ): "match" | "conflict" | "absent" {
   const unit = measurement.unit;
   if (
@@ -1173,7 +1174,8 @@ function customerMeasurementEvidence(
           facetVoltageRole && customerRole &&
           facetVoltageRole !== customerRole &&
           !(customerRole === "operating" &&
-            /^(?:working|supply)$/u.test(facetVoltageRole))
+            /^(?:working|supply)$/u.test(facetVoltageRole)) &&
+          !(operatingSupply && customerRole === "supply" && facetVoltageRole === "working")
         ) {
           conflict = true;
           continue;
@@ -1653,6 +1655,10 @@ export function filterPerProductMeasuredCriteria(
             measurement,
             customerText,
             facets,
+            // A per-product connection names its operating supply. Do not
+            // extend this to a system-total whose mains value need not name
+            // the working voltage of each individual device.
+            measurementScope === "per_product",
           ) === "match" ||
         customerVerifiedCapacityRelation(
           criterion,
