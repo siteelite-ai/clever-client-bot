@@ -141,3 +141,31 @@ correction yields four checked fixture cards; the invalid cases yield none
 without treating customer inputs as missing. All 2,257 offline V3 tests,
 the closure-preview type-check and `git diff --check` passed. Live acceptance
 for this change has not been run.
+
+## Follow-up: anchor focused repair to the confirmed load
+
+The live run of `a97a7054` accepted the repair wire format and recomputed
+the product proof. The failing clause changed from a current quantity of
+6 A to 10 A (request `6bdb136e-fe23-4dbe-9d20-6303238dcf6d`). The 6 A
+customer value was still present. The final gate rejected the new clause as
+`customer_implication_not_proven`, before final product search. Raw wording
+was not retained, so the source or comparator of the 10 A cannot be inferred.
+
+Focused repair now receives the server's canonical range requirement and
+verified load, not live range endpoints or a private SKU sample. The focused
+route skips the unused private product probe; legacy correction still uses
+its existing evidence path. A server-side guard rejects current magnitudes
+other than the verified load (including a unit-equivalent comparison) before
+merging the response. A full range clause can mention catalog endpoints only
+if the existing certificate independently proves that entire clause. The
+guard never treats a matching number as proof of an independent property.
+It never rewrites 10 A to 6 A or removes an unresolved condition. Initial
+readiness, the conjunction check, final filters and per-card proof are
+unchanged; no retry was added.
+
+The four-message offline regression covers an unsupported 10 A replacement
+and the grounded 6 A path against the same synthetic draft. The bad reply is
+logged as `unverified_load_point` and triggers no product search. The good
+reply retains the two live intervals and verified voltage, yielding only the
+four checked fixture cards. All 2,260 offline V3 tests, the closure-preview
+type-check and `git diff --check` passed. No live or paid test is part of this change.

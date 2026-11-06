@@ -74,7 +74,7 @@ export function validateMeasurementRepairResponse(
     args: unknown;
     argumentIssue?: MeasurementRepairArgumentIssue;
   }[],
-): { ok: true; args: Record<string, unknown> } | {
+): { ok: true; args: Record<string, unknown> & { product_requirements: string[] } } | {
   ok: false;
   reason: MeasurementRepairArgumentIssue | "missing_tool_call" |
     "multiple_tool_calls" | "unexpected_tool" | "unexpected_fields" |
@@ -103,7 +103,7 @@ export function validateMeasurementRepairResponse(
   if (!requirements.length) return { ok: false, reason: "unresolved" };
   if (requirements.length > 8) return { ok: false, reason: "requirements_limit" };
   if (!validRequirements(requirements)) return { ok: false, reason: "invalid_requirement_item" };
-  return { ok: true, args };
+  return { ok: true, args: { product_requirements: requirements } };
 }
 
 export function mergeStructuredMeasurementRepair(

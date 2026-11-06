@@ -7,7 +7,10 @@ import {
   compileMeasuredRequirementConjunction,
   type MeasuredConjunctionDiagnostic,
 } from "./measured-requirement-conjunction.ts";
-import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
+import {
+  compileMeasuredPointRangeRelation,
+  focusedRepairPreservesLoadPoint,
+} from "./measured-point-range-relation.ts";
 import {
   materializeStructuredMeasurementDeclaration,
   MEASUREMENT_REPAIR_TOOL_NAME,
@@ -46,6 +49,39 @@ const input = {
   requiredFacetValues: [],
 };
 
+Deno.test("focused repair cannot turn certified range endpoints into a different load or scalar rating", () => {
+  for (const requirement of [
+    "Диапазон уставки тока должен включать рабочий ток 10 А.",
+    "Номинальный ток автомата должен быть равен 10 A.",
+    "Уставка должна быть не менее 10 амперов.",
+    "Рабочий ток равен 10000 мА.",
+    "Рабочий ток равен 0,01 kA.",
+    "Номинальный ток изделия равен 4–6 А.",
+    "Номинальный ток изделия равен 6–10 А.",
+    "Диапазон уставки тока 6–10 А должен включать 6 А, отключающий ток 10 А.",
+  ]) {
+    assert(!focusedRepairPreservesLoadPoint([requirement], certificate), requirement);
+  }
+  for (const requirement of [
+    relation,
+    working,
+    "Рабочий ток нагрузки 6000 mA.",
+    "Рабочий ток нагрузки 0,006 кА.",
+    "Диапазон уставки тока 6–10 А должен включать рабочий ток 6 А.",
+  ]) {
+    assert(focusedRepairPreservesLoadPoint([requirement], certificate), requirement);
+  }
+  assert(!focusedRepairPreservesLoadPoint([relation, "Номинальный ток автомата 10 А."], certificate));
+  const differentPoint = compileMeasuredPointRangeRelation({
+    point: { value: 10, unit: "А", source: "customer_load" },
+    facets,
+  })!;
+  assert(focusedRepairPreservesLoadPoint([
+    "Диапазон уставки тока должен включать рабочий ток 10 А.",
+  ], differentPoint));
+  assert(!focusedRepairPreservesLoadPoint([relation], differentPoint));
+});
+
 Deno.test("measurement repair preserves accepted fields and every untouched requirement", () => {
   const later = "Максимальная рабочая температура изделия не менее 60 °C.";
   const initial = {
@@ -77,7 +113,10 @@ Deno.test("measurement repair reports bounded wire failures without retaining ra
   const name = MEASUREMENT_REPAIR_TOOL_NAME;
   const parseCall = (raw: unknown) => ({ name, ...parseMeasurementRepairArguments(raw) });
   const valid = parseCall(JSON.stringify({ product_requirements: [working] }));
-  assertEquals(validateMeasurementRepairResponse([valid]), { ok: true, args: valid.args });
+  assertEquals(validateMeasurementRepairResponse([valid]), {
+    ok: true,
+    args: { product_requirements: [working] },
+  });
   const cases = [
     { calls: [], reason: "missing_tool_call" },
     { calls: [valid, valid], reason: "multiple_tool_calls" },

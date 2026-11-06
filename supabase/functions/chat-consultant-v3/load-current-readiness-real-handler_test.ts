@@ -136,7 +136,7 @@ async function runDialogue({
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   rangeDeclaration?: "working_load" | "nominal_load";
-  measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | null;
+  measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -424,10 +424,14 @@ async function runDialogue({
                 content?.includes("<correction>")
               )
             ) correctionRequests++;
+            const currentDraft = measurementRepairCase === "catalog_current" || measurementRepairCase === "grounded_current";
+            const failedRequirement = currentDraft
+              ? "Номинальный ток автомата должен быть равен 6 А."
+              : "Количество дополнительных каналов должно быть 2 канала.";
             if (measurementRepairCase && isCorrection) {
               assert(context.includes("server_measurement_repair_context"));
               assert(context.includes("failed_obligation"));
-              assert(context.includes("Количество дополнительных каналов должно быть 2 канала"));
+              assert(context.includes(failedRequirement.slice(0, -1)));
               assert(context.includes("proven_obligations"));
             }
             const args = {
@@ -443,8 +447,11 @@ async function runDialogue({
               },
               product_requirements: measurementRepairCase
                 ? (isCorrection
-                  ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", ...(measurementRepairCase === "keep_unproven" ? ["Количество дополнительных каналов должно быть 2 канала."] : [])]
-                  : ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Рабочее напряжение изделия должно соответствовать 380 В.", "Количество дополнительных каналов должно быть 2 канала."])
+                  ? [measurementRepairCase === "catalog_current"
+                    ? "Номинальный ток автомата должен быть равен 10 А."
+                    : "Диапазон уставки тока должен включать рабочий ток 6 А.",
+                  ...(measurementRepairCase === "keep_unproven" ? [failedRequirement] : [])]
+                  : ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Рабочее напряжение изделия должно соответствовать 380 В.", failedRequirement])
                 : terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
@@ -464,6 +471,8 @@ async function runDialogue({
               assertEquals(Object.keys(properties), ["product_requirements"]);
               const system = body.messages?.find(({ role }) => role === "system")?.content ?? "";
               assert(!/selection_readiness|required_facet_values|measurement_scope|Все прочие поля/u.test(system));
+              assert(!/accepted_live_values|candidate_sample/u.test(context));
+              assert(context.includes('"requirement":"Диапазон уставки тока должен включать рабочий ток 6 А."'));
               if (measurementRepairCase === "malformed") return toolReply(declarationToolName, '{"product_requirements":[');
               if (measurementRepairCase === "unresolved") return toolReply(declarationToolName, { product_requirements: [] });
               return toolReply(declarationToolName, measurementRepairCase === "overflow"
@@ -643,7 +652,8 @@ async function runDialogue({
           const conjunction=refusalDiagnostic?.meta?.independent_conjunction as {diagnostic?:{code?:string}} | undefined;
           assert(typeof conjunction?.diagnostic?.code==="string" && conjunction.diagnostic.code!=="covered",JSON.stringify(row.steps));
           assert(publicText(events).includes("исходные данные учтены"), publicText(events));
-          assert(publicText(events).includes(measurementRepairCase ? "Не удалось подтвердить пригодность товаров" : "напряжение"), publicText(events));
+          assert(publicText(events).includes(measurementRepairCase === "catalog_current" ? "ток"
+            : measurementRepairCase ? "Не удалось подтвердить пригодность товаров" : "напряжение"), publicText(events));
           if (measurementRepairCase) assert(!publicText(events).includes("напряжение"),publicText(events));
           assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));
           assert(!publicText(events).includes("https://220volt.kz/catalog/"),
@@ -840,19 +850,15 @@ async function runDialogue({
           correctionRequests >= 1,
           `${label}: unprojected voltage did not enter repair`,
         );
-        assertEquals(catalogProductRequests.length, 2,
-          `${label}: only the two bounded private range probes may run`);
+        assertEquals(catalogProductRequests.length, 0,
+          `${label}: no product search before a certified focused repair`);
         const privateProbe = logs.at(-1)?.steps.find(({ step }) =>
           step === "v3_private_candidate_measurement_probe");
-        assertEquals(privateProbe?.meta?.renderable, false);
-        assertEquals(privateProbe?.meta?.shared_cache, false);
-        const sampledValues = new Set(catalogProductRequests.flatMap(url =>
-          url.searchParams.getAll(`options[${settingKey}][]`)));
-        assert(sampledValues.has(useLiveVoltageSchema?"4-6.3":"4–6 А") && sampledValues.has(useLiveVoltageSchema?"6-10":"6–10 А"));
-        assert(!sampledValues.has("7–10 А"));
+        assertEquals(privateProbe, undefined);
         const diagnostics = logs.at(-1)?.steps.filter(({ step }) => step === "v3_product_measurement_projection_diagnostic") ?? [];
         const rejectedReason = measurementRepairCase === "overflow" ? "unexpected_fields"
           : measurementRepairCase === "malformed" ? "malformed_json"
+          : measurementRepairCase === "catalog_current" ? "unverified_load_point"
           : measurementRepairCase === "unresolved" ? "unresolved" : null;
         assertEquals(diagnostics.map(d => d.meta?.stage), rejectedReason
           ? ["before_repair"] : ["before_repair", "after_repair", "terminal"]);
@@ -1123,7 +1129,7 @@ for (const keep of [false,true]) Deno.test({
   fn:()=>runDialogue({label:`targeted proof-preserving repair ${keep}`,messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:keep?"motor_voltage_refusal":"motor_voltage_conjunction",useLiveVoltageSchema:true,measurementRepairCase:keep?"keep_unproven":"omit_unproven"}),
 });
 
-for (const repairCase of ["overflow", "malformed", "unresolved", "omit_unproven"] as const) Deno.test({
+for (const repairCase of ["overflow", "malformed", "unresolved", "omit_unproven", "catalog_current", "grounded_current"] as const) Deno.test({
   name: `measurement-only repair after 6А: ${repairCase} preserves accepted readiness and card gates`,
   permissions: { read: true, env: false, net: false },
   fn: () => runDialogue({
@@ -1131,7 +1137,7 @@ for (const repairCase of ["overflow", "malformed", "unresolved", "omit_unproven"
     messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы", "Прямой пуск", "6А"],
     expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
     expectedProfile: "motor_breaker",
-    terminalMode: repairCase === "omit_unproven" ? "motor_voltage_conjunction" : "motor_voltage_refusal",
+    terminalMode: repairCase === "omit_unproven" || repairCase === "grounded_current" ? "motor_voltage_conjunction" : "motor_voltage_refusal",
     useLiveVoltageSchema: true,
     rangeDeclaration: "nominal_load",
     measurementRepairCase: repairCase,

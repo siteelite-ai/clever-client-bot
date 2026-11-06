@@ -282,6 +282,44 @@ const SEPARATE_NOMINAL_CURRENT =
   /(?:номинальн\p{L}*\s+ток\p{L}*|ток\p{L}*\s+номинальн\p{L}*)/iu;
 const AMPERE_TOKEN = String.raw`(?:ампер(?:а|ов)?|ampere?s?|amps?|[AА])`;
 
+/**
+ * In a focused repair the load point is server-owned. A catalog endpoint is
+ * not a second load point or a new scalar product rating. The sole exception
+ * is an entire clause independently proved by the same range certificate.
+ * This only rejects proposals: it never authorizes a search or a card.
+ */
+export function focusedRepairPreservesLoadPoint(
+  requirements: readonly string[],
+  certificate: MeasuredPointRangeCertificate,
+): boolean {
+  if (!verifiedMeasuredPointRangeEvidence(certificate)) return false;
+  const ampere = String.raw`(?:(?:милли|кило)ампер(?:а|ов)?|(?:milli|kilo)ampere?s?|(?:[mмkк])?[aа]|ампер(?:а|ов)?|ampere?s?|amps?)`;
+  const amount = String.raw`([+-]?\d+(?:[.,]\d+)?)`;
+  const measurement = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])${amount}(?:\s*[-–—−]\s*${amount})?\s*(${ampere})(?![\p{L}\p{N}])`,
+    "giu",
+  );
+  const decimal = (value: string) => Number(value.replace(",", "."));
+  for (const requirement of requirements) {
+    const text = requirement.normalize("NFKC").toLowerCase();
+    const foreign = [...text.matchAll(measurement)].some(([, first, second, unit]) => {
+      const divisor = /^(?:м|m)/u.test(unit) ? 1000 : 1;
+      const multiplier = /^(?:к|k)/u.test(unit) ? 1000 : 1;
+      // Compare in the written scale to avoid multiplying a small decimal
+      // before comparing (e.g. 0.006 kA represents exactly 6 A).
+      const expected = certificate.value * divisor / multiplier;
+      return decimal(first) !== expected ||
+        (second !== undefined && decimal(second) !== expected);
+    });
+    if (foreign && !certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence: requirement,
+      requiredFacetValues: [],
+    })) return false;
+  }
+  return true;
+}
+
 /** Resolve source-vs-product ownership with the SAME parser that accepts
  * customer load facts. Only an explicit, exact, already-certified load point
  * can be discounted as source context. A matching number or the word
