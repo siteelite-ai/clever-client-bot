@@ -8,7 +8,13 @@ import {
   type MeasuredConjunctionDiagnostic,
 } from "./measured-requirement-conjunction.ts";
 import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
-import { materializeStructuredMeasurementDeclaration, mergeStructuredMeasurementRepair } from "./structured-measurement-declaration.ts";
+import {
+  materializeStructuredMeasurementDeclaration,
+  MEASUREMENT_REPAIR_TOOL_NAME,
+  mergeStructuredMeasurementRepair,
+  parseMeasurementRepairArguments,
+  validateMeasurementRepairResponse,
+} from "./structured-measurement-declaration.ts";
 
 const relation = "Диапазон уставки тока должен включать рабочий ток 6 А.";
 const working = "Рабочее напряжение изделия должно соответствовать 380 В.";
@@ -65,6 +71,31 @@ Deno.test("measurement repair preserves accepted fields and every untouched requ
   assertEquals(mergeStructuredMeasurementRepair(
     initial, { product_requirements: Array(9).fill(working) }, unsupported,
   ), null);
+});
+
+Deno.test("measurement repair reports bounded wire failures without retaining raw arguments", () => {
+  const name = MEASUREMENT_REPAIR_TOOL_NAME;
+  const parseCall = (raw: unknown) => ({ name, ...parseMeasurementRepairArguments(raw) });
+  const valid = parseCall(JSON.stringify({ product_requirements: [working] }));
+  assertEquals(validateMeasurementRepairResponse([valid]), { ok: true, args: valid.args });
+  const cases = [
+    { calls: [], reason: "missing_tool_call" },
+    { calls: [valid, valid], reason: "multiple_tool_calls" },
+    { calls: [{ ...valid, name: "declare_selection_reasoning" }], reason: "unexpected_tool" },
+    { calls: [parseCall(undefined)], reason: "missing_arguments" },
+    { calls: [parseCall('{"private":"must not be copied"')], reason: "malformed_json" },
+    { calls: [parseCall("null")], reason: "non_object_arguments" },
+    { calls: [parseCall("[]")], reason: "non_object_arguments" },
+    { calls: [parseCall("{}")], reason: "missing_requirements" },
+    { calls: [parseCall('{"product_requirements":null}')], reason: "requirements_type" },
+    { calls: [parseCall('{"product_requirements":[]}')], reason: "unresolved" },
+    { calls: [parseCall('{"product_requirements":[false]}')], reason: "invalid_requirement_item" },
+    { calls: [parseCall(JSON.stringify({ product_requirements: Array(9).fill(working) }))], reason: "requirements_limit" },
+    { calls: [parseCall('{"product_requirements":[],"private":"must not be copied"}')], reason: "unexpected_fields" },
+  ] as const;
+  for (const { calls, reason } of cases) {
+    assertEquals(validateMeasurementRepairResponse(calls), { ok: false, reason });
+  }
 });
 
 Deno.test("repair freezes only individually proven numeric obligations and identifies the actual failed clause", () => {

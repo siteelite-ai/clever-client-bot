@@ -108,3 +108,36 @@ Offline regressions cover the oversized full declaration after the four-turn
 dialogue, valid narrow repair, unknown-property refusal, and retention of
 unrelated requirements. All 2,253 offline V3 tests and the closure-preview
 type-check passed. The live result remains unverified for this follow-up.
+
+## Follow-up: isolate the focused repair wire contract
+
+The live run of `bf927b6d` reached readiness with all three answers accepted.
+It projected the voltage condition and identified an unprojectable
+current-related clause. The repair attempt was rejected before per-card
+verification, with the catch-all `invalid_repair_contract` (request
+`cdb33315-182c-42e6-b70b-2d11445c6b90`). The response arguments were not
+retained. That record does not prove whether the model returned extra fields,
+no call, invalid JSON, an empty array, or a result that failed after merging.
+
+Code inspection found a contract conflict independent of the historical
+response: the full declaration and one-clause correction shared a tool name,
+and the correction inherited instructions to supply full-declaration fields
+that its schema forbade. The focused route now has a distinct tool identity
+and a dedicated prompt with only the failed clause, bounded schema and
+untrusted catalog evidence, and server-owned request context. Legacy
+correction routes retain their existing tool and prompt.
+
+The focused parser distinguishes absent, malformed and non-object arguments;
+the validator distinguishes wrong/multiple calls, unsupported fields, missing
+or invalid requirements, and explicit unresolved responses. An unresolved
+response does not replace or delete the failed condition. Telemetry includes
+fixed codes, a capped call count and an allowlisted completion status, not
+raw arguments, model prose or catalog evidence. No retry, size limit,
+materialization requirement or per-card proof is relaxed.
+
+Offline tests exercise the four-turn “6А” scenario with valid, oversized,
+malformed and unresolved corrections using fixture responses. The valid
+correction yields four checked fixture cards; the invalid cases yield none
+without treating customer inputs as missing. All 2,257 offline V3 tests,
+the closure-preview type-check and `git diff --check` passed. Live acceptance
+for this change has not been run.

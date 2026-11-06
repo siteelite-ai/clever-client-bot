@@ -25,24 +25,85 @@ export function structuredMeasurementTool(base: DeclarationTool): DeclarationToo
 
 /** A measurement-only retry cannot redeclare readiness, scope or catalog
  * filters. Those were already validated on the original request. */
-export function structuredMeasurementRepairTool(base: DeclarationTool): DeclarationTool {
+export const MEASUREMENT_REPAIR_TOOL_NAME = "repair_product_measurement" as const;
+
+export function structuredMeasurementRepairTool(base: DeclarationTool) {
   const requirements = (base.function.parameters.properties as Record<string, unknown>).product_requirements as Record<string, unknown>;
   return {
-    type: "function",
+    type: "function" as const,
     function: {
-      name: base.function.name,
+      name: MEASUREMENT_REPAIR_TOOL_NAME,
       description: "Уточни только неподтверждённые требования к товару. Остальные поля сохраняет сервер.",
       parameters: {
         type: "object",
         additionalProperties: false,
         properties: { product_requirements: {
           ...requirements,
-          description: "Уточнённые требования к товару. Подтверждённые условия сервер добавит сам. Если обязательное условие не подтверждается, сохрани его, чтобы сервер не принял неполный подбор.",
+          description: "Замена только спорного условия. Пустой массив означает, что безопасная замена не подтверждена: сервер оставит исходное условие.",
         } },
         required: ["product_requirements"],
       },
     },
   };
+}
+
+export type MeasurementRepairArgumentIssue =
+  "missing_arguments" | "malformed_json" | "non_object_arguments";
+
+export function parseMeasurementRepairArguments(raw: unknown): {
+  args: Record<string, unknown>;
+  argumentIssue?: MeasurementRepairArgumentIssue;
+} {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { args: {}, argumentIssue: "missing_arguments" };
+  }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return { args: value as Record<string, unknown> };
+    }
+    return { args: {}, argumentIssue: "non_object_arguments" };
+  } catch {
+    return { args: {}, argumentIssue: "malformed_json" };
+  }
+}
+
+export function validateMeasurementRepairResponse(
+  calls: readonly {
+    name: string;
+    args: unknown;
+    argumentIssue?: MeasurementRepairArgumentIssue;
+  }[],
+): { ok: true; args: Record<string, unknown> } | {
+  ok: false;
+  reason: MeasurementRepairArgumentIssue | "missing_tool_call" |
+    "multiple_tool_calls" | "unexpected_tool" | "unexpected_fields" |
+    "missing_requirements" | "requirements_type" | "requirements_limit" |
+    "invalid_requirement_item" | "unresolved";
+} {
+  if (!calls.length) return { ok: false, reason: "missing_tool_call" };
+  if (calls.length !== 1) return { ok: false, reason: "multiple_tool_calls" };
+  const [call] = calls;
+  if (call.name !== MEASUREMENT_REPAIR_TOOL_NAME) {
+    return { ok: false, reason: "unexpected_tool" };
+  }
+  if (call.argumentIssue) return { ok: false, reason: call.argumentIssue };
+  if (!call.args || typeof call.args !== "object" || Array.isArray(call.args)) {
+    return { ok: false, reason: "non_object_arguments" };
+  }
+  const args = call.args as Record<string, unknown>;
+  if (Object.keys(args).some(key => key !== "product_requirements")) {
+    return { ok: false, reason: "unexpected_fields" };
+  }
+  if (!Object.hasOwn(args, "product_requirements")) {
+    return { ok: false, reason: "missing_requirements" };
+  }
+  const requirements = args.product_requirements;
+  if (!Array.isArray(requirements)) return { ok: false, reason: "requirements_type" };
+  if (!requirements.length) return { ok: false, reason: "unresolved" };
+  if (requirements.length > 8) return { ok: false, reason: "requirements_limit" };
+  if (!validRequirements(requirements)) return { ok: false, reason: "invalid_requirement_item" };
+  return { ok: true, args };
 }
 
 export function mergeStructuredMeasurementRepair(
