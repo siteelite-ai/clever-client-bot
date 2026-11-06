@@ -1,12 +1,47 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { materializeStructuredMeasurementDeclaration, structuredMeasurementTool } from "./structured-measurement-declaration.ts";
+import { decodeMeasurementParameters, materializeStructuredMeasurementDeclaration, structuredMeasurementTool } from "./structured-measurement-declaration.ts";
 import { buildDerivedSelectionReasoningToolSchema, resolveDerivedSelectionReasoning } from "./selection-actionability.ts";
 import { certificateCoversSoleUnprojectedMeasurement, compileMeasuredPointRangeRelation, verifiedMeasuredPointRangeEvidence } from "./measured-point-range-relation.ts";
 
-const facets = [{key:"setting",caption:"Диапазон уставки тока расцепления, А",unit:"А",values:[{value:"4–6 А"},{value:"6–10 А"},{value:"7–10 А"}]}];
+const facets = [{key:"setting",caption:"Диапазон уставки тока расцепления, А",type:"string",unit:"А",values:[{value:"4–6 А"},{value:"6–10 А"},{value:"7–10 А"}]}];
 const customer = "Автомат для двигателя 3 кВт, 380 В, рабочий ток по шильдику 6 А";
 const relation = "Диапазон уставки тока должен включать рабочий ток 6 А.";
 const certificate = compileMeasuredPointRangeRelation({point:{value:6,unit:"A",source:"customer_load"},facets})!;
+
+Deno.test("typed measurement parameters resolve exact server references and reject rewritten source facts", () => {
+  const reference = {kind: "server_relation", facet_key: "setting"};
+  const verified = [{facetKey: "setting", evidence: relation}];
+  assertEquals(decodeMeasurementParameters([reference], verified, facets), [relation]);
+  for (const invalid of [
+    [reference, "Требование из свободного текста."],
+    [{...reference, value: 10, unit: "А"}],
+    [{...reference, facet_key: "other"}],
+    [{kind: "catalog_bound", facet_key: "setting", operator: "gte", value: 10, unit: "А"}],
+  ]) assertEquals(decodeMeasurementParameters(invalid, verified, facets), null);
+  assertEquals(decodeMeasurementParameters([reference], [...verified, ...verified], facets), null);
+});
+
+Deno.test("typed bounds project only the named numeric facet; unsupported companions reject the whole declaration", () => {
+  const catalog = [
+    {key: "flow", caption: "Световой поток", type: "numeric", unit: "лм", values: [{value: "1000"}, {value: "1200"}]},
+    {key: "power", caption: "Мощность", type: "numeric", unit: "Вт", values: [{value: "10"}, {value: "15"}]},
+  ];
+  const flow = {kind: "catalog_bound", facet_key: "flow", operator: "gte", value: 1000, unit: "лм"};
+  const power = {kind: "catalog_bound", facet_key: "power", operator: "lt", value: 15, unit: "Вт"};
+  assertEquals(decodeMeasurementParameters([flow, power], [], catalog), [
+    "Световой поток изделия должно быть не менее 1000 лм.",
+    "Мощность изделия должно быть меньше 15 Вт.",
+  ]);
+  for (const invalid of [
+    {...power, facet_key: "flow"},
+    {...power, facet_key: "other"},
+    {...power, value: 1},
+    {...power, value: "15"},
+    {...power, operator: "or"},
+    {...power, operator: ["lte"]},
+    {...power, second_value: 10},
+  ]) assertEquals(decodeMeasurementParameters([flow, invalid], [], catalog), null);
+});
 
 Deno.test("atomic area obligations preserve destination and technology without adopting model-only lumen math", () => {
   const request = "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?";

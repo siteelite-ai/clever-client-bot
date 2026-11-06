@@ -3,6 +3,7 @@ import { normalizeKey } from "./criteria-gate.ts";
 import { hasMeasuredSelectionRequirement } from "./criteria-reasoning.ts";
 import { canonicalMeasurementUnit } from "./criteria-reasoning.ts";
 import { extractClientQuantities } from "./criteria-consistency.ts";
+import { extractNominalLoadCurrent } from "./selection-readiness.ts";
 
 /** A server-verified customer load, not a number inferred from model prose. */
 export interface TrustedCustomerLoadPoint {
@@ -196,10 +197,18 @@ interface SoleUnprojectedMeasurementInput {
 
 /** Canonical executable evidence for a relation already certified by the
  * server. It is not copied from model prose and proves no other property. */
-export function verifiedMeasuredPointRangeEvidence(certificate: MeasuredPointRangeCertificate): string | null {
-  const evidence = `Диапазон уставки тока должен включать рабочий ток ${certificate.value} А.`;
-  return certificateCoversSoleUnprojectedMeasurement({certificate, measurementEvidence:evidence, requiredFacetValues:[]})
-    ? evidence : null;
+export function verifiedMeasuredPointRangeEvidence(
+  certificate: MeasuredPointRangeCertificate,
+): string | null {
+  const evidence =
+    `Диапазон уставки тока должен включать рабочий ток ${certificate.value} А.`;
+  return certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence: evidence,
+      requiredFacetValues: [],
+    })
+    ? evidence
+    : null;
 }
 
 /** Technical scalars only: never raw sentences, identifiers, contact data or
@@ -260,6 +269,7 @@ export type CoverageDiagnostic = {
   facet_index?: number;
   quantities?: ReturnType<typeof measurementQuantityDiagnostics>;
   remaining_digits_capped?: number;
+  source_load_facts_resolved?: number;
 };
 
 const COVERAGE_WORD =
@@ -267,10 +277,97 @@ const COVERAGE_WORD =
 const STRONG_COVERAGE_WORD =
   /(?:покрыва|перекрыва|охватыва|включа|попада|входи|укладыва|cover|within|include|contain|encompass)/iu;
 const NEGATED_COVERAGE =
-  /(?:\b(?:does\s+not|not|never|outside)\b|(?:^|[^\p{L}])(?:не\s+(?:покрыва|перекрыва|охватыва|включа|попада|входи|укладыва|подходи|соответств)|вне\s+диапазон|за\s+пределами))/iu;
+  /(?:\b(?:does\s+not|not|never|outside)\b|(?:^|[^\p{L}])(?:не\s+(?:(?:долж\p{L}*|мож\p{L}*|буд\p{L}*|обязан\p{L}*|следует|нужно|надо)\s+){0,2}(?:покрыва|перекрыва|охватыва|включа|попада|входи|укладыва|подходи|соответств)|вне\s+диапазон|за\s+пределами))/iu;
 const SEPARATE_NOMINAL_CURRENT =
   /(?:номинальн\p{L}*\s+ток\p{L}*|ток\p{L}*\s+номинальн\p{L}*)/iu;
 const AMPERE_TOKEN = String.raw`(?:ампер(?:а|ов)?|ampere?s?|amps?|[AА])`;
+
+/**
+ * In a focused repair the load point is server-owned. A catalog endpoint is
+ * not a second load point or a new scalar product rating. The sole exception
+ * is an entire clause independently proved by the same range certificate.
+ * This only rejects proposals: it never authorizes a search or a card.
+ */
+export function focusedRepairPreservesLoadPoint(
+  requirements: readonly string[],
+  certificate: MeasuredPointRangeCertificate,
+): boolean {
+  if (!verifiedMeasuredPointRangeEvidence(certificate)) return false;
+  const ampere = String.raw`(?:(?:милли|кило)ампер(?:а|ов)?|(?:milli|kilo)ampere?s?|(?:[mмkк])?[aа]|ампер(?:а|ов)?|ampere?s?|amps?)`;
+  const amount = String.raw`([+-]?\d+(?:[.,]\d+)?)`;
+  const measurement = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])${amount}(?:\s*[-–—−]\s*${amount})?\s*(${ampere})(?![\p{L}\p{N}])`,
+    "giu",
+  );
+  const decimal = (value: string) => Number(value.replace(",", "."));
+  for (const requirement of requirements) {
+    const text = requirement.normalize("NFKC").toLowerCase();
+    const foreign = [...text.matchAll(measurement)].some(([, first, second, unit]) => {
+      const divisor = /^(?:м|m)/u.test(unit) ? 1000 : 1;
+      const multiplier = /^(?:к|k)/u.test(unit) ? 1000 : 1;
+      // Compare in the written scale to avoid multiplying a small decimal
+      // before comparing (e.g. 0.006 kA represents exactly 6 A).
+      const expected = certificate.value * divisor / multiplier;
+      return decimal(first) !== expected ||
+        (second !== undefined && decimal(second) !== expected);
+    });
+    if (foreign && !certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence: requirement,
+      requiredFacetValues: [],
+    })) return false;
+  }
+  return true;
+}
+
+/** Resolve source-vs-product ownership with the SAME parser that accepts
+ * customer load facts. Only an explicit, exact, already-certified load point
+ * can be discounted as source context. A matching number or the word
+ * "nominal" alone proves nothing about ownership. Keep every unowned claim,
+ * product rating, negation, other number and physical requirement untouched. */
+function stripCertifiedLoadFacts(
+  clause: string,
+  certificate: MeasuredPointRangeCertificate,
+): { text: string; resolved: number } {
+  const claims = [...clause.matchAll(
+    /(?<!\p{L})(?:(?:номинальн|рабоч)\p{L}*\s+){0,2}ток\p{L}*(?!\p{L})/giu,
+  )];
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const [index, claim] of claims.entries()) {
+    const start = claim.index!;
+    // Do not reinterpret a negative assertion or a transport/context marker
+    // embedded in model prose as a newly trusted customer answer.
+    if (
+      /(?:^|[^\p{L}])(?:не|ни|без|кроме|not|no)\s*$/iu.test(
+        clause.slice(0, start),
+      )
+    ) continue;
+    if (
+      /(?:^|[^\p{L}])(?:пусков|стартов|максимальн|минимальн|пиков|предельн|допустим)\p{L}*\s*$/iu
+        .test(clause.slice(0, start))
+    ) continue;
+    const tail = clause.slice(start, claims[index + 1]?.index);
+    const point = new RegExp(
+      String
+        .raw`(?<![\p{L}\d–—-])(\d+(?:[.,]\d+)?)\s*${AMPERE_TOKEN}(?![\p{L}\d])`,
+      "iu",
+    ).exec(tail);
+    if (!point || point.index > 120) continue;
+    const prefix = tail.slice(0, point.index);
+    if (/[\n\r;.!?<>:=]|---/u.test(prefix)) continue;
+    const assertion = tail.slice(0, point.index + point[0].length);
+    if (extractNominalLoadCurrent(assertion) !== certificate.value) continue;
+    spans.push({ start, end: start + assertion.length });
+  }
+  // A certificate discharges one point per clause, not multiple load
+  // declarations which happen to use the same number.
+  if (spans.length > 1) return { text: clause, resolved: 0 };
+  let text = clause;
+  for (const span of spans.reverse()) {
+    text = text.slice(0, span.start) + " " + text.slice(span.end);
+  }
+  return { text, resolved: spans.length };
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -464,10 +561,16 @@ export function certificateCoversSoleUnprojectedMeasurement(
     .split(/(?<!\d)[.!?;]+(?!\d)|\n+/u)
     .map((clause) => clause.trim()).filter(Boolean);
   let covered = false;
+  let sourceLoadFactsResolved = 0;
   for (const [clauseIndex, clause] of clauses.entries()) {
     const coverageClause = isCertifiedSettingCoverageClause(clause);
-    const sourceSafe = stripVerifiedSourceFacts(
+    const loadFacts = stripCertifiedLoadFacts(
       coverageClause ? stripCertifiedRanges(clause, certificate) : clause,
+      certificate,
+    );
+    sourceLoadFactsResolved += loadFacts.resolved;
+    const sourceSafe = stripVerifiedSourceFacts(
+      loadFacts.text,
       input.customerEvidence ?? "",
     );
     if (!coverageClause) {
@@ -512,7 +615,7 @@ export function certificateCoversSoleUnprojectedMeasurement(
       continue;
     }
     if (
-      NEGATED_COVERAGE.test(clause) || SEPARATE_NOMINAL_CURRENT.test(clause)
+      NEGATED_COVERAGE.test(clause) || SEPARATE_NOMINAL_CURRENT.test(sourceSafe)
     ) {
       return reject(
         NEGATED_COVERAGE.test(clause)
@@ -534,6 +637,11 @@ export function certificateCoversSoleUnprojectedMeasurement(
     }
     covered = true;
   }
-  report({ code: covered ? "covered" : "coverage_relation_missing" });
+  report({
+    code: covered ? "covered" : "coverage_relation_missing",
+    ...(sourceLoadFactsResolved > 0
+      ? { source_load_facts_resolved: sourceLoadFactsResolved }
+      : {}),
+  });
   return covered;
 }

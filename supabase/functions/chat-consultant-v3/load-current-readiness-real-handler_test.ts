@@ -125,6 +125,9 @@ async function runDialogue({
   expectedFinalOptions = 0,
   useLiveVoltageSchema = false,
   livePrimaryTypeEvidence = "owned",
+  rangeDeclaration = "working_load",
+  measurementRepairCase = null,
+  typedParameters = null,
 }: {
   label: string;
   messages: string[];
@@ -133,6 +136,9 @@ async function runDialogue({
   expectedFinalOptions?: number;
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
+  rangeDeclaration?: "working_load" | "nominal_load";
+  typedParameters?: "confirmed" | "forged" | null;
+  measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
     | "pe_answer"
@@ -362,9 +368,9 @@ async function runDialogue({
           const body = await request.json() as {
             tool_choice?: { function?: { name?: string } };
             tools?: Array<{ function?: { name?: string } }>;
-            messages?: Array<{ content?: string }>;
+            messages?: Array<{ role?: string; content?: string }>;
           };
-          const toolReply = (name: string, args: Record<string, unknown>) =>
+          const toolReply = (name: string, args: Record<string, unknown> | string) =>
             json({
               choices: [{
                 finish_reason: "tool_calls",
@@ -373,7 +379,7 @@ async function runDialogue({
                   tool_calls: [{
                     id: `offline-motor-${modelRequests}`,
                     type: "function",
-                    function: { name, arguments: JSON.stringify(args) },
+                    function: { name, arguments: typeof args === "string" ? args : JSON.stringify(args) },
                   }],
                 },
               }],
@@ -398,9 +404,9 @@ async function runDialogue({
               }],
             });
           }
-          if (
-            body.tool_choice?.function?.name === "declare_selection_reasoning"
-          ) {
+          const declarationToolName = body.tool_choice?.function?.name;
+          if (declarationToolName === "declare_selection_reasoning" ||
+            declarationToolName === "repair_product_measurement") {
             declarationRequests++;
             const isCorrection = body.messages?.some(({ content }) => content?.includes("<correction>"));
             const context = body.messages?.map(m => m.content ?? "").join("\n") ?? "";
@@ -411,30 +417,64 @@ async function runDialogue({
             // structured contract as the positively tested closed preview.
             const properties = (body.tools as unknown as Array<{
               function: { name: string; parameters: { properties: Record<string, unknown> } };
-            }>).find(tool => tool.function.name === "declare_selection_reasoning")!
+            }>).find(tool => tool.function.name === declarationToolName)!
               .function.parameters.properties;
             assert("product_requirements" in properties);
             assert(!("reasoning" in properties));
+            const parameterShape = properties.product_requirements as {items: {type: string}};
+            assertEquals(parameterShape.items.type, "object");
+            if (typedParameters) {
+              assert(context.includes("verified_measurement_parameters"));
+              assert(!context.includes("accepted_live_values"));
+              for (const key of [settingKey, voltageKey]) {
+                assert(context.includes(JSON.stringify({ kind: "server_relation", facet_key: key })));
+              }
+            }
             if (
               body.messages?.some(({ content }) =>
                 content?.includes("<correction>")
               )
             ) correctionRequests++;
-            return toolReply("declare_selection_reasoning", {
+            const currentDraft = measurementRepairCase === "catalog_current" || measurementRepairCase === "grounded_current";
+            const failedRequirement = currentDraft
+              ? "Номинальный ток автомата должен быть равен 6 А."
+              : "Количество дополнительных каналов должно быть 2 канала.";
+            if (measurementRepairCase && isCorrection) {
+              assert(context.includes("server_measurement_repair_context"));
+              assert(context.includes("failed_obligation"));
+              assert(context.includes(failedRequirement.slice(0, -1)));
+              assert(context.includes("proven_obligations"));
+            }
+            const args = {
               selection_readiness: {
                 decision: "ready",
                 critical_inputs: {
-                  first: { parameter: "Ток нагрузки", customer_quote: "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  first: { parameter: "Ток нагрузки", customer_quote: rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
                   rest: [
                     { parameter: "Питание", customer_quote: "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
                     { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
                   ],
                 },
               },
-              product_requirements: terminalMode === "motor_measurement_repair" && !isCorrection
+              product_requirements: typedParameters
+                ? [
+                  { kind: "server_relation", facet_key: settingKey,
+                    ...(typedParameters === "forged" ? { value: 10, unit: "А" } : {}) },
+                  { kind: "server_relation", facet_key: voltageKey },
+                ]
+                : measurementRepairCase
+                ? (isCorrection
+                  ? [measurementRepairCase === "catalog_current"
+                    ? "Номинальный ток автомата должен быть равен 10 А."
+                    : "Диапазон уставки тока должен включать рабочий ток 6 А.",
+                  ...(measurementRepairCase === "keep_unproven" ? [failedRequirement] : [])]
+                  : ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Рабочее напряжение изделия должно соответствовать 380 В.", failedRequirement])
+                : terminalMode === "motor_measurement_repair" && !isCorrection
                 ? [] // Malformed declaration must repair, never waive proof.
                 : terminalMode === "motor_voltage_refusal" || terminalMode === "motor_voltage_conjunction"
-                ? ["Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
+                ? [rangeDeclaration === "nominal_load"
+                  ? "Диапазон уставки тока должен включать номинальный ток двигателя 6А."
+                  : "Диапазон уставки тока должен включать рабочий ток 6 А.", "Номинальное напряжение каждого автомата должно быть не менее 380 В."]
                 : ["Диапазон уставки тока должен включать рабочий ток 6 А."],
               retrieval_query: "автомат защиты двигателя",
               measurement_scope: "per_product",
@@ -442,7 +482,21 @@ async function runDialogue({
               excluded_classifications: [],
               required_facet_values: [],
               explicit_customer_classifications: [],
-            });
+            };
+            if (isCorrection && terminalMode !== "motor_measurement_repair") {
+              assertEquals(declarationToolName, "repair_product_measurement");
+              assertEquals(Object.keys(properties), ["product_requirements"]);
+              const system = body.messages?.find(({ role }) => role === "system")?.content ?? "";
+              assert(!/selection_readiness|required_facet_values|measurement_scope|Все прочие поля/u.test(system));
+              assert(!/accepted_live_values|candidate_sample/u.test(context));
+              assert(context.includes(JSON.stringify({ kind: "server_relation", facet_key: settingKey })));
+              if (measurementRepairCase === "malformed") return toolReply(declarationToolName, '{"product_requirements":[');
+              if (measurementRepairCase === "unresolved") return toolReply(declarationToolName, { product_requirements: [] });
+              return toolReply(declarationToolName, measurementRepairCase === "overflow"
+                ? { ...args, required_facet_values: Array.from({ length: 9 }, (_, i) => `facet-${i}`) }
+                : { product_requirements: args.product_requirements });
+            }
+            return toolReply("declare_selection_reasoning", args);
           }
           if (body.tool_choice?.function?.name === "propose_candidates") {
             return toolReply("propose_candidates", {
@@ -520,6 +574,15 @@ async function runDialogue({
       const row = logs[turn];
       assert(row, `${label}: missing server log for turn ${turn}`);
       if (terminalMode && turn === messages.length - 1) {
+        if (typedParameters === "forged") {
+          assertEquals(row.error, null);
+          assert(row.steps.some(s => s.step === "v3_measurement_parameter_rejected"));
+          assertEquals(row.final_products_count, 0);
+          assert(!visible.some(event => event.type === "products_block"));
+          assertEquals(catalogProductRequests.length, 0);
+          assertEquals(externalRequests, 0);
+          return;
+        }
         if (terminalMode === "specification_lookup") {
           assertEquals(row.error,null,JSON.stringify(row.steps));
           const cards=visible.filter(event=>event.type==="products_block");
@@ -545,7 +608,7 @@ async function runDialogue({
               assert(!row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"));
             } else {
             assertEquals(cards.length,1,JSON.stringify({visible,steps:row.steps}));
-            assertEquals(row.final_products_count,4);
+            assertEquals(row.final_products_count,4,JSON.stringify({visible,steps:row.steps}));
             const markdown = String(cards[0].markdown);
             const accepted = new Set([28903,28913,29287,29288]);
             for (const product of liveMotorCatalog.products) {
@@ -555,8 +618,12 @@ async function runDialogue({
             }
             assert(row.steps.some(s=>s.step==="v3_catalog_primary_type_verified"),JSON.stringify(row.steps));
             assert(!row.steps.some(s=>s.step==="v3_product_measurement_unverified"),JSON.stringify(row.steps));
-            const diagnosis=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
+            const diagnosis=row.steps.filter(s=>s.step==="v3_product_measurement_projection_diagnostic").at(-1);
             assertEquals(diagnosis?.meta?.gap,null);
+            const conjunction=diagnosis?.meta?.independent_conjunction as {diagnostic?:{code?:string;operating_domains_resolved?:number;operating_domains_projected?:number}} | undefined;
+            assertEquals(conjunction?.diagnostic?.code,"covered");
+            assertEquals(conjunction?.diagnostic?.operating_domains_resolved,1);
+            assertEquals(conjunction?.diagnostic?.operating_domains_projected,1);
             }
           }else{
           assertEquals(
@@ -599,7 +666,7 @@ async function runDialogue({
             }`,
           );
           assert(
-            terminalMode === "motor_measurement_repair" || !row.steps.some(({ step }) =>
+            terminalMode === "motor_measurement_repair" || measurementRepairCase || !row.steps.some(({ step }) =>
               step === "v3_product_measurement_gap_before_repair"
             ),
             `${label}: certified range coverage was not discharged: ${
@@ -607,8 +674,13 @@ async function runDialogue({
             }`,
           );
         } else if (terminalMode === "motor_voltage_refusal") {
+          const refusalDiagnostic=row.steps.find(s=>s.step==="v3_product_measurement_projection_diagnostic");
+          const conjunction=refusalDiagnostic?.meta?.independent_conjunction as {diagnostic?:{code?:string}} | undefined;
+          assert(typeof conjunction?.diagnostic?.code==="string" && conjunction.diagnostic.code!=="covered",JSON.stringify(row.steps));
           assert(publicText(events).includes("исходные данные учтены"), publicText(events));
-          assert(publicText(events).includes("напряжение"), publicText(events));
+          assert(publicText(events).includes(measurementRepairCase === "catalog_current" ? "ток"
+            : measurementRepairCase ? "Не удалось подтвердить пригодность товаров" : "напряжение"), publicText(events));
+          if (measurementRepairCase) assert(!publicText(events).includes("напряжение"),publicText(events));
           assert(!/укажите|уточните|повторите/iu.test(publicText(events)), publicText(events));
           assert(!publicText(events).includes("https://220volt.kz/catalog/"),
             `${label}: private candidate link leaked into public prose`);
@@ -767,7 +839,7 @@ async function runDialogue({
         assert(declarationRequests >= 1, `${label}: no derived declaration`);
         assertEquals(
           correctionRequests,
-          terminalMode === "motor_measurement_repair" ? 1 : 0,
+          terminalMode === "motor_measurement_repair" || measurementRepairCase ? 1 : 0,
           `${label}: only an invalid hypothesis should repair once`,
         );
         const searchedValues = new Set(catalogProductRequests.flatMap((url) =>
@@ -778,6 +850,12 @@ async function runDialogue({
         if (terminalMode === "motor_voltage_conjunction") {
           const voltages = new Set(catalogProductRequests.flatMap(url => url.searchParams.getAll(`options[${voltageKey}][]`)));
           assertEquals([...voltages],[useLiveVoltageSchema?"230-690":"380"],"the customer working point must shape retrieval as well as final cards");
+        }
+        if (measurementRepairCase) {
+          const frozen=logs.at(-1)?.steps.find(s=>s.step==="v3_measurement_repair_context_frozen");
+          assert(Number(frozen?.meta?.proven_obligations)>0,JSON.stringify(logs.at(-1)?.steps));
+          assert(logs.at(-1)?.steps.some(s=>s.step==="v3_structured_measurement_declaration" && Number(s.meta?.server_obligations_retained)>0));
+          assertEquals(Object.keys(frozen?.meta??{}).sort(),["proven_obligations","failed_obligation_present","reason"].sort());
         }
         assert(
           !searchedValues.has("7–10 А"),
@@ -798,18 +876,25 @@ async function runDialogue({
           correctionRequests >= 1,
           `${label}: unprojected voltage did not enter repair`,
         );
-        assertEquals(catalogProductRequests.length, 2,
-          `${label}: only the two bounded private range probes may run`);
+        assertEquals(catalogProductRequests.length, 0,
+          `${label}: no product search before a certified focused repair`);
         const privateProbe = logs.at(-1)?.steps.find(({ step }) =>
           step === "v3_private_candidate_measurement_probe");
-        assertEquals(privateProbe?.meta?.renderable, false);
-        assertEquals(privateProbe?.meta?.shared_cache, false);
-        const sampledValues = new Set(catalogProductRequests.flatMap(url =>
-          url.searchParams.getAll("options[thermal_trip_setting][]")));
-        assert(sampledValues.has("4–6 А") && sampledValues.has("6–10 А"));
-        assert(!sampledValues.has("7–10 А"));
+        assertEquals(privateProbe, undefined);
         const diagnostics = logs.at(-1)?.steps.filter(({ step }) => step === "v3_product_measurement_projection_diagnostic") ?? [];
-        assertEquals(diagnostics.map(d => d.meta?.stage), ["before_repair", "after_repair", "terminal"]);
+        const rejectedReason = measurementRepairCase === "overflow" ? "unexpected_fields"
+          : measurementRepairCase === "malformed" ? "malformed_json"
+          : measurementRepairCase === "catalog_current" ? "unverified_load_point"
+          : measurementRepairCase === "unresolved" ? "unresolved" : null;
+        assertEquals(diagnostics.map(d => d.meta?.stage), rejectedReason
+          ? ["before_repair"] : ["before_repair", "after_repair", "terminal"]);
+        if (rejectedReason) {
+          const steps = logs.at(-1)?.steps ?? [];
+          assertEquals(correctionRequests, 1);
+          assert(steps.some(s => s.step === "v3_structured_measurement_repair_rejected" &&
+            s.meta?.reason === rejectedReason));
+          assert(!steps.some(s => s.meta?.rejection === "missing_readiness_decision"));
+        }
         for (const diagnostic of diagnostics) {
           assertEquals(diagnostic.meta?.gap, "unprojectable_criterion");
           assert(!JSON.stringify(diagnostic.meta).includes("Для двигателя"), `${label}: raw model prose leaked into diagnostic`);
@@ -1046,10 +1131,60 @@ Deno.test({
   }),
 });
 
+for (const typedParameters of ["confirmed", "forged"] as const) Deno.test({
+  name: typedParameters === "confirmed"
+    ? "typed server parameters after 6А reach final search without repair and retain the same SKU gates"
+    : "a typed server reference cannot overwrite 6А with a model-supplied 10 A",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "typed compatibility after 6А",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы", "Прямой пуск", "6А"],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: "motor_voltage_conjunction",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    typedParameters,
+  }),
+});
+
 Deno.test({
   name: "real catalog replay admits four same-card primary-type candidates only after independent numeric proof",
   permissions:{read:true,env:false,net:false},
   fn:()=>runDialogue({label:"real catalog operating domain replay",messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true}),
+});
+
+for (const dialogue of [false,true]) Deno.test({
+  name: `real catalog nominal-load role proof after ${dialogue ? "four-turn clarification ending in 6А" : "one complete message"}`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`nominal-load role ${dialogue ? "dialogue" : "complete"}`,
+    messages:dialogue ? ["Подберите автомат для двигателя асинхронный 3 кВТ", "380 В, 3 фазы", "Прямой пуск", "6А"]
+      : ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6А."],
+    expectedFacets:dialogue ? ["supply_phase", "motor_start_method", "load_current"] : [],
+    expectedProfile:"motor_breaker",terminalMode:"motor_voltage_conjunction",useLiveVoltageSchema:true,rangeDeclaration:"nominal_load"}),
+});
+
+// Synthetic independent clause, not an assertion about the unavailable raw
+// model clause from live QA. Exercise the repair transition and attribution.
+for (const keep of [false,true]) Deno.test({
+  name:`targeted measurement repair ${keep ? "reports the actual unproven property without blaming verified voltage" : "retains verified obligations when the model omits them"}`,
+  permissions:{read:true,env:false,net:false},
+  fn:()=>runDialogue({label:`targeted proof-preserving repair ${keep}`,messages:["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],expectedFacets:[],expectedProfile:"motor_breaker",terminalMode:keep?"motor_voltage_refusal":"motor_voltage_conjunction",useLiveVoltageSchema:true,measurementRepairCase:keep?"keep_unproven":"omit_unproven"}),
+});
+
+for (const repairCase of ["overflow", "malformed", "unresolved", "omit_unproven", "catalog_current", "grounded_current"] as const) Deno.test({
+  name: `measurement-only repair after 6А: ${repairCase} preserves accepted readiness and card gates`,
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: `${repairCase} correction after current reply`,
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы", "Прямой пуск", "6А"],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: repairCase === "omit_unproven" || repairCase === "grounded_current" ? "motor_voltage_conjunction" : "motor_voltage_refusal",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    measurementRepairCase: repairCase,
+  }),
 });
 
 for (const livePrimaryTypeEvidence of ["missing", "accessory"] as const) Deno.test({

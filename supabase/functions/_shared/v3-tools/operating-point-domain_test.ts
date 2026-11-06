@@ -5,6 +5,7 @@ import {
 import {
   compileCustomerOperatingPointDomains,
   productProvesOperatingPointDomain,
+  resolveCustomerOperatingPointDomains,
 } from "./operating-point-domain.ts";
 import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
 import { compileMeasuredRequirementConjunction } from "./measured-requirement-conjunction.ts";
@@ -32,6 +33,53 @@ const certificate = compileMeasuredPointRangeRelation({
   point: { value: 6, unit: "А", source: "customer_load" },
   facets: [setting],
 })!;
+
+Deno.test("standalone voltage-phase replies preserve supply role across completed customer turns", () => {
+  const dialogue =
+    "Подберите защиту для нагрузки\n\n---\n\n380 В, 3 фазы\n\n---\n\nПрямой пуск\n\n---\n\n6А";
+  const full = compileCustomerOperatingPointDomains(customer, [voltage]);
+  for (
+    const text of [dialogue, "380 В, 3 фазы", "Уточнение клиента: 380В,3 фазы"]
+  ) {
+    assertEquals(
+      compileCustomerOperatingPointDomains(text, [voltage]),
+      full,
+      text,
+    );
+  }
+  const low = { ...voltage, values: [{ value: "220" }, { value: "100-250" }] };
+  assertEquals(
+    compileCustomerOperatingPointDomains("220 В, 1 фаза", [low])[0]
+      .acceptedValues,
+    ["220"],
+  );
+  for (
+    const text of [
+      "380 В, 3 фазы\n\n---\n\n220 В, 1 фаза",
+      "380 В, 3 фазы\n\n---\n\nПоправка: 220 В, 1 фаза",
+      "Не 380 В, 3 фазы",
+    ]
+  ) {
+    assert(
+      resolveCustomerOperatingPointDomains(text, [voltage]).unresolved > 0,
+      text,
+    );
+  }
+  for (
+    const text of [
+      "Напряжение катушки 380 В, 3 фазы",
+      "На выходе 380 В, 3 фазы",
+      "Номинальное напряжение изделия 380 В, 3 фазы",
+      "380\nВ, 3 фазы",
+    ]
+  ) {
+    assertEquals(
+      compileCustomerOperatingPointDomains(text, [voltage]),
+      [],
+      text,
+    );
+  }
+});
 
 Deno.test("real nullable-unit abbreviated caption projects customer point into closed live interval, not higher scalar ratings", () => {
   const domains = compileCustomerOperatingPointDomains(customer, [voltage]);

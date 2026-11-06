@@ -553,18 +553,23 @@ Deno.test("transport retry is confined to product-measurement correction and the
       "correctionMessages,",
       "turnController.signal,",
       '"derived_reasoning",',
-      '["declare_selection_reasoning"],',
-      '"declare_selection_reasoning",',
-      "[providerReasoningToolSchema],",
+      "[correctionToolName],",
+      "correctionToolName,",
+      "[repairTransport?.tool ?? repairTool ?? providerReasoningToolSchema],",
       "GENERAL_INQUIRY_MODEL_ROUTING,",
     ]
   ) {
     assertStringIncludes(correctionCall, mandatoryArg);
   }
-  // The repair uses exactly the same wire adapter and deferred bound guard as
-  // primary/fallback; the OFF lane still passes through its canonical schema.
+  // One transport attempt function closes over the same selected schema on
+  // retry. Focused measurement repair defers and validates its own bounds;
+  // all other correction routes retain the primary wire contract.
   assertStringIncludes(source, "reasoningTransport?.tool ?? reasoningToolSchema");
   assertStringIncludes(source, "reasoningTransport?.validate(call.args)");
+  assertStringIncludes(source, "compileToolArrayBounds(repairTool)");
+  assertStringIncludes(source, "repairTransport?.validate(validated.args)");
+  assertStringIncludes(source, "validateMeasurementRepairResponse(structuredReasoning.toolCalls.map(call => {");
+  assertStringIncludes(source, "const decoded = decodeMeasurementCall(call);");
   assertEquals(
     source.match(/retryProductMeasurementUpstreamOnce\(\{/gu)?.length,
     1,

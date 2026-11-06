@@ -27,6 +27,95 @@ const setting: LiveAdjustableRangeFacet = {
   ],
 };
 
+Deno.test("verified nominal load assertions do not become a second product rating", () => {
+  const certificate = compile()!;
+  for (const owner of ["двигателя", "насоса", "нагрузки", "компрессора"]) {
+    const fact = `Номинальный ток ${owner} 10А`;
+    for (
+      const measurementEvidence of [
+        `Диапазон уставки тока должен включать номинальный ток ${owner} 10А.`,
+        `${fact}. Диапазон уставки тока должен включать рабочий ток 10А.`,
+        `Рабочий ток ${owner} 10А. Диапазон уставки тока должен включать рабочий ток 10А.`,
+        `${fact} входит в диапазон уставки тока.`,
+      ]
+    ) {
+      assertEquals(
+        certificateCoversSoleUnprojectedMeasurement({
+          certificate,
+          measurementEvidence,
+          requiredFacetValues: [],
+          customerEvidence: fact,
+        }),
+        true,
+        measurementEvidence,
+      );
+    }
+  }
+});
+
+Deno.test("load role proof uses the actual decimal certificate and exposes only bounded diagnostic facts", () => {
+  const certificate = compile([{
+    ...setting,
+    values: [{ value: "1,6–2,5 А" }, { value: "2,5–4 А" }],
+  }], { ...point, value: 2.5 })!;
+  let diagnostic: CoverageDiagnostic | undefined;
+  assertEquals(
+    certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence:
+        "Диапазон уставки тока включает номинальный ток нагрузки 2,5А.",
+      requiredFacetValues: [],
+      customerEvidence: "Номинальный ток нагрузки 2,5А",
+    }, (d) => {
+      diagnostic = d;
+    }),
+    true,
+  );
+  assertEquals(diagnostic, { code: "covered", source_load_facts_resolved: 1 });
+  assertEquals(
+    certificateCoversSoleUnprojectedMeasurement({
+      certificate,
+      measurementEvidence:
+        "Диапазон уставки тока включает номинальный ток нагрузки 2,5А.",
+      requiredFacetValues: [{ key: "Номинальный ток товара, А", value: "2.5" }],
+      customerEvidence: "Номинальный ток нагрузки 2,5А",
+    }),
+    false,
+  );
+});
+
+Deno.test("nominal load ownership never erases a product rating, negation or another value", () => {
+  const certificate = compile()!;
+  for (
+    const measurementEvidence of [
+      "Диапазон уставки тока должен включать номинальный ток автомата 10А.",
+      "Диапазон уставки тока должен включать номинальный ток 10А.",
+      "Диапазон уставки тока должен включать номинальный ток двигателя 12А.",
+      "Диапазон уставки тока должен включать номинальный ток двигателя 10кА.",
+      "Диапазон уставки тока не должен включать номинальный ток двигателя 10А.",
+      "Диапазон уставки тока не должен включать рабочий ток двигателя 10А.",
+      "Диапазон уставки тока включает пусковой номинальный ток двигателя 10А.",
+      "Диапазон уставки тока включает максимальный номинальный ток двигателя 10А.",
+      "Диапазон уставки тока включает не номинальный ток двигателя 10А.",
+      "Диапазон уставки тока включает номинальный ток двигателя 10А, номинальный ток автомата 10А обязателен.",
+      "Диапазон уставки тока включает номинальный ток двигателя 10А и напряжение 380В.",
+      "Диапазон уставки тока включает номинальный ток двигателя 10А с коэффициентом 1,25.",
+      "Диапазон уставки тока включает номинальный ток двигателя 10А и номинальный ток насоса 10А.",
+    ]
+  ) {
+    assertEquals(
+      certificateCoversSoleUnprojectedMeasurement({
+        certificate,
+        measurementEvidence,
+        requiredFacetValues: [],
+        customerEvidence: "Номинальный ток двигателя 10А",
+      }),
+      false,
+      measurementEvidence,
+    );
+  }
+});
+
 function compile(
   facets: readonly LiveAdjustableRangeFacet[] = [setting],
   customerPoint: TrustedCustomerLoadPoint = point,
