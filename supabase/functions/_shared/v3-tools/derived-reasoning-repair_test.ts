@@ -568,7 +568,8 @@ Deno.test("transport retry is confined to product-measurement correction and the
   assertStringIncludes(source, "reasoningTransport?.validate(call.args)");
   assertStringIncludes(source, "compileToolArrayBounds(repairTool)");
   assertStringIncludes(source, "repairTransport?.validate(validated.args)");
-  assertStringIncludes(source, "validateMeasurementRepairResponse(structuredReasoning.toolCalls)");
+  assertStringIncludes(source, "validateMeasurementRepairResponse(structuredReasoning.toolCalls.map(call => {");
+  assertStringIncludes(source, "const decoded = decodeMeasurementCall(call);");
   assertEquals(
     source.match(/retryProductMeasurementUpstreamOnce\(\{/gu)?.length,
     1,

@@ -127,6 +127,7 @@ async function runDialogue({
   livePrimaryTypeEvidence = "owned",
   rangeDeclaration = "working_load",
   measurementRepairCase = null,
+  typedParameters = null,
 }: {
   label: string;
   messages: string[];
@@ -136,6 +137,7 @@ async function runDialogue({
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   rangeDeclaration?: "working_load" | "nominal_load";
+  typedParameters?: "confirmed" | "forged" | null;
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
@@ -419,6 +421,15 @@ async function runDialogue({
               .function.parameters.properties;
             assert("product_requirements" in properties);
             assert(!("reasoning" in properties));
+            const parameterShape = properties.product_requirements as {items: {type: string}};
+            assertEquals(parameterShape.items.type, "object");
+            if (typedParameters) {
+              assert(context.includes("verified_measurement_parameters"));
+              assert(!context.includes("accepted_live_values"));
+              for (const key of [settingKey, voltageKey]) {
+                assert(context.includes(JSON.stringify({ kind: "server_relation", facet_key: key })));
+              }
+            }
             if (
               body.messages?.some(({ content }) =>
                 content?.includes("<correction>")
@@ -445,7 +456,13 @@ async function runDialogue({
                   ],
                 },
               },
-              product_requirements: measurementRepairCase
+              product_requirements: typedParameters
+                ? [
+                  { kind: "server_relation", facet_key: settingKey,
+                    ...(typedParameters === "forged" ? { value: 10, unit: "А" } : {}) },
+                  { kind: "server_relation", facet_key: voltageKey },
+                ]
+                : measurementRepairCase
                 ? (isCorrection
                   ? [measurementRepairCase === "catalog_current"
                     ? "Номинальный ток автомата должен быть равен 10 А."
@@ -472,7 +489,7 @@ async function runDialogue({
               const system = body.messages?.find(({ role }) => role === "system")?.content ?? "";
               assert(!/selection_readiness|required_facet_values|measurement_scope|Все прочие поля/u.test(system));
               assert(!/accepted_live_values|candidate_sample/u.test(context));
-              assert(context.includes('"requirement":"Диапазон уставки тока должен включать рабочий ток 6 А."'));
+              assert(context.includes(JSON.stringify({ kind: "server_relation", facet_key: settingKey })));
               if (measurementRepairCase === "malformed") return toolReply(declarationToolName, '{"product_requirements":[');
               if (measurementRepairCase === "unresolved") return toolReply(declarationToolName, { product_requirements: [] });
               return toolReply(declarationToolName, measurementRepairCase === "overflow"
@@ -557,6 +574,15 @@ async function runDialogue({
       const row = logs[turn];
       assert(row, `${label}: missing server log for turn ${turn}`);
       if (terminalMode && turn === messages.length - 1) {
+        if (typedParameters === "forged") {
+          assertEquals(row.error, null);
+          assert(row.steps.some(s => s.step === "v3_measurement_parameter_rejected"));
+          assertEquals(row.final_products_count, 0);
+          assert(!visible.some(event => event.type === "products_block"));
+          assertEquals(catalogProductRequests.length, 0);
+          assertEquals(externalRequests, 0);
+          return;
+        }
         if (terminalMode === "specification_lookup") {
           assertEquals(row.error,null,JSON.stringify(row.steps));
           const cards=visible.filter(event=>event.type==="products_block");
@@ -1102,6 +1128,23 @@ Deno.test({
     label: "independent voltage conjunction",
     messages: ["Подберите автомат для двигателя асинхронный 3 кВт. Питание 380 В, 3 фазы; прямой пуск; номинальный рабочий ток по шильдику 6 А."],
     expectedFacets: [], expectedProfile: "motor_breaker", terminalMode: "motor_voltage_conjunction",
+  }),
+});
+
+for (const typedParameters of ["confirmed", "forged"] as const) Deno.test({
+  name: typedParameters === "confirmed"
+    ? "typed server parameters after 6А reach final search without repair and retain the same SKU gates"
+    : "a typed server reference cannot overwrite 6А with a model-supplied 10 A",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "typed compatibility after 6А",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВт", "380 В, 3 фазы", "Прямой пуск", "6А"],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: "motor_voltage_conjunction",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    typedParameters,
   }),
 });
 
