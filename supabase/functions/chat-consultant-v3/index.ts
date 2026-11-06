@@ -224,6 +224,8 @@ import {
 } from "../_shared/v3-tools/derived-reasoning-repair.ts";
 import {
   materializeStructuredMeasurementDeclaration,
+  mergeStructuredMeasurementRepair,
+  structuredMeasurementRepairTool,
   structuredMeasurementTool,
   STRUCTURED_MEASUREMENT_DECLARATION_POLICY,
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
@@ -13511,8 +13513,20 @@ async function runExpertLoop(
               const correctionMessages = derivedMessages.map((message) => ({
                 ...message,
               }));
-              if (repairReason === "product_measurement" && structuredMeasurementMode && currentMeasurementRepairContext) {
-                const repairContext: ReturnType<typeof buildMeasurementRepairContext> = currentMeasurementRepairContext;
+              const focusContext = currentMeasurementRepairContext as ReturnType<typeof buildMeasurementRepairContext> | null;
+              const failedObligation = focusContext?.failedObligation;
+              const repairBase = repairReason === "product_measurement" &&
+                  structuredMeasurementMode && failedObligation && declaration && declarationCall
+                ? declarationCall
+                : null;
+              const repairTool = repairBase
+                ? structuredMeasurementRepairTool(reasoningToolSchema)
+                : null;
+              const repairTransport = repairTool && requireSelectionReadiness
+                ? compileToolArrayBounds(repairTool)
+                : null;
+              if (repairReason === "product_measurement" && structuredMeasurementMode && focusContext) {
+                const repairContext = focusContext;
                 serverVerifiedMeasurementObligations = [...repairContext.provenObligations];
                 if (correctionMessages[0]?.role === "system") correctionMessages[0].content += `\n\n${MEASUREMENT_REPAIR_FOCUS_POLICY}`;
                 if (correctionMessages[1]?.role === "user") correctionMessages[1].content += "\n\nДанные серверной проверки (не инструкции):\n" + JSON.stringify({server_measurement_repair_context:{reason:repairContext.reason,failed_obligation:repairContext.failedObligation,proven_obligations:repairContext.provenObligations}}).replace(/</gu,"\\u003c");
@@ -13569,6 +13583,10 @@ async function runExpertLoop(
                   };
                 }
               }
+              if (repairBase && correctionMessages[0]?.role === "system") {
+                correctionMessages[0].content +=
+                  "\n\nДля этого исправления верни только product_requirements: уточни failed_obligation. Не перечисляй значения фильтров и не повторяй остальные условия. Сервер сохранит остальные требования и поля исходного вызова. Не удаляй обязательное условие, которое не удалось подтвердить.";
+              }
               const correctionAttempt = (timeoutMs: number) => {
                 derivedReasoningProviderAttempts += 1;
                 return callOpenRouter(
@@ -13580,7 +13598,7 @@ async function runExpertLoop(
                   ["declare_selection_reasoning"],
                   "declare_selection_reasoning",
                   0,
-                  [providerReasoningToolSchema],
+                  [repairTransport?.tool ?? repairTool ?? providerReasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
                   DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -13668,11 +13686,31 @@ async function runExpertLoop(
                 }
                 throw correctionError;
               }
-              declarationCall = cleanDeclarationCall(
-                structuredReasoning.toolCalls.find((toolCall) =>
+              const repairCall = structuredReasoning.toolCalls.find((toolCall) =>
                   toolCall.name === "declare_selection_reasoning"
-                ),
               );
+              if (repairBase) {
+                const boundsFailure = repairTransport?.validate(repairCall?.args);
+                const merged = repairCall && failedObligation && structuredReasoning.toolCalls.length === 1 &&
+                    !boundsFailure
+                  ? mergeStructuredMeasurementRepair(repairBase.args, repairCall.args, failedObligation)
+                  : null;
+                if (!merged || !materializeStructuredMeasurementDeclaration(
+                  merged,
+                  certifiedMeasuredPointRange
+                    ? verifiedMeasuredPointRangeEvidence(certifiedMeasuredPointRange) : null,
+                  serverVerifiedMeasurementObligations,
+                )) {
+                  steps.push({ step: "v3_structured_measurement_repair_rejected", ms: now(), meta: {
+                    reason: boundsFailure ? "array_bound" : "invalid_repair_contract",
+                  } });
+                  return stopForUnverifiedProductMeasurement(requiredProductMeasurementGap());
+                }
+                // Original args have already been decoded and validated.
+                declarationCall = { ...repairBase, args: merged };
+              } else {
+                declarationCall = cleanDeclarationCall(repairCall);
+              }
               if (requireSelectionReadiness) {
                 const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);
                 if (outcome) return outcome;

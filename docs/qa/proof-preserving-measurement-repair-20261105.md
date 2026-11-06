@@ -86,3 +86,25 @@ fixed codes, counts and booleans; no raw clause, arbitrary facet name or secret.
 Exact-head CI and a fresh separately authorized bounded preview dialogue are
 still required. Do not reuse deleted QA credentials. One success in the prior
 diagnostic-only version is not proof that this new correction works live.
+
+## Follow-up: narrow the correction response
+
+The live run of `af40a3c6` did not pass. The first declaration accepted the
+customer's inputs; the correction was rejected for exceeding the existing
+`required_facet_values` limit. The later missing-readiness diagnostic was a
+consequence of discarding that response, not a missing customer input.
+
+When the structured measurement checker identifies a concrete failed clause,
+the existing correction attempt receives a tool with only
+`product_requirements`. The server retains the accepted readiness, retrieval
+and filter fields and all original requirements outside the failed clause.
+Only an exact whole-clause match can be replaced; compound entries are not
+split or discarded. The merged declaration is still validated and must pass
+the original conjunction and per-card checks. Extra fields, oversized lists
+and malformed replies fail closed without reattributing the failure to
+readiness. There is no new model attempt or change to the original tool limits.
+
+Offline regressions cover the oversized full declaration after the four-turn
+dialogue, valid narrow repair, unknown-property refusal, and retention of
+unrelated requirements. All 2,253 offline V3 tests and the closure-preview
+type-check passed. The live result remains unverified for this follow-up.

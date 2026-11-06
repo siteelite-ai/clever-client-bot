@@ -8,7 +8,7 @@ import {
   type MeasuredConjunctionDiagnostic,
 } from "./measured-requirement-conjunction.ts";
 import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
-import { materializeStructuredMeasurementDeclaration } from "./structured-measurement-declaration.ts";
+import { materializeStructuredMeasurementDeclaration, mergeStructuredMeasurementRepair } from "./structured-measurement-declaration.ts";
 
 const relation = "Диапазон уставки тока должен включать рабочий ток 6 А.";
 const working = "Рабочее напряжение изделия должно соответствовать 380 В.";
@@ -39,6 +39,33 @@ const input = {
   measurementScope: "per_product",
   requiredFacetValues: [],
 };
+
+Deno.test("measurement repair preserves accepted fields and every untouched requirement", () => {
+  const later = "Максимальная рабочая температура изделия не менее 60 °C.";
+  const initial = {
+    selection_readiness: { decision: "ready" },
+    required_facet_values: ["v1"],
+    product_requirements: [relation, unsupported, later],
+  };
+  const repaired = mergeStructuredMeasurementRepair(
+    initial, { product_requirements: [working] }, unsupported.slice(0, -1),
+  );
+  assertEquals(repaired, {
+    ...initial,
+    product_requirements: [working, relation, later],
+  });
+  assertEquals(initial.product_requirements, [relation, unsupported, later]);
+  const compound = { ...initial, product_requirements: [`${unsupported} ${later}`] };
+  assertEquals(mergeStructuredMeasurementRepair(
+    compound, { product_requirements: [working] }, unsupported,
+  )?.product_requirements, [working, ...compound.product_requirements]);
+  assertEquals(mergeStructuredMeasurementRepair(
+    initial, { product_requirements: [working], required_facet_values: [] }, unsupported,
+  ), null);
+  assertEquals(mergeStructuredMeasurementRepair(
+    initial, { product_requirements: Array(9).fill(working) }, unsupported,
+  ), null);
+});
 
 Deno.test("repair freezes only individually proven numeric obligations and identifies the actual failed clause", () => {
   const evidence = [relation, working, unsupported].join("\n");

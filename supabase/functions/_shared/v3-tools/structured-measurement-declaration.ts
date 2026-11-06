@@ -23,13 +23,62 @@ export function structuredMeasurementTool(base: DeclarationTool): DeclarationToo
   } } };
 }
 
+/** A measurement-only retry cannot redeclare readiness, scope or catalog
+ * filters. Those were already validated on the original request. */
+export function structuredMeasurementRepairTool(base: DeclarationTool): DeclarationTool {
+  const requirements = (base.function.parameters.properties as Record<string, unknown>).product_requirements as Record<string, unknown>;
+  return {
+    type: "function",
+    function: {
+      name: base.function.name,
+      description: "Уточни только неподтверждённые требования к товару. Остальные поля сохраняет сервер.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: { product_requirements: {
+          ...requirements,
+          description: "Уточнённые требования к товару. Подтверждённые условия сервер добавит сам. Если обязательное условие не подтверждается, сохрани его, чтобы сервер не принял неполный подбор.",
+        } },
+        required: ["product_requirements"],
+      },
+    },
+  };
+}
+
+export function mergeStructuredMeasurementRepair(
+  initial: Record<string, unknown>,
+  repair: Record<string, unknown>,
+  failedObligation: string,
+): Record<string, unknown> | null {
+  const original = initial.product_requirements;
+  const replacement = repair.product_requirements;
+  if (Object.keys(repair).length !== 1 ||
+    !Object.hasOwn(repair, "product_requirements") ||
+    !validRequirements(original) || !validRequirements(replacement)) return null;
+  const identity = (value: string) => value.trim().replace(/[.!?…;]+$/u, "").trim();
+  const failed = identity(failedObligation);
+  // No substring match: when the diagnostic points inside a compound
+  // requirement, keep the entire original condition for the next proof.
+  const untouched = original.filter(value => !failed || identity(value) !== failed);
+  const requirements = [...new Map([...replacement, ...untouched]
+    .map(value => [identity(value), value])).values()];
+  // The complete merged declaration still goes through materialization and
+  // the same proof gates. Neither tool can supply server-owned evidence.
+  return { ...initial, product_requirements: requirements };
+}
+
+function validRequirements(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= 8 &&
+    value.every(item => typeof item === "string" &&
+      item.trim().length >= 10 && item.trim().length <= 300);
+}
+
 export function materializeStructuredMeasurementDeclaration(args: Record<string, unknown>, serverVerifiedRelationEvidence?: string | null, serverVerifiedObligations: readonly string[] = []): {
   args: Record<string, unknown>;
   requirementCount: number;
 } | null {
   const requirements = args.product_requirements;
-  if ("reasoning" in args || !Array.isArray(requirements) || requirements.length === 0 || requirements.length > 8) return null;
-  if (requirements.some(value => typeof value !== "string" || value.trim().length < 10 || value.trim().length > 300)) return null;
+  if ("reasoning" in args || !validRequirements(requirements)) return null;
   const normalized = requirements.map(value => value.trim());
   if (serverVerifiedObligations.length > 32 || serverVerifiedObligations.some(value => typeof value !== "string" || !value.trim() || value.length > 1600)) return null;
   // A server-owned compatibility obligation must not be rediscovered from
