@@ -159,27 +159,56 @@ async function runFourTurnScenario(input: {
   preview?: boolean;
   fourthMessage?: string;
   prefacedAreaFirstTurn?: boolean;
+  repairContinuation?: boolean;
+  repairFault?: "forged_customer_state" | "unknown_late_id" | "http_503" | "invalid_reasoning";
+  primaryFailure?: "timeout" | "http_503" | "http_429";
+  fallbackValid?: boolean;
+  exhaustedReasoningTime?: boolean;
+  continuationCandidateFault?: "wrong_destination" | "insufficient_area" | "missing_area";
 }): Promise<void> {
   Deno.env.get = input.envGet;
   resetDiscoverCategoryCacheForTest();
-  const category = input.prefacedAreaFirstTurn ? "Светильники" : "Люстры";
+  const category = input.prefacedAreaFirstTurn || input.repairContinuation ? "Светильники" : "Люстры";
   const scenarioMessages = [...messages];
   if (input.prefacedAreaFirstTurn) {
     scenarioMessages.splice(0, 4,
       "Новая тема. Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?");
   }
   if (input.fourthMessage) scenarioMessages[3] = input.fourthMessage;
+  if (input.repairContinuation) scenarioMessages.splice(0, 4,
+    "Хочу заменить люстру на светодиодный светильник в гостиной 30 м². Что можете предложить?",
+    "А есть другие варианты?");
   const allProducts = [
     ...firstBatch,
     ...freshBatch,
     ...(input.newCapacity ? capacityFreshBatch : []),
     ...distractors,
-  ].map((item) => input.prefacedAreaFirstTurn ? {
+  ].map((item) => input.prefacedAreaFirstTurn || input.repairContinuation ? {
     ...item, category, pagetitle: item.pagetitle.replace(/^Люстра/u, "Светильник"),
     url: item.url.replace("/lyustryi/", "/svetilniki/"),
-  } : item);
+  } : item).map((item) => {
+    if (!input.continuationCandidateFault || !freshBatch.some(({ id }) => id === item.id)) return item;
+    return {
+      ...item,
+      pagetitle: input.continuationCandidateFault === "wrong_destination"
+        ? item.pagetitle.replace("для гостиной", "для офиса")
+        : item.pagetitle,
+      options: item.options.filter((option) =>
+        input.continuationCandidateFault !== "missing_area" || option.key !== "lighting_area"
+      ).map((option) => ({
+        ...option,
+        value_ru: input.continuationCandidateFault === "wrong_destination" && option.key === "destination"
+          ? "для офиса"
+          : input.continuationCandidateFault === "insufficient_area" && option.key === "lighting_area"
+          ? "12"
+          : option.value_ru,
+      })),
+    };
+  });
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
+  const originalNow = Date.now;
+  let elapsedFixtureTime = 0;
   const intervals = new Set<number>();
   const logs: Log[] = [];
   const catalogReads: string[][] = [[], [], [], []];
@@ -188,8 +217,14 @@ async function runFourTurnScenario(input: {
   const historyBases: Array<string | null> = [];
   let fourthTurnDeclarationRequests = 0;
   let fourthTurnCorrectionRequests = 0;
+  let continuationDeclarations = 0;
+  let continuationRepairs = 0;
+  let continuationProviderRequests = 0;
+  let unfitContinuationCandidatesReturned = 0;
   let turn = 0;
   try {
+    // Simulate elapsed timeout time without sleeping or external I/O.
+    Date.now = () => originalNow() + elapsedFixtureTime;
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
       intervals.add(id);
@@ -294,6 +329,8 @@ async function runFourTurnScenario(input: {
                       products_count: input.newCapacity ? 9 : 7,
                     },
                     { value_ru: "для офиса", products_count: 1 },
+                    ...(input.repairContinuation ? ["для склада", "для улицы", "для производства", "для гаража", "для стадиона", "для тоннеля", "для теплицы", "для магазина", "для больницы", "для школы", "для мастерской"]
+                      .map(value_ru => ({ value_ru, products_count: 1 })) : []),
                   ],
                 },
                 {
@@ -359,12 +396,20 @@ async function runFourTurnScenario(input: {
             (categoryIn.length === 0 || categoryIn.includes(item.category)) &&
             (!query ||
               item.pagetitle.toLocaleLowerCase("ru").includes(query)) &&
-            facetFilters.every(({ key, value }) =>
+            // Intentionally imperfect catalogue responses in the negative
+            // continuation scenarios: SKU guards must inspect actual traits,
+            // not trust that an upstream facet query was honoured.
+            ((turn > 0 && Boolean(input.continuationCandidateFault)) || facetFilters.every(({ key, value }) =>
               item.options.some((option) =>
                 option.key === key && option.value_ru === value
               )
-            )
+            ))
           );
+          if (turn > 0 && input.continuationCandidateFault) {
+            unfitContinuationCandidatesReturned += matching.filter((item) =>
+              freshBatch.some(({ id }) => id === item.id)
+            ).length;
+          }
           return json({
             data: {
               results: matching,
@@ -417,6 +462,71 @@ async function runFourTurnScenario(input: {
           });
         }
         if (
+          input.repairContinuation && turn === 1 &&
+          ["declare_selection_reasoning", "repair_selection_contract"].includes(body.tool_choice?.function?.name ?? "")
+        ) {
+          const toolName = body.tool_choice!.function!.name!;
+          continuationProviderRequests++;
+          if (input.primaryFailure && continuationProviderRequests === 1) {
+            if (input.primaryFailure === "timeout") {
+              elapsedFixtureTime += 11_500;
+              throw new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError");
+            }
+            return json({ error: "offline upstream failure" }, input.primaryFailure === "http_503" ? 503 : 429);
+          }
+          const correction = toolName === "repair_selection_contract" || continuationDeclarations > 0;
+          if (input.exhaustedReasoningTime && continuationProviderRequests === 2) elapsedFixtureTime = 25_000;
+          if (correction) continuationRepairs++;
+          else continuationDeclarations++;
+          const projection = {
+            reasoning: correction || input.fallbackValid
+              ? "Для гостиной 30 м² проверяю назначение светодиодного светильника и максимальную площадь освещения каждого нового товара не менее 30 м²."
+              : input.primaryFailure
+              ? "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения."
+              : "", // Valid customer facts, but no usable product-side derivation.
+            measurement_scope: "per_product",
+            retrieval_query: "светодиодного светильника",
+            compatible_classifications: ["f0v0"],
+            excluded_classifications: correction ? Array.from({ length: 12 }, (_, i) => `f0v${i + 1}`) : [],
+            required_facet_values: [],
+            ...(correction && input.repairFault === "forged_customer_state"
+              ? { selection_readiness: { decision: "ready", critical_inputs: [] } } : {}),
+          };
+          if (correction && input.repairFault === "http_503") return json({ error: "offline correction outage" }, 503);
+          if (correction && input.repairFault === "invalid_reasoning") projection.reasoning = "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.";
+          if (correction && input.repairFault === "unknown_late_id") projection.excluded_classifications[9] = "f0v999";
+          if (toolName === "repair_selection_contract") {
+            const schema = body.tools?.find(({ function: fn }) => fn?.name === toolName)?.function?.parameters;
+            assert(schema?.properties);
+            assert(!("selection_readiness" in schema.properties));
+            assert(!("selection_subject" in schema.properties));
+            const context = body.messages?.map(({ content }) => content).join("\n") ?? "";
+            assert(context.includes("accepted_customer_state"));
+            assert(context.includes("validation_feedback"));
+            if (input.primaryFailure === "timeout") {
+              assert(context.includes("unsupported_per_product_claims"));
+              assert(context.includes("per_product_claim_scrub"));
+            }
+            assert(context.includes("гостиной 30 м²"));
+            assert(!context.includes("Верни решение только вызовом declare_selection_reasoning"));
+          }
+          return modelTool(toolName, correction ? projection : {
+            ...projection,
+            explicit_customer_classifications: [],
+            selection_readiness: {
+              decision: "ready",
+              critical_inputs: {
+                first: { parameter: "Площадь", customer_quote: "гостиной 30 м²", question: "", impact: "Площадь освещения каждого светильника проверяется по карточке." },
+                rest: [
+                  { parameter: "Помещение", customer_quote: "гостиной", question: "", impact: "Назначение должно соответствовать жилому помещению." },
+                  { parameter: "Исходный товар", customer_quote: "заменить люстру", question: "", impact: "Сохраняется исходная задача замены." },
+                  { parameter: "Выбираемый товар", customer_quote: "светодиодный светильник", question: "", impact: "Не подменяется класс и тип источника света." },
+                ],
+              },
+            },
+          });
+        }
+        if (
           body.tool_choice?.function?.name === "declare_selection_reasoning"
         ) {
           if (turn === 3) fourthTurnDeclarationRequests++;
@@ -444,7 +554,7 @@ async function runFourTurnScenario(input: {
           });
         }
         if (body.tool_choice?.function?.name === "discover_category") {
-          return modelTool("discover_category", { noun: input.prefacedAreaFirstTurn ? "светильник" : "люстра" });
+          return modelTool("discover_category", { noun: input.prefacedAreaFirstTurn || input.repairContinuation ? "светильник" : "люстра" });
         }
         if (body.tool_choice?.function?.name === "propose_candidates") {
           return modelTool("propose_candidates", { candidates: ["люстра"] });
@@ -535,6 +645,60 @@ async function runFourTurnScenario(input: {
       first.every((url) => allProducts.some((product) => firstBatch.some(({id}) => id === product.id) && product.url === url)),
       JSON.stringify(first),
     );
+    if (input.repairContinuation) {
+      const other = cardUrls(turns[1]);
+      if (input.primaryFailure) {
+        const repairsAllowed = input.primaryFailure === "timeout" && !input.fallbackValid && !input.exhaustedReasoningTime;
+        assertEquals(continuationProviderRequests, input.primaryFailure === "http_429" ? 1 : repairsAllowed ? 3 : 2,
+          JSON.stringify(logs[1].steps));
+        assertEquals(continuationRepairs, repairsAllowed ? 1 : 0);
+        if (input.primaryFailure !== "timeout" || input.repairFault === "http_503" || input.repairFault === "invalid_reasoning" || input.exhaustedReasoningTime) {
+          assertEquals(other, []);
+          assert(!logs[1].steps.some(({ step, meta }) => step === "v3_tool_call" && meta?.tool === "search_catalog"));
+          assert(!logs[1].steps.some(({ step }) => step === "v3_derived_reasoning_timeout_fallback_repair_validated"));
+          if (input.exhaustedReasoningTime) assert(!logs[1].steps.some(({ step }) => step === "v3_derived_reasoning_timeout_fallback_repair"));
+          if (input.repairFault === "invalid_reasoning") {
+            const rejected = logs[1].steps.find(({ step }) => step === "v3_derived_selection_reasoning_contract_rejected");
+            const diagnostic = rejected?.meta?.resolver_diagnostic as { cause?: string; claim_spans?: unknown[] } | undefined;
+            assertEquals(diagnostic?.cause, "inseparable_live_facet");
+            assertEquals(diagnostic?.claim_spans?.length, 1);
+            assert(!JSON.stringify(diagnostic).includes("4000"));
+          }
+          return;
+        }
+        assert(logs[1].steps.some(({ step }) => step === "v3_derived_selection_reasoning_retry"));
+        if (!input.fallbackValid) assert(logs[1].steps.some(({ step, meta }) => step === "v3_derived_reasoning_timeout_fallback_repair" && meta?.max_provider_attempts === 3));
+      }
+      assertEquals(continuationDeclarations, 1);
+      assertEquals(continuationRepairs, input.fallbackValid ? 0 : 1);
+      if (input.repairFault) {
+        assertEquals(other, []);
+        assert(logs[1].steps.some(({ step, meta }) => step === "v3_selection_projection_repair" && meta?.accepted === false &&
+          meta?.reason === (input.repairFault === "forged_customer_state" ? "unexpected_fields" : "invalid_live_id")), JSON.stringify(logs[1].steps));
+        assert(!logs[1].steps.some(({ step, meta }) => step === "v3_tool_call" && meta?.tool === "search_catalog"));
+        assert(!logs[1].steps.some(({ step, meta }) => step === "v3_selection_readiness_decision" && meta?.rejection === "missing_readiness_decision"));
+        return;
+      }
+      if (input.continuationCandidateFault) {
+        assertEquals(other, [], JSON.stringify({ fault: input.continuationCandidateFault, steps: logs[1].steps }));
+        assert(unfitContinuationCandidatesReturned >= freshBatch.length,
+          "The catalogue must actually return unfit fresh candidates; an empty response cannot prove a SKU gate");
+        assert(logs[1].steps.some(({ step }) => step === "v3_derived_reasoning_timeout_fallback_repair_validated"));
+        assert(logs[1].steps.some(({ step, meta }) => step === "v3_tool_call" && meta?.tool === "search_catalog"));
+      } else {
+        assert(other.length >= 2, JSON.stringify({ other, steps: logs[1].steps, text: publicText(turns[1]) }));
+      }
+      assert(other.every(url => allProducts.some(p => freshBatch.some(({ id }) => id === p.id) && p.url === url)), JSON.stringify(other));
+      assert(other.every(url => !first.includes(url)), JSON.stringify({ first, other }));
+      assert(logs[1].steps.some(({ step, meta }) => step === "v3_elliptical_selection_context_resolved" && meta?.excluded_urls === first.length));
+      assert(logs[1].steps.some(({ step, meta }) => step === "v3_user_constraints_frozen" &&
+        (meta?.added as Array<{ op?: string; value?: string; unit?: string }> | undefined)?.some(criterion => criterion.op === "min" && Number(criterion.value) === 30 && criterion.unit === "м²")), JSON.stringify(logs[1].steps));
+      assert(logs[1].steps.some(({ step, meta }) => step === "v3_selection_readiness_decision" && meta?.source === (input.fallbackValid ? "derived_reasoning" : "derived_reasoning_repair") && meta?.status === "ready" && meta?.known === 4 && meta?.missing === 0));
+      if (!input.fallbackValid) assert(logs[1].steps.some(({ step, meta }) => step === "v3_selection_projection_repair" && meta?.accepted === true && meta?.excluded_count === 12 && meta?.customer_state === "retained"));
+      assert(catalogReads[1].length > 0);
+      assert(!logs[1].steps.some(({ step }) => step === "v3_derived_reasoning_array_bound_rejected"));
+      return;
+    }
     if (input.prefacedAreaFirstTurn) {
       assert(logs[0].steps.some(({ step }) => step === "v3_measured_replacement_rendered"));
       assert(!modelTools[0].includes("declare_selection_reasoning"));
@@ -727,6 +891,7 @@ async function runFourTurnScenario(input: {
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
     globalThis.fetch = originalFetch;
+    Date.now = originalNow;
     restoreOfflineModuleSetup();
   }
 }
@@ -812,4 +977,68 @@ Deno.test({
     "preview direct capacity minimum renders fresh cards without consuming a correction retry",
   permissions: { read: true, env: false, net: false },
   fn: () => runPreviewDirectMinimumScenario(),
+});
+
+Deno.test({
+  name: "strict continuation repairs only the product projection, retaining customer facts and every live exclusion before fresh card gates",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const strictGet = (name: string) => name === "VOLT220_SELECTION_READINESS_REQUIRED" ? "true" : offlineEnvGet(name);
+    let handler: ((request: Request) => Promise<Response>) | null = null;
+    try {
+      Deno.env.get = strictGet;
+      (Deno as unknown as { serve: typeof Deno.serve }).serve = ((callback: (request: Request) => Promise<Response>) => {
+        handler = callback;
+        return { shutdown() {}, finished: Promise.resolve() };
+      }) as unknown as typeof Deno.serve;
+      await import("./index.ts?strict-continuation-projection-repair");
+      assert(handler);
+      await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true });
+      // Invalid patches must still fail closed before any search, without
+      // reclassifying the accepted customer facts as missing input.
+      for (const repairFault of ["forged_customer_state", "unknown_late_id"] as const) {
+        await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, repairFault });
+      }
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "timeout fallback can repair one unverified projection within a strict three-call ceiling, without waiving SKU gates",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const strictGet = (name: string) => name === "VOLT220_SELECTION_READINESS_REQUIRED" ? "true" : offlineEnvGet(name);
+    let handler: ((request: Request) => Promise<Response>) | null = null;
+    try {
+      Deno.env.get = strictGet;
+      (Deno as unknown as { serve: typeof Deno.serve }).serve = ((callback: (request: Request) => Promise<Response>) => {
+        handler = callback;
+        return { shutdown() {}, finished: Promise.resolve() };
+      }) as unknown as typeof Deno.serve;
+      await import("./index.ts?strict-timeout-fallback-projection-repair");
+      assert(handler);
+      await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, primaryFailure: "timeout" });
+      await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, primaryFailure: "timeout", fallbackValid: true });
+      await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, primaryFailure: "timeout", exhaustedReasoningTime: true });
+      for (const repairFault of ["forged_customer_state", "unknown_late_id", "http_503", "invalid_reasoning"] as const) {
+        await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, primaryFailure: "timeout", repairFault });
+      }
+      // Exercise real final-card rejection even when the catalogue ignores
+      // the requested facets. Run before the confirmed quota failure below,
+      // whose shared production cooldown intentionally persists in this isolate.
+      for (const continuationCandidateFault of ["insufficient_area", "missing_area", "wrong_destination"] as const) {
+        await runFourTurnScenario({
+          newCapacity: false, handler, envGet: strictGet, repairContinuation: true,
+          primaryFailure: "timeout", continuationCandidateFault,
+        });
+      }
+      for (const primaryFailure of ["http_503", "http_429"] as const) {
+        await runFourTurnScenario({ newCapacity: false, handler, envGet: strictGet, repairContinuation: true, primaryFailure });
+      }
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
 });

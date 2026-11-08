@@ -217,6 +217,7 @@ import {
 } from "../_shared/v3-tools/environmental-protection-range.ts";
 import {
   classifyRequiredProductMeasurementGap,
+  canRepairTimedOutFallback,
   chooseDerivedReasoningRepair,
   INVALID_DERIVED_DECLARATION_CORRECTION,
   PRODUCT_MEASUREMENT_CORRECTION,
@@ -236,6 +237,12 @@ import {
   validateMeasurementRepairResponse,
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
+import {
+  mergeSelectionProjectionRepair,
+  selectionProjectionRepairTool,
+  SELECTION_PROJECTION_REPAIR_POLICY,
+  SELECTION_PROJECTION_REPAIR_TOOL,
+} from "../_shared/v3-tools/selection-projection-repair.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
@@ -3825,7 +3832,7 @@ async function callOpenRouter(
   if (Array.isArray(msg.tool_calls)) {
     for (const tc of msg.tool_calls) {
       if (!tc?.function?.name) continue;
-      if (forcedToolName === MEASUREMENT_REPAIR_TOOL_NAME) {
+      if (forcedToolName === MEASUREMENT_REPAIR_TOOL_NAME || forcedToolName === SELECTION_PROJECTION_REPAIR_TOOL) {
         toolCalls.push({
           id: tc.id ?? crypto.randomUUID(),
           name: tc.function.name,
@@ -12828,6 +12835,7 @@ async function runExpertLoop(
           });
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
+          let primaryReasoningTimedOut = false;
           let closureRetryOutcomePending: {
             model: string;
             provider: string;
@@ -12887,6 +12895,7 @@ async function runExpertLoop(
               )
               : null;
             if (retryTimeout === null) throw reasoningError;
+            primaryReasoningTimedOut = timedOut;
             steps.push({
               step: "v3_derived_selection_reasoning_retry",
               ms: now(),
@@ -13049,12 +13058,14 @@ async function runExpertLoop(
             args: Record<string, unknown>,
           ) => pairedDecisionForEvidence(String(args.reasoning ?? ""));
           let declarationRejectionReason: string | null = null;
+          let declarationRejectionDiagnostic: Parameters<NonNullable<Parameters<typeof resolveDerivedSelectionReasoning>[6]>>[1] = undefined;
           let serverVerifiedMeasurementObligations: string[] = [];
           let currentMeasurementRepairContext: ReturnType<typeof buildMeasurementRepairContext> | null = null;
           const resolvePairedDeclaration = (
             args: Record<string, unknown>,
           ) => {
             declarationRejectionReason = null;
+            declarationRejectionDiagnostic = undefined;
             let structuredObligationEvidence: string | null = null;
             if (structuredMeasurementMode) {
               const relationEvidence = certifiedMeasuredPointRange
@@ -13090,8 +13101,12 @@ async function runExpertLoop(
                 trustedActiveProductTarget: trustedAppearanceTarget(),
                 independentDestinationAreaProof:
                   independentFirstTurnDestinationAreaProof,
+                completeClassificationExclusions: requireSelectionReadiness,
               },
-              reason => { declarationRejectionReason = reason; },
+              (reason, diagnostic) => {
+                declarationRejectionReason = reason;
+                declarationRejectionDiagnostic = diagnostic;
+              },
               structuredMeasurementMode && certifiedMeasuredPointRange
                 ? { measuredPointRange: certifiedMeasuredPointRange } : undefined,
             );
@@ -13461,6 +13476,7 @@ async function runExpertLoop(
                 ),
                 declaration_found: Boolean(declarationCall),
                 resolver_rejection: declarationRejectionReason,
+                resolver_diagnostic: declarationRejectionDiagnostic ?? null,
                 declaration_keys: Object.keys(declarationArgs).sort(),
                 declaration_reasoning_chars:
                   typeof declarationArgs.reasoning === "string"
@@ -13481,6 +13497,15 @@ async function runExpertLoop(
           };
           const needsEnvironmentalProtectionRetry =
             missingEnvironmentalProtection();
+          const timeoutFallbackRepair = canRepairTimedOutFallback({
+            providerAttempts: derivedReasoningProviderAttempts,
+            primaryTimedOut: primaryReasoningTimedOut,
+            customerStateAccepted: customerInputsAccepted,
+            narrowProjectionAvailable: Boolean(requireSelectionReadiness && !structuredMeasurementMode && declarationCall),
+            fallbackProvider: structuredReasoning.provider ?? "unknown",
+            independentProviderRetryEnabled: DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+            aborted: turnController.signal.aborted,
+          });
           // The closure-only two-provider route has already exhausted its
           // allowance after a second response, including an invalid HTTP 200.
           // Do not let any later contract correction reopen provider failover.
@@ -13493,6 +13518,7 @@ async function runExpertLoop(
               pairedFitMissing: missingPairedFitProof(),
               productMeasurementMissing: missingRequiredProductMeasurement(),
               providerAttempts: derivedReasoningProviderAttempts,
+              timeoutFallbackProjectionRepair: timeoutFallbackRepair,
             });
           if (repairReason === "product_measurement") {
             const modelUnits = [
@@ -13537,6 +13563,14 @@ async function runExpertLoop(
               structuredMeasurementMode && failedObligation && declaration && declarationCall
             ? declarationCall
             : null;
+          // Readiness has already succeeded above. A product-side repair
+          // cannot erase/redeclare those facts, the selected subject or the
+          // customer's explicit mappings. The typed measurement route keeps
+          // its separate, still narrower obligation-only protocol.
+          const projectionRepairBase = requireSelectionReadiness &&
+              !structuredMeasurementMode && !repairBase && declarationCall
+            ? { ...declarationCall, args: structuredClone(declarationCall.args) }
+            : null;
           // Discovery is not retrieval. A model-only measurement mismatch
           // must not prevent inspecting real candidates, but this private
           // sample is NOT a usable/renderable pool and cannot waive a gate.
@@ -13579,9 +13613,20 @@ async function runExpertLoop(
               MIN_AGENT_STEP_BUDGET_MS,
             );
             if (correctionTimeout !== null) {
+              if (timeoutFallbackRepair) steps.push({
+                step: "v3_derived_reasoning_timeout_fallback_repair", ms: now(), meta: {
+                  repair_reason: repairReason,
+                  previous_provider_attempts: derivedReasoningProviderAttempts,
+                  max_provider_attempts: 3,
+                  timeout_ms: correctionTimeout,
+                  customer_state: "retained",
+                  provider_failover: false,
+                  proof_gates: "unchanged",
+                },
+              });
               const repairTool = repairBase
                 ? structuredMeasurementRepairTool(reasoningToolSchema)
-                : null;
+                : projectionRepairBase ? selectionProjectionRepairTool(reasoningToolSchema) : null;
               const repairTransport = repairTool && requireSelectionReadiness
                 ? compileToolArrayBounds(repairTool)
                 : null;
@@ -13616,6 +13661,28 @@ async function runExpertLoop(
                     },
                   }).replace(/</gu, "\\u003c"),
                 }]
+                : projectionRepairBase
+                ? [{ role: "system", content: SELECTION_PROJECTION_REPAIR_POLICY }, {
+                  role: "user",
+                  content: JSON.stringify({
+                    customer_request: userMessage,
+                    category: lastDiscover.category?.pagetitle,
+                    accepted_customer_state: {
+                      selection_readiness: projectionRepairBase.args.selection_readiness,
+                      selection_subject: projectionRepairBase.args.selection_subject,
+                      explicit_customer_classifications: projectionRepairBase.args.explicit_customer_classifications,
+                    },
+                    previous_projection: Object.fromEntries(Object.entries(projectionRepairBase.args)
+                      .filter(([key]) => ["reasoning", "measurement_scope", "retrieval_query", "compatible_classifications", "excluded_classifications", "required_facet_values"].includes(key))),
+                    validation_feedback: {
+                      reason: declarationRejectionReason,
+                      diagnostic: declarationRejectionDiagnostic ?? null,
+                    },
+                    // Reuse the bounded, ID-labelled live context, not raw
+                    // unbounded facets or another independently indexed copy.
+                    catalog_context: derivedMessages.filter(message => message.role === "user").map(message => message.content),
+                  }).replace(/</gu, "\\u003c"),
+                }]
                 : derivedMessages.map((message) => ({ ...message }));
               if (repairReason === "product_measurement" && structuredMeasurementMode && focusContext) {
                 const repairContext = focusContext;
@@ -13645,7 +13712,9 @@ async function runExpertLoop(
               }
               if (!repairBase && correctionMessages[0]?.role === "system") {
                 const correction = repairReason === "invalid_declaration"
-                  ? INVALID_DERIVED_DECLARATION_CORRECTION
+                  ? projectionRepairBase
+                    ? "Предыдущая продуктовая часть не прошла проверку. Перепроверь технические тезисы по запросу и живой схеме. Исправь неподтверждённые выводы; не добавляй числовой порог ради заполнения контракта."
+                    : INVALID_DERIVED_DECLARATION_CORRECTION
                   : repairReason === "environmental_protection"
                   ? "Предыдущая попытка не зафиксировала проверяемое обязательное условие защиты каждого товара для названной клиентом среды эксплуатации. Проверь технический фасет защиты в живой схеме. Если безопасный уровень обоснован, прямо назови в reasoning смысл фасета и его точное живое значение, затем передай ID этого значения именно в required_facet_values: compatible_classifications не подтверждает технический параметр каждого товара. Сохрани остальные обоснованные условия исходного запроса. Если данных клиента недостаточно для безопасного порога, явно назови недостающий параметр, не объявляй товары подходящими и не выдумывай уровень защиты. Не заменяй требование защиты числовой потребностью всей системы."
                   : repairReason === "paired_fit"
@@ -13676,7 +13745,8 @@ async function runExpertLoop(
                 }
               }
               const correctionToolName = repairBase
-                ? MEASUREMENT_REPAIR_TOOL_NAME : "declare_selection_reasoning";
+                ? MEASUREMENT_REPAIR_TOOL_NAME
+                : projectionRepairBase ? SELECTION_PROJECTION_REPAIR_TOOL : "declare_selection_reasoning";
               const correctionAttempt = (timeoutMs: number) => {
                 derivedReasoningProviderAttempts += 1;
                 return callOpenRouter(
@@ -13691,7 +13761,7 @@ async function runExpertLoop(
                   [repairTransport?.tool ?? repairTool ?? providerReasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
-                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED
+                  DERIVED_REASONING_LOVABLE_RETRY_ENABLED || timeoutFallbackRepair
                     ? "openrouter_only"
                     : "configured",
                 );
@@ -13700,9 +13770,9 @@ async function runExpertLoop(
                 structuredReasoning = await runProductMeasurementCorrection({
                   repairReason,
                   retryEnabled: PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED &&
-                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED && !timeoutFallbackRepair,
                   envelopeRetryEnabled:
-                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED,
+                    !DERIVED_REASONING_LOVABLE_RETRY_ENABLED && !timeoutFallbackRepair,
                   attempt: correctionAttempt,
                   initialTimeoutMs: correctionTimeout,
                   retryTimeoutMs: () =>
@@ -13821,6 +13891,26 @@ async function runExpertLoop(
                 }
                 // Original args have already been decoded and validated.
                 declarationCall = { ...repairBase, args: merged };
+              } else if (projectionRepairBase && repairTool) {
+                const merged = mergeSelectionProjectionRepair(
+                  projectionRepairBase.args,
+                  structuredReasoning.toolCalls,
+                  selectionProjectionRepairTool(reasoningToolSchema),
+                );
+                steps.push({ step: "v3_selection_projection_repair", ms: now(), meta: {
+                  accepted: merged.ok,
+                  reason: merged.ok ? null : merged.reason,
+                  field: merged.ok ? null : merged.field ?? null,
+                  customer_state: "retained",
+                  excluded_count: merged.ok ? merged.excludedCount : null,
+                  proof_gates: "unchanged",
+                } });
+                if (!merged.ok) return stopForInvalidDerivedDeclaration();
+                // Do not run the wire decoder on an already-decoded base.
+                // Both the immutable readiness and the merged projection
+                // still face the original semantic and per-card gates below.
+                const cleaned = stripMalformedModelSentences(String(merged.args.reasoning ?? ""));
+                declarationCall = { ...projectionRepairBase, args: { ...merged.args, reasoning: cleaned.text } };
               } else {
                 declarationCall = cleanDeclarationCall(structuredReasoning.toolCalls.find(
                   (toolCall) => toolCall.name === "declare_selection_reasoning",
@@ -13872,6 +13962,10 @@ async function runExpertLoop(
             return stopForUnverifiedProductMeasurement(productMeasurementGap);
           }
           recordClosureRetryOutcome(true);
+          if (timeoutFallbackRepair && derivedReasoningProviderAttempts === 3) steps.push({
+            step: "v3_derived_reasoning_timeout_fallback_repair_validated", ms: now(),
+            meta: { provider_attempts: derivedReasoningProviderAttempts, customer_state: "retained", proof_gates: "unchanged" },
+          });
           for (const mapping of declaration.explicitCustomerMappings) {
             if (mapping.phrase.trim()) {
               semanticallyMappedCustomerPhrases.add(mapping.phrase.trim());

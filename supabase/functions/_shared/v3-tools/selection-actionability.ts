@@ -490,6 +490,18 @@ export function demoteUnsupportedSystemTotalClaims(
  * clause can be separated; retry the declaration if that would erase another
  * live requirement or leave no useful reasoning. Never turn a rejected hard
  * threshold into a softer recommendation by editing its number in place. */
+export interface PerProductClaimRejectionDiagnostic {
+  version: 1;
+  stage: "per_product_claim_scrub";
+  cause: "inseparable_live_facet" | "insufficient_remaining_reasoning";
+  unsupported_claim_count_capped: number;
+  /** Offsets into the scrubber input, not raw request text. No prose/values. */
+  claim_spans: Array<{ start: number; end: number; facet_index: number | null }>;
+  other_facet_indices: number[];
+  independently_covered_destination: boolean;
+  remaining_chars: number;
+}
+
 function scrubUnsupportedPerProductMeasuredClaims(
   reasoning: string,
   customerEvidence: string,
@@ -502,6 +514,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
     minimumAreaM2: number;
   } | null = null,
   serverVerifiedMeasurementEvidence: string | null = null,
+  observeRejection?: (diagnostic: PerProductClaimRejectionDiagnostic) => void,
 ): string | null {
   if (!customerEvidence.trim()) return reasoning;
   const liveMeasuredFacets = facets.map((facet) => ({
@@ -656,6 +669,32 @@ function scrubUnsupportedPerProductMeasuredClaims(
   const explicitPerItemCue =
     /(?:^|[^\p{L}])(?:кажд\p{L}*|у\s+кажд\p{L}*|на\s+(?:один|одно|одну|одного)|по\s+одному)(?=$|[^\p{L}])/iu;
   const retained: string[] = [];
+  const rejectUnsupported = (
+    cause: PerProductClaimRejectionDiagnostic["cause"],
+    otherFacets: DerivedSelectionFacet[] = [],
+  ): null => {
+    // Diagnostics carry bounded positions and live-schema indices only.
+    // Never log claim.text, a criterion value, customer prose or facet labels.
+    const diagnostic: PerProductClaimRejectionDiagnostic = {
+      version: 1,
+      stage: "per_product_claim_scrub",
+      cause,
+      unsupported_claim_count_capped: Math.min(claims.length, 160),
+      claim_spans: claims.slice(0, 8).map((claim) => {
+        const facetIndex = facets.findIndex((facet) =>
+          [facet.key, facet.caption].some((key) =>
+            normalizeKey(String(key ?? "")) === normalizeKey(claim.criterion.key)
+          )
+        );
+        return { start: claim.start, end: claim.end, facet_index: facetIndex < 0 ? null : facetIndex };
+      }),
+      other_facet_indices: [...new Set(otherFacets.map((facet) => facets.indexOf(facet)))].slice(0, 8),
+      independently_covered_destination: independentlyCoveredDestination,
+      remaining_chars: retained.join(" ").replace(/\s+/gu, " ").trim().length,
+    };
+    try { observeRejection?.(diagnostic); } catch { /* observational only */ }
+    return null;
+  };
   let sentenceStart = 0;
   const sentenceSpans: Array<{ start: number; end: number }> = [];
   for (const separator of reasoning.matchAll(sentenceSeparator)) {
@@ -758,7 +797,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
                 ` ${provedPlace} `,
               )
             );
-          if (!onlyCoveredDestination) return null;
+          if (!onlyCoveredDestination) return rejectUnsupported("inseparable_live_facet", otherFacetMatches.map(({ facet }) => facet));
         }
         continue;
       }
@@ -773,7 +812,7 @@ function scrubUnsupportedPerProductMeasuredClaims(
     }
   }
   const safe = retained.join(" ").replace(/\s+/gu, " ").trim();
-  return safe.length >= 20 ? safe : null;
+  return safe.length >= 20 ? safe : rejectUnsupported("insufficient_remaining_reasoning");
 }
 
 /**
@@ -1711,7 +1750,10 @@ export function buildDerivedSelectionReasoningToolSchema(
           },
           excluded_classifications: {
             type: "array",
-            maxItems: 8,
+            // Strict declarations must be able to represent the complete
+            // live exclusion set they are asked to supply (bounded at 160
+            // choices by derivedClassificationChoices). OFF wire unchanged.
+            maxItems: policy.requireReadiness ? ids.length : 8,
             items: choiceItems,
             description:
               "IDs всех живых классов, чьё собственное понятное название однозначно противоречит назначению клиента. Неизвестные сокращения и неоднозначные отраслевые метки не являются доказательством несовместимости.",
@@ -2738,16 +2780,18 @@ export function resolveDerivedSelectionReasoning(
       place: string;
       minimumAreaM2: number;
     } | null;
+    /** Canonical strict wire supports every exact live classification ID. */
+    completeClassificationExclusions?: boolean;
   } = {},
   observeRejection?: (reason:
     | "incompatible_paired_range"
     | "insufficient_grounded_reasoning"
     | "system_total_reconciliation_failed"
-    | "unsupported_per_product_claims") => void,
+    | "unsupported_per_product_claims", diagnostic?: PerProductClaimRejectionDiagnostic) => void,
   serverRelations?: { measuredPointRange: MeasuredPointRangeCertificate },
 ): ResolvedDerivedSelectionReasoning | null {
-  const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0]) => {
-    try { observeRejection?.(reason); } catch { /* observational only */ }
+  const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0], diagnostic?: PerProductClaimRejectionDiagnostic) => {
+    try { observeRejection?.(reason, diagnostic); } catch { /* observational only */ }
     return null;
   };
   // Aggregated customer history remains useful for measured engineering
@@ -2829,6 +2873,7 @@ export function resolveDerivedSelectionReasoning(
       facets,
     )
     : reconciledScopeReasoning;
+  let perProductRejectionDiagnostic: PerProductClaimRejectionDiagnostic | undefined;
   const scopeConsistentReasoning = scrubUnsupportedPerProductMeasuredClaims(
     aggregateSafeReasoning,
     customerEvidence,
@@ -2838,8 +2883,9 @@ export function resolveDerivedSelectionReasoning(
     productClass,
     appearanceScope.independentDestinationAreaProof,
     serverRelations ? verifiedMeasuredPointRangeEvidence(serverRelations.measuredPointRange) : null,
+    diagnostic => { perProductRejectionDiagnostic = diagnostic; },
   );
-  if (!scopeConsistentReasoning) return reject("unsupported_per_product_claims");
+  if (!scopeConsistentReasoning) return reject("unsupported_per_product_claims", perProductRejectionDiagnostic);
   const rawRetrievalQuery = visibleFacetText(
     String(args.retrieval_query ?? ""),
   ).slice(0, 120);
@@ -3057,7 +3103,8 @@ export function resolveDerivedSelectionReasoning(
   );
   const excludedChoices = [
     ...groundedExcludedChoices,
-    ...resolveIds(args.excluded_classifications, 8),
+    ...resolveIds(args.excluded_classifications,
+      appearanceScope.completeClassificationExclusions ? byId.size : 8),
   ]
     .filter((choice) =>
       !compatibleIds.has(choice.id) &&

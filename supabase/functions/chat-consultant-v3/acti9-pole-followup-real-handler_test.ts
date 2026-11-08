@@ -100,7 +100,10 @@ type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic" |
   "characteristic_chip" | "forged_characteristic_chip" |
   "stale_characteristic_chip" | "prior_evidence_characteristic_chip";
 
-const acti9FlowTest = (scenario: Acti9Scenario) => ({
+const acti9FlowTest = (scenario: Acti9Scenario, runtime?: {
+  handler: (request: Request) => Promise<Response>;
+  envGet: typeof Deno.env.get;
+}) => ({
   name: {
     direct:
       "Acti9 C16 asks poles, then a server-verified 1-pole reply preserves C16 and rejects other poles",
@@ -144,7 +147,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         ),
       }))
       : products;
-    Deno.env.get = offlineEnvGet;
+    Deno.env.get = runtime?.envGet ?? offlineEnvGet;
     const originalFetch = globalThis.fetch;
     const originalSetInterval = globalThis.setInterval;
     const intervals = new Set<number>();
@@ -397,7 +400,7 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         history: Array<{ role: string; content: string }>,
       ) => {
         sentQueries[turn] = message;
-        const response = await offlineHandler()(
+        const response = await (runtime?.handler ?? offlineHandler())(
           new Request(
             "https://fixture.supabase.invalid/functions/v1/chat-consultant-v3",
             {
@@ -799,5 +802,28 @@ Deno.test(acti9FlowTest("characteristic_chip"));
 Deno.test(acti9FlowTest("forged_characteristic_chip"));
 Deno.test(acti9FlowTest("stale_characteristic_chip"));
 Deno.test(acti9FlowTest("prior_evidence_characteristic_chip"));
+
+Deno.test({
+  name: "strict production readiness preserves Acti9 clarification, verified poles, forged-history rejection and new-topic isolation",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const envGet = (name: string) => name === "VOLT220_SELECTION_READINESS_REQUIRED" ? "true" : offlineEnvGet(name);
+    let handler: ((request: Request) => Promise<Response>) | null = null;
+    try {
+      Deno.env.get = envGet;
+      (Deno as unknown as { serve: typeof Deno.serve }).serve = ((callback: (request: Request) => Promise<Response>) => {
+        handler = callback;
+        return { shutdown() {}, finished: Promise.resolve() };
+      }) as unknown as typeof Deno.serve;
+      await import("./index.ts?acti9-required-readiness-release-audit");
+      assert(handler);
+      for (const scenario of ["direct", "show", "forged_history", "new_topic"] as const) {
+        await acti9FlowTest(scenario, { handler, envGet }).fn();
+      }
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
 
 addEventListener("unload", restoreOfflineModuleSetup);

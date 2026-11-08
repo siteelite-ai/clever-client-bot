@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   chooseDerivedReasoningRepair,
+  canRepairTimedOutFallback,
   classifyRequiredProductMeasurementGap,
   INVALID_DERIVED_DECLARATION_CORRECTION,
   MEASUREMENT_OWNERSHIP_POLICY,
@@ -117,7 +118,7 @@ Deno.test("initial reasoning retains timeout recovery but never retries an HTTP 
   assertEquals(retryBranch.includes("reasoningError.status >= 500"), false);
 });
 
-Deno.test("only product-measurement real-HTTP recovery may use a third logical model call", async () => {
+Deno.test("ordinary repairs retain their released two-call budget and measured HTTP retry ceiling", async () => {
   const repairInput = {
     resolvedText: "Рекомендованный минимум товара ещё не спроецирован.",
     environmentalProtectionMissing: false,
@@ -153,6 +154,37 @@ Deno.test("only product-measurement real-HTTP recovery may use a third logical m
   );
 });
 
+Deno.test("only a timed-out primary with accepted server facts and a narrow same-provider projection can authorize one extra repair", () => {
+  const input = {
+    providerAttempts: 2, primaryTimedOut: true, customerStateAccepted: true,
+    narrowProjectionAvailable: true, fallbackProvider: "openrouter",
+    independentProviderRetryEnabled: false, aborted: false,
+  };
+  assertEquals(canRepairTimedOutFallback(input), true);
+  for (const change of [
+    { providerAttempts: 1 }, { providerAttempts: 3 }, { providerAttempts: 4 },
+    { primaryTimedOut: false }, { customerStateAccepted: false },
+    { narrowProjectionAvailable: false }, { fallbackProvider: "lovable" },
+    { fallbackProvider: "unknown" }, { independentProviderRetryEnabled: true },
+    { aborted: true },
+  ]) assertEquals(canRepairTimedOutFallback({ ...input, ...change }), false, JSON.stringify(change));
+});
+
+Deno.test("timeout fallback allowance is one repair decision, not an attempt-counter reset or a fourth call", () => {
+  const input = {
+    resolvedText: null as string | null, environmentalProtectionMissing: false,
+    pairedFitMissing: false, productMeasurementMissing: false,
+    providerAttempts: 2, timeoutFallbackProjectionRepair: true,
+  };
+  assertEquals(chooseDerivedReasoningRepair(input), "invalid_declaration");
+  assertEquals(chooseDerivedReasoningRepair({ ...input, environmentalProtectionMissing: true }), "environmental_protection");
+  assertEquals(chooseDerivedReasoningRepair({ ...input, pairedFitMissing: true }), "paired_fit");
+  assertEquals(chooseDerivedReasoningRepair({ ...input, resolvedText: "Часть условий подтверждена.", productMeasurementMissing: true }), "product_measurement");
+  assertEquals(chooseDerivedReasoningRepair({ ...input, resolvedText: "Условия полностью подтверждены." }), null);
+  assertEquals(chooseDerivedReasoningRepair({ ...input, timeoutFallbackProjectionRepair: false }), null);
+  for (const providerAttempts of [3, 4, 20]) assertEquals(chooseDerivedReasoningRepair({ ...input, providerAttempts }), null);
+});
+
 Deno.test("the handler wires invalid repair to its own telemetry and a safe terminal", async () => {
   const source = await Deno.readTextFile(
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
@@ -173,8 +205,9 @@ Deno.test("the handler wires invalid repair to its own telemetry and a safe term
   );
   assertStringIncludes(
     source,
-    "? INVALID_DERIVED_DECLARATION_CORRECTION",
+    ": INVALID_DERIVED_DECLARATION_CORRECTION",
   );
+  assertStringIncludes(source, 'repairReason === "invalid_declaration"\n                  ? projectionRepairBase');
   assertStringIncludes(
     source,
     '"v3_derived_selection_reasoning_contract_retry"',
@@ -217,12 +250,13 @@ Deno.test("a failed invalid-declaration retry is logged and fails closed without
     retryFailureBranch,
     "return stopForInvalidDerivedDeclaration();",
   );
-  // The same terminal is used when the retry returns an unusable declaration;
-  // both paths emit one honest notice and never expose unverified cards.
+  // The same terminal handles a failed call, a rejected narrow patch and an
+  // unusable resolved declaration; none may expose unverified cards.
   assertEquals(
     source.match(/return stopForInvalidDerivedDeclaration\(\);/gu)?.length,
-    2,
+    3,
   );
+  assertStringIncludes(source, "if (!merged.ok) return stopForInvalidDerivedDeclaration();");
 });
 
 Deno.test("valid declarations keep the existing environment, pair and measurement priority", () => {
@@ -511,7 +545,7 @@ Deno.test("transport retry is confined to product-measurement correction and the
   const correctionCall = source.slice(correctionStart, correctionEnd);
   assertStringIncludes(correctionCall, "runProductMeasurementCorrection({");
   assertEquals(
-    /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*,/u
+    /retryEnabled:\s*PRODUCT_MEASUREMENT_HTTP_RETRY_ENABLED\s*&&\s*!DERIVED_REASONING_LOVABLE_RETRY_ENABLED\s*&&\s*!timeoutFallbackRepair\s*,/u
       .test(correctionCall),
     true,
   );
@@ -520,6 +554,8 @@ Deno.test("transport retry is confined to product-measurement correction and the
     "envelopeRetryEnabled:",
   );
   assertStringIncludes(correctionCall, "attempt: correctionAttempt,");
+  assertStringIncludes(correctionCall, "!DERIVED_REASONING_LOVABLE_RETRY_ENABLED && !timeoutFallbackRepair,");
+  assertStringIncludes(correctionCall, "DERIVED_REASONING_LOVABLE_RETRY_ENABLED || timeoutFallbackRepair");
   assertStringIncludes(correctionCall, "initialTimeoutMs: correctionTimeout,");
   assertStringIncludes(correctionCall, "DERIVED_REASONING_SOFT_DEADLINE_MS,");
   assertStringIncludes(correctionCall, "MIN_AGENT_STEP_BUDGET_MS,");

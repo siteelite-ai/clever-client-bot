@@ -185,6 +185,38 @@ Deno.test("independent area card proof removes only an inseparable model-only ha
   ), null);
 });
 
+Deno.test("unsupported product claims report bounded rejection causes without changing acceptance or logging prose", () => {
+  const customer = "Нужен светильник для гостиной 30 м².";
+  const facets = [{ key: "destination", caption: "Назначение", values: [{ value: "для гостиной" }, { value: "для офиса" }] }];
+  const base = { measurement_scope: "per_product", compatible_classifications: [], excluded_classifications: [], required_facet_values: [], explicit_customer_classifications: [] };
+  const examples = [
+    { reasoning: "Для гостиной 30 м² каждый светильник обязан иметь не менее 4000 лм. Проверяю карточки по назначению и площади освещения.", cause: "inseparable_live_facet" },
+    { reasoning: "Каждый светильник обязан иметь не менее 4000 лм.", cause: "insufficient_remaining_reasoning" },
+  ];
+  for (const { reasoning, cause } of examples) {
+    const observed: Array<{ reason: string; diagnostic: unknown }> = [];
+    const args = { ...base, reasoning };
+    const baseline = resolveDerivedSelectionReasoning(args, facets, customer, "Светильники");
+    assertEquals(baseline, null);
+    assertEquals(resolveDerivedSelectionReasoning(args, facets, customer, "Светильники", null, {}, (reason, diagnostic) => observed.push({ reason, diagnostic })), baseline);
+    assertEquals(observed.length, 1);
+    assertEquals(observed[0].reason, "unsupported_per_product_claims");
+    const diagnostic = observed[0].diagnostic as Record<string, unknown>;
+    assertEquals(diagnostic.cause, cause);
+    assertEquals(diagnostic.stage, "per_product_claim_scrub");
+    assertEquals(diagnostic.unsupported_claim_count_capped, 1);
+    assertEquals((diagnostic.claim_spans as unknown[]).length, 1);
+    assertEquals(JSON.stringify(diagnostic).includes("4000"), false);
+    assertEquals(JSON.stringify(diagnostic).includes("гостиной"), false);
+    assertEquals(JSON.stringify(diagnostic).includes("Назначение"), false);
+    assertEquals(resolveDerivedSelectionReasoning(args, facets, customer, "Светильники", null, {}, () => { throw Error("unavailable logger"); }), baseline);
+  }
+  const marker = "private-token-do-not-log";
+  const captured: unknown[] = [];
+  resolveDerivedSelectionReasoning({ ...base, reasoning: examples[0].reasoning + " " + marker }, facets, customer, "Светильники", null, {}, (_reason, diagnostic) => captured.push(diagnostic));
+  assertEquals(JSON.stringify(captured).includes(marker), false);
+});
+
 Deno.test("public explanation renders same-facet exact alternatives as one OR clause", () => {
   const publicExplanation = buildDerivedSelectionPublicExplanation({
     productClass: "Прожекторы",
