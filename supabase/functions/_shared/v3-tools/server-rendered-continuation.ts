@@ -11,6 +11,8 @@ import {
   verifiedRenderedDestinationContextUnchanged,
 } from "./destination-area-measurement-coverage.ts";
 import { joinCustomerTurns } from "./criteria-consistency.ts";
+import type { Criterion } from "./criteria-gate.ts";
+import { readServerSelectionCriteria } from "./dialogue-selection-state.ts";
 
 /** A bounded projection of prior durable v3 turns. Database
  * access and the current-turn exclusion belong to the caller. In particular,
@@ -29,6 +31,8 @@ export interface ServerRenderedSelectionLogRow {
 }
 
 export interface ServerRenderedSelectionProof {
+  /** Obligations of the latest validated server batch, never browser slots. */
+  mandatoryCriteria?: Criterion[];
   /** Exact request that produced the original completed server-side batch. */
   baseRequest: string;
   /** Durable log identities bind later zero-card scope certificates to this
@@ -406,6 +410,7 @@ function proofFromVerifiedChain(
     }
   }
   return {
+    ...withServerCriteria(ordered[latestCardIndex].row),
     baseRequest: base.row.user_query as string,
     baseLogId: base.row.id as string,
     latestCardLogId: ordered[latestCardIndex].row.id as string,
@@ -580,6 +585,7 @@ export function resolveServerRenderedSelectionProof(
     }
   }
   return {
+    ...withServerCriteria(intervening.find(({ row }) => row.id === latestCardLogId)?.row ?? base.row),
     baseRequest,
     baseLogId: base.row.id as string,
     latestCardLogId,
@@ -590,6 +596,13 @@ export function resolveServerRenderedSelectionProof(
       baseRequest,
     ],
   };
+}
+
+function withServerCriteria(row: ServerRenderedSelectionLogRow): {
+  mandatoryCriteria?: Criterion[];
+} {
+  const mandatoryCriteria = readServerSelectionCriteria(row.response_events);
+  return mandatoryCriteria.length ? { mandatoryCriteria } : {};
 }
 
 /** Compatibility wrapper for callers that only need the original request. */

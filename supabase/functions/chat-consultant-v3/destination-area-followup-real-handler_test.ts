@@ -799,19 +799,33 @@ function hasEnforcedDestinationArea(
 }
 
 function hasVerifiedAdditionalSelectionTerminalRecovery(steps: Step[]): boolean {
+  // Restoring a dialogue contract can now choose the existing measured
+  // finalizer rather than semantic recovery. It is accepted only with the
+  // same verified server base and a frozen, actually gated area requirement.
+  // Callers still assert all outgoing filters and every rendered card below.
+  const measuredRecovery = steps.some(({ step, meta }) =>
+    step === "v3_measured_reasoning_terminal_recovery" &&
+    Number(meta?.rendered) > 0 && Array.isArray(meta?.criteria) &&
+    meta.criteria.some((raw: unknown) => {
+      const criterion = raw as Record<string,unknown>;
+      return criterion.key === "Максимальная площадь освещения, м2" &&
+        criterion.op === "min" && Number(criterion.value) > 0 &&
+        hasEnforcedDestinationArea(steps,Number(criterion.value));
+    })
+  );
   return steps.some(({ step, meta }) =>
     step === "v3_server_rendered_selection_base_checked" &&
     meta?.matched === true
   ) && steps.some(({ step, meta }) =>
     step === "v3_elliptical_selection_context_resolved" &&
     meta?.additional_selection === true
-  ) && steps.some(({ step, meta }) =>
+  ) && (measuredRecovery || steps.some(({ step, meta }) =>
     step === "v3_grounded_category_search_recovery" &&
     (meta?.source === "category" || meta?.source === "token" ||
       meta?.source === "server_verified_additional_selection")
   ) && steps.some(({ step, meta }) =>
     step === "v3_semantic_render_recovery" && Number(meta?.rendered) > 0
-  );
+  ));
 }
 
 Deno.test({

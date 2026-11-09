@@ -6,6 +6,7 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
+import type { Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import {
   executeDiscoverCategory,
   resetDiscoverCategoryCacheForTest,
@@ -65,6 +66,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 interface CaseResult {
+  modelRequests: number;
   catalogProductUrls: string[];
   catalogProductReadsAfterOptions: boolean[];
   directModelSearchCalls: number;
@@ -75,6 +77,9 @@ interface CaseResult {
 }
 
 interface CaseOptions {
+  serverHistoryMissing?: boolean;
+  priorRequest?: string;
+  priorCriteria?: Criterion[];
   /** Keep the declaration visible but make the next catalog call model-owned. */
   directModelSearch?: boolean;
   /** Avoid a prior rendered card that makes this a selection continuation. */
@@ -127,7 +132,7 @@ async function runCase(
   const priorLog = {
     id: "offline-appearance-prior",
     session_id: sessionId,
-    user_query: baseRequest,
+    user_query: options.priorRequest ?? baseRequest,
     error: null,
     final_products_count: 1,
     created_at: new Date(Date.now() - 2_000).toISOString(),
@@ -136,6 +141,9 @@ async function runCase(
         type: "products_block",
         count: 1,
         markdown: `- **[${round.pagetitle}](${round.url})**\n  Цена: 4 500 ₸`,
+        ...(options.priorCriteria ? {
+          selection_contract: { mandatory_criteria: options.priorCriteria },
+        } : {}),
       },
       {
         type: "diagnostic",
@@ -170,7 +178,7 @@ async function runCase(
           }
           if (request.method === "GET") {
             if (url.searchParams.has("response_events")) return json(null);
-            return json(options.freshSession ? [] : [priorLog]);
+            return json(options.freshSession || options.serverHistoryMissing ? [] : [priorLog]);
           }
         }
         if (url.pathname === "/rest/v1/app_settings") {
@@ -476,7 +484,7 @@ async function runCase(
             sessionId,
             slots: {},
             history: options.freshSession ? [] : [
-              { role: "user", content: baseRequest },
+              { role: "user", content: options.priorRequest ?? baseRequest },
               {
                 role: "assistant",
                 content:
@@ -492,6 +500,7 @@ async function runCase(
       .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
       .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>);
     return {
+      modelRequests: modelCalls,
       catalogProductUrls,
       catalogProductReadsAfterOptions,
       directModelSearchCalls,
@@ -506,6 +515,166 @@ async function runCase(
     globalThis.fetch = originalFetch;
   }
 }
+
+Deno.test({
+  name: "compound refinement preserves verified context, replaces shape/budget and applies independent new fields",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      const candidate={...oval,id:3,price:5500,
+        pagetitle:"Люстра для гостиной овальная IP65 4000K",
+        url:"https://220volt.kz/catalog/lighting/chandeliers/oval-ip65-4000/",
+        options:oval.options.map(option=> option.key==="protection" ? {...option,value_ru:"IP65"} :
+          option.key==="temperature" ? {...option,value_ru:"4000 K"} : option)};
+      const expensive={...candidate,id:4,price:6500,url:"https://220volt.kz/catalog/lighting/chandeliers/expensive-oval/"};
+      const wrongTemperature={...candidate,id:5,pagetitle:"Люстра для гостиной овальная IP65 3000K",
+        url:"https://220volt.kz/catalog/lighting/chandeliers/oval-warm/",
+        options:candidate.options.map(option=>option.key==="temperature" ? {...option,value_ru:"3000 K"}:option)};
+      for(const withTemperature of [false,true]) {
+      const result=await runCase(withTemperature
+        ? "А есть овальные? Цветовая температура: 4000 K; Бюджет до 6000 тенге."
+        : "А есть овальные? Бюджет до 6000 тенге.","круглую люстру",null,{
+        priorRequest:"Нужна круглая люстра для гостиной со степенью защиты IP65 до 5000 тенге.",
+        priorCriteria:[
+          {key:"Форма люстры",op:"eq",value:"круг",level:"A",evidence:"user_explicit"},
+          {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"},
+          {key:"Цена",op:"max",value:5000,level:"A",evidence:"user_explicit"},
+        ],
+        fixtureProducts:[round,oval,candidate,expensive,wrongTemperature],
+      });
+      const diagnostic=JSON.stringify({steps:result.steps,events:result.publicEvents});
+      assert(result.steps.some(({step})=>step==="v3_compound_selection_refinement_bound"),diagnostic);
+      const state=result.steps.find(({step})=>step==="v3_dialogue_selection_state_compiled")?.meta?.active_criteria as Criterion[];
+      assert(state?.some(c=>c.value==="овал"),diagnostic);
+      assert(state.some(c=>c.value==="IP65"),diagnostic);
+      if(withTemperature) assert(state.some(c=>/температур/iu.test(c.key)&&Number.parseFloat(String(c.value))===4000),diagnostic);
+      assert(state.some(c=>c.key==="Цена"&&c.value===6000),diagnostic);
+      assert(!state.some(c=>c.value==="круг"||c.value===5000),diagnostic);
+      const blocks=result.publicEvents.map(event=>event.v3_event as Record<string,unknown>)
+        .filter(event=>event?.type==="products_block");
+      assert(blocks.length>0,diagnostic);
+      const rendered=blocks.map(block=>block.markdown).join("\n");
+      assert(rendered.includes(candidate.url),diagnostic);
+      for(const decoy of [round,oval,expensive,...(withTemperature ? [wrongTemperature]:[])]) assert(!rendered.includes(decoy.url),diagnostic);
+      }
+    } finally {restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name:"compound refinement cannot inherit a fabricated or absent browser selection",
+  permissions:{read:true,env:false,net:false},
+  async fn() {
+    try {
+      for(const options of [{freshSession:true},{serverHistoryMissing:true}]) {
+        const result=await runCase("А есть овальные? Бюджет до 6000 тенге.","люстры",null,options);
+        assertEquals(result.modelRequests,0,JSON.stringify(result.steps));
+        assertEquals(result.catalogProductUrls,[],JSON.stringify(result.steps));
+        assert(result.steps.some(({step})=>step==="v3_compound_selection_context_unproven"),JSON.stringify(result.steps));
+        assert(!result.publicEvents.some(event=>(event.v3_event as Record<string,unknown>)?.type==="products_block"));
+      }
+    } finally {restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name:"compound refinement does not carry old conditions into a second independent task",
+  permissions:{read:true,env:false,net:false},
+  async fn() {
+    try {
+      for(const message of ["А есть овальные? Ещё нужен кабель.","Покажи такие же, но белые. Ещё нужен кабель."]) {
+        const result=await runCase(message,"кабель",null,{
+          priorRequest:"Нужна круглая люстра для гостиной IP65 до 4000 тенге.",
+          priorCriteria:[{key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"}],
+        });
+        const trace=JSON.stringify(result.steps);
+        assert(result.steps.some(({step,meta})=>step==="v3_conversation_boundary"&&meta?.mode==="new_task"),trace);
+        assert(!result.steps.some(({step})=>step==="v3_compound_selection_refinement_bound"),trace);
+        assert(!result.steps.some(({step})=>step==="v3_verified_rendered_scope_continuation"),trace);
+        for(const {meta} of result.steps.filter(({step})=>step==="v3_dialogue_selection_state_compiled")) {
+          assertEquals(meta?.prior_turns,0,trace);
+          assertEquals(meta?.restored_contract_criteria,0,trace);
+          assert(!(meta?.active_criteria as Criterion[]).some(c=>c.value==="IP65"||c.value===4000),trace);
+        }
+      }
+    } finally {restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "dialogue replacement reaches search and card gate without reviving the old axis",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const newOval = {
+        ...oval, id: 3,
+        pagetitle: "Люстра для гостиной овальная IP65",
+        url: "https://220volt.kz/catalog/lighting/chandeliers/oval-ip65/",
+        options: oval.options.map(option => option.key === "protection"
+          ? { ...option, value_ru: "IP65" } : option),
+      };
+      const result = await runCase("А есть овальные?", "круглую люстру", null, {
+        priorRequest: "Нужна круглая люстра для гостиной со степенью защиты IP65.",
+        priorCriteria: [
+          { key: "Форма люстры", op: "eq", value: "круг", level: "A", evidence: "user_explicit" },
+          { key: "Степень защиты", op: "eq", value: "IP65", level: "A", evidence: "user_explicit" },
+        ],
+        fixtureProducts: [round, oval, newOval],
+      });
+      const state = result.steps.find(({step}) => step === "v3_dialogue_selection_state_compiled");
+      assert(state, JSON.stringify(result.steps));
+      assertEquals((state.meta?.active_criteria as Criterion[]).some(c => c.value === "круг"), false, JSON.stringify(state));
+      assert((state.meta?.active_criteria as Criterion[]).some(c => c.value === "овал"));
+      assert((state.meta?.active_criteria as Criterion[]).some(c => c.value === "IP65"));
+      assert(result.catalogProductUrls.length > 0, JSON.stringify(result.steps));
+      for (const raw of result.catalogProductUrls) {
+        const url = new URL(raw);
+        assert(![...url.searchParams.entries()].some(([key,value]) => /shape/.test(key) && /круг/.test(value)), raw);
+      }
+      const blocks = result.publicEvents.map(event => event.v3_event as Record<string,unknown>)
+        .filter(event => event?.type === "products_block");
+      assert(blocks.length > 0, JSON.stringify({events:result.publicEvents,steps:result.steps}));
+      const rendered = blocks.map(block => block.markdown).join("\n");
+      assert(rendered.includes(newOval.url), rendered);
+      assert(!rendered.includes(round.url), rendered);
+      assert(!rendered.includes(oval.url), rendered);
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "more options preserves prior server constraints even when model omits them",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const nextRound = {...round, id: 3,
+        pagetitle:"Люстра для гостиной круглая IP65 новая",
+        url:"https://220volt.kz/catalog/lighting/chandeliers/round-new/"};
+      const result = await runCase("А есть другие варианты?", "люстры", null, {
+        priorRequest:"Нужна круглая люстра для гостиной IP65",
+        priorCriteria:[
+          {key:"Форма люстры",op:"eq",value:"круг",level:"A",evidence:"user_explicit"},
+          {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"},
+        ],
+        fixtureProducts:[round,oval,nextRound],
+      });
+      const state=result.steps.find(({step})=>step==="v3_dialogue_selection_state_compiled");
+      assert(state,JSON.stringify(result.steps));
+      assertEquals((state.meta?.active_criteria as Criterion[]).map(c=>c.value).sort(),["IP65","круг"]);
+      const blocks=result.publicEvents.map(event=>event.v3_event as Record<string,unknown>)
+        .filter(event=>event?.type==="products_block");
+      assert(blocks.length>0,JSON.stringify({events:result.publicEvents,steps:result.steps}));
+      const rendered=blocks.map(block=>block.markdown).join("\n");
+      assert(rendered.includes(nextRound.url),rendered);
+      assert(!rendered.includes(oval.url),rendered);
+      assert(!rendered.includes(round.url),rendered);
+    } finally {
+      restoreOfflineModuleSetup();
+    }
+  },
+});
 
 Deno.test({
   name: "model-owned round chandelier query cannot narrow a round room request",

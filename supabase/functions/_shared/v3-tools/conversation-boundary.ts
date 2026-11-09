@@ -1,6 +1,6 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
-import { isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
+import { compoundAttributeSelectionBoundary, isCompoundAttributeSelectionFollowup, isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
 
 export type ConversationMessage = {
   role: "user" | "assistant";
@@ -313,7 +313,7 @@ export function isEllipticalAttributeFollowup(userMessage: string): boolean {
   // This recognises dependency only; the caller must still load a completed
   // server batch before restoring a missing product head or prior constraint.
   return Boolean(text && (ELLIPTICAL_ATTRIBUTE_RE.test(text) ||
-    isShortAttributeSelectionFollowup(text)));
+    isShortAttributeSelectionFollowup(text) || isCompoundAttributeSelectionFollowup(text)));
 }
 
 function lexicalWords(value: string): string[] {
@@ -337,6 +337,9 @@ export function classifyConversationBoundaryLocally(
       confidence: 1,
       reason: "local_explicit_new_task",
     };
+  }
+  if (compoundAttributeSelectionBoundary(text)==="new_task") {
+    return {mode:"new_task",confidence:0.98,reason:"local_compound_independent_task"};
   }
   if (isAdditionalProductSelectionFollowup(text)) {
     return {

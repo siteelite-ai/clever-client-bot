@@ -70,6 +70,13 @@ import {
   type RenderProductsInput,
 } from "../_shared/v3-tools/render.ts";
 import {
+  compileDialogueSelectionCriteria,
+  enforceDialogueBudgetCriteria,
+  enforceDialogueSelectionCriteria,
+  isDialoguePriceCriterion,
+  resolveDialogueBudgetCap,
+} from "../_shared/v3-tools/dialogue-selection-state.ts";
+import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
@@ -341,8 +348,10 @@ import {
 import {
   activeSelectionScopeLookupCreatedAfter,
   classifyActivePrepositionalRefinement,
+  compoundAttributeSelectionBoundary,
   explicitlyChangesActiveSelectionEntity,
   isIndependentNominalRequestOutsideActiveScope,
+  isCompoundAttributeSelectionFollowup,
   isSameSectionNominalRefinement,
   isShortAttributeSelectionFollowup,
   isVerifiedFreeformReadinessAnswer,
@@ -9486,6 +9495,7 @@ async function runExpertLoop(
   serverVerifiedPriorQueriesNewestFirst: readonly string[] = [],
   rawCurrentUserMessage = userMessage,
   verifiedReadinessChoiceFacet: string | null = null,
+  serverVerifiedPriorCriteria: readonly Criterion[] = [],
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -9544,6 +9554,9 @@ async function runExpertLoop(
   const hasVisibleText = () =>
     (replacementEgressGuarded ? visibleText : finalText).trim().length > 0;
   let productsRendered = 0;
+  const activeBudgetCap = resolveDialogueBudgetCap(
+    serverVerifiedPriorQueriesNewestFirst, rawCurrentUserMessage, serverVerifiedPriorCriteria,
+  ) ?? extractBudgetCap(serverRenderedBaseRequest ?? ellipticalContinuation?.baseUserMessage ?? userMessage);
   // The generic expert route has candidate search, not a complete catalog
   // price proof. Exact compound and complete recent-set price requests are
   // verified by their separate direct routes before reaching this loop.
@@ -9735,6 +9748,14 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  let dialogueSelectionCriteria: Criterion[] = [];
+  const currentDialogueCriteria = (criteria: Criterion[]): Criterion[] =>
+    enforceDialogueBudgetCriteria(
+      enforceDialogueSelectionCriteria(
+        criteria, dialogueSelectionCriteria.filter(criterion => !isDialoguePriceCriterion(criterion)),
+        lastDiscover?.facets ?? [],
+      ), activeBudgetCap,
+    );
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
   const modelAssumedSearchFacetValues: Array<{ key: string; value: string }> =
     [];
@@ -10073,7 +10094,7 @@ async function runExpertLoop(
       selection_contract: {
         hash: emittedPlan.hash,
         mandatory_criteria: emittedPlan.mandatory_criteria.map((
-          { key, op, value, unit, exclusive, evidence },
+          { key, op, value, unit, exclusive, evidence, proof_scope },
         ) => ({
           key,
           op,
@@ -10081,6 +10102,7 @@ async function runExpertLoop(
           ...(unit ? { unit } : {}),
           ...(exclusive ? { exclusive } : {}),
           ...(evidence ? { evidence } : {}),
+          ...(proof_scope ? { proof_scope } : {}),
         })),
         ...(visibleRequirements.length > 0
           ? { visible_requirements: visibleRequirements }
@@ -10183,7 +10205,7 @@ async function runExpertLoop(
       ? "catalog_verified"
       : "derived_required";
     const attributedCriteria = scopeCardCriteria(
-      omitDisclosedUnverifiedCriteria(criteria.filter(
+      omitDisclosedUnverifiedCriteria(currentDialogueCriteria(criteria).filter(
         appearanceCriterionIsCustomerOwned,
       )),
     ).criteria.map((
@@ -10233,13 +10255,13 @@ async function runExpertLoop(
         selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({
           ...criterion,
         })),
-        omitDisclosedUnverifiedCriteria(criteria.filter(
+        omitDisclosedUnverifiedCriteria(currentDialogueCriteria(criteria).filter(
           appearanceCriterionIsCustomerOwned,
         )),
         [],
         false,
       )
-      : omitDisclosedUnverifiedCriteria(criteria.filter(
+      : omitDisclosedUnverifiedCriteria(currentDialogueCriteria(criteria).filter(
         appearanceCriterionIsCustomerOwned,
       )),
   ).criteria;
@@ -11097,7 +11119,14 @@ async function runExpertLoop(
   const equivalentReplacementRequested = replacementIntent &&
     /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
-  const intentMode = detectUserIntentMode(userMessage);
+  const verifiedCompoundRefinement = isCompoundAttributeSelectionFollowup(rawCurrentUserMessage) &&
+    Boolean(serverRenderedBaseRequest || verifiedActiveLeafEvidence);
+  const intentMode = verifiedCompoundRefinement ? "select" : detectUserIntentMode(userMessage);
+  if (verifiedCompoundRefinement) steps.push({
+    step:"v3_compound_selection_refinement_bound",ms:now(),meta:{
+      source:serverRenderedBaseRequest ? "completed_server_batch" : "verified_active_section",
+    },
+  });
   const directProductLookup = extractReplacementLookupKeys(userMessage);
   const resultCardinality = resolveResultCardinality(userMessage, {
     selection: intentMode === "select",
@@ -11430,7 +11459,7 @@ async function runExpertLoop(
       min_price: 1,
       per_page: 8,
     };
-    const budgetCap = extractBudgetCap(userMessage);
+    const budgetCap = activeBudgetCap;
     if (budgetCap !== null && budgetCap > 0) searchInput.max_price = budgetCap;
     const priceIntent = detectPriceDirection(userMessage);
     if (priceIntent?.kind === "superlative") {
@@ -11959,8 +11988,8 @@ async function runExpertLoop(
   // lets compact answers such as `1P` bind to the intended live axis when the
   // same abbreviation would be ambiguous elsewhere in a large schema.
   const explicitCustomerEvidence = dialogueChoice
-    ? `${userMessage}\nУточняемый параметр: ${dialogueChoice.question}\nВыбор клиента: ${dialogueChoice.chosen}`
-    : userMessage;
+    ? `${rawCurrentUserMessage}\nУточняемый параметр: ${dialogueChoice.question}\nВыбор клиента: ${dialogueChoice.chosen}`
+    : rawCurrentUserMessage;
   const baseSystemPrompt = buildSystemPrompt(
     flags.relaxationHintsEnabled,
     flags.criteriaGateEnabled,
@@ -12093,7 +12122,7 @@ async function runExpertLoop(
       ? category
       : "";
     if (leaves.length === 0 && !safeCategory) return null;
-    const customerBudget = extractBudgetCap(userMessage) ??
+    const customerBudget = activeBudgetCap ??
       (trustedAppearanceBaseRequest
         ? extractBudgetCap(trustedAppearanceBaseRequest)
         : null);
@@ -12533,7 +12562,7 @@ async function runExpertLoop(
               pagetitle
             ).filter(Boolean);
             const price = detectPriceDirection(userMessage);
-            const budget = extractBudgetCap(userMessage);
+            const budget = activeBudgetCap;
             const text = `Явно указанное условие «${
               application.phrases.join(", ")
             }» однозначно соответствует параметру каталога «${
@@ -13560,7 +13589,7 @@ async function runExpertLoop(
               }
               const result = await retrievePrivateSelectionCandidates({
                 discovery: lastDiscover, options,
-                maxPrice: extractBudgetCap(userMessage),
+                maxPrice: activeBudgetCap,
                 deps: { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken,
                   timeoutMs: 3000,
                   signal: AbortSignal.any([turnController.signal, AbortSignal.timeout(3000)]) },
@@ -14484,7 +14513,7 @@ async function runExpertLoop(
                 per_page: 50,
               }
               : null;
-          const directBudgetCap = extractBudgetCap(userMessage);
+          const directBudgetCap = activeBudgetCap;
           const modelSearchAbsentBrowseCandidate = !directSearchBase &&
               lastDiscover.leaf_categories.length === 1
             ? buildCurrentUnqualifiedCategoryBrowse({
@@ -16998,7 +17027,7 @@ async function runExpertLoop(
         // передать max_price в search_catalog или ценовой гард выше пропустил.
         // Это страховка, а не основной механизм — основная работа в промпте.
         if (tc.name === "render_products") {
-          const budgetCap = extractBudgetCap(userMessage);
+          const budgetCap = activeBudgetCap;
           if (budgetCap !== null && budgetCap > 0) {
             const origIds = Array.isArray(tc.args.product_ids)
               ? (tc.args.product_ids as unknown[]).map(String)
@@ -17913,7 +17942,7 @@ async function runExpertLoop(
                   const budgetPassed = filterProductIdsByBudgetCap(
                     targetPassed.map((product) => product.id),
                     ctx.cache,
-                    extractBudgetCap(userMessage),
+                    activeBudgetCap,
                   ).ids;
                   const budgetIds = new Set(budgetPassed);
                   paired = {
@@ -17987,7 +18016,7 @@ async function runExpertLoop(
                       filterProductIdsByBudgetCap(
                         targetPassed.map((product) => product.id),
                         ctx.cache,
-                        extractBudgetCap(userMessage),
+                        activeBudgetCap,
                       ).ids,
                     );
                     paired = {
@@ -18082,7 +18111,7 @@ async function runExpertLoop(
                     filterProductIdsByBudgetCap(
                       targetPassed.map((product) => product.id),
                       ctx.cache,
-                      extractBudgetCap(userMessage),
+                      activeBudgetCap,
                     ).ids,
                   );
                   paired = {
@@ -18927,7 +18956,7 @@ async function runExpertLoop(
                   const budgetPassed = filterProductIdsByBudgetCap(
                     gatedIds,
                     ctx.cache,
-                    extractBudgetCap(userMessage),
+                    activeBudgetCap,
                   ).ids.slice(0, 10);
                   const priorProofs = pairedTitleContractProven
                     ? [{
@@ -19407,7 +19436,13 @@ async function runExpertLoop(
 
         if (tc.name === "search_catalog") {
           const beforeBudgetCap = Number(tc.args.max_price) || null;
-          tc.args = enforceBudgetCapOnSelectionSearch(userMessage, tc.args);
+          tc.args = activeBudgetCap !== null &&
+              (tc.args.mode === "by_query" || tc.args.mode === "by_filter")
+            ? enforceBudgetCapOnSelectionSearch(
+              `Бюджет до ${activeBudgetCap} тенге`,
+              { ...tc.args, max_price: activeBudgetCap },
+            )
+            : tc.args;
           const afterBudgetCap = Number(tc.args.max_price) || null;
           if (afterBudgetCap !== beforeBudgetCap) {
             steps.push({
@@ -20582,7 +20617,7 @@ async function runExpertLoop(
           userBackedSearchCriteria,
           Boolean(namedSeriesToken),
         ), derivedSelectionReasoningEvidence || assistantReasoning).criteria;
-        const sourceProofBudget = extractBudgetCap(userMessage);
+        const sourceProofBudget = activeBudgetCap;
         const sourceProofProducts = result.ok &&
             result.tool === "search_catalog"
           ? result.results
@@ -22224,6 +22259,25 @@ async function runExpertLoop(
                   discoveryPairedDecision,
                   discoveryFacets,
                 );
+              dialogueSelectionCriteria = scopeCardCriteria(omitPairedExact(
+                compileDialogueSelectionCriteria({
+                  facets: discoveryFacets,
+                  priorQueriesNewestFirst: serverVerifiedPriorQueriesNewestFirst,
+                  currentEvidence: explicitCustomerEvidence,
+                  priorCriteria: serverVerifiedPriorCriteria,
+                  trustedActiveProductTarget: trustedAppearanceTarget(),
+                  trustedBaseUserMessage: trustedAppearanceBaseRequest,
+                }),
+              ), userMessage).criteria;
+              steps.push({
+                step: "v3_dialogue_selection_state_compiled", ms: now(), meta: {
+                  version: 1,
+                  prior_turns: serverVerifiedPriorQueriesNewestFirst.length,
+                  restored_contract_criteria: serverVerifiedPriorCriteria.length,
+                  active_criteria: dialogueSelectionCriteria.map(({ key, op, value }) =>
+                    ({ key, op, value })),
+                },
+              });
               const explicitCriteria: Criterion[] = scopeCardCriteria(omitPairedExact(
                 explicitKept.map(
                   ({ key, value }) => {
@@ -22350,7 +22404,7 @@ async function runExpertLoop(
                 evidence: "user_explicit" as const,
               }))), userMessage).criteria;
               const before = userBackedSearchCriteria.length;
-              userBackedSearchCriteria = scopeCardCriteria(mergeUserBackedCriteria(
+              userBackedSearchCriteria = scopeCardCriteria(currentDialogueCriteria(mergeUserBackedCriteria(
                 userBackedSearchCriteria,
                 [
                   ...explicitUserBackedCriteria,
@@ -22358,7 +22412,7 @@ async function runExpertLoop(
                   ...literalMeasuredCriteria,
                   ...(verifiedApplicationSelection?.criteria ?? []),
                 ],
-              ), userMessage).criteria;
+              )), userMessage).criteria;
               enforcedSearchCriteria = freezeSelectionCriteria(
                 [
                   ...explicitCriteria,
@@ -22552,7 +22606,7 @@ async function runExpertLoop(
                 // such as IP66 is sent to literal recovery. A compact reply
                 // such as `1P` still resolves through the separate evidence
                 // argument below.
-                userMessage,
+                rawCurrentUserMessage,
                 lastDiscover.facets,
                 representedCustomerEvidence,
                 explicitCustomerEvidence,
@@ -22560,7 +22614,7 @@ async function runExpertLoop(
               const unresolvedLexicalQualifier = targetCatalogAliasClaim(
                 unresolvedCompactCode ??
                   extractUnrepresentedPostNominalCatalogQualifier(
-                    userMessage,
+                    rawCurrentUserMessage,
                     lastDiscover.category.pagetitle,
                     representedCustomerEvidence,
                   ),
@@ -23910,7 +23964,7 @@ async function runExpertLoop(
               gate.passed_ids.includes(id)
             ),
           ctx.cache,
-          extractBudgetCap(userMessage),
+          activeBudgetCap,
         ).ids,
       );
       safeIds = terminalPairedSafeIds(safeIds, "terminal_jargon_exact");
@@ -23965,7 +24019,7 @@ async function runExpertLoop(
           )
           : ids;
       const target = terminalSelectionTarget;
-      const budgetCap = extractBudgetCap(userMessage);
+      const budgetCap = activeBudgetCap;
       const baseProducts = split.baseIds
         .map((id) => ctx.cache.get(id))
         .filter((product): product is ProductFull =>
@@ -24305,7 +24359,7 @@ async function runExpertLoop(
       safeIds = filterProductIdsByBudgetCap(
         safeIds,
         ctx.cache,
-        extractBudgetCap(userMessage),
+        activeBudgetCap,
       ).ids;
       safeIds = finalizeTerminalRenderIds(
         terminalPairedSafeIds(safeIds, "visible_reasoning_guided_search"),
@@ -24405,7 +24459,7 @@ async function runExpertLoop(
             .filter((product) => targetIds.has(product.id))
             .map((product) => product.id),
           ctx.cache,
-          extractBudgetCap(userMessage),
+          activeBudgetCap,
         ).ids;
       };
       let compatibilityPool: ToolResult = derivedStructuredSearchResult ??
@@ -24726,7 +24780,7 @@ async function runExpertLoop(
       safeIds = filterProductIdsByBudgetCap(
         guardFinalRenderIds(safeIds),
         ctx.cache,
-        extractBudgetCap(userMessage),
+        activeBudgetCap,
       ).ids;
       safeIds = terminalPairedSafeIds(
         safeIds,
@@ -24984,7 +25038,7 @@ async function runExpertLoop(
           safeIds = filterProductIdsByBudgetCap(
             safeIds,
             ctx.cache,
-            extractBudgetCap(userMessage),
+            activeBudgetCap,
           ).ids;
           safeIds = finalizeTerminalRenderIds(
             terminalPairedSafeIds(safeIds, "terminal_catalog_recheck"),
@@ -25118,7 +25172,7 @@ async function runExpertLoop(
             filterProductIdsByBudgetCap(
               recoveredIds,
               ctx.cache,
-              extractBudgetCap(userMessage),
+              activeBudgetCap,
             ).ids,
             "terminal_category_recovery",
           ),
@@ -25313,7 +25367,7 @@ async function runExpertLoop(
       const budgetGuard = filterProductIdsByBudgetCap(
         safeIds,
         ctx.cache,
-        extractBudgetCap(userMessage),
+        activeBudgetCap,
       );
       safeIds = budgetGuard.ids;
       safeIds = finalizeTerminalRenderIds(
@@ -25562,7 +25616,7 @@ async function runExpertLoop(
           const budgetIds = filterProductIdsByBudgetCap(
             eligibleIds,
             ctx.cache,
-            extractBudgetCap(userMessage),
+            activeBudgetCap,
           ).ids;
           const renderableIds = finalizeTerminalRenderIds(
             terminalPairedSafeIds(budgetIds, "category_preacceptance"),
@@ -25694,7 +25748,7 @@ async function runExpertLoop(
           const budgetIds = filterProductIdsByBudgetCap(
             eligibleIds,
             ctx.cache,
-            extractBudgetCap(userMessage),
+            activeBudgetCap,
           ).ids;
           const renderableIds = finalizeTerminalRenderIds(
             terminalPairedSafeIds(budgetIds, "lexical_preacceptance"),
@@ -25826,7 +25880,7 @@ async function runExpertLoop(
       const budgetGuard = filterProductIdsByBudgetCap(
         safeIds,
         ctx.cache,
-        extractBudgetCap(userMessage),
+        activeBudgetCap,
       );
       safeIds = budgetGuard.ids;
       safeIds = finalizeTerminalRenderIds(
@@ -26153,7 +26207,7 @@ async function runExpertLoop(
           safeIds = filterProductIdsByBudgetCap(
             safeIds,
             ctx.cache,
-            extractBudgetCap(userMessage),
+            activeBudgetCap,
           ).ids;
           safeIds = terminalPairedSafeIds(
             safeIds,
@@ -26222,7 +26276,7 @@ async function runExpertLoop(
               querySafeIds = filterProductIdsByBudgetCap(
                 querySafeIds,
                 ctx.cache,
-                extractBudgetCap(userMessage),
+                activeBudgetCap,
               ).ids;
               querySafeIds = terminalPairedSafeIds(
                 querySafeIds,
@@ -27862,6 +27916,7 @@ Deno.serve(async (req) => {
               mayBeNominalRefinement(userMessage) ||
               mayBeActivePrepositionalRefinement(userMessage) ||
               isShortAttributeSelectionFollowup(userMessage) ||
+              isCompoundAttributeSelectionFollowup(userMessage) ||
               Boolean(verifiedReadinessState.slot);
             const activeScopeState = activeScopeLookupNeeded
               ? await loadVerifiedActiveSelectionScope(
@@ -27914,7 +27969,8 @@ Deno.serve(async (req) => {
                   activeScopeState.scope,
                 ),
             );
-            const activeScopeExplicitBoundary = Boolean(specificationLookupQuery) || activeScopeEntityChanged ||
+            const compoundTaskSwitch = compoundAttributeSelectionBoundary(userMessage)==="new_task";
+            const activeScopeExplicitBoundary = compoundTaskSwitch || Boolean(specificationLookupQuery) || activeScopeEntityChanged ||
               activeScopeClassChanged;
             if (
               activePrepositionalRefinement === "ambiguous" &&
@@ -27948,6 +28004,7 @@ Deno.serve(async (req) => {
                 !activeScopeExplicitBoundary &&
                 (sameSectionNominalRefinement ||
                   isShortAttributeSelectionFollowup(userMessage) ||
+                  isCompoundAttributeSelectionFollowup(userMessage) ||
                   activePrepositionalRefinement === "continue" ||
                   readinessScopeReply || verifiedFreeformReadinessAnswer)
               ? activeScopeState.scope
@@ -27989,7 +28046,9 @@ Deno.serve(async (req) => {
                 mode: "new_task" as const,
                 confidence: 1,
                 source: "local" as const,
-                reason: activeScopeEntityChanged
+                reason: compoundTaskSwitch
+                  ? "local_compound_independent_task"
+                  : activeScopeEntityChanged
                   ? "explicit_active_selection_entity_change"
                   : "independent_nominal_selection_outside_active_scope",
               }
@@ -28145,6 +28204,24 @@ Deno.serve(async (req) => {
                     prior_context_available: mayCarryPriorMeasurements,
                   },
                 });
+                // A verified readiness question already carries a server-owned
+                // snapshot, even if the bounded historical read is unavailable.
+                // Keep its customer turns separate: never authorize stale values
+                // by treating the composed snapshot as the latest answer.
+                const issuedScope = verifiedReadinessState.slot?.scope;
+                const issuedToken = !startsNewTask && scopedSelectionRequest.scoped &&
+                    issuedScope && typeof issuedScope === "object" &&
+                    typeof (issuedScope as Record<string, unknown>).token === "string"
+                  ? String((issuedScope as Record<string, unknown>).token) : "";
+                if (issuedToken && evidence.priorQueriesNewestFirst.length === 0) {
+                  const priorQueriesNewestFirst = issuedToken
+                    .split(CUSTOMER_TURN_BOUNDARY).filter(Boolean).reverse();
+                  return {
+                    ...evidence,
+                    ...composeVerifiedCustomerMeasurementEvidence(userMessage, priorQueriesNewestFirst),
+                    priorQueriesNewestFirst,
+                  };
+                }
                 return evidence;
               })();
             const measuredBreakerGuidance = buildMeasuredBreakerGuidance(
@@ -28257,8 +28334,9 @@ Deno.serve(async (req) => {
             // Cache v2 is not an authority for previously shown products. The
             // latest completed server batch is the only source of card identity,
             // even if the current wording escaped a follow-up classifier.
-            const activeRenderedRead = startsNewTask ||
-                preflightRenderedSelection
+            const activeRenderedRead = startsNewTask
+              ? {proof:null,lookupFailed:false}
+              : preflightRenderedSelection
               ? {
                 proof: preflightRenderedSelection,
                 lookupFailed: false,
@@ -28272,6 +28350,15 @@ Deno.serve(async (req) => {
                   t0,
                 );
             const activeRenderedProof = activeRenderedRead.proof;
+            if (isCompoundAttributeSelectionFollowup(userMessage) && !activeRenderedProof &&
+              !(verifiedReadinessState.slot && scopedSelectionRequest.scoped && !startsNewTask) &&
+              !sameSectionScope) {
+              send({type:"delta",content:
+                "Не удалось подтвердить прежнюю подборку на сервере. Повторите полный запрос — проверю товары заново."});
+              steps.push({step:"v3_compound_selection_context_unproven",ms:Date.now()-t0});
+              productsCount = 0;
+              return;
+            }
             if (activeRenderedRead.lookupFailed) {
               const staleRows = await loadRecentProductEvidence(
                 supabase,
@@ -28471,7 +28558,7 @@ Deno.serve(async (req) => {
             // freshly rehydrated server batch, never from browser prose or a
             // guessed category. Mixed-category batches remain unexpanded.
             const ellipticalBatchProducts = ellipticalContinuation &&
-                isShortAttributeSelectionFollowup(userMessage)
+                (isShortAttributeSelectionFollowup(userMessage) || isCompoundAttributeSelectionFollowup(userMessage))
               ? recentProductEvidence.map(({ id }) => ctx.cache.get(id))
               : [];
             const ellipticalLeaves = [...new Set(ellipticalBatchProducts
@@ -28917,8 +29004,10 @@ Deno.serve(async (req) => {
                   verifiedBroadChoiceState.typedContinuation?.leaf ?? null,
                   Boolean(replacementEgressRequest),
                   null,
-                  [],
+                  (await verifiedCustomerMeasurementEvidence()).priorQueriesNewestFirst,
                   userMessage,
+                  null,
+                  !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -29024,6 +29113,7 @@ Deno.serve(async (req) => {
                 additionalSelectionRequest
                   ? joinCustomerTurns([ellipticalBaseRequest!, userMessage])
                   : isShortAttributeSelectionFollowup(userMessage)
+                    || isCompoundAttributeSelectionFollowup(userMessage)
                   ? `${scopedSelectionRequest.message} ${sameSectionScope.leaf}`
                   : scopedSelectionRequest.message,
                 effectiveHistory,
@@ -29047,13 +29137,15 @@ Deno.serve(async (req) => {
                 // The customer's short attribute has no category noun. Seed
                 // only the initial taxonomy lookup from the verified scope;
                 // never use browser-carried slots or change full requests.
-                isShortAttributeSelectionFollowup(userMessage)
+                (isShortAttributeSelectionFollowup(userMessage) || isCompoundAttributeSelectionFollowup(userMessage))
                   ? sameSectionScope.leaf
                   : null,
                 Boolean(replacementEgressRequest),
                 null,
-                [],
+                (await verifiedCustomerMeasurementEvidence()).priorQueriesNewestFirst,
                 userMessage,
+                null,
+                !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -29118,8 +29210,10 @@ Deno.serve(async (req) => {
                   null,
                   Boolean(replacementEgressRequest),
                   null,
-                  [],
+                  (await verifiedCustomerMeasurementEvidence()).priorQueriesNewestFirst,
                   userMessage,
+                  null,
+                  !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -29282,8 +29376,10 @@ Deno.serve(async (req) => {
                   null,
                   Boolean(replacementEgressRequest),
                   null,
-                  [],
+                  (await verifiedCustomerMeasurementEvidence()).priorQueriesNewestFirst,
                   userMessage,
+                  null,
+                  !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -29706,8 +29802,10 @@ Deno.serve(async (req) => {
                   null,
                   Boolean(replacementEgressRequest),
                   null,
-                  [],
+                  (await verifiedCustomerMeasurementEvidence()).priorQueriesNewestFirst,
                   userMessage,
+                  null,
+                  !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
                 );
                 productsCount = out.productsRendered;
                 const shownProducts = out.shownProductIds
@@ -29842,6 +29940,7 @@ Deno.serve(async (req) => {
                 !startsNewTask && !readinessQuestionSuperseded && readinessScopeReply &&
                     typeof verifiedReadinessState.slot?.facet_key === "string"
                   ? verifiedReadinessState.slot.facet_key : null,
+                !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

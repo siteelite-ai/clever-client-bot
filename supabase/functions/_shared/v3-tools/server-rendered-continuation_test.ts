@@ -84,6 +84,24 @@ function laterTurn(
   });
 }
 
+Deno.test("only a validated latest server batch restores its selection obligations", () => {
+  const criterion = { key: "Цвет", op: "eq", value: "черный", level: "A", evidence: "user_explicit" };
+  const row = successfulSelection();
+  (row.response_events as Array<Record<string, unknown>>)[1].selection_contract = {
+    mandatory_criteria: [criterion],
+  };
+  const proof = resolveServerRenderedSelectionProof([row], sessionId, base, null, now);
+  assertEquals(JSON.stringify(proof?.mandatoryCriteria), JSON.stringify([criterion]), "verified criterion");
+  assertEquals(resolveServerRenderedSelectionProof([{...row,error:"failed"}], sessionId, base, null, now), null, "failed batch");
+  assertEquals(resolveServerRenderedSelectionProof([row], "other-session", base, null, now), null, "foreign session");
+  const later = laterTurn("А есть другие варианты?");
+  later.steps = [{step:"v3_conversation_boundary",meta:{mode:"continuation",references_rendered_products:true}}];
+  const nextCriterion = {...criterion,value:"белый"};
+  (later.response_events as Array<Record<string, unknown>>)[1].selection_contract = {mandatory_criteria:[nextCriterion]};
+  const updated = resolveServerRenderedSelectionProof([later,row], sessionId, base, null, now);
+  assertEquals(JSON.stringify(updated?.mandatoryCriteria), JSON.stringify([nextCriterion]), "latest batch contract wins");
+});
+
 function certifiedZeroCardTurn(
   query: string,
   overrides: Partial<ServerRenderedSelectionLogRow> = {},
