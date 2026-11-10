@@ -1,4 +1,5 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
+import { isIndependentExactProductInquiry } from "./independent-product-inquiry.ts";
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
 import { compoundAttributeSelectionBoundary, isCompoundAttributeSelectionFollowup, isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
 
@@ -336,6 +337,13 @@ export function classifyConversationBoundaryLocally(
       mode: "new_task",
       confidence: 1,
       reason: "local_explicit_new_task",
+    };
+  }
+  if (isIndependentExactProductInquiry(text)) {
+    return {
+      mode: "new_task",
+      confidence: 1,
+      reason: "local_independent_exact_product_inquiry",
     };
   }
   if (compoundAttributeSelectionBoundary(text)==="new_task") {

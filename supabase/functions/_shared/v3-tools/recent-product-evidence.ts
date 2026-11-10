@@ -7,6 +7,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0
 import type { ProductFull } from "./types.ts";
 import { detectPriceDirection } from "./price-scope-policy.ts";
 import { runWithDeadline } from "./turn-deadline.ts";
+import { isIndependentExactProductInquiry } from "./independent-product-inquiry.ts";
 
 const TTL_SECONDS = 30 * 60;
 export const MAX_RECENT_EVIDENCE_PRODUCTS = 10;
@@ -189,6 +190,9 @@ export function extractPriorAssistantProse(
 }
 
 export function isEvidenceOnlyFollowup(message: string): boolean {
+  // A freshly named item is lookup input, not a claim about the old cards.
+  // Keep this before truncation so a later reference cannot be lost.
+  if (isIndependentExactProductInquiry(message)) return false;
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;
   if (isAdditionalProductSelectionFollowup(normalized)) return false;
