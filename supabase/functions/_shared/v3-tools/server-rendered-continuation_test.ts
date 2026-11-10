@@ -1,5 +1,6 @@
 import {
   isNeutralAcknowledgement,
+  isVerifiedRenderedSelectionRefinement,
   resolveServerRenderedSelectionBase,
   resolveServerRenderedSelectionProof,
   type ServerRenderedSelectionLogRow,
@@ -83,6 +84,56 @@ function laterTurn(
     ...overrides,
   });
 }
+
+Deno.test("server-owned condition refinements start fresh selection, never certify old product facts", () => {
+  const proof = resolveServerRenderedSelectionProof([successfulSelection()], sessionId, base, null, now);
+  if (!proof) throw new Error("Fixture must have a completed server proof");
+  for (const message of [
+    "А есть овальные? Бюджет до 6000 тенге",
+    "Нужны двойные",
+    "Покажи такие же, но белые. Напряжение: 220 В",
+    "А есть настенные?",
+  ]) {
+    assertEquals(isVerifiedRenderedSelectionRefinement({message,proof,newTask:false}), true, message);
+    assertEquals(isVerifiedRenderedSelectionRefinement({message,proof:null,newTask:false}), false, "no browser authority");
+    assertEquals(isVerifiedRenderedSelectionRefinement({message,proof,newTask:true}), false, "new topic discards proof");
+  }
+  for (const message of [
+    "Какая из них самая дешёвая?", "Покажи их", "Какие остатки у этих товаров?",
+    "Почему они подходят?", "А есть овальные? Ещё нужен кабель.", "Спасибо!",
+    "А есть другие варианты?",
+  ]) {
+    assertEquals(isVerifiedRenderedSelectionRefinement({message,proof,newTask:false}), false, message);
+  }
+});
+
+Deno.test("a completed fresh refinement preserves the original condition base for the next turn",()=>{
+  const original=successfulSelection();
+  const changed=laterTurn("А есть овальные? Бюджет до 6000 тенге",{
+    id:"refined",steps:[
+      {step:"v3_conversation_boundary",meta:{mode:"continuation"}},
+      {step:"v3_rendered_refinement_fresh_search_context",meta:{
+        source:"completed_server_selection_conditions",base_log_id:original.id,
+        latest_card_log_id:original.id,old_cards_rehydrated:false,
+      }},
+    ],
+  });
+  for(const current of [null,"А есть другие варианты?","Покажи их"]) {
+    const proof=resolveServerRenderedSelectionProof([changed,original],sessionId,null,current,now);
+    assertEquals(proof?.baseRequest,base,"original type/destination stays authoritative");
+    assertEquals(proof?.latestCardLogId,"refined","new SKU batch owns current card identity");
+    assertEquals(JSON.stringify(proof?.priorQueriesNewestFirst),JSON.stringify([changed.user_query,base]),"changed customer turn retained");
+  }
+  for(const patch of [
+    {base_log_id:"unrelated"},{latest_card_log_id:"unrelated"},{old_cards_rehydrated:true},{source:"browser"},
+  ]) {
+    const broken=structuredClone(changed);
+    Object.assign((broken.steps as Array<{meta:Record<string,unknown>}>)[1].meta,patch);
+    assertEquals(resolveServerRenderedSelectionProof([broken,original],sessionId,null,null,now),null,"unbound marker cannot carry context");
+  }
+  const zero={...changed,final_products_count:0,response_events:[]};
+  assertEquals(resolveServerRenderedSelectionProof([zero,original],sessionId,null,null,now),null,"failed update is not a condition certificate");
+});
 
 Deno.test("only a validated latest server batch restores its selection obligations", () => {
   const criterion = { key: "Цвет", op: "eq", value: "черный", level: "A", evidence: "user_explicit" };

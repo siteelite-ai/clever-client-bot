@@ -13,6 +13,7 @@ import {
 import { joinCustomerTurns } from "./criteria-consistency.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import { readServerSelectionCriteria } from "./dialogue-selection-state.ts";
+import { isEllipticalAttributeFollowup } from "./conversation-boundary.ts";
 
 /** A bounded projection of prior durable v3 turns. Database
  * access and the current-turn exclusion belong to the caller. In particular,
@@ -51,6 +52,23 @@ export interface ServerRenderedSelectionProof {
 export interface ServerRenderedProductCard {
   pagetitle: string;
   url: string;
+}
+
+/** Restoring customer obligations does not assert any old SKU is still valid.
+ * Attribute changes start a fresh search; questions/ranking about shown SKUs
+ * keep the complete-batch refresh requirement. Syntax is not proof: only the
+ * caller's validated, completed server selection may authorize this split. */
+export function isVerifiedRenderedSelectionRefinement(input: {
+  message: string;
+  proof: ServerRenderedSelectionProof | null;
+  newTask: boolean;
+}): boolean {
+  return !input.newTask && input.proof !== null &&
+    isEllipticalAttributeFollowup(input.message) &&
+    !isAdditionalProductSelectionFollowup(input.message) &&
+    !isEvidenceOnlyFollowup(input.message) &&
+    !isRecentProductShowFollowup(input.message) &&
+    !isRecentProductPriceSelectionFollowup(input.message);
 }
 
 // Eight same-session rows plus the separately queried session-rotation row.
@@ -97,6 +115,15 @@ function structurallyDependent(query: string): boolean {
   ) return true;
   return /^(?:спасибо|благодарю|понятно|хорошо|ок|ладно)[!.,\s]*$/iu
     .test(query);
+}
+
+/** New condition changes carry their own server-only linkage. Do not change
+ * the interpretation of historical rows that predate this marker. */
+function hasRefinementMarker(row: ServerRenderedSelectionLogRow, query: string): boolean {
+  return isEllipticalAttributeFollowup(query) &&
+    !isAdditionalProductSelectionFollowup(query) &&
+    Array.isArray(row.steps) && row.steps.length <= MAX_STEP_COUNT &&
+    row.steps.some(raw => record(raw)?.step === "v3_rendered_refinement_fresh_search_context");
 }
 
 /** An intentionally small dialogue-form vocabulary, not a catalog/product
@@ -314,10 +341,10 @@ function hasDurableContinuationCertificate(
   latestCardCount: number,
 ): boolean {
   if (
-    !isUnchangedDependentTurn(
+    (!isUnchangedDependentTurn(
       query,
       base.user_query as string,
-    ) ||
+    ) && !hasRefinementMarker(row,query)) ||
     !Array.isArray(row.steps) || row.steps.length === 0 ||
     row.steps.length > MAX_STEP_COUNT ||
     !Array.isArray(row.response_events) ||
@@ -344,6 +371,17 @@ function hasDurableContinuationCertificate(
   }
   const meta = record(boundarySteps[0]?.meta);
   if (meta?.mode !== "continuation") return false;
+  if (hasRefinementMarker(row,query)) {
+    const markers=steps.filter(s=>s?.step==="v3_rendered_refinement_fresh_search_context");
+    const linkage=record(markers[0]?.meta);
+    // A successful fresh batch establishes its OWN SKU facts. This proves
+    // only the customer-condition chain; never bridge a failed/zero-card
+    // change or assert that the previous SKU facts were freshly verified.
+    return row.final_products_count as number > 0 && markers.length===1 &&
+      linkage?.source==="completed_server_selection_conditions" &&
+      linkage.base_log_id===base.id && linkage.latest_card_log_id===latestCard.id &&
+      linkage.old_cards_rehydrated===false;
+  }
   if (meta.references_rendered_products === true) return true;
   // Some generic questions about existing cards are recognised only after
   // routing, by the server-side active-proof read. The prior request must
@@ -513,7 +551,7 @@ export function resolveServerRenderedSelectionProof(
     }
     if (latestCardIndex < 0) return null;
     const latestCards = ordered[latestCardIndex];
-    if (!structurallyDependent(latestCards.query)) {
+    if (!structurallyDependent(latestCards.query) && !hasRefinementMarker(latestCards.row,latestCards.query)) {
       return proofFromVerifiedChain(
         ordered,
         latestCardIndex,
@@ -522,7 +560,7 @@ export function resolveServerRenderedSelectionProof(
       );
     }
     const baseIndex = ordered.findIndex((entry, index) =>
-      index > latestCardIndex && !structurallyDependent(entry.query)
+      index > latestCardIndex && !structurallyDependent(entry.query) && !hasRefinementMarker(entry.row,entry.query)
     );
     if (baseIndex >= 0) {
       const proof = proofFromVerifiedChain(
@@ -540,14 +578,18 @@ export function resolveServerRenderedSelectionProof(
       ? proofFromVerifiedChain(ordered, 0, 0, suggested)
       : null;
   }
-  const baseIndex = ordered.findIndex(({ query }) =>
-    !structurallyDependent(query)
+  const baseIndex = ordered.findIndex(({ query,row }) =>
+    !structurallyDependent(query) && !hasRefinementMarker(row,query)
   );
   if (baseIndex < 0) return null;
   const base = ordered[baseIndex];
   if (suggested !== null && base.query !== suggested) return null;
   const baseRequest = base.row.user_query as string;
   if (!isReadOnlyRenderedFollowup(currentFollowup, baseRequest)) return null;
+  if (ordered.slice(0,baseIndex).some(({row,query})=>hasRefinementMarker(row,query))) {
+    const latest=ordered.findIndex(({row})=>Number(row.final_products_count)>0);
+    return latest>=0 ? proofFromVerifiedChain(ordered,baseIndex,latest,suggested) : null;
+  }
   const baseCards = completedControlledCards(base.row);
   if (!baseCards) return null;
   const intervening = ordered.slice(0, baseIndex);

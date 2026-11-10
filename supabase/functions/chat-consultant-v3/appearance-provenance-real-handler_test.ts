@@ -77,9 +77,13 @@ interface CaseResult {
 }
 
 interface CaseOptions {
+  /** Old SKU refresh must not gate a new search with changed conditions. */
+  oldCardLookup?: "empty" | "unavailable" | "ambiguous";
   serverHistoryMissing?: boolean;
   priorRequest?: string;
   priorCriteria?: Criterion[];
+  priorCard?: {pagetitle:string;url:string};
+  serverRefinement?: {query:string;card:{pagetitle:string;url:string};criteria:Criterion[]};
   /** Keep the declaration visible but make the next catalog call model-owned. */
   directModelSearch?: boolean;
   /** Avoid a prior rendered card that makes this a selection continuation. */
@@ -99,6 +103,7 @@ interface CaseOptions {
   jargonCandidates?: string[];
   categoryName?: string;
   fixtureProducts?: Array<Record<string, unknown>>;
+  fixtureFacets?: Array<Record<string, unknown>>;
   fixtureLeaves?: string[];
   catalogOnlyQueryToken?: string;
   forceFreshTaxonomy?: boolean;
@@ -125,6 +130,7 @@ async function runCase(
   let modelDiscoveryCalls = 0;
   let jargonModelCalls = 0;
   const categoryName = options.categoryName ?? category;
+  const priorCard = options.priorCard ?? round;
   const leaves = options.fixtureLeaves ?? [
     options.liveAppearanceCategory ? "Круглые люстры" : "Люстры потолочные",
     "Люстры подвесные",
@@ -140,7 +146,7 @@ async function runCase(
       {
         type: "products_block",
         count: 1,
-        markdown: `- **[${round.pagetitle}](${round.url})**\n  Цена: 4 500 ₸`,
+        markdown: `- **[${priorCard.pagetitle}](${priorCard.url})**\n  Цена: 4 500 ₸`,
         ...(options.priorCriteria ? {
           selection_contract: { mandatory_criteria: options.priorCriteria },
         } : {}),
@@ -155,6 +161,22 @@ async function runCase(
       { type: "done" },
     ],
   };
+  const serverLogs=options.serverRefinement ? [{
+    ...priorLog,id:"offline-appearance-refined",user_query:options.serverRefinement.query,
+    created_at:new Date(Date.now()-1_000).toISOString(),
+    response_events:[
+      {type:"products_block",count:1,
+        markdown:`- **[${options.serverRefinement.card.pagetitle}](${options.serverRefinement.card.url})**\n  Цена: 5 500 ₸`,
+        selection_contract:{mandatory_criteria:options.serverRefinement.criteria}},
+      {type:"diagnostic",phase:"complete",log_id:"offline-appearance-refined",error:null,products_count:1},
+      {type:"done"},
+    ],
+    steps:[
+      {step:"v3_conversation_boundary",meta:{mode:"continuation"}},
+      {step:"v3_rendered_refinement_fresh_search_context",meta:{source:"completed_server_selection_conditions",
+        base_log_id:priorLog.id,latest_card_log_id:priorLog.id,old_cards_rehydrated:false}},
+    ],
+  },priorLog] : [priorLog];
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
@@ -178,7 +200,8 @@ async function runCase(
           }
           if (request.method === "GET") {
             if (url.searchParams.has("response_events")) return json(null);
-            return json(options.freshSession || options.serverHistoryMissing ? [] : [priorLog]);
+            return json(options.freshSession || options.serverHistoryMissing ? [] :
+              url.searchParams.get("limit")==="1" ? serverLogs.slice(0,1) : serverLogs);
           }
         }
         if (url.pathname === "/rest/v1/app_settings") {
@@ -235,7 +258,7 @@ async function runCase(
           return json({
             data: {
               category: { id: 1, pagetitle: categoryName, total_products: 2 },
-              options: [
+              options: options.fixtureFacets ?? [
                 {
                   key: "shape",
                   caption_ru: "Форма люстры",
@@ -283,6 +306,11 @@ async function runCase(
         if (url.pathname === "/api/products") {
           catalogProductUrls.push(url.toString());
           catalogProductReadsAfterOptions.push(optionsDiscovered);
+          if (url.searchParams.has("pagetitle") && options.oldCardLookup) {
+            if (options.oldCardLookup === "unavailable") return json({error:"unavailable"},503);
+            const results = options.oldCardLookup === "empty" ? [] : [round,round];
+            return json({data:{results,pagination:{total:results.length}}});
+          }
           const matchedProducts = options.catalogOnlyQueryToken &&
               !(url.searchParams.get("query") ?? "").toLocaleLowerCase("ru-RU")
                 .includes(
@@ -488,7 +516,7 @@ async function runCase(
               {
                 role: "assistant",
                 content:
-                  `- **[${round.pagetitle}](${round.url})**\n  Цена: 4 500 ₸`,
+                  `- **[${priorCard.pagetitle}](${priorCard.url})**\n  Цена: 4 500 ₸`,
               },
             ],
           }),
@@ -515,6 +543,198 @@ async function runCase(
     globalThis.fetch = originalFetch;
   }
 }
+
+Deno.test({
+  name: "changed conditions search fresh cards even when old SKU lookup is empty, unavailable or ambiguous",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      const candidate={...oval,id:3,price:5500,
+        pagetitle:"Люстра для гостиной овальная белая IP65",
+        url:"https://220volt.kz/catalog/lighting/chandeliers/fresh-oval/",
+        options:[
+          ...oval.options.map(option=>option.key==="protection" ? {...option,value_ru:"IP65"}:option),
+          {key:"color",caption_ru:"Цвет корпуса",value_ru:"белый"},
+        ]};
+      const expensive={...candidate,id:4,price:6500,url:candidate.url+"expensive/"};
+      const wrongIP={...candidate,id:5,url:candidate.url+"ip44/",
+        options:candidate.options.map(o=>o.key==="protection"?{...o,value_ru:"IP44"}:o)};
+      const wrongColor={...candidate,id:6,url:candidate.url+"black/",
+        options:candidate.options.map(o=>o.key==="color"?{...o,value_ru:"черный"}:o)};
+      const noStock={...candidate,id:7,url:candidate.url+"no-stock/",warehouses:[{city:"Караганда",amount:0}]};
+      const restricted={...candidate,id:8,url:candidate.url+"restricted/",options:[...candidate.options,
+        {key:"ogranichennyy_prosmotr",caption_ru:"Ограниченный просмотр",value_ru:"Да"}]};
+      for(const mode of ["empty","unavailable","ambiguous"] as const) {
+        const result=await runCase("А есть овальные? Бюджет до 6000 тенге","круглую люстру",null,{
+          oldCardLookup:mode,
+          priorRequest:"Нужна круглая белая люстра для гостиной IP65 в наличии, бюджет до 5000 тенге.",
+          priorCriteria:[
+            {key:"Форма люстры",op:"eq",value:"круг",level:"A",evidence:"user_explicit"},
+            {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"},
+            {key:"Цвет корпуса",op:"eq",value:"белый",level:"A",evidence:"user_explicit"},
+          ],
+          fixtureFacets:[
+            {key:"shape",caption_ru:"Форма люстры",type:"string",values:[{value_ru:"круг"},{value_ru:"овал"}]},
+            {key:"protection",caption_ru:"Степень защиты",type:"string",values:[{value_ru:"IP65"},{value_ru:"IP44"}]},
+            {key:"color",caption_ru:"Цвет корпуса",type:"string",values:[{value_ru:"белый"},{value_ru:"черный"}]},
+          ],
+          fixtureProducts:[round,candidate,expensive,wrongIP,wrongColor,noStock,restricted],
+        });
+        const trace=JSON.stringify({mode,steps:result.steps,events:result.publicEvents});
+        assert(result.steps.some(({step})=>step==="v3_rendered_refinement_fresh_search_context"),trace);
+        assert(!result.steps.some(({step})=>step==="v3_verified_rendered_scope_continuation"||step==="v3_recent_product_evidence_recovered"),trace);
+        assert(result.catalogProductUrls.length>0,trace);
+        assert(result.catalogProductUrls.every(u=>!new URL(u).searchParams.has("pagetitle")),trace);
+        const state=result.steps.find(({step})=>step==="v3_dialogue_selection_state_compiled")?.meta?.active_criteria as Criterion[];
+        for(const value of ["овал","IP65","белый",6000]) assert(state?.some(c=>c.value===value),trace);
+        assert(!state.some(c=>c.value==="круг"||c.value===5000),trace);
+        const blocks=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>).filter(e=>e?.type==="products_block");
+        const rendered=blocks.map(b=>b.markdown).join("\n");
+        assert(rendered.includes(candidate.url),trace);
+        for(const p of [round,expensive,wrongIP,wrongColor,noStock,restricted]) assert(!rendered.includes(`](${p.url})`),trace);
+      }
+    } finally {restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "without a catalog shape axis the current text axis replaces old geometry and verifies every fresh card",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      resetDiscoverCategoryCacheForTest();
+      const fresh={...round,id:3,category:"Светильники",price:5500,
+        pagetitle:"Светильник овальный белый IP65",
+        url:"https://220volt.kz/catalog/lighting/luminaires/new-oval/",
+        options:[
+          {key:"protection",caption_ru:"Степень защиты",value_ru:"IP65"},
+          {key:"color",caption_ru:"Цвет корпуса",value_ru:"белый"},
+        ]};
+      const oldShape={...fresh,id:4,pagetitle:"Светильник круглый белый IP65",url:fresh.url+"round/"};
+      const overBudget={...fresh,id:5,price:6500,url:fresh.url+"expensive/"};
+      const missingShape={...fresh,id:6,pagetitle:"Светильник ABC белый IP65",url:fresh.url+"unknown/"};
+      const conflictingShape={...fresh,id:7,url:fresh.url+"conflict/",options:[...fresh.options,
+        {key:"body_shape",caption_ru:"Форма корпуса",value_ru:"круглая"}]};
+      const wrongIP={...fresh,id:8,url:fresh.url+"ip44/",options:fresh.options.map(o=>o.key==="protection"?{...o,value_ru:"IP44"}:o)};
+      const wrongColor={...fresh,id:9,url:fresh.url+"black/",options:fresh.options.map(o=>o.key==="color"?{...o,value_ru:"черный"}:o)};
+      const noStock={...fresh,id:10,url:fresh.url+"no-stock/",warehouses:[{city:"Караганда",amount:0}]};
+      const restricted={...fresh,id:11,url:fresh.url+"restricted/",options:[...fresh.options,
+        {key:"ogranichennyy_prosmotr",caption_ru:"Ограниченный просмотр",value_ru:"Да"}]};
+      const result=await runCase("А есть овальные? Бюджет до 6000 тенге","круглые светильники",null,{
+        categoryName:"Светильники",oldCardLookup:"unavailable",forceFreshTaxonomy:true,
+        priorRequest:"Покажи круглые белые светильники с защитой IP65 в наличии, бюджет до 5000 тенге.",
+        priorCard:{pagetitle:"Светильник IP65  D140*48 круглый",url:"https://220volt.kz/catalog/lighting/luminaires/old/"},
+        priorCriteria:[
+          {key:"Цвет корпуса",op:"eq",value:"белый",level:"A",evidence:"user_explicit"},
+          {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"},
+        ],
+        fixtureFacets:[
+          {key:"color",caption_ru:"Цвет корпуса",type:"string",values:[{value_ru:"белый"}]},
+          {key:"protection",caption_ru:"Степень защиты",type:"string",values:[{value_ru:"IP65"}]},
+        ],
+        fixtureProducts:[oldShape,missingShape,conflictingShape,overBudget,wrongIP,wrongColor,noStock,restricted,fresh],
+      });
+      const trace=JSON.stringify(result);
+      assert(result.steps.some(({step})=>step==="v3_rendered_refinement_fresh_search_context"),trace);
+      assert(result.catalogProductUrls.length>0,trace);
+      assert(result.catalogProductUrls.every(u=>!new URL(u).searchParams.has("pagetitle")),trace);
+      const blocks=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>).filter(e=>e?.type==="products_block");
+      const rendered=blocks.map(b=>b.markdown).join("\n");
+      assert(rendered.includes(`](${fresh.url})`),trace);
+      for(const p of [oldShape,missingShape,conflictingShape,overBudget,wrongIP,wrongColor,noStock,restricted])
+        assert(!rendered.includes(`](${p.url})`),trace);
+      const shape=result.steps.find(({step})=>step==="v3_textual_selection_contract_compiled")?.meta;
+      assertEquals(shape?.allowed,["oval"],trace);
+      assertEquals(shape?.catalog_filter,false,trace);
+      assert(result.catalogProductUrls.every(raw=>![...new URL(raw).searchParams.keys()].some(k=>/shape|форма/iu.test(k))),trace);
+      const contract=blocks[0]?.selection_contract as Record<string,unknown>;
+      const visible=contract?.visible_requirements as Array<Record<string,unknown>>;
+      assert(visible?.some(r=>r.kind==="textual_characteristic"&&r.value==="oval"),trace);
+      assert(!visible?.some(r=>r.kind==="literal_modifier"&&/круг/iu.test(String(r.label))),trace);
+    } finally {
+      resetDiscoverCategoryCacheForTest();
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
+  name: "a third color turn keeps the certified text shape and budget without reloading either old SKU",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      resetDiscoverCategoryCacheForTest();
+      const product={...round,id:3,category:"Светильники",price:5500,
+        pagetitle:"Светильник овальный черный IP65",url:"https://220volt.kz/catalog/lighting/luminaires/oval-black/",
+        options:[{key:"color",caption_ru:"Цвет корпуса",value_ru:"черный"},
+          {key:"protection",caption_ru:"Степень защиты",value_ru:"IP65"}]};
+      const oldShape={...product,id:4,pagetitle:"Светильник круглый черный IP65",url:product.url+"round/"};
+      const oldColor={...product,id:5,pagetitle:"Светильник овальный белый IP65",url:product.url+"white/",
+        options:product.options.map(o=>o.key==="color"?{...o,value_ru:"белый"}:o)};
+      const result=await runCase("А есть черные?","круглые светильники",null,{
+        categoryName:"Светильники",oldCardLookup:"unavailable",forceFreshTaxonomy:true,
+        priorRequest:"Покажи круглые белые светильники IP65 в наличии, бюджет до 5000 тенге.",
+        serverRefinement:{query:"А есть овальные? Бюджет до 6000 тенге",card:oldColor,
+          criteria:[{key:"Цвет корпуса",op:"eq",value:"белый",level:"A",evidence:"user_explicit"},
+            {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"}]},
+        fixtureFacets:[{key:"color",caption_ru:"Цвет корпуса",type:"string",values:[{value_ru:"белый"},{value_ru:"черный"}]},
+          {key:"protection",caption_ru:"Степень защиты",type:"string",values:[{value_ru:"IP65"}]}],
+        fixtureProducts:[oldShape,oldColor,product],
+      });
+      const trace=JSON.stringify(result);
+      const state=result.steps.find(({step})=>step==="v3_dialogue_selection_state_compiled")?.meta?.active_criteria as Criterion[];
+      assert(state?.some(c=>c.value===6000),trace);
+      assert(state.some(c=>c.value==="черный"),trace);
+      assert(!state.some(c=>c.value==="белый"||c.value===5000),trace);
+      assert(result.catalogProductUrls.every(u=>!new URL(u).searchParams.has("pagetitle")),trace);
+      const rendered=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>).filter(e=>e?.type==="products_block").map(b=>b.markdown).join("\n");
+      assert(rendered.includes(`](${product.url})`),trace);
+      assert(!rendered.includes(`](${oldShape.url})`)&&!rendered.includes(`](${oldColor.url})`),trace);
+    } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "a text-only shape with no proven candidate never disappears at the final card gate",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      resetDiscoverCategoryCacheForTest();
+      const result=await runCase("А есть овальные? Бюджет до 6000 тенге","светильники",null,{
+        categoryName:"Светильники",forceFreshTaxonomy:true,oldCardLookup:"empty",
+        priorRequest:"Покажи круглые белые светильники IP65 в наличии, до 5000 тенге.",
+        priorCriteria:[{key:"Цвет корпуса",op:"eq",value:"белый",level:"A",evidence:"user_explicit"},
+          {key:"Степень защиты",op:"eq",value:"IP65",level:"A",evidence:"user_explicit"}],
+        fixtureFacets:[{key:"color",caption_ru:"Цвет корпуса",type:"string",values:[{value_ru:"белый"}]},
+          {key:"protection",caption_ru:"Степень защиты",type:"string",values:[{value_ru:"IP65"}]}],
+        fixtureProducts:[{...round,pagetitle:"Светильник ABC белый IP65",category:"Светильники",
+          options:[{key:"color",caption_ru:"Цвет корпуса",value_ru:"белый"},
+            {key:"protection",caption_ru:"Степень защиты",value_ru:"IP65"}]}],
+      });
+      const trace=JSON.stringify(result);
+      assert(result.catalogProductUrls.length>0,trace);
+      assert(result.steps.some(({step,meta})=>step==="v3_textual_selection_contract_compiled"&&JSON.stringify(meta?.allowed)==='["oval"]'),trace);
+      assert(!result.publicEvents.some(e=>(e.v3_event as Record<string,unknown>)?.type==="products_block"),trace);
+    } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "questions about old cards still fail closed when the old SKU cannot be refreshed",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      for(const message of ["Покажи их","Какая из них самая дешёвая?","Какие остатки у этих товаров?"]) {
+        const result=await runCase(message,"люстры",null,{oldCardLookup:"empty"});
+        const trace=JSON.stringify(result);
+        assertEquals(result.modelRequests,0,trace);
+        assert(result.steps.some(({step})=>step==="v3_recent_product_evidence_unavailable"),trace);
+        assert(!result.steps.some(({step})=>step==="v3_rendered_refinement_fresh_search_context"),trace);
+        assert(!result.publicEvents.some(e=>(e.v3_event as Record<string,unknown>)?.type==="products_block"),trace);
+      }
+    } finally {restoreOfflineModuleSetup();}
+  },
+});
 
 Deno.test({
   name: "compound refinement preserves verified context, replaces shape/budget and applies independent new fields",

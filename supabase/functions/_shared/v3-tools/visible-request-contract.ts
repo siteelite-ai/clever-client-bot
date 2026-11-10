@@ -10,6 +10,7 @@ export interface VisibleRequestRequirement {
     | "linear_measurement"
     | "bounded_measurement"
     | "count"
+    | "textual_characteristic"
     | "literal_modifier";
   label: string;
   op?: "eq" | "min" | "max";

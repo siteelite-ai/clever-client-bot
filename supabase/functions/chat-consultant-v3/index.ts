@@ -253,6 +253,7 @@ import {
 } from "../_shared/v3-tools/destination-area-measurement-coverage.ts";
 import {
   isNeutralAcknowledgement,
+  isVerifiedRenderedSelectionRefinement,
   resolveServerRenderedSelectionProof,
   type ServerRenderedProductCard,
   type ServerRenderedSelectionProof,
@@ -762,6 +763,11 @@ import {
   shouldExpandVisibleRecoverySearch,
   type VisibleRequestContractContext,
 } from "../_shared/v3-tools/visible-request-contract.ts";
+import {
+  applyTextualShapeContract,
+  compileTextualShapeState,
+  hasCatalogShapeAxis,
+} from "../_shared/v3-tools/textual-selection-contract.ts";
 import {
   type EscalateInput,
   executeEscalate,
@@ -9689,9 +9695,28 @@ async function runExpertLoop(
         .criteria.length > 0
     );
   };
+  let lastTextualShapeStateKey = "";
+  let compiledTextShapeClass: string | null = null;
+  let compiledTextShapeState: ReturnType<typeof compileTextualShapeState> = null;
   const scopedVisibleRequestContract = (
     context: VisibleRequestContractContext = {},
-  ) => buildVisibleRequestContract(userMessage, context).filter(
+  ) => {
+    // A compound attribute reply has no product head, and appending the
+    // category *after* its budget cannot bind its first adjective. Bind it
+    // before the first clause boundary, only with server-owned selection
+    // context and a currently verified taxonomy target. This adds current
+    // obligations. Same-axis retirement without a catalog facet is owned by
+    // the independently checked semantic text contract below, never the model.
+    const target = context.productClass ?? activeSelectionTarget ??
+      lastDiscover?.category?.pagetitle;
+    const currentWithHead = serverRenderedBaseRequest && target &&
+        (isShortAttributeSelectionFollowup(rawCurrentUserMessage) ||
+          isCompoundAttributeSelectionFollowup(rawCurrentUserMessage))
+      ? rawCurrentUserMessage.replace(/^([^!?;.,\r\n]+)([\s\S]*)$/u,
+        (_match, head, tail) => `${head} ${target}${tail}`)
+      : "";
+    const visible = buildVisibleRequestContract(currentWithHead
+      ? joinCustomerTurns([userMessage, currentWithHead]) : userMessage, context).filter(
     (requirement) => {
       if (
         requirement.kind === "literal_modifier" &&
@@ -9719,7 +9744,33 @@ async function runExpertLoop(
         evidence: "user_explicit",
       }], verifiedCustomerMeasurementEvidence).criteria.length > 0;
     },
-  );
+    );
+    const textDiscovery = appearanceCatalogDiscovery();
+    const textShapeClass = serverRenderedBaseRequest && textDiscovery &&
+        !hasCatalogShapeAxis(textDiscovery.facets)
+      ? textDiscovery.category.pagetitle : null;
+    if (textShapeClass && textShapeClass !== compiledTextShapeClass) {
+      compiledTextShapeClass = textShapeClass;
+      compiledTextShapeState = compileTextualShapeState({
+        productClass: textShapeClass,
+        priorQueriesNewestFirst: serverVerifiedPriorQueriesNewestFirst.length
+          ? serverVerifiedPriorQueriesNewestFirst : [serverRenderedBaseRequest!],
+        current: rawCurrentUserMessage,
+      });
+    }
+    const textShapeState = textShapeClass ? compiledTextShapeState : null;
+    if (textShapeState) {
+      const key = JSON.stringify(textShapeState);
+      if (key !== lastTextualShapeStateKey) {
+        lastTextualShapeStateKey = key;
+        steps.push({step:"v3_textual_selection_contract_compiled",ms:now(),meta:{
+          ...textShapeState,product_class:textShapeClass,
+          source:"server_customer_turns",catalog_filter:false,
+        }});
+      }
+    }
+    return applyTextualShapeContract(visible, textShapeState);
+  };
   const semanticallyMappedCustomerPhrases = new Set<string>();
   // A compatible family is retrieval guidance, not an exhaustive allow-list.
   // Only values the reasoning explicitly marks incompatible may eliminate a
@@ -10579,6 +10630,22 @@ async function runExpertLoop(
     });
     const exactCountRemoved = afterCompact - guarded.length;
     const afterExactCount = guarded.length;
+    if (/(?:^|[^\p{L}])в\s+наличии(?=$|[^\p{L}])/iu.test(userMessage)) {
+      const before = guarded.length;
+      guarded = guarded.filter(id => {
+        const product = ctx.cache.get(id);
+        // The legacy public `stock` flag treats active zero-stock products
+        // as available. It is not proof for an explicitly stock-only request.
+        return product?.warehouse_evidence === "positive" ||
+          Boolean(product?.warehouses?.some(w => Number.isFinite(w.qty) && w.qty > 0));
+      });
+      if (guarded.length !== before) steps.push({
+        step:"v3_requested_stock_final_card_gate",ms:now(),meta:{
+          before,after:guarded.length,source:"positive_warehouse_evidence",
+        },
+      });
+    }
+    const beforeVisibleRequest = guarded.length;
     const affirmativeFeatureCriteria = mergeMandatorySelectionCriteria([
       ...userBackedSearchCriteria,
       ...(selectionCriteriaPlan?.mandatory_criteria ?? []),
@@ -10603,7 +10670,7 @@ async function runExpertLoop(
         ),
       );
     });
-    const visibleRequestRemoved = afterExactCount - guarded.length;
+    const visibleRequestRemoved = beforeVisibleRequest - guarded.length;
     const afterVisibleRequest = guarded.length;
     if (explicitCompoundMarking) {
       guarded = guarded.filter((id) => {
@@ -28350,6 +28417,11 @@ Deno.serve(async (req) => {
                   t0,
                 );
             const activeRenderedProof = activeRenderedRead.proof;
+            const verifiedRenderedRefinement = isVerifiedRenderedSelectionRefinement({
+              message: userMessage,
+              proof: activeRenderedProof,
+              newTask: startsNewTask,
+            });
             if (isCompoundAttributeSelectionFollowup(userMessage) && !activeRenderedProof &&
               !(verifiedReadinessState.slot && scopedSelectionRequest.scoped && !startsNewTask) &&
               !sameSectionScope) {
@@ -28412,7 +28484,24 @@ Deno.serve(async (req) => {
                 effectiveHistory,
               );
             let recentProductEvidence: RecentProductEvidence[] = [];
-            if (activeRenderedProof && !additionalProductSelectionFollowup) {
+            if (verifiedRenderedRefinement && activeRenderedProof) {
+              // This is a new selection, not a factual claim about old SKUs.
+              // Restore obligations from completed server logs only; keep the
+              // old batch out of the cache, evidence and scope certificates.
+              // Every newly retrieved card still passes the ordinary gates.
+              steps.push({
+                step: "v3_rendered_refinement_fresh_search_context",
+                ms: Date.now() - t0,
+                meta: {
+                  source: "completed_server_selection_conditions",
+                  base_log_id: activeRenderedProof.baseLogId,
+                  latest_card_log_id: activeRenderedProof.latestCardLogId,
+                  prior_turns: activeRenderedProof.priorQueriesNewestFirst.length,
+                  restored_contract_criteria: activeRenderedProof.mandatoryCriteria?.length ?? 0,
+                  old_cards_rehydrated: false,
+                },
+              });
+            } else if (activeRenderedProof && !additionalProductSelectionFollowup) {
               // Rehydrate the *entire* latest batch. A partial set cannot
               // justify a cheapest claim, a comparison, or "these products".
               const lookupCards = activeRenderedProof.recentShownProductCards;
@@ -28529,7 +28618,7 @@ Deno.serve(async (req) => {
               isRecentProductPriceSelectionFollowup(userMessage) &&
               !isPureRecentPriceFollowup(userMessage);
             const ellipticalAttributeFollowup =
-              recentProductEvidence.length > 0 &&
+              verifiedRenderedRefinement || recentProductEvidence.length > 0 &&
               (isEllipticalAttributeFollowup(userMessage) ||
                 constrainedRecentPriceFollowup);
             const ellipticalBaseRequest = additionalProductSelectionFollowup
@@ -28554,9 +28643,9 @@ Deno.serve(async (req) => {
               | null = ellipticalBaseRequest
                 ? { baseUserMessage: ellipticalBaseRequest }
                 : null;
-            // Restore the omitted grammatical head only from the complete,
-            // freshly rehydrated server batch, never from browser prose or a
-            // guessed category. Mixed-category batches remain unexpanded.
+            // Fresh refinements discover the category from their server-owned
+            // base request. Only an actually refreshed batch may additionally
+            // supply a live leaf; old card titles never nominate a category.
             const ellipticalBatchProducts = ellipticalContinuation &&
                 (isShortAttributeSelectionFollowup(userMessage) || isCompoundAttributeSelectionFollowup(userMessage))
               ? recentProductEvidence.map(({ id }) => ctx.cache.get(id))
@@ -28573,7 +28662,9 @@ Deno.serve(async (req) => {
                 step: "v3_elliptical_selection_context_resolved",
                 ms: Date.now() - t0,
                 meta: {
-                  source: "latest_controlled_product_batch",
+                  source: verifiedRenderedRefinement
+                    ? "completed_server_selection_conditions"
+                    : "latest_controlled_product_batch",
                   additional_selection: additionalSelectionRequest,
                   excluded_urls: priorShownProductUrls.length,
                 },
@@ -28710,7 +28801,7 @@ Deno.serve(async (req) => {
               ),
               recentProductEvidence: recentProductEvidence.length > 0,
               activeSelectionScope: scopedSelectionRequest.scoped,
-            }) && !additionalSelectionRequest;
+            }) && !additionalSelectionRequest && !verifiedRenderedRefinement;
             // A verified formula/safety rule is selected by its own narrow proof
             // conditions, not by whether the generic intent classifier called the
             // same wording a question or a command (`чем отличается` vs `сравни`,
