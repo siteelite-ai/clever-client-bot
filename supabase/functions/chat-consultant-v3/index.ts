@@ -769,6 +769,7 @@ import {
   compileTextualShapeState,
   hasCatalogShapeAxis,
 } from "../_shared/v3-tools/textual-selection-contract.ts";
+import { compileSocketFunctionRequirements } from "../_shared/v3-tools/socket-function-contract.ts";
 import {
   type EscalateInput,
   executeEscalate,
@@ -9699,6 +9700,7 @@ async function runExpertLoop(
   let lastTextualShapeStateKey = "";
   let compiledTextShapeClass: string | null = null;
   let compiledTextShapeState: ReturnType<typeof compileTextualShapeState> = null;
+  let lastSocketFunctionStateKey = "";
   const scopedVisibleRequestContract = (
     context: VisibleRequestContractContext = {},
   ) => {
@@ -9780,7 +9782,26 @@ async function runExpertLoop(
     const withCounts = countState.length
       ? [...visible.filter(requirement => requirement.kind !== "count"), ...countState]
       : visible;
-    return applyTextualShapeContract(withCounts, textShapeState);
+    const socketFunction = compileSocketFunctionRequirements({
+      productClass: target ?? "",
+      priorQueriesNewestFirst: serverRenderedBaseRequest
+        ? serverVerifiedPriorQueriesNewestFirst.length
+          ? serverVerifiedPriorQueriesNewestFirst : [serverRenderedBaseRequest]
+        : [],
+      current: rawCurrentUserMessage,
+    });
+    const socketFunctionStateKey = JSON.stringify(socketFunction.map(({value}) => value));
+    if (socketFunction.length && socketFunctionStateKey !== lastSocketFunctionStateKey) {
+      lastSocketFunctionStateKey = socketFunctionStateKey;
+      steps.push({step:"v3_socket_function_contract_compiled",ms:now(),meta:{
+        product_class:target,functions:socketFunction.map(({value}) => value),
+        source:"server_customer_turns",catalog_filter:false,
+      }});
+    }
+    return [
+      ...applyTextualShapeContract(withCounts, textShapeState),
+      ...socketFunction,
+    ];
   };
   const semanticallyMappedCustomerPhrases = new Set<string>();
   // A compatible family is retrieval guidance, not an exhaustive allow-list.
@@ -10033,7 +10054,10 @@ async function runExpertLoop(
       semanticallyMappedCustomerPhrases: [
         ...semanticallyMappedCustomerPhrases,
       ],
-    }).map(({ kind, label, op, value, unit, exclusive }) => ({
+    // The default mains/sibling policy is a server class invariant, not an
+    // explicit customer facet. Keep it in verification and server diagnostics,
+    // without changing the public contract of otherwise identical cards.
+    }).filter(({kind}) => kind !== "functional_class").map(({ kind, label, op, value, unit, exclusive }) => ({
       kind,
       label,
       ...(op ? { op } : {}),

@@ -1512,7 +1512,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "exact silver refinement reaches catalog I/O and final cards without gray or composite colors",
+  name: "exact silver refinement preserves mains socket purpose, mount and color through catalog I/O and final cards",
   permissions: {read:true,env:false,net:false},
   async fn() {
     try {
@@ -1525,7 +1525,10 @@ Deno.test({
           {key:"mount",caption_ru:"Тип монтажа",value_ru:mount}],
       });
       const good=make(101,"серебристый");
-      const decoys=[make(102,"серый"),make(103,"черный с серебром"),make(104,"черный"),make(105,"серебристый","открытый")];
+      const decoys=[make(102,"серый"),make(103,"черный с серебром"),make(104,"черный"),make(105,"серебристый","открытый"),
+        {...make(106,"серебристый"),pagetitle:"Розетка Ethernet RJ-45 /W1181006 (серебряный)"},
+        {...make(107,"серебристый"),pagetitle:"Розетка TV серебристая"},
+        {...make(108,"серебристый"),options:[...make(108,"серебристый").options,{key:"type",caption_ru:"Тип",value_ru:"компьютерная"}]}];
       const result=await runCase("А есть серебристые?","розетки",null,{
         categoryName:"Розетки",forceFreshTaxonomy:true,directModelSearch:true,
         declarationReasoning:"Ищу розетки скрытого монтажа серебристого цвета.",
@@ -1553,6 +1556,41 @@ Deno.test({
       for(const block of blocks) {
         const contract=block.selection_contract as {mandatory_criteria:Criterion[]};
         assertEquals(contract.mandatory_criteria.filter(c=>c.key==="Цвет").map(c=>c.value),["серебристый"],trace);
+      }
+    } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "socket function is customer-owned: fresh mains and explicit RJ45 requests do not share final cards",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      const make=(id:number,pagetitle:string)=>({id,pagetitle,category:"Розетки",price:1000,
+        url:`https://220volt.kz/catalog/electrics/sockets/function-${id}/`,
+        warehouses:[{city:"Караганда",amount:2}],options:[{key:"color",caption_ru:"Цвет",value_ru:"серебристый"}]});
+      const mains=make(301,"Розетка с заземлением");
+      const data=make(302,"Розетка RJ45");
+      const tv=make(303,"Розетка TV");
+      for (const scenario of [
+        {query:"Покажи серебристые розетки",reasoning:"Подбираю серебристые розетки по каталогу.",good:mains,bad:[data,tv]},
+        {query:"Покажи серебристые розетки RJ45",reasoning:"Подбираю серебристые розетки RJ45 по каталогу.",good:data,bad:[mains,tv]},
+      ]) {
+        resetDiscoverCategoryCacheForTest();
+        const result=await runCase(scenario.query,"розетки",null,{
+          freshSession:true,categoryName:"Розетки",forceFreshTaxonomy:true,directModelSearch:true,
+          declarationReasoning:scenario.reasoning,fixtureLeaves:["Розетки электрические","Розетки информационные"],
+          fixtureFacets:[{key:"color",caption_ru:"Цвет",type:"string",values:[{value_ru:"серебристый"}]}],
+          fixtureProducts:[mains,data,tv],
+        });
+        const trace=JSON.stringify(result);
+        assert(result.catalogProductUrls.length>0,trace);
+        const blocks=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>).filter(e=>e?.type==="products_block");
+        const rendered=blocks.map(b=>b.markdown).join("\n");
+        assert(rendered.includes(scenario.good.url),trace);
+        for(const p of scenario.bad) assert(!rendered.includes(`](${p.url})`),trace);
+        assert(result.steps.some(({step,meta})=>step==="v3_socket_function_contract_compiled" &&
+          (meta?.functions as string[])?.includes(scenario.good===mains ? "mains" : "data")),trace);
       }
     } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
   },
