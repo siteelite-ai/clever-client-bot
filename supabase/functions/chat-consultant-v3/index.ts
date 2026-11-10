@@ -758,6 +758,7 @@ import {
 } from "../_shared/v3-tools/measured-point-range-relation.ts";
 import {
   buildVisibleRequestContract,
+  compileDialogueCountRequirements,
   productSupportsVisibleRequestContract,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
@@ -9769,7 +9770,17 @@ async function runExpertLoop(
         }});
       }
     }
-    return applyTextualShapeContract(visible, textShapeState);
+    const countState = serverRenderedBaseRequest && target
+      ? compileDialogueCountRequirements(
+        serverVerifiedPriorQueriesNewestFirst.length
+          ? serverVerifiedPriorQueriesNewestFirst : [serverRenderedBaseRequest],
+        rawCurrentUserMessage,
+        {...context, productClass:target},
+      ) : [];
+    const withCounts = countState.length
+      ? [...visible.filter(requirement => requirement.kind !== "count"), ...countState]
+      : visible;
+    return applyTextualShapeContract(withCounts, textShapeState);
   };
   const semanticallyMappedCustomerPhrases = new Set<string>();
   // A compatible family is retrieval guidance, not an exhaustive allow-list.

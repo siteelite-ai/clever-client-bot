@@ -77,6 +77,7 @@ interface CaseResult {
 }
 
 interface CaseOptions {
+  declarationReasoning?: string;
   /** Old SKU refresh must not gate a new search with changed conditions. */
   oldCardLookup?: "empty" | "unavailable" | "ambiguous";
   serverHistoryMissing?: boolean;
@@ -371,11 +372,11 @@ async function runCase(
                   function: {
                     name: "declare_selection_reasoning",
                     arguments: JSON.stringify({
-                      reasoning: options.includeAreaFacet
+                      reasoning: options.declarationReasoning ?? (options.includeAreaFacet
                         ? "Для гостиной 30 м² проверяю максимальную площадь освещения каждого светильника: не менее 30 м². Ищу люстры по каталогу."
                         : options.directModelSearch
                         ? "Подбираю люстры по запросу клиента и проверяю наличие."
-                        : `Подбираю ${modelQuery} для гостиной.`,
+                        : `Подбираю ${modelQuery} для гостиной.`),
                       retrieval_query: options.directModelSearch
                         ? ""
                         : modelQuery,
@@ -1507,6 +1508,105 @@ Deno.test({
     } finally {
       restoreOfflineModuleSetup();
     }
+  },
+});
+
+Deno.test({
+  name: "exact silver refinement reaches catalog I/O and final cards without gray or composite colors",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      resetDiscoverCategoryCacheForTest();
+      const make = (id:number,color:string,mount="скрытый") => ({
+        id,category:"Розетки",pagetitle:`Розетка ${id}`,price:1000,
+        url:`https://220volt.kz/catalog/electrics/sockets/exact-enum-${id}/`,
+        warehouses:[{city:"Караганда",amount:2}],
+        options:[{key:"color",caption_ru:"Цвет",value_ru:color},
+          {key:"mount",caption_ru:"Тип монтажа",value_ru:mount}],
+      });
+      const good=make(101,"серебристый");
+      const decoys=[make(102,"серый"),make(103,"черный с серебром"),make(104,"черный"),make(105,"серебристый","открытый")];
+      const result=await runCase("А есть серебристые?","розетки",null,{
+        categoryName:"Розетки",forceFreshTaxonomy:true,directModelSearch:true,
+        declarationReasoning:"Ищу розетки скрытого монтажа серебристого цвета.",
+        priorRequest:"Есть ли у вас розетки скрытого монтажа черного цвета?",
+        priorCard:{pagetitle:"Розетка черная",url:"https://220volt.kz/catalog/electrics/sockets/black/"},
+        priorCriteria:[{key:"Цвет",op:"eq",value:"черный",level:"A",evidence:"user_explicit"},
+          {key:"Тип монтажа",op:"eq",value:"скрытый",level:"A",evidence:"user_explicit"}],
+        fixtureLeaves:["Розетки электрические"],
+        fixtureFacets:[{key:"color",caption_ru:"Цвет",type:"string",
+          values:["серый","серебристый","серебряный рифленый","черный с серебром","черный"].map(value_ru=>({value_ru}))},
+          {key:"mount",caption_ru:"Тип монтажа",type:"string",values:[{value_ru:"скрытый"},{value_ru:"открытый"}]}],
+        // Deliberately ignore API filters: final card checks must reject decoys independently.
+        fixtureProducts:[...decoys,good],
+      });
+      const trace=JSON.stringify(result);
+      assert(result.catalogProductUrls.length>0,trace);
+      for(const url of result.catalogProductUrls) {
+        const colors=[...new URL(url).searchParams].filter(([key])=>key.includes("[color]")).map(([,value])=>value);
+        assertEquals(colors,["серебристый"],trace);
+      }
+      const blocks=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>).filter(e=>e?.type==="products_block");
+      const rendered=blocks.map(b=>b.markdown).join("\n");
+      assert(rendered.includes(good.url),trace);
+      for(const p of decoys) assert(!rendered.includes(`](${p.url})`),trace);
+      for(const block of blocks) {
+        const contract=block.selection_contract as {mandatory_criteria:Criterion[]};
+        assertEquals(contract.mandatory_criteria.filter(c=>c.key==="Цвет").map(c=>c.value),["серебристый"],trace);
+      }
+    } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
+  },
+});
+
+Deno.test({
+  name: "multiword color refinement restores the completed Gallant double selection through search and rendering",
+  permissions: {read:true,env:false,net:false},
+  async fn() {
+    try {
+      resetDiscoverCategoryCacheForTest();
+      const make=(id:number,series:string,count:string,color:string)=>({
+        id,category:"Розетки",pagetitle:`Розетка ${count==="2"?"двойная":"одинарная"} ${series} ${id}`,
+        price:1000,url:`https://220volt.kz/catalog/electrics/sockets/ivory-${id}/`,warehouses:[{city:"Караганда",amount:2}],
+        options:[{key:"series",caption_ru:"Коллекция",value_ru:series},
+          {key:"count",caption_ru:"Количество разъемов",value_ru:count},
+          {key:"color",caption_ru:"Цвет",value_ru:color}],
+      });
+      const good=make(201,"Gallant","2","слоновая кость");
+      const decoys=[make(202,"Gallant","1","слоновая кость"),make(203,"Другой","2","слоновая кость"),
+        make(204,"Gallant","2","белый")];
+      const series:Criterion={key:"Коллекция",op:"eq",value:"Gallant",level:"A",evidence:"user_explicit"};
+      const result=await runCase("Мне нужен цвет слоновой кости","розетки",null,{
+        categoryName:"Розетки",forceFreshTaxonomy:true,directModelSearch:true,
+        declarationReasoning:"Подбираю двойные розетки Gallant цвета слоновой кости.",
+        priorRequest:"Покажи розетки Gallant",
+        priorCard:{pagetitle:"Розетка Gallant",url:"https://220volt.kz/catalog/electrics/sockets/gallant/"},priorCriteria:[series],
+        serverRefinement:{query:"Нужны двойные",criteria:[series],card:{
+          pagetitle:"Розетка двойная Gallant",url:"https://220volt.kz/catalog/electrics/sockets/gallant-double/"}},
+        fixtureLeaves:["Розетки электрические"],
+        fixtureFacets:[{key:"series",caption_ru:"Коллекция",type:"string",values:[{value_ru:"Gallant"},{value_ru:"Другой"}]},
+          {key:"count",caption_ru:"Количество разъемов",type:"string",values:[{value_ru:"1"},{value_ru:"2"}]},
+          {key:"color",caption_ru:"Цвет",type:"string",values:[{value_ru:"белый"},{value_ru:"слоновая кость"}]}],
+        fixtureProducts:[...decoys,good],
+      });
+      const trace=JSON.stringify(result);
+      assert(!result.publicEvents.some(e=>(e.v3_event as Record<string,unknown>)?.type==="conversation_boundary"),trace);
+      assert(result.steps.some(({step})=>step==="v3_rendered_refinement_fresh_search_context"),trace);
+      const state=result.steps.find(({step})=>step==="v3_dialogue_selection_state_compiled")?.meta?.active_criteria as Criterion[];
+      for(const value of ["Gallant","слоновая кость"]) assert(state?.some(c=>c.value===value),trace);
+      assert(result.catalogProductUrls.length>0,trace);
+      for(const raw of result.catalogProductUrls) {
+        const params=new URL(raw).searchParams;
+        assertEquals(params.getAll("options[series][]"),["Gallant"],trace);
+        assertEquals(params.getAll("options[color][]"),["слоновая кость"],trace);
+      }
+      const rendered=result.publicEvents.map(e=>e.v3_event as Record<string,unknown>)
+        .filter(e=>e?.type==="products_block").map(e=>e.markdown).join("\n");
+      assert(rendered.includes(good.url),trace);
+      for(const p of decoys) assert(!rendered.includes(`](${p.url})`),trace);
+      const contract=(result.publicEvents.map(e=>e.v3_event as Record<string,unknown>)
+        .find(e=>e?.type==="products_block")?.selection_contract) as {visible_requirements:Array<{kind:string;value:unknown}>};
+      assert(contract.visible_requirements.some(r=>r.kind==="count" && r.value===2),trace);
+    } finally {resetDiscoverCategoryCacheForTest();restoreOfflineModuleSetup();}
   },
 });
 
