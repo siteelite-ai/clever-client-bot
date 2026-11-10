@@ -496,8 +496,32 @@ export function isShortAttributeSelectionFollowup(message: string): boolean {
     /^(?:(?:(?:мне|нам)\s+)?нуж\p{L}*|хочу(?:\s+купить)?|есть(?:\s+ли)?|покажи\p{L}*|найди\p{L}*|подбери\p{L}*)(?:\s+|$)/u,
     "",
   );
-  return /^(?:еще\s+)?(?:более\s+)?[\p{L}-]{3,}(?:ые|ие|ее|ая|ое|ый|ий|ой|ых|их|ую|юю)$/u
+  return isLabelledAttributeSelectionFollowup(raw) ||
+    /^(?:еще\s+)?(?:более\s+)?[\p{L}-]{3,}(?:ые|ие|ее|ая|ое|ый|ий|ой|ых|их|ую|юю)$/u
     .test(value);
+}
+
+/** A property label is not a product head. Its value may contain nouns
+ * (e.g. a material or a multiword finish), so adjective-only syntax is not
+ * enough. This bounded grammar recognises attribute axes, not their values
+ * or catalog entities. It only requests a server-owned scope lookup; it
+ * cannot itself authorize inherited criteria or a product card. */
+export function isLabelledAttributeSelectionFollowup(message: string): boolean {
+  const raw = String(message ?? "").trim();
+  if (
+    !raw || raw.length > 180 || /\p{Cc}/u.test(raw) ||
+    hasExplicitNewTaskPreface(raw) || /[.!?;]\s*\p{L}/u.test(raw)
+  ) return false;
+  const body = scopedSelectionObject(normalized(raw));
+  const match = body.match(
+    /^(?:цвет(?:\s+корпуса)?|материал(?:\s+корпуса)?|форма(?:\s+корпуса)?|тип\s+монтажа|способ\s+монтажа|степень\s+защиты|количество\s+[\p{L}-]+|длина|ширина|высота|диаметр|мощность|напряжение)\s+(.+)$/u,
+  );
+  if (!match) return false;
+  const words = match[1].split(" ");
+  return words.length <= 5 && !words.some((word) =>
+    /^(?:и|но|также|или|почему|объясни\p{L}*|расскажи\p{L}*|найди\p{L}*|подбери\p{L}*|покажи\p{L}*|нуж\p{L}*|хочу|ищу|товар\p{L}*|категори\p{L}*|бренд\p{L}*|сери\p{L}*|модел\p{L}*)$/u
+      .test(word)
+  );
 }
 
 /**

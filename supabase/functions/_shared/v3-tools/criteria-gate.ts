@@ -1810,6 +1810,26 @@ export function filterProductsByExcludedCriteria<T extends ProductRef>(
   );
 }
 
+/** A live categorical equality is an enum identity, not fuzzy similarity.
+ * Prefer an exact schema member before the legacy morphology/measurement
+ * matcher. This is schema-wide: neither colors nor product names are known
+ * here. Numeric/code compatibility retains its separate typed checks. */
+export function exactCatalogEqualityValues(
+  criterion: Criterion,
+  values: readonly { value: string }[],
+): { value: string }[] | null {
+  if (
+    criterion.op !== "eq" || typeof criterion.value !== "string" ||
+    !criterion.value.trim() || /\d/u.test(criterion.value)
+  ) return null;
+  const identity = (value: string) => value.normalize("NFKC")
+    .toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ").trim();
+  const wanted = identity(criterion.value);
+  const exact = values.filter(({ value }) => identity(value) === wanted);
+  return exact.length ? exact : null;
+}
+
 /** Compile mandatory criteria into exact values of uniquely matching live
  * facets. Repeated equality criteria for one key become OR values; different
  * constraints on one facet intersect. Product and category names are absent. */
@@ -1848,6 +1868,8 @@ export function projectCriteriaFacetOptions(
     const acceptedByCriterion = items.map((criterion) =>
       new Set(
         (() => {
+          const exactEnum = exactCatalogEqualityValues(criterion, facet.values);
+          if (exactEnum) return exactEnum;
           // When the live schema offers the customer's exact scalar, equality
           // must not be broadened to adjustable/range values that merely contain
           // it. This keeps an exact nominal such as 25 A distinct from 20–25 A;

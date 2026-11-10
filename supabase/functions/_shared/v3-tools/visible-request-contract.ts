@@ -10,6 +10,7 @@ export interface VisibleRequestRequirement {
     | "linear_measurement"
     | "bounded_measurement"
     | "count"
+    | "functional_class"
     | "textual_characteristic"
     | "literal_modifier";
   label: string;
@@ -535,6 +536,26 @@ export function buildVisibleRequestContract(
     });
     structurallyCoveredModifierStems.add(tokenStem("двойная"));
   }
+  if (hasSingleSocketPhrase(source)) {
+    add("count:single-socket", {
+      kind: "count",
+      label: "одинарная розетка",
+      op: "eq",
+      value: 1,
+      matches: (evidence) => {
+        if (!hasSingleSocketPhrase(evidence.split(/\r?\n/u)[0] ?? "") ||
+          hasDoubleSocketPhrase(evidence)) return false;
+        // An explicit contradictory first-party count still vetoes a
+        // favourable title, just as in the double-socket checker.
+        const counts = [...evidence.matchAll(
+          /(?:количеств\p{L}*\s+)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъ[её]м\p{L}*)\s*(?::|=|[-–—])\s*(\d+)/giu,
+        )];
+        return counts.every(match => Number(match[1]) === 1);
+      },
+    });
+    structurallyCoveredModifierStems.add(tokenStem("одинарная"));
+    structurallyCoveredModifierStems.add(tokenStem("одноместная"));
+  }
 
   // Preserve explicit directional quantities at the final card boundary.
   // The check is purely number+unit based and therefore applies equally to
@@ -601,6 +622,30 @@ export function titleSupportsVisibleRequestContract(
   requirements: VisibleRequestRequirement[],
 ): boolean {
   return requirements.every((requirement) => requirement.matches(title));
+}
+
+/** Preserve a count stated in an intermediate completed customer turn.
+ * Only the caller's verified selection history may enter here. Parse each
+ * turn separately: an explicit newer count replaces the old count, while
+ * unrelated attribute changes cannot discard it. The target supplies only
+ * the omitted noun, never a value or a product proof. */
+export function compileDialogueCountRequirements(
+  priorQueriesNewestFirst: readonly string[],
+  current: string,
+  context: VisibleRequestContractContext,
+): VisibleRequestRequirement[] {
+  const target = context.productClass?.trim();
+  if (!target || target.length > 200) return [];
+  let state: VisibleRequestRequirement[] = [];
+  for (const query of [...priorQueriesNewestFirst.slice(0, 9)].reverse().concat(current)) {
+    if (!query.trim() || query.length > 8_000) continue;
+    const withHead = query.replace(/^([^!?;.,\r\n]+)([\s\S]*)$/u,
+      (_match, head, tail) => `${head} ${target}${tail}`);
+    const patch = buildVisibleRequestContract(withHead, context)
+      .filter(requirement => requirement.kind === "count");
+    if (patch.length) state = patch;
+  }
+  return state;
 }
 
 /**

@@ -1,5 +1,6 @@
 import {
   checkCriterion,
+  exactCatalogEqualityValues,
   type Criterion,
   normalizeKey,
 } from "./criteria-gate.ts";
@@ -64,6 +65,15 @@ export function filterFinalCardsByMandatoryFacetEvidence<
     for (const alternatives of groups.values()) {
       const key = alternatives[0].key;
       const normalizedKey = normalizeKey(key);
+      const namedFacets = liveFacets.filter((facet) =>
+        [facet.key, facet.caption ?? ""].some((label) =>
+          normalizeKey(label) === normalizedKey
+        )
+      );
+      const exactEnumContract = namedFacets.length === 1 &&
+        alternatives.every((criterion) =>
+          exactCatalogEqualityValues(criterion, namedFacets[0].values ?? []) !== null
+        );
       const traitValues = (product.short_traits ?? []).flatMap((line) => {
         const colon = line.indexOf(":");
         return colon > 0 &&
@@ -124,6 +134,19 @@ export function filterFinalCardsByMandatoryFacetEvidence<
         continue;
       }
       for (const { source, values } of sources) {
+        // An API receipt or a similar word in the title cannot override an
+        // explicit, different enum value on this final SKU. Same-axis OR is
+        // preserved; numeric/range and noncanonical checks stay unchanged.
+        if (
+          exactEnumContract && !values.some((value) =>
+            alternatives.some((criterion) =>
+              exactCatalogEqualityValues(criterion, [{ value }]) !== null
+            )
+          )
+        ) {
+          rejected.push({ id: product.id, key, actual: values.join(" | "), source });
+          return false;
+        }
         // A multi-valued facet may legitimately offer alternatives. Reject
         // only when every explicit value contradicts every allowed value.
         const checks = values.flatMap((value) =>
