@@ -349,7 +349,8 @@ export function isIndependentNominalRequestOutsideActiveScope(
   if (
     !mayBeNominalRefinement(message) ||
     isSameSectionNominalRefinement(message, scope) ||
-    isShortAttributeSelectionFollowup(message)
+    isShortAttributeSelectionFollowup(message) ||
+    isCompoundAttributeSelectionFollowup(message)
   ) return false;
   const value = normalized(message);
   const object = selectionObject(value);
@@ -497,6 +498,95 @@ export function isShortAttributeSelectionFollowup(message: string): boolean {
   );
   return /^(?:еще\s+)?(?:более\s+)?[\p{L}-]{3,}(?:ые|ие|ее|ая|ое|ый|ий|ой|ых|их|ую|юю)$/u
     .test(value);
+}
+
+/**
+ * Syntax only, not authority to inherit a product. A dependent selection head
+ * can carry several attribute clauses; punctuation, prices and dimensions do
+ * not introduce a new subject. The caller must still verify the server scope
+ * and project every value through the live schema and unchanged card gates.
+ * Unknown prose, explanations and independent product tasks stay on the
+ * ordinary boundary route. No product/brand/facet-value dictionary is used.
+ */
+function compoundAttributeClauses(message: string): string[] | null {
+  const text = String(message ?? "").trim();
+  if (
+    !text || text.length > 800 ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)
+  ) return null;
+  const clauses = text.split(
+    /(?<!\d)[.,]|[.,](?!\d)|[!?;]+|[\r\n]+|\s+(?:и|но|также)\s+/iu,
+  ).map((clause) => clause.trim().replace(/^(?:а\s+также|только)\s+/iu, ""))
+    .filter(Boolean);
+  // A bound can follow the missing noun in the same sentence as well.
+  if (clauses.length === 1) {
+    const bound = clauses[0].match(
+      /^(.+?)\s+((?:(?:бюджет|цен[ауы]|стоимость)\s+)?(?:до|от|не\s+(?:дороже|более|менее|выше|ниже)|максимум|минимум)\s+\d.+)$/iu,
+    );
+    if (bound) clauses.splice(0, 1, bound[1], bound[2]);
+  }
+  if (
+    clauses.length < 2 || clauses.length > 6 ||
+    clauses.some((clause) => clause.length > 180)
+  ) return null;
+  return clauses;
+}
+
+function dependentAttributeHead(clause: string): boolean {
+  return (
+    isShortAttributeSelectionFollowup(clause.replace(/\s+варианты?$/iu, "")) ||
+    /^(?:а\s+)?(?:(?:покажи(?:те)?|подбери(?:те)?|найди(?:те)?|нужны)\s+)?(?:такие\s+же|те\s+же|эти\s+же)$/iu
+      .test(clause)
+  );
+}
+
+export function compoundAttributeSelectionBoundary(
+  message: string,
+): "continuation" | "new_task" | null {
+  const clauses = compoundAttributeClauses(message);
+  if (!clauses) return null;
+  if (clauses.some(hasExplicitNewTaskPreface)) return "new_task";
+  if (!dependentAttributeHead(clauses[0])) return null;
+  for (const clause of clauses.slice(1)) {
+    const frame = clause.match(
+      /^(?:(?:а|еще|ещё|теперь|также|заодно|ну|пожалуйста)\s+)*(?:(?:мне|нам)\s+)?(?:найди(?:те)?|подбери(?:те)?|покажи(?:те)?|предложи(?:те)?|посоветуй(?:те)?|нуж(?:ен|на|но|ны)|хочу(?:\s+купить)?|ищу)\s+(.+)$/iu,
+    );
+    if (
+      frame &&
+      !isShortAttributeSelectionFollowup(
+        clause.replace(/^(?:еще|ещё|теперь|также|заодно)\s+/iu, ""),
+      ) &&
+      /^\p{L}{3,}(?:\s|$)/u.test(frame[1]) &&
+      !/^(?:для|под|на|к|ко|в|во|с|со|без|до|от|из|эти|такие|другие|еще|ещё)(?:\s|$)/iu
+        .test(frame[1])
+    ) return "new_task";
+  }
+  const refinements = clauses.slice(1).every((clause) => {
+    if (isShortAttributeSelectionFollowup(clause)) return true;
+    // Full consumption prevents an appended new task from hiding in a price
+    // fragment. Bare quantities bind only later, against a unique live axis.
+    if (
+      /^(?:(?:бюджет|цен[ауы]|стоимость)\s+)?(?:(?:до|от|не\s+(?:дороже|более|менее|выше|ниже)|максимум|минимум)\s+)?\d+(?:[.,]\d+)?(?:[ \u00a0]\d{3})*(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*[\p{L}²³°/%₸]{1,15}$/iu
+        .test(clause)
+    ) return true;
+    const assignment = clause.match(
+      /^([\p{L}][\p{L}\s()-]{1,60})\s*[:=—]\s*([^:=—]{1,120})$/u,
+    );
+    if (!assignment) return false;
+    const key = normalized(assignment[1]);
+    // A named product/identity replacement is not an attribute ellipsis.
+    if (
+      /^(?:товар\p{L}*|категори\p{L}*|раздел\p{L}*|бренд\p{L}*|марк\p{L}*|сери\p{L}*|модел\p{L}*|тип\s+товара)$/u
+        .test(key)
+    ) return false;
+    return !/(?:^|[^\p{L}])(?:почему|объясни\p{L}*|расскажи\p{L}*|найди\p{L}*|подбери\p{L}*|покажи\p{L}*|нуж(?:ен|на|но|ны)|хочу|ищу|новая\s+тема|новый\s+вопрос)(?=$|[^\p{L}])/iu
+      .test(clause);
+  });
+  return refinements ? "continuation" : null;
+}
+
+export function isCompoundAttributeSelectionFollowup(message: string): boolean {
+  return compoundAttributeSelectionBoundary(message) === "continuation";
 }
 
 /**

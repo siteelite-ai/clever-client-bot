@@ -32,7 +32,7 @@ test('active scope lookup is server-owned despite stale client slots and routes 
     'const activeScopeLookupNeeded =',
     'const sameSectionScope =',
   );
-  assert.match(decision, /mayBeNominalRefinement\(userMessage\) \|\|\s*mayBeActivePrepositionalRefinement\(userMessage\) \|\|\s*isShortAttributeSelectionFollowup\(userMessage\) \|\|\s*Boolean\(verifiedReadinessState\.slot\)/);
+  assert.match(decision, /mayBeNominalRefinement\(userMessage\) \|\|\s*mayBeActivePrepositionalRefinement\(userMessage\) \|\|\s*isShortAttributeSelectionFollowup\(userMessage\) \|\|\s*isCompoundAttributeSelectionFollowup\(userMessage\) \|\|\s*Boolean\(verifiedReadinessState\.slot\)/);
   assert.doesNotMatch(decision, /!clientCatalogClarification/,
     'a browser-carried stale catalog slot must not suppress scope verification');
   assert.doesNotMatch(decision, /priorHistory/,
@@ -66,13 +66,13 @@ test('active scope lookup is server-owned despite stale client slots and routes 
   assert.match(scopedRoute, /v3_active_selection_scope_expert_route/);
   assert.match(
     scopedRoute,
-    /isShortAttributeSelectionFollowup\(userMessage\)\s*\? `\$\{scopedSelectionRequest\.message\} \$\{sameSectionScope\.leaf\}`\s*: scopedSelectionRequest\.message/,
-    'only a short attribute request gets its missing product noun from the verified section',
+    /isShortAttributeSelectionFollowup\(userMessage\)\s*\|\| isCompoundAttributeSelectionFollowup\(userMessage\)\s*\? `\$\{scopedSelectionRequest\.message\} \$\{sameSectionScope\.leaf\}`\s*: scopedSelectionRequest\.message/,
+    'only a short or compound attribute request gets its missing product noun from the verified section',
   );
   assert.match(
     scopedRoute,
-    /isShortAttributeSelectionFollowup\(userMessage\)\s*\? sameSectionScope\.leaf\s*: null/,
-    'only a short attribute request may seed the first taxonomy lookup from the verified leaf',
+    /\(isShortAttributeSelectionFollowup\(userMessage\) \|\| isCompoundAttributeSelectionFollowup\(userMessage\)\)\s*\? sameSectionScope\.leaf\s*: null/,
+    'only a short or compound attribute request may seed the first taxonomy lookup from the verified leaf',
   );
   assert.match(
     source,
@@ -145,8 +145,12 @@ test('a verified free-form readiness answer suppresses only a nominal class chan
   assert.match(classChange, /isIndependentNominalRequestOutsideActiveScope\(/);
   assert.match(classChange, /!\s*(?:isVerifiedFreeformReadinessAnswer\(|verifiedFreeformReadinessAnswer)/,
     'only a verified free-form answer can suppress a nominal class boundary');
-  assert.match(source, /const activeScopeExplicitBoundary = Boolean\(specificationLookupQuery\) \|\| activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
-    'verified specification lookup adds a boundary without suppressing entity or class changes');
+  assert.match(source, /const compoundTaskSwitch = compoundAttributeSelectionBoundary\(userMessage\)\s*===\s*"new_task"/,
+    'an independent second task must be determined from customer syntax, not browser state');
+  assert.match(source, /const activeScopeExplicitBoundary = compoundTaskSwitch \|\| Boolean\(specificationLookupQuery\) \|\| activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
+    'compound and specification boundaries must not suppress entity or class changes');
+  assert.match(source, /const activeRenderedRead = startsNewTask\s*\? \{proof:null,lookupFailed:false\}\s*: preflightRenderedSelection/,
+    'a new task must discard even an earlier preflight batch');
   const sameSection = between(
     'const sameSectionScope =',
     'const readinessQuestionSuperseded =',
