@@ -28215,9 +28215,8 @@ Deno.serve(async (req) => {
                 // Even when the active section wins, never concatenate the
                 // superseded readiness question with this complete request.
                 newTaskBoundary: Boolean(
-                  independentProductInquiry || readinessNewTask ||
-                    activeScopeExplicitBoundary ||
-                    readinessQuestionSuperseded
+                  readinessNewTask || activeScopeExplicitBoundary ||
+                    readinessQuestionSuperseded || independentProductInquiry
                 ),
               },
             );
