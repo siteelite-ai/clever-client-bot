@@ -1,4 +1,5 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
+import { CABLE_LUG_REQUEST, compileCableLugConnection } from "./selection-connection.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
   joinCustomerTurns,
@@ -270,6 +271,8 @@ interface ReadinessProfile {
   missing_labels: string[];
   /** Stable identity for exact facts that cannot honestly be represented by chips. */
   freeform_facets?: Record<number, string>;
+  /** Concrete wording once this axis (rather than its parent choice) is missing. */
+  freeform_questions?: Record<number, string>;
   /** Prefer an actionable exact measurement before an open-ended purpose. */
   freeform_order?: number[];
   /**
@@ -676,20 +679,12 @@ function hasKgCoreAndSection(evidence: string): boolean {
 }
 
 function hasLugConnectionType(evidence: string): boolean {
-  return /(?:болт\p{L}*|клемм\p{L}*|отверст\p{L}*|(?<![\p{L}\p{N}])[мm]\s*\d{1,2}(?=$|[^\p{L}\p{N}]))/iu
-    .test(evidence);
+  return compileCableLugConnection(evidence) !== null;
 }
 
 function hasLugConnectionAndSize(evidence: string): boolean {
-  if (/(?:в\s+клемм\p{L}*|клеммн\p{L}*\s+соедин\p{L}*)/iu.test(evidence)) {
-    return true;
-  }
-  const mSize = /(?<![\p{L}\p{N}])[мm]\s*\d{1,2}(?=$|[^\p{L}\p{N}])/iu
-    .test(evidence);
-  const diameter = /(?<![\p{L}\p{N}])\d{1,2}\s*мм(?=$|[^\p{L}\p{N}²])/iu
-    .test(evidence);
-  return mSize ||
-    (diameter && /(?:болт\p{L}*|отверст\p{L}*)/iu.test(evidence));
+  const connection = compileCableLugConnection(evidence);
+  return connection?.type === "terminal" || !!connection?.size;
 }
 
 function hasMountingHeight(evidence: string): boolean {
@@ -937,7 +932,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "cable_lug",
-    applies: /наконечник\p{L}*[^.!?\n]{0,80}кабел\p{L}*/iu,
+    applies: CABLE_LUG_REQUEST,
     required: [
       /(?:мед\p{L}*|алюмин\p{L}*)/iu,
       hasLugConnectionAndSize,
@@ -948,6 +943,7 @@ const PROFILES: ReadinessProfile[] = [
       "тип присоединения и, если под болт, точный размер отверстия (например, M8)",
     ],
     freeform_facets: { 1: "hole_size" },
+    freeform_questions: { 1: "Какой нужен диаметр монтажного отверстия в миллиметрах? Если знаете только размер болта, например М8, напишите его." },
     follow_ups: [{
       requirement_index: 1,
       question: "Как присоединяется наконечник? Для болтового соединения после выбора понадобится точный размер отверстия.",
@@ -1200,7 +1196,8 @@ export function selectReadinessClarification(
       ? options.progressive
         ? `Осталось уточнить: ${missingSummary}. Уточните ${profile.missing_labels[profile.primary_requirement_index]}. Можно выбрать вариант или написать свой ответ.`
         : profile.question
-      : `Осталось уточнить: ${missingSummary}. Укажите ${profile.missing_labels[nextFreeform]} конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением.`,
+      : profile.freeform_questions?.[nextFreeform] ??
+        `Осталось уточнить: ${missingSummary}. Укажите ${profile.missing_labels[nextFreeform]} конкретным значением — без этих данных я не буду считать подбор подтверждённым. Можно ответить обычным сообщением.`,
     facet_key: followUp?.facet_key ??
       (useOpening
         ? profile.facet_key

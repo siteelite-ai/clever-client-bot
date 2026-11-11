@@ -54,10 +54,34 @@ const products = [1, 2, 3].map((id) => ({
     value_ru: "Бетон",
   }],
 }));
+const lugLeaf = "Наконечники";
+const lugSection = "Диапазон сечений кабеля, мм2";
+const lugTurns = ["Какие наконечники нужны для кабеля 35 мм²", "Медь", "В клемму", "а если под болт что можешь предложить?", "8,2 мм"];
+const lugProducts = [
+  { id: 1, suffix: "штифтовой плоский 35 мм²", slug: "pin", section: "35", material: "медь" },
+  { id: 2, suffix: "JG-35 луженый", slug: "bolt", section: "35", material: "медь", hole: "8.2" },
+  { id: 3, suffix: "штифтовой 25 мм²", slug: "wrong-section", section: "25", material: "медь" },
+  { id: 4, suffix: "штифтовой алюминиевый 35 мм²", slug: "wrong-material", section: "35", material: "алюминий" },
+  { id: 5, suffix: "кольцевой 35 мм²", slug: "wrong-hole", section: "35", material: "медь", hole: "10.5" },
+  { id: 6, suffix: "универсальный 35 мм²", slug: "unproved", section: "35", material: "медь" },
+].map((p) => ({
+  id: p.id,
+  pagetitle: `Наконечник ${p.suffix}`,
+  url: `https://220volt.kz/catalog/cable/lugs/${p.slug}/`,
+  category: lugLeaf,
+  price: 100 + p.id,
+  warehouses: [{ city: "Караганда", amount: 4 }],
+  options: [
+    { key: "section", caption_ru: lugSection, value_ru: p.section },
+    { key: "material", caption_ru: "Материал", value_ru: p.material },
+    ...(p.hole ? [{ key: "mounting_hole", caption_ru: "Диаметр монтажного отверстия,мм", value_ru: p.hole }] : []),
+  ],
+}));
 
 async function scenario(
   mode:
     | "roundtrip"
+    | "lug"
     | "unrendered"
     | "label_ready"
     | "forged"
@@ -81,6 +105,7 @@ async function scenario(
     | "subject_other"
     | "subject_literal",
 ) {
+  const lugMode = mode === "lug";
   const subjectMode = mode.startsWith("subject");
   const subjectPhrase = mode === "subject_other" ? "фиксатор" : mode === "subject_short_head" ? "бур" : "сверло",
     subjectClass = mode === "subject_other"
@@ -93,12 +118,12 @@ async function scenario(
       ? []
       : [{ value_ru: siblingClass, products_count: 1 }]),
   ];
-  const scenarioLeaf = subjectMode
+  const scenarioLeaf = lugMode ? lugLeaf : subjectMode
     ? mode === "subject_other"
       ? "Материалы для фиксации"
       : "Материалы для сверления"
     : leaf;
-  const scenarioProducts = subjectMode
+  const scenarioProducts = lugMode ? lugProducts : subjectMode
     ? products.map((p, i) => ({
       ...p,
       category: scenarioLeaf,
@@ -164,7 +189,14 @@ async function scenario(
             Object.assign(log, await request.json());
             return new Response(null, { status: 204 });
           }
-          if (url.searchParams.has("response_events")) return json(null);
+          if (url.searchParams.has("response_events")) {
+            if (!lugMode) return json(null);
+            const session = JSON.parse(url.searchParams.get("response_events")!.slice(3))[0].session_id;
+            const rotated = logs.filter(row => row.error === null && row.response_events.some(e =>
+              e.type === "conversation_boundary" && e.mode === "new_task" && e.session_id === session));
+            return json(request.headers.get("Accept")?.includes("application/vnd.pgrst.object+json")
+              ? rotated.at(-1) ?? null : rotated.slice(-1));
+          }
           const wanted = url.searchParams.get("session_id")?.replace(
             /^eq\./u,
             "",
@@ -208,7 +240,11 @@ async function scenario(
           return json({
             data: {
               category: { id: 1, pagetitle: scenarioLeaf, total_products: 3 },
-              options: [
+              options: lugMode ? [
+                { key: "section", caption_ru: lugSection, type: "number", unit: "мм²", values: ["25", "35"].map(value_ru => ({ value_ru, products_count: 1 })) },
+                { key: "material", caption_ru: "Материал", type: "string", values: ["медь", "алюминий"].map(value_ru => ({ value_ru, products_count: 1 })) },
+                { key: "mounting_hole", caption_ru: "Диаметр монтажного отверстия,мм", type: "number", unit: "мм", values: ["8.2", "10.5"].map(value_ru => ({ value_ru, products_count: 1 })) },
+              ] : [
                 {
                   key: "base_material",
                   caption_ru: "Материал основания",
@@ -243,7 +279,7 @@ async function scenario(
           return json({
             data: {
               results: scenarioProducts,
-              pagination: { page: 1, pages: 1, total: 3 },
+              pagination: { page: 1, pages: 1, total: scenarioProducts.length },
             },
           });
         }
@@ -366,6 +402,24 @@ async function scenario(
             : [],
           explicit_customer_classifications: [],
         };
+        if (lugMode) {
+          const knownConnection = turn === 2 ? "В клемму" : "под болт";
+          const facts = [["Сечение кабеля", "35 мм²"], ["Материал жилы", "Медь"], ["Тип соединения", knownConnection],
+            ...(turn === 4 ? [["Размер отверстия", "8,2 мм"]] : [])].map(([parameter, customer_quote]) => ({
+            parameter, customer_quote, question: "", impact: "",
+          }));
+          const properties = schema.properties;
+          const p = properties.selection_readiness?.properties.critical_inputs;
+          Object.assign(args, {
+            selection_readiness: { decision: "ready", critical_inputs: p?.type === "object" ? { first: facts[0], rest: facts.slice(1) } : facts },
+            reasoning: `Подбираю наконечники. ${lugSection}: 35; Материал: медь.`,
+            retrieval_query: "наконечники",
+            measurement_scope: "per_product",
+            required_facet_values: properties.required_facet_values?.items.enum ?? [],
+            ...(properties.product_requirements ? { product_requirements: [] } : {}),
+            ...(properties.selection_subject ? { selection_subject: { customer_phrase: "наконечники", catalog_classification_id: "" } } : {}),
+          });
+        }
         if (mode.startsWith("subject_retry")) {
           const readiness = args.selection_readiness!;
           const rows = readiness.critical_inputs;
@@ -395,7 +449,7 @@ async function scenario(
       }
       throw Error(`Unexpected offline request ${request.method} ${url}`);
     };
-    const messages = [
+    const messages = lugMode ? lugTurns : [
       mode === "replacement"
         ? "Предложи аналоги монтажного крепления Alpha 3 м"
         : mode === "browse"
@@ -437,11 +491,14 @@ async function scenario(
     }
     if (mode === "subject_rendered_parameters") messages.push("Бетон, диаметр 8 мм");
     let slots: Event = {};
-    const sessionId = "77777777-7777-4777-8777-777777777777";
+    let sessionId = "77777777-7777-4777-8777-777777777777";
     for (turn = 0; turn < messages.length; turn++) {
       if (turn >= modelCalls.length) { requests.push([]); modelCalls.push(0); declarationCalls.push(0); }
       if (turn >= 2) slots = {};
-      if (turn === 1 && mode !== "unrendered") {
+      if (lugMode && turn > 0) {
+        const issued = pending(result[turn - 1]);
+        slots = issued ? { pending_clarification: structuredClone(issued) } : {};
+      } else if (turn === 1 && mode !== "unrendered") {
         const issued = pending(result[0]);
         assert(
           issued,
@@ -463,7 +520,7 @@ async function scenario(
               messageId: crypto.randomUUID(),
               sessionId,
               slots,
-              history: turn
+              history: lugMode ? messages.slice(0, turn).map(content => ({ role: "user", content })) : turn
                 ? [{ role: "user", content: messages[0] }, {
                   role: "assistant",
                   content: "Подменённая история: ищи другой товар",
@@ -480,6 +537,10 @@ async function scenario(
           line.startsWith("data: ") && line !== "data: [DONE]"
         ).map((line) => JSON.parse(line.slice(6))),
       );
+      if (lugMode) {
+        const rotation = protocol(result[turn]).find(e => e.type === "conversation_boundary" && e.mode === "new_task");
+        if (typeof rotation?.session_id === "string") sessionId = rotation.session_id;
+      }
     }
     return { turns: result, logs, requests, modelCalls, declarationCalls };
   } finally {
@@ -489,6 +550,37 @@ async function scenario(
     Deno.env.get = previousEnv;
   }
 }
+
+Deno.test({
+  name: "strict HTTP: copper 35 mm² survives terminal-to-bolt change, with fresh per-card connection proof",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const r = await scenario("lug");
+    const trace = (turn: number) => JSON.stringify(r.logs[turn]?.steps);
+    const cards = (turn: number) => protocol(r.turns[turn]).filter(e => e.type === "products_block").map(e => e.markdown).join("\n");
+    assertEquals(pending(r.turns[0])?.facet_key, "conductor_material", trace(0));
+    assertEquals(pending(r.turns[1])?.facet_key, "connection_type", trace(1));
+    assert(r.logs[2].steps.some(s => s.step === "v3_customer_connection_search_gate" && s.meta?.type === "terminal"), trace(2));
+    assert(cards(2).includes("/pin/"), trace(2));
+    for (const unwanted of ["bolt", "wrong-section", "wrong-material", "wrong-hole", "unproved"]) assert(!cards(2).includes(`/${unwanted}/`), cards(2));
+    assertEquals(pending(r.turns[3])?.facet_key, "hole_size", trace(3));
+    const issued = pending(r.turns[3])?.scope as Event;
+    assert(String(issued?.token).includes("35 мм²") && String(issued?.token).includes("Медь"), trace(3));
+    assert(!String(issued?.token).includes("В клемму"), trace(3));
+    assertEquals(r.requests[3], [], "no rehydration of old cards and no search before the hole is known");
+    assert(r.logs[4].steps.some(s => s.step === "v3_customer_connection_search_gate" && s.meta?.type === "bolt"), trace(4));
+    assert(cards(4).includes("/bolt/"), trace(4));
+    assert(!cards(4).includes("/pin/") && !cards(4).includes("/wrong-hole/"), cards(4));
+    for (const turn of [2, 4]) {
+      const searches = r.logs[turn].steps.filter(s => s.step === "v3_tool_call" && s.meta?.tool === "search_catalog");
+      assert(searches.some(s => {
+        const options = (s.meta?.args as Event | undefined)?.options as Event | undefined;
+        return Array.isArray(options?.material) && options.material.includes("медь") &&
+          Array.isArray(options?.section) && options.section.includes("35") && !("connection_type" in options);
+      }), trace(turn));
+    }
+  },
+});
 
 Deno.test({
   name: "strict HTTP: literal live type membership cannot skip subject validation in a non-measured request",

@@ -742,6 +742,15 @@ import {
   verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
+  CABLE_LUG_REQUEST,
+  compileCableLugConnection,
+  connectionFacetOptions,
+  isCableLugConnectionReply,
+  isCableLugSelectionClass,
+  productProvesCableLugConnection,
+  resolveCableLugConnectionRefinement,
+} from "../_shared/v3-tools/selection-connection.ts";
+import {
   resolveSpecificationAssistance,
   specificationCatalogQuery,
 } from "../_shared/v3-tools/specification-assistance.ts";
@@ -1273,6 +1282,8 @@ interface ToolContext {
   observeCatalogToolResult?: (result: ToolResult) => void;
   /** Request-local hard card proof, including terminal and recovery renders. */
   verifyMeasuredPointRangeRenderIds?: (ids: string[]) => boolean;
+  verifyCustomerConnection?: (id: string) => boolean;
+  filterSelectionCandidates?: <T extends { results: ProductRef[] }>(result: T) => T;
   /** Per-turn provenance boundary shared by every catalog and jargon route. */
   catalogAppearanceGuard?: (
     name: "search_catalog" | "jargon_recover_catalog",
@@ -1315,11 +1326,12 @@ async function runTool(
   }
   const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   if (name === "search_catalog") {
-    const result = await executeSearchCatalog(
+    let result = await executeSearchCatalog(
       args as unknown as SearchCatalogInput,
       catalogDeps,
       ctx.cache,
     );
+    if (result.ok && ctx.filterSelectionCandidates) result = ctx.filterSelectionCandidates(result);
     ctx.observeCatalogToolResult?.(result);
     return result;
   }
@@ -1332,7 +1344,7 @@ async function runTool(
     return result;
   }
   if (name === "jargon_recover_catalog") {
-    const result = await executeJargonRecoverCatalog(
+    let result = await executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
       {
         ...catalogDeps,
@@ -1346,6 +1358,7 @@ async function runTool(
       },
       ctx.cache,
     );
+    if (result.ok && ctx.filterSelectionCandidates) result = ctx.filterSelectionCandidates(result);
     ctx.observeCatalogToolResult?.(result);
     return result;
   }
@@ -1367,6 +1380,10 @@ async function runTool(
     const renderIds = Array.isArray(args.product_ids)
       ? args.product_ids.map(String)
       : [];
+    if (ctx.verifyCustomerConnection && !renderIds.every(ctx.verifyCustomerConnection)) {
+      return { tool: "render_products", ok: false, error_code: "bad_input",
+        message: "A rendered product lacks verified connection evidence" };
+    }
     if (
       ctx.verifyMeasuredPointRangeRenderIds &&
       !ctx.verifyMeasuredPointRangeRenderIds(renderIds)
@@ -8426,6 +8443,8 @@ interface VerifiedCustomerMeasurementEvidence {
   lookupFailed: boolean;
   /** Completed server-log customer turns before physical-unit compaction. */
   priorQueriesNewestFirst: string[];
+  /** Contiguous completed, successful turns for a dependent condition change. */
+  completedQueriesNewestFirst: string[];
 }
 
 /** Model fields are separate evidence sources, not adjacent words in one sentence. */
@@ -8499,6 +8518,7 @@ export async function loadVerifiedCustomerMeasurementEvidence(
     sourceCount: 0,
     lookupFailed: false,
     priorQueriesNewestFirst: [] as string[],
+    completedQueriesNewestFirst: [] as string[],
   };
   if (skipPriorLookup) return currentOnly;
   const createdAfter = activeSelectionScopeLookupCreatedAfter(
@@ -8564,11 +8584,15 @@ export async function loadVerifiedCustomerMeasurementEvidence(
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
     const seenIds = new Set<string>();
     const previousQueries: string[] = [];
+    const completedQueriesNewestFirst: string[] = [];
+    let completedChain = true;
     for (const row of rows) {
       if (seenIds.has(row.id)) continue;
       seenIds.add(row.id);
       if (row.session_id !== sessionId && row.id !== boundary?.id) continue;
       previousQueries.push(row.user_query!);
+      completedChain &&= row.error === null;
+      if (completedChain) completedQueriesNewestFirst.push(row.user_query!);
     }
     const composed = composeVerifiedCustomerMeasurementEvidence(
       currentQuery,
@@ -8578,6 +8602,7 @@ export async function loadVerifiedCustomerMeasurementEvidence(
       ...composed,
       lookupFailed: false,
       priorQueriesNewestFirst: previousQueries,
+      completedQueriesNewestFirst,
     };
   } catch (error) {
     console.error("[v3] customer measurement evidence lookup failed", error);
@@ -9509,6 +9534,22 @@ async function runExpertLoop(
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
   const now = () => Date.now() - t0;
+  const requestedConnection = CABLE_LUG_REQUEST.test(userMessage)
+    ? compileCableLugConnection(userMessage) : null;
+  if (requestedConnection) {
+    ctx.verifyCustomerConnection = (id) => {
+      const product = ctx.cache.get(id);
+      return !!product && productProvesCableLugConnection(product, requestedConnection);
+    };
+    ctx.filterSelectionCandidates = (result) => {
+      const candidates = result.results.filter(({ id }) => ctx.verifyCustomerConnection!(id));
+      steps.push({ step: "v3_customer_connection_search_gate", ms: now(), meta: {
+        type: requestedConnection.type, size: requestedConnection.size,
+        examined: result.results.length, verified: candidates.length,
+      } });
+      return { ...result, results: candidates };
+    };
+  }
   const observedSearchCatalog = async (
     ...args: Parameters<typeof executeSearchCatalog>
   ): Promise<Awaited<ReturnType<typeof executeSearchCatalog>>> => {
@@ -9520,7 +9561,8 @@ async function runExpertLoop(
       }
       args[0] = guarded.args as unknown as SearchCatalogInput;
     }
-    const result = await executeSearchCatalog(...args);
+    let result = await executeSearchCatalog(...args);
+    if (result.ok && ctx.filterSelectionCandidates) result = ctx.filterSelectionCandidates(result);
     ctx.observeCatalogToolResult?.({ ...result, tool: "search_catalog" });
     return result;
   };
@@ -10694,7 +10736,8 @@ async function runExpertLoop(
     guarded = guarded.filter((id) => {
       const product = ctx.cache.get(id);
       return Boolean(
-        product && productSupportsVisibleRequestContract(
+        product && (!ctx.verifyCustomerConnection || ctx.verifyCustomerConnection(id)) &&
+          productSupportsVisibleRequestContract(
           product,
           visibleRequestContract,
           (requirement) =>
@@ -12353,7 +12396,7 @@ async function runExpertLoop(
   // Central catalog I/O boundary. Direct model searches, terminal recovery,
   // jargon recovery and bounded observed searches all pass through this same
   // request-scoped gate; non-search tools are untouched.
-  ctx.catalogAppearanceGuard = (name, input) => {
+  const guardCatalogAppearance: NonNullable<ToolContext["catalogAppearanceGuard"]> = (name, input) => {
     const discovery = appearanceCatalogDiscovery();
     if (!discovery) {
       // An exact customer-supplied identity can still be recovered during a
@@ -12455,7 +12498,7 @@ async function runExpertLoop(
           ...rest
         } = input;
         // The second pass still checks any appearance option values.
-        return ctx.catalogAppearanceGuard?.(name, rest) ?? { args: rest };
+        return guardCatalogAppearance(name, rest);
       }
       const broad = verifiedAppearanceBrowseArgs(query || pagetitle, input);
       return broad
@@ -12524,6 +12567,18 @@ async function runExpertLoop(
         ...(Object.keys(kept).length > 0 ? { options: kept } : {}),
       },
     };
+  };
+  ctx.catalogAppearanceGuard = (name, input) => {
+    const guarded = guardCatalogAppearance(name, input);
+    const discovery = appearanceCatalogDiscovery();
+    if ("error" in guarded || !requestedConnection || name !== "search_catalog" ||
+      guarded.args.mode !== "by_filter" || !discovery ||
+      !isCableLugSelectionClass(discovery.category.pagetitle)) return guarded;
+    const connection = connectionFacetOptions(requestedConnection, discovery.facets);
+    if (!Object.keys(connection).length) return guarded;
+    return { args: { ...guarded.args, options: {
+      ...(guarded.args.options as Record<string, unknown> | undefined), ...connection,
+    } } };
   };
 
   const turnController = new AbortController();
@@ -26643,6 +26698,8 @@ async function runExpertLoop(
     return { finalText, productsRendered, shownProductIds: [...shownIds] };
   } finally {
     ctx.catalogAppearanceGuard = undefined;
+    ctx.verifyCustomerConnection = undefined;
+    ctx.filterSelectionCandidates = undefined;
     clearTimeout(turnTimer);
   }
 }
@@ -28137,6 +28194,16 @@ Deno.serve(async (req) => {
             const effectiveReadinessNewTask = readinessQuestionSuperseded
               ? null
               : readinessNewTask;
+            const connectionRefinementEvidence = !independentProductInquiry &&
+                !activeScopeExplicitBoundary && !effectiveReadinessNewTask &&
+                !readinessScopeReply && isCableLugConnectionReply(userMessage)
+              ? await loadVerifiedCustomerMeasurementEvidence(
+                supabase, sessionId, logId, userMessage, false, t0,
+              ) : null;
+            const connectionRefinement = connectionRefinementEvidence
+              ? resolveCableLugConnectionRefinement(
+                userMessage, connectionRefinementEvidence.completedQueriesNewestFirst,
+              ) : null;
             const verifiedCutoutContinuation = verifiedCutoutMm !== null &&
               Boolean(verifiedCutoutState.slot);
             const dependentCutoutReply = Boolean(
@@ -28187,6 +28254,9 @@ Deno.serve(async (req) => {
               }
               : effectiveReadinessNewTask
               ? { ...effectiveReadinessNewTask, source: "local" as const }
+              : connectionRefinement
+              ? {mode:"continuation" as const,confidence:1,source:"local" as const,
+                reason:"server_verified_connection_refinement"}
               : sameSectionScope
               ? {
                 mode: "continuation" as const,
@@ -28303,12 +28373,12 @@ Deno.serve(async (req) => {
               | null = null;
             const mayCarryPriorMeasurements = !startsNewTask && (
               effectiveHistory.some((message) => message.role === "user") ||
-              matchedPendingClarification || Boolean(sameSectionScope)
+              matchedPendingClarification || Boolean(sameSectionScope) || Boolean(connectionRefinement)
             );
             const verifiedCustomerMeasurementEvidence = ():
               Promise<VerifiedCustomerMeasurementEvidence> =>
               customerMeasurementEvidencePromise ??= (async () => {
-                const evidence = await loadVerifiedCustomerMeasurementEvidence(
+                const evidence = (connectionRefinement && connectionRefinementEvidence) || await loadVerifiedCustomerMeasurementEvidence(
                   supabase,
                   effectiveSessionId,
                   logId,
@@ -28472,7 +28542,7 @@ Deno.serve(async (req) => {
                   t0,
                 );
             const activeRenderedProof = activeRenderedRead.proof;
-            const verifiedRenderedRefinement = isVerifiedRenderedSelectionRefinement({
+            const verifiedRenderedRefinement = Boolean(connectionRefinement && activeRenderedProof) || isVerifiedRenderedSelectionRefinement({
               message: userMessage,
               proof: activeRenderedProof,
               newTask: startsNewTask,
@@ -28501,7 +28571,7 @@ Deno.serve(async (req) => {
                   isEllipticalAttributeFollowup(userMessage),
                 verifiedFreeformReadinessAnswer,
               });
-              if (referencedContext) {
+              if (referencedContext && !connectionRefinement) {
                 send({
                   type: "delta",
                   content:
@@ -28621,7 +28691,7 @@ Deno.serve(async (req) => {
                 productsCount = 0;
                 return;
               }
-            } else if (!startsNewTask && !activeRenderedProof) {
+            } else if (!startsNewTask && !activeRenderedProof && !connectionRefinement) {
               // A stale cache is only a signal to stop a dependent turn; its
               // rows are never supplied as facts to any branch or model.
               const staleRows = await loadRecentProductEvidence(
@@ -28678,7 +28748,7 @@ Deno.serve(async (req) => {
                 constrainedRecentPriceFollowup);
             const ellipticalBaseRequest = additionalProductSelectionFollowup
               ? verifiedAdditionalSelection?.baseRequest ?? null
-              : ellipticalAttributeFollowup
+              : connectionRefinement?.base ?? (ellipticalAttributeFollowup
               ? (preflightRenderedSelection?.baseRequest ??
                 (activeRenderedProof &&
                     !isAdditionalProductSelectionFollowup(
@@ -28686,7 +28756,7 @@ Deno.serve(async (req) => {
                     )
                   ? activeRenderedProof.baseRequest
                   : null))
-              : null;
+              : null);
             const additionalSelectionRequest =
               additionalProductSelectionFollowup &&
               Boolean(ellipticalBaseRequest);
@@ -28856,7 +28926,7 @@ Deno.serve(async (req) => {
               ),
               recentProductEvidence: recentProductEvidence.length > 0,
               activeSelectionScope: scopedSelectionRequest.scoped,
-            }) && !additionalSelectionRequest && !verifiedRenderedRefinement;
+              }) && !additionalSelectionRequest && !verifiedRenderedRefinement && !connectionRefinement;
             // A verified formula/safety rule is selected by its own narrow proof
             // conditions, not by whether the generic intent classifier called the
             // same wording a question or a command (`чем отличается` vs `сравни`,
@@ -28876,6 +28946,8 @@ Deno.serve(async (req) => {
               ) ??
                 extractBroadAssortmentScope(userMessage)
               : null;
+            const readinessRequest = connectionRefinement?.request ?? scopedSelectionRequest.message;
+            const typedConnectionReadiness = CABLE_LUG_REQUEST.test(readinessRequest);
             const readinessClarification = specificationLookupQuery || storePolicyInquiry ||
                 additionalSelectionRequest || matchedVerifiedBroadSelection ||
                 freeformCandidate
@@ -28886,11 +28958,11 @@ Deno.serve(async (req) => {
                   newTask: startsNewTask,
                   enabled: Deno.env.get("VOLT220_SPECIFICATION_ASSISTANCE_ENABLED") !== "false",
                 }) ?? selectReadinessClarification(
-                scopedSelectionRequest.message,
-                selectionReadinessEvidenceFromHistory(
+                readinessRequest,
+                typedConnectionReadiness ? "" : selectionReadinessEvidenceFromHistory(
                   effectiveHistory.slice(-8),
                 ),
-                { progressive: scopedSelectionRequest.scoped },
+                { progressive: scopedSelectionRequest.scoped || Boolean(connectionRefinement) },
               );
             if (readinessClarification?.scope?.assistance?.version === 1 && readinessClarification.facet_key === "engineering_specification") {
               const phone = await lookupProductManagerPhone(supabase);
@@ -29971,9 +30043,9 @@ Deno.serve(async (req) => {
               // only the adjective loses identity and can skip the criteria
               // contract entirely. rawCurrentUserMessage remains separate for
               // current-axis overrides and appearance ownership below.
-              const baseSelectionRequest = ellipticalBaseRequest
+              const baseSelectionRequest = connectionRefinement?.request ?? (ellipticalBaseRequest
                 ? joinCustomerTurns([ellipticalBaseRequest, ellipticalCurrentRequest])
-                : scopedSelectionRequest.message;
+                : scopedSelectionRequest.message);
               const customerMeasurementEvidence =
                 await verifiedCustomerMeasurementEvidence();
               const unrenderedContext = resolveUnrenderedSelectionContext({
@@ -30066,7 +30138,9 @@ Deno.serve(async (req) => {
                   // экспериментальный UX-флаг. Его нельзя выключить настройкой.
                   criteriaGateEnabled: true,
                 },
-                ellipticalAttributeFollowup && activeRenderedProof
+                CABLE_LUG_REQUEST.test(combinedSelectionRequest)
+                  ? combinedSelectionRequest
+                  : ellipticalAttributeFollowup && activeRenderedProof
                   ? joinCustomerTurns([...activeRenderedProof.priorQueriesNewestFirst].reverse().concat(userMessage))
                   : customerMeasurementEvidence.text,
                 recentProductEvidence,

@@ -159,6 +159,7 @@ Deno.test("initial request and a new topic never read or inherit prior measureme
     sourceCount: 0,
     lookupFailed: false,
     priorQueriesNewestFirst: [],
+    completedQueriesNewestFirst: [],
   });
   assertEquals(calls(), 0);
 });
