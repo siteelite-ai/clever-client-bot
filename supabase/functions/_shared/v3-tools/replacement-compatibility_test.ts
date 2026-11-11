@@ -78,7 +78,7 @@ function candidate(
     ...source,
     id: "candidate",
     article: "candidate-article",
-    pagetitle: "Лампа светодиодная T75 таблетка 6Вт 230В 4000К GX53 IEK",
+    pagetitle: "Лампа светодиодная T75 таблетка 6Вт 230В 6500К GX53 IEK",
     url: "https://220volt.kz/catalog/svetotexnika/lampyi/candidate/",
     ...overrides,
   };
@@ -119,11 +119,10 @@ Deno.test("LED lamp family profile maps dynamic live keys, not a GX53/SKU dictio
   );
 });
 
-Deno.test("two verified 6W LED lamps remain provisional candidates with exact differences", () => {
+Deno.test("matching temperature preserves provisional candidates with other exact differences", () => {
   const profile = readyProfile();
-  const warm = candidate({ id: "warm" }, {
+  const sameTemperature = candidate({ id: "same-temperature" }, {
     voltage: "175-250",
-    colorTemperature: "4000",
   });
   const navigator = candidate({
     id: "navigator",
@@ -134,15 +133,15 @@ Deno.test("two verified 6W LED lamps remain provisional candidates with exact di
     length: "28",
     luminousFlux: "510",
   });
-  const first = evaluateLedLampCandidate(profile, warm);
+  const first = evaluateLedLampCandidate(profile, sameTemperature);
   const second = evaluateLedLampCandidate(profile, navigator);
   assert(first.ok && second.ok);
-  assertEquals(first.differences.map(({ role }) => role), ["colorTemperature"]);
+  assertEquals(first.differences, []);
   assertEquals(second.differences.map(({ role }) => role), [
     "length", "luminousFlux",
   ]);
   const disclosure = ledLampCandidateDisclosure(profile, [first, second]);
-  assertStringIncludes(disclosure, "4000 К вместо 6500 К");
+  assertStringIncludes(disclosure, "6500 К");
   assertStringIncludes(disclosure, "510 лм вместо 600 лм");
   assertStringIncludes(disclosure, "28 мм вместо 29 мм");
   assertStringIncludes(disclosure, "максимально допустимую мощность");
@@ -158,11 +157,49 @@ Deno.test("equal-power verified lamps outrank earlier lower-power catalogue rows
   const equal = evaluateLedLampCandidate(profile, candidate({
     id: "equal",
     price: 900,
-  }, { power: "6", colorTemperature: "4000" }));
+  }, { power: "6" }));
   assert(lower.ok && equal.ok);
   assertEquals(rankLedLampCandidates([lower, equal]).map(({ candidate }) =>
     candidate.id
   ), ["equal", "lower"]);
+});
+
+Deno.test("LED replacement temperature is mandatory regardless of socket or other differences", () => {
+  for (const [socket, temperature] of [["GX53", 6500], ["E27", 4000]] as const) {
+    const resolved = resolveLedLampCompatibilityProfile(lamp({
+      pagetitle: `Лампа 6Вт 230В ${temperature}К ${socket}`,
+    }, { base: socket, colorTemperature: String(temperature) }), facets);
+    assert(resolved.status === "ready");
+    const withTemperature = (value: string, titleValue = value) => candidate({
+      pagetitle: `Лампа 6Вт 230В ${titleValue} ${socket}`,
+    }, { base: socket, colorTemperature: value });
+    for (const wrong of ["2700", "3000", "5000"]) {
+      assertEquals(evaluateLedLampCandidate(
+        resolved.profile, withTemperature(wrong, `${wrong}K`),
+      ), { ok: false, reason: "color_temperature_mismatch" });
+    }
+    assertEquals(evaluateLedLampCandidate(
+      resolved.profile, withTemperature(String(temperature), "2,7K"),
+    ), { ok: false, reason: "color_temperature_unverified" });
+    assertEquals(evaluateLedLampCandidate(
+      resolved.profile, withTemperature(String(temperature), "2700–6500K"),
+    ), { ok: false, reason: "color_temperature_unverified" });
+    const match = withTemperature(`${temperature} К`, `${temperature / 1000}K`);
+    assert(evaluateLedLampCandidate(resolved.profile, match).ok);
+    delete match.facet_values!.colorTemperature;
+    assertEquals(evaluateLedLampCandidate(resolved.profile, match).ok, false);
+  }
+});
+
+Deno.test("a declared source temperature cannot disappear with a missing facet or conflicting source evidence", () => {
+  const conflicts = [
+    resolveLedLampCompatibilityProfile(lamp(), facets.filter(({ key }) => key !== "colorTemperature")),
+    resolveLedLampCompatibilityProfile(lamp({}, { colorTemperature: "3000" }), facets),
+    resolveLedLampCompatibilityProfile(lamp({}, { colorTemperature: "2700–6500" }), facets),
+  ];
+  for (const result of conflicts) {
+    assertEquals(result, { status: "unverifiable", reason: "source_color_temperature_unverified" });
+  }
 });
 
 Deno.test("lamp compatibility rejects wrong base, supply, voltage, class, size and power", () => {

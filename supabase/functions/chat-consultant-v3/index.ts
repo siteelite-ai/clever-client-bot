@@ -5836,9 +5836,11 @@ async function selectVerifiedLedLampReplacement(
   let lastTotal: number | null = null;
   let partialCoverage = false;
   let searchError: string | null = null;
+  const temperature = profile.sourceColorTemperatureK;
+  const minRenderable = temperature === null ? 2 : 1;
   // The single live socket axis is a recall filter, not compatibility proof.
-  // A category-wide AND of every source trait would lose legitimate changes
-  // in voltage range, light colour, output and length before the typed gate.
+  // Check exact Kelvin on every materialized card; different raw spellings
+  // of the same Kelvin value must not be dropped by the upstream filter.
   for (let page = 1; page <= 2; page += 1) {
     const found = await executeSearchCatalog({
       mode: "by_filter",
@@ -5899,6 +5901,7 @@ async function selectVerifiedLedLampReplacement(
       source_id: profile.source.id,
       family: profile.family,
       socket_key: profile.required.base.key,
+      color_temperature_k: temperature,
       pages_checked: pagesChecked,
       raw_total: lastTotal,
       partial_coverage: partialCoverage,
@@ -5909,12 +5912,14 @@ async function selectVerifiedLedLampReplacement(
       duration_ms: Date.now() - started,
     },
   });
-  if (selected.length < 2) {
+  if (selected.length < minRenderable) {
     send({
       type: "delta",
       origin: "server",
       content: searchError
         ? "Сейчас не удалось полностью проверить товары в каталоге. Это не означает, что подходящих вариантов нет. Повторите запрос позже."
+        : temperature !== null
+        ? `В проверенной части каталога не нашёл подходящей лампы с цветовой температурой ${temperature} К. Если подходит другая температура, задайте отдельный запрос на подбор с нужным значением.`
         : "По проверенной части каталога не удалось подтвердить два разных варианта с совместимыми цоколем, питанием и размерами. Это не означает, что других вариантов нет; уточните подбор у менеджера.",
     });
     return {
@@ -5929,7 +5934,7 @@ async function selectVerifiedLedLampReplacement(
     product_ids: ids,
     total_available: selected.length,
   }, ctx.cache);
-  if (!rendered.ok || rendered.rendered_count < 2) {
+  if (!rendered.ok || rendered.rendered_count < minRenderable) {
     send({
       type: "delta",
       origin: "server",
@@ -5960,8 +5965,8 @@ async function selectVerifiedLedLampReplacement(
   }
 
   // Only exact common source values are machine criteria. Voltage ranges and
-  // colour/lumen/length changes are proven by the typed family gate and
-  // disclosed in prose, not falsely encoded as equality filters.
+  // lumen/length changes are proven by the typed family gate and disclosed
+  // in prose, not falsely encoded as equality filters.
   const criteria: Criterion[] = [];
   for (const role of ["base", "technology", "supply", "shape", "diameter"] as const) {
     const facet = profile.required[role];
@@ -5979,6 +5984,16 @@ async function selectVerifiedLedLampReplacement(
         evidence: "derived_required",
       });
     }
+  }
+  if (temperature !== null && profile.optional.colorTemperature) {
+    criteria.push({
+      key: profile.optional.colorTemperature.caption,
+      op: "eq",
+      value: temperature,
+      unit: "К",
+      level: "A",
+      evidence: "derived_required",
+    });
   }
   if (budgetCap !== null) {
     criteria.push({
@@ -6706,12 +6721,29 @@ async function selectVerifiedOrdinaryReplacement(
       ctx.cache.get(anchor.id) ?? (anchor as ProductFull),
       discovery.facets,
     );
-    if (resolved.status === "ready") {
-      const familyRouteAdmitted = admitProvisionalReplacementFamilyRoute({
-        userMessage,
-        verifiedSourceTitle: anchor.pagetitle,
-        coversBudgetCap: budgetCap !== null,
+    const familyRouteAdmitted = admitProvisionalReplacementFamilyRoute({
+      userMessage,
+      verifiedSourceTitle: anchor.pagetitle,
+      coversBudgetCap: budgetCap !== null,
+    });
+    if (
+      familyRouteAdmitted && resolved.status === "unverifiable" &&
+      resolved.reason === "source_color_temperature_unverified"
+    ) {
+      steps.push({
+        step: "v3_led_lamp_source_temperature_unverified",
+        ms: Date.now() - t0,
+        meta: { anchor_id: anchor.id, reason: resolved.reason },
       });
+      send({
+        type: "delta",
+        origin: "server",
+        content:
+          "По карточке исходной лампы не удалось подтвердить цветовую температуру. Укажите значение в кельвинах с упаковки, чтобы подобрать замену без изменения цвета света.",
+      });
+      return { handled: true, products: [], outcome: "query_inconsistent" };
+    }
+    if (resolved.status === "ready") {
       if (!familyRouteAdmitted) {
         // The typed lamp path proves only source-family fit. Preserve the
         // existing user-owned-axis route for additional constraints instead

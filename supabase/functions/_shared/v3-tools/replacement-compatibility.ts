@@ -25,7 +25,6 @@ const OPTIONAL_CAPTIONS = {
 
 type RequiredRole = keyof typeof REQUIRED_CAPTIONS;
 type OptionalRole = keyof typeof OPTIONAL_CAPTIONS;
-type Role = RequiredRole | OptionalRole;
 
 export interface LedLampCompatibilityProfile {
   family: "led_lamp";
@@ -76,7 +75,7 @@ export type LedLampCompatibilityResolution =
   | { status: "ready"; profile: LedLampCompatibilityProfile };
 
 export interface LedLampDifference {
-  role: OptionalRole | "power";
+  role: Exclude<OptionalRole, "colorTemperature"> | "power";
   caption: string;
   source: number;
   candidate: number;
@@ -155,6 +154,32 @@ export function parseStrictLampScalar(
   if (!match || (match[2] && !units.includes(match[2]))) return null;
   const number = Number(match[1]);
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+const KELVIN_UNITS = ["к", "k"] as const;
+
+function catalogueLampKelvin(raw: string): number | null {
+  const value = parseStrictLampScalar(raw, KELVIN_UNITS);
+  return value !== null && Number.isInteger(value) && value >= 1000 &&
+      value <= 20_000 ? value : null;
+}
+
+// The explicit field is the proof. Kelvin in the title can require proof or
+// veto a conflicting field, but cannot supply missing proof for a candidate.
+// Accept both 6500К and model-name notation such as 6,5K. Treat a title range
+// as multiple claims, not as evidence that its last endpoint is a fixed CCT.
+function lampTitleKelvinClaims(title: string): number[] {
+  const claims = [...normalizedText(title).matchAll(
+    /(?<![\p{L}\p{N}.,])(?:(\d{4,5}|\d{1,2}[.,]\d{1,3})\s*[-–—/]\s*)?(\d{4,5}|\d{1,2}(?:[.,]\d{1,3})?)\s*[кk](?![\p{L}\p{N}])/gu,
+  )].flatMap((match) => [match[1], match[2]]).flatMap((raw) => {
+    if (!raw) return [];
+    const number = Number(raw.replace(",", "."));
+    const kelvin = number < 100 ? number * 1000 : number;
+    return Number.isInteger(kelvin) && kelvin >= 1000 && kelvin <= 20_000
+      ? [kelvin]
+      : [];
+  });
+  return [...new Set(claims)];
 }
 
 /** Both ends must be explicit valid scalars; never turn 8-30 into 8 or 30. */
@@ -440,6 +465,23 @@ export function resolveLedLampCompatibilityProfile(
   }
   if (!isLed(technologyValue)) return { status: "not_applicable" };
 
+  const colorFacets = facets.filter(({ key, caption }) =>
+    key && /^цветовая температура(?:,\s*[кk])?$/u.test(normalizedText(caption))
+  );
+  const colorFacet = colorFacets.length === 1 ? colorFacets[0] : null;
+  const sourceColorRaw = colorFacet ? oneLiveValue(source, colorFacet) : null;
+  const sourceColorTemperatureK = sourceColorRaw
+    ? catalogueLampKelvin(sourceColorRaw)
+    : null;
+  const titleTemperatures = lampTitleKelvinClaims(source.pagetitle);
+  if (
+    (sourceColorRaw !== null && sourceColorTemperatureK === null) ||
+    titleTemperatures.some((claim) => claim !== sourceColorTemperatureK) ||
+    colorFacets.length > 1
+  ) {
+    return { status: "unverifiable", reason: "source_color_temperature_unverified" };
+  }
+
   const required = {} as Record<RequiredRole, Facet>;
   const sourceValues = {} as LedLampCompatibilityProfile["sourceValues"];
   for (const role of Object.keys(REQUIRED_CAPTIONS) as RequiredRole[]) {
@@ -461,9 +503,13 @@ export function resolveLedLampCompatibilityProfile(
 
   const optional: LedLampCompatibilityProfile["optional"] = {};
   for (const role of Object.keys(OPTIONAL_CAPTIONS) as OptionalRole[]) {
-    const facet = liveFacetForCaption(facets, OPTIONAL_CAPTIONS[role]);
+    const facet = role === "colorTemperature"
+      ? colorFacet
+      : liveFacetForCaption(facets, OPTIONAL_CAPTIONS[role]);
     if (!facet) continue;
-    const value = oneLiveValue(source, facet);
+    const value = role === "colorTemperature"
+      ? sourceColorRaw
+      : oneLiveValue(source, facet);
     if (!value) {
       return { status: "unverifiable", reason: `source_value_missing:${role}` };
     }
@@ -487,9 +533,6 @@ export function resolveLedLampCompatibilityProfile(
   const sourceLengthMm = sourceValues.length
     ? parseStrictLampScalar(sourceValues.length, ["мм", "mm"])
     : null;
-  const sourceColorTemperatureK = sourceValues.colorTemperature
-    ? parseStrictLampScalar(sourceValues.colorTemperature, ["к", "k"])
-    : null;
   const sourceLuminousFluxLm = sourceValues.luminousFlux
     ? parseStrictLampScalar(sourceValues.luminousFlux, ["лм", "lm"])
     : null;
@@ -499,7 +542,6 @@ export function resolveLedLampCompatibilityProfile(
     !sourceRange || !covered(sourceRange, sourceNominalVoltage) ||
     sourceDiameterMm === null || sourcePowerW === null ||
     (sourceValues.length && sourceLengthMm === null) ||
-    (sourceValues.colorTemperature && sourceColorTemperatureK === null) ||
     (sourceValues.luminousFlux && sourceLuminousFluxLm === null)
   ) {
     return { status: "unverifiable", reason: "source_technical_facts_invalid" };
@@ -584,10 +626,22 @@ export function evaluateLedLampCandidate(
   if (powerW === null || powerW > profile.sourcePowerW) {
     return { ok: false, reason: "power_unproven_or_higher" };
   }
+  if (profile.sourceColorTemperatureK !== null) {
+    const temperature = values.colorTemperature
+      ? catalogueLampKelvin(values.colorTemperature)
+      : null;
+    if (temperature === null ||
+      lampTitleKelvinClaims(candidate.pagetitle).some((claim) => claim !== temperature)) {
+      return { ok: false, reason: "color_temperature_unverified" };
+    }
+    if (temperature !== profile.sourceColorTemperatureK) {
+      return { ok: false, reason: "color_temperature_mismatch" };
+    }
+  }
 
   const differences: LedLampDifference[] = [];
   const pushDifference = (
-    role: OptionalRole | "power",
+    role: LedLampDifference["role"],
     source: number | null,
     raw: string | undefined,
     units: readonly string[],
@@ -608,13 +662,6 @@ export function evaluateLedLampCandidate(
   if (
     !pushDifference("power", profile.sourcePowerW, values.power, ["вт", "w"], "Вт") ||
     !pushDifference("length", profile.sourceLengthMm, values.length, ["мм", "mm"], "мм") ||
-    !pushDifference(
-      "colorTemperature",
-      profile.sourceColorTemperatureK,
-      values.colorTemperature,
-      ["к", "k"],
-      "К",
-    ) ||
     !pushDifference(
       "luminousFlux",
       profile.sourceLuminousFluxLm,
@@ -651,8 +698,13 @@ export function ledLampCandidateDisclosure(
       `${caption}: ${candidate} ${unit} вместо ${source} ${unit}`
     );
     return differences.length > 0
-      ? `№${index + 1}: ${differences.join(", ")}`
-      : `№${index + 1}: отличий в проверенных параметрах не обнаружено`;
-  }).join("; ");
-  return `Показываю кандидатов для проверки: по карточкам подтверждены цоколь ${profile.sourceValues.base}, светодиодный тип, питание ${profile.sourceSupply}, форма колбы и диаметр ${profile.sourceDiameterMm} мм; рабочие диапазоны напряжения каждого включают ${profile.sourceNominalVoltage} В. Различия: ${specifics}. Полная взаимозаменяемость не подтверждена. Перед заменой проверьте посадочные размеры и максимально допустимую мощность светильника.`;
+      ? `№ ${index + 1}: ${differences.join(", ")}`
+      : null;
+  }).filter(Boolean).join("; ");
+  const temperature = profile.sourceColorTemperatureK === null
+    ? ""
+    : `, цветовая температура ${profile.sourceColorTemperatureK} К`;
+  return `Подтверждены цоколь ${profile.sourceValues.base}, питание ${profile.sourceNominalVoltage} В${temperature}.${
+    specifics ? ` Различия: ${specifics}.` : ""
+  } Полная взаимозаменяемость не подтверждена. Перед заменой проверьте посадочные размеры и максимально допустимую мощность светильника.`;
 }
