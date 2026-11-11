@@ -700,6 +700,11 @@ import {
   subsumeCriteriaProvenByExplicitCompound,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import {
+  compileSemanticCompoundFacetPlan,
+  productProvesSemanticCompoundFacets,
+  type SemanticCompoundFacetPlan,
+} from "../_shared/v3-tools/semantic-compound-facet-proof.ts";
+import {
   exactCompoundClassPhrase,
   selectCompleteCategoryPrice,
 } from "../_shared/v3-tools/complete-category-price.ts";
@@ -7835,6 +7840,100 @@ async function selectVerifiedSemanticCompoundProducts(
     liveCategories,
   );
 
+  // A lexical helper picks one winning title query. It may find a valid
+  // example but is not evidence that other catalogue spellings are wrong.
+  // When the seed supplies an unambiguous typed field for every modifier,
+  // prove the requested conjunction independently on all candidates first.
+  const seedCards = seedProducts.map(({ id }) => ctx.cache.get(id)).filter(
+    (card): card is ProductFull => Boolean(card),
+  );
+  const tryFacetProof = async (
+    observedCards: ProductFull[],
+    onProvenFields?: () => void,
+  ): Promise<
+    { handled: true; products: ProductFull[] } | null
+  > => {
+    const facetPlans = liveCategories.map((category) =>
+      compileSemanticCompoundFacetPlan(sourceQuery, category, observedCards)
+    ).filter((plan): plan is SemanticCompoundFacetPlan => Boolean(plan));
+    if (!facetPlans.length) return null;
+    onProvenFields?.();
+    const cardinality = resolveResultCardinality(userMessage, { selection: true });
+    const proved = new Map<string, ProductFull>();
+    const rejectedIds = new Set<string>();
+    const proofPasses = (card: ProductFull) => facetPlans.some((plan) =>
+      productProvesSemanticCompoundFacets(card, plan, marking)
+    );
+    for (const card of observedCards) if (proofPasses(card)) proved.set(card.id, card);
+    const distinct = () => {
+      const urls = new Set<string>();
+      return [...proved.values()].filter((card) => {
+        const url = productUrlIdentity(card.url);
+        if (!url || urls.has(url)) return false;
+        urls.add(url);
+        return true;
+      });
+    };
+    const seedVerified = distinct().length;
+    const probes: Array<{ category: string; filters: Record<string, string[]>; status: string; materialized: number }> = [];
+    // A narrow first page is not an assortment verdict. At most three
+    // scoped searches reuse the verified size, leaf and canonical values.
+    for (const plan of facetPlans.slice(0, 3)) {
+      if (distinct().length >= cardinality.target) break;
+      const options = Object.fromEntries(plan.fields.map(({ key, value }) => [key, [value]]));
+      const fresh: ProductCache = new Map();
+      const result = await executeSearchCatalog({
+        mode: "by_query", query: literalMarking, category: plan.category,
+        options, min_price: 1, per_page: 50,
+      }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken, signal: ctx.turnSignal }, fresh);
+      probes.push({ category: plan.category, filters: options, status: result.ok ? "ok" : result.error_code,
+        materialized: result.ok ? result.results.length : 0 });
+      if (!result.ok) continue;
+      for (const { id } of result.results) {
+        const card = fresh.get(id);
+        const previous = proved.get(id);
+        if (!card || !proofPasses(card) || previous && productUrlIdentity(previous.url) !== productUrlIdentity(card.url)) {
+          proved.delete(id);
+          rejectedIds.add(id);
+          continue;
+        }
+        if (!rejectedIds.has(id)) proved.set(id, card);
+      }
+    }
+    const eligible = distinct();
+    const ids = capResultCandidateIds(eligible.map(({ id }) => id), cardinality);
+    const selected = new Map(eligible.filter(({ id }) => ids.includes(id)).map((card) => [card.id, card]));
+    const rendered = ids.length ? executeRenderProducts({ product_ids: ids, total_available: eligible.length }, selected) : null;
+    steps.push({ step: "v3_semantic_compound_facets_verified", ms: Date.now() - t0,
+      meta: { marking, observed_cards: observedCards.length, observed_verified: seedVerified,
+        plans: facetPlans.map(({ category, fields }) => ({ category, fields })), probes,
+        verified: eligible.length, rendered: rendered?.ok ? rendered.rendered_count : 0,
+        coverage: "bounded_catalog_candidates" } });
+    if (!rendered?.ok) {
+      // Never fall back to a looser lexical proof after a known field fails.
+      send({ type: "delta", content: "В проверенной части каталога не удалось подтвердить товары в наличии с точным размером и всеми указанными характеристиками.", origin: "server" });
+      return { handled: true, products: [] };
+    }
+    const shown = rendered.rendered_ids.map((id) => selected.get(id)!);
+    for (const card of shown) ctx.cache.set(card.id, card);
+    const shortfall = resultCardinalityShortfallText(shown.length, cardinality, { candidateCoverage: "partial" });
+    send({ type: "delta", content: shortfall ??
+      `Показываю товары размера ${literalMarking.replace("*", "×")}, у которых указанные условия подтверждены характеристиками каталога.`, origin: "server" });
+    // Exact field proofs are useful to the next server-owned selection; only
+    // criteria shared by every participating leaf are serialized as common.
+    const common = facetPlans[0].fields.filter(({ caption, value }) => facetPlans.every(({ fields }) =>
+      fields.some((f) => f.caption === caption && f.value === value)
+    ));
+    const plan = extendSelectionCriteriaPlan(null, common.map(({ caption, value }) => ({
+      key: caption, op: "eq", value, level: "A", evidence: "user_explicit",
+    })), "guarded_search");
+    send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count,
+      total_available: eligible.length, selection_contract: { hash: plan.hash, mandatory_criteria: [...plan.mandatory_criteria] } });
+    return { handled: true, products: shown };
+  };
+  const seedProof = await tryFacetProof(seedCards);
+  if (seedProof) return seedProof;
+
   send({
     type: "tool_event",
     tool: "jargon_recover_catalog",
@@ -7866,6 +7965,26 @@ async function selectVerifiedSemanticCompoundProducts(
     : "";
   const semanticBridgeProven = partition.semanticModifiers.length === 0 ||
     (recovered.ok && recovered.semantic_bridge_matched === true);
+  // A sparse marking-only page may not expose the requested canonical value.
+  // The recovery can supply another first-party card, but its translated
+  // query is still not a restriction on the rest of the eligible pool.
+  if (recovered.ok && recovered.results.length > 0 && liveCategories.length > 0) {
+    const observed = new Map(seedCards.map((card) => [card.id, card]));
+    for (const { id } of recovered.results) {
+      const card = ctx.cache.get(id);
+      if (card && productTitleMatchesExplicitCompoundMarking(card.pagetitle, marking)) observed.set(id, card);
+    }
+    const recoveryProof = await tryFacetProof([...observed.values()], () => {
+      send({
+        type: "tool_event",
+        tool: "jargon_recover_catalog",
+        phase: "result",
+        duration_ms: Date.now() - started,
+        summary: "Условия сопоставлены с характеристиками каталога.",
+      });
+    });
+    if (recoveryProof) return recoveryProof;
+  }
   let verified = recovered.ok && matchedQuery && semanticBridgeProven
     ? recovered.results.filter((product) =>
       productTitleMatchesExplicitCompoundMarking(product.pagetitle, marking) &&
@@ -7919,6 +8038,8 @@ async function selectVerifiedSemanticCompoundProducts(
     });
     return { handled: false, products: [] };
   }
+  send({ type: "delta", origin: "server", content:
+    `Показываю товары точного размера ${literalMarking.replace("*", "×")}, для которых условия запроса удалось подтвердить по данным карточек.` });
   send({
     type: "products_block",
     markdown: rendered.markdown,
@@ -29473,15 +29594,6 @@ Deno.serve(async (req) => {
               (semanticCompoundUnprovenSuperlative && explicitCompoundMarking)
             ) {
               const semanticMarking = semanticCompoundMarking ?? explicitCompoundMarking!;
-              if (!semanticCompoundUnprovenSuperlative) {
-                send({
-                  type: "delta",
-                  content:
-                    `Понял требования: сохраняю точный размер ${semanticMarking.first}×${
-                      String(semanticMarking.second).replace(".", ",")
-                    } и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
-                });
-              }
               const direct = await selectVerifiedSemanticCompoundProducts(
                 userMessage,
                 semanticMarking,
