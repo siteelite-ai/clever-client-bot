@@ -693,18 +693,49 @@ export function ledLampCandidateDisclosure(
   profile: LedLampCompatibilityProfile,
   fits: ReadonlyArray<Extract<LedLampCandidateFit, { ok: true }>>,
 ): string {
+  const labels: Record<LedLampDifference["role"], string> = {
+    length: "длина",
+    luminousFlux: "световой поток",
+    power: "мощность",
+  };
   const specifics = fits.map((fit, index) => {
-    const differences = fit.differences.map(({ caption, source, candidate, unit }) =>
-      `${caption}: ${candidate} ${unit} вместо ${source} ${unit}`
+    const differences = fit.differences.map(({ role, source, candidate, unit }) =>
+      `${labels[role]} ${candidate} ${unit} вместо ${source} ${unit}`
     );
     return differences.length > 0
-      ? `№ ${index + 1}: ${differences.join(", ")}`
+      ? `${fits.length > 1 ? `№ ${index + 1}: ` : ""}${differences.join(", ")}`
       : null;
   }).filter(Boolean).join("; ");
   const temperature = profile.sourceColorTemperatureK === null
     ? ""
-    : `, цветовая температура ${profile.sourceColorTemperatureK} К`;
-  return `Подтверждены цоколь ${profile.sourceValues.base}, питание ${profile.sourceNominalVoltage} В${temperature}.${
+    : `, ${profile.sourceColorTemperatureK} К`;
+  return `Цоколь ${profile.sourceBase}, питание ${profile.sourceNominalVoltage} В${temperature}.${
     specifics ? ` Различия: ${specifics}.` : ""
-  } Полная взаимозаменяемость не подтверждена. Перед заменой проверьте посадочные размеры и максимально допустимую мощность светильника.`;
+  } Полная взаимозаменяемость не подтверждена: сверьте посадочные размеры и максимально допустимую мощность светильника.`;
+}
+
+/** The short caption is presentation only. Use it instead of the generic
+ * replacement caption only when the current source and every visible card
+ * still pass the same lamp checks. Otherwise the caller keeps its fallback. */
+export function verifiedLedLampDisclosure(
+  staged: LedLampCompatibilityProfile,
+  source: ProductFull | undefined,
+  candidates: readonly ProductFull[],
+): string | null {
+  if (
+    !source || source.id !== staged.source.id || source.url !== staged.source.url ||
+    candidates.length === 0
+  ) return null;
+  const live = resolveLedLampCompatibilityProfile(source, [
+    ...Object.values(staged.required),
+    ...Object.values(staged.optional),
+  ]);
+  if (live.status !== "ready") return null;
+  const fits: Array<Extract<LedLampCandidateFit, { ok: true }>> = [];
+  for (const candidate of candidates) {
+    const fit = evaluateLedLampCandidate(live.profile, candidate);
+    if (!fit.ok) return null;
+    fits.push(fit);
+  }
+  return ledLampCandidateDisclosure(live.profile, fits);
 }

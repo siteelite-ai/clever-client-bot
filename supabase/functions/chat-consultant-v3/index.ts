@@ -604,11 +604,11 @@ import {
   evaluateLedLampCandidate,
   evaluateLedLampFamilyBrowseCandidate,
   evaluateLedLampNamedSourceFamilyMember,
-  ledLampCandidateDisclosure,
   observedLedLampFamilyEnvelope,
   rankLedLampCandidates,
   resolveLedLampFamilyBrowseProfile,
   resolveLedLampCompatibilityProfile,
+  verifiedLedLampDisclosure,
   type LedLampCandidateFit,
   type LedLampCompatibilityProfile,
   type LedLampFamilyBrowseFit,
@@ -5819,12 +5819,18 @@ async function selectVerifiedCompactReplacementContinuation(
 }
 
 type ProvenLedLampFit = Extract<LedLampCandidateFit, { ok: true }>;
+// The optional profile is a server-side presentation hint, not an SSE field
+// or a signal that authorizes cards or changes their selection contract.
+type ReplacementResponseSender = (
+  event: SseEvent,
+  lampProfile?: LedLampCompatibilityProfile,
+) => void;
 
 async function selectVerifiedLedLampReplacement(
   profile: LedLampCompatibilityProfile,
   budgetCap: number | null,
   ctx: ToolContext,
-  send: (event: SseEvent) => void,
+  send: ReplacementResponseSender,
   steps: StepLog[],
   t0: number,
 ): Promise<DirectReplacementResult> {
@@ -6015,11 +6021,6 @@ async function selectVerifiedLedLampReplacement(
       `Проверены ${pagesChecked} страницы категории; подтверждены ${displayedFits.length} кандидата семейства светодиодных ламп`,
   });
   send({
-    type: "delta",
-    origin: "server",
-    content: ledLampCandidateDisclosure(profile, displayedFits),
-  });
-  send({
     type: "products_block",
     markdown: rendered.markdown,
     count: rendered.rendered_count,
@@ -6040,7 +6041,7 @@ async function selectVerifiedLedLampReplacement(
         ...(evidence ? { evidence } : {}),
       })),
     },
-  });
+  }, profile);
   steps.push({
     step: "v3_led_lamp_family_provisional_candidates_rendered",
     ms: Date.now() - t0,
@@ -6271,7 +6272,7 @@ async function browseVerifiedLedLampFamilyAlternatives(
 async function selectVerifiedOrdinaryReplacement(
   userMessage: string,
   ctx: ToolContext,
-  send: (event: SseEvent) => void,
+  send: ReplacementResponseSender,
   steps: StepLog[],
   t0: number,
   verifiedExactSource: ProductRef | null = null,
@@ -27164,7 +27165,10 @@ Deno.serve(async (req) => {
         responseEvents.push(pending);
         emit(pending);
       };
-      const send = (ev: SseEvent): string => {
+      const send = (
+        ev: SseEvent,
+        lampProfile?: LedLampCompatibilityProfile,
+      ): string => {
         // An uncooperative remote promise may settle after the turn deadline.
         // It must not append a second answer or mutate the persisted replay.
         if (streamCompleted || (workTimedOut && !sendingTerminalFailure)) {
@@ -27326,9 +27330,16 @@ Deno.serve(async (req) => {
                 source,
               ),
             });
+            const lampCaption = lampProfile && source && renderedProducts.length === ev.count
+              ? verifiedLedLampDisclosure(
+                lampProfile,
+                replacementEgressCache?.get(source.id),
+                renderedProducts,
+              )
+              : null;
             const caption = confirmedDirectAnalogProof
               ? `Кандидаты на замену: ${confirmedDirectAnalogProof.candidates.length} шт. Прошли проверку по восьми критериям, включая диапазон монтажного отверстия для Ø${confirmedDirectAnalogProof.target_cutout_mm} мм. Совместимость по габаритам, глубине, подключению и условиям установки не подтверждена — сверьте их по паспортам перед покупкой.`
-              : replacementProofCaption(replacementLastProof);
+              : lampCaption ?? replacementProofCaption(replacementLastProof);
             const disclosure: SseEvent = {
               type: "delta",
               content: `\n\n${caption}`,

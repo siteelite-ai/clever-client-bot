@@ -12,6 +12,7 @@ import {
   rankLedLampFamilyBrowseCandidates,
   resolveLedLampFamilyBrowseProfile,
   resolveLedLampCompatibilityProfile,
+  verifiedLedLampDisclosure,
 } from "./replacement-compatibility.ts";
 import type { ProductFull } from "./types.ts";
 
@@ -162,6 +163,24 @@ Deno.test("equal-power verified lamps outrank earlier lower-power catalogue rows
   assertEquals(rankLedLampCandidates([lower, equal]).map(({ candidate }) =>
     candidate.id
   ), ["equal", "lower"]);
+});
+
+Deno.test("short lamp caption requires the current source and every rendered candidate", () => {
+  const profile = readyProfile();
+  const same = candidate({}, { length: "28", luminousFlux: "510" });
+  const text = verifiedLedLampDisclosure(profile, lamp(), [same]);
+  assert(text);
+  assertStringIncludes(text, "длина 28 мм вместо 29 мм");
+  assertStringIncludes(text, "световой поток 510 лм вместо 600 лм");
+  const warm = candidate({
+    id: "warm",
+    pagetitle: "Лампа GX53 230В 3000К",
+  }, { colorTemperature: "3000" });
+  assertEquals(verifiedLedLampDisclosure(profile, lamp(), [same, warm]), null);
+  assertEquals(verifiedLedLampDisclosure(profile, lamp({ id: "other" }), [same]), null);
+  const incomplete = lamp();
+  delete incomplete.facet_values!.colorTemperature;
+  assertEquals(verifiedLedLampDisclosure(profile, incomplete, [same]), null);
 });
 
 Deno.test("LED replacement temperature is mandatory regardless of socket or other differences", () => {
