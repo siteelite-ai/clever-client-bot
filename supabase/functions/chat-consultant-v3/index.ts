@@ -464,6 +464,7 @@ import {
   productUrlIdentity,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
+import { isIndependentExactProductInquiry } from "../_shared/v3-tools/independent-product-inquiry.ts";
 import { proveRecentPriceSet } from "../_shared/v3-tools/recent-price-proof.ts";
 import {
   buildExactPriceUnitAnswer,
@@ -27601,6 +27602,12 @@ Deno.serve(async (req) => {
             }
 
             const priorHistory = stripCurrentUserEcho(history, userMessage);
+            // Decide independence before reading any previous card/slot. A
+            // complete exact-item inquiry must not depend on a stale batch or
+            // pending question. This authorises only a fresh identity lookup;
+            // existing unique-card and factual checks remain mandatory.
+            const independentProductInquiry =
+              isIndependentExactProductInquiry(userMessage);
             // A strict acknowledgement requires no prior product facts. Exit
             // before the boundary model, server-log read or catalog hydration.
             // A pending clarification is deliberately excluded; short answers
@@ -27621,7 +27628,9 @@ Deno.serve(async (req) => {
               productsCount = 0;
               return;
             }
-            const pendingSlot = slots.pending_clarification;
+            const pendingSlot = independentProductInquiry
+              ? undefined
+              : slots.pending_clarification;
             const pendingRecord =
               pendingSlot && typeof pendingSlot === "object" &&
                 !Array.isArray(pendingSlot)
@@ -27772,7 +27781,7 @@ Deno.serve(async (req) => {
                 supabase,
                 sessionId,
                 logId,
-                slots,
+                independentProductInquiry ? {} : slots,
                 userMessage,
               );
             // When preflight could not issue chips, a typed section is not
@@ -27889,7 +27898,9 @@ Deno.serve(async (req) => {
                   slots,
                 )
                 : { slot: null, lookupFailed: false });
-            const readinessSlots = clientSelectionReadinessScope
+            const readinessSlots = independentProductInquiry
+              ? {}
+              : clientSelectionReadinessScope
               ? {
                 ...slots,
                 pending_clarification: verifiedReadinessState.slot ?? undefined,
@@ -28015,11 +28026,13 @@ Deno.serve(async (req) => {
               return;
             }
             const activeScopeLookupNeeded =
-              mayBeNominalRefinement(userMessage) ||
-              mayBeActivePrepositionalRefinement(userMessage) ||
-              isShortAttributeSelectionFollowup(userMessage) ||
-              isCompoundAttributeSelectionFollowup(userMessage) ||
-              Boolean(verifiedReadinessState.slot);
+              !independentProductInquiry && (
+                mayBeNominalRefinement(userMessage) ||
+                mayBeActivePrepositionalRefinement(userMessage) ||
+                isShortAttributeSelectionFollowup(userMessage) ||
+                isCompoundAttributeSelectionFollowup(userMessage) ||
+                Boolean(verifiedReadinessState.slot)
+              );
             const activeScopeState = activeScopeLookupNeeded
               ? await loadVerifiedActiveSelectionScope(
                 supabase,
@@ -28132,7 +28145,14 @@ Deno.serve(async (req) => {
                   /^\s*(?:(?:около|примерно|приблизительно)\s+)?(?:отверстие|вырез|диаметр)?\s*[:=]?[Ø⌀]?\s*\d{1,4}(?:[.,]\d)?\s*(?:мм|mm)?(?:\s*,?\s*(?:если верно|наверное|примерно))?[.!]?\s*$/iu
                     .test(userMessage)),
             );
-            const boundary = specificationLookupQuery
+            const boundary = independentProductInquiry
+              ? {
+                mode: "new_task" as const,
+                confidence: 1,
+                source: "local" as const,
+                reason: "local_independent_exact_product_inquiry",
+              }
+              : specificationLookupQuery
               ? {mode:"new_task" as const,confidence:1,source:"local" as const,reason:"server_verified_specification_catalog_lookup"}
               : verifiedCutoutContinuation || dependentCutoutReply
               ? {
@@ -28196,7 +28216,7 @@ Deno.serve(async (req) => {
                 // superseded readiness question with this complete request.
                 newTaskBoundary: Boolean(
                   readinessNewTask || activeScopeExplicitBoundary ||
-                    readinessQuestionSuperseded
+                    readinessQuestionSuperseded || independentProductInquiry
                 ),
               },
             );
