@@ -233,17 +233,17 @@ export function discoveryNounIsGrounded(
  * any reasoning. Numeric targets are excluded because "replace ... with 16 A"
  * describes a parameter, not a product class.
  */
-export function extractCustomerOwnedDiscoveryTarget(
+function customerReplacementSides(
   customerText: string,
-): string | null {
-  const source = String(customerText ?? "").trim();
-  const match = source.match(
-    /(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)[^.!?\n]{0,100}?\s+на\s+([^.!?\n]{2,100})/iu,
-  ) ?? source.match(
-    /(?:чем\s+замен\p{L}*|замен\p{L}*)[^:;!?\n]{1,100}[:;—-]\s*(?:мне\s+)?(?:нуж\p{L}*|ищ\p{L}*|подбер\p{L}*)\s+([^.!?\n]{2,100})/iu,
+): { source: string; target: string } | null {
+  const text = String(customerText ?? "").trim();
+  const match = text.match(
+    /(?<![\p{L}\p{N}])(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)\s+([^.!?\n]{1,100}?)\s+на\s+([^.!?\n]{2,100})/iu,
+  ) ?? text.match(
+    /(?<![\p{L}\p{N}])(?:чем\s+замен\p{L}*|замен\p{L}*)\s+([^:;!?\n]{1,100})[:;—-]\s*(?:мне\s+)?(?:нуж\p{L}*|ищ\p{L}*|подбер\p{L}*)\s+([^.!?\n]{2,100})/iu,
   );
-  if (!match) return null;
-  const destination = String(match[1] ?? "")
+  if (!match || !match[1].trim()) return null;
+  const destination = match[2]
     .split(/\s+(?:в|во|для|под|при|с|со)\s+/iu, 1)[0]
     .replace(/\s+(?:что|котор\p{L}*|како\p{L}*)\s*$/iu, "")
     .trim();
@@ -255,7 +255,39 @@ export function extractCustomerOwnedDiscoveryTarget(
       /^\d/u.test(token) || /^(?:мм|см|м|вт|квт|а|в)$/u.test(token)
     )
   ) return null;
-  return destination;
+  return { source: match[1].trim(), target: destination };
+}
+
+export function extractCustomerOwnedDiscoveryTarget(
+  customerText: string,
+): string | null {
+  return customerReplacementSides(customerText)?.target ?? null;
+}
+
+/** A class explicitly named on the source side only cannot authorize
+ * discovery or cards for the target, regardless of model wording. If the
+ * customer repeats the same class on both sides, it remains eligible. */
+export function replacementClassIsSourceOnly(
+  label: string,
+  customerText: string,
+): boolean {
+  const sides = customerReplacementSides(customerText);
+  if (!sides) return false;
+  // A bare locative after «на» can describe where the old item is installed
+  // (e.g. «заменить кабель на улице»), not the desired replacement.
+  // Don't introduce a hard veto from such an ambiguous reading.
+  if (/^[а-яё-]+е$/iu.test(sides.target)) return false;
+  const sourceHead = sides.source.split(
+    /\s+(?:в|во|для|под|при|с|со)\s+/iu,
+    1,
+  )[0];
+  const source = significantTokens(sourceHead);
+  const target = significantTokens(sides.target);
+  const labelTokens = significantTokens(label);
+  return labelTokens.some((word) =>
+    source.some((token) => tokenMatches(token, word)) &&
+    !target.some((token) => tokenMatches(token, word))
+  );
 }
 
 /**

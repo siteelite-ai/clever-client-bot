@@ -4,6 +4,7 @@
 import {
   assert,
   assertEquals,
+  assertMatch,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   offlineHandler,
@@ -159,14 +160,16 @@ async function runFourTurnScenario(input: {
   preview?: boolean;
   fourthMessage?: string;
   prefacedAreaFirstTurn?: boolean;
+  targetIsParent?: boolean;
 }): Promise<void> {
   Deno.env.get = input.envGet;
   resetDiscoverCategoryCacheForTest();
   const category = input.prefacedAreaFirstTurn ? "Светильники" : "Люстры";
+  const productCategory = input.targetIsParent ? "Потолочные светильники" : category;
   const scenarioMessages = [...messages];
   if (input.prefacedAreaFirstTurn) {
     scenarioMessages.splice(0, 4,
-      "Новая тема. Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?");
+      `${input.targetIsParent ? "" : "Новая тема. "}Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?`);
   }
   if (input.fourthMessage) scenarioMessages[3] = input.fourthMessage;
   const allProducts = [
@@ -175,7 +178,7 @@ async function runFourTurnScenario(input: {
     ...(input.newCapacity ? capacityFreshBatch : []),
     ...distractors,
   ].map((item) => input.prefacedAreaFirstTurn ? {
-    ...item, category, pagetitle: item.pagetitle.replace(/^Люстра/u, "Светильник"),
+    ...item, category: productCategory, pagetitle: item.pagetitle.replace(/^Люстра/u, "Светильник"),
     url: item.url.replace("/lyustryi/", "/svetilniki/"),
   } : item);
   const originalFetch = globalThis.fetch;
@@ -270,7 +273,12 @@ async function runFourTurnScenario(input: {
         if (url.pathname === "/api/categories") {
           return json({
             data: {
-              results: [{ id: 1, pagetitle: category, children: [] }],
+              results: input.targetIsParent
+                ? [{ id: 1, pagetitle: category, children: [
+                  { id: 2, pagetitle: productCategory, children: [] },
+                  { id: 3, pagetitle: "Люстры", children: [] },
+                ] }]
+                : [{ id: 1, pagetitle: category, children: [] }],
               pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
             },
           });
@@ -367,8 +375,11 @@ async function runFourTurnScenario(input: {
           );
           return json({
             data: {
-              results: matching,
-              pagination: { total: matching.length },
+              results: input.targetIsParent && query
+                ? [...matching, { ...firstBatch[0], id: 98,
+                  url: firstBatch[0].url.replace(/fixture-\d+/u, "fixture-98") }]
+                : matching,
+              pagination: { total: matching.length + (input.targetIsParent && query ? 1 : 0) },
             },
           });
         }
@@ -537,9 +548,37 @@ async function runFourTurnScenario(input: {
     );
     if (input.prefacedAreaFirstTurn) {
       assert(logs[0].steps.some(({ step }) => step === "v3_measured_replacement_rendered"));
-      assert(!modelTools[0].includes("declare_selection_reasoning"));
+      assertEquals(modelTools[0], []);
       assert(!publicText(turns[0]).includes("4000"), publicText(turns[0]));
-      assert(first.every((url) => !distractors.some((product) => product.url === url)), JSON.stringify(first));
+      assert(first.every((url) => url.includes("/svetilniki/")), JSON.stringify(first));
+      assertMatch(publicText(turns[0]), /гостиной.*25 м²/isu);
+      const block = v3Events(turns[0]).find(({ type }) => type === "products_block");
+      const contract = block?.selection_contract as {
+        mandatory_criteria: Array<{ op: string; value: unknown }>;
+        visible_requirements: Array<{ kind: string; value?: string }>;
+      } | undefined;
+      assert(contract?.mandatory_criteria.some(({ op, value }) =>
+        op === "min" && value === 25
+      ));
+      assert(contract?.visible_requirements.some(({ kind, value }) =>
+        kind === "application" && value === "гостиной"
+      ));
+      assert(contract?.visible_requirements.some(({ kind, value }) =>
+        kind === "product_class" && /светильник/iu.test(value ?? "")
+      ));
+      if (input.targetIsParent) {
+        assertEquals(
+          logs[0].steps.find(({ step }) => step === "v3_measured_replacement_target_probe")?.meta?.target_query_status,
+          "ok",
+        );
+        assert(!logs[0].steps.some(({ step }) =>
+          step === "v3_measured_replacement_source_class_fallback"
+        ));
+        assertEquals(catalogReads[0].map((raw) => {
+          const p = new URL(raw).searchParams;
+          return [p.get("category"), p.get("query")];
+        }), [[null, "светильник"]]);
+      }
       return;
     }
     assert(
@@ -737,6 +776,15 @@ Deno.test({
   fn: () => runFourTurnScenario({
     newCapacity: false, handler: offlineHandler(), envGet: offlineEnvGet,
     prefacedAreaFirstTurn: true,
+  }),
+});
+
+Deno.test({
+  name: "explicit 25 m² replacement with no exact live leaf searches the target and excludes chandeliers",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runFourTurnScenario({
+    newCapacity: false, handler: offlineHandler(), envGet: offlineEnvGet,
+    prefacedAreaFirstTurn: true, targetIsParent: true,
   }),
 });
 

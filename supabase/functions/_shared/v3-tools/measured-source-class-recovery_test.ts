@@ -410,11 +410,12 @@ Deno.test("destination-only request never opens source-class fallback", async ()
   assertEquals(fetched, false);
 });
 
-Deno.test("explicit class first checks live target leaf, then labels only verified source alternatives", async () => {
+Deno.test("explicit class searches only the target, even when the live target leaf cannot be resolved", async () => {
   resetDiscoverCategoryCacheForTest();
   const calls: string[] = [];
   let targetResolutionFailed = false;
   let targetEnough = false;
+  let queryOnlySource = false;
   const cards: ProductFull[] = [
     { ...product("target", "Светильник светодиодный 60W", "гостиная", "25"), leaf_category: "Светильники" },
     { ...product("target-b", "Светильник светодиодный 65W", "гостиная", "30"), leaf_category: "Светильники" },
@@ -422,11 +423,14 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
     product("source-a", "Люстра светодиодная 96W", "гостиная", "30"),
     product("source-b", "Люстра светодиодная 75W", "гостиная", "28"),
     product("source-c", "Люстра светодиодная 70W", "гостиная", "25"),
-    product("source-missing-stock", "Люстра светодиодная 65W", "гостиная", "30", 0),
-    product("office", "Люстра светодиодная офисная 48W", "офис", "30"),
-    product("small", "Люстра светодиодная 24W", "гостиная", "12"),
-    product("bulb-only", "Люстра под светодиодные лампы", "гостиная", "30"),
-    { ...product("other-leaf", "Люстра светодиодная 72W", "гостиная", "30"), leaf_category: "Декоративное освещение" },
+    { ...product("no-stock", "Светильник светодиодный 65W", "гостиная", "30", 0), leaf_category: "Светильники" },
+    { ...product("office", "Светильник светодиодный 48W", "офис", "30"), leaf_category: "Светильники" },
+    { ...product("small", "Светильник светодиодный 24W", "гостиная", "12"), leaf_category: "Светильники" },
+    { ...product("bulb-only", "Светильник под светодиодные лампы", "гостиная", "30"), leaf_category: "Светильники" },
+    { ...product("wrong-leaf", "Светильник светодиодный 72W", "гостиная", "30"), leaf_category: "Декоративное освещение" },
+    { ...product("wrong-title", "Люстра светодиодная 72W", "гостиная", "30"), leaf_category: "Светильники" },
+    { ...product("accessory", "Драйвер светодиодный для светильника", "гостиная", "30"), leaf_category: "Светильники" },
+    { ...product("mixed-source-leaf", "Светильник светодиодный 72W", "гостиная", "30"), leaf_category: "Люстры и светильники" },
   ];
   const rows = cards.map((card) => ({
     id: card.id,
@@ -434,7 +438,7 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
     price: card.price,
     url: card.url,
     category: { pagetitle: card.leaf_category },
-    ...(card.id === "source-missing-stock"
+    ...(card.id === "no-stock"
       ? {}
       : { warehouses: [{ city: "Алматы", amount: 3 }] }),
     options: card.short_traits.map((trait, index) => {
@@ -479,11 +483,17 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
       };
     } else if (url.pathname.endsWith("/products")) {
       const category = url.searchParams.get("category");
+      const query = url.searchParams.get("query");
       const results = category === "Светильники"
-        ? rows.filter((row) => row.category.pagetitle === "Светильники")
-          .slice(0, targetEnough ? 3 : 1)
+        ? rows.filter((row) => row.id === "target" ||
+          targetEnough && (row.id === "target-b" || row.id === "target-c") ||
+          row.id === "wrong-title" || row.id === "accessory")
+        : query === "светильник"
+        ? rows.filter((row) => queryOnlySource
+          ? row.id.startsWith("source-")
+          : row.id !== "target-b" && row.id !== "target-c")
         : category === "Люстры"
-        ? rows.filter((row) => row.category.pagetitle !== "Светильники")
+        ? rows.filter((row) => row.id.startsWith("source-"))
         : [];
       data = { data: { results, pagination: { total: results.length } } };
     } else {
@@ -500,21 +510,13 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
     cache: new Map(),
     fetchImpl,
   });
-  assertEquals(recovered?.origin, "explicit_target_with_source_alternatives");
+  assertEquals(recovered?.origin, "explicit_target_class");
   assertEquals(recovered?.target_category, "Светильники");
-  assertEquals(recovered?.source_category, "Люстры");
+  assertEquals(recovered?.source_category, null);
   assertEquals(recovered?.target_verified, 1);
-  assertEquals(recovered?.source_verified, 3);
-  assertEquals(recovered?.products.map(({ id }) => id), [
-    "target",
-    "source-a",
-    "source-b",
-    "source-c",
-  ]);
-  assertEquals(calls.filter((call) => call.includes("/products?")), [
-    "/products?category=%D0%A1%D0%B2%D0%B5%D1%82%D0%B8%D0%BB%D1%8C%D0%BD%D0%B8%D0%BA%D0%B8&min_price=1&per_page=50",
-    "/products?category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B&min_price=1&per_page=50",
-  ]);
+  assertEquals(recovered?.source_verified, 0);
+  assertEquals(recovered?.products.map(({ id }) => id), ["target"]);
+  assertEquals(calls.some((call) => decodeURIComponent(call).includes("Люстры")), false);
 
   targetEnough = true;
   calls.length = 0;
@@ -535,23 +537,34 @@ Deno.test("explicit class first checks live target leaf, then labels only verifi
 
   targetResolutionFailed = true;
   calls.length = 0;
-  const sourceOnly = await recoverMeasuredSourceClassSelection(explicitRequest, {
+  const queryRecovery = await recoverMeasuredSourceClassSelection(explicitRequest, {
     baseUrl: "https://catalog.test",
     apiToken: "test",
     cache: new Map(),
     fetchImpl,
   });
-  assertEquals(sourceOnly?.origin, "explicit_target_with_source_alternatives");
-  assertEquals(sourceOnly?.target_category, null);
-  assertEquals(sourceOnly?.target_status, "category_not_found");
-  assertEquals(sourceOnly?.products.map(({ id }) => id), [
-    "source-a",
-    "source-b",
-    "source-c",
-  ]);
-  assertEquals(calls.filter((call) => call.includes("/products?")), [
-    "/products?category=%D0%9B%D1%8E%D1%81%D1%82%D1%80%D1%8B&min_price=1&per_page=50",
-  ]);
+  assertEquals(queryRecovery?.origin, "explicit_target_query");
+  assertEquals(queryRecovery?.target_category, null);
+  assertEquals(queryRecovery?.target_status, "category_not_found");
+  assertEquals(queryRecovery?.request.place, "гостиной");
+  assertEquals(queryRecovery?.request.minimum_area_m2, 25);
+  assertEquals(queryRecovery?.products.map(({ id }) => id), ["target"]);
+  assertEquals(calls.filter((call) => call.includes("/products?")).map((call) =>
+    new URL(call, "https://catalog.test").searchParams.get("query")
+  ), ["светильник"]);
+  assertEquals(calls.some((call) => decodeURIComponent(call).includes("Люстры")), false);
+
+  queryOnlySource = true;
+  calls.length = 0;
+  const noVerifiedTarget = await recoverMeasuredSourceClassSelection(explicitRequest, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    cache: new Map(),
+    fetchImpl,
+  });
+  assertEquals(noVerifiedTarget?.origin, "unverified");
+  assertEquals(noVerifiedTarget?.products, []);
+  assertEquals(calls.some((call) => decodeURIComponent(call).includes("Люстры")), false);
 
   // A narrower named product cannot inherit chandelier alternatives merely
   // because those chandeliers also illuminate the same room and area.

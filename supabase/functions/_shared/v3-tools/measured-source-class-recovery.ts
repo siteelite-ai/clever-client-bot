@@ -1,10 +1,14 @@
 import {
   discoveryNounIsGrounded,
   extractCustomerOwnedDiscoveryTarget,
+  replacementClassIsSourceOnly,
 } from "./category-reasoning-guard.ts";
 import { executeDiscoverCategory } from "./discover-category.ts";
 import { executeSearchCatalog } from "./search-catalog.ts";
-import { verifyReplacementDestinationFit } from "./selection-contract.ts";
+import {
+  verifyReplacementDestinationFit,
+  verifySelectionTargetWithVisibleTitle,
+} from "./selection-contract.ts";
 import type { ProductCache, ProductFull } from "./types.ts";
 import { stripExplicitNewTaskPreface } from "./request-preface.ts";
 
@@ -311,7 +315,7 @@ export interface MeasuredSourceClassRecoveryResult {
     | "target_query"
     | "source_class_fallback"
     | "explicit_target_class"
-    | "explicit_target_with_source_alternatives"
+    | "explicit_target_query"
     | "unverified";
   products: ProductFull[];
   target_status: string;
@@ -319,6 +323,7 @@ export interface MeasuredSourceClassRecoveryResult {
   target_duration_ms: number;
   target_category?: string | null;
   target_pages?: number;
+  target_query_status?: string;
   source_category: string | null;
   source_status: string;
   source_pages: number;
@@ -328,10 +333,9 @@ export interface MeasuredSourceClassRecoveryResult {
 }
 
 /**
- * The destination is tried first. Only a shortfall of independently suitable
- * cards opens the customer's *own* source class as a fallback scope. The
- * class must resolve to a live leaf; broad umbrellas and invented siblings
- * never authorize a source-category search.
+ * An explicit target stays in its own class. Only a generic lighting goal
+ * without a named product type can open the customer's source class as a
+ * fallback, and only after that class resolves to a live leaf.
  */
 export async function recoverMeasuredSourceClassSelection(
   message: string,
@@ -347,11 +351,10 @@ export async function recoverMeasuredSourceClassSelection(
 ): Promise<MeasuredSourceClassRecoveryResult | null> {
   const explicit = parseMeasuredExplicitTargetClassRequest(message);
   if (explicit && admitMeasuredExplicitTargetDirectRoute(message)) {
-    // Resolve the customer's target against the live tree first. The removed
-    // class is a separately labelled alternative scope, not evidence that a
-    // source-class product belongs to the customer's exact target category.
-    // Such alternatives still need independent LED, site, area, price and
-    // stock proof; the answer must disclose their different catalog category.
+    const provesTarget = (product: ProductFull): boolean =>
+      verifySelectionTargetWithVisibleTitle(explicit.target_class, [product])
+        .passed_ids.length === 1;
+    // Resolve the customer's target against the live tree first.
     const started = Date.now();
     const discovered = await executeDiscoverCategory({
       noun: explicit.target_class,
@@ -367,6 +370,7 @@ export async function recoverMeasuredSourceClassSelection(
           discovered.category.pagetitle,
           explicit.target_class,
         ) &&
+        !replacementClassIsSourceOnly(discovered.category.pagetitle, message) &&
         discovered.leaf_categories.some((leaf) =>
           leaf.pagetitle === discovered.category.pagetitle
         )
@@ -401,105 +405,68 @@ export async function recoverMeasuredSourceClassSelection(
           found.results
             .filter((product) => product.leaf_category === targetCategory)
             .map(({ id }) => deps.cache.get(id))
-            .filter((product): product is ProductFull => Boolean(product)),
+            .filter((product): product is ProductFull =>
+              !!product && provesTarget(product)
+            ),
         ).filter(hasPositiveWarehouseProof);
         for (const product of verified) selected.set(product.id, product);
         if (found.results.length < 50 || found.total <= page * 50) break;
       }
     }
-    const targetVerified = selected.size;
-    const targetDuration = Date.now() - started;
-    let sourceCategory: string | null = null;
-    let sourceStatus = "not_needed";
-    let sourcePages = 0;
-    let sourceVerified = 0;
-    let sourceDiscoveryDuration = 0;
-    let sourceSearchDuration = 0;
-    // Only the customer's broad fixture noun can use the removed lighting
-    // fixture as a separately labelled alternative. A specific target such
-    // as an LED strip or bulb must remain exact-target-only: room/area
-    // suitability alone cannot make a chandelier that requested product.
-    const permitsSourceFixtureAlternatives =
-      normalizedRequestWords(explicit.target_class)[0] === "светильник";
-    if (permitsSourceFixtureAlternatives && selected.size < 3) {
-      const sourceStarted = Date.now();
-      const sourceDiscovery = await executeDiscoverCategory({
-        noun: explicit.source_class,
-        semantic_query: explicit.source_class,
+    // If the target has no usable leaf or no verified cards, try a bounded
+    // text query for Y's class alone, so word order in titles cannot hide
+    // matches. The title and leaf must prove the class, then the ordinary
+    // per-card checks still require LED construction, application and area.
+    let targetQueryStatus: string | undefined;
+    if (selected.size === 0) {
+      const found = await executeSearchCatalog({
+        mode: "by_query",
+        query: explicit.target_class,
+        min_price: 1,
+        per_page: 50,
       }, {
         baseUrl: deps.baseUrl,
         apiToken: deps.apiToken,
         fetchImpl: deps.fetchImpl,
-        timeoutMs: deps.discoveryTimeoutMs ?? 3_500,
-      });
-      sourceCategory = sourceDiscovery.ok &&
-          discoveryNounIsGrounded(
-            sourceDiscovery.category.pagetitle,
-            explicit.source_class,
-          ) &&
-          sourceDiscovery.leaf_categories.some((leaf) =>
-            leaf.pagetitle === sourceDiscovery.category.pagetitle
-          )
-        ? sourceDiscovery.category.pagetitle
-        : null;
-      sourceStatus = sourceDiscovery.ok
-        ? sourceCategory ? "ok" : "unproven_source_leaf"
-        : sourceDiscovery.error_code;
-      sourceDiscoveryDuration = Date.now() - sourceStarted;
-      if (sourceCategory && sourceCategory !== targetCategory) {
-        const sourceSearchStarted = Date.now();
-        for (let page = 1; page <= 3 && selected.size < 5; page++) {
-          const found = await executeSearchCatalog({
-            mode: "by_filter",
-            category: sourceCategory,
-            min_price: 1,
-            per_page: 50,
-            page,
-          }, {
-            baseUrl: deps.baseUrl,
-            apiToken: deps.apiToken,
-            fetchImpl: deps.fetchImpl,
-            timeoutMs: deps.sourceTimeoutMs ?? 2_500,
-          }, deps.cache);
-          sourcePages += 1;
-          if (!found.ok) {
-            sourceStatus = found.error_code;
-            break;
-          }
-          const verified = verifiedMeasuredLedReplacementProducts(
-            message,
-            found.results
-              .filter((product) => product.leaf_category === sourceCategory)
-              .map(({ id }) => deps.cache.get(id))
-              .filter((product): product is ProductFull => Boolean(product)),
-          ).filter(hasPositiveWarehouseProof);
-          sourceVerified += verified.length;
-          for (const product of verified) selected.set(product.id, product);
-          if (found.results.length < 50 || found.total <= page * 50) break;
-        }
-        sourceSearchDuration = Date.now() - sourceSearchStarted;
+        timeoutMs: deps.targetTimeoutMs ?? 2_500,
+      }, deps.cache);
+      targetQueryStatus = found.ok ? "ok" : found.error_code;
+      if (found.ok) {
+        const verified = verifiedMeasuredLedReplacementProducts(
+          message,
+          found.results
+            .map(({ id }) => deps.cache.get(id))
+            .filter((product): product is ProductFull =>
+              !!product?.leaf_category &&
+              discoveryNounIsGrounded(explicit.target_class, product.leaf_category) &&
+              provesTarget(product) &&
+              !replacementClassIsSourceOnly(product.leaf_category, message)
+            ),
+        ).filter(hasPositiveWarehouseProof);
+        for (const product of verified) selected.set(product.id, product);
       }
     }
     const products = [...selected.values()].slice(0, 5);
     return {
       request: explicit,
-      origin: sourceVerified > 0
-        ? "explicit_target_with_source_alternatives"
-        : products.length > 0
-        ? "explicit_target_class"
-        : "unverified",
+      origin: products.length === 0
+        ? "unverified"
+        : targetQueryStatus
+        ? "explicit_target_query"
+        : "explicit_target_class",
       products,
       target_status: targetStatus,
-      target_verified: targetVerified,
-      target_duration_ms: targetDuration,
+      target_verified: selected.size,
+      target_duration_ms: Date.now() - started,
       target_category: targetCategory,
       target_pages: targetPages,
-      source_category: sourceCategory,
-      source_status: sourceStatus,
-      source_pages: sourcePages,
-      source_verified: sourceVerified,
-      source_discovery_duration_ms: sourceDiscoveryDuration,
-      source_search_duration_ms: sourceSearchDuration,
+      target_query_status: targetQueryStatus,
+      source_category: null,
+      source_status: "not_needed",
+      source_pages: 0,
+      source_verified: 0,
+      source_discovery_duration_ms: 0,
+      source_search_duration_ms: 0,
     };
   }
   if (!admitMeasuredSourceClassDirectRoute(message)) return null;

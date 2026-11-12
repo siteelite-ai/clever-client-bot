@@ -17,6 +17,7 @@ import {
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
   rankGroundedCategoryRecoveryScopes,
+  replacementClassIsSourceOnly,
   resolveSelectiveLiteralTokenCategoryCandidates,
   scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
@@ -424,6 +425,26 @@ Deno.test("a directly negated category word is exclusion rather than affirmation
     ),
     false,
   );
+});
+
+Deno.test("only the named target can carry a replacement class across catalog domains", () => {
+  for (const [request, source, target] of [
+    ["Хочу заменить люстру на светодиодный светильник в гостиной 25 м²", "Люстры", "Светильники"],
+    ["Поменяйте старый удлинитель на сетевой фильтр с выключателем", "Удлинители", "Сетевые фильтры"],
+    ["Хочу сменить стабилизатор на ИБП для дома", "Стабилизаторы напряжения", "ИБП"],
+    ["Чем заменить лампу: нужен светильник для офиса", "Лампы", "Светильники"],
+  ]) {
+    assertEquals(replacementClassIsSourceOnly(source, request), true, request);
+    assertEquals(replacementClassIsSourceOnly(target, request), false, request);
+  }
+  assertEquals(replacementClassIsSourceOnly("Удлинители", "Заменить старый удлинитель на новый удлинитель"), false);
+  assertEquals(replacementClassIsSourceOnly("Автоматы", "Заменить автомат на 16 А"), false);
+  assertEquals(replacementClassIsSourceOnly("Светильники", "Хочу заменить светильник на улице"), false);
+  assertEquals(
+    replacementClassIsSourceOnly("Кабели для насосов", "Заменить кабель для насоса на кабель для насоса длиной 50 м"),
+    false,
+  );
+  assertEquals(replacementClassIsSourceOnly("Люстры", "А есть другие варианты?"), false);
 });
 
 Deno.test("semantic discovery uses only the explicit customer destination of a transformation", () => {
