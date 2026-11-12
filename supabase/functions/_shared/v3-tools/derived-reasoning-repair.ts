@@ -11,6 +11,28 @@ export interface DerivedReasoningRepairInput {
   pairedFitMissing: boolean;
   productMeasurementMissing: boolean;
   providerAttempts: number;
+  /** Server-authorized exception: one narrow repair of the first usable
+   * response after a primary timeout. Never a reset of the attempt counter. */
+  timeoutFallbackProjectionRepair?: boolean;
+}
+
+/** A timeout produced no declaration to correct. The fallback's accepted
+ * customer state can support exactly one product-only correction, not a new
+ * full declaration, provider failover loop or a fourth logical model call.
+ * These are server-observed facts, never request/header/model switches. */
+export function canRepairTimedOutFallback(input: {
+  providerAttempts: number;
+  primaryTimedOut: boolean;
+  customerStateAccepted: boolean;
+  narrowProjectionAvailable: boolean;
+  fallbackProvider: string;
+  independentProviderRetryEnabled: boolean;
+  aborted: boolean;
+}): boolean {
+  return input.providerAttempts === 2 && input.primaryTimedOut &&
+    input.customerStateAccepted && input.narrowProjectionAvailable &&
+    input.fallbackProvider === "openrouter" &&
+    !input.independentProviderRetryEnabled && !input.aborted;
 }
 
 export type RequiredProductMeasurementGap =
@@ -46,11 +68,13 @@ export function chooseDerivedReasoningRepair(
   input: DerivedReasoningRepairInput,
 ): DerivedReasoningRepairReason | null {
   // The normal provider retry and contract repair share a two-call budget.
-  // The sole exception is one transport retry of a product_measurement
-  // correction after a confirmed real HTTP 5xx, within the same turn deadline:
-  // that can make at most three logical model calls, never a second repair.
+  // A server-authorized timeout fallback may use a third call for one narrow
+  // projection repair, under the same deadline. That third call cannot use
+  // the separate measured-product transport retry (enforced by the caller).
+  // Ordinary paths retain their released budget and transport retry policy.
   // Keep safety-specific repairs ahead of the generic malformed-contract case.
-  if (input.providerAttempts >= 2) return null;
+  if (input.providerAttempts >= 2 &&
+    !(input.providerAttempts === 2 && input.timeoutFallbackProjectionRepair === true)) return null;
   if (input.environmentalProtectionMissing) return "environmental_protection";
   if (input.pairedFitMissing) return "paired_fit";
   if (!input.resolvedText?.trim()) return "invalid_declaration";
