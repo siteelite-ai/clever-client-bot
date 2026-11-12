@@ -425,6 +425,7 @@ import {
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
   rankGroundedCategoryRecoveryScopes,
+  replacementClassIsSourceOnly,
   resolveSelectiveLiteralTokenCategoryCandidates,
   scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
@@ -4594,6 +4595,7 @@ async function answerMeasuredSourceClassRecovery(
     meta: {
       destination: recovered.request.destination,
       status: recovered.target_status,
+      target_query_status: recovered.target_query_status ?? null,
       verified: recovered.target_verified,
       live_target_category: recovered.target_category ?? null,
       target_pages: recovered.target_pages ?? 0,
@@ -4623,14 +4625,14 @@ async function answerMeasuredSourceClassRecovery(
       recovered.source_discovery_duration_ms +
       recovered.source_search_duration_ms,
     summary: recovered.target_category !== undefined
-      ? `Проверено карточек: ${recovered.products.length}; целевая категория: ${recovered.target_verified}; исходные альтернативы: ${recovered.source_verified}; статус: ${recovered.target_status}`
+      ? `Подтверждено товаров нужного типа: ${recovered.target_verified}`
       : `Проверено подходящих карточек: ${recovered.products.length}; целевой поиск: ${recovered.target_status}; исходный класс: ${recovered.source_status}`,
   });
   if (recovered.products.length === 0) {
     send({
       type: "delta",
       content: recovered.target_category !== undefined
-        ? `Не смог подтвердить товары именно запрошенного типа «${recovered.request.destination}» для «${recovered.request.place}» с площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Другие типы вместо него не подставляю. Это не доказывает, что подходящих товаров нет во всём каталоге; можно уточнить условия подбора у менеджера.`
+        ? `В проверенной части каталога не смог подтвердить нужный тип («${recovered.request.destination}») в наличии для помещения «${recovered.request.place}» площадью ${recovered.request.minimum_area_m2} м². Подбор можно уточнить у менеджера.`
         : `Не смог подтвердить светодиодные товары для «${recovered.request.place}» с заявленной площадью освещения не менее ${recovered.request.minimum_area_m2} м² и положительным остатком. Это не доказывает, что таких товаров нет в каталоге; для точного подбора можно уточнить вариант у менеджера.`,
     });
     return { handled: true, products: [] };
@@ -4652,21 +4654,10 @@ async function answerMeasuredSourceClassRecovery(
     });
     return { handled: true, products: [] };
   }
-  const exactTargetShown = Math.min(
-    recovered.target_verified,
-    rendered.rendered_count,
-  );
-  const alternativeShown = rendered.rendered_count - exactTargetShown;
   const classCaveat = recovered.origin === "source_class_fallback"
     ? `Для расширения поиска проверил названный вами исходный класс «${recovered.source_category}»; это не обзор всех видов светодиодного освещения. `
-    : recovered.origin === "explicit_target_with_source_alternatives"
-    ? `${exactTargetShown > 0
-      ? `Из запрошенной категории «${recovered.target_category}» подтверждено ${exactTargetShown}. `
-      : recovered.target_category
-      ? `В запрошенной категории «${recovered.target_category}» подходящих карточек пока не подтвердил. `
-      : `Целевую категорию для «${recovered.request.destination}» пока не удалось подтвердить. `}Альтернативы из названной вами исходной категории «${recovered.source_category}»: ${alternativeShown}. Их принадлежность к целевой каталожной категории не утверждаю. `
     : recovered.origin === "explicit_target_class"
-    ? `Подобрал только товары из каталожной категории «${recovered.target_category}»; исходный тип не подставлял. `
+    ? `Подобрал товары из каталожной категории «${recovered.target_category}». `
     : "";
   const cardinality = resolveResultCardinality(userMessage, {
     selection: true,
@@ -4700,12 +4691,13 @@ async function answerMeasuredSourceClassRecovery(
         ...(criterion.evidence ? { evidence: criterion.evidence } : {}),
       })),
       visible_requirements: [
-        ...(recovered.origin === "explicit_target_class" &&
-            recovered.target_category
+        ...("target_class" in recovered.request
           ? [{
             kind: "product_class",
             label: "Целевой тип товара",
-            value: recovered.target_category,
+            value: recovered.origin === "explicit_target_class" && recovered.target_category
+              ? recovered.target_category
+              : recovered.request.destination,
           }]
           : []),
         {
@@ -9745,6 +9737,10 @@ async function runExpertLoop(
   // can replace, rather than be ANDed with, the previous value of that facet.
   const selectionDiscoveryMessage = ellipticalContinuation?.baseUserMessage ??
     userMessage;
+  // Only the current customer turn can identify an explicit transformation.
+  // Neither assistant prose nor an inherited «Другие варианты» turn can.
+  const namesRemovedReplacementClass = (label: string): boolean =>
+    replacementClassIsSourceOnly(label, rawCurrentUserMessage);
   // A compound answer or a short attribute-only refinement may bind to a
   // completed server-issued leaf. Only the first mandatory taxonomy lookup
   // uses that leaf; the request remains the source for every facet, exclusion
@@ -17398,13 +17394,16 @@ async function runExpertLoop(
           const schemaGroundableNamedReplacement = replacementIntent &&
             agentPhase === "rediscover_after_failed_discovery" &&
             compactCodeTokensInQuery(selectionDiscoveryMessage).length > 0;
+          const sourceNounProposed = !customerQueryCompiledByServer &&
+            namesRemovedReplacementClass(tc.args.noun);
           if (
-            !customerQueryCompiledByServer &&
-            !discoveryNounIsGrounded(tc.args.noun, discoveryEvidence) &&
-            !schemaGroundableNamedReplacement
+            sourceNounProposed ||
+            (!customerQueryCompiledByServer &&
+              !discoveryNounIsGrounded(tc.args.noun, discoveryEvidence) &&
+              !schemaGroundableNamedReplacement)
           ) {
             const customerTarget = extractCustomerOwnedDiscoveryTarget(
-              selectionDiscoveryMessage,
+              sourceNounProposed ? rawCurrentUserMessage : selectionDiscoveryMessage,
             );
             if (customerTarget) {
               const rejected = tc.args.noun;
@@ -20451,8 +20450,11 @@ async function runExpertLoop(
                 selectionDiscoveryMessage,
                 (result as DiscoverCategoryOk).facets ?? [],
               ) >= 2;
+          const resolvedToRemovedClass = namesRemovedReplacementClass(
+            resolvedCategory,
+          );
           if (
-            !discoveryResultPreservesCustomerIntent(
+            resolvedToRemovedClass || !discoveryResultPreservesCustomerIntent(
               requestedNoun,
               resolvedCategory,
               discoveryEvidence,
@@ -20470,7 +20472,7 @@ async function runExpertLoop(
               ),
             )
           ) {
-            const liveType = SELECTION_READINESS_REQUIRED && !replacementIntent &&
+            const liveType = !resolvedToRemovedClass && SELECTION_READINESS_REQUIRED && !replacementIntent &&
                 !isReplacementProofRequest(userMessage) && !activeSelectionTarget && !productsRendered
               ? resolveLiveTypeDiscovery({ currentMessage: rawCurrentUserMessage, request: userMessage,
                 category: resolvedCategory, choices: selectionSubjectChoices((result as DiscoverCategoryOk).facets ?? []),
@@ -20502,7 +20504,9 @@ async function runExpertLoop(
                 ok: false,
                 error_code: "category_not_found",
                 message:
-                  "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
+                  resolvedToRemovedClass
+                    ? "Каталог вернул тип товара, который клиент хочет заменить. Повтори поиск по названному клиентом целевому типу или сообщи, что подобрать товар не удалось."
+                    : "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
               } as unknown as ToolResult;
               steps.push({
                 step: "v3_discovery_result_target_mismatch",
