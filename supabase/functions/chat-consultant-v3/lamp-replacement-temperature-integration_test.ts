@@ -3,6 +3,7 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { guardReplacementReplayEvents } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
   offlineHandler,
   restoreOfflineModuleSetup,
@@ -21,12 +22,18 @@ const traits = [
   ["shape", "Форма колбы", "таблетка"],
   ["diameter", "Диаметр, мм", "74"],
   ["power", "Мощность, Вт", "6"],
+  ["volume", "Объём", "0.02"],
   ["length", "Длина, мм", "29"],
   ["temperature", "Цветовая температура, К", "6500"],
   ["flux", "Световой поток, Лм", "600"],
 ] as const;
 
-function lamp(id: number, title: string, temperature: string | null) {
+function lamp(
+  id: number,
+  title: string,
+  temperature: string | null,
+  overrides: Record<string, string> = {},
+) {
   return {
     id,
     pagetitle: title,
@@ -36,7 +43,9 @@ function lamp(id: number, title: string, temperature: string | null) {
     price: id === 2 ? 2000 : 100 + id,
     warehouses: [{ city: "Караганда", amount: 5 }],
     options: traits.flatMap(([key, caption_ru, value]) => {
-      const value_ru = key === "temperature" ? temperature : value;
+      const value_ru = key === "temperature"
+        ? temperature
+        : overrides[key] ?? value;
       return value_ru === null ? [] : [{ key, caption_ru, value_ru }];
     }),
   };
@@ -56,6 +65,7 @@ const matching = lamp(
   2,
   "Лампа NLL-GX53-6-230-6,5K 61 247 Navigator",
   "6500 К",
+  { length: "28", flux: "510", volume: "0.01" },
 );
 
 function json(value: unknown, status = 200) {
@@ -66,6 +76,13 @@ function json(value: unknown, status = 200) {
 }
 
 type Step = { step: string; meta?: Record<string, unknown> };
+type SavedEvent = {
+  type: string;
+  phase?: string;
+  origin?: string;
+  replacement_proof?: boolean;
+  content?: string;
+};
 type Frame = {
   choices?: Array<{ delta?: { content?: string } }>;
   v3_event?: {
@@ -90,6 +107,7 @@ async function runTurn({
   const intervals = new Set<number>();
   const pages: number[] = [];
   let steps: Step[] = [];
+  let savedEvents: SavedEvent[] = [];
   try {
     globalThis.setInterval = ((callback, delay, ...args) => {
       const id = originalSetInterval(callback, delay, ...args);
@@ -105,7 +123,9 @@ async function runTurn({
             return json({ id: "offline-lamp-log" }, 201);
           }
           if (req.method === "PATCH") {
-            steps = (await req.json()).steps ?? [];
+            const body = await req.json();
+            steps = body.steps ?? [];
+            savedEvents = body.response_events ?? [];
             return new Response(null, { status: 204 });
           }
         }
@@ -211,6 +231,7 @@ async function runTurn({
     return {
       pages,
       steps,
+      savedEvents,
       blocks: frames.flatMap(({ v3_event }) =>
         v3_event?.type === "products_block" ? [v3_event] : []
       ),
@@ -251,6 +272,41 @@ Deno.test({
       assertStringIncludes(
         positive.text,
         "Полная взаимозаменяемость не подтверждена",
+      );
+      assertEquals(
+        (positive.text.match(/Полная взаимозаменяемость/gu) ?? []).length,
+        1,
+        positive.text,
+      );
+      assertStringIncludes(positive.text, "длина 28 мм вместо 29 мм");
+      assertStringIncludes(
+        positive.text,
+        "световой поток 510 лм вместо 600 лм",
+      );
+      assert(
+        !/объ[её]м|сравнение с ценой/iu.test(positive.text),
+        positive.text,
+      );
+      const proofIndex = positive.savedEvents.findIndex((
+        { replacement_proof },
+      ) => replacement_proof);
+      assert(
+        proofIndex >= 0 &&
+          proofIndex <
+            positive.savedEvents.findIndex(({ type }) =>
+              type === "products_block"
+            ),
+      );
+      const replay = guardReplacementReplayEvents(
+        positive.savedEvents,
+        { type: "delta", origin: "server", content: "generic fallback" },
+        { type: "delta", origin: "server", content: "clarification fallback" },
+      );
+      assertEquals(
+        replay.filter(({ type }) => type === "delta").map(({ content }) =>
+          content
+        ).join(""),
+        positive.text,
       );
       assert(
         !positive.text.includes("2700") && !positive.text.includes("3000"),

@@ -49,17 +49,21 @@ test("source title and article are lookup identity, not analogue literals", () =
   assert.match(preflight, /sourceIdentityVerified = found\.total === 1 &&\s*exactArticleMatches\.length === 1 &&\s*exactArticleMatches\[0\]\.id === anchor\.id/u);
   const cards = preflight.indexOf('type: "products_block"');
   assert.ok(cards > -1, "direct replacement still renders product cards");
-  // Disclosure now belongs to the common SSE proof boundary, not this one
-  // preflight branch: direct/model/fallback cards must share the same caption.
-  const egress = source.slice(source.indexOf("const send = (ev: SseEvent)"));
+  // All captions are selected at the common SSE proof boundary, before cards.
+  const send = /const send = \(\s*ev: SseEvent\b/u.exec(source);
+  assert.ok(send, "SSE proof boundary is present");
+  const egress = source.slice(send.index);
   const proof = egress.indexOf("const caption = confirmedDirectAnalogProof");
   const proofSent = egress.indexOf("responseEvents.push(disclosure)", proof);
   const publicBlock = egress.indexOf("responseEvents.push(out)", proofSent);
   assert.ok(proof > -1 && proofSent > proof && publicBlock > proofSent,
     "server-owned replacement proof must precede product cards on every render path");
+  assert.match(egress.slice(0, proof),
+    /const lampCaption = lampProfile && source && renderedProducts\.length === ev\.count\s*\? verifiedLedLampDisclosure\(\s*lampProfile,\s*replacementEgressCache\?\.get\(source\.id\),\s*renderedProducts,?\s*\)\s*: null/u,
+    "the lamp caption requires a resolved source and every rendered card");
   assert.match(egress.slice(proof, proofSent),
-    /: replacementProofCaption\(replacementLastProof\)/u,
-    "non-certified cards still get the former provisional proof caption");
+    /: lampCaption \?\? replacementProofCaption\(replacementLastProof\)/u,
+    "the former provisional caption remains the fallback without verified lamp wording");
   assert.match(preflight, /replacement_evidence:\s*"provisional"/u);
 
   const axes = [{ caption: "Мощность", value: "7 Вт" }];
