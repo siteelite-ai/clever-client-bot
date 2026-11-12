@@ -1,4 +1,8 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
+import {
+  OUTDOOR_AREA_FLOODLIGHT,
+  PARKING_AREA_FLOODLIGHT,
+} from "./area-lighting-fit.ts";
 import { CABLE_LUG_REQUEST, compileCableLugConnection } from "./selection-connection.ts";
 import {
   CUSTOMER_TURN_BOUNDARY,
@@ -1040,8 +1044,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "outdoor_floodlight",
-    applies:
-      /прожектор\p{L}*[^.!?\n]{0,80}(?:ули[цч]\p{L}*|наруж\p{L}*)|(?:ули[цч]\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
+    applies: OUTDOOR_AREA_FLOODLIGHT,
     required: [
       /\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м|квадрат\p{L}*)|\d+(?:[.,]\d+)?\s*[xх×*]\s*\d+(?:[.,]\d+)?\s*м(?=$|[^\p{L}\p{N}²])/iu,
       hasMountingHeight,
@@ -1062,7 +1065,7 @@ const PROFILES: ReadinessProfile[] = [
       ],
     }],
     question:
-      "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
+      "На какой высоте будет установлен прожектор? Выберите диапазон или напишите высоту. Если знаете площадь или размеры двора, укажите их в том же сообщении.",
     facet_key: "mounting_height",
     options: [
       { value: "До 4 м", label: "До 4 м" },
@@ -1073,8 +1076,7 @@ const PROFILES: ReadinessProfile[] = [
   {
     id: "parking_floodlight",
     priority: 10,
-    applies:
-      /прожектор\p{L}*[^.!?\n]{0,80}парковк\p{L}*|парковк\p{L}*[^.!?\n]{0,80}прожектор\p{L}*/iu,
+    applies: PARKING_AREA_FLOODLIGHT,
     required: [
       /\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м|квадрат\p{L}*)|\d+(?:[.,]\d+)?\s*[xх×*]\s*\d+(?:[.,]\d+)?\s*м(?=$|[^\p{L}\p{N}²])/iu,
       hasMountingHeight,
@@ -1095,7 +1097,7 @@ const PROFILES: ReadinessProfile[] = [
       ],
     }],
     question:
-      "Для парковки сначала нужны площадь территории и высота установки. Для улицы также уточним требуемую защиту, обычно рассматривают IP65/IP66. Какая площадь и высота монтажа?",
+      "На какой высоте будет установлен прожектор? Выберите диапазон или напишите высоту. Если знаете площадь или размеры парковки, укажите их в том же сообщении.",
     facet_key: "mounting_height",
     options: [
       { value: "До 4 м", label: "До 4 м" },

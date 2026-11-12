@@ -54,6 +54,7 @@ async function runOfflineTurn(message: string, scenario: {
   category?: string; clarification?: unknown; planningClarification?: boolean;
   competingSearch?: boolean;
   discoveryFailure?: boolean;
+  areaLighting?: "mixed" | "ip_only";
 } = {}): Promise<FixtureResult> {
   resetDiscoverCategoryCacheForTest();
   const leaf = scenario.category ?? catalogLeaf;
@@ -63,6 +64,32 @@ async function runOfflineTurn(message: string, scenario: {
   const requests: string[] = [];
   let steps: FixtureResult["steps"] = [];
   let modelCalls = 0;
+  const floodlights = [
+    { id: 401, area: "40", height: "2,5", ip: "IP65" },
+    { id: 402, area: "25", height: "2,5", ip: "IP65" },
+    { id: 403, area: "40", height: "4", ip: "IP65" },
+    { id: 404, area: "40", height: "2,5", ip: "IP44" },
+    { id: 405, area: "", height: "", ip: "IP65" },
+  ].filter((product) => scenario.areaLighting !== "ip_only" || product.id === 405)
+    .map((product) => ({
+      id: product.id,
+      pagetitle: `Прожектор Fixture ${product.id} 30 Вт ${product.ip}`,
+      url: `https://220volt.kz/catalog/lighting/floodlights/${product.id}/`,
+      category: leaf,
+      price: 2000,
+      warehouses: [{ city: "Караганда", amount: 3 }],
+      options: [
+        { key: "ip", caption_ru: "IP", value_ru: product.ip },
+        ...(product.area ? [{
+          key: "lit_area", caption_ru: "Максимальная площадь освещения, м²",
+          value_ru: product.area,
+        }] : []),
+        ...(product.height ? [{
+          key: "mounting_height", caption_ru: "Высота установки, м",
+          value_ru: product.height,
+        }] : []),
+      ],
+    }));
 
   try {
     globalThis.setInterval = ((
@@ -133,7 +160,10 @@ async function runOfflineTurn(message: string, scenario: {
           return json({
             data: {
               category: { id: 1, pagetitle: leaf, total_products: 3 },
-              options: [{
+              options: scenario.areaLighting ? [{
+                key: "ip", caption_ru: "IP", type: "string",
+                values: ["IP44", "IP65"].map(value_ru => ({ value_ru, products_count: 2 })),
+              }] : [{
                 key: "tip",
                 caption_ru: "Тип",
                 type: "string",
@@ -143,13 +173,14 @@ async function runOfflineTurn(message: string, scenario: {
           });
         }
         if (url.pathname === "/api/products") {
-          if (!message.includes("аналоги")) {
+          if (!scenario.areaLighting && !message.includes("аналоги")) {
             assertEquals(url.searchParams.get("category"), leaf);
           }
+          const products = scenario.areaLighting ? floodlights : baseProducts;
           return json({
             data: {
-              results: baseProducts.map(product => ({ ...product, category: leaf })),
-              pagination: { total: baseProducts.length },
+              results: products.map(product => ({ ...product, category: leaf })),
+              pagination: { total: products.length },
             },
           });
         }
@@ -197,12 +228,14 @@ async function runOfflineTurn(message: string, scenario: {
                   name: "declare_selection_reasoning",
                   arguments: JSON.stringify({
                     ...(scenario.clarification !== undefined ? { clarification: scenario.clarification } : {}),
-                    reasoning: message.includes("аналоги")
+                    reasoning: scenario.areaLighting
+                      ? "Ищу уличный прожектор. Подтвержу площадь освещения и высоту установки по характеристикам товара. Защиту корпуса проверяю отдельно."
+                      : message.includes("аналоги")
                       ? "Ищу электрические удлинители из каталога. Эти модели полностью взаимозаменяемы и дешевле исходной."
                       : message.includes("для дома")
                       ? "Покажу несколько электрических удлинителей для дома."
                       : "Покажу несколько электрических удлинителей из каталога для выбора.",
-                    measurement_scope: "not_applicable",
+                    measurement_scope: scenario.areaLighting ? "system_total" : "not_applicable",
                     compatible_classifications: [],
                     excluded_classifications: [],
                     required_facet_values: [],
@@ -248,6 +281,50 @@ async function runOfflineTurn(message: string, scenario: {
     globalThis.fetch = originalFetch;
   }
 }
+
+Deno.test({
+  name: "yard floodlight fit verifies area and mounting height after an IP-only search",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn(
+      "Подберите прожектор для двора 35 м², высота установки 2,5 м",
+      { areaLighting: "mixed", category: "Прожекторы" },
+    );
+    const input = result.steps.find(({ step }) => step === "v3_area_lighting_inputs");
+    assertEquals(input?.meta?.area, { min: 35, max: 35 });
+    assertEquals(input?.meta?.height, { min: 2.5, max: 2.5 });
+    const search = result.steps.find(({ step, meta }) =>
+      step === "v3_area_lighting_fit" && meta?.phase === "search"
+    );
+    const catalog = result.steps.find(({ step, meta }) =>
+      step === "v3_tool_call" && meta?.tool === "search_catalog"
+    );
+    assertEquals((catalog?.meta?.args as Record<string, unknown>)?.category, "Прожекторы");
+    assertEquals((catalog?.meta?.args as Record<string, unknown>)?.options, { ip: ["IP65"] });
+    assertEquals(search?.meta?.verified, 1, JSON.stringify(result.steps));
+    assertEquals(search?.meta?.rejected, { coverage: 2, height: 1, protection: 1 });
+    const cards = result.events
+      .map((event) => event.v3_event as Record<string, unknown> | undefined)
+      .filter((event) => event?.type === "products_block");
+    assertEquals(cards.length, 1, JSON.stringify(result.steps));
+    assertEquals(cards[0]?.count, 1);
+    assert(String(cards[0]?.markdown).includes("/401/"));
+  },
+});
+
+Deno.test({
+  name: "yard floodlight does not promise a match when the catalog only verifies IP",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const result = await runOfflineTurn(
+      "Подберите прожектор для двора 35 м², высота установки 2,5 м",
+      { areaLighting: "ip_only", category: "Прожекторы" },
+    );
+    const events = result.events.map((event) => event.v3_event as Record<string, unknown> | undefined);
+    assert(!events.some((event) => event?.type === "products_block"));
+    assert(JSON.stringify(result.events).includes("По IP и ваттам нельзя определить площадь освещения"), JSON.stringify(result.steps));
+  },
+});
 
 Deno.test({
   name: "pure delivery and payment request stays on real knowledge handler route",

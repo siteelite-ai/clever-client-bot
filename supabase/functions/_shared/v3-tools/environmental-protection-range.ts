@@ -80,10 +80,13 @@ function hasExplicitIpFacetLabel(facet: DerivedSelectionFacet): boolean {
  * not that another criteria projector will preserve this exact set. The
  * caller must intersect projected values with this list and require strict
  * per-product proof. `unresolved` must not be projected as a partial filter.
+ * A scoped caller can supply an additional predicate to narrow this range;
+ * it cannot override the existing hazard checks or the customer's own code.
  */
 export function deriveEnvironmentalProtectionRange(
   customerEvidence: string,
   facets: DerivedSelectionFacet[],
+  acceptsCode: (code: string) => boolean = () => true,
 ): EnvironmentalProtectionRange {
   // This is a conservative hand-off, not an attempt to parse whether the
   // customer's own IP code means equality, minimum, or exclusion.
@@ -139,6 +142,7 @@ export function deriveEnvironmentalProtectionRange(
     // Validate against the existing hazard policy using its IP notation, but
     // keep the exact live enum for downstream search and product proof.
     const protectionCode = bareCode ? `IP${value}` : value;
+    if (!acceptsCode(protectionCode)) continue;
     if (
       hasUnresolvedEnvironmentalProtectionObligation(
         customerEvidence,

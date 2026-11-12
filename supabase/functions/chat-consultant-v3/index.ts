@@ -223,6 +223,12 @@ import {
   type EnvironmentalProtectionRange,
 } from "../_shared/v3-tools/environmental-protection-range.ts";
 import {
+  areaLightingCardIssue,
+  areaLightingFitText,
+  compileAreaLightingFit,
+  isOpenAreaLightingProtection,
+} from "../_shared/v3-tools/area-lighting-fit.ts";
+import {
   classifyRequiredProductMeasurementGap,
   chooseDerivedReasoningRepair,
   INVALID_DERIVED_DECLARATION_CORRECTION,
@@ -9682,6 +9688,34 @@ async function runExpertLoop(
   const now = () => Date.now() - t0;
   const requestedConnection = CABLE_LUG_REQUEST.test(userMessage)
     ? compileCableLugConnection(userMessage) : null;
+  const areaLightingFit = compileAreaLightingFit(
+    rawCurrentUserMessage,
+    serverVerifiedPriorQueriesNewestFirst,
+    userMessage,
+  );
+  const areaLightingIpPolicy = areaLightingFit?.exposed
+    ? isOpenAreaLightingProtection
+    : undefined;
+  const areaLightingPolicy = areaLightingFit
+    ? "\n\nДля этого подбора сервер отдельно проверяет площадь освещения и высоту установки по характеристикам каталога. Выполни поиск по типу товара и проверяемым условиям клиента. Не превращай площадь участка или высоту установки в габариты изделия. Не выводи порог мощности, освещённости или светового потока только из этих двух чисел. IP подтверждает защиту корпуса, а не освещение заданной площади."
+    : "";
+  let areaLightingSearchInspectedCards = false;
+  const filterAreaLightingIds = (ids: string[], phase: string): string[] => {
+    if (!areaLightingFit) return ids;
+    const rejected: Record<string, number> = {};
+    const verified = ids.filter((id) => {
+      const issue = areaLightingCardIssue(ctx.cache.get(id), areaLightingFit);
+      if (!issue) return true;
+      rejected[issue] = (rejected[issue] ?? 0) + 1;
+      return false;
+    });
+    if (ids.length > 0) steps.push({
+      step: "v3_area_lighting_fit",
+      ms: now(),
+      meta: { phase, examined: ids.length, verified: verified.length, rejected },
+    });
+    return verified;
+  };
   if (requestedConnection) {
     ctx.verifyCustomerConnection = (id) => {
       const product = ctx.cache.get(id);
@@ -9694,6 +9728,23 @@ async function runExpertLoop(
         examined: result.results.length, verified: candidates.length,
       } });
       return { ...result, results: candidates };
+    };
+  }
+  if (areaLightingFit) {
+    steps.push({
+      step: "v3_area_lighting_inputs",
+      ms: now(),
+      meta: { ...areaLightingFit },
+    });
+    const previousGate = ctx.filterSelectionCandidates;
+    ctx.filterSelectionCandidates = (result) => {
+      const base = previousGate?.(result) ?? result;
+      areaLightingSearchInspectedCards ||= base.results.length > 0;
+      const ids = new Set(filterAreaLightingIds(
+        base.results.map(({ id }) => id),
+        "search",
+      ));
+      return { ...base, results: base.results.filter(({ id }) => ids.has(id)) };
     };
   }
   const observedSearchCatalog = async (
@@ -10122,6 +10173,7 @@ async function runExpertLoop(
   // intentional one-card answer.
   let emittedResultCardinality: ResultCardinalityContract | null = null;
   let systemTotalCaveatSent = false;
+  let areaLightingNoticeSent = false;
   let applicationClassFallbackNoticeSent = false;
   // The plan is mutated inside the freeze helper. Reading it through a small
   // accessor prevents TypeScript control-flow analysis from treating the
@@ -10144,6 +10196,17 @@ async function runExpertLoop(
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
       event.markdown.includes(`](${product.url})`)
     );
+    if (areaLightingFit) {
+      const ids = renderedProducts.map(({ id }) => id);
+      if (ids.length !== event.count ||
+        filterAreaLightingIds(ids, "egress").length !== ids.length) return "";
+      if (!areaLightingNoticeSent) {
+        const notice = areaLightingFitText(areaLightingFit, true);
+        rawSendVisibleDelta({ type: "delta", origin: "server", content: `\n\n${notice}` });
+        finalText += `\n\n${notice}`;
+        areaLightingNoticeSent = true;
+      }
+    }
     const renderedClassTier = preferCustomerGroundedLiveClassification(
       renderedProducts,
       customerExactClassificationCriteria,
@@ -10312,7 +10375,7 @@ async function runExpertLoop(
       const verdict = requirement
         ? verifySystemTotalCapacityPlan(requirement, [])
         : null;
-      if (!verdict?.canClaimSufficient) {
+      if (!verdict?.canClaimSufficient && (!areaLightingFit || requirement)) {
         const threshold = requirement
           ? ` ${
             requirement.minimumTotal.toLocaleString("ru-RU")
@@ -10993,7 +11056,7 @@ async function runExpertLoop(
         ctx.cache.get(id),
         certifiedMeasuredPointRange!,
       )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain))
-    );
+    ) && filterAreaLightingIds(ids, "render").length === ids.length;
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
     | null = null;
@@ -11094,6 +11157,15 @@ async function runExpertLoop(
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
   let catalogLookupCompleted = false;
+  const appendAreaLightingEmpty = (): boolean => {
+    if (!areaLightingFit || areaLightingNoticeSent || productsRendered ||
+      !catalogLookupCompleted) return false;
+    const notice = areaLightingFitText(areaLightingFit, false);
+    send({ type: "delta", origin: "server", content: `\n\n${notice}` });
+    finalText += `\n\n${notice}`;
+    areaLightingNoticeSent = true;
+    return true;
+  };
   // If the model tries to finish immediately after a successful discovery,
   // give its reasoning one continuation and then force the existing catalog
   // phase. This preserves one opportunity for a model-owned category
@@ -12120,7 +12192,15 @@ async function runExpertLoop(
     const operatingPointSafe=pointRangeSafe.filter(product=>certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(product,domain)));
     if(operatingPointSafe.length<pointRangeSafe.length)steps.push({step:"v3_operating_point_domain_card_proof_rejected",ms:now(),meta:{before:pointRangeSafe.length,after:operatingPointSafe.length,facets:certifiedOperatingPointDomains.map(d=>d.facetKey)}});
     const classPriority = preferCustomerGroundedLiveClassification(
-      operatingPointSafe,
+      areaLightingFit
+        ? (() => {
+          const eligible = new Set(filterAreaLightingIds(
+            operatingPointSafe.map(({ id }) => id),
+            "final_cards",
+          ));
+          return operatingPointSafe.filter(({ id }) => eligible.has(id));
+        })()
+        : operatingPointSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -12307,7 +12387,7 @@ async function runExpertLoop(
     }`;
 
   const messages: ORMessage[] = [
-    { role: "system", content: systemContent },
+    { role: "system", content: systemContent + areaLightingPolicy },
     ...history.map((h) => ({ role: h.role, content: h.content })),
     { role: "user", content: userMessage },
   ];
@@ -12719,8 +12799,18 @@ async function runExpertLoop(
     };
   };
   ctx.catalogAppearanceGuard = (name, input) => {
-    const guarded = guardCatalogAppearance(name, input);
+    let guarded = guardCatalogAppearance(name, input);
     const discovery = appearanceCatalogDiscovery();
+    if (areaLightingFit && "args" in guarded && name === "search_catalog" &&
+      guarded.args.mode === "by_filter" && !guarded.args.category &&
+      !guarded.args.category_in && discovery?.category?.pagetitle &&
+      /(?<!\p{L})прожектор\p{L}*/iu.test(discovery.category.pagetitle) &&
+      discovery.leaf_categories.length === 1 &&
+      discovery.leaf_categories[0].pagetitle === discovery.category.pagetitle) {
+      // Geometry is checked on the resulting SKUs, but an IP-only option
+      // must not send the lookup across unrelated catalogue sections.
+      guarded = { args: { ...guarded.args, category: discovery.category.pagetitle } };
+    }
     if ("error" in guarded || !requestedConnection || name !== "search_catalog" ||
       guarded.args.mode !== "by_filter" || !discovery ||
       !isCableLugSelectionClass(discovery.category.pagetitle)) return guarded;
@@ -13131,6 +13221,11 @@ async function runExpertLoop(
             verified_meaning: evidence,
           }));
           if (structuredMeasurementMode) derivedMessages[0].content += `\n\n${STRUCTURED_MEASUREMENT_DECLARATION_POLICY}`;
+          if (areaLightingFit) {
+            derivedMessages[0].content += areaLightingPolicy;
+            derivedMessages[1].content += "\n\nПодтверждённые исходные данные клиента: " +
+              JSON.stringify(areaLightingFit);
+          }
           if (structuredMeasurementMode && derivedMessages[1]?.role === "user") {
             derivedMessages[1].content += "\n\nПроверенные параметры сервера (данные):\n" +
               JSON.stringify({ verified_measurement_parameters: measurementParameterPrompt }).replace(/</gu, "\\u003c");
@@ -13494,6 +13589,7 @@ async function runExpertLoop(
           const environmentalRange = deriveEnvironmentalProtectionRange(
             userMessage,
             lastDiscover?.facets ?? [],
+            areaLightingIpPolicy,
           );
           let independentlyProvenMeasuredCriteria: Criterion[] = [];
           const requiredProductMeasurementGap = (diagnosticStage?: "before_repair" | "after_repair" | "terminal") => {
@@ -16004,6 +16100,7 @@ async function runExpertLoop(
           ms: now(),
           meta: { reason: "ok", step_count: step + 1 },
         });
+        appendAreaLightingEmpty();
         return { finalText, productsRendered, shownProductIds: [...shownIds] };
       }
 
@@ -19893,6 +19990,7 @@ async function runExpertLoop(
           const liveRange = deriveEnvironmentalProtectionRange(
             userMessage,
             lastDiscover.facets ?? [],
+            areaLightingIpPolicy,
           );
           const certified = certifiedEnvironmentalRange;
           const expected = new Set(certified.acceptedValues);
@@ -25787,7 +25885,7 @@ async function runExpertLoop(
       deadlineFinalizeBreak,
     );
     if (
-      shouldAttemptTerminalLexicalRecovery({
+      !areaLightingSearchInspectedCards && shouldAttemptTerminalLexicalRecovery({
         productsRendered,
         intentMode,
         replacementIntent,
@@ -26804,6 +26902,7 @@ async function runExpertLoop(
       },
     });
     if (
+      !appendAreaLightingEmpty() &&
       shouldAppendCatalogEmpty({
         products_rendered: productsRendered,
         intent_mode: intentMode,
@@ -26858,6 +26957,7 @@ async function runExpertLoop(
     ctx.catalogAppearanceGuard = undefined;
     ctx.verifyCustomerConnection = undefined;
     ctx.filterSelectionCandidates = undefined;
+    ctx.verifyMeasuredPointRangeRenderIds = undefined;
     clearTimeout(turnTimer);
   }
 }
