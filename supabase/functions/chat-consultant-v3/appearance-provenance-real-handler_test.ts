@@ -546,6 +546,82 @@ async function runCase(
 }
 
 Deno.test({
+  name: "lamp request over a dense catalog keeps exact socket and temperature in final cards",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    try {
+      const snapshot = JSON.parse(await Deno.readTextFile(new URL(
+        "../../../docs/external/220volt-facets-snapshot.json",
+        import.meta.url,
+      )));
+      const live = snapshot.categories["Лампы"].options as Array<{
+        key: string;
+        caption_ru: string;
+        type_api: string;
+      }>;
+      const field = (name: string) =>
+        live.find(({ caption_ru }) => caption_ru.startsWith(name))!;
+      const product = (
+        id: number,
+        slug: string,
+        temperature: number,
+        socket = "E27",
+      ) => ({
+        id,
+        pagetitle: `Лампа светодиодная ${socket} ${temperature} K`,
+        url: `https://220volt.kz/catalog/lighting/lamps/${slug}/`,
+        category: "Лампы",
+        price: 450,
+        warehouses: [{ city: "Караганда", amount: 4 }],
+        options: ([
+          [field("Цветовая температура"), String(temperature)],
+          [field("Тип цоколя"), socket],
+          [field("Цвет свечения"), "теплый"],
+          [field("Вид лампы"), "светодиодная"],
+        ] as const).map(([f, value]) => ({
+          key: f.key,
+          caption_ru: f.caption_ru,
+          value_ru: value,
+        })),
+      });
+      const query =
+        "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27";
+      const result = await runCase(query, query, null, {
+        freshSession: true,
+        forceFreshTaxonomy: true,
+        categoryName: "Лампы",
+        fixtureFacets: live.map((f) => ({ ...f, type: f.type_api })),
+        fixtureProducts: [
+          product(1, "exact-warm", 3000),
+          product(2, "wrong-temperature", 4000),
+          product(3, "wrong-socket", 3000, "E14"),
+        ],
+        declarationReasoning:
+          "Ищу светодиодные лампы: цветовая температура 3000 К, цвет свечения теплый, тип цоколя E27.",
+      });
+      const trace = JSON.stringify({ steps: result.steps, events: result.publicEvents });
+      assert(result.catalogProductUrls.length > 0, trace);
+      const events = result.publicEvents.map(({ v3_event }) =>
+        v3_event as Record<string, unknown> | undefined
+      );
+      const cards = events.filter((event) => event?.type === "products_block");
+      assertEquals(cards.length, 1, trace);
+      const markdown = String(cards[0]?.markdown);
+      assert(markdown.includes("/exact-warm/"), trace);
+      assert(!markdown.includes("/wrong-temperature/"), trace);
+      assert(!markdown.includes("/wrong-socket/"), trace);
+      assert(events.some((event) =>
+        event?.type === "diagnostic" && event.phase === "complete" &&
+        event.error === null
+      ), trace);
+    } finally {
+      resetDiscoverCategoryCacheForTest();
+      restoreOfflineModuleSetup();
+    }
+  },
+});
+
+Deno.test({
   name: "changed conditions search fresh cards even when old SKU lookup is empty, unavailable or ambiguous",
   permissions: {read:true,env:false,net:false},
   async fn() {

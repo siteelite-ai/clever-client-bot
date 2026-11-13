@@ -567,6 +567,31 @@ function tokensMatchByStem(left: string, right: string): boolean {
   return false;
 }
 
+// Each projection inspects many values against the same small set of texts.
+// Keep the parse cache local to that invocation; do not retain customer text
+// or catalog state across turns. The predicates still evaluate every value.
+function createFacetMeasurementChecks() {
+  const quantities = new Map<string, ReturnType<typeof extractClientQuantities>>();
+  const bounds = new Map<string, ReturnType<typeof extractReasoningBounds>>();
+  const readQuantities = (text: string) => {
+    let result = quantities.get(text);
+    if (!result) {
+      result = extractClientQuantities(text);
+      quantities.set(text, result);
+    }
+    return result;
+  };
+  const readBounds = (text: string) => {
+    let result = bounds.get(text);
+    if (!result) {
+      result = extractReasoningBounds(text);
+      bounds.set(text, result);
+    }
+    return result;
+  };
+  return { readQuantities, readBounds };
+}
+
 /** Prevent a model from reusing a customer's exact scalar under another
  * physical unit. The rule is dimension-agnostic: it compares only canonical
  * units exposed by the live facet with explicit number+unit pairs in the
@@ -575,12 +600,16 @@ function numericFacetValueConflictsWithUserMeasurement(
   value: string,
   facet: SearchFacet,
   userEvidence: string,
-  declaredEvidence: string = userEvidence,
+  declaredEvidence: string,
+  checks: ReturnType<typeof createFacetMeasurementChecks>,
 ): boolean {
   const exactNumber = norm(value).match(/^\d+(?:[.,]\d+)?$/u)?.[0];
   if (!exactNumber) return false;
   const scalar = Number(exactNumber.replace(",", "."));
   if (!Number.isFinite(scalar)) return false;
+  const sameScalar = checks.readQuantities(userEvidence)
+    .filter((quantity) => quantity.value === scalar);
+  if (sameScalar.length === 0) return false;
   const expectedUnits = new Set(
     [
       facet.unit ?? "",
@@ -588,9 +617,6 @@ function numericFacetValueConflictsWithUserMeasurement(
         .flatMap((suffix) => suffix.match(/[a-zа-я°]{1,10}[²³]?\d?/giu) ?? []),
     ].map(canonicalMeasurementUnit).filter(Boolean),
   );
-  const sameScalar = extractClientQuantities(userEvidence)
-    .filter((quantity) => quantity.value === scalar);
-  if (sameScalar.length === 0) return false;
   // A scalar that the customer supplied only as a physical measurement may
   // not be projected onto an unlabelled/unitless catalog axis. Otherwise a
   // nearby product word can relabel `25 m²` as `25 LEDs`, poles, pieces, etc.
@@ -600,7 +626,7 @@ function numericFacetValueConflictsWithUserMeasurement(
     const facetTokens = norm(facet.caption ?? facet.key).split(" ").filter((
       token,
     ) => token.length >= 3);
-    const declaredUnitNamesTheFacet = extractClientQuantities(declaredEvidence)
+    const declaredUnitNamesTheFacet = checks.readQuantities(declaredEvidence)
       .filter((quantity) => quantity.value === scalar)
       .some((quantity) => {
         const unit = norm(quantity.unit);
@@ -1737,14 +1763,16 @@ function customerOwnsFacetValueAxis(
         token === other || tokensMatchByStem(token, other)
       )
     );
-    const overlappingValue = candidate.values.some(({ value: otherValue }) =>
+    // A different axis label cannot be ambiguous, regardless of its value
+    // vocabulary. Avoid a second full scan of unrelated facets per value.
+    if (!sharedLabel) return false;
+    return candidate.values.some(({ value: otherValue }) =>
       significantValueTokens(otherValue).some((other) =>
         valueTokens.some((token) =>
           token === other || tokensMatchByStem(token, other)
         )
       )
     );
-    return sharedLabel && overlappingValue;
   });
   if (siblings.length === 0) return true;
 
@@ -2043,6 +2071,7 @@ export function projectExplicitReasoningFacetValues(
   const reasoning = ` ${norm(declaredReasoning)} `;
   const kept: ReasoningFacetProjection["kept"] = [];
   const userBacked: ReasoningFacetProjection["user_backed"] = [];
+  const measurementChecks = createFacetMeasurementChecks();
 
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
@@ -2123,6 +2152,7 @@ export function projectExplicitReasoningFacetValues(
           facet,
           userEvidence,
           declaredReasoning,
+          measurementChecks,
         )
       ) return false;
       if (
@@ -2130,6 +2160,7 @@ export function projectExplicitReasoningFacetValues(
           candidate.value,
           facet,
           declaredReasoning,
+          measurementChecks,
         )
       ) return false;
       if (!facetStateQualifierIsUserBacked(facet, declaredReasoning)) {
@@ -2158,6 +2189,7 @@ function numericFacetValueIsLocallyEvidenced(
   value: string,
   facet: SearchFacet,
   evidence: string,
+  checks: ReturnType<typeof createFacetMeasurementChecks>,
 ): boolean {
   const normalizedValue = norm(value);
   if (!/\d/u.test(normalizedValue)) return true;
@@ -2224,7 +2256,13 @@ function numericFacetValueIsLocallyEvidenced(
   const exactNumber = normalizedValue.match(/^\d+(?:[.,]\d+)?$/u)?.[0];
   if (exactNumber && expectedUnits.size > 0) {
     const scalar = Number(exactNumber.replace(",", "."));
-    const directional = extractReasoningBounds(evidence).some((bound) =>
+    // The exact measurement regex below cannot match unless this literal
+    // occurs in the original text (allowing either decimal separator).
+    if (
+      !evidence.includes(exactNumber.replace(",", ".")) &&
+      !evidence.includes(exactNumber.replace(".", ","))
+    ) return false;
+    const directional = checks.readBounds(evidence).some((bound) =>
       bound.value === scalar && expectedUnits.has(normalizeUnit(bound.unit))
     );
     // Once the consultant has stated that the product value must be above or
@@ -2458,6 +2496,7 @@ export function guardSearchFilters(
   > = [];
   const dropped: DroppedSearchFilter[] = [];
   const unitConflictKeys = new Set<string>();
+  const measurementChecks = createFacetMeasurementChecks();
   const requestedOptions = args.options && typeof args.options === "object"
     ? args.options as Record<string, unknown>
     : {};
@@ -2513,6 +2552,7 @@ export function guardSearchFilters(
           facet,
           userEvidence,
           declaredReasoning,
+          measurementChecks,
         )
       ) {
         unitConflictKeys.add(canonicalKey);
@@ -2530,6 +2570,7 @@ export function guardSearchFilters(
           canonical,
           facet,
           declaredReasoning,
+          measurementChecks,
         )
       ) {
         dropped.push({
@@ -2657,6 +2698,7 @@ export function guardSearchFilters(
             canonical,
             facet,
             userEvidence,
+            measurementChecks,
           ))) ||
         (isAffirmativeBoolean && labelUserStatus === "affirmed")
       ) userBacked.push({ key: canonicalKey, value: canonical });
@@ -2684,6 +2726,7 @@ export function guardSearchFilters(
             facet,
             userEvidence,
             declaredReasoning,
+            measurementChecks,
           ) &&
           visibleRequirementAuthorizesFacetValue(facet, value, [requirement])
           ? [{ key: facet.key, value }]
@@ -2752,26 +2795,7 @@ export function guardSearchFilters(
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (
-        !customerOwnsAppearanceFacetValue(
-          facet,
-          candidate.value,
-          userEvidence,
-          appearanceScope,
-        )
-      ) return false;
-      if (
-        numericFacetValueConflictsWithUserMeasurement(
-          candidate.value,
-          facet,
-          userEvidence,
-          declaredReasoning,
-        )
-      ) return false;
-      if (
         !normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)
-      ) return false;
-      if (
-        facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)
       ) return false;
       // The live schema can expose hundreds of values. First establish that
       // this value is actually present in the customer's text; only those
@@ -2790,8 +2814,28 @@ export function guardSearchFilters(
             candidate.value,
             facet,
             userEvidence,
+            measurementChecks,
           ) &&
           facetStateQualifierIsUserBacked(facet, userEvidence))
+      ) return false;
+      // Only values with a textual/measurement hit need the expensive
+      // appearance, physical-unit and neighbouring-axis checks. All are
+      // still required before a value can enter the filter.
+      if (
+        !customerOwnsAppearanceFacetValue(
+          facet,
+          candidate.value,
+          userEvidence,
+          appearanceScope,
+        ) ||
+        numericFacetValueConflictsWithUserMeasurement(
+          candidate.value,
+          facet,
+          userEvidence,
+          declaredReasoning,
+          measurementChecks,
+        ) ||
+        facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)
       ) return false;
       if (
         !customerOwnsFacetValueAxis(
@@ -2859,6 +2903,7 @@ export function guardSearchFilters(
           candidate.value,
           facet,
           inferenceEvidence,
+          measurementChecks,
         )
       ) {
         return false;
@@ -2891,6 +2936,7 @@ export function guardSearchFilters(
           facet,
           userEvidence,
           inferenceEvidence,
+          measurementChecks,
         )
       ) return false;
       return true;
