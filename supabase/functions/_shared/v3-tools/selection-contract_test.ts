@@ -5,6 +5,7 @@ import {
   bootstrapSelectionTargetFromTaxonomy,
   buildSelectionEvidenceCaption,
   buildSelectionRenderCaption,
+  buildServerDestinationFitProof,
   continuedSelectionTargetIsGrounded,
   extractCustomerApplicationContexts,
   filterProductsByMandatoryFacetTitleContradictions,
@@ -33,7 +34,7 @@ import {
   verifySelectionTargetWithNamedEntityCategory,
   verifySelectionTargetWithVisibleTitle,
 } from "./selection-contract.ts";
-import type { ProductRef } from "./types.ts";
+import type { ProductFull, ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
   return {
@@ -283,6 +284,82 @@ Deno.test("home hall shares living-room proof but an unspecified hall does not",
       products,
     ).passed_ids,
     [],
+  );
+});
+
+Deno.test("destination certificate requires each exact displayed ProductFull card to pass", () => {
+  const request =
+    "Хочу поменять дома люстру в зале 30 квадратов. Что предложишь?";
+  const url = (id: string) =>
+    `https://220volt.kz/catalog/svetotexnika/lyustryi/${id}/`;
+  const item = (
+    id: string,
+    destination: string,
+    area: number,
+  ): ProductFull => ({
+    ...product(id, `Люстра светодиодная ${id}`, "Люстры"),
+    url: url(id),
+    short_traits: [
+      `Назначение: ${destination}`,
+      `Максимальная площадь освещения: ${area} м²`,
+    ],
+  });
+  const fitting = item("home", "Гостиная", 35);
+  const input = {
+    customerRequest: request,
+    selectionHash: "selection-12345678",
+    renderedUrls: [fitting.url],
+    displayedProducts: [fitting],
+  };
+  assertEquals(buildServerDestinationFitProof(input), {
+    kind: "replacement_destination_fit_v1",
+    selection_hash: input.selectionHash,
+    customer_request: request,
+    place: "зале",
+    minimum_area_m2: 30,
+    rendered_cards: [{ id: "home", url: fitting.url }],
+  });
+  assertEquals(
+    buildServerDestinationFitProof({
+      ...input,
+      displayedProducts: [item("office", "Офис", 35)],
+      renderedUrls: [url("office")],
+    }),
+    null,
+  );
+  assertEquals(
+    buildServerDestinationFitProof({
+      ...input,
+      displayedProducts: [item("small", "Гостиная", 18)],
+      renderedUrls: [url("small")],
+    }),
+    null,
+  );
+  assertEquals(
+    buildServerDestinationFitProof({
+      ...input,
+      displayedProducts: [fitting, item("small", "Гостиная", 18)],
+      renderedUrls: [fitting.url, url("small")],
+    }),
+    null,
+    "one unsuitable visible card invalidates the whole block",
+  );
+  assertEquals(
+    buildServerDestinationFitProof({
+      ...input,
+      renderedUrls: [url("another")],
+    }),
+    null,
+    "verified pool cannot prove a different displayed URL",
+  );
+  assertEquals(
+    buildServerDestinationFitProof({
+      ...input,
+      displayedProducts: [fitting, fitting],
+      renderedUrls: [fitting.url, fitting.url],
+    }),
+    null,
+    "duplicate rendered identity cannot inflate proof",
   );
 });
 
