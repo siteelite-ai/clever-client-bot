@@ -675,6 +675,7 @@ Deno.test("specific readiness profile wins over an overlapping generic profile",
 Deno.test("floodlight height chip advances to area instead of repeating height", () => {
   for (const request of [
     "Нужен прожектор на улицу для двора",
+    "Подберите прожектор для двора",
     "Нужен уличный прожектор для парковки",
   ]) {
     const first = selectReadinessClarification(request);
