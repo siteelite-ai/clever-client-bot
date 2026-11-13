@@ -19,6 +19,61 @@ import {
 } from "./search-filter-guard.ts";
 import { buildVisibleRequestContract } from "./visible-request-contract.ts";
 
+Deno.test("the lamp facet snapshot keeps all four user constraints without using the same scalar on another axis", async () => {
+  const snapshot = JSON.parse(await Deno.readTextFile(new URL(
+    "../../../../docs/external/220volt-facets-snapshot.json",
+    import.meta.url,
+  )));
+  const live = (snapshot.categories["Лампы"].options as Array<{
+    key: string;
+    caption_ru: string;
+    unit: string | null;
+    values: Array<{ value_ru: string | number }>;
+  }>).map((f) => ({
+    key: f.key,
+    caption: f.caption_ru,
+    unit: f.unit,
+    values: f.values.flatMap(({ value_ru }) => {
+      const value = String(value_ru ?? "").trim();
+      return value ? [{ value }] : [];
+    }),
+  }));
+  const temperature = live.find(({ caption }) =>
+    caption.startsWith("Цветовая температура")
+  )!;
+  const socket = live.find(({ caption }) => caption === "Тип цоколя")!;
+  const emission = live.find(({ caption }) => caption === "Цвет свечения")!;
+  const lamp = live.find(({ caption }) => caption.startsWith("Вид лампы"))!;
+  const flux = {
+    key: "additional_flux",
+    caption: "Подтвержденный световой поток, лм",
+    unit: "лм",
+    values: [{ value: "3000" }],
+  };
+  const request =
+    "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27";
+  const reasoning = "Для поиска использую цветовую температуру 3000 К.";
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { [flux.key]: ["3000"] } },
+    [...live, flux],
+    reasoning,
+    request,
+    reasoning,
+    buildVisibleRequestContract(request),
+  );
+  assertEquals(result.args.options, {
+    [temperature.key]: ["3000"],
+    [emission.key]: ["теплый"],
+    [socket.key]: ["E27"],
+    [lamp.key]: ["светодиодная"],
+  });
+  assertEquals(result.dropped, [{
+    key: flux.key,
+    value: "3000",
+    reason: "unit_conflict",
+  }]);
+});
+
 const facets = [
   {
     key: "kind",
