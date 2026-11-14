@@ -240,6 +240,7 @@ Deno.test("bounded search returns proven cards with precise non-exhaustive guida
   assertEquals(calls, [
     { query: "ИБП", page: 1 },
     { query: "источник бесперебойного питания", page: 1 },
+    { query: "UPS", page: 1 },
   ]);
   assertStringIncludes(result.answer, "предварительные варианты");
   assertStringIncludes(result.answer, "пуск насоса");
@@ -276,7 +277,10 @@ Deno.test("catalog empty, catalog error and unverified results have different ho
   );
   assertEquals(unverified.status, "unverified");
   assertEquals(unverified.products.length, 0);
-  assertStringIncludes(unverified.answer, "В проверенной выборке");
+  assertStringIncludes(
+    unverified.answer,
+    "не удалось подтвердить именно как ИБП",
+  );
 });
 
 Deno.test("inconsistent zero total with materialized cards is not an empty catalog", async () => {
@@ -311,4 +315,162 @@ Deno.test("search covers no more than four catalog pages and does not borrow gen
   assert(result.answer.includes("укажите максимальное суммарное потребление"));
   assert(result.answer.includes("совместимость входа конкретного ИБП"));
   assertEquals(result.answer.includes("генератора 900 Вт"), false);
+});
+
+Deno.test("class-wide retrieval covers UPS alias before noisy query pagination", async () => {
+  const good = ups({ id: "good-ups", pagetitle: "UPS 1000 VA" });
+  const wrong = ups({ id: "wrong", pagetitle: "АВР для ИБП" });
+  const cache: ProductCache = new Map([[good.id, good], [wrong.id, wrong]]);
+  const calls: Array<{ query?: string; page?: number }> = [];
+  const result = await searchVerifiedCleanPowerCards(
+    "Какой ИБП для газового котла 250 Вт?",
+    async (input) => {
+      calls.push({ query: input.query, page: input.page });
+      return input.query === "UPS" ? okay([good]) : okay([wrong], 500);
+    },
+    cache,
+  );
+  assertEquals(calls.slice(0, 3), [
+    { query: "ИБП", page: 1 },
+    { query: "источник бесперебойного питания", page: 1 },
+    { query: "UPS", page: 1 },
+  ]);
+  assertEquals(calls.length, 4);
+  assertEquals(result.products.map((p) => p.id), [good.id]);
+  assertEquals(result.rejectionCounts.wrong_class, 1);
+  assertEquals(result.partial, true);
+});
+
+Deno.test("all wrong-class candidates explain class failure rather than missing electrical proof", async () => {
+  // Synthetic counterexample, NOT a replay of the seven unrecorded live SKUs.
+  const cards = Array.from({ length: 7 }, (_, i) =>
+    ups({
+      id: `wrong-${i}`,
+      pagetitle: "Стабилизатор напряжения с ИБП",
+    }));
+  const result = await searchVerifiedCleanPowerCards(
+    "ИБП для котла 250 Вт",
+    async () => okay(cards),
+    new Map(cards.map((p) => [p.id, p])),
+  );
+  assertEquals(result.products.length, 0);
+  assertEquals(result.rejectionCounts.wrong_class, 7);
+  assertStringIncludes(result.answer, "не удалось подтвердить именно как ИБП");
+  assertStringIncludes(result.answer, "не доказывает отсутствия ИБП");
+  assertEquals(
+    result.answer.includes("одновременно по чистой синусоиде"),
+    false,
+  );
+});
+
+Deno.test("additional UPS query never confers identity, waveform or active watt proof", async () => {
+  const cards = [
+    ups({ id: "ats", pagetitle: "ATS для ИБП" }),
+    ups({
+      id: "sine",
+      pagetitle: "UPS Pure Sine 600W",
+      short_traits: ["Активная мощность: 600 Вт"],
+    }),
+    ups({
+      id: "va",
+      short_traits: [
+        "Форма выходного сигнала: Чистая синусоида",
+        "Выходная мощность: 1000 ВА",
+      ],
+    }),
+    ups({
+      id: "weak",
+      short_traits: [
+        "Форма выходного сигнала: Чистая синусоида",
+        "Активная мощность: 300 Вт",
+      ],
+    }),
+  ];
+  const calls: string[] = [];
+  const result = await searchVerifiedCleanPowerCards(
+    "ИБП для котла 250 Вт",
+    async (input) => {
+      calls.push(input.query!);
+      return input.query === "UPS" ? okay(cards) : okay([]);
+    },
+    new Map(cards.map((p) => [p.id, p])),
+  );
+  assertEquals(calls.includes("UPS"), true);
+  assertEquals(result.products.length, 0);
+  assertEquals(result.rejectionCounts, {
+    wrong_class: 1,
+    output_waveform_unproved: 1,
+    active_output_watts_unproved: 1,
+    active_output_watts_insufficient: 1,
+  });
+});
+
+Deno.test("class diagnostics distinguish prohibited title, category conflict and absent UPS evidence without relaxing identity", async () => {
+  const cards = [
+    ups({ id: "title", pagetitle: "ATS для ИБП" }),
+    ups({
+      id: "category",
+      pagetitle: "UPS",
+      leaf_category: "Стабилизаторы и ИБП",
+    }),
+    ups({
+      id: "unknown",
+      pagetitle: "Блок питания",
+      leaf_category: "Электропитание",
+    }),
+  ];
+  const result = await searchVerifiedCleanPowerCards(
+    "ИБП для котла 250 Вт",
+    async () => okay(cards),
+    new Map(cards.map((p) => [p.id, p])),
+  );
+  assertEquals(result.products.length, 0);
+  assertEquals(
+    result.classRejections.map((
+      x,
+    ) => [x.product_id, x.reason, x.excluded_source]),
+    [
+      ["title", "excluded_power_class", "title"],
+      ["category", "excluded_power_class", "category"],
+      ["unknown", "ups_identity_unproved", "none"],
+    ],
+  );
+  assertEquals(result.classRejections[1].title_has_ups_identity, true);
+  assertEquals(result.classRejections[2].title_has_ups_identity, false);
+});
+
+Deno.test("class diagnostics are capped and omit unsafe ids and raw catalog prose", async () => {
+  const cards = Array.from({ length: 12 }, (_, i) =>
+    ups({
+      id: i === 0 ? "unsafe/<private>" : `wrong-${i}`,
+      pagetitle: "Стабилизатор с ИБП private-marker",
+    }));
+  const result = await searchVerifiedCleanPowerCards(
+    "ИБП для котла 250 Вт",
+    async () => okay(cards),
+    new Map(cards.map((p) => [p.id, p])),
+  );
+  assertEquals(result.rejectionCounts.wrong_class, 12);
+  assertEquals(result.classRejections.length, 8);
+  assertEquals(result.classRejections[0].product_id, null);
+  assertEquals(
+    JSON.stringify(result.classRejections).includes("private-marker"),
+    false,
+  );
+});
+
+Deno.test("a failed alias does not prevent another alias, and partial status is honest", async () => {
+  const good = ups();
+  const result = await searchVerifiedCleanPowerCards(
+    "ИБП для котла 250 Вт",
+    async (input) => {
+      if (input.query === "ИБП") throw Error("offline catalog failure");
+      return input.query === "UPS" ? okay([good]) : okay([]);
+    },
+    new Map([[good.id, good]]),
+  );
+  assertEquals(result.searchCalls, 3);
+  assertEquals(result.products.length, 1);
+  assertEquals(result.partial, true);
+  assertStringIncludes(result.answer, "Поиск был частичным");
 });

@@ -42,6 +42,27 @@ export interface CleanPowerCatalogResult {
   searchCalls: number;
   partial: boolean;
   rejectionCounts: Partial<Record<CleanPowerRejection, number>>;
+  /** Bounded catalog identity evidence only; no descriptions or customer prose. */
+  classRejections: CleanPowerClassRejection[];
+  queryDiagnostics: CleanPowerQueryDiagnostic[];
+}
+
+export interface CleanPowerQueryDiagnostic {
+  query: string;
+  page: number;
+  status: "ok" | "catalog_error";
+  reported_total: number;
+  materialized: number;
+  sampled: Array<CleanPowerCardProof & { product_id: string | null }>;
+  sample_truncated: boolean;
+}
+
+export interface CleanPowerClassRejection {
+  product_id: string | null;
+  reason: "excluded_power_class" | "ups_identity_unproved";
+  title_has_ups_identity: boolean;
+  category_has_ups_identity: boolean;
+  excluded_source: "title" | "category" | "both" | "joined_identity" | "none";
 }
 
 export type CleanPowerSearch = (
@@ -51,7 +72,13 @@ export type CleanPowerSearch = (
 const MAX_SEARCH_CALLS = 4;
 const PAGE_SIZE = 50;
 const MAX_VERIFIED_CARDS = 3;
-const UPS_QUERIES = ["ИБП", "источник бесперебойного питания"] as const;
+const UPS_QUERIES = ["ИБП", "источник бесперебойного питания", "UPS"] as const;
+const MAX_CLASS_DIAGNOSTICS = 8;
+// Same strict identity predicates as before. Retrieval aliases never grant proof.
+const EXCLUDED_POWER_CLASS =
+  /\b(?:ats|avr)\b|авр|автоматическ\p{L}*\s+ввод\p{L}*\s+резерв\p{L}*|стабилизатор/u;
+const UPS_IDENTITY =
+  /(?<!\p{L})(?:ибп|ups)(?!\p{L})|источник\p{L}*\s+бесперебойн\p{L}*\s+питан\p{L}*|бесперебойник/u;
 
 function normalized(value: unknown): string {
   return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ru-RU")
@@ -85,14 +112,33 @@ function provesUpsIdentity(product: ProductFull): boolean {
   const identity = normalized(
     `${product.pagetitle} ${product.leaf_category ?? ""}`,
   );
-  if (
-    /\b(?:ats|avr)\b|авр|автоматическ\p{L}*\s+ввод\p{L}*\s+резерв\p{L}*|стабилизатор/u
-      .test(identity)
-  ) {
+  if (EXCLUDED_POWER_CLASS.test(identity)) {
     return false;
   }
-  return /(?<!\p{L})(?:ибп|ups)(?!\p{L})|источник\p{L}*\s+бесперебойн\p{L}*\s+питан\p{L}*|бесперебойник/u
-    .test(identity);
+  return UPS_IDENTITY.test(identity);
+}
+
+function classRejection(product: ProductFull): CleanPowerClassRejection {
+  const title = normalized(product.pagetitle);
+  const category = normalized(product.leaf_category);
+  const titleExcluded = EXCLUDED_POWER_CLASS.test(title);
+  const categoryExcluded = EXCLUDED_POWER_CLASS.test(category);
+  const excluded = EXCLUDED_POWER_CLASS.test(`${title} ${category}`);
+  return {
+    product_id: /^[a-zA-Z0-9_-]{1,64}$/u.test(product.id) ? product.id : null,
+    reason: excluded ? "excluded_power_class" : "ups_identity_unproved",
+    title_has_ups_identity: UPS_IDENTITY.test(title),
+    category_has_ups_identity: UPS_IDENTITY.test(category),
+    excluded_source: titleExcluded && categoryExcluded
+      ? "both"
+      : titleExcluded
+      ? "title"
+      : categoryExcluded
+      ? "category"
+      : excluded
+      ? "joined_identity"
+      : "none",
+  };
 }
 
 function outputWaveformLabel(label: string): boolean {
@@ -219,6 +265,7 @@ export function buildCleanPowerCatalogAnswer(
   status: CleanPowerCatalogResult["status"],
   count: number,
   partial: boolean,
+  rejectionCounts: Partial<Record<CleanPowerRejection, number>> = {},
 ): string {
   const guidance = buildSensitiveBackupPowerGuidance(message);
   const loadMissing = cleanPowerMinimumWatts(message) === null;
@@ -227,7 +274,12 @@ export function buildCleanPowerCatalogAnswer(
     : status === "empty"
     ? "По ограниченному поиску ИБП карточки не пришли. Это не доказывает, что таких товаров нет во всём каталоге; уточнить наличие можно у менеджера."
     : status === "unverified"
-    ? loadMissing
+    ? (rejectionCounts.wrong_class ?? 0) > 0 &&
+        Object.entries(rejectionCounts).every(([key, count]) =>
+          key === "wrong_class" || count === 0
+        )
+      ? "Поиск вернул кандидатов, но ни одного не удалось подтвердить именно как ИБП. До проверки синусоиды и мощности подбор не дошёл. Это не доказывает отсутствия ИБП в каталоге; уточнить подходящие модели можно у менеджера."
+      : loadMissing
       ? "В найденных карточках недостаточно оснований для подбора по мощности: укажите максимальное суммарное потребление котла и насоса в Вт. До этого конкретную модель безопасно рекомендовать нельзя."
       : "В проверенной выборке не удалось подтвердить ни одну карточку ИБП одновременно по чистой синусоиде на выходе и достаточной активной выходной мощности в Вт. Не подменяю ИБП стабилизатором или АВР; характеристики можно уточнить у менеджера."
     : `Нашёл ${count} ${
@@ -245,7 +297,8 @@ export function buildCleanPowerCatalogAnswer(
 }
 
 /**
- * Bounded retrieval: at most two pages for each of two class-wide queries.
+ * Bounded retrieval: all class-wide aliases before pagination, at most four
+ * calls and two pages per alias. A noisy alias cannot starve another spelling.
  * Search results alone confer no proof; the normalized ProductFull cache must
  * contain structured per-card evidence. Never report catalog-wide absence.
  */
@@ -258,57 +311,105 @@ export async function searchVerifiedCleanPowerCards(
   const accepted = new Map<string, ProductFull>();
   const seen = new Set<string>();
   const rejectionCounts: Partial<Record<CleanPowerRejection, number>> = {};
+  const classRejections: CleanPowerClassRejection[] = [];
+  const queryDiagnostics: CleanPowerQueryDiagnostic[] = [];
   let reportedRawTotal = 0;
   let searchCalls = 0;
   let encounteredError = false;
   let incompleteWindow = false;
 
-  for (const query of UPS_QUERIES) {
-    for (let page = 1; page <= 2 && searchCalls < MAX_SEARCH_CALLS; page++) {
-      const input: SearchCatalogInput = {
-        mode: "by_query",
+  const pending: Array<{ query: string; page: number }> = UPS_QUERIES.map((
+    query,
+  ) => ({ query, page: 1 }));
+  while (
+    pending.length > 0 && searchCalls < MAX_SEARCH_CALLS &&
+    accepted.size < MAX_VERIFIED_CARDS
+  ) {
+    const { query, page } = pending.shift()!;
+    const input: SearchCatalogInput = {
+      mode: "by_query",
+      query,
+      page,
+      per_page: PAGE_SIZE,
+    };
+    searchCalls++;
+    let result: SearchCatalogOk | ToolError;
+    try {
+      result = await search(input);
+    } catch {
+      encounteredError = true;
+      queryDiagnostics.push({
         query,
         page,
-        per_page: PAGE_SIZE,
-      };
-      searchCalls++;
-      let result: SearchCatalogOk | ToolError;
-      try {
-        result = await search(input);
-      } catch {
-        encounteredError = true;
-        break;
-      }
-      if (!result.ok) {
-        encounteredError = true;
-        break;
-      }
-      if (page === 1) reportedRawTotal += Math.max(0, result.total);
-      for (const ref of result.results) {
-        if (seen.has(ref.id)) continue;
-        seen.add(ref.id);
-        const product = cache.get(ref.id);
-        if (!product) {
-          rejectionCounts.output_waveform_unproved =
-            (rejectionCounts.output_waveform_unproved ?? 0) + 1;
-          continue;
-        }
-        const proof = verifyCleanPowerCard(product, minimumWatts);
-        if (proof.verified) accepted.set(product.id, product);
-        else if (proof.rejection) {
-          rejectionCounts[proof.rejection] =
-            (rejectionCounts[proof.rejection] ?? 0) + 1;
-        }
-      }
-      if (accepted.size >= MAX_VERIFIED_CARDS) {
-        incompleteWindow = true;
-        break;
-      }
-      if (result.total <= page * PAGE_SIZE) break;
-      if (page === 2) incompleteWindow = true;
+        status: "catalog_error",
+        reported_total: 0,
+        materialized: 0,
+        sampled: [],
+        sample_truncated: false,
+      });
+      continue;
     }
-    if (accepted.size >= MAX_VERIFIED_CARDS) break;
+    if (!result.ok) {
+      encounteredError = true;
+      queryDiagnostics.push({
+        query,
+        page,
+        status: "catalog_error",
+        reported_total: 0,
+        materialized: 0,
+        sampled: [],
+        sample_truncated: false,
+      });
+      continue;
+    }
+    queryDiagnostics.push({
+      query,
+      page,
+      status: "ok",
+      reported_total: result.total,
+      materialized: result.results.length,
+      sampled: result.results.slice(0, MAX_CLASS_DIAGNOSTICS).flatMap((ref) => {
+        const product = cache.get(ref.id);
+        if (!product) return [];
+        return [{
+          product_id: /^[a-zA-Z0-9_-]{1,64}$/u.test(product.id)
+            ? product.id
+            : null,
+          ...verifyCleanPowerCard(product, minimumWatts),
+        }];
+      }),
+      sample_truncated: result.results.length > MAX_CLASS_DIAGNOSTICS ||
+        result.results.some((ref) => !cache.has(ref.id)),
+    });
+    if (page === 1) reportedRawTotal += Math.max(0, result.total);
+    for (const ref of result.results) {
+      if (seen.has(ref.id)) continue;
+      seen.add(ref.id);
+      const product = cache.get(ref.id);
+      if (!product) {
+        rejectionCounts.output_waveform_unproved =
+          (rejectionCounts.output_waveform_unproved ?? 0) + 1;
+        continue;
+      }
+      const proof = verifyCleanPowerCard(product, minimumWatts);
+      if (proof.verified) accepted.set(product.id, product);
+      else if (proof.rejection) {
+        rejectionCounts[proof.rejection] =
+          (rejectionCounts[proof.rejection] ?? 0) + 1;
+        if (
+          proof.rejection === "wrong_class" &&
+          classRejections.length < MAX_CLASS_DIAGNOSTICS
+        ) {
+          classRejections.push(classRejection(product));
+        }
+      }
+    }
+    if (result.total > page * PAGE_SIZE) {
+      if (page < 2) pending.push({ query, page: page + 1 });
+      else incompleteWindow = true;
+    }
   }
+  incompleteWindow ||= pending.length > 0 || accepted.size > MAX_VERIFIED_CARDS;
 
   const products = [...accepted.values()].slice(0, MAX_VERIFIED_CARDS);
   const status: CleanPowerCatalogResult["status"] = products.length > 0
@@ -322,12 +423,20 @@ export async function searchVerifiedCleanPowerCards(
   return {
     status,
     products,
-    answer: buildCleanPowerCatalogAnswer(message, status, products.length, partial),
+    answer: buildCleanPowerCatalogAnswer(
+      message,
+      status,
+      products.length,
+      partial,
+      rejectionCounts,
+    ),
     minimumWatts,
     examinedCards: seen.size,
     reportedRawTotal,
     searchCalls,
     partial,
     rejectionCounts,
+    classRejections,
+    queryDiagnostics,
   };
 }

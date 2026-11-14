@@ -9486,6 +9486,11 @@ async function selectVerifiedCleanPowerProducts(
       rendered: renderedProducts.length,
       partial: found.partial,
       rejection_counts: found.rejectionCounts,
+      class_diagnostics_version: 1,
+      query_diagnostics: found.queryDiagnostics,
+      class_rejections: found.classRejections,
+      class_diagnostics_truncated:
+        (found.rejectionCounts.wrong_class ?? 0) > found.classRejections.length,
       duration_ms: Date.now() - started,
     },
   });
