@@ -538,7 +538,14 @@ import {
   shouldAnswerGeneralInquiryDirectly,
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
-import { resolveVerifiedApplicationSelection } from "../_shared/v3-tools/verified-application-selection.ts";
+import {
+  APPLICATION_CARDS_UNVERIFIED,
+  APPLICATION_INPUT_CURRENT_FACET,
+  APPLICATION_LOAD_UNSUPPORTED,
+  productProvesVerifiedApplication,
+  resolveApplicationLoadReadiness,
+  resolveVerifiedApplicationSelection,
+} from "../_shared/v3-tools/verified-application-selection.ts";
 import {
   buildElectricalProtectionTripFollowupAnswer,
   ELECTRICAL_PROTECTION_TRIP_ANSWER,
@@ -9686,6 +9693,38 @@ async function runExpertLoop(
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
   const now = () => Date.now() - t0;
+  const applicationLoad = resolveApplicationLoadReadiness(
+    userMessage,
+    rawCurrentUserMessage,
+    verifiedReadinessChoiceFacet === APPLICATION_INPUT_CURRENT_FACET,
+  );
+  let verifiedApplicationSelectionContract: ReturnType<
+    typeof resolveVerifiedApplicationSelection
+  > = null;
+  const applicationCardsPass = (ids: string[]) => ids.every((id) =>
+    productProvesVerifiedApplication(ctx.cache.get(id), verifiedApplicationSelectionContract)
+  );
+  if (applicationLoad && applicationLoad.status !== "ready") {
+    // An expert continuation can recover context after the top-level check.
+    const content = applicationLoad.status === "ask"
+      ? applicationLoad.question : APPLICATION_LOAD_UNSUPPORTED;
+    send({ type: "delta", content, origin: "server" });
+    if (applicationLoad.status === "ask") {
+      send({ type: "slot_update", slots: { pending_clarification: {
+        status: "pending", slot_id: crypto.randomUUID(),
+        facet_key: APPLICATION_INPUT_CURRENT_FACET, question: content,
+        options: [], scope: selectionReadinessScope(userMessage),
+      } } });
+    }
+    return { finalText: content, productsRendered: 0, shownProductIds: [] };
+  }
+  if (applicationLoad) {
+    // The operating current is not an exact catalog facet. Its verified
+    // capacity class is projected separately by the application plan.
+    userMessage = applicationLoad.catalogRequest;
+    rawCurrentUserMessage = userMessage;
+    verifiedCustomerMeasurementEvidence = userMessage;
+  }
   const requestedConnection = CABLE_LUG_REQUEST.test(userMessage)
     ? compileCableLugConnection(userMessage) : null;
   const areaLightingFit = compileAreaLightingFit(
@@ -9745,6 +9784,16 @@ async function runExpertLoop(
         "search",
       ));
       return { ...base, results: base.results.filter(({ id }) => ids.has(id)) };
+    };
+  }
+  if (applicationLoad) {
+    const previousGate = ctx.filterSelectionCandidates;
+    ctx.filterSelectionCandidates = (result) => {
+      const base = previousGate?.(result) ?? result;
+      const results = base.results.filter(({ id }) => applicationCardsPass([id]));
+      steps.push({ step: "v3_application_card_facet_proof", ms: now(),
+        meta: { examined: base.results.length, verified: results.length } });
+      return { ...base, results };
     };
   }
   const observedSearchCatalog = async (
@@ -10196,6 +10245,8 @@ async function runExpertLoop(
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
       event.markdown.includes(`](${product.url})`)
     );
+    if (applicationLoad && (renderedProducts.length !== event.count ||
+      !applicationCardsPass(renderedProducts.map(({ id }) => id)))) return "";
     if (areaLightingFit) {
       const ids = renderedProducts.map(({ id }) => id);
       if (ids.length !== event.count ||
@@ -10293,10 +10344,16 @@ async function runExpertLoop(
         }]
         : []),
     ]), undefined, certifiedPairedCriteria).criteria;
-    const emittedPlan = emittedCriteria.length > 0
+    const finalEmittedCriteria = verifiedApplicationSelectionContract
+      ? mergeMandatorySelectionCriteria([
+        ...emittedCriteria,
+        ...verifiedApplicationSelectionContract.criteria,
+      ])
+      : emittedCriteria;
+    const emittedPlan = finalEmittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(
         compatibilityCriteria.length >= 2 ? null : plan,
-        emittedCriteria,
+        finalEmittedCriteria,
         "render_alignment",
       )
       : plan ?? extendSelectionCriteriaPlan(null, [], "render_alignment");
@@ -11056,7 +11113,8 @@ async function runExpertLoop(
         ctx.cache.get(id),
         certifiedMeasuredPointRange!,
       )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain))
-    ) && filterAreaLightingIds(ids, "render").length === ids.length;
+    ) && filterAreaLightingIds(ids, "render").length === ids.length &&
+    (!applicationLoad || applicationCardsPass(ids));
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
     | null = null;
@@ -11177,9 +11235,6 @@ async function runExpertLoop(
   let selectionReasoningOnlyRequired = false;
   let unresolvedProductMeasurementRequired = false;
   let verifiedApplicationSelectionRule: string | null = null;
-  let verifiedApplicationSelectionContract: ReturnType<
-    typeof resolveVerifiedApplicationSelection
-  > = null;
   // Последний осмысленный поисковый запрос — нужен как «существительное» для
   // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
   // обретают смысл только вместе с предметом текущего поиска.
@@ -22775,7 +22830,15 @@ async function runExpertLoop(
                   userMessage,
                   lastDiscover.category?.pagetitle ?? "",
                   lastDiscover.facets,
+                  applicationLoad,
                 );
+              if (applicationLoad && !verifiedApplicationSelection) {
+                const content = APPLICATION_CARDS_UNVERIFIED;
+                send({ type: "delta", content, origin: "server" });
+                steps.push({ step: "v3_application_catalog_contract_unverified",
+                  ms: now(), meta: { rule: applicationLoad.rule } });
+                return { finalText: content, productsRendered: 0, shownProductIds: [] };
+              }
               if (verifiedApplicationSelection) {
                 verifiedApplicationSelectionContract =
                   verifiedApplicationSelection;
@@ -29216,7 +29279,20 @@ Deno.serve(async (req) => {
               : null;
             const readinessRequest = connectionRefinement?.request ?? scopedSelectionRequest.message;
             const typedConnectionReadiness = CABLE_LUG_REQUEST.test(readinessRequest);
-            const readinessClarification = specificationLookupQuery || storePolicyInquiry ||
+            const applicationLoadReadiness = resolveApplicationLoadReadiness(
+              startsNewTask ? userMessage : readinessRequest,
+              userMessage,
+              !startsNewTask && scopedSelectionRequest.scoped &&
+                verifiedReadinessState.slot?.facet_key === APPLICATION_INPUT_CURRENT_FACET,
+            );
+            const applicationLoadClarification = applicationLoadReadiness?.status === "ask"
+              ? { profile: "verified_application_load",
+                question: applicationLoadReadiness.question,
+                facet_key: APPLICATION_INPUT_CURRENT_FACET,
+                options: [], scope: selectionReadinessScope(readinessRequest) }
+              : null;
+            const readinessClarification: ReturnType<typeof selectReadinessClarification> =
+              applicationLoadClarification ?? (specificationLookupQuery || storePolicyInquiry ||
                 additionalSelectionRequest || matchedVerifiedBroadSelection ||
                 freeformCandidate
               ? null
@@ -29231,7 +29307,7 @@ Deno.serve(async (req) => {
                   effectiveHistory.slice(-8),
                 ),
                 { progressive: scopedSelectionRequest.scoped || Boolean(connectionRefinement) },
-              );
+              ));
             if (readinessClarification?.scope?.assistance?.version === 1 && readinessClarification.facet_key === "engineering_specification") {
               const phone = await lookupProductManagerPhone(supabase);
               if (phone) readinessClarification.scope.assistance.manager_phone = phone;
@@ -29384,6 +29460,11 @@ Deno.serve(async (req) => {
                 ms: Date.now() - t0,
                 meta: { lookup_failed: verifiedBroadChoiceState.lookupFailed },
               });
+            } else if (applicationLoadReadiness?.status === "unsupported") {
+              send({ type: "delta", origin: "server", content: APPLICATION_LOAD_UNSUPPORTED });
+              steps.push({ step: "v3_application_load_outside_verified_domain",
+                ms: Date.now() - t0, meta: { rule: applicationLoadReadiness.rule } });
+              productsCount = 0;
             } else if (readinessClarification) {
               const { profile, ...clarificationInput } = readinessClarification;
               send({
@@ -29424,6 +29505,33 @@ Deno.serve(async (req) => {
                 },
               });
               productsCount = 0;
+            } else if (applicationLoadReadiness?.status === "ready") {
+              // This selection must use its application proof even when a
+              // model number or previous card would admit an exact-item route.
+              const out = await runExpertLoop(
+                startsNewTask ? userMessage : readinessRequest,
+                effectiveHistory, effectiveSlots, settings.openrouter_api_key!,
+                ctx, send, steps, t0,
+                {
+                  anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+                  relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+                  criteriaGateEnabled: true,
+                },
+                applicationLoadReadiness.catalogRequest,
+                [], [], null, null, [], null, false, null, [],
+                userMessage,
+                !startsNewTask && scopedSelectionRequest.scoped &&
+                  verifiedReadinessState.slot?.facet_key === APPLICATION_INPUT_CURRENT_FACET
+                  ? APPLICATION_INPUT_CURRENT_FACET : null,
+              );
+              productsCount = out.productsRendered;
+              await persistRecentProductEvidence(
+                supabase, effectiveSessionId,
+                out.shownProductIds.flatMap((id) => {
+                  const product = ctx.cache.get(id);
+                  return product ? [product] : [];
+                }),
+              );
             } else if (
               matchedVerifiedBroadSelection &&
               !verifiedBroadChoice && !startsNewTask
