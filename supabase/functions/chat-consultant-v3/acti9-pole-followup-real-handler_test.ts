@@ -97,7 +97,9 @@ function publicText(events: Event[]): string {
 }
 
 type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic" |
-  "characteristic_chip" | "forged_characteristic_chip" |
+  "characteristic_chip" | "characteristic_full_dialogue" |
+  "characteristic_snapshot_dialogue" |
+  "forged_characteristic_chip" |
   "stale_characteristic_chip" | "prior_evidence_characteristic_chip";
 
 const acti9FlowTest = (scenario: Acti9Scenario) => ({
@@ -112,6 +114,10 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
       "explicit new topic is not consumed by an outstanding Acti9 pole clarification",
     characteristic_chip:
       "recorded 25 A → 1P server turns then real handler accepts issued characteristic chip without cards",
+    characteristic_full_dialogue:
+      "client 14: real handler 25 A → 1P → characteristic C clarifies, searches, and verifies all three facets",
+    characteristic_snapshot_dialogue:
+      "client 14: full breaker catalog vocabulary preserves all three facets",
     prior_evidence_characteristic_chip:
       "real handler accepts exact issued characteristic chip even with prior verified product evidence",
     forged_characteristic_chip:
@@ -122,10 +128,19 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
   permissions: { read: true, env: false, net: false },
   async fn() {
     const showBeforeChoice = scenario === "show";
+    const snapshotDialogue = scenario === "characteristic_snapshot_dialogue";
+    const fullDialogue = scenario === "characteristic_full_dialogue" ||
+      snapshotDialogue;
+    const catalogSnapshot = snapshotDialogue
+      ? JSON.parse(await Deno.readTextFile(new URL(
+        "../../../docs/external/220volt-facets-snapshot.json",
+        import.meta.url,
+      ))).categories[category]
+      : null;
     const characteristicScenario = scenario === "characteristic_chip" ||
       scenario === "forged_characteristic_chip" ||
       scenario === "stale_characteristic_chip" ||
-      scenario === "prior_evidence_characteristic_chip";
+      scenario === "prior_evidence_characteristic_chip" || fullDialogue;
     const priorRenderedEvidence =
       scenario === "prior_evidence_characteristic_chip";
     const requestedOriginal = characteristicScenario
@@ -137,10 +152,15 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         product(12, "Автомат GENERICA 1P 25A B", "GENERICA", "1", "B"),
         product(13, "Автомат CHINT 1P 25A C", "CHINT", "1"),
         product(14, "Автомат CHINT 2P 25A C", "CHINT", "2"),
+        ...(fullDialogue
+          ? [product(15, "Автомат CHINT 1P 16A C", "CHINT", "1")]
+          : []),
       ].map((item) => ({
         ...item,
         options: item.options.map((option) =>
-          option.key === "current" ? { ...option, value_ru: "25" } : option
+          option.key === "current" && item.id !== 15
+            ? { ...option, value_ru: "25" }
+            : option
         ),
       }))
       : products;
@@ -182,6 +202,21 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
               return new Response(null, { status: 204 });
             }
             if (request.method === "GET") {
+              const fields = url.searchParams.get("select");
+              if (snapshotDialogue && turn >= 1 &&
+                fields === "id,session_id,user_query,error,created_at") {
+                return json(sentQueries.slice(0, turn).map((query, index) => ({
+                  id: `offline-acti9-${index}`,
+                  session_id: sessionId,
+                  user_query: query,
+                  error: null,
+                  created_at: new Date(Date.now() - (turn - index) * 1000)
+                    .toISOString(),
+                })));
+              }
+              if (snapshotDialogue && url.searchParams.has("response_events")) {
+                return json(null);
+              }
               if (
                 priorRenderedEvidence &&
                 (url.searchParams.get("select") ?? "").includes(
@@ -248,6 +283,16 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
             });
           }
           if (url.pathname === "/api/categories/options") {
+            if (catalogSnapshot) {
+              return json({ data: {
+                category: {
+                  id: 10,
+                  pagetitle: category,
+                  total_products: fixtureProducts.length,
+                },
+                options: catalogSnapshot.options,
+              } });
+            }
             return json({
               data: {
                 category: {
@@ -270,7 +315,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                     caption_ru: "Номинальный ток",
                     type: "number",
                     unit: "А",
-                    values: (characteristicScenario
+                    values: (fullDialogue
+                      ? ["16", "25"]
+                      : characteristicScenario
                       ? ["25"]
                       : ["10", "16"]).map((value_ru) => ({
                       value_ru,
@@ -416,6 +463,112 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         assertEquals(response.status, 200);
         return eventsFromSse(await response.text());
       };
+
+      if (fullDialogue) {
+        // The first message is reconstructed; only the two replies are
+        // preserved in the original client document.
+        const messages = [
+          "Мне нужен автоматический выключатель на 25 А для квартиры. Что можете предложить?",
+          "1P",
+          "Характеристика C",
+        ];
+        const history: Array<{ role: string; content: string }> = [];
+        let slots: Record<string, unknown> = {};
+        for (turn = 0; turn < messages.length; turn++) {
+          const sse = await invoke(messages[turn], slots, history);
+          const events = v3Events(sse);
+          const diagnostic = () =>
+            JSON.stringify({ turn, events, steps: steps[turn] });
+          assert(
+            events.some((event) =>
+              event.type === "diagnostic" && event.phase === "complete" &&
+              event.error === null
+            ),
+            diagnostic(),
+          );
+          const blocks = events.filter((event) =>
+            event.type === "products_block"
+          );
+          if (turn < 2) {
+            assertEquals(blocks.length, 0, diagnostic());
+            assertEquals(catalogQueries.length, 0, diagnostic());
+            assert(
+              (turn === 0 ? /полюс/iu : /характеристика срабатывания/iu).test(
+                publicText(sse),
+              ),
+              diagnostic(),
+            );
+            const pending = events.filter((event) => event.type === "slot_update")
+              .map((event) =>
+                (event.slots as {
+                  pending_clarification?: Record<string, unknown>;
+                } | undefined)?.pending_clarification
+              ).find(Boolean);
+            assert(pending, diagnostic());
+            assertEquals(
+              pending.facet_key,
+              turn === 0 ? "pole_count" : "trip_curve",
+              diagnostic(),
+            );
+            const replies = events.find((event) =>
+              event.type === "quick_replies"
+            )
+              ?.replies as Array<{ value: string }> | undefined;
+            assert(
+              replies?.some(({ value }) => value === messages[turn + 1]),
+              diagnostic(),
+            );
+            slots = { pending_clarification: pending };
+            history.push(
+              { role: "user", content: messages[turn] },
+              { role: "assistant", content: publicText(sse) },
+            );
+            continue;
+          }
+          assert(
+            responseLogs[turn].some((event) => event.type === "done"),
+            diagnostic(),
+          );
+          assert(catalogQueries.length > 0, diagnostic());
+          if (snapshotDialogue) {
+            assert(steps[turn].some(({ step, meta }) =>
+              step === "v3_customer_facet_search_queued" ||
+              step === "v3_measured_reasoning_terminal_recovery" ||
+              (step === "v3_tool_call" && meta?.tool === "search_catalog")
+            ), diagnostic());
+            assert(!steps[turn].some(({ step }) =>
+              step === "v3_derived_selection_measurement_retry"
+            ), diagnostic());
+            assert(steps[turn].some(({ step, meta }) =>
+              step === "v3_customer_measurement_evidence_resolved" &&
+              meta?.lookup_failed === false && meta?.server_prior_turns === 2
+            ), diagnostic());
+          }
+          assertEquals(blocks.length, 1, diagnostic());
+          assertEquals(blocks[0].count, 2, diagnostic());
+          const markdown = String(blocks[0].markdown ?? "");
+          for (const item of fixtureProducts) {
+            assertEquals(
+              markdown.includes(item.url),
+              item.id === 11 || item.id === 13,
+              diagnostic(),
+            );
+          }
+          const criteria = (blocks[0].selection_contract as {
+            mandatory_criteria?: Array<{ key: string; value: unknown }>;
+          } | undefined)?.mandatory_criteria ?? [];
+          for (const [keyPattern, expected] of [
+            [/ток/iu, "25"],
+            [/полюс/iu, "1"],
+            [/характеристик/iu, "C"],
+          ] as const) {
+            assert(criteria.some(({ key, value }) =>
+              keyPattern.test(key) && String(value).toUpperCase() === expected
+            ), diagnostic());
+          }
+        }
+        return;
+      }
 
       if (characteristicScenario) {
         // The immediately preceding completed server turn issued this chip.
@@ -796,6 +949,8 @@ Deno.test(acti9FlowTest("show"));
 Deno.test(acti9FlowTest("forged_history"));
 Deno.test(acti9FlowTest("new_topic"));
 Deno.test(acti9FlowTest("characteristic_chip"));
+Deno.test(acti9FlowTest("characteristic_full_dialogue"));
+Deno.test(acti9FlowTest("characteristic_snapshot_dialogue"));
 Deno.test(acti9FlowTest("forged_characteristic_chip"));
 Deno.test(acti9FlowTest("stale_characteristic_chip"));
 Deno.test(acti9FlowTest("prior_evidence_characteristic_chip"));

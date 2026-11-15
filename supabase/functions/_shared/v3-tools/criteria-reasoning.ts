@@ -119,13 +119,14 @@ const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,20}[²³]?\d?`;
 const RATE_DENOMINATOR = String.raw`[a-zа-я°]{1,4}[²³]?\d?`;
 const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${RATE_DENOMINATOR})?`;
 
+const SCHEMA_MEASUREMENT_UNIT_TOKEN = new RegExp(
+  String.raw`(?<![a-zа-я])(${SIMPLE_UNIT})(?![a-zа-я])`,
+  "giu",
+);
+
 function schemaMeasurementUnitTokens(value: string): string[] {
   const source = String(value ?? "");
-  const pattern = new RegExp(
-    String.raw`(?<![a-zа-я])(${SIMPLE_UNIT})(?![a-zа-я])`,
-    "giu",
-  );
-  return [...source.matchAll(pattern)].flatMap((match) => {
+  return [...source.matchAll(SCHEMA_MEASUREMENT_UNIT_TOKEN)].flatMap((match) => {
     const token = match[1];
     const index = match.index ?? 0;
     // A one-letter lowercase token in the middle of a caption is usually a
@@ -2671,10 +2672,6 @@ export function projectLiteralMeasuredCriteria(
   }));
   const added: Criterion[] = [];
   const matched: Criterion[] = [];
-  const bounds = collapseBounds([
-    ...extractReasoningBounds(reasoningText),
-    ...extractReasoningBounds(customerText),
-  ]);
   // A range endpoint is not a second, exact customer requirement. Extract
   // literal equalities only from text outside customer-authored intervals;
   // the range projector above owns both endpoints. An independently stated
@@ -2684,6 +2681,47 @@ export function projectLiteralMeasuredCriteria(
     " ",
   );
   const quantities = extractClientQuantities(exactCustomerText);
+  if (quantities.length === 0) return { criteria: next, added, matched };
+  const bounds = collapseBounds([
+    ...extractReasoningBounds(reasoningText),
+    ...(customerText === reasoningText ? [] : extractReasoningBounds(customerText)),
+  ]);
+  type Facet = typeof facets[number];
+  // Normalize the live axes once per projection, not once per quantity and
+  // then again for each tier of the same evidence check.
+  const unitEvidence = new Map<Facet, {
+    declared: string;
+    labels: Set<string>;
+    hasSuffix: boolean;
+  }>();
+  const unitsFor = (facet: Facet) => {
+    let evidence = unitEvidence.get(facet);
+    if (evidence) return evidence;
+    const label = String(facet.caption ?? "").trim() || facet.key;
+    const suffix = label.split(",").slice(1).join(" ").trim();
+    let declared = canonicalMeasurementUnit(facet.unit ?? "");
+    const labels = new Set(schemaMeasurementUnitTokens(label).map(
+      canonicalMeasurementUnit,
+    ));
+    // A legacy nominal-current column stores ampere scalars without a unit.
+    // Do not infer the scale from an arbitrary current/range/threshold label,
+    // or if catalog metadata or values actually specify another scale.
+    if (!declared && !suffix &&
+      /^(?:номинальный ток|rated current|nominal current)$/iu.test(label) &&
+      facet.values?.length && facet.values.every(({ value }) =>
+        /^\d+(?:[.,]\d+)?$/u.test(value.trim())
+      )) declared = "а";
+    evidence = { declared, labels, hasSuffix: Boolean(suffix) };
+    unitEvidence.set(facet, evidence);
+    return evidence;
+  };
+  const exactScalarByValue = new Map<string, ReturnType<typeof parseNumericFacetValue>>();
+  const exactScalar = (value: string) => {
+    if (!exactScalarByValue.has(value)) {
+      exactScalarByValue.set(value, parseNumericFacetValue(value));
+    }
+    return exactScalarByValue.get(value);
+  };
 
   for (const quantity of quantities) {
     const unit = canonicalMeasurementUnit(quantity.unit);
@@ -2744,29 +2782,18 @@ export function projectLiteralMeasuredCriteria(
     if (serviceCapacities.length === 1 && !serviceCapacity) continue;
 
     const exactValueFacets = (facets ?? []).filter((facet) => {
-      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const publicLabel = String(facet.caption ?? "").trim() || facet.key;
-      const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
-        .some((token) => canonicalMeasurementUnit(token) === unit);
+      const { declared, labels, hasSuffix } = unitsFor(facet);
+      const labelHasUnit = labels.has(unit);
       // Some catalog branches omit `unit` even for numeric facets. A unitless
       // fallback is safe only when no suffix declares another scale and the
       // remaining exact-value facet is unique. Example schema shape:
       // `Nominal current` values [6,16] vs `Cable section, mm2` values [6,16].
-      const captionSuffix = String(facet.caption ?? "").split(",").slice(1)
-        .join(" ");
-      const suffixDeclaresAnotherUnit = schemaMeasurementUnitTokens(
-        captionSuffix,
-      )
-        .some((token) => canonicalMeasurementUnit(token) !== unit);
-      const hasExplicitUnitEvidence = Boolean(declaredUnit) || labelHasUnit ||
-        Boolean(captionSuffix.trim());
       if (
-        declaredUnit !== unit && !labelHasUnit &&
-        (hasExplicitUnitEvidence || suffixDeclaresAnotherUnit)
+        declared !== unit && !labelHasUnit && (declared || hasSuffix)
       ) return false;
       return (facet.values ?? []).some(({ value }) => {
-        const span = parseNumericFacetValue(value);
-        return span !== null && span.min === quantity.value &&
+        const span = exactScalar(value);
+        return span != null && span.min === quantity.value &&
           span.max === quantity.value;
       });
     });
@@ -2776,11 +2803,8 @@ export function projectLiteralMeasuredCriteria(
     // unrelated property. Mixing both tiers makes an exact unit match appear
     // ambiguous (for example `3000 K` versus a unitless lifetime `3000`).
     const explicitUnitFacets = exactValueFacets.filter((facet) => {
-      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const publicLabel = String(facet.caption ?? "").trim() || facet.key;
-      const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
-        .some((token) => canonicalMeasurementUnit(token) === unit);
-      return declaredUnit === unit || labelHasUnit;
+      const { declared, labels } = unitsFor(facet);
+      return declared === unit || labels.has(unit);
     });
     const unitFacets = serviceCapacity
       ? [serviceCapacity.facet]
@@ -2897,12 +2921,8 @@ export function projectLiteralMeasuredCriteria(
     // example, an installation height of 1.5 m from becoming `Weight = 1.5`
     // merely because Weight is the only unitless live facet with that value.
     const hasSchemaUnitEvidence = unitFacets.some((facet) => {
-      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const labelHasUnit = schemaMeasurementUnitTokens(
-        String(facet.caption ?? ""),
-      )
-        .some((token) => canonicalMeasurementUnit(token) === unit);
-      return declaredUnit === unit || labelHasUnit;
+      const { declared, labels } = unitsFor(facet);
+      return declared === unit || labels.has(unit);
     });
     if (
       !hasSchemaUnitEvidence &&
@@ -2921,8 +2941,8 @@ export function projectLiteralMeasuredCriteria(
 
     const facet = matchingFacets[0];
     const exactLiveValue = (facet.values ?? []).find(({ value }) => {
-      const span = parseNumericFacetValue(value);
-      return span !== null && span.min === quantity.value &&
+      const span = exactScalar(value);
+      return span != null && span.min === quantity.value &&
         span.max === quantity.value;
     })?.value;
     const liveValue = exactLiveValue ??

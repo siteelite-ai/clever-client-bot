@@ -3147,6 +3147,43 @@ Deno.test("a customer range endpoint is not an exact measured product value", ()
   );
 });
 
+Deno.test("unitless legacy rated-current axis proves amperes, not a coincident dimension or breaking capacity", () => {
+  const nominal = {
+    key: "nominal_current",
+    caption: "Номинальный ток",
+    type: "string",
+    unit: null,
+    values: [{ value: "16" }, { value: "25" }],
+  };
+  const otherFacets = [
+    { ...nominal, key: "unnamed", caption: "Другая характеристика" },
+    { ...nominal, key: "section", caption: "Сечение, мм2" },
+    { ...nominal, key: "breaking", caption: "Отключающая способность, кА" },
+  ];
+  const customer = "Мне нужен автоматический выключатель на 25 А для квартиры";
+  assertEquals(
+    projectLiteralMeasuredCriteria([], customer, customer, [nominal, ...otherFacets]).added,
+    [{ key: nominal.caption, op: "eq", value: "25", unit: "а", level: "A" }],
+  );
+  const breaking = "Нужен автомат с отключающей способностью 25 кА";
+  assertEquals(
+    projectLiteralMeasuredCriteria([], breaking, breaking, [nominal, ...otherFacets])
+      .added.map(({ key }) => key),
+    ["Отключающая способность, кА"],
+  );
+  const connectedLoad = "Подберите автомат для двигателя с номинальным током двигателя 25 А";
+  assertEquals(
+    projectLiteralMeasuredCriteria([], connectedLoad, connectedLoad, [nominal, ...otherFacets]).added,
+    [],
+  );
+  assertEquals(
+    projectLiteralMeasuredCriteria([], customer, customer, [
+      nominal, { ...nominal, key: "competing_nominal_current" },
+    ]).added,
+    [],
+  );
+});
+
 Deno.test("guarded exact criterion disambiguates an otherwise ambiguous literal measurement", () => {
   const existing: Criterion = {
     key: "Цветовая температура, К",

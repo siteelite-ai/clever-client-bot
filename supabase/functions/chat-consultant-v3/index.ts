@@ -758,6 +758,7 @@ import {
   selectionReadinessEvidenceFromHistory,
   selectionReadinessScope,
   selectReadinessClarification,
+  verifiedReadinessEvidenceTurns,
   verifiedReadinessReplayInput,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
@@ -22804,13 +22805,6 @@ async function runExpertLoop(
                   lastDiscover.facets,
                   explicitUserBackedCriteria,
                 );
-              const directLiteralMeasuredCriteria = scopeCardCriteria(omitPairedExact(
-                directLiteralMeasuredProjection.added
-                  .map((criterion) => ({
-                    ...criterion,
-                    evidence: "user_explicit" as const,
-                  })),
-              ), userMessage).criteria;
               const directMeasuredCriteriaCount = measuredCriteria.length +
                 scopeCardCriteria(
                   omitPairedExact(directLiteralMeasuredProjection.matched),
@@ -22865,13 +22859,15 @@ async function runExpertLoop(
                   },
                 });
               }
-              const literalMeasuredProjection = projectLiteralMeasuredCriteria(
-                [...explicitCriteria, ...measuredCriteria],
-                userMessage,
-                userMessage,
-                lastDiscover.facets,
-                explicitUserBackedCriteria,
-              );
+              const literalMeasuredProjection = measuredCriteria.length === 0
+                ? directLiteralMeasuredProjection
+                : projectLiteralMeasuredCriteria(
+                  [...explicitCriteria, ...measuredCriteria],
+                  userMessage,
+                  userMessage,
+                  lastDiscover.facets,
+                  explicitUserBackedCriteria,
+                );
               const literalMeasuredCriteria = scopeCardCriteria(omitPairedExact([
                 ...literalMeasuredProjection.added,
                 ...literalMeasuredProjection.matched,
@@ -28619,6 +28615,7 @@ Deno.serve(async (req) => {
                   readinessNewTask || activeScopeExplicitBoundary ||
                     readinessQuestionSuperseded || independentProductInquiry
                 ),
+                verifiedIssuedSlot: Boolean(verifiedReadinessState.slot),
               },
             );
             const matchedPendingClarification = Boolean(
@@ -28736,9 +28733,13 @@ Deno.serve(async (req) => {
                     issuedScope && typeof issuedScope === "object" &&
                     typeof (issuedScope as Record<string, unknown>).token === "string"
                   ? String((issuedScope as Record<string, unknown>).token) : "";
-                if (issuedToken && evidence.priorQueriesNewestFirst.length === 0) {
-                  const priorQueriesNewestFirst = issuedToken
-                    .split(CUSTOMER_TURN_BOUNDARY).filter(Boolean).reverse();
+                if (issuedToken) {
+                  const priorQueriesNewestFirst = verifiedReadinessEvidenceTurns(
+                    issuedToken, evidence.priorQueriesNewestFirst,
+                  );
+                  if (priorQueriesNewestFirst === evidence.priorQueriesNewestFirst) {
+                    return evidence;
+                  }
                   return {
                     ...evidence,
                     ...composeVerifiedCustomerMeasurementEvidence(userMessage, priorQueriesNewestFirst),
