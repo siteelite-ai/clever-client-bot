@@ -5,6 +5,7 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { resetDiscoverCategoryCacheForTest } from "../_shared/v3-tools/discover-category.ts";
 import {
   offlineHandler,
   enableMandatoryReadinessInOfflineFixture,
@@ -31,6 +32,23 @@ type Log = {
 };
 
 const motorCategory = "Автоматы защиты двигателя";
+const extensionCategory = "Удлинители";
+const extensionOptions = [
+  { key: "length", caption_ru: "Длина кабеля, м", unit: "м", value_ru: "30" },
+  { key: "section", caption_ru: "Сечение жилы, мм2", unit: "мм2", value_ru: "2.5" },
+  { key: "cores", caption_ru: "Количество жил", value_ru: "3" },
+  { key: "ip", caption_ru: "Степень защиты", value_ru: "44" },
+  { key: "current", caption_ru: "Номинальный ток, А", unit: "А", value_ru: "16" },
+  { key: "cable_type", caption_ru: "Тип кабеля", value_ru: "КГ" },
+];
+const extensionGood = {
+  id: 401,
+  pagetitle: "Удлинитель КГ 30 м 16 А IP44",
+  url: "https://220volt.kz/catalog/electric/extensions/welder-good/",
+  category: extensionCategory, price: 4000,
+  warehouses: [{ city: "Караганда", amount: 5 }],
+  options: extensionOptions,
+};
 const motorSettingCaption = "Диапазон уставки тока расцепления, А";
 const motorProducts = [
   {
@@ -148,9 +166,14 @@ async function runDialogue({
     | "motor_voltage_refusal"
     | "motor_voltage_conjunction"
     | "specification_lookup"
+    | "application_load_ready"
+    | "application_load_unverified"
+    | "application_load_unsupported"
     | null;
 }): Promise<void> {
   Deno.env.get = offlineEnvGet;
+  // Each dialogue may use a different synthetic catalog on the same host.
+  resetDiscoverCategoryCacheForTest();
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
   const intervals = new Set<number>();
@@ -294,6 +317,64 @@ async function runDialogue({
           {id:200,pagetitle:"Кабель ВВГ 3*1,5 ГОСТ",url:"https://220volt.kz/catalog/cable/vvg/vvg-good/",category:"Кабель ВВГ",price:301,unit:"м",warehouses:[{city:"Караганда",amount:10}],options:[]},
           {id:201,pagetitle:"Кабель ВВГ 2*1,5 ГОСТ",url:"https://220volt.kz/catalog/cable/vvg/vvg-wrong-size/",category:"Кабель ВВГ",price:201,unit:"м",warehouses:[{city:"Караганда",amount:10}],options:[]}
         ],pagination:{total:2}}});
+      }
+      if (
+        (terminalMode === "application_load_ready" ||
+          terminalMode === "application_load_unverified") &&
+        currentTurn === messages.length - 1
+      ) {
+        if (url.origin === "https://fixture.catalog.invalid") {
+          if (url.pathname === "/api/categories") return json({ data: {
+            results: [{ id: 41, pagetitle: extensionCategory, children: [] }],
+            pagination: { page: 1, per_page: 200, pages: 1, total: 1 },
+          } });
+          if (url.pathname === "/api/categories/options") return json({ data: {
+            category: { id: 41, pagetitle: extensionCategory, total_products: 3 },
+            options: extensionOptions
+              .filter(({ key }) => terminalMode !== "application_load_unverified" || key !== "ip")
+              .map(({ value_ru, ...option }) => ({
+                ...option, type: "string", values: [{ value_ru, products_count: 1 }],
+              })),
+          } });
+          if (url.pathname === "/api/products") {
+            catalogProductRequests.push(url);
+            // An untrusted upstream intentionally ignores the search facets.
+            return json({ data: { results: [
+              extensionGood,
+              { ...extensionGood, id: 402, url: "https://220volt.kz/catalog/electric/extensions/welder-wrong-ip/",
+                options: extensionOptions.map(option => option.key === "ip" ? { ...option, value_ru: "20" } : option) },
+              { ...extensionGood, id: 403, url: "https://220volt.kz/catalog/electric/extensions/welder-missing-current/",
+                options: extensionOptions.filter(option => option.key !== "current") },
+            ], pagination: { total: 3 } } });
+          }
+        }
+        if (url.toString() === "https://openrouter.ai/api/v1/chat/completions") {
+          modelRequests++;
+          const body = await request.json();
+          const name = body.tool_choice?.function?.name;
+          const tool = (name: string, args: Record<string, unknown>) => json({ choices: [{
+            finish_reason: "tool_calls", message: { content: null, tool_calls: [{
+              id: `application-load-${modelRequests}`, type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+            }] },
+          }] });
+          if (name === "discover_category") return tool(name, { noun: extensionCategory });
+          if (name === "declare_selection_reasoning") return tool(name, {
+            product_requirements: [],
+            compatible_classifications: [], excluded_classifications: [],
+            explicit_customer_classifications: [], required_facet_values: [],
+            measurement_scope: "not_applicable",
+          });
+          if (name === "render_products") return tool(name, { product_ids: ["401", "402", "403"] });
+          if (body.tools?.some((x: { function?: { name?: string } }) => x.function?.name === "search_catalog")) {
+            return tool("search_catalog", { mode: "by_filter", category: extensionCategory, per_page: 50 });
+          }
+          return json({ choices: [{ finish_reason: "stop", message: {
+            content: body.messages?.some((m: {content?: string}) => m.content?.includes("CATEGORY MATCHER"))
+              ? JSON.stringify({ candidates: [{ pagetitle: extensionCategory, confidence: 0.99 }] })
+              : "", tool_calls: [],
+          } }] });
+        }
       }
       if (
         (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" ||
@@ -573,6 +654,34 @@ async function runDialogue({
       const visible = v3Events(events);
       const row = logs[turn];
       assert(row, `${label}: missing server log for turn ${turn}`);
+      if (turn === messages.length - 1 && terminalMode?.startsWith("application_load_")) {
+        const cards = visible.filter(event => event.type === "products_block");
+        assertEquals(row.error, null, JSON.stringify(row.steps));
+        assertEquals(externalRequests, 0);
+        assert(visible.some(e => e.type === "diagnostic" && e.phase === "complete" && e.error === null));
+        if (terminalMode === "application_load_ready") {
+          assert(catalogProductRequests.length > 0, JSON.stringify(row.steps));
+          assertEquals(row.final_products_count, 1, JSON.stringify({ visible, steps: row.steps }));
+          assertEquals(cards.length, 1);
+          assert(String(cards[0].markdown).includes("welder-good"));
+          assert(!String(cards[0].markdown).includes("welder-wrong-ip"));
+          assert(!String(cards[0].markdown).includes("welder-missing-current"));
+          assert(publicText(events).includes("12 А"));
+          const contract = cards[0].selection_contract as {
+            mandatory_criteria: Array<{ key: string; value: unknown }>;
+          };
+          assert(contract.mandatory_criteria.some(({ key, value }) =>
+            key === "Номинальный ток, А" && value === "16"));
+          assert(!contract.mandatory_criteria.some(({ value }) => String(value) === "12"));
+        } else {
+          assertEquals(cards.length, 0);
+          assertEquals(row.final_products_count, 0);
+          assertEquals(catalogProductRequests.length, 0);
+          assert(publicText(events).includes(terminalMode === "application_load_unsupported"
+            ? "не могу подтвердить подходящий удлинитель" : "все характеристики удлинителя"));
+        }
+        return;
+      }
       if (terminalMode && turn === messages.length - 1) {
         if (typedParameters === "forged") {
           assertEquals(row.error, null);
@@ -950,11 +1059,56 @@ async function runDialogue({
       }`,
     );
   } finally {
+    resetDiscoverCategoryCacheForTest();
     for (const id of intervals) clearInterval(id);
     globalThis.setInterval = originalSetInterval;
     globalThis.fetch = originalFetch;
   }
 }
+
+Deno.test({
+  name: "outdoor extension for a welder asks for input current before model or catalog",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "welder extension load readiness",
+    messages: [
+      "Подберите удлинитель для подключения сварочного аппарата на улице, длина 30 метров.",
+      "Модель Ресанта САИ-190, сварочный ток 190 А",
+    ],
+    expectedFacets: ["equipment_input_current", "equipment_input_current"],
+    expectedProfile: "verified_application_load",
+  }),
+});
+
+for (const [answer, terminalMode] of [
+  ["12 А по шильдику", "application_load_ready"],
+  ["12 А", "application_load_unverified"],
+  ["I₁max: 25 А", "application_load_unsupported"],
+] as const) Deno.test({
+  name: `outdoor extension for a welder: ${terminalMode}`,
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: terminalMode,
+    messages: ["Подберите удлинитель для подключения сварочного аппарата на улице, длина 30 метров.", answer],
+    expectedFacets: ["equipment_input_current"],
+    expectedProfile: "verified_application_load",
+    terminalMode,
+  }),
+});
+
+Deno.test({
+  name: "outdoor extension for a welder keeps a valid input current supplied in the first request",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "explicit input current",
+    messages: [
+      "Какой удлинитель подойдёт для сварочного аппарата на улице, длина 30 метров? Входной ток аппарата по шильдику 12 А.",
+    ],
+    expectedFacets: [],
+    expectedProfile: "verified_application_load",
+    terminalMode: "application_load_ready",
+  }),
+});
 
 Deno.test({
   name:
