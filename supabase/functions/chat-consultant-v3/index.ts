@@ -534,6 +534,14 @@ import {
 } from "../_shared/v3-tools/clean-power-catalog-evidence.ts";
 import { buildMeasuredBreakerGuidance } from "../_shared/v3-tools/measured-breaker-guidance.ts";
 import {
+  CIRCUIT_BREAKER_CATEGORY,
+  circuitCardProvesFilters,
+  circuitCatalogFilters,
+  isCircuitProtectionReply,
+  isCircuitProtectionSlot,
+  resolveCircuitProtection,
+} from "../_shared/v3-tools/circuit-protection-dialogue.ts";
+import {
   buildGeneralInquiryMessages,
   GENERAL_INQUIRY_UNAVAILABLE_TEXT,
   resolveStorePolicyKnowledgeAnswer,
@@ -1447,7 +1455,10 @@ async function runTool(
     ) as ToolResult;
   }
   if (name === "propose_clarification") {
-    if (isResidentialFixtureSlot(args) || isReservedStabilizerApplicationSlot(args)) {
+    if (
+      isResidentialFixtureSlot(args) || isReservedStabilizerApplicationSlot(args) ||
+      isCircuitProtectionSlot(args)
+    ) {
       return { tool: "propose_clarification", ok: false, error_code: "bad_input",
         message: "This clarification scope is issued only by the server." };
     }
@@ -9698,6 +9709,60 @@ async function selectVerifiedOutdoorPoeProducts(
   return ids
     .map((id) => ctx.cache.get(id))
     .filter((product): product is ProductFull => Boolean(product));
+}
+
+/** Measured line protection never sends model-authored criteria or cards to
+ * rendering. The live schema supplies filter keys; each card must also carry
+ * its own matching structured evidence. */
+async function selectCircuitProtectionProducts(
+  criteria: Criterion[],
+  catalogToken: string,
+  turnSignal: AbortSignal,
+  cache: ProductCache,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const fallback = (stage: string, errorCode?: string) => {
+    steps.push({ step: "v3_circuit_protection_catalog_not_verified",
+      ms: Date.now() - t0, meta: { stage, ...(errorCode ? { error_code: errorCode } : {}) } });
+    send({ type: "delta", origin: "server",
+      content: stage === "catalog_error"
+        ? "Не удалось проверить каталог. Попробуйте позже; неподтверждённые товары не показываю."
+        : "По проверенным данным каталога не удалось подтвердить варианты в наличии со всеми указанными параметрами. Это не означает, что таких автоматов нет. Неподтверждённые товары не показываю." });
+    return [];
+  };
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: catalogToken, signal: turnSignal };
+  const category = await executeDiscoverCategory({ noun: CIRCUIT_BREAKER_CATEGORY }, {
+    ...deps, requireExactPagetitle: true, openrouterApiKey: null,
+  });
+  if (!category.ok) return fallback(
+    category.error_code === "category_not_found" ? "category" : "catalog_error", category.error_code);
+  if (category.leaf_categories.length !== 1 ||
+    category.leaf_categories[0].pagetitle !== CIRCUIT_BREAKER_CATEGORY) return fallback("category");
+  const options = circuitCatalogFilters(criteria, category.facets);
+  if (!options) return fallback("facets");
+  const result = await executeSearchCatalog({
+    mode: "by_filter", category: CIRCUIT_BREAKER_CATEGORY, options, min_price: 1, per_page: 50,
+  }, deps, cache);
+  if (!result.ok) return fallback("catalog_error", result.error_code);
+  const ids = [...new Set(result.results.map(({ id }) => id))].filter((id) => {
+    const product = cache.get(id);
+    return product && circuitCardProvesFilters(product, options);
+  });
+  const rendered = ids.length ? executeRenderProducts({
+    product_ids: ids, total_available: ids.length,
+  }, cache) : null;
+  steps.push({ step: "v3_circuit_protection_cards_verified", ms: Date.now() - t0,
+    meta: { filter_count: Object.keys(options).length, candidates: result.results.length,
+      verified: ids.length, rendered: rendered?.ok ? rendered.rendered_count : 0 } });
+  if (!rendered?.ok) return fallback("cards");
+  const plan = extendSelectionCriteriaPlan(null, criteria, "guarded_search");
+  send({ type: "delta", origin: "server",
+    content: "Нашёл в каталоге модели с указанными параметрами защиты. Это подбор по спецификации, не проверка безопасности монтажа." });
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count,
+    total_available: ids.length, selection_contract: { hash: plan.hash, mandatory_criteria: [...plan.mandatory_criteria] } });
+  return rendered.rendered_ids.map((id) => cache.get(id)!);
 }
 
 /** Safety-critical power selection uses the same catalog boundary as ordinary
@@ -28488,6 +28553,66 @@ Deno.serve(async (req) => {
                     settings.volt220_api_token!, turnSignal, send, steps, t0, cache);
                   productsCount = products.length;
                   await persistRecentProductEvidence(supabase, taskSession, products);
+                }
+              }
+              return;
+            }
+            // Keep circuit measurements and project specifications out of
+            // the model correction/classification loop. Only the latest
+            // completed server-issued question can carry facts between turns.
+            const circuitReply = isCircuitProtectionReply(userMessage, pendingRecord);
+            const circuitSlot = circuitReply
+              ? await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots)
+              : null;
+            const circuit = independentProductInquiry ? null
+              : resolveCircuitProtection(userMessage, circuitSlot?.slot ?? null);
+            if (circuitReply && !circuitSlot?.slot && !circuit) {
+              send({ type: "slot_update", slots: { pending_clarification: null } });
+              send({ type: "delta", origin: "server", content: circuitSlot?.lookupFailed
+                ? "Не удалось проверить сохранённые параметры линии. Повторите полный запрос позже."
+                : "Это уточнение больше не связано с текущим подбором. Напишите запрос и параметры линии заново." });
+              steps.push({ step: "v3_circuit_protection_unverified_slot", ms: Date.now() - t0 });
+              return;
+            }
+            if (circuit) {
+              const circuitSessionId = !circuitSlot?.slot && priorHistory.length
+                ? `session_${crypto.randomUUID()}`
+                : sessionId;
+              if (circuitSessionId !== sessionId) {
+                send({ type: "conversation_boundary", mode: "new_task", session_id: circuitSessionId });
+              }
+              if (!circuitSlot?.slot && pendingRecord) {
+                send({ type: "slot_update", slots: { pending_clarification: null } });
+              }
+              if (circuit.status === "ask") {
+                const next = executeProposeClarification(circuit.clarification, { allowFreeform: true });
+                if (!next.ok) {
+                  errorMsg = "circuit_protection_invalid_clarification";
+                  publicDiagnosticError = "request_unavailable";
+                  send({ type: "delta", origin: "server", content: "Не удалось сохранить уточнение. Напишите запрос и параметры линии заново." });
+                  return;
+                }
+                send({ type: "delta", content: circuit.clarification.question, origin: "server" });
+                emitSideEffects({ ...next, side_effects: next.side_effects?.filter(
+                  (effect) => effect.type !== "quick_replies" || circuit.clarification.options.length > 0,
+                ) }, send);
+                steps.push({ step: "v3_selection_readiness_clarification", ms: Date.now() - t0,
+                  meta: { profile: circuit.clarification.profile, facet_key: circuit.clarification.facet_key,
+                    choice_count: circuit.clarification.options.length } });
+              } else {
+                send({ type: "slot_update", slots: { pending_clarification: null } });
+                if (circuit.status === "stop") {
+                  send({ type: "delta", content: circuit.text, origin: "server" });
+                  steps.push({ step: "v3_circuit_protection_handoff", ms: Date.now() - t0,
+                    meta: { reason: circuit.reason } });
+                } else {
+                  const cache: ProductCache = new Map();
+                  replacementEgressCache = cache;
+                  const products = await selectCircuitProtectionProducts(
+                    circuit.criteria, settings.volt220_api_token!, turnSignal, cache, send, steps, t0,
+                  );
+                  productsCount = products.length;
+                  await persistRecentProductEvidence(supabase, circuitSessionId, products);
                 }
               }
               return;
