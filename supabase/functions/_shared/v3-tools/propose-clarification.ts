@@ -9,6 +9,7 @@ import type {
   ToolError,
   ToolSideEffect,
 } from "./types.ts";
+import type { CableConsultationState } from "./cable-consultation.ts";
 
 export interface ProposeClarificationInput {
   question: string;
@@ -20,7 +21,7 @@ export interface ProposeClarificationInput {
     /** Server-proven taxonomy context for the next dialogue turn. */
     resolved_category?: string;
     /** Server-issued, non-calculating specification/handoff workflow. */
-    assistance?: { version: 1; handoff?: boolean; manager_phone?: string; summary?: string; deferred_facets?: string[] };
+    assistance?: { version: 1; handoff?: boolean; manager_phone?: string; summary?: string; deferred_facets?: string[]; consultation?: CableConsultationState };
   };
 }
 

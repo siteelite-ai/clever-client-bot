@@ -1,4 +1,5 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
+import { cableRouteLengthObservations } from "./cable-route-length.ts";
 import {
   OUTDOOR_AREA_FLOODLIGHT,
   PARKING_AREA_FLOODLIGHT,
@@ -205,7 +206,7 @@ export function verifiedReadinessReplayInput(
         : {}),
       ...(scoped.assistance && typeof scoped.assistance === "object" &&
           (scoped.assistance as { version?: unknown }).version === 1
-        ? { assistance: scoped.assistance as { version: 1; summary?: string; deferred_facets?: string[] } }
+        ? { assistance: scoped.assistance as NonNullable<ProposeClarificationInput["scope"]>["assistance"] }
         : {}),
     },
   };
@@ -428,20 +429,10 @@ function hasUndergroundCoreCount(evidence: string): boolean {
  * height/diameter, a unit from another turn or one endpoint of an invalid
  * interval. Existing issued distance bands remain planning inputs only. */
 function hasCableRouteLength(evidence: string): boolean {
-  const lengths = /(?<![\p{L}\p{N}.,+\-−–—])([+−-]?\d+(?:[.,]\d+)?)(?:\s*[-–—]\s*([+−-]?\d+(?:[.,]\d+)?))?\s*м(?:етр\p{L}*)?(?![\p{L}\p{N}²³])/giu;
   let known = false;
   for (const turn of evidence.split(CUSTOMER_TURN_BOUNDARY)) {
     if (/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*)[^,;.!?\n]{0,45}(?:не\s+знаю|неизвест\p{L}*|нет\s+данных|не\s+определ\p{L}*)/iu.test(turn)) known = false;
-    for (const match of turn.matchAll(lengths)) {
-      const prefix = turn.slice(0, match.index).split(/[,;!?\n]/u).at(-1)!
-        .replace(/^\s*Уточнение клиента:\s*/iu, "").trim();
-      const routeLabel = [...prefix.matchAll(/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*|кабел\p{L}*)/giu)].at(-1);
-      const otherLabel = [...prefix.matchAll(/(?:высот\p{L}*|глубин\p{L}*|диаметр\p{L}*|ширин\p{L}*|толщин\p{L}*)/giu)].at(-1);
-      const owned = /^(?:(?:до|более|около|примерно)\s*)?$/iu.test(prefix) ||
-        Boolean(routeLabel && (!otherLabel || routeLabel.index! > otherLabel.index!));
-      if (!owned) continue;
-      const lower = Number(match[1].replace(",", ".").replace("−", "-"));
-      const upper = match[2] ? Number(match[2].replace(",", ".").replace("−", "-")) : lower;
+    for (const {lower, upper} of cableRouteLengthObservations(turn)) {
       // The latest owned declaration wins, including an invalid correction.
       known = Number.isFinite(lower) && Number.isFinite(upper) &&
         lower > 0 && upper >= lower;
@@ -767,7 +758,7 @@ const PROFILES: ReadinessProfile[] = [
   {
     id: "pump_cable",
     specification_assistance: true,
-    applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
+    applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*|для\s+(?:\p{L}+\s+){0,2}насос\p{L}*[^.!?\n]{0,40}кабел\p{L}*/iu,
     required: [
       hasNominalLoadCurrent,
       hasCableRouteLength,
@@ -825,7 +816,7 @@ const PROFILES: ReadinessProfile[] = [
     id: "underground_cable",
     specification_assistance: true,
     applies:
-      /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}земл\p{L}*/iu,
+      /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*|грунт\p{L}*|транше\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}(?:земл\p{L}*|грунт\p{L}*|транше\p{L}*)/iu,
     required: [
       /(?:труб\p{L}*|пнд|брон\p{L}*|(?:непосредственно|прямо)\s+в\s+земл)/iu,
       /\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])/iu,
