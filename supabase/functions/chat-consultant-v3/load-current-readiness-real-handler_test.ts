@@ -578,9 +578,9 @@ async function runDialogue({
               selection_readiness: {
                 decision: "ready",
                 critical_inputs: {
-                  first: { parameter: "Ток нагрузки", customer_quote: motor220 ? "30 А" : rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  first: { parameter: "Ток нагрузки", customer_quote: motor220 ? messages.at(-1)! : rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
                   rest: [
-                    { parameter: "Питание", customer_quote: motor220 ? "220 В, 3 фазы" : "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
+                    { parameter: "Питание", customer_quote: motor220 ? messages[1] : "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
                     { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
                   ],
                 },
@@ -1473,12 +1473,12 @@ Deno.test({
   }),
 });
 
-for (const motor220 of ["catalog_gap", "proved_fixture"] as const) Deno.test({
-  name: `client 15: 220 V three phase direct start 30 A ${motor220}`,
+for (const motor220 of ["catalog_gap", "proved_fixture"] as const) for (const original of [false, true]) Deno.test({
+  name: `client 15: 220 V three phase direct start 30 A ${motor220} ${original ? "verbatim client transcript" : "normalized"}`,
   permissions: { read: true, env: false, net: false },
   fn: () => runDialogue({
     label: motor220,
-    messages: [
+    messages: original ? ["Подберите автомат для двигателя асинхронный 3 кВТ", "220в 3 фазы", "Прямой пуск", "30а"] : [
       "Подберите автомат для двигателя асинхронный 3 кВт",
       "220 В, 3 фазы", "Прямой пуск", "30 А",
     ],
