@@ -183,6 +183,42 @@ Deno.test("sale-unit parsing never consumes an ordinary trailing purpose clause"
   );
 });
 
+Deno.test("an explicit metre price stays selected across positions and polite wording", () => {
+  for (const message of [
+    "За метр найди самый дешёвый кабель ВВГ 3×1,5",
+    "Найди самый дешёвый кабель ВВГ 3×1,5 за метр, пожалуйста",
+    "Найди самый дешёвый за метр кабель ВВГ 3×1,5",
+    "Новая тема. За погонный метр найди самый дешёвый кабель ВВГ 3×1,5",
+  ]) {
+    assertEquals(classifyExactCompoundMarkingRequest(message), {
+      query: "кабель ввг 3*1,5",
+      first: 3,
+      second: 1.5,
+      priceDirection: "cheapest",
+      exhaustive: false,
+      saleUnit: "м",
+    }, message);
+  }
+});
+
+Deno.test("metre unit handling does not override alternatives or drop product requirements", () => {
+  for (const fragment of [
+    "не за метр",
+    "за метр или за бухту",
+    "за бухту или за метр",
+    "за метр и бухту",
+    "за метр квадратный",
+    "за 100 м",
+    "за м²",
+  ]) {
+    const message = `Найди самый дешёвый кабель ВВГ 3×1,5 ${fragment}`;
+    assertEquals(classifyExactCompoundMarkingRequest(message), null, message);
+  }
+  const message = "За метр найди самый дешёвый кабель ВВГ 3×1,5 без брони";
+  assertEquals(semanticCompoundSourceQuery(message), "кабель ввг без брони");
+  assertEquals(classifyExactCompoundMarkingRequest(message), null);
+});
+
 Deno.test("exact compound intro checks sale units without promising an unproved cross-unit ranking", () => {
   const request = classifyExactCompoundMarkingRequest(
     "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
