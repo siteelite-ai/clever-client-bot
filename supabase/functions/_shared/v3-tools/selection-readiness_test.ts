@@ -13,6 +13,7 @@ import {
   selectionReadinessScope,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
+  verifiedReadinessEvidenceTurns,
   verifiedReadinessReplayInput,
 } from "./selection-readiness.ts";
 import { executeProposeClarification } from "./propose-clarification.ts";
@@ -360,6 +361,39 @@ Deno.test("free-form clarification answer retains the original selection request
     ]),
     scoped: true,
   });
+});
+
+Deno.test("only a verified pole-count choice carries its meaning to later turns", () => {
+  const original = "Нужен автомат 25 А для квартиры";
+  const pending = {
+    facet_key: "pole_count",
+    options: [{ value: "1P" }, { value: "2P" }],
+    scope: selectionReadinessScope(original),
+  };
+  const slots = { pending_clarification: pending };
+  const accepted = "Уточнение клиента: Количество полюсов: 1";
+  const token = joinCustomerTurns([original, accepted]);
+  assertEquals(resolveSelectionReadinessRequest("1P", slots, {
+    verifiedIssuedSlot: true,
+  }).message, token);
+  assertEquals(
+    resolveSelectionReadinessRequest("1P", slots).message,
+    joinCustomerTurns([original, "Уточнение клиента: 1P"]),
+  );
+  assertEquals(
+    resolveSelectionReadinessRequest("3P", slots, { verifiedIssuedSlot: true }).message,
+    joinCustomerTurns([original, "Уточнение клиента: 3P"]),
+  );
+  assertEquals(
+    verifiedReadinessEvidenceTurns(token, ["1P", original]),
+    [accepted, original],
+  );
+  assertEquals(verifiedReadinessEvidenceTurns(token, []), [accepted, original]);
+  assertEquals(verifiedReadinessEvidenceTurns(token, ["2P", original]), ["2P", original]);
+  assertEquals(
+    verifiedReadinessEvidenceTurns(token, ["Новые условия", "1P", original]),
+    ["Новые условия", "1P", original],
+  );
 });
 
 Deno.test("a new-task boundary never concatenates the pending readiness request", () => {

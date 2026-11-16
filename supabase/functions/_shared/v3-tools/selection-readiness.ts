@@ -10,6 +10,27 @@ import {
 } from "./criteria-consistency.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
+const POLE_COUNT_CHIP = /^([1-4])\s*[pрп]$/iu;
+const SCOPED_POLE_COUNT = /^Уточнение клиента: Количество полюсов: ([1-4])$/u;
+
+/** Reapply server-verified option meanings to the raw completed turns. The
+ * scoped record adds no turns when the log is available and cannot override
+ * a different, newer response. With no log, use the existing scoped fallback.
+ */
+export function verifiedReadinessEvidenceTurns(
+  issuedToken: string,
+  serverQueriesNewestFirst: string[],
+): string[] {
+  const scoped = issuedToken.split(CUSTOMER_TURN_BOUNDARY).filter(Boolean)
+    .reverse();
+  if (serverQueriesNewestFirst.length === 0) return scoped;
+  const [latest] = serverQueriesNewestFirst;
+  const trustedCount = scoped[0]?.match(SCOPED_POLE_COUNT)?.[1];
+  if (!trustedCount || latest.trim().match(POLE_COUNT_CHIP)?.[1] !== trustedCount) {
+    return serverQueriesNewestFirst;
+  }
+  return [scoped[0], ...serverQueriesNewestFirst.slice(1)];
+}
 
 export interface CompletedSelectionReadinessLog {
   session_id: unknown;
@@ -1220,7 +1241,7 @@ export function selectReadinessClarification(
 export function resolveSelectionReadinessRequest(
   currentMessage: string,
   slots: Record<string, unknown>,
-  options: { newTaskBoundary?: boolean } = {},
+  options: { newTaskBoundary?: boolean; verifiedIssuedSlot?: boolean } = {},
 ): { message: string; scoped: boolean } {
   const current = String(currentMessage ?? "").trim();
   if (options.newTaskBoundary) {
@@ -1243,8 +1264,23 @@ export function resolveSelectionReadinessRequest(
   }
   const original = record.token.trim().slice(0, 500);
   if (!original || !current) return { message: current, scoped: false };
+  // A bare abbreviation can match several live count axes (e.g. poles and
+  // package quantity). Only the exact answer to the verified question may
+  // carry the engineering meaning into subsequent clarification turns.
+  const optionSlot = pending as { facet_key?: unknown; options?: unknown };
+  const poleCount = optionSlot.facet_key === "pole_count"
+    ? current.match(POLE_COUNT_CHIP)?.[1] : undefined;
+  const exactIssuedOption = options.verifiedIssuedSlot && poleCount &&
+    Array.isArray(optionSlot.options) && optionSlot.options.some((option) =>
+      option && typeof option === "object" &&
+      typeof option.value === "string" &&
+      option.value.trim().toLowerCase() === current.toLowerCase()
+    );
+  const answer = exactIssuedOption
+    ? `Количество полюсов: ${poleCount}`
+    : current;
   return {
-    message: joinCustomerTurns([original, `Уточнение клиента: ${current}`]),
+    message: joinCustomerTurns([original, `Уточнение клиента: ${answer}`]),
     scoped: true,
   };
 }
