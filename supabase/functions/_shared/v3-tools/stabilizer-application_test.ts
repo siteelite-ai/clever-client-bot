@@ -110,6 +110,88 @@ Deno.test("stabilizer: peak confirmed separately; explicitly new purchase constr
   ) assertEquals(resolveStabilizerApplication(raw, null), null);
 });
 
+Deno.test("stabilizer: corrected input replaces only the recorded minimum, not the remaining load facts", () => {
+  const first = asked(resolveStabilizerApplication(stabilizerRequest, null));
+  const details = "одна фаза, нагрузка 1 кВА, без пусковых токов";
+  for (
+    const [input, expectedV] of [
+      ["Поправка: 150 В", 150],
+      ["Поправка: 150В", 150],
+      ["Минимум 150 В", 150],
+      ["На входе 150 В, на выходе 220 В", 150],
+      ["Напряжение падает с 220 В до 150 В", 150],
+      ["Номинал 220 В", 170],
+      ["Поправка: 150 В на выходе", 170],
+    ] as const
+  ) {
+    assertEquals(
+      resolveStabilizerApplication(`${input}; ${details}`, { ...first }),
+      {
+        status: "ready",
+        application: {
+          inputV: expectedV,
+          phases: 1,
+          loadVa: 1000,
+          peakVa: 1000,
+          kind: "steady",
+        },
+      },
+      input,
+    );
+  }
+  const pendingLoad = asked(
+    resolveStabilizerApplication("1 фаза, нагрузка 1 кВА", { ...first }),
+  );
+  const clarified = resolveStabilizerApplication(
+    "На входе 150 В, нагрузка 1,05 кВА, без пусковых токов",
+    { ...pendingLoad },
+  );
+  assert(clarified?.status === "ready");
+  assertEquals(clarified.application, {
+    inputV: 150,
+    phases: 1,
+    loadVa: 1050,
+    peakVa: 1050,
+    kind: "steady",
+  });
+  assert(
+    !qualifyingStabilizerPassports(clarified.application).some(
+      ({ article }) => article === "IVS21-1-002-13",
+    ),
+  );
+});
+
+Deno.test("stabilizer: contradictory or unsupported input cannot fall back to a superseded 170 V", () => {
+  const first = asked(resolveStabilizerApplication(stabilizerRequest, null));
+  const load = asked(
+    resolveStabilizerApplication("1 фаза, нагрузка 1 кВА", { ...first }),
+  );
+  for (
+    const phrase of [
+      "На входе 150 или 160 В",
+      "Поправка: не 170 В, а 150 В",
+      "Падает до 150 В и 160 В",
+      "На входе 150 В на выходе 220 В",
+      "На входе 50 В",
+    ]
+  ) {
+    const updated = asked(resolveStabilizerApplication(phrase, { ...load }));
+    const resolved = resolveStabilizerApplication("150 В, без пусковых токов", {
+      ...updated,
+    });
+    assertEquals(resolved, {
+      status: "ready",
+      application: {
+        inputV: 150,
+        phases: 1,
+        loadVa: 1000,
+        peakVa: 1000,
+        kind: "steady",
+      },
+    }, phrase);
+  }
+});
+
 Deno.test("stabilizer: comparable evidence at the actual input and with the correct curve", () => {
   const sample = {
     inputV: 170,

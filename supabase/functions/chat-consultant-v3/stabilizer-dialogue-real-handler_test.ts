@@ -78,7 +78,8 @@ Deno.test({
             id: part,
             article,
             pagetitle: `Стабилизатор напряжения HUB ${Number(part)}кВА IEK`,
-            url: `https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/stabilizatoryi/hub-${part}/`,
+            url:
+              `https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/stabilizatoryi/hub-${part}/`,
             vendor: "IEK",
             category: "Стабилизаторы",
             price: 10000,
@@ -215,6 +216,24 @@ Deno.test({
         }],
       });
       assertEquals(catalogRequests.length, 6);
+      turn++;
+      const correctedStart = getSlot((await invoke(ask, {})).events);
+      turn++;
+      const corrected = await invoke(
+        "Поправка: 150 В; одна фаза, нагрузка 1,05 кВА, без пусковых токов",
+        correctedStart,
+      );
+      const correctedSearch = stored[turn]?.steps?.find(({ step }) =>
+        step === "v3_stabilizer_passport_search"
+      )?.meta as Record<string, unknown> | undefined;
+      assertEquals(correctedSearch?.input_v, 150);
+      assertEquals(correctedSearch?.load_va, 1050);
+      assertEquals(correctedSearch?.verified_count, 0);
+      assert(
+        !corrected.events.some(({ type }) => type === "products_block"),
+        corrected.body,
+      );
+      assert(!corrected.body.includes("/hub-002/"), corrected.body);
       assertEquals(unexpected, []);
     } finally {
       globalThis.fetch = originalFetch;
