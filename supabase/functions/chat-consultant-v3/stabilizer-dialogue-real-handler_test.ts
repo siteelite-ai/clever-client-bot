@@ -208,6 +208,8 @@ Deno.test({
         catalog_failures: 0,
         catalog_rejected: 5,
         verified_count: 1,
+        selected_count: 1,
+        outcome: "shown",
         approved: [{
           id: "002",
           revision: "IEK-HUB-ed3-fig2",
@@ -229,6 +231,8 @@ Deno.test({
       assertEquals(correctedSearch?.input_v, 150);
       assertEquals(correctedSearch?.load_va, 1050);
       assertEquals(correctedSearch?.verified_count, 0);
+      assertEquals(correctedSearch?.selected_count, 0);
+      assertEquals(correctedSearch?.outcome, "no_verified_cards");
       assert(
         !corrected.events.some(({ type }) => type === "products_block"),
         corrected.body,
