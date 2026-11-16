@@ -161,7 +161,7 @@ async function runDialogue({
   typedParameters?: "confirmed" | "forged" | null;
   expectedConsultation?: Array<{
     phrase: string;
-    state?: { route: string; lengthM?: number; loadA?: number };
+    state?: { route?: string; lengthM?: number; loadA?: number };
     handoff?: boolean;
   }>;
   motor220?: false | "catalog_gap" | "proved_fixture";
@@ -1523,6 +1523,32 @@ for (const scenario of [
       { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
       { phrase: "явное разрешение в паспорте", state: { route: "direct", lengthM: 25 } },
       { phrase: "марку и сечение наугад не рекомендую", state: { route: "direct", lengthM: 25 }, handoff: true },
+    ],
+  },
+  {
+    label: "pump consultation keeps known facts from mixed confidence replies and later looks up the exact marking",
+    messages: ["Мне нужен кабель для насоса", "Марку не знаю, часть кабеля в воде, длина примерно 30 м",
+      "Длина 32 м, ток по шильдику около 6 А", "По шильдику 6 А",
+      "В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "pump_cable",
+    terminalMode: "specification_lookup" as const,
+    expectedConsultation: [
+      { phrase: "погружён в воду" },
+      { phrase: "длина линии", state: { route: "water" } },
+      { phrase: "ток указан на шильдике", state: { route: "water", lengthM: 32 } },
+      { phrase: "Длина и ток уже есть", state: { route: "water", lengthM: 32, loadA: 6 }, handoff: true },
+    ],
+  },
+  {
+    label: "underground consultation withdraws a disputed route without losing confirmed line length",
+    messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, расчётный ток около 16 А, длина 25 м",
+      "Теперь не уверен: в трубе, или прямо в грунт", "Прямо в грунт, расчётный ток 16 А"],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "underground_cable",
+    expectedConsultation: [
+      { phrase: "прямо в грунте или в защитной трубе" },
+      { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
+      { phrase: "прямо в грунте или в защитной трубе", state: { lengthM: 25 } },
+      { phrase: "Длина и ток уже есть", state: { route: "direct", lengthM: 25, loadA: 16 }, handoff: true },
     ],
   },
 ]) Deno.test({
