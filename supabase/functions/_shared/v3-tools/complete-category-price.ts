@@ -74,7 +74,13 @@ export type CompleteCategoryPriceResult =
 type RawProduct = Record<string, unknown>;
 type PageOk = { ok: true; total: number; rows: RawProduct[] };
 type PageFailure = Extract<CompleteCategoryPriceResult, { ok: false }>;
-type RawScopeResult = { ok: true; scope: CompleteScope; rows: Map<string, { raw: RawProduct; leaf: string }> } | PageFailure;
+type VerifiedLeafPages = { leaf: string; pages_read: number; declared_rows: number };
+type RawScopeResult = {
+  ok: true;
+  scope: CompleteScope;
+  rows: Map<string, { raw: RawProduct; leaf: string }>;
+  leafPages: VerifiedLeafPages[];
+} | PageFailure;
 
 function fail(reason: PageFailure["reason"], message: string): PageFailure {
   return { ok: false, reason, message };
@@ -282,13 +288,27 @@ async function fetchRawPage(
         offset += chunk.byteLength;
       }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      const json = JSON.parse(text) as { data?: { results?: unknown; pagination?: { total?: unknown } } };
-      const total = json?.data?.pagination?.total;
+      const json = JSON.parse(text) as { data?: { results?: unknown; pagination?: {
+        total?: unknown; page?: unknown; per_page?: unknown; pages?: unknown;
+      } } };
+      const pagination = json?.data?.pagination;
+      const total = pagination?.total;
       const rows = json?.data?.results;
       if (!Number.isSafeInteger(total) || Number(total) < 0 || !Array.isArray(rows) ||
           rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
         throw new Error("catalog response has no complete raw pagination contract");
       }
+      // Unique IDs and the expected row count do not identify the page: an
+      // inconsistent upstream response can have both and still echo page 1.
+      // A one-page result may omit the page number, but a multi-page proof
+      // must explicitly identify each page and not contradict its boundaries.
+      const expectedPages = Math.ceil(Number(total) / PAGE_SIZE);
+      if (
+        (pagination?.page === undefined ? expectedPages > 1 : pagination.page !== page) ||
+        (pagination?.per_page !== undefined && pagination.per_page !== PAGE_SIZE) ||
+        (pagination?.pages !== undefined && pagination.pages !== expectedPages &&
+          !(expectedPages === 0 && pagination.pages === 1))
+      ) return fail("catalog_partial", `pagination metadata disagrees with requested page ${page} in ${leaf}`);
       return { ok: true as const, total: Number(total), rows: rows as RawProduct[] };
     })();
     return await Promise.race([request, deadline]);
@@ -392,6 +412,7 @@ async function readCompleteCategoryRows(
   const { leaves } = scope;
   const deadline = Date.now() + MAX_TOTAL_MS;
   const all = new Map<string, { raw: RawProduct; leaf: string }>();
+  const leafPages: VerifiedLeafPages[] = [];
   let declaredRawTotal = 0;
   for (const leaf of leaves) {
     const first = await fetchRawPage(leaf, 1, deps, deadline - Date.now());
@@ -421,9 +442,10 @@ async function readCompleteCategoryRows(
         all.set(id, { raw, leaf });
       }
     }
+    leafPages.push({ leaf, pages_read: Math.max(1, pageCount), declared_rows: first.total });
   }
   if (all.size !== declaredRawTotal) return fail("catalog_partial", "declared and materialized row counts disagree");
-  return { ok: true, scope, rows: all };
+  return { ok: true, scope, rows: all, leafPages };
 }
 
 /** Package price remains a package price. A warehouse quantity, a naked
@@ -540,6 +562,7 @@ export async function selectCompleteCategoryAssortment(
 ): Promise<PageFailure | {
   ok: true;
   products: ProductFull[];
+  leafPages: VerifiedLeafPages[];
   evidence: {
     raw_rows: number;
     unrelated: number;
@@ -575,5 +598,5 @@ export async function selectCompleteCategoryAssortment(
     products.push(product);
     cache.set(product.id, product);
   }
-  return { ok: true, products, evidence };
+  return { ok: true, products, evidence, leafPages: scan.leafPages };
 }
