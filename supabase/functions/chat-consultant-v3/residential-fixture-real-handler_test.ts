@@ -164,7 +164,13 @@ Deno.test({
               data: {
                 results: page === "1" ? first : good,
                 ...(turn === 1 && page === "2" ? {} : {
-                  pagination: { total: first.length + good.length },
+                  pagination: {
+                    total: first.length + good.length,
+                    per_page: 50, pages: 2,
+                    ...(turn === 10 ? {} : {
+                      page: turn === 9 && page === "2" ? 1 : Number(page),
+                    }),
+                  },
                 }),
               },
             });
@@ -289,6 +295,21 @@ Deno.test({
       assertEquals(several.cards?.count, 3, several.body);
       assert(!several.body.includes("Где будет светильник"));
       assertEquals(requests.length, 14);
+      for (const [nextTurn, expectedReason] of [
+        [9, "page_mismatch"],
+        [10, "page_missing"],
+      ] as const) {
+        turn = nextTurn;
+        const uncertain = await invoke(customer);
+        assertEquals(uncertain.cards?.count, 1, "verified cards survive uncertain coverage");
+        assertStringIncludes(uncertain.body, "один вариант");
+        const proof = uncertain.proof as Record<string, unknown>;
+        assertEquals(proof?.catalogue_window_complete, false,
+          `page evidence: ${expectedReason}`);
+        assert((proof?.catalogue_page_evidence as Array<Record<string, unknown>>)
+          ?.some(({ page, issue }) => page === 2 && issue === expectedReason));
+      }
+      assertEquals(requests.length, 18);
       assert(
         requests.every((url) => url.searchParams.get("max_price") === "4000"),
       );

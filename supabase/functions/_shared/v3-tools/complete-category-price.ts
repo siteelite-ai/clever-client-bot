@@ -15,6 +15,7 @@ import {
   sanitizeCatalogDescription,
 } from "./search-catalog.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import { catalogPageIdentityIssue, type CatalogPagination } from "./catalog-page-identity.ts";
 import type { ProductCache, ProductFull, ProductRef } from "./types.ts";
 
 const PAGE_SIZE = 50;
@@ -288,9 +289,7 @@ async function fetchRawPage(
         offset += chunk.byteLength;
       }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      const json = JSON.parse(text) as { data?: { results?: unknown; pagination?: {
-        total?: unknown; page?: unknown; per_page?: unknown; pages?: unknown;
-      } } };
+      const json = JSON.parse(text) as { data?: { results?: unknown; pagination?: CatalogPagination } };
       const pagination = json?.data?.pagination;
       const total = pagination?.total;
       const rows = json?.data?.results;
@@ -298,17 +297,9 @@ async function fetchRawPage(
           rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
         throw new Error("catalog response has no complete raw pagination contract");
       }
-      // Unique IDs and the expected row count do not identify the page: an
-      // inconsistent upstream response can have both and still echo page 1.
-      // A one-page result may omit the page number, but a multi-page proof
-      // must explicitly identify each page and not contradict its boundaries.
-      const expectedPages = Math.ceil(Number(total) / PAGE_SIZE);
-      if (
-        (pagination?.page === undefined ? expectedPages > 1 : pagination.page !== page) ||
-        (pagination?.per_page !== undefined && pagination.per_page !== PAGE_SIZE) ||
-        (pagination?.pages !== undefined && pagination.pages !== expectedPages &&
-          !(expectedPages === 0 && pagination.pages === 1))
-      ) return fail("catalog_partial", `pagination metadata disagrees with requested page ${page} in ${leaf}`);
+      if (catalogPageIdentityIssue(pagination, page, PAGE_SIZE, Number(total))) {
+        return fail("catalog_partial", `pagination metadata disagrees with requested page ${page} in ${leaf}`);
+      }
       return { ok: true as const, total: Number(total), rows: rows as RawProduct[] };
     })();
     return await Promise.race([request, deadline]);

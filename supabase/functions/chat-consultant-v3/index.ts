@@ -34,6 +34,7 @@ import {
   executeSearchCatalog,
   expandOptionAlternatives,
   type CatalogClientDeps,
+  type CatalogSinglePageEvidence,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
 import {
@@ -9188,11 +9189,13 @@ async function selectVerifiedResidentialFixtures(
   const pagesLimit = 5;
   const readPage = async (page: number) => {
     const scopedCache: ProductCache = new Map();
+    const evidence: CatalogSinglePageEvidence[] = [];
     const result = await executeSearchCatalog({
       mode: "by_filter", category: leaf!, max_price: state.cap,
       page, per_page: pageSize,
-    }, deps, scopedCache);
-    return result.ok ? { total: result.total, coverage: result.candidate_coverage,
+    }, { ...deps, onSinglePageEvidence: (proof) => evidence.push(proof) }, scopedCache);
+    return result.ok ? { total: result.total, page, coverage: result.candidate_coverage,
+      evidence: evidence.length === 1 ? evidence[0] : null,
       products: result.results.flatMap(({ id }) => {
         const card = scopedCache.get(String(id));
         return card ? [card] : [];
@@ -9245,8 +9248,15 @@ async function selectVerifiedResidentialFixtures(
       taxonomy_error: taxonomy.ok ? null : taxonomy.error_code,
       pages_failed: pages.filter((page) => !page).length,
       catalogue_window_complete: !!first && pages.every((page) => page?.total === first.total &&
+        page.evidence?.issue === null && page.evidence.requested_page === page.page &&
         (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
         first.total === products.length && first.total === counts.size,
+      catalogue_page_evidence: pages.map((result, index) => ({
+        page: index + 1,
+        raw_rows: result?.evidence?.raw_rows ?? null,
+        issue: !result ? "search_failed" : !result.evidence ? "evidence_missing"
+          : result.evidence.issue ?? (result.total !== first?.total ? "total_changed" : null),
+      })),
       scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length,
       proofs: shown.length ? selected.map(({ product, proof }) => ({
         id: product.id, application: proof.application.source, sensor: proof.sensor.source,
