@@ -485,6 +485,7 @@ type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_m
 // the terminal product gate, not the mocked API, must reject wrong variants.
 async function runAdditionalBranchWithOff(
   branch: AdditionalBranch,
+  messageOverride?: string,
 ): Promise<Run> {
   const originalFetch = globalThis.fetch;
   const originalSetInterval = globalThis.setInterval;
@@ -496,11 +497,11 @@ async function runAdditionalBranchWithOff(
   const mixed = branch === "mixed_price" || branch === "chosen_meter";
   const exhaustive = branch === "all_positions" || branch === "coverage_partial";
   const leaf = paired ? "Трубки термоусаживаемые" : "Кабель ВВГ";
-  const message = paired
+  const message = messageOverride ?? (paired
     ? "подбери термоусадочную трубку для кабеля диаметром 12 мм"
     : mixed ? `найди кабель ввг 3*1,5 самый дешевый${branch === "chosen_meter" ? " за метр" : ""}`
     : exhaustive ? "какой есть кабель ввг 3*1,5 покажи все позиции"
-    : "найди кабель ВВГ 2*1,5 самый дешевый";
+    : "найди кабель ВВГ 2*1,5 самый дешевый");
   const items = paired
     ? [
       [401, "Трубка ТТУ 12/6 мм", 500, "12 мм", "6 мм"],
@@ -923,10 +924,17 @@ Deno.test({
     assert(text.includes("бухта 100 м: 46 500 ₸ за всю бухту"), text);
     assertEquals(blocks(mixed)[0]?.count, 1);
     assert(!mixed.events.some(event=>(event.v3_event as Block|undefined)?.type==="quick_replies"));
-    const chosen = await runAdditionalBranchWithOff("chosen_meter");
-    assert(blocks(chosen)[0]?.markdown?.includes("301* ₸/м"), customerVisibleText(chosen));
-    assert(!chosen.events.some(event=>(event.v3_event as Block|undefined)?.type==="quick_replies"));
-    assert(!customerVisibleText(chosen).includes("46 500"));
+    for (const phrase of [
+      "найди кабель ввг 3*1,5 самый дешевый за метр",
+      "За метр найди самый дешёвый кабель ВВГ 3×1,5",
+      "Найди самый дешёвый за метр кабель ВВГ 3×1,5",
+      "Найди самый дешёвый кабель ВВГ 3×1,5 за метр, пожалуйста",
+    ]) {
+      const chosen = await runAdditionalBranchWithOff("chosen_meter", phrase);
+      assert(blocks(chosen)[0]?.markdown?.includes("301* ₸/м"), customerVisibleText(chosen));
+      assert(!chosen.events.some(event=>(event.v3_event as Block|undefined)?.type==="quick_replies"));
+      assert(!customerVisibleText(chosen).includes("46 500"));
+    }
   },
 });
 

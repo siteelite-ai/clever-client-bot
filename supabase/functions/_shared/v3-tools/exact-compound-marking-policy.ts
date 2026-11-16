@@ -40,7 +40,7 @@ const EXPLICIT_TRAILING_SALE_UNIT = new RegExp(
 // words are ambiguous («за двор», «за квартиру»), so generated choice chips
 // use the explicit quoted «за единицу «…»» form instead.
 const SHORT_TRAILING_SALE_UNIT = /\s+за\s+(\p{L})\s*[.!?…]*\s*$/iu;
-const TRAILING_METRE_UNIT = /\s+за\s+(?:(?:погонный|пог\.?)\s+)?(?:метр|м)\s*[.!?…]*\s*$/iu;
+const METRE_UNIT = /(?:^|[\s,])за\s+(?:(?:погонный|пог\.?)\s+)?(?:метр|м)(?=$|[\s,!?…]|\.(?:$|\s))/giu;
 
 function priceDirectionFor(input: string): "cheapest" | "expensive" | null {
   return /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u
@@ -51,14 +51,28 @@ function priceDirectionFor(input: string): "cheapest" | "expensive" | null {
     : null;
 }
 
-function explicitTrailingSaleUnit(
+function explicitSaleUnit(
   input: string,
-): { unit: string; start: number } | null {
+): { unit: string; start: number; end: number } | null {
   if (!extractExplicitCompoundMarking(input) || !priceDirectionFor(input)) {
     return null;
   }
-  const metre = input.match(TRAILING_METRE_UNIT);
-  if (metre?.index !== undefined) return { unit: "м", start: metre.index };
+  const metres = [...input.matchAll(METRE_UNIT)];
+  if (metres.length > 0) {
+    const [{ index: start, 0: phrase }] = metres;
+    const end = start + phrase.length;
+    const before = input.slice(0, start);
+    const after = input.slice(end);
+    // Do not turn negated, alternative, or area/volume units into a price
+    // filter. Leave the original wording for semantic handling instead.
+    if (
+      metres.length !== 1 ||
+      /(?:^|[^\p{L}])за(?=$|[^\p{L}])/u.test(`${before} ${after}`) ||
+      /(?:^|[^\p{L}])(?:не|без|кроме|вместо)\s*[,—-]?\s*$/u.test(before) ||
+      /^[\s,.—-]*(?:и|или|либо|квадратн\p{L}*|кубическ\p{L}*|кв\.|куб\.)(?=$|[^\p{L}])/u.test(after)
+    ) return null;
+    return { unit: "м", start, end };
+  }
   const match = input.match(EXPLICIT_TRAILING_SALE_UNIT) ??
     input.match(SHORT_TRAILING_SALE_UNIT);
   if (!match || match.index === undefined) return null;
@@ -68,7 +82,7 @@ function explicitTrailingSaleUnit(
     unit.length === 0 || unit.length > 12 ||
     !/^[\p{L}\p{N}][\p{L}\p{N}./% -]*$/u.test(unit)
   ) return null;
-  return { unit, start: match.index };
+  return { unit, start: match.index, end: match.index + match[0].length };
 }
 
 /**
@@ -181,8 +195,10 @@ export function requiresSemanticCompoundEvidence(message: string): boolean {
  * the literal N×S constraint and an explicit sale-unit choice removed. */
 export function semanticCompoundSourceQuery(message: string): string {
   const normalized = norm(stripExplicitNewTaskPreface(message));
-  const saleUnit = explicitTrailingSaleUnit(normalized);
-  return (saleUnit ? normalized.slice(0, saleUnit.start) : normalized)
+  const saleUnit = explicitSaleUnit(normalized);
+  return (saleUnit
+    ? `${normalized.slice(0, saleUnit.start)} ${normalized.slice(saleUnit.end)}`
+    : normalized)
     .replace(/[?!]/gu, " ")
     // Relative availability clauses describe request/cardinality semantics,
     // not an additional product property. Keeping them here makes an exact
@@ -488,7 +504,7 @@ export function classifyExactCompoundMarkingRequest(
   const { first, second } = marking;
 
   const priceDirection = priceDirectionFor(input);
-  const saleUnit = explicitTrailingSaleUnit(input)?.unit;
+  const saleUnit = explicitSaleUnit(stripExplicitNewTaskPreface(input))?.unit;
 
   const sourceQuery = semanticCompoundSourceQuery(input);
   const literal = `${first}*${String(second).replace(".", ",")}`;
