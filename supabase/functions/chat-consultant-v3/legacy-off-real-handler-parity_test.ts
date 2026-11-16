@@ -478,7 +478,7 @@ async function runProtectionWithOff(message: string): Promise<Run> {
   }
 }
 
-type AdditionalBranch = "paired_fit" | "exact_cable";
+type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_meter" | "all_positions" | "coverage_partial";
 
 // These two fixtures exercise independent, already-shipped selection routes
 // through the actual HTTP handler. Search intentionally returns a broad pool:
@@ -493,9 +493,13 @@ async function runAdditionalBranchWithOff(
   const catalogPages: number[] = [];
   let steps: Step[] = [];
   const paired = branch === "paired_fit";
+  const mixed = branch === "mixed_price" || branch === "chosen_meter";
+  const exhaustive = branch === "all_positions" || branch === "coverage_partial";
   const leaf = paired ? "Трубки термоусаживаемые" : "Кабель ВВГ";
   const message = paired
     ? "подбери термоусадочную трубку для кабеля диаметром 12 мм"
+    : mixed ? `найди кабель ввг 3*1,5 самый дешевый${branch === "chosen_meter" ? " за метр" : ""}`
+    : exhaustive ? "какой есть кабель ввг 3*1,5 покажи все позиции"
     : "найди кабель ВВГ 2*1,5 самый дешевый";
   const items = paired
     ? [
@@ -503,6 +507,15 @@ async function runAdditionalBranchWithOff(
       [402, "Трубка ТТУ 14/7 мм", 530, "14 мм", "7 мм"],
       [403, "Трубка ТТУ 16/8 мм", 606, "16 мм", "8 мм"],
     ] as const
+    : mixed ? [
+      [34437, "Кабель ВВГ 3*1,5 ГОСТ IK", 301, "3*1,5", "м"],
+      [38903, "Кабель ВВГ нг 3*1,5 ГОСТ (Бухта 100м)", 46500, "3*1,5", "уп."],
+      [31111, "Кабель ВВГ 3*1,5 ГОСТ А", 330, "3*1,5", "м"],
+    ] as const
+    : exhaustive ? [
+      ...Array.from({length: 19}, (_, i) => [10000+i, "Кабель ВВГ 3*1,5", 300+i, "3*1,5", "м"] as const),
+      [999, "Кабель ВВГ 3*2,5", 10, "3*2,5", "м"] as const,
+    ]
     : [
       [501, "Кабель ВВГ 2*1,5 ГОСТ А", 380, "2*1,5", "м"],
       [502, "Кабель ВВГ 2*1,5 ГОСТ Б", 320, "2*1,5", "м"],
@@ -639,7 +652,7 @@ async function runAdditionalBranchWithOff(
               category: {
                 id: paired ? 13 : 14,
                 pagetitle: leaf,
-                total_products: 3,
+                total_products: products.length,
               },
               options,
             },
@@ -647,8 +660,11 @@ async function runAdditionalBranchWithOff(
         }
         if (url.pathname === "/api/products") {
           catalogPages.push(Number(url.searchParams.get("page") ?? "1"));
+          if (branch === "coverage_partial" && url.searchParams.has("category")) {
+            return json({error:"fixture category unavailable"}, 503);
+          }
           return json({
-            data: { results: products, pagination: { total: 3 } },
+            data: { results: products, pagination: { total: branch === "coverage_partial" ? 80 : products.length } },
           });
         }
       }
@@ -889,6 +905,47 @@ Deno.test({
         (event.v3_event as Block | undefined)?.type === "done"
       ),
     );
+  },
+});
+
+function customerVisibleText(run: Run) {
+  return run.events.flatMap(event => (event.choices as Array<{delta?:{content?:string}}> | undefined)
+    ?.map(({delta})=>delta?.content ?? "") ?? []).join("");
+}
+
+Deno.test({
+  name: "client #1 distinct metre and coil prices, no repeated unit question",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const mixed = await runAdditionalBranchWithOff("mixed_price");
+    const text = customerVisibleText(mixed);
+    assert(text.includes("За метр: 301 ₸."), text);
+    assert(text.includes("бухта 100 м: 46 500 ₸ за всю бухту"), text);
+    assertEquals(blocks(mixed)[0]?.count, 1);
+    assert(!mixed.events.some(event=>(event.v3_event as Block|undefined)?.type==="quick_replies"));
+    const chosen = await runAdditionalBranchWithOff("chosen_meter");
+    assert(blocks(chosen)[0]?.markdown?.includes("301* ₸/м"), customerVisibleText(chosen));
+    assert(!chosen.events.some(event=>(event.v3_event as Block|undefined)?.type==="quick_replies"));
+    assert(!customerVisibleText(chosen).includes("46 500"));
+  },
+});
+
+Deno.test({
+  name: "client #11 distinguishes exact category proof, fallback and rendered cap",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    for (const branch of ["all_positions", "coverage_partial"] as const) {
+      const run = await runAdditionalBranchWithOff(branch);
+      const report = run.steps.find(step=>step.step==="v3_exact_compound_assortment_coverage")?.meta;
+      const answer = customerVisibleText(run);
+      assertEquals(report?.category_complete, branch === "all_positions", JSON.stringify(run.steps));
+      assertEquals(report?.verified,19);
+      assertEquals(report?.hidden_by_display_limit,9);
+      assertEquals(blocks(run)[0]?.count,10);
+      assert(!blocks(run)[0]?.markdown?.includes("3*2,5"));
+      assert(answer.includes("10 из 19 подтверждённых"), answer);
+      assert(answer.includes(branch === "all_positions" ? "все страницы разделов точной категории" : "Полноту каталога по этой маркировке подтвердить не удалось"), answer);
+    }
   },
 });
 

@@ -55,6 +55,8 @@ export interface CompleteCategoryPriceEvidence {
   unit: string;
   selected_price: number;
   tied_count: number;
+  /** Independent price rows, never part of a cross-unit ranking. */
+  unit_examples?: Array<{ unit: string; price: number; coilLengthM?: number }>;
 }
 
 export type CompleteCategoryPriceResult =
@@ -72,6 +74,7 @@ export type CompleteCategoryPriceResult =
 type RawProduct = Record<string, unknown>;
 type PageOk = { ok: true; total: number; rows: RawProduct[] };
 type PageFailure = Extract<CompleteCategoryPriceResult, { ok: false }>;
+type RawScopeResult = { ok: true; scope: CompleteScope; rows: Map<string, { raw: RawProduct; leaf: string }> } | PageFailure;
 
 function fail(reason: PageFailure["reason"], message: string): PageFailure {
   return { ok: false, reason, message };
@@ -97,8 +100,7 @@ function normalizedSaleUnit(value: unknown): string | null {
     ? unit : null;
 }
 
-/** The literal product-class phrase that must exactly resolve in live taxonomy. */
-export function exactCompoundClassPhrase(request: ExactCompoundMarkingRequest): string | null {
+function compoundClassPhrase(request: ExactCompoundMarkingRequest): string | null {
   if (!request || typeof request.query !== "string" || !Number.isFinite(request.first) ||
       !Number.isFinite(request.second) || request.first <= 0 || request.second <= 0) return null;
   const query = normalize(request.query);
@@ -107,7 +109,13 @@ export function exactCompoundClassPhrase(request: ExactCompoundMarkingRequest): 
   if (position < 0) return null;
   const phrase = `${query.slice(0, position)} ${query.slice(position + marking.length)}`
     .replace(/\s+/gu, " ").trim();
-  return phrase.length >= 5 ? phrase : null;
+  return phrase || null;
+}
+
+/** The literal product-class phrase that must exactly resolve in live taxonomy. */
+export function exactCompoundClassPhrase(request: ExactCompoundMarkingRequest): string | null {
+  const phrase = compoundClassPhrase(request);
+  return phrase && phrase.length >= 5 ? phrase : null;
 }
 
 interface CompleteScope {
@@ -144,8 +152,8 @@ type TitleRelation = "match" | "unrelated" | "ambiguous";
  * A partially matching class or multiple sizes is ambiguous, not an exclusion:
  * silently discarding it could turn a cheaper item into a false minimum.
  */
-function titleRelation(title: string, request: ExactCompoundMarkingRequest): TitleRelation {
-  const classPhrase = exactCompoundClassPhrase(request);
+export function exactCompoundTitleRelation(title: string, request: ExactCompoundMarkingRequest): TitleRelation {
+  const classPhrase = compoundClassPhrase(request);
   if (!classPhrase) return "ambiguous";
   const value = normalize(title);
   const allMarkings = [...value.matchAll(/\b(\d{1,3})\*(\d+(?:\.\d+)?)\b/gu)];
@@ -175,11 +183,13 @@ function titleRelation(title: string, request: ExactCompoundMarkingRequest): Tit
   return "ambiguous";
 }
 
-function validScope(input: CompleteCategoryPriceInput): CompleteScope | null {
+function validScope(input: CompleteCategoryPriceInput, assortment: boolean): CompleteScope | null {
   const { request, discovery } = input;
-  if (!request || !["cheapest", "expensive"].includes(request.priceDirection ?? "") ||
+  if (!request || (assortment
+      ? !request.exhaustive || request.priceDirection !== null || request.saleUnit !== undefined
+      : !["cheapest", "expensive"].includes(request.priceDirection ?? "") || request.exhaustive) ||
       (request.saleUnit !== undefined && normalizedSaleUnit(request.saleUnit) === null) ||
-      request.exhaustive || !Number.isFinite(request.first) || !Number.isFinite(request.second) ||
+      !Number.isFinite(request.first) || !Number.isFinite(request.second) ||
       request.first <= 0 || request.second <= 0 ||
       typeof request.query !== "string" || !request.query.trim() || request.query.length > 160 ||
       !productTitleMatchesExplicitCompoundMarking(request.query, request) ||
@@ -370,12 +380,12 @@ function productFromRaw(raw: RawProduct, leaf: string, unit: string): ProductFul
  * The caller must use the returned product only on `ok: true`; a failure must
  * suppress any unproven "самый дешёвый/дорогой" claim.
  */
-export async function selectCompleteCategoryPrice(
+async function readCompleteCategoryRows(
   input: CompleteCategoryPriceInput,
   deps: CatalogClientDeps,
-  cache: ProductCache,
-): Promise<CompleteCategoryPriceResult> {
-  const scope = validScope(input);
+  assortment = false,
+): Promise<RawScopeResult> {
+  const scope = validScope(input, assortment);
   if (!scope || !deps.baseUrl || !deps.apiToken) {
     return fail("invalid_scope", "exact compound and a complete live leaf-category scope are required");
   }
@@ -413,6 +423,27 @@ export async function selectCompleteCategoryPrice(
     }
   }
   if (all.size !== declaredRawTotal) return fail("catalog_partial", "declared and materialized row counts disagree");
+  return { ok: true, scope, rows: all };
+}
+
+/** Package price remains a package price. A warehouse quantity, a naked
+ * length or a numeric price must never stand in for one coil's length. */
+function confirmedCoilLength(raw: RawProduct, unit: string): number | undefined {
+  if (!/^(?:уп|упак|упаковка|бухта)$/iu.test(unit)) return undefined;
+  const title = String(raw.pagetitle ?? raw.name ?? "");
+  const lengths = [...title.matchAll(/(?<!\p{L})бухта\s+(\d{1,5}(?:[.,]\d{1,3})?)\s*(?:м|метр(?:а|ов)?)(?![\p{L}\p{N}²³])/giu)]
+    .map((match) => Number(match[1].replace(",", ".")));
+  return lengths.length === 1 && lengths[0] > 0 ? lengths[0] : undefined;
+}
+
+export async function selectCompleteCategoryPrice(
+  input: CompleteCategoryPriceInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+): Promise<CompleteCategoryPriceResult> {
+  const scan = await readCompleteCategoryRows(input, deps);
+  if (!scan.ok) return scan;
+  const { scope, rows: all } = scan;
   const candidates: Array<{ raw: RawProduct; leaf: string; unit: string; price: number }> = [];
   let restrictedExcluded = 0;
   let unpricedExcluded = 0;
@@ -420,7 +451,7 @@ export async function selectCompleteCategoryPrice(
   for (const { raw, leaf } of all.values()) {
     const title = typeof raw.pagetitle === "string" ? raw.pagetitle
       : typeof raw.name === "string" ? raw.name : "";
-    const relation = titleRelation(title, input.request);
+    const relation = exactCompoundTitleRelation(title, input.request);
     if (relation === "unrelated") continue;
     if (isRestrictedCatalogProduct(raw)) { restrictedExcluded++; continue; }
     const price = Number(raw.price);
@@ -476,8 +507,8 @@ export async function selectCompleteCategoryPrice(
       scope_category: input.discovery.category.pagetitle,
       taxonomy_leaf_count: scope.taxonomyLeafCount,
       skipped_other_marking_leaves: scope.skippedOtherMarkingLeaves,
-      leaf_categories: leaves,
-      raw_rows: declaredRawTotal,
+      leaf_categories: scope.leaves,
+      raw_rows: all.size,
       matching_available: selectedCandidates.length,
       restricted_excluded: restrictedExcluded,
       unpriced_excluded: unpricedExcluded,
@@ -487,6 +518,62 @@ export async function selectCompleteCategoryPrice(
       unit: selectedUnit,
       selected_price: winner.price,
       tied_count: selectedCandidates.filter((item) => item.price === winner.price).length,
+      ...(!requestedUnit && unitOptions.length > 1 ? {
+        unit_examples: unitOptions.map((unit) => {
+          const example = [...byUnit.get(unit)!].sort((a, b) =>
+            direction * (a.price - b.price) || String(a.raw.id).localeCompare(String(b.raw.id)))[0];
+          const coilLengthM = confirmedCoilLength(example.raw, unit);
+          return { unit, price: example.price, ...(coilLengthM === undefined ? {} : { coilLengthM }) };
+        }),
+      } : {}),
     },
   };
+}
+
+/** Exhaustive intent can claim completeness only for the verified taxonomy
+ * scope. Unknown relevant cards are recorded, never silently counted as
+ * non-matches. Item count and display limit are deliberately independent. */
+export async function selectCompleteCategoryAssortment(
+  input: CompleteCategoryPriceInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+): Promise<PageFailure | {
+  ok: true;
+  products: ProductFull[];
+  evidence: {
+    raw_rows: number;
+    unrelated: number;
+    restricted: number;
+    unpriced: number;
+    out_of_stock: number;
+    unverified: number;
+  };
+}> {
+  const scan = await readCompleteCategoryRows(input, deps, true);
+  if (!scan.ok) return scan;
+  const evidence = { raw_rows: scan.rows.size, unrelated: 0, restricted: 0, unpriced: 0, out_of_stock: 0, unverified: 0 };
+  const products: ProductFull[] = [];
+  for (const { raw, leaf } of scan.rows.values()) {
+    const title = typeof raw.pagetitle === "string" ? raw.pagetitle
+      : typeof raw.name === "string" ? raw.name : "";
+    if (!title.trim() || !/\b\d{1,3}\*\d/u.test(normalize(title))) { evidence.unverified++; continue; }
+    const relation = exactCompoundTitleRelation(title, input.request);
+    if (relation === "unrelated") { evidence.unrelated++; continue; }
+    if (isRestrictedCatalogProduct(raw)) { evidence.restricted++; continue; }
+    const stock = warehouseProof(raw);
+    if (stock === "zero") { evidence.out_of_stock++; continue; }
+    const price = Number(raw.price);
+    if (!Number.isFinite(price) || price <= 0) { evidence.unpriced++; continue; }
+    const unit = normalizedSaleUnit(extractUnit(raw));
+    if (relation !== "match" || stock !== "positive" || !unit || !normalizeProductUrl(raw.url)) {
+      evidence.unverified++;
+      continue;
+    }
+    // Preserve catalog order rather than comparing prices across different
+    // units. Coverage is based on SKU, not normalized labels.
+    const product = productFromRaw(raw, leaf, unit);
+    products.push(product);
+    cache.set(product.id, product);
+  }
+  return { ok: true, products, evidence };
 }

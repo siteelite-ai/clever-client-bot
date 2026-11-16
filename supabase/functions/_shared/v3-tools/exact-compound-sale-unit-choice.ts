@@ -5,6 +5,21 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 // Keep the same small grammar accepted by the request parser and widget chips.
 const SAFE_SALE_UNIT = /^[\p{L}\p{N}][\p{L}\p{N}./% -]{0,11}$/u;
 
+/** Separate the actual per-metre offer from the actual price of a whole
+ * coil. No division by length, no equivalence between products or units. */
+export function exactCompoundUnitPriceBreakdown(
+  examples: ReadonlyArray<{ unit: string; price: number; coilLengthM?: number }>,
+): string | null {
+  if (examples.length !== 2 || examples.some(({ price }) => !Number.isFinite(price) || price <= 0)) return null;
+  const metre = examples.find(({ unit }) => /^(?:м|метр|пог\.?\s*м)$/iu.test(unit));
+  const coil = examples.find(({ unit, coilLengthM }) =>
+    /^(?:уп|упак|упаковка|бухта)$/iu.test(unit) &&
+    typeof coilLengthM === "number" && Number.isFinite(coilLengthM) && coilLengthM > 0);
+  if (!metre || !coil || metre === coil) return null;
+  const number = (value: number) => value.toLocaleString("ru-RU").replace(/\u00a0/gu, " ");
+  return `За метр: ${number(metre.price)} ₸.\n\nОтдельно бухта ${number(coil.coilLengthM!)} м: ${number(coil.price)} ₸ за всю бухту. Это разные единицы продажи.`;
+}
+
 export function exactCompoundUnitScopeNotice(
   direction: "cheapest" | "expensive",
   selectedUnit: string,
@@ -41,12 +56,13 @@ export function exactCompoundSaleUnitChoices(
   const order = request.priceDirection === "cheapest"
     ? "самый дешевый"
     : "самый дорогой";
-  const options = units.map((unit) => ({
+  const selected = request.saleUnit?.normalize("NFKC").trim().toLocaleLowerCase("ru-RU").replace(/ё/gu, "е").replace(/\.$/u, "");
+  const options = units.filter(unit => unit !== selected).map((unit) => ({
     value: `найди ${request.query} ${order} за единицу «${unit}»`,
-    label: `За ${unit}`,
+    label: unit === "м" ? "За метр" : unit === "уп" ? "За упаковку" : `За ${unit}`,
   }));
   if (
-    options.some(({ value, label }) =>
+    options.length < 2 || options.some(({ value, label }) =>
       value.length > 2000 ||
       label.length > 160
     )

@@ -40,6 +40,7 @@ const EXPLICIT_TRAILING_SALE_UNIT = new RegExp(
 // words are ambiguous («за двор», «за квартиру»), so generated choice chips
 // use the explicit quoted «за единицу «…»» form instead.
 const SHORT_TRAILING_SALE_UNIT = /\s+за\s+(\p{L})\s*[.!?…]*\s*$/iu;
+const TRAILING_METRE_UNIT = /\s+за\s+(?:(?:погонный|пог\.?)\s+)?(?:метр|м)\s*[.!?…]*\s*$/iu;
 
 function priceDirectionFor(input: string): "cheapest" | "expensive" | null {
   return /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u
@@ -56,6 +57,8 @@ function explicitTrailingSaleUnit(
   if (!extractExplicitCompoundMarking(input) || !priceDirectionFor(input)) {
     return null;
   }
+  const metre = input.match(TRAILING_METRE_UNIT);
+  if (metre?.index !== undefined) return { unit: "м", start: metre.index };
   const match = input.match(EXPLICIT_TRAILING_SALE_UNIT) ??
     input.match(SHORT_TRAILING_SALE_UNIT);
   if (!match || match.index === undefined) return null;
