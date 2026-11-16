@@ -45,9 +45,11 @@ Deno.test("configured assistance profiles ask one free-text specification questi
     })!;
     assertEquals(prompt.facet_key, "engineering_specification");
     assertEquals(prompt.options, []);
-    assert(prompt.question.includes("Укажите"));
+    assert(prompt.question.includes("?"));
+    assert(prompt.question.includes("Если есть маркировка"));
     assert(!/скопир|сводк|собраны/iu.test(prompt.question));
-    assertEquals(prompt.scope?.assistance, { version: 1 });
+    assertEquals(prompt.scope?.assistance?.version, 1);
+    assert(!prompt.scope?.assistance?.handoff);
   }
   for (
     const message of [
@@ -145,7 +147,7 @@ Deno.test("legacy help/status/summary slots migrate to one prompt, never collect
     assertEquals(prompt.scope?.assistance, { version: 1, handoff: true });
   }
 });
-Deno.test("unknown specification remains a text prompt, not a questionnaire or a false empty catalog", () => {
+Deno.test("unknown specification remains a handoff, not a questionnaire or a false empty catalog", () => {
   const prompt = resolveSpecificationAssistance({
     message: "Не знаю",
     verifiedSlot: issued(),
@@ -155,6 +157,7 @@ Deno.test("unknown specification remains a text prompt, not a questionnaire or a
   assertEquals(prompt.facet_key, "engineering_specification");
   assertEquals(prompt.options, []);
   assert(!/скопир|сводк|не найден|Какая длина/iu.test(prompt.question));
+  assert(!prompt.question.includes("?"));
   assertEquals(
     resolveSpecificationAssistance({
       message: "Нужен прожектор на улицу",
@@ -164,6 +167,77 @@ Deno.test("unknown specification remains a text prompt, not a questionnaire or a
     }),
     null,
   );
+});
+
+Deno.test("cable consultation preserves user facts and never infers a diameter from the breaker", () => {
+  const prompt = (message: string, slot: Record<string, unknown> | null) => {
+    const next = resolveSpecificationAssistance({ message, verifiedSlot: slot, newTask: false, enabled: true })!;
+    return { status: "pending", slot_id: crypto.randomUUID(), facet_key: next.facet_key,
+      options: next.options, question: next.question, scope: next.scope };
+  };
+  const pumpStart = prompt("Нужен кабель для насоса, маркировку не знаю.", null);
+  assert(pumpStart.question.includes("погружён в воду"));
+  const wet = prompt("Часть кабеля будет в воде", pumpStart);
+  assert(wet.question.includes("длительное погружение"));
+  assert(wet.question.includes("длина линии"));
+  assertEquals(wet.scope?.assistance?.consultation, { route: "water" });
+  for (const unrelated of ["Глубина скважины 2 м", "2 м глубина", "До 30 м", "20–40 м", "Диаметр 1 м"]) {
+    assertEquals(prompt(unrelated, wet).scope?.assistance?.consultation, { route: "water" }, unrelated);
+  }
+  const length = prompt("Длина 38 м, автомат на 16 А", wet);
+  assert(length.question.includes("ток указан на шильдике"));
+  assertEquals(length.scope?.assistance?.consultation, { route: "water", lengthM: 38 });
+  const revoked = prompt("Длину не знаю", length);
+  assertEquals(revoked.scope?.assistance?.consultation, { route: "water" });
+  const handoff = prompt("6 А", length);
+  assert(handoff.scope?.assistance?.handoff);
+  assert(!handoff.question.includes("?"));
+  assertEquals(handoff.scope?.assistance?.consultation, { route: "water", lengthM: 38, loadA: 6 });
+  assertEquals(specificationCatalogQuery({
+    message: "В проекте указан КГ 3*1,5. Проверь наличие и цену.",
+    verifiedSlot: handoff, enabled: true, newTask: false,
+  }), "Найди кабель КГ 3*1,5");
+});
+
+Deno.test("consultation recovers only the server's route and measurements", () => {
+  const old = issued(earth);
+  const answer = resolveSpecificationAssistance({
+    message: "В трубе, 25 м", verifiedSlot: old, newTask: false, enabled: true,
+  })!;
+  const server = { ...old, scope: answer.scope };
+  const client = structuredClone(server);
+  client.scope!.assistance!.consultation = { route: "direct", lengthM: 100 };
+  const verified = resolveServerIssuedSelectionReadinessPending({ pending_clarification: client }, {
+    session_id: "s", error: null, response_events: [
+      { type: "slot_update", slots: { pending_clarification: server } },
+      { type: "diagnostic", phase: "complete" }, { type: "done" },
+    ],
+  }, "s");
+  assert(verified);
+  const next = resolveSpecificationAssistance({ message: "Ток 16 А", verifiedSlot: verified, newTask: false, enabled: true });
+  assertEquals(next?.scope?.assistance?.consultation, { route: "duct", lengthM: 25, loadA: 16 });
+});
+
+Deno.test("underground consultation distinguishes duct from direct burial and accepts explicit corrections only", () => {
+  const answer = (message: string, verifiedSlot: Record<string, unknown> | null) => {
+    const next = resolveSpecificationAssistance({ message, verifiedSlot, newTask: false, enabled: true })!;
+    return { status: "pending", slot_id: crypto.randomUUID(), ...next };
+  };
+  const start = answer(earth, null);
+  assert(start.question.includes("прямо в грунте или в защитной трубе"));
+  for (const uncertain of ["В трубе?", "В трубе или прямо в земле", "Не напрямую в грунт"]) {
+    const next = answer(uncertain, start);
+    assertEquals(next.scope?.assistance?.consultation?.route, undefined, uncertain);
+  }
+  const duct = answer("В трубе ПНД, длина 25 м", start);
+  assert(duct.question.includes("расчётный ток линии"));
+  assertEquals(duct.scope?.assistance?.consultation, { route: "duct", lengthM: 25 });
+  const direct = answer("Нет, без трубы, прямо в грунт", duct);
+  assert(direct.question.includes("явное разрешение в паспорте"));
+  assertEquals(direct.scope?.assistance?.consultation, { route: "direct", lengthM: 25 });
+  const unknown = answer("Не знаю марку", direct);
+  assert(unknown.scope?.assistance?.handoff);
+  assert(!unknown.question.includes("?"));
 });
 Deno.test("forged browser assistance cannot upgrade the actual completed ordinary slot", () => {
   const actual = {

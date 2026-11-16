@@ -29710,8 +29710,8 @@ Deno.serve(async (req) => {
               const phone = await lookupProductManagerPhone(supabase);
               if (phone) readinessClarification.scope.assistance.manager_phone = phone;
               readinessClarification.question += phone
-                ? `\n\n${readinessClarification.scope.assistance.handoff ? "Позвоните менеджеру" : "Если маркировка неизвестна, позвоните менеджеру"}: ${phone}.`
-                : "\n\nЕсли маркировка неизвестна, свяжитесь с менеджером. Телефон можно посмотреть на странице контактов.";
+                ? `\n\n${readinessClarification.scope.assistance.handoff ? "Позвоните менеджеру" : "Если хотите обсудить подбор с менеджером, позвоните"}: ${phone}.`
+                : "\n\nСвязаться с менеджером можно по телефону на странице контактов.";
             }
             // GUARD v3_meta_question_declined: вопрос про устройство сервиса
             // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
