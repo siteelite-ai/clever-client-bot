@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   exactCompoundSaleUnitChoices,
+  exactCompoundUnitPriceBreakdown,
   exactCompoundUnitScopeNotice,
 } from "./exact-compound-sale-unit-choice.ts";
 import { executeProposeClarification } from "./propose-clarification.ts";
@@ -21,11 +22,11 @@ Deno.test("mixed sale units offer full-query chips without cross-unit ranking", 
     options: [
       {
         value: "найди кабель ввг 3*1,5 самый дешевый за единицу «м»",
-        label: "За м",
+        label: "За метр",
       },
       {
         value: "найди кабель ввг 3*1,5 самый дешевый за единицу «уп»",
-        label: "За уп",
+        label: "За упаковку",
       },
     ],
   });
@@ -70,4 +71,14 @@ Deno.test("quoted unit chips preserve a safe multiword catalog unit", () => {
     value: "найди кабель ввг 3*1,5 самый дешевый за единицу «пог. м»",
     label: "За пог. м",
   });
+});
+
+Deno.test("a verified coil is priced separately and a chosen unit is not offered again", () => {
+  assertEquals(exactCompoundUnitPriceBreakdown([{ unit: "м", price: 301 },
+    { unit: "уп", price: 46500, coilLengthM: 100 }]),
+    "За метр: 301 ₸.\n\nОтдельно бухта 100 м: 46 500 ₸ за всю бухту. Это разные единицы продажи.");
+  assertEquals(exactCompoundUnitPriceBreakdown([{ unit: "м", price: 301 }, { unit: "уп", price: 46500 }]), null);
+  assertEquals(exactCompoundSaleUnitChoices({ ...request, saleUnit: "м" }, ["м", "уп"]), null);
+  assertEquals(exactCompoundSaleUnitChoices({ ...request, saleUnit: "м" }, ["м", "уп", "рул"])?.options.map(o=>o.label),
+    ["За упаковку", "За рул"]);
 });
