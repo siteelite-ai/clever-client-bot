@@ -540,6 +540,17 @@ import {
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
 import {
+  continueResidentialFixtureSelection,
+  encodeResidentialFixtureSlot,
+  isResidentialFixtureSlot,
+  proveResidentialFixture,
+  RESIDENTIAL_FIXTURE_CATEGORY,
+  residentialFixtureShortfall,
+  startResidentialFixtureSelection,
+  type ResidentialFixtureSelection,
+  verifiedResidentialFixtureState,
+} from "../_shared/v3-tools/residential-fixture-selection.ts";
+import {
   APPLICATION_CARDS_UNVERIFIED,
   APPLICATION_INPUT_CURRENT_FACET,
   APPLICATION_LOAD_UNSUPPORTED,
@@ -1425,6 +1436,10 @@ async function runTool(
     ) as ToolResult;
   }
   if (name === "propose_clarification") {
+    if (isResidentialFixtureSlot(args)) {
+      return { tool: "propose_clarification", ok: false, error_code: "bad_input",
+        message: "This clarification scope is issued only by the server." };
+    }
     return executeProposeClarification(
       args as unknown as ProposeClarificationInput,
     );
@@ -9128,6 +9143,119 @@ async function loadVerifiedSelectionReadinessPending(
     console.error("[v3] selection readiness slot lookup exception", error);
   }
   return { slot: null, lookupFailed: true };
+}
+
+async function selectVerifiedResidentialFixtures(
+  state: ResidentialFixtureSelection,
+  catalogToken: string,
+  signal: AbortSignal,
+  cache: ProductCache,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  // A budget-scoped browse avoids losing products with an empty motion
+  // facet; that facet is verified against each returned card afterwards.
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: catalogToken, signal, timeoutMs: 4500 };
+  const taxonomy = await verifyExactCatalogLeaf(RESIDENTIAL_FIXTURE_CATEGORY, {
+    ...deps, openrouterApiKey: null,
+  });
+  const leaf = taxonomy.ok && taxonomy.leaf_categories[0].pagetitle === RESIDENTIAL_FIXTURE_CATEGORY
+    ? taxonomy.leaf_categories[0].pagetitle : null;
+  const pageSize = 50;
+  const pagesLimit = 5;
+  const readPage = async (page: number) => {
+    const scopedCache: ProductCache = new Map();
+    const result = await executeSearchCatalog({
+      mode: "by_filter", category: leaf!, max_price: state.cap,
+      page, per_page: pageSize,
+    }, deps, scopedCache);
+    return result.ok ? { total: result.total, coverage: result.candidate_coverage,
+      products: result.results.flatMap(({ id }) => {
+        const card = scopedCache.get(String(id));
+        return card ? [card] : [];
+      }),
+    } : null;
+  };
+  const first = leaf ? await readPage(1) : null;
+  const pages = first ? [
+    first,
+    ...await Promise.all(Array.from({
+      length: Math.max(0, Math.min(pagesLimit, Math.ceil(first.total / pageSize)) - 1),
+    }, (_, i) => readPage(i + 2))),
+  ] : [];
+  const products = pages.flatMap((page) => page?.products ?? []);
+  const rejected: Record<string, number> = {};
+  const counts = new Map<string, number>();
+  for (const product of products) counts.set(product.id, (counts.get(product.id) ?? 0) + 1);
+  const exact = products.flatMap((product) => {
+    if (counts.get(product.id) !== 1) {
+      rejected.duplicate = (rejected.duplicate ?? 0) + 1;
+      return [];
+    }
+    const proof = proveResidentialFixture(product, state);
+    if (!proof.ok) {
+      rejected[proof.reason] = (rejected[proof.reason] ?? 0) + 1;
+      return [];
+    }
+    return [{ product, proof }];
+  }).sort((a, b) => a.product.price - b.product.price);
+  const urls = new Set<string>();
+  const seen = new Set(state.seen);
+  const distinct = exact.filter(({ product }) => {
+    if (urls.has(product.url)) return false;
+    urls.add(product.url);
+    return !seen.has(product.id);
+  });
+  const selected = distinct.slice(0, state.target);
+  for (const { product } of selected) cache.set(product.id, product);
+  const render = selected.length
+    ? executeRenderProducts({
+      product_ids: selected.map(({ product }) => product.id),
+      total_available: distinct.length,
+    }, cache) : null;
+  const shown = render?.ok && render.rendered_count === selected.length
+    ? selected.map(({ product }) => product) : [];
+  steps.push({ step: "v3_residential_fixture_proof", ms: Date.now() - t0,
+    meta: {
+      cap: state.cap, place: state.place ?? null, utility: state.utility, led: state.led,
+      mount: state.mount ?? null, pages_attempted: pages.length,
+      taxonomy_error: taxonomy.ok ? null : taxonomy.error_code,
+      pages_failed: pages.filter((page) => !page).length,
+      catalogue_window_complete: !!first && pages.every((page) => page?.total === first.total &&
+        (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
+        first.total === products.length && first.total === counts.size,
+      scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length,
+      proofs: shown.length ? selected.map(({ product, proof }) => ({
+        id: product.id, application: proof.application.source, sensor: proof.sensor.source,
+        manufacturer_reference: proof.application.url ?? proof.sensor.url ?? null,
+      })) : [],
+    },
+  });
+  const fallback = residentialFixtureShortfall(state, shown.length, !!first);
+  const answer = shown.length >= state.target
+    ? `До ${state.cap} ₸ со встроенным датчиком движения: ${shown.length} подтверждённых вариантов.`
+    : fallback.text;
+  send({ type: "delta", origin: "server", content: answer });
+  if (shown.length && render?.ok) {
+    if (selected.some(({ proof }) => proof.utility)) {
+      send({ type: "delta", origin: "server",
+        content: " Модели ЖКХ включены по вашему согласию: назначение проверено для указанного места установки." });
+    }
+    send({ type: "products_block", markdown: render.markdown, count: shown.length,
+      total_available: distinct.length });
+  }
+  if (first && shown.length < state.target) {
+    send({ type: "delta", origin: "server", content: `\n\n${fallback.question}` });
+  }
+  // Also keep the exact scope after a successful batch. A later «ещё»
+  // cannot discard the budget, purpose or motion proof and use a generic
+  // search from assistant prose. No extra UI chip is emitted.
+  const trackedIds = shown.map(({ id }) => id).filter((id) => /^[a-z0-9_-]{1,24}$/iu.test(id));
+  const next = { ...state, seen: [...new Set([...state.seen, ...trackedIds])].slice(-12) };
+  send({ type: "slot_update", slots: { pending_clarification:
+    encodeResidentialFixtureSlot(next, shown.length < state.target ? fallback.question : "Условия подбора сохранены.") } });
+  return shown;
 }
 
 async function loadVerifiedReplacementCutoutPending(
@@ -28101,6 +28229,47 @@ Deno.serve(async (req) => {
                 !Array.isArray(pendingSlot)
                 ? pendingSlot as Record<string, unknown>
                 : null;
+            const initialFixture = independentProductInquiry ? null : startResidentialFixtureSelection(userMessage);
+            const fixtureSlotCandidate = pendingRecord && isResidentialFixtureSlot(pendingRecord)
+              ? pendingRecord : null;
+            const fixtureReply = !initialFixture &&
+              !!continueResidentialFixtureSelection(userMessage, fixtureSlotCandidate);
+            const trustedFixtureReply = fixtureReply
+              ? await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots)
+              : null;
+            const fixtureSelection = initialFixture ??
+              continueResidentialFixtureSelection(userMessage, trustedFixtureReply?.slot ?? null);
+            if (fixtureReply && !fixtureSelection) {
+              send({ type: "slot_update", slots: { pending_clarification: null } });
+              send({ type: "delta", origin: "server", content: "Не удалось подтвердить условия предыдущего подбора. Напишите исходный запрос заново — без сохранённых условий поиск не расширяю." });
+              steps.push({ step: "v3_residential_fixture_unverified_scope", ms: Date.now() - t0 });
+              return;
+            }
+            if (fixtureSelection) {
+              const taskSession = initialFixture && priorHistory.length ? `session_${crypto.randomUUID()}` : sessionId;
+              if (taskSession !== sessionId) {
+                send({ type: "conversation_boundary", mode: "new_task", session_id: taskSession });
+              }
+              const cache: ProductCache = new Map();
+              replacementEgressCache = cache;
+              const found = await selectVerifiedResidentialFixtures(fixtureSelection,
+                settings.volt220_api_token!, turnSignal, cache, send, steps, t0);
+              productsCount = found.length;
+              await persistRecentProductEvidence(supabase, taskSession, found);
+              return;
+            }
+            const ambiguousFixtureReply = /^(?:да|можно|не знаю|какие варианты)[.!?\s]*$/iu.test(userMessage);
+            if (fixtureSlotCandidate && (isNeutralAcknowledgement(userMessage) || ambiguousFixtureReply)) {
+              const previous = await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots);
+              const state = verifiedResidentialFixtureState(previous.slot);
+              const question = state ? residentialFixtureShortfall(state, 0, true).question : "";
+              send({ type: "delta", origin: "server", content: state
+                ? ambiguousFixtureReply ? question : "Пожалуйста! Условия подбора не меняю."
+                : "Не удалось подтвердить условия предыдущего подбора. При необходимости напишите исходный запрос заново." });
+              send({ type: "slot_update", slots: { pending_clarification: state
+                ? encodeResidentialFixtureSlot(state, question) : null } });
+              return;
+            }
             const pendingScope = pendingRecord?.scope;
             const clientSelectionReadinessScope = Boolean(
               pendingScope && typeof pendingScope === "object" &&
