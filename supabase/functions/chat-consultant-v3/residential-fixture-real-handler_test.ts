@@ -145,6 +145,7 @@ Deno.test({
               ...(turn === 0 ? [card("missing-class", { category: undefined })] : []),
               card("acoustic", { content: "Датчик реагирует только на звук." }),
               card("utility", {
+                content: "Назначение и область применения:<br>- Освещение подъездов и лестничных площадок<br>- Подсветка технических зон<br>Основные преимущества:<br>- Освещение спальни в другой модели.",
                 options: [{
                   key: "type",
                   caption_ru: "Вид светильника",
@@ -324,6 +325,21 @@ Deno.test({
           ?.some(({ page, issue }) => page === 2 && issue === expectedReason));
       }
       assertEquals(requests.length, 18);
+
+      turn = 11;
+      const beforeUseList = await invoke(customer);
+      assert(beforeUseList.slots);
+      assert(!beforeUseList.body.includes("fixture-utility/"));
+      turn = 12;
+      const entry = await invoke("Можно ЖКХ, для подъезда", beforeUseList.slots);
+      assertEquals(entry.cards?.count, 2, entry.body);
+      assertStringIncludes(String(entry.cards?.markdown), "fixture-utility/");
+      assertStringIncludes(String(entry.cards?.markdown), "fixture-37237/");
+      assert(entry.slots);
+      turn = 13;
+      const bedroom = await invoke("Для спальни", entry.slots);
+      assertEquals(bedroom.cards, undefined, bedroom.body);
+      assert(!bedroom.body.includes("fixture-utility/"));
       assert(
         requests.every((url) => url.searchParams.get("max_price") === "4000"),
       );

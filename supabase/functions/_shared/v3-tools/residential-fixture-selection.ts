@@ -235,6 +235,30 @@ const denies =
 const vagueVariants =
   /другие\s+модели|отдельные\s+модели|в\s+(?:серии|линейке)\s+есть|в\s+ассортименте\s+есть/iu;
 
+// The bounded catalog excerpt is flattened HTML. A complete bullet under an
+// explicit purpose heading can prove use even when there is no sentence verb.
+// Do not treat a bare keyword, an unrelated later section or a truncated final
+// bullet as proof. All other checks and explicit contrary evidence still win.
+function explicitLightingUseBullets(description: string): string[] {
+  const heading =
+    /(?:^|\s)(?:назначение\s+и\s+область\s+применения|область\s+применения|назначение)\s*:\s*(?=[•–—-]\s)/iu;
+  const nextSection = /[.!?;](?=\s|$)|\s+[А-ЯЁA-Z][\p{L}\s]{2,48}:(?=\s)/u;
+  const bullet = /(?:^|\s)[•–—-]\s+/u;
+  const lightingUse = /^(?:освещени[еяю]|подсветк[аиуе])\s+\p{L}/iu;
+  const qualification =
+    /(?:^|[^\p{L}])(?:кроме|за\s+исключением|при\s+условии|только\s+если|не|нельзя)(?!\p{L})/iu;
+  const match = heading.exec(description);
+  if (!match) return [];
+  const tail = description.slice(match.index + match[0].length);
+  const boundary = tail.search(nextSection);
+  const rows = (boundary < 0 ? tail : tail.slice(0, boundary)).split(bullet);
+  if (boundary < 0) rows.pop();
+  return rows.slice(0, 9).map((row) => row.trim()).filter((row) =>
+    row.length <= 180 && lightingUse.test(row) && !qualification.test(row) &&
+    !vagueVariants.test(row)
+  );
+}
+
 function traitValues(product: ProductFull, key: RegExp): string[] {
   const values: string[] = [];
   for (const trait of product.short_traits ?? []) {
@@ -328,7 +352,8 @@ export function proveResidentialFixture(
     product,
     /^(?:с )?(?:датчик|датчиком|сенсор|сенсором) движения$/u,
   );
-  const description = (product.description_excerpt ?? "").split(/[.!?;\n]+/u)
+  const descriptionText = product.description_excerpt ?? "";
+  const description = descriptionText.split(/[.!?;\n]+/u)
     .filter((part) => !vagueVariants.test(part));
   const affirmative = /^(?:да|есть|true|yes)$/iu;
   const explicitNo = /^(?:нет|без|false|no)$/iu;
@@ -400,7 +425,11 @@ export function proveResidentialFixture(
   if (
     description.some((value) =>
       expected.test(value) && disposition.test(value) && !denies.test(value)
-    )
+    ) ||
+    (selection.place &&
+      explicitLightingUseBullets(descriptionText).some((value) =>
+        expected.test(value)
+      ))
   ) {
     return {
       ok: true,
