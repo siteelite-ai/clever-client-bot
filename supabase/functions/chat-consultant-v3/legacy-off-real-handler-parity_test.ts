@@ -478,7 +478,7 @@ async function runProtectionWithOff(message: string): Promise<Run> {
   }
 }
 
-type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_meter" | "all_positions" | "coverage_partial";
+type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_meter" | "all_positions" | "coverage_partial" | "coverage_bad_page";
 
 // These two fixtures exercise independent, already-shipped selection routes
 // through the actual HTTP handler. Search intentionally returns a broad pool:
@@ -495,7 +495,7 @@ async function runAdditionalBranchWithOff(
   let steps: Step[] = [];
   const paired = branch === "paired_fit";
   const mixed = branch === "mixed_price" || branch === "chosen_meter";
-  const exhaustive = branch === "all_positions" || branch === "coverage_partial";
+  const exhaustive = branch === "all_positions" || branch === "coverage_partial" || branch === "coverage_bad_page";
   const leaf = paired ? "Трубки термоусаживаемые" : "Кабель ВВГ";
   const message = messageOverride ?? (paired
     ? "подбери термоусадочную трубку для кабеля диаметром 12 мм"
@@ -663,6 +663,11 @@ async function runAdditionalBranchWithOff(
           catalogPages.push(Number(url.searchParams.get("page") ?? "1"));
           if (branch === "coverage_partial" && url.searchParams.has("category")) {
             return json({error:"fixture category unavailable"}, 503);
+          }
+          if (branch === "coverage_bad_page" && url.searchParams.has("category")) {
+            return json({ data: { results: products, pagination: {
+              total: products.length, page: 2, per_page: 50, pages: 1,
+            } } });
           }
           return json({
             data: { results: products, pagination: { total: branch === "coverage_partial" ? 80 : products.length } },
@@ -942,11 +947,17 @@ Deno.test({
   name: "client #11 distinguishes exact category proof, fallback and rendered cap",
   permissions: { read: true, env: false, net: false },
   async fn() {
-    for (const branch of ["all_positions", "coverage_partial"] as const) {
+    for (const branch of ["all_positions", "coverage_partial", "coverage_bad_page"] as const) {
       const run = await runAdditionalBranchWithOff(branch);
       const report = run.steps.find(step=>step.step==="v3_exact_compound_assortment_coverage")?.meta;
       const answer = customerVisibleText(run);
       assertEquals(report?.category_complete, branch === "all_positions", JSON.stringify(run.steps));
+      if (branch === "coverage_bad_page") assertEquals(report?.category_failure, "catalog_partial");
+      if (branch === "all_positions") {
+        assertEquals(report?.category_pages, [
+          { leaf: "Кабель ВВГ", pages_read: 1, declared_rows: 20 },
+        ]);
+      } else assertEquals(report?.category_pages, null);
       assertEquals(report?.verified,19);
       assertEquals(report?.hidden_by_display_limit,9);
       assertEquals(blocks(run)[0]?.count,10);

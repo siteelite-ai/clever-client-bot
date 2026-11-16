@@ -7699,6 +7699,7 @@ async function selectVerifiedExactCompoundProducts(
       meta: { scope: full?.ok ? "exact_category" : "bounded_query",
         category_complete: catalogComplete,
         category_failure: full && !full.ok ? full.reason : !discovery?.ok ? "discovery_unverified" : null,
+        category_pages: full?.ok ? full.leafPages : null,
         checked: full?.ok ? full.evidence.raw_rows : fallback?.ok ? fallback.results.length : 0,
         search_total: fallback?.ok ? fallback.total : null,
         query_coverage: fallback?.ok ? fallback.candidate_coverage : null,
