@@ -99,6 +99,7 @@ function publicText(events: Event[]): string {
 type Acti9Scenario = "direct" | "show" | "forged_history" | "new_topic" |
   "characteristic_chip" | "characteristic_full_dialogue" |
   "characteristic_snapshot_dialogue" |
+  "characteristic_compact_wire_dialogue" |
   "forged_characteristic_chip" |
   "stale_characteristic_chip" | "prior_evidence_characteristic_chip";
 
@@ -118,6 +119,8 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
       "client 14: real handler 25 A → 1P → characteristic C clarifies, searches, and verifies all three facets",
     characteristic_snapshot_dialogue:
       "client 14: full breaker catalog vocabulary preserves all three facets",
+    characteristic_compact_wire_dialogue:
+      "client 14: strict preview accepts a compact fallback declaration and still verifies 25 A, 1P and C",
     prior_evidence_characteristic_chip:
       "real handler accepts exact issued characteristic chip even with prior verified product evidence",
     forged_characteristic_chip:
@@ -128,7 +131,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
   permissions: { read: true, env: false, net: false },
   async fn() {
     const showBeforeChoice = scenario === "show";
-    const snapshotDialogue = scenario === "characteristic_snapshot_dialogue";
+    const compactWireDialogue = scenario === "characteristic_compact_wire_dialogue";
+    const snapshotDialogue = scenario === "characteristic_snapshot_dialogue" ||
+      compactWireDialogue;
     const fullDialogue = scenario === "characteristic_full_dialogue" ||
       snapshotDialogue;
     const catalogSnapshot = snapshotDialogue
@@ -174,7 +179,21 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
     const sentQueries: string[] = [];
     const catalogQueries: URL[] = [];
     let modelRequests = 0;
+    let declarationAttempts = 0;
+    let primaryDeclarationSchema = "";
     try {
+      if (compactWireDialogue) {
+        // A separate handler bootstrap mirrors closure preview: other tests
+        // retain the ordinary production bootstrap and its original schema.
+        const envGet = Deno.env.get;
+        Deno.env.get = (name) =>
+          name === "VOLT220_SELECTION_READINESS_REQUIRED" ? "true" : envGet(name);
+        try {
+          await import("./index.ts?strict-breaker-transport");
+        } finally {
+          Deno.env.get = envGet;
+        }
+      }
       globalThis.setInterval = ((callback, delay, ...args) => {
         const id = originalSetInterval(callback, delay, ...args);
         intervals.add(id);
@@ -288,7 +307,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                 category: {
                   id: 10,
                   pagetitle: category,
-                  total_products: fixtureProducts.length,
+                  total_products: compactWireDialogue
+                    ? catalogSnapshot.total_products ?? 1320
+                    : fixtureProducts.length,
                 },
                 options: catalogSnapshot.options,
               } });
@@ -376,8 +397,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         ) {
           modelRequests++;
           const body = await request.json() as {
+            model?: string;
             tool_choice?: { function?: { name?: string } };
-            tools?: Array<{ function?: { name?: string } }>;
+            tools?: Array<{ function?: { name?: string; parameters?: Event } }>;
             messages?: Array<{ content?: string }>;
           };
           if (
@@ -400,6 +422,44 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
           if (
             body.tool_choice?.function?.name === "declare_selection_reasoning"
           ) {
+            let readiness = {};
+            if (compactWireDialogue) {
+              declarationAttempts++;
+              assertEquals(turn, 2);
+              const parameters = body.tools?.[0]?.function?.parameters;
+              assert(parameters);
+              const wireJson = JSON.stringify(parameters);
+              if (declarationAttempts === 1) {
+                primaryDeclarationSchema = wireJson;
+                throw new DOMException("llm_call_timeout:derived_reasoning", "TimeoutError");
+              }
+              assertEquals(body.model, "google/gemini-2.5-flash");
+              assertEquals(wireJson, primaryDeclarationSchema);
+              // Model the observed rejection on catalog-sized enums and
+              // bounded strings, not on fixture-specific product names.
+              const wireTooComplex = (value: unknown): boolean => {
+                if (!value || typeof value !== "object") return false;
+                const node = value as Event;
+                return (Array.isArray(node.enum) &&
+                  (node.enum.length > 8 || node.enum.some((entry) =>
+                    typeof entry === "string" && entry.length > 24
+                  ))) ||
+                  Object.values(node).some(wireTooComplex);
+              };
+              if (/"(?:minLength|maxLength|minItems|maxItems)":/u.test(wireJson) ||
+                  wireTooComplex(parameters)) {
+                return json({ error: "The specified schema produces a constraint that has too many states for serving." }, 400);
+              }
+              const facts = [
+                { parameter: "Номинальный ток", customer_quote: "25 А", question: "", impact: "" },
+                { parameter: "Полюсность", customer_quote: "Количество полюсов: 1", question: "", impact: "" },
+                { parameter: "Кривая срабатывания", customer_quote: "Характеристика C", question: "", impact: "" },
+              ];
+              readiness = { selection_readiness: {
+                decision: "ready",
+                critical_inputs: { first: facts[0], rest: facts.slice(1) },
+              } };
+            }
             return json({
               choices: [{
                 finish_reason: "tool_calls",
@@ -411,9 +471,13 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
                     function: {
                       name: "declare_selection_reasoning",
                       arguments: JSON.stringify({
-                        reasoning:
-                          "Ищу аналоги автомата Schneider Electric Acti9 C16 с характеристикой C, номиналом 16 А и уточнённой полюсностью 1.",
-                        retrieval_query: "автоматический выключатель 1P 16A C",
+                        ...readiness,
+                        reasoning: compactWireDialogue
+                          ? "Подбираю автоматический выключатель для квартиры: номинальный ток 25 А, один полюс, характеристика срабатывания C."
+                          : "Ищу аналоги автомата Schneider Electric Acti9 C16 с характеристикой C, номиналом 16 А и уточнённой полюсностью 1.",
+                        retrieval_query: compactWireDialogue
+                          ? "автоматический выключатель"
+                          : "автоматический выключатель 1P 16A C",
                         measurement_scope: "not_applicable",
                         compatible_classifications: [],
                         excluded_classifications: [],
@@ -546,6 +610,24 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
           }
           assertEquals(blocks.length, 1, diagnostic());
           assertEquals(blocks[0].count, 2, diagnostic());
+          if (compactWireDialogue) {
+            assertEquals(declarationAttempts, 2, diagnostic());
+            assert(steps[turn].some(({ step, meta }) =>
+              step === "v3_derived_reasoning_wire_contract" &&
+              meta?.format === "server_constraints_v2" &&
+              Number(meta.deferred_string_fields) > 0
+            ), diagnostic());
+            assert(steps[turn].some(({ step }) =>
+              step === "v3_derived_selection_reasoning_retry_recovered"
+            ), diagnostic());
+            const queries = catalogQueries.map((url) => url.searchParams);
+            assert(queries.some((params) =>
+              params.getAll("options[nominalynyy_tok__nominaldy_toқ][]").includes("25") &&
+              params.getAll("options[kolichestvo_polyusov__polyuster_sany][]").includes("1") &&
+              params.getAll("options[harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy][]")
+                .some((value) => /^[CС]$/u.test(value))
+            ), JSON.stringify(catalogQueries.map(String)));
+          }
           const markdown = String(blocks[0].markdown ?? "");
           for (const item of fixtureProducts) {
             assertEquals(
@@ -954,5 +1036,6 @@ Deno.test(acti9FlowTest("characteristic_snapshot_dialogue"));
 Deno.test(acti9FlowTest("forged_characteristic_chip"));
 Deno.test(acti9FlowTest("stale_characteristic_chip"));
 Deno.test(acti9FlowTest("prior_evidence_characteristic_chip"));
+Deno.test(acti9FlowTest("characteristic_compact_wire_dialogue"));
 
 addEventListener("unload", restoreOfflineModuleSetup);

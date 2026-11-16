@@ -250,6 +250,7 @@ import {
 } from "../_shared/v3-tools/structured-measurement-declaration.ts";
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
+import { compileToolStringConstraints } from "../_shared/v3-tools/tool-string-constraints.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
 import {compileCustomerOperatingPointDomains, productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
@@ -13294,25 +13295,38 @@ async function runExpertLoop(
           );
           const reasoningToolSchema = structuredMeasurementMode
             ? structuredMeasurementTool(baseReasoningToolSchema) : baseReasoningToolSchema;
+          // The original declaration remains authoritative. A provider sees
+          // the types and short decision enums, not the grammar for all
+          // catalog IDs, long keys and bounded strings in the current schema.
+          const reasoningStrings = requireSelectionReadiness
+            ? compileToolStringConstraints(reasoningToolSchema) : null;
+          if (reasoningStrings && derivedMessages[0]?.role === "system") {
+            derivedMessages[0].content +=
+              " Для полей каталожных ID и ключей без enum копируй только точные значения из JSON живой схемы: сервер проверяет их. Для уточнения факта вне каталога используй предусмотренный clarification.facet_key=customer_input. Для пустого выбора используй пустой список или пустую строку, если поле это допускает.";
+          }
           // Match the wire to the existing server requirement, for every
           // application/measurement selection, not particular products. A
           // required first object is representable by both providers without
           // the nested bounded-array grammar that Gemini previously rejected.
           const requiredReadinessInput = requireSelectionReadiness &&
             (hasSelectionSuitabilityContext(userMessage) || hasSelectionMeasurementContext(userMessage))
-            ? compileToolRequiredArrayHead(reasoningToolSchema, ["selection_readiness", "critical_inputs"]) : null;
+            ? compileToolRequiredArrayHead(reasoningStrings?.tool ?? reasoningToolSchema, ["selection_readiness", "critical_inputs"]) : null;
           if (requiredReadinessInput) derivedMessages[0].content +=
             " В ЭТОЙ задаче сервер требует непустые исходные данные подбора. В selection_readiness.critical_inputs заполни обязательный объект first и массив rest для остальных параметров. Не оставляй first пустым и не выдумывай факты: неизвестное значение обозначь пустой customer_quote и конкретным question. rest=[] допустим только если других критичных параметров нет.";
           // Only the opt-in readiness lane added the nested contract that hit
           // the provider grammar limit. Keep the released OFF wire untouched.
           // All attempts share one compact wire contract and one server guard.
           const reasoningTransport = requireSelectionReadiness
-            ? compileToolArrayBounds(requiredReadinessInput?.tool ?? reasoningToolSchema) : null;
+            ? compileToolArrayBounds(requiredReadinessInput?.tool ?? reasoningStrings?.tool ?? reasoningToolSchema) : null;
           const providerReasoningToolSchema = reasoningTransport?.tool ?? reasoningToolSchema;
           if (reasoningTransport) steps.push({
             step: "v3_derived_reasoning_wire_contract",
             ms: now(),
-            meta: { format: "server_array_bounds_v1", deferred_array_bounds: reasoningTransport.deferredCount },
+            meta: {
+              format: "server_constraints_v2",
+              deferred_array_bounds: reasoningTransport.deferredCount,
+              deferred_string_fields: reasoningStrings?.deferredCount ?? 0,
+            },
           });
           let structuredReasoning: ORResponse;
           let derivedReasoningProviderAttempts = 1;
@@ -13481,6 +13495,15 @@ async function runExpertLoop(
                 return undefined;
               }
               call = { ...call, args: decoded };
+            }
+            const stringFailure = reasoningStrings?.validate(call.args);
+            if (stringFailure) {
+              steps.push({
+                step: "v3_derived_reasoning_string_constraint_rejected",
+                ms: now(),
+                meta: stringFailure,
+              });
+              return undefined;
             }
             if (structuredMeasurementMode) {
               const decoded = decodeMeasurementCall(call);
