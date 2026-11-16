@@ -478,7 +478,7 @@ async function runProtectionWithOff(message: string): Promise<Run> {
   }
 }
 
-type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_meter" | "all_positions" | "coverage_partial" | "coverage_bad_page";
+type AdditionalBranch = "paired_fit" | "exact_cable" | "mixed_price" | "chosen_meter" | "all_positions" | "coverage_partial" | "coverage_bad_page" | "coverage_unavailable" | "coverage_empty";
 
 // These two fixtures exercise independent, already-shipped selection routes
 // through the actual HTTP handler. Search intentionally returns a broad pool:
@@ -495,7 +495,7 @@ async function runAdditionalBranchWithOff(
   let steps: Step[] = [];
   const paired = branch === "paired_fit";
   const mixed = branch === "mixed_price" || branch === "chosen_meter";
-  const exhaustive = branch === "all_positions" || branch === "coverage_partial" || branch === "coverage_bad_page";
+  const exhaustive = branch === "all_positions" || branch.startsWith("coverage_");
   const leaf = paired ? "Трубки термоусаживаемые" : "Кабель ВВГ";
   const message = messageOverride ?? (paired
     ? "подбери термоусадочную трубку для кабеля диаметром 12 мм"
@@ -661,6 +661,14 @@ async function runAdditionalBranchWithOff(
         }
         if (url.pathname === "/api/products") {
           catalogPages.push(Number(url.searchParams.get("page") ?? "1"));
+          if (branch === "coverage_unavailable") {
+            return json({ error: "fixture catalogue unavailable" }, 503);
+          }
+          if (branch === "coverage_empty") {
+            return json({ data: { results: [], pagination: {
+              total: 0, page: 1, per_page: 50, pages: 1,
+            } } });
+          }
           if (branch === "coverage_partial" && url.searchParams.has("category")) {
             return json({error:"fixture category unavailable"}, 503);
           }
@@ -959,12 +967,33 @@ Deno.test({
         ]);
       } else assertEquals(report?.category_pages, null);
       assertEquals(report?.verified,19);
+      assertEquals(report?.outcome, "shown");
       assertEquals(report?.hidden_by_display_limit,9);
       assertEquals(blocks(run)[0]?.count,10);
       assert(!blocks(run)[0]?.markdown?.includes("3*2,5"));
       assert(answer.includes("10 из 19 подтверждённых"), answer);
       assert(answer.includes(branch === "all_positions" ? "все страницы разделов точной категории" : "Полноту каталога по этой маркировке подтвердить не удалось"), answer);
     }
+  },
+});
+
+Deno.test({
+  name: "client #11 catalogue outage must not report a verified empty assortment",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const unavailable = await runAdditionalBranchWithOff("coverage_unavailable");
+    const empty = await runAdditionalBranchWithOff("coverage_empty");
+    for (const run of [unavailable, empty]) {
+      assertEquals(blocks(run).length, 0);
+      assert(run.events.some((event) => (event.v3_event as Block | undefined)?.type === "done"));
+    }
+    const unavailableText = customerVisibleText(unavailable);
+    assert(unavailableText.includes("Не удалось закончить проверку каталога"), unavailableText);
+    assert(!unavailableText.includes("В проверенной выдаче не подтверждены"), unavailableText);
+    assert(customerVisibleText(empty).includes("В проверенной выдаче не подтверждены"), customerVisibleText(empty));
+    const outcomeOf = (run: Run) => run.steps.find((s) => s.step === "v3_exact_compound_assortment_coverage")?.meta?.outcome;
+    assertEquals(outcomeOf(unavailable), "catalog_unavailable");
+    assertEquals(outcomeOf(empty), "no_verified_cards");
   },
 });
 

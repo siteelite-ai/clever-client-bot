@@ -551,6 +551,10 @@ import {
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
 import {
+  VERIFIED_CARDS_RENDER_UNAVAILABLE,
+  verifiedOutputOutcome,
+} from "../_shared/v3-tools/verified-output-outcome.ts";
+import {
   continueResidentialFixtureSelection,
   encodeResidentialFixtureSlot,
   isResidentialFixtureSlot,
@@ -7708,6 +7712,11 @@ async function selectVerifiedExactCompoundProducts(
     }, ctx.cache) : null;
     const catalogComplete = Boolean(full?.ok && full.evidence.unverified === 0);
     const visible = rendered?.ok ? rendered.rendered_count : 0;
+    const outcome = verifiedOutputOutcome({
+      catalogUnavailable: !full?.ok && !fallback?.ok,
+      selected: products.length,
+      rendered: visible > 0,
+    });
     steps.push({ step: "v3_exact_compound_assortment_coverage", ms: Date.now() - t0,
       meta: { scope: full?.ok ? "exact_category" : "bounded_query",
         category_complete: catalogComplete,
@@ -7719,12 +7728,17 @@ async function selectVerifiedExactCompoundProducts(
         filtered_before_product_checks: fallback?.ok && fallback.candidate_coverage === "complete_query_window"
           ? fallback.total - fallback.results.length : null,
         exclusions: full?.ok ? full.evidence : fallbackRejected,
-        verified: products.length, rendered: visible, hidden_by_display_limit: products.length - visible } });
+        verified: products.length, rendered: visible, outcome,
+        hidden_by_display_limit: outcome === "shown" ? products.length - visible : 0 } });
     const scopeText = catalogComplete
       ? "Проверил все страницы разделов точной категории, где могла быть эта маркировка."
       : "Полноту каталога по этой маркировке подтвердить не удалось.";
     if (!rendered?.ok) {
-      send({ type: "delta", origin: "server", content: `${scopeText} В проверенной выдаче не подтверждены позиции с точной маркировкой, ценой и остатком.` });
+      send({ type: "delta", origin: "server", content:
+        outcome === "render_unavailable" ? VERIFIED_CARDS_RENDER_UNAVAILABLE
+        : outcome === "catalog_unavailable"
+        ? "Не удалось закончить проверку каталога. Это не означает, что товаров с такой маркировкой нет. Попробуйте позже."
+        : `${scopeText} В проверенной выдаче не подтверждены позиции с точной маркировкой, ценой и остатком.` });
       return [];
     }
     const unitText = new Set(products.map(({ unit }) => unit)).size > 1
@@ -9256,6 +9270,11 @@ async function selectVerifiedResidentialFixtures(
     }, cache) : null;
   const shown = render?.ok && render.rendered_count === selected.length
     ? selected.map(({ product }) => product) : [];
+  const outcome = verifiedOutputOutcome({
+    catalogUnavailable: !searched,
+    selected: selected.length,
+    rendered: shown.length > 0,
+  });
   steps.push({ step: "v3_residential_fixture_proof", ms: Date.now() - t0,
     meta: {
       cap: state.cap, place: state.place ?? null, utility: state.utility, led: state.led,
@@ -9280,7 +9299,7 @@ async function selectVerifiedResidentialFixtures(
         issue: !result ? "search_failed" : !result.evidence ? "evidence_missing"
           : result.evidence.issue ?? (result.total !== groupPages[0]?.total ? "total_changed" : null),
       }))),
-      scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length,
+      scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length, outcome,
       proofs: shown.length ? selected.map(({ product, proof }) => ({
         id: product.id, application: proof.application.source, sensor: proof.sensor.source,
         manufacturer_reference: proof.application.url ?? proof.sensor.url ?? null,
@@ -9288,7 +9307,9 @@ async function selectVerifiedResidentialFixtures(
     },
   });
   const fallback = residentialFixtureShortfall(state, shown.length, searched);
-  const answer = shown.length >= state.target
+  const answer = outcome === "render_unavailable"
+    ? VERIFIED_CARDS_RENDER_UNAVAILABLE
+    : shown.length >= state.target
     ? `До ${state.cap} ₸ со встроенным датчиком движения: ${shown.length} подтверждённых вариантов.`
     : fallback.text;
   send({ type: "delta", origin: "server", content: answer });
@@ -9300,7 +9321,7 @@ async function selectVerifiedResidentialFixtures(
     send({ type: "products_block", markdown: render.markdown, count: shown.length,
       total_available: distinct.length });
   }
-  if (searched && shown.length < state.target) {
+  if (searched && outcome !== "render_unavailable" && shown.length < state.target) {
     send({ type: "delta", origin: "server", content: `\n\n${fallback.question}` });
   }
   // Also keep the exact scope after a successful batch. A later «ещё»
@@ -9309,7 +9330,8 @@ async function selectVerifiedResidentialFixtures(
   const trackedIds = shown.map(({ id }) => id).filter((id) => /^[a-z0-9_-]{1,24}$/iu.test(id));
   const next = { ...state, seen: [...new Set([...state.seen, ...trackedIds])].slice(-12) };
   send({ type: "slot_update", slots: { pending_clarification:
-    encodeResidentialFixtureSlot(next, shown.length < state.target ? fallback.question : "Условия подбора сохранены.") } });
+    encodeResidentialFixtureSlot(next, shown.length < state.target && outcome !== "render_unavailable"
+      ? fallback.question : "Условия подбора сохранены.") } });
   return shown;
 }
 
@@ -9358,6 +9380,11 @@ async function answerVerifiedStabilizerApplication(
   const products = rendered?.ok && rendered.rendered_count === selected.length
     ? selected.map(({ card }) => card!)
     : [];
+  const outcome = verifiedOutputOutcome({
+    catalogUnavailable: lookups.length > 0 && lookups.every(({ catalogOk }) => !catalogOk),
+    selected: selected.length,
+    rendered: products.length > 0,
+  });
   steps.push({
     step: "v3_stabilizer_passport_search", ms: Date.now() - t0,
     meta: {
@@ -9367,6 +9394,8 @@ async function answerVerifiedStabilizerApplication(
       catalog_failures: lookups.filter(({ catalogOk }) => !catalogOk).length,
       catalog_rejected: lookups.filter(({ card, catalogOk }) => !card && catalogOk).length,
       verified_count: products.length,
+      selected_count: selected.length,
+      outcome,
       approved: products.length
         ? selected.map(({ proof, card }) => ({
           id: card!.id, revision: proof.revision, page: proof.page, limit_va: proof.provenVa,
@@ -9375,10 +9404,10 @@ async function answerVerifiedStabilizerApplication(
     },
   });
   if (!products.length || !rendered?.ok) {
-    const unavailable = lookups.length > 0 && lookups.every(({ catalogOk }) => !catalogOk);
     send({
       type: "delta", origin: "server",
-      content: unavailable
+      content: outcome === "render_unavailable" ? VERIFIED_CARDS_RENDER_UNAVAILABLE
+        : outcome === "catalog_unavailable"
         ? "Не удалось проверить наличие стабилизаторов в каталоге. Непроверенные модели не показываю."
         : `При ${application.inputV} В не удалось подтвердить модель в наличии по рабочему диапазону и допустимой нагрузке. Это не означает, что подходящих моделей нет: у проверенных вариантов может не быть нужных паспортных данных или подтверждённого остатка.`,
     });
