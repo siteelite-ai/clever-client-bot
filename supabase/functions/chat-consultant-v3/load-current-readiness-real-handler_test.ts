@@ -149,6 +149,8 @@ async function runDialogue({
   typedParameters = null,
   expectedConsultation = [],
   motor220 = false,
+  invalidMotorCatalogEnum = false,
+  catalogAllowsOtherRequiredFacets = false,
 }: {
   label: string;
   messages: string[];
@@ -165,6 +167,8 @@ async function runDialogue({
     handoff?: boolean;
   }>;
   motor220?: false | "catalog_gap" | "proved_fixture";
+  invalidMotorCatalogEnum?: boolean;
+  catalogAllowsOtherRequiredFacets?: boolean;
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
@@ -407,12 +411,22 @@ async function runDialogue({
                   pagetitle: motorCategory,
                   total_products: motorProducts.length,
                 },
-                options: useLiveVoltageSchema ? liveMotorCatalog.options.map((option) =>
+                options: useLiveVoltageSchema ? [...liveMotorCatalog.options.map((option) =>
                   motor220 === "proved_fixture" && option.key === voltageKey
                     ? { ...option, values: [...option.values as Array<Record<string, unknown>>,
                       { value_ru: "200-240", products_count: 1 }] }
                     : option
-                ) : [{
+                ), ...(catalogAllowsOtherRequiredFacets ? [{
+                  key: "terminal_connection",
+                  caption_ru: "Способ присоединения",
+                  type: "string",
+                  // Nine allowed values force server-side enum validation,
+                  // as in the preview schema; short enums stay on the wire.
+                  values: Array.from("abcdefghi", (label) => ({
+                    value_ru: `вариант соединения ${label}`,
+                    products_count: 1,
+                  })),
+                }] : [])] : [{
                   key: "thermal_trip_setting",
                   caption_ru: motorSettingCaption,
                   type: "string",
@@ -611,7 +625,8 @@ async function runDialogue({
               measurement_scope: "per_product",
               compatible_classifications: [],
               excluded_classifications: [],
-              required_facet_values: [],
+              required_facet_values: invalidMotorCatalogEnum
+                ? ["f8v8"] : [],
               explicit_customer_classifications: [],
             };
             if (isCorrection && terminalMode !== "motor_measurement_repair") {
@@ -742,10 +757,24 @@ async function runDialogue({
             assertEquals(cards.length, 0, evidence);
             assertEquals(row.final_products_count, 0);
             assertEquals(catalogProductRequests.length, 0, evidence);
-            assert(evidence.includes("unresolved_customer_operating_point"), evidence);
+            if (invalidMotorCatalogEnum) {
+              assert(row.steps.some(({ step, meta }) =>
+                step === "v3_derived_reasoning_string_constraint_rejected" &&
+                meta?.path === "required_facet_values.*" &&
+                meta?.reason === (catalogAllowsOtherRequiredFacets ? "enum" : "maxLength")), evidence);
+              assert(evidence.includes("rejected_required_facet_value"), evidence);
+            } else {
+              assert(evidence.includes("unresolved_customer_operating_point"), evidence);
+            }
             assert(evidence.includes("v3_catalog_operating_point_not_proven"), evidence);
             assert(publicText(events).includes("не подтверждают рабочее напряжение 220 В"));
             assert(publicText(events).includes("рабочий ток 30 А"));
+            assertEquals(correctionRequests, 0, evidence);
+          } else if (invalidMotorCatalogEnum) {
+            assertEquals(cards.length, 0, evidence);
+            assertEquals(catalogProductRequests.length, 0, evidence);
+            assert(evidence.includes("missing_readiness_decision"), evidence);
+            assert(!evidence.includes("v3_catalog_operating_point_not_proven"), evidence);
             assertEquals(correctionRequests, 0, evidence);
           } else {
             assertEquals(cards.length, 1, evidence);
@@ -1489,6 +1518,41 @@ for (const motor220 of ["catalog_gap", "proved_fixture"] as const) for (const or
     rangeDeclaration: "nominal_load",
     typedParameters: motor220 === "proved_fixture" ? "confirmed" : null,
     motor220,
+    invalidMotorCatalogEnum: motor220 === "catalog_gap" && original,
+  }),
+});
+
+Deno.test({
+  name: "client 15: explain unsupported voltage when a model facet ID is outside a nonempty live enum",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "invalid live enum with unavailable operating point",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВТ", "220в 3 фазы", "Прямой пуск", "30а"],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: "motor_voltage_refusal",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    motor220: "catalog_gap",
+    invalidMotorCatalogEnum: true,
+    catalogAllowsOtherRequiredFacets: true,
+  }),
+});
+
+Deno.test({
+  name: "client 15: invalid model enum cannot launch search even if the catalog covers the requested point",
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: "strict enum with available operating domain",
+    messages: ["Подберите автомат для двигателя асинхронный 3 кВТ", "220в 3 фазы", "Прямой пуск", "30а"],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: "motor_voltage_conjunction",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    typedParameters: "confirmed",
+    motor220: "proved_fixture",
+    invalidMotorCatalogEnum: true,
   }),
 });
 

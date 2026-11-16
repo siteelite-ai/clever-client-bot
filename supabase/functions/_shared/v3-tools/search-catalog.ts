@@ -140,6 +140,8 @@ export interface CatalogClientDeps {
   signal?: AbortSignal;
   /** Optional server-only evidence; not part of the model tool result. */
   onSinglePageEvidence?: (evidence: CatalogSinglePageEvidence) => void;
+  /** A browse on a parent category cannot supply missing class evidence. */
+  requireExplicitCategory?: boolean;
   /** Server-only exact-identity outage mode: one physical GET, no retry,
    * compound rewrite, pagination, sorting or category/facet fan-out. */
   singleRequest?: boolean;
@@ -505,7 +507,8 @@ async function singleSearch(
         // category as verified query provenance even when the API omits the
         // redundant category object in the product payload. Preserve this
         // lineage for later class gates instead of treating it as unknown.
-        leaf_category: extractLeafCategory(raw) ?? categoryOverride ?? null,
+        leaf_category: extractLeafCategory(raw) ??
+          (deps.requireExplicitCategory ? null : categoryOverride ?? null),
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       Object.defineProperty(ref, PROOF_RESULT_URL, { value: u });

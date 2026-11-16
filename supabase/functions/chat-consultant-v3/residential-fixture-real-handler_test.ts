@@ -12,6 +12,7 @@ import "./index.ts";
 
 const offlineEnvGet = Deno.env.get;
 const category = "Светильники";
+const residentialLeaf = "Накладные светильники";
 const customer =
   "Мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов.";
 type Event = Record<string, unknown>;
@@ -109,7 +110,9 @@ Deno.test({
           if (url.pathname === "/api/categories") {
             return json({
               data: {
-                results: [{ id: 10, pagetitle: category, children: [] }],
+                results: [{ id: 10, pagetitle: category, children: turn === 0
+                  ? [{ id: 11, pagetitle: residentialLeaf, children: [] }]
+                  : [] }],
                 pagination: { total: 1, per_page: 200, page: 1, pages: 1 },
               },
             });
@@ -133,12 +136,13 @@ Deno.test({
             // search response is not evidence that the filters worked.
             const good = turn === 8
               ? [card("a"), card("b"), card("c")]
-              : [card("a")];
+              : [card("a", turn === 0 ? { category: residentialLeaf } : {})];
             const other = [
               gauss,
               card("too-expensive", { price: 5100 }),
               card("no-stock", { warehouses: [] }),
               card("wrong-class", { category: "Датчики" }),
+              ...(turn === 0 ? [card("missing-class", { category: undefined })] : []),
               card("acoustic", { content: "Датчик реагирует только на звук." }),
               card("utility", {
                 options: [{
@@ -160,6 +164,13 @@ Deno.test({
               ),
             ];
             const page = url.searchParams.get("page") ?? "1";
+            if (turn === 0) {
+              const results = url.searchParams.get("category") === residentialLeaf
+                ? good : first.slice(0, 50);
+              return json({ data: { results,
+                pagination: { total: results.length, per_page: 50, pages: 1, page: Number(page) },
+              } });
+            }
             return json({
               data: {
                 results: page === "1" ? first : good,
@@ -239,10 +250,13 @@ Deno.test({
         true,
       );
       assert(!first.body.includes("fixture-37237"));
-      assertEquals(requests.map((url) => url.searchParams.get("page") ?? "1"), [
-        "1",
-        "2",
+      assert(!first.body.includes("fixture-wrong-class"));
+      assert(!first.body.includes("fixture-missing-class"));
+      assertEquals(requests.map((url) => [url.searchParams.get("category"), url.searchParams.get("page") ?? "1"]), [
+        [category, "1"],
+        [residentialLeaf, "1"],
       ]);
+      resetDiscoverCategoryCacheForTest();
       assert(first.slots);
       turn++;
       const more = await invoke("Покажи ещё", first.slots);

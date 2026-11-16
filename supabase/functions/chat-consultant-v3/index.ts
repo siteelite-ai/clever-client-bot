@@ -42,6 +42,7 @@ import {
   type DiscoverCategoryOk,
   executeDiscoverCategory,
   verifyExactCatalogLeaf,
+  verifyExactCatalogScope,
   type Facet,
 } from "../_shared/v3-tools/discover-category.ts";
 import {
@@ -9180,20 +9181,23 @@ async function selectVerifiedResidentialFixtures(
   // A budget-scoped browse avoids losing products with an empty motion
   // facet; that facet is verified against each returned card afterwards.
   const deps = { baseUrl: CATALOG_BASE_URL, apiToken: catalogToken, signal, timeoutMs: 4500 };
-  const taxonomy = await verifyExactCatalogLeaf(RESIDENTIAL_FIXTURE_CATEGORY, {
+  const taxonomy = await verifyExactCatalogScope(RESIDENTIAL_FIXTURE_CATEGORY, {
     ...deps, openrouterApiKey: null,
   });
-  const leaf = taxonomy.ok && taxonomy.leaf_categories[0].pagetitle === RESIDENTIAL_FIXTURE_CATEGORY
-    ? taxonomy.leaf_categories[0].pagetitle : null;
+  const routes = taxonomy.ok ? taxonomy.routes : [];
+  const titles = new Set(routes.map(({ pagetitle }) => pagetitle));
   const pageSize = 50;
   const pagesLimit = 5;
-  const readPage = async (page: number) => {
+  const readPage = async (route: typeof routes[number], page: number) => {
     const scopedCache: ProductCache = new Map();
     const evidence: CatalogSinglePageEvidence[] = [];
     const result = await executeSearchCatalog({
-      mode: "by_filter", category: leaf!, max_price: state.cap,
+      mode: "by_filter", category: route.pagetitle, max_price: state.cap,
       page, per_page: pageSize,
-    }, { ...deps, onSinglePageEvidence: (proof) => evidence.push(proof) }, scopedCache);
+    }, {
+      ...deps, requireExplicitCategory: !route.verified_leaf,
+      onSinglePageEvidence: (proof) => evidence.push(proof),
+    }, scopedCache);
     return result.ok ? { total: result.total, page, coverage: result.candidate_coverage,
       evidence: evidence.length === 1 ? evidence[0] : null,
       products: result.results.flatMap(({ id }) => {
@@ -9202,14 +9206,25 @@ async function selectVerifiedResidentialFixtures(
       }),
     } : null;
   };
-  const first = leaf ? await readPage(1) : null;
-  const pages = first ? [
-    first,
-    ...await Promise.all(Array.from({
-      length: Math.max(0, Math.min(pagesLimit, Math.ceil(first.total / pageSize)) - 1),
-    }, (_, i) => readPage(i + 2))),
-  ] : [];
+  // The catalog filter is not assumed to include descendants. Give verified
+  // routes their own first page before spending the remaining page budget.
+  const groups = await Promise.all(routes.slice(0, pagesLimit).map(async (route) => ({
+    route, pages: [await readPage(route, 1)],
+  })));
+  const extra: Promise<void>[] = [];
+  for (let page = 2; page <= pagesLimit && groups.length + extra.length < pagesLimit; page++) {
+    for (const group of groups) {
+      if (groups.length + extra.length >= pagesLimit) break;
+      const first = group.pages[0];
+      if (!first || page > Math.ceil(first.total / pageSize)) continue;
+      const index = page - 1;
+      extra.push(readPage(group.route, page).then((result) => { group.pages[index] = result; }));
+    }
+  }
+  await Promise.all(extra);
+  const pages = groups.flatMap((group) => group.pages);
   const products = pages.flatMap((page) => page?.products ?? []);
+  const searched = pages.some((page) => page !== null);
   const rejected: Record<string, number> = {};
   const counts = new Map<string, number>();
   for (const product of products) counts.set(product.id, (counts.get(product.id) ?? 0) + 1);
@@ -9218,7 +9233,7 @@ async function selectVerifiedResidentialFixtures(
       rejected.duplicate = (rejected.duplicate ?? 0) + 1;
       return [];
     }
-    const proof = proveResidentialFixture(product, state);
+    const proof = proveResidentialFixture(product, state, titles);
     if (!proof.ok) {
       rejected[proof.reason] = (rejected[proof.reason] ?? 0) + 1;
       return [];
@@ -9246,17 +9261,25 @@ async function selectVerifiedResidentialFixtures(
       cap: state.cap, place: state.place ?? null, utility: state.utility, led: state.led,
       mount: state.mount ?? null, pages_attempted: pages.length,
       taxonomy_error: taxonomy.ok ? null : taxonomy.error_code,
+      taxonomy_reason: "reason" in taxonomy ? taxonomy.reason : null,
+      taxonomy_routes: routes.length,
       pages_failed: pages.filter((page) => !page).length,
-      catalogue_window_complete: !!first && pages.every((page) => page?.total === first.total &&
-        page.evidence?.issue === null && page.evidence.requested_page === page.page &&
-        (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
-        first.total === products.length && first.total === counts.size,
-      catalogue_page_evidence: pages.map((result, index) => ({
+      catalogue_window_complete: taxonomy.ok && taxonomy.complete &&
+        groups.length === routes.length && products.length === counts.size &&
+        groups.every(({ pages: groupPages }) => {
+          const first = groupPages[0];
+          return !!first && groupPages.every((page) => page?.total === first.total &&
+              page.evidence?.issue === null && page.evidence.requested_page === page.page &&
+              (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
+            first.total === groupPages.reduce((n, page) => n + (page?.products.length ?? 0), 0);
+        }),
+      catalogue_page_evidence: groups.flatMap(({ route, pages: groupPages }) => groupPages.map((result, index) => ({
+        category_id: route.id,
         page: index + 1,
         raw_rows: result?.evidence?.raw_rows ?? null,
         issue: !result ? "search_failed" : !result.evidence ? "evidence_missing"
-          : result.evidence.issue ?? (result.total !== first?.total ? "total_changed" : null),
-      })),
+          : result.evidence.issue ?? (result.total !== groupPages[0]?.total ? "total_changed" : null),
+      }))),
       scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length,
       proofs: shown.length ? selected.map(({ product, proof }) => ({
         id: product.id, application: proof.application.source, sensor: proof.sensor.source,
@@ -9264,7 +9287,7 @@ async function selectVerifiedResidentialFixtures(
       })) : [],
     },
   });
-  const fallback = residentialFixtureShortfall(state, shown.length, !!first);
+  const fallback = residentialFixtureShortfall(state, shown.length, searched);
   const answer = shown.length >= state.target
     ? `До ${state.cap} ₸ со встроенным датчиком движения: ${shown.length} подтверждённых вариантов.`
     : fallback.text;
@@ -9277,7 +9300,7 @@ async function selectVerifiedResidentialFixtures(
     send({ type: "products_block", markdown: render.markdown, count: shown.length,
       total_available: distinct.length });
   }
-  if (first && shown.length < state.target) {
+  if (searched && shown.length < state.target) {
     send({ type: "delta", origin: "server", content: `\n\n${fallback.question}` });
   }
   // Also keep the exact scope after a successful batch. A later «ещё»
@@ -13825,6 +13848,28 @@ async function runExpertLoop(
             });
             closureRetryOutcomePending = null;
           };
+          const finishWithUncoveredCatalogPoint = (
+            { point, unit }: { point: number; unit: string },
+            range: MeasuredPointRangeCertificate,
+            trigger: "measurement_obligation" | "rejected_required_facet_value",
+          ) => {
+            const voltage = `${point} ${unit === "кв" ? "кВ" : "В"}`;
+            const current = range.value;
+            const notice = `Учёл питание ${voltage} и рабочий ток ${current} А. В каталоге есть диапазоны уставки, включающие ${current} А, но доступные характеристики не подтверждают рабочее напряжение ${voltage}. Поэтому не показываю неподтверждённые варианты. Если подбираете защиту для конкретного двигателя, сверьте рабочий ток и напряжение по шильдику; менеджеру поможет точная модель или паспорт.`;
+            send({ type: "delta", content: notice, origin: "server" });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({
+              step: "v3_catalog_operating_point_not_proven", ms: now(),
+              meta: {
+                point, unit, customer_load_a: current,
+                range_facet: range.facetKey,
+                accepted_range_count: range.acceptedValues.length,
+                trigger, correction_skipped: true,
+              },
+            });
+            recordClosureRetryOutcome(false, "catalog_operating_point_not_proven");
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          };
           const typedMeasurementArguments = new WeakSet<object>();
           const decodeMeasurementCall = (call: ORToolCall): ORToolCall | null => {
             const requirements = call.args.product_requirements;
@@ -13840,6 +13885,7 @@ async function runExpertLoop(
             typedMeasurementArguments.add(args);
             return { ...call, args };
           };
+          let rejectedRequiredFacetValue = false;
           const cleanDeclarationCall = (
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
@@ -13861,6 +13907,10 @@ async function runExpertLoop(
             }
             const stringFailure = reasoningStrings?.validate(call.args);
             if (stringFailure) {
+              // If there are no permissible IDs, this field has an empty
+              // string bound instead of an enum in the canonical schema.
+              rejectedRequiredFacetValue = stringFailure.path === "required_facet_values.*" &&
+                (stringFailure.reason === "enum" || stringFailure.reason === "maxLength");
               steps.push({
                 step: "v3_derived_reasoning_string_constraint_rejected",
                 ms: now(),
@@ -13896,6 +13946,20 @@ async function runExpertLoop(
             ),
           );
           if (requireSelectionReadiness) {
+            // Do not repair or trust the rejected declaration. If the
+            // independently verified operating point is absent from the
+            // catalog facet, report that specific evidence gap without
+            // declaring readiness, searching, or changing the measured input.
+            if (!declarationCall && rejectedRequiredFacetValue &&
+              certifiedMeasuredPointRange && motorProtectionPoleProof.status === "verified" &&
+              !replacementIntent && !presearchPairDecision.reference) {
+              const point = singleUncoveredCatalogOperatingPoint(
+                verifiedCustomerMeasurementEvidence, lastDiscover.facets ?? [],
+              );
+              if (point) {
+                return finishWithUncoveredCatalogPoint(point, certifiedMeasuredPointRange, "rejected_required_facet_value");
+              }
+            }
             const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning", requireSelectionSubject);
             if (outcome) {
               const reason = String(steps.at(-1)?.meta?.reason ?? "selection_readiness_contract_invalid");
@@ -14422,23 +14486,7 @@ async function runExpertLoop(
               )
               : null;
           if (uncoveredCatalogPoint && certifiedMeasuredPointRange) {
-            const { point, unit } = uncoveredCatalogPoint;
-            const recordUnit = unit === "кв" ? "кВ" : "В";
-            const current = certifiedMeasuredPointRange.value;
-            const notice = `Учёл питание ${point} ${recordUnit} и рабочий ток ${current} А. В каталоге есть диапазоны уставки, включающие ${current} А, но доступные характеристики не подтверждают рабочее напряжение ${point} ${recordUnit}. Поэтому не показываю неподтверждённые варианты. Если подбираете защиту для конкретного двигателя, сверьте рабочий ток и напряжение по шильдику; менеджеру поможет точная модель или паспорт.`;
-            send({ type: "delta", content: notice, origin: "server" });
-            finalText += `${finalText ? "\n\n" : ""}${notice}`;
-            steps.push({
-              step: "v3_catalog_operating_point_not_proven", ms: now(),
-              meta: {
-                point, unit, customer_load_a: current,
-                range_facet: certifiedMeasuredPointRange.facetKey,
-                accepted_range_count: certifiedMeasuredPointRange.acceptedValues.length,
-                correction_skipped: true,
-              },
-            });
-            recordClosureRetryOutcome(false, "catalog_operating_point_not_proven");
-            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+            return finishWithUncoveredCatalogPoint(uncoveredCatalogPoint, certifiedMeasuredPointRange, "measurement_obligation");
           }
           if (motorProtectionPoleProof.status === "unverified") {
             const reason = motorProtectionPoleProof.reason;

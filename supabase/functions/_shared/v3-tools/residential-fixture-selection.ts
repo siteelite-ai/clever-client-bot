@@ -254,6 +254,7 @@ function traitValues(product: ProductFull, key: RegExp): string[] {
 export function proveResidentialFixture(
   product: ProductFull,
   selection: ResidentialFixtureSelection,
+  verifiedCategoryTitles?: ReadonlySet<string>,
 ):
   | {
     ok: true;
@@ -278,8 +279,10 @@ export function proveResidentialFixture(
     /^(?:датчик|сенсор|комплектующ|лампа|аксессуар)\p{L}*/iu.test(
       product.pagetitle.trim(),
     ) ||
-    normalizeKey(product.leaf_category ?? "") !==
-      normalizeKey(RESIDENTIAL_FIXTURE_CATEGORY)
+    (verifiedCategoryTitles
+      ? !verifiedCategoryTitles.has(product.leaf_category?.trim() ?? "")
+      : normalizeKey(product.leaf_category ?? "") !==
+        normalizeKey(RESIDENTIAL_FIXTURE_CATEGORY))
   ) {
     return { ok: false, reason: "class" };
   }
