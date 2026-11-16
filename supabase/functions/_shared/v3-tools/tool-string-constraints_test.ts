@@ -140,9 +140,14 @@ Deno.test("compact string validator checks every nested entry without coercing o
 });
 
 Deno.test("compact string validator keeps an independent membership check for each shared schema path", () => {
-  for (const enumValues of [[], Array.from({ length: 10 }, (_, i) => `f1v${i}`)]) {
+  for (const count of [0, 10]) {
+    const enumValues = Array.from({ length: count }, (_, i) => `f0v${i}`);
     const canonical = buildDerivedSelectionReasoningToolSchema(
-      [{ key: "item_kind", caption: "Вид изделия", values: enumValues.map(value => ({value})) }],
+      [{
+        key: "item_kind",
+        caption: "Вид изделия",
+        values: enumValues.map((_, i) => ({ value: `Вид крепления ${i + 1}` })),
+      }],
       "", null, { requireReadiness: true, requireSubject: true },
     );
     const before = JSON.stringify(canonical);
