@@ -50,6 +50,7 @@ const extensionGood = {
   options: extensionOptions,
 };
 const motorSettingCaption = "Диапазон уставки тока расцепления, А";
+const syntheticMotorPoles = { key: "poles", caption_ru: "Количество полюсов", value_ru: "3" };
 const motorProducts = [
   {
     id: 100,
@@ -90,7 +91,7 @@ const motorProducts = [
       value_ru: "7–10 А",
     }],
   },
-];
+].map((product) => ({ ...product, options: [...product.options, syntheticMotorPoles] }));
 const liveMotorCatalog=JSON.parse(await Deno.readTextFile(new URL("./fixtures/motor-operating-domain-20261105.json",import.meta.url))) as {
   options:Array<Record<string,unknown>>; products:Array<Record<string,unknown>>;
 };
@@ -147,6 +148,7 @@ async function runDialogue({
   measurementRepairCase = null,
   typedParameters = null,
   expectedConsultation = [],
+  motor220 = false,
 }: {
   label: string;
   messages: string[];
@@ -162,6 +164,7 @@ async function runDialogue({
     state?: { route: string; lengthM?: number; loadA?: number };
     handoff?: boolean;
   }>;
+  motor220?: false | "catalog_gap" | "proved_fixture";
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
@@ -404,7 +407,12 @@ async function runDialogue({
                   pagetitle: motorCategory,
                   total_products: motorProducts.length,
                 },
-                options: useLiveVoltageSchema?liveMotorCatalog.options:[{
+                options: useLiveVoltageSchema ? liveMotorCatalog.options.map((option) =>
+                  motor220 === "proved_fixture" && option.key === voltageKey
+                    ? { ...option, values: [...option.values as Array<Record<string, unknown>>,
+                      { value_ru: "200-240", products_count: 1 }] }
+                    : option
+                ) : [{
                   key: "thermal_trip_setting",
                   caption_ru: motorSettingCaption,
                   type: "string",
@@ -416,7 +424,10 @@ async function runDialogue({
                 }, ...(terminalMode === "motor_voltage_conjunction" ? [{
                   key: "working_voltage", caption_ru: "Номинальное рабочее напряжение, В",
                   type: "string", unit: "В", values: ["220", "380", "400", "690"].map(value_ru => ({value_ru,products_count:1})),
-                }] : [])],
+                }] : []), {
+                  key: syntheticMotorPoles.key, caption_ru: syntheticMotorPoles.caption_ru, type: "string",
+                  values: ["2", "3"].map((value_ru) => ({ value_ru, products_count: 1 })),
+                }],
               },
             });
           }
@@ -424,7 +435,38 @@ async function runDialogue({
             catalogProductRequests.push(url);
             const title = url.searchParams.get("pagetitle");
             const category = url.searchParams.get("category");
-            const pool = useLiveVoltageSchema?liveMotorCatalog.products.map((product): Record<string,unknown> => ({
+            const base220 = liveMotorCatalog.products.find((product) => product.article === "495081")!;
+            const proofRows = (range: string, voltage?: string) => [
+              ...(base220.options as Array<Record<string, unknown>>).filter(({ key }) => key !== settingKey && key !== voltageKey),
+              { key: settingKey, caption_ru: "Диапазон уставки тока расцепления,А", value_ru: range },
+              ...(voltage ? [{ key: voltageKey, caption_ru: "Номин раб напряжение, В", value_ru: voltage }] : []),
+            ];
+            const sample220 = (name: string, range: string, voltage?: string) => ({
+              ...base220,
+              id: name, article: name, pagetitle: `Автомат защиты двигателя 3P ${name}`,
+              url: `https://220volt.kz/catalog/electric/motor-protection/${name}/`,
+              options: proofRows(range, voltage),
+            });
+            const pool = motor220 ? [
+              // Synthetic rows use the published setting intervals, not a
+              // claim of 220-V suitability for a specific catalog article.
+              sample220("retail-range-excludes-220", "24-32", "230-690"),
+              sample220("different-voltage", "23-32", "380"),
+              {
+                ...sample220("insulation-is-not-ue", "25-40"),
+                options: [...proofRows("25-40"), { key: "insulation", caption_ru: "Номинальное напряжение изоляции, В", value_ru: "690" }],
+              },
+              ...(motor220 === "proved_fixture" ? [
+                sample220("test-confirmed-220", "24-32", "200-240"),
+                sample220("wrong-current", "32-45", "200-240"),
+                {
+                  ...sample220("wrong-poles", "24-32", "200-240"),
+                  pagetitle: "Автомат защиты двигателя 2P wrong-poles",
+                  options: proofRows("24-32", "200-240").map((row) => row.caption_ru === "Количество полюсов"
+                    ? { ...row, value_ru: "2" } : row),
+                },
+              ] : []),
+            ] : useLiveVoltageSchema?liveMotorCatalog.products.map((product): Record<string,unknown> => ({
               ...product,
               ...(livePrimaryTypeEvidence === "missing" ? {content:null} : {}),
               ...(livePrimaryTypeEvidence === "accessory" ? {pagetitle:`Крышка для ${product.pagetitle}`} : {}),
@@ -536,9 +578,9 @@ async function runDialogue({
               selection_readiness: {
                 decision: "ready",
                 critical_inputs: {
-                  first: { parameter: "Ток нагрузки", customer_quote: rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
+                  first: { parameter: "Ток нагрузки", customer_quote: motor220 ? "30 А" : rangeDeclaration === "nominal_load" ? "6А" : "6 А", question: "", impact: isCorrection ? "" : "По току нагрузки проверяется диапазон уставки." },
                   rest: [
-                    { parameter: "Питание", customer_quote: "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
+                    { parameter: "Питание", customer_quote: motor220 ? "220 В, 3 фазы" : "380 В, 3 фазы", question: "", impact: "Питание должно соответствовать исполнению защиты." },
                     { parameter: "Пуск", customer_quote: "Прямой пуск", question: "", impact: "Проверяются условия пуска двигателя." },
                   ],
                 },
@@ -549,6 +591,8 @@ async function runDialogue({
                     ...(typedParameters === "forged" ? { value: 10, unit: "А" } : {}) },
                   { kind: "server_relation", facet_key: voltageKey },
                 ]
+                : motor220
+                ? ["Диапазон уставки тока должен включать номинальный ток двигателя 30 А.", "Рабочее напряжение изделия должно соответствовать 220 В."]
                 : measurementRepairCase
                 ? (isCorrection
                   ? [measurementRepairCase === "catalog_current"
@@ -689,6 +733,40 @@ async function runDialogue({
         return;
       }
       if (terminalMode && turn === messages.length - 1) {
+        if (motor220) {
+          const evidence = JSON.stringify(row.steps);
+          assertEquals(row.error, null, JSON.stringify({ text: publicText(events), evidence }));
+          assert(visible.some((event) => event.type === "diagnostic" && event.phase === "complete"), evidence);
+          const cards = visible.filter((event) => event.type === "products_block");
+          if (motor220 === "catalog_gap") {
+            assertEquals(cards.length, 0, evidence);
+            assertEquals(row.final_products_count, 0);
+            assertEquals(catalogProductRequests.length, 0, evidence);
+            assert(evidence.includes("unresolved_customer_operating_point"), evidence);
+            assert(evidence.includes("v3_catalog_operating_point_not_proven"), evidence);
+            assert(publicText(events).includes("не подтверждают рабочее напряжение 220 В"));
+            assert(publicText(events).includes("рабочий ток 30 А"));
+            assertEquals(correctionRequests, 0, evidence);
+          } else {
+            assertEquals(cards.length, 1, evidence);
+            const markdown = String(cards[0].markdown);
+            assertEquals(cards[0].count, 1, markdown);
+            assert(markdown.includes("test-confirmed-220"), markdown);
+            for (const word of ["wrong-current", "different-voltage", "wrong-poles", "insulation-is-not-ue", "range-excludes-220"]) {
+              assert(!markdown.includes(word), markdown);
+            }
+            const voltageValues = catalogProductRequests.flatMap((url) => url.searchParams.getAll(`options[${voltageKey}][]`));
+            assert(voltageValues.length > 0 && voltageValues.every((value) => value === "200-240"), evidence);
+            const ranges = catalogProductRequests.flatMap((url) => url.searchParams.getAll(`options[${settingKey}][]`));
+            assert(ranges.includes("24-32") && ranges.includes("23-32") && ranges.includes("25-40") &&
+              !ranges.includes("6-10") && !ranges.includes("32-45"), evidence);
+            const primarySearch = catalogProductRequests.filter((url) => url.searchParams.has(`options[${settingKey}][]`));
+            assert(primarySearch.length > 0 && primarySearch.every((url) =>
+              url.searchParams.getAll("options[kolichestvo_polyusov__polyuster_sany_][]").join() === "3"), evidence);
+          }
+          assertEquals(externalRequests, 0, evidence);
+          return;
+        }
         if (typedParameters === "forged") {
           assertEquals(row.error, null);
           assert(row.steps.some(s => s.step === "v3_measurement_parameter_rejected"));
@@ -1392,6 +1470,25 @@ Deno.test({
       "Прямой пуск, номинальный рабочий ток по шильдику 6 А."],
     expectedFacets: ["supply_phase", "motor_start_method"],
     expectedProfile: "motor_breaker", terminalMode: "motor_selection",
+  }),
+});
+
+for (const motor220 of ["catalog_gap", "proved_fixture"] as const) Deno.test({
+  name: `client 15: 220 V three phase direct start 30 A ${motor220}`,
+  permissions: { read: true, env: false, net: false },
+  fn: () => runDialogue({
+    label: motor220,
+    messages: [
+      "Подберите автомат для двигателя асинхронный 3 кВт",
+      "220 В, 3 фазы", "Прямой пуск", "30 А",
+    ],
+    expectedFacets: ["supply_phase", "motor_start_method", "load_current"],
+    expectedProfile: "motor_breaker",
+    terminalMode: motor220 === "catalog_gap" ? "motor_voltage_refusal" : "motor_voltage_conjunction",
+    useLiveVoltageSchema: true,
+    rangeDeclaration: "nominal_load",
+    typedParameters: motor220 === "proved_fixture" ? "confirmed" : null,
+    motor220,
   }),
 });
 
