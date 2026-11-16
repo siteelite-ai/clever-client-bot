@@ -9,6 +9,16 @@ export type CableConsultationState = {
 };
 type Profile = "pump_cable" | "underground_cable";
 type Stage = "route" | "length" | "load" | "handoff";
+const routeNote: Record<Route, string> = {
+  water:
+    "Для участка в воде проверяют, допускает ли паспорт конкретного кабеля длительное погружение.",
+  dry:
+    "Для сухого участка кабель проверяют по условиям трассы и паспорту насоса.",
+  direct:
+    "Для прямой укладки в грунт нужно явное разрешение в паспорте кабеля.",
+  duct:
+    "Подземная труба меняет условия прокладки, но сама по себе не подтверждает пригодность кабеля.",
+};
 const CURRENT =
   /(?<![\p{L}\p{N}.,-])(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:а|ампер(?:а|ов)?)(?![\p{L}\p{N}])/giu;
 const AMBIGUOUS =
@@ -175,7 +185,12 @@ export function cableConsultation(input: {
   message: string;
   prior?: CableConsultationState;
   continuation: boolean;
-}): { state: CableConsultationState; stage: Stage; text: string } | null {
+}): {
+  state: CableConsultationState;
+  stage: Stage;
+  text: string;
+  reason?: "missing_specification";
+} | null {
   const profile = asProfile(input.profile);
   if (!profile) return null;
   const oldRoute = input.prior?.route;
@@ -219,22 +234,22 @@ export function cableConsultation(input: {
     input.continuation && MISSING_SPECIFICATION.test(input.message) &&
     !Object.keys(observed.confirmed).length && !observed.uncertain.size
   ) {
-    return handoff(
-      profile === "pump_cable"
-        ? "Если маркировки нет, для разговора с менеджером подготовьте модель или фото шильдика насоса и длину кабельной линии. Для участка в воде нужен паспортный допуск на погружение. Марку и сечение без этих данных не подтверждаю."
-        : "Без маркировки менеджеру пригодятся длина линии, данные нагрузки и способ прокладки. Для прямой укладки в грунт нужно проверить допуск по паспорту кабеля; марку и сечение наугад не рекомендую.",
-    );
+    const missing = [
+      ...(!state.route ? ["способ прокладки"] : []),
+      ...(!state.lengthM ? ["длина линии"] : []),
+      ...(!state.loadA
+        ? [profile === "pump_cable" ? "модель насоса или фото шильдика" : "данные нагрузки"]
+        : []),
+    ];
+    const note = state.route ? `${routeNote[state.route]} ` : "";
+    const next = missing.length
+      ? `Для консультации менеджеру пригодятся: ${missing.join(", ")}.`
+      : "Для точного подбора менеджеру пригодится паспорт оборудования или проект линии.";
+    return {
+      ...handoff(`${note}${next} Без подтверждённой спецификации марку и сечение наугад не рекомендую.`),
+      reason: "missing_specification",
+    };
   }
-  const routeNote: Record<Route, string> = {
-    water:
-      "Для участка в воде проверяют, допускает ли паспорт конкретного кабеля длительное погружение.",
-    dry:
-      "Для сухого участка кабель проверяют по условиям трассы и паспорту насоса.",
-    direct:
-      "Для прямой укладки в грунт нужно явное разрешение в паспорте кабеля.",
-    duct:
-      "Подземная труба меняет условия прокладки, но сама по себе не подтверждает пригодность кабеля.",
-  };
   if (!state.route) {
     return {
       state,

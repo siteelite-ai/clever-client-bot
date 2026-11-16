@@ -68,3 +68,33 @@ Deno.test("a question about a different route does not withdraw the previously s
   assertEquals(result?.stage, "load");
   assertEquals(result?.state, { route: "direct", lengthM: 25 });
 });
+
+Deno.test("missing-specification handoff follows the verified route and names only missing facts", () => {
+  for (const { profile, route, note, wrong } of [
+    { profile: "underground_cable", route: "duct", note: "Подземная труба", wrong: "Для прямой укладки" },
+    { profile: "underground_cable", route: "direct", note: "Для прямой укладки", wrong: "Подземная труба" },
+    { profile: "pump_cable", route: "dry", note: "Для сухого участка", wrong: "Для участка в воде" },
+    { profile: "pump_cable", route: "water", note: "Для участка в воде", wrong: "Для сухого участка" },
+  ] as const) {
+    const prior = { route, lengthM: 25 };
+    const outcome = cableConsultation({ profile, prior, continuation: true, message: "Марку не знаю" });
+    assert(outcome);
+    assertEquals(outcome.state, prior);
+    assertEquals(outcome.stage, "handoff");
+    assertEquals(outcome.reason, "missing_specification");
+    assert(outcome.text.includes(note));
+    assert(!outcome.text.includes(wrong));
+    assert(!outcome.text.includes("длина линии"));
+    assert(!outcome.text.includes("способ прокладки"));
+    assert(!outcome.text.includes("?"));
+  }
+  const unknownRoute = cableConsultation({
+    profile: "pump_cable", prior: { lengthM: 25, loadA: 6 },
+    continuation: true, message: "Марку не знаю",
+  })!;
+  assert(unknownRoute.text.includes("способ прокладки"));
+  assert(!unknownRoute.text.includes("погружение"));
+  assert(!unknownRoute.text.includes("сухого участка"));
+  assert(!unknownRoute.text.includes("длина линии"));
+  assert(!unknownRoute.text.includes("шильдика"));
+});

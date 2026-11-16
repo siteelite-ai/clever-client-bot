@@ -109,7 +109,9 @@ export function resolveSpecificationAssistance(
   });
   if (!advice) return null;
   const handoff = advice.stage === "handoff";
-  const lookupOffer = !active || handoff
+  // A later exact marking still resolves through this slot. Do not re-ask
+  // for it in the message where the customer explicitly said it was missing.
+  const lookupOffer = !active || (handoff && advice.reason !== "missing_specification")
     ? "\n\nЕсли есть маркировка из паспорта или проекта, напишите её — проверю наличие и цену."
     : "";
   return {

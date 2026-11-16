@@ -163,6 +163,7 @@ async function runDialogue({
   typedParameters?: "confirmed" | "forged" | null;
   expectedConsultation?: Array<{
     phrase: string;
+    excludes?: string[];
     state?: { route?: string; lengthM?: number; loadA?: number };
     handoff?: boolean;
   }>;
@@ -1039,6 +1040,9 @@ async function runDialogue({
         assertEquals(Boolean(assistance?.handoff), Boolean(expectedAdvice.handoff));
         const answer = publicText(events);
         assert(answer.includes(expectedAdvice.phrase), answer);
+        for (const phrase of expectedAdvice.excludes ?? []) {
+          assert(!answer.includes(phrase), answer);
+        }
         assertEquals((answer.match(/\?/gu) ?? []).length, expectedAdvice.handoff ? 0 : 1);
         assert(!visible.some((event) => event.type === "quick_replies"), JSON.stringify(visible));
         assertEquals(catalogProductRequests.length, 0);
@@ -1575,6 +1579,18 @@ for (const scenario of [
       { phrase: "длина линии", state: { route: "water" } },
       { phrase: "ток указан на шильдике", state: { route: "water", lengthM: 38 } },
       { phrase: "Длина и ток уже есть", state: { route: "water", lengthM: 38, loadA: 6 }, handoff: true },
+    ],
+  },
+  {
+    label: "client 22 handoff uses the confirmed conduit and does not request the unavailable marking again",
+    messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, длина 25 м",
+      "Марку и сечение не знаю, нужна помощь."],
+    expectedFacets: Array(3).fill("engineering_specification"), expectedProfile: "underground_cable",
+    expectedConsultation: [
+      { phrase: "прямо в грунте или в защитной трубе" },
+      { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
+      { phrase: "Подземная труба", excludes: ["Для прямой укладки", "Если есть маркировка"],
+        state: { route: "duct", lengthM: 25 }, handoff: true },
     ],
   },
   {
