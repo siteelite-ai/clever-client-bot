@@ -138,3 +138,31 @@ Deno.test("compact string validator checks every nested entry without coercing o
     })
   );
 });
+
+Deno.test("compact string validator keeps an independent membership check for each shared schema path", () => {
+  for (const count of [0, 10]) {
+    const enumValues = Array.from({ length: count }, (_, i) => `f0v${i}`);
+    const canonical = buildDerivedSelectionReasoningToolSchema(
+      [{
+        key: "item_kind",
+        caption: "Вид изделия",
+        values: enumValues.map((_, i) => ({ value: `Вид крепления ${i + 1}` })),
+      }],
+      "", null, { requireReadiness: true, requireSubject: true },
+    );
+    const before = JSON.stringify(canonical);
+    const compact = compileToolStringConstraints(canonical);
+    const reason = enumValues.length ? "enum" : "maxLength";
+    assertEquals(compact.validate({ compatible_classifications: ["bad"] }), {
+      path: "compatible_classifications.*", reason,
+    });
+    assertEquals(compact.validate({ excluded_classifications: ["bad"] }), {
+      path: "excluded_classifications.*", reason,
+    });
+    assertEquals(compact.validate({ explicit_customer_classifications: [{ classification_id: "bad" }] }), {
+      path: "explicit_customer_classifications.*.classification_id", reason,
+    });
+    assertEquals(compact.validate({ excluded_classifications: enumValues }), null);
+    assertEquals(JSON.stringify(canonical), before);
+  }
+});
