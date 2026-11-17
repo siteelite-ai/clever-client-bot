@@ -28,7 +28,11 @@ export function compileToolStringConstraints<T extends Tool>(canonical: T): {
 } {
   const tool = structuredClone(canonical);
   const constraints: Constraint[] = [];
-  function visit(schema: Schema, path: string[]) {
+  function visit(input: Schema, path: string[]): Schema {
+    // structuredClone preserves aliases: the same catalog item schema can
+    // back multiple fields. Strip constraints on a per-path copy, or the
+    // first visit removes evidence needed by later validators.
+    const schema = { ...input };
     if (schema.type === "string") {
       const constraint: Constraint = { path };
       if (Array.isArray(schema.enum)) {
@@ -69,13 +73,14 @@ export function compileToolStringConstraints<T extends Tool>(canonical: T): {
       }
     }
     if (record(schema.properties)) {
-      for (const [key, child] of Object.entries(schema.properties)) {
-        if (record(child)) visit(child, [...path, key]);
-      }
+      schema.properties = Object.fromEntries(Object.entries(schema.properties).map(
+        ([key, child]) => [key, record(child) ? visit(child, [...path, key]) : child],
+      ));
     }
-    if (record(schema.items)) visit(schema.items, [...path, "*"]);
+    if (record(schema.items)) schema.items = visit(schema.items, [...path, "*"]);
+    return schema;
   }
-  visit(tool.function.parameters, []);
+  tool.function.parameters = visit(tool.function.parameters, []);
 
   const check = (
     value: unknown,

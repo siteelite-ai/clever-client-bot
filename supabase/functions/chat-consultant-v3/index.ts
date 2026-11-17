@@ -13605,6 +13605,7 @@ async function runExpertLoop(
               reason => { declarationRejectionReason = reason; },
               structuredMeasurementMode && certifiedMeasuredPointRange
                 ? { measuredPointRange: certifiedMeasuredPointRange } : undefined,
+              { requireReadiness: requireSelectionReadiness },
             );
             // A typed product requirement is an obligation, not narrative.
             // The legacy prose scrubber can clean the display, but cannot

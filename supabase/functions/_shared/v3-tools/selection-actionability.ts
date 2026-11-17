@@ -1221,6 +1221,16 @@ function derivedClassificationChoices(
   return choices;
 }
 
+/** The compact readiness contract can enumerate all exposed IDs (already
+ * capped by derivedClassificationChoices). Legacy OFF keeps its original
+ * fixed provider and resolver budgets. */
+function derivedClassificationExclusionLimit(
+  liveChoiceCount: number,
+  requireReadiness: boolean | undefined,
+): number {
+  return requireReadiness ? liveChoiceCount : 8;
+}
+
 export function selectionSubjectChoices(facets: DerivedSelectionFacet[]): SubjectChoice[] {
   return derivedClassificationChoices(facets).map(choice => ({
     ...choice, key: facets[Number(choice.id.match(/^f(\d+)v/u)?.[1])]?.key ?? "",
@@ -1711,10 +1721,13 @@ export function buildDerivedSelectionReasoningToolSchema(
           },
           excluded_classifications: {
             type: "array",
-            maxItems: 8,
+            maxItems: derivedClassificationExclusionLimit(
+              ids.length,
+              policy.requireReadiness,
+            ),
             items: choiceItems,
-            description:
-              "IDs всех живых классов, чьё собственное понятное название однозначно противоречит назначению клиента. Неизвестные сокращения и неоднозначные отраслевые метки не являются доказательством несовместимости.",
+            description: "IDs всех живых классов, чьё собственное понятное название однозначно противоречит назначению клиента. Неизвестные сокращения и неоднозначные отраслевые метки не являются доказательством несовместимости." +
+              (policy.requireReadiness ? " Каждый ID укажи не более одного раза." : ""),
           },
           required_facet_values: {
             type: "array",
@@ -2745,6 +2758,7 @@ export function resolveDerivedSelectionReasoning(
     | "system_total_reconciliation_failed"
     | "unsupported_per_product_claims") => void,
   serverRelations?: { measuredPointRange: MeasuredPointRangeCertificate },
+  policy: { requireReadiness?: boolean } = {},
 ): ResolvedDerivedSelectionReasoning | null {
   const reject = (reason: Parameters<NonNullable<typeof observeRejection>>[0]) => {
     try { observeRejection?.(reason); } catch { /* observational only */ }
@@ -3055,18 +3069,22 @@ export function resolveDerivedSelectionReasoning(
   const groundedExcludedIds = new Set(
     groundedExcludedChoices.map(({ id }) => id),
   );
+  const seenExcludedIds = new Set<string>();
+  const exclusionLimit = derivedClassificationExclusionLimit(
+    byId.size,
+    policy.requireReadiness,
+  );
   const excludedChoices = [
     ...groundedExcludedChoices,
-    ...resolveIds(args.excluded_classifications, 8),
+    ...resolveIds(args.excluded_classifications, exclusionLimit),
   ]
-    .filter((choice) =>
-      !compatibleIds.has(choice.id) &&
-      (groundedExcludedIds.has(choice.id) ||
-        !classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices))
-    )
-    .filter((choice, index, all) =>
-      all.findIndex(({ id }) => id === choice.id) === index
-    );
+    .filter((choice) => {
+      if (compatibleIds.has(choice.id) || seenExcludedIds.has(choice.id) ||
+        (!groundedExcludedIds.has(choice.id) &&
+          classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices))) return false;
+      seenExcludedIds.add(choice.id);
+      return true;
+    });
 
   // A structured ID is necessary but not sufficient: the consultant must
   // state the same exact live value in its visible reasoning. Reuse the
