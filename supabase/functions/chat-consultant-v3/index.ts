@@ -9202,14 +9202,16 @@ async function selectVerifiedResidentialFixtures(
   const titles = new Set(routes.map(({ pagetitle }) => pagetitle));
   const pageSize = 50;
   const pagesLimit = 5;
-  const readPage = async (route: typeof routes[number], page: number) => {
+  const readPage = async (
+    route: typeof routes[number], page: number, query?: string, readSignal = signal,
+  ) => {
     const scopedCache: ProductCache = new Map();
     const evidence: CatalogSinglePageEvidence[] = [];
     const result = await executeSearchCatalog({
-      mode: "by_filter", category: route.pagetitle, max_price: state.cap,
-      page, per_page: pageSize,
+      mode: query ? "by_query" : "by_filter", category: route.pagetitle,
+      ...(query ? { query } : {}), max_price: state.cap, page, per_page: pageSize,
     }, {
-      ...deps, requireExplicitCategory: !route.verified_leaf,
+      ...deps, signal: readSignal, requireExplicitCategory: !!query || !route.verified_leaf,
       onSinglePageEvidence: (proof) => evidence.push(proof),
     }, scopedCache);
     return result.ok ? { total: result.total, page, coverage: result.candidate_coverage,
@@ -9238,29 +9240,81 @@ async function selectVerifiedResidentialFixtures(
   await Promise.all(extra);
   const pages = groups.flatMap((group) => group.pages);
   const products = pages.flatMap((page) => page?.products ?? []);
-  const searched = pages.some((page) => page !== null);
+  let searched = pages.some((page) => page !== null);
   const rejected: Record<string, number> = {};
   const counts = new Map<string, number>();
   for (const product of products) counts.set(product.id, (counts.get(product.id) ?? 0) + 1);
+  const catalogueWindowComplete = taxonomy.ok && taxonomy.complete &&
+    groups.length === routes.length && products.length === counts.size &&
+    groups.every(({ pages: groupPages }) => {
+      const first = groupPages[0];
+      return !!first && groupPages.every((page) => page?.total === first.total &&
+          page.evidence?.issue === null && page.evidence.requested_page === page.page &&
+          (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
+        first.total === groupPages.reduce((n, page) => n + (page?.products.length ?? 0), 0);
+    });
+  const checkedIds = new Set(counts.keys());
+  const checkedUrls = new Set(products.map(({ url }) => url));
+  const checkCard = (product: ProductFull) => {
+    const proof = proveResidentialFixture(product, state, titles);
+    if (proof.ok) return [{ product, proof }];
+    rejected[proof.reason] = (rejected[proof.reason] ?? 0) + 1;
+    return [];
+  };
   const exact = products.flatMap((product) => {
     if (counts.get(product.id) !== 1) {
       rejected.duplicate = (rejected.duplicate ?? 0) + 1;
       return [];
     }
-    const proof = proveResidentialFixture(product, state, titles);
-    if (!proof.ok) {
-      rejected[proof.reason] = (rejected[proof.reason] ?? 0) + 1;
-      return [];
-    }
-    return [{ product, proof }];
-  }).sort((a, b) => a.product.price - b.product.price);
-  const urls = new Set<string>();
-  const seen = new Set(state.seen);
-  const distinct = exact.filter(({ product }) => {
-    if (urls.has(product.url)) return false;
-    urls.add(product.url);
-    return !seen.has(product.id);
+    return checkCard(product);
   });
+  const seen = new Set(state.seen);
+  const distinctUnseen = () => {
+    const urls = new Set<string>();
+    return [...exact].sort((a, b) => a.product.price - b.product.price)
+      .filter(({ product }) => {
+        if (urls.has(product.url)) return false;
+        urls.add(product.url);
+        return !seen.has(product.id);
+      });
+  };
+
+  // Text search discovers cards beyond the default category sort window. A
+  // match to either word is only a candidate, never motion or purpose proof.
+  // In particular it cannot replace a previously checked card with a
+  // different snapshot, bypass a contradictory facet, or prove completeness.
+  const rootRoute = routes.find(({ pagetitle }) => pagetitle === RESIDENTIAL_FIXTURE_CATEGORY);
+  const supplemental: Array<{ query: string; rows: number; verified: number; failed: boolean }> = [];
+  let supplementalRows = 0;
+  if (rootRoute && !catalogueWindowComplete && distinctUnseen().length < state.target && !signal.aborted) {
+    const searchSignal = AbortSignal.any([signal, AbortSignal.timeout(3000)]);
+    for (const query of ["датчик", "сенсор"]) {
+      if (searchSignal.aborted || distinctUnseen().length >= state.target) break;
+      const result = await readPage(rootRoute, 1, query, searchSignal);
+      const candidates = result?.products ?? [];
+      const batchCounts = new Map<string, number>();
+      for (const { id } of candidates) batchCounts.set(id, (batchCounts.get(id) ?? 0) + 1);
+      const verified = candidates.flatMap((product) => {
+        if (batchCounts.get(product.id) !== 1) {
+          rejected.duplicate = (rejected.duplicate ?? 0) + 1;
+          return [];
+        }
+        if (checkedIds.has(product.id) || checkedUrls.has(product.url)) return [];
+        // No category fallback from the text query; it can return products
+        // outside the requested class even if the backend accepted the filter.
+        return checkCard(product);
+      });
+      for (const { id, url } of candidates) {
+        checkedIds.add(id);
+        checkedUrls.add(url);
+      }
+      exact.push(...verified);
+      searched ||= result !== null;
+      supplementalRows += candidates.length;
+      supplemental.push({ query, rows: candidates.length, verified: verified.length, failed: result === null });
+    }
+  }
+  const distinct = distinctUnseen();
   const selected = distinct.slice(0, state.target);
   for (const { product } of selected) cache.set(product.id, product);
   const render = selected.length
@@ -9283,15 +9337,7 @@ async function selectVerifiedResidentialFixtures(
       taxonomy_reason: "reason" in taxonomy ? taxonomy.reason : null,
       taxonomy_routes: routes.length,
       pages_failed: pages.filter((page) => !page).length,
-      catalogue_window_complete: taxonomy.ok && taxonomy.complete &&
-        groups.length === routes.length && products.length === counts.size &&
-        groups.every(({ pages: groupPages }) => {
-          const first = groupPages[0];
-          return !!first && groupPages.every((page) => page?.total === first.total &&
-              page.evidence?.issue === null && page.evidence.requested_page === page.page &&
-              (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
-            first.total === groupPages.reduce((n, page) => n + (page?.products.length ?? 0), 0);
-        }),
+      catalogue_window_complete: catalogueWindowComplete,
       catalogue_page_evidence: groups.flatMap(({ route, pages: groupPages }) => groupPages.map((result, index) => ({
         category_id: route.id,
         page: index + 1,
@@ -9299,7 +9345,9 @@ async function selectVerifiedResidentialFixtures(
         issue: !result ? "search_failed" : !result.evidence ? "evidence_missing"
           : result.evidence.issue ?? (result.total !== groupPages[0]?.total ? "total_changed" : null),
       }))),
-      scannable_rows: products.length, rejected, verified_unseen: distinct.length, shown: shown.length, outcome,
+      supplemental_candidate_search: supplemental,
+      scannable_rows: products.length + supplementalRows, rejected, verified_unseen: distinct.length,
+      shown: shown.length, outcome,
       proofs: shown.length ? selected.map(({ product, proof }) => ({
         id: product.id, application: proof.application.source, sensor: proof.sensor.source,
         manufacturer_reference: proof.application.url ?? proof.sensor.url ?? null,
