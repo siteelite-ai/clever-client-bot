@@ -53,6 +53,10 @@ Deno.test("stabilizer: measured input survives clarifications; watts are not con
   assert(
     !isStabilizerApplicationReply("Кабель для насоса на 1 кВт", { ...first }),
   );
+  for (const message of ["Ищу датчик на 12 В", "Нам нужен светильник на 12 В", "Мне нужен кабель для нагрузки 1 кВт"]) {
+    assert(!isStabilizerApplicationReply(message, {...first}), message);
+    assertEquals(resolveStabilizerApplication(message, {...first}), null, message);
+  }
   assertEquals(
     resolveStabilizerApplication("Новая тема. Нагрузка 1,2 кВА", { ...second }),
     null,

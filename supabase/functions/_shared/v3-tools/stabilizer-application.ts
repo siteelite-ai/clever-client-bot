@@ -1,5 +1,6 @@
 import {
   hasExplicitNewTaskPreface,
+  independentSelectionRequestBody,
   stripExplicitNewTaskPreface,
 } from "./request-preface.ts";
 import {
@@ -106,6 +107,7 @@ export function isStabilizerApplicationReply(
 ): boolean {
   const raw = message.trim();
   return !!scopedState(slot) && !hasExplicitNewTaskPreface(raw) &&
+    independentSelectionRequestBody(raw) === null &&
     raw.length <= 500 &&
     !OTHER_PRODUCT.test(raw) && !SPECIAL.test(raw) &&
     (UNKNOWN.test(raw) || PENDING_FACTS.test(raw) && !FRESH.test(raw));
