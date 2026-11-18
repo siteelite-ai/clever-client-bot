@@ -536,7 +536,7 @@ import {
 import { buildMeasuredBreakerGuidance } from "../_shared/v3-tools/measured-breaker-guidance.ts";
 import {
   CIRCUIT_BREAKER_CATEGORY,
-  circuitCardProvesFilters,
+  inspectCircuitProtectionCard,
   circuitCatalogFilters,
   isCircuitProtectionReply,
   isCircuitProtectionSlot,
@@ -9723,7 +9723,9 @@ async function selectCircuitProtectionProducts(
     steps.push({ step: "v3_circuit_protection_catalog_not_verified",
       ms: Date.now() - t0, meta: { stage, ...(errorCode ? { error_code: errorCode } : {}) } });
     send({ type: "delta", origin: "server",
-      content: stage === "catalog_error"
+      content: stage === "device_class"
+        ? "По числовым параметрам нашлись варианты, но класс обычного автоматического выключателя у них не подтверждён. Комбинированные аппараты с дополнительными функциями защиты без отдельного согласования по проекту не показываю."
+        : stage === "catalog_error"
         ? "Не удалось проверить каталог. Попробуйте позже; неподтверждённые товары не показываю."
         : "По проверенным данным каталога не удалось подтвердить варианты в наличии со всеми указанными параметрами. Это не означает, что таких автоматов нет. Неподтверждённые товары не показываю." });
     return [];
@@ -9745,17 +9747,23 @@ async function selectCircuitProtectionProducts(
     mode: "by_filter", category: CIRCUIT_BREAKER_CATEGORY, options, min_price: 1, per_page: 50,
   }, deps, cache);
   if (!result.ok) return fallback("catalog_error", result.error_code);
-  const ids = [...new Set(result.results.map(({ id }) => id))].filter((id) => {
+  const inspected = [...new Set(result.results.map(({ id }) => id))].flatMap((id) => {
     const product = cache.get(id);
-    return product && circuitCardProvesFilters(product, options);
+    return product ? [{ id, ...inspectCircuitProtectionCard(product, options) }] : [];
   });
+  steps.push({ step: "v3_circuit_protection_device_class", ms: Date.now() - t0,
+    meta: { required_class: "ordinary_circuit_breaker", checked: inspected.length,
+      verified: inspected.filter(({ deviceClass }) => deviceClass.verified).length,
+      rejected: inspected.flatMap(({ id, deviceClass }) => deviceClass.verified ? [] : [{ id, reason: deviceClass.reason }]) } });
+  const ids = inspected.filter(({ verified }) => verified).map(({ id }) => id);
   const rendered = ids.length ? executeRenderProducts({
     product_ids: ids, total_available: ids.length,
   }, cache) : null;
   steps.push({ step: "v3_circuit_protection_cards_verified", ms: Date.now() - t0,
     meta: { filter_count: Object.keys(options).length, candidates: result.results.length,
       verified: ids.length, rendered: rendered?.ok ? rendered.rendered_count : 0 } });
-  if (!rendered?.ok) return fallback("cards");
+  if (!rendered?.ok) return fallback(inspected.some(({ filtersVerified, deviceClass }) =>
+    filtersVerified && !deviceClass.verified) ? "device_class" : "cards");
   const plan = extendSelectionCriteriaPlan(null, criteria, "guarded_search");
   send({ type: "delta", origin: "server",
     content: "Нашёл в каталоге модели с указанными параметрами защиты. Это подбор по спецификации, не проверка безопасности монтажа." });

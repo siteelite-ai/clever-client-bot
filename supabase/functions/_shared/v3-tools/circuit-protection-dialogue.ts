@@ -8,6 +8,7 @@ import {
 import type { ProductFull } from "./types.ts";
 import type { SelectionReadinessClarification } from "./selection-readiness.ts";
 import { selectionReadinessScope } from "./selection-readiness.ts";
+import { proveOrdinaryCircuitBreakerClass } from "./circuit-breaker-class-proof.ts";
 
 // A measured application is not an exact product order. Keep circuit design
 // facts separate from catalogue specifications even when both use amperes.
@@ -511,7 +512,14 @@ export function circuitCardProvesFilters(
   product: ProductFull,
   options: Record<string, string[]>,
 ): boolean {
-  return Object.keys(options).length === AXES.length &&
+  return inspectCircuitProtectionCard(product, options).verified;
+}
+
+export function inspectCircuitProtectionCard(
+  product: ProductFull,
+  options: Record<string, string[]>,
+) {
+  const filtersVerified = Object.keys(options).length === AXES.length &&
     normalizeKey(product.leaf_category ?? "") ===
       normalizeKey(CIRCUIT_BREAKER_CATEGORY) &&
     (product.stock === "in_stock" || product.stock === "low") &&
@@ -521,4 +529,6 @@ export function circuitCardProvesFilters(
       const observed = product.facet_values?.[key];
       return observed?.length === 1 && accepted.includes(observed[0]);
     });
+  const deviceClass = proveOrdinaryCircuitBreakerClass(product);
+  return { verified: filtersVerified && deviceClass.verified, filtersVerified, deviceClass };
 }

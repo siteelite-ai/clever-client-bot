@@ -29,9 +29,9 @@ function json(value: unknown, status = 200) {
   });
 }
 
-Deno.test({
+for (const onlyCombined of [false, true]) Deno.test({
   name:
-    "apartment load: start with supply and line, then search and strictly verify cards",
+    `apartment load: preserve line/project and verify ordinary class (${onlyCombined ? "only combined candidates" : "mixed candidates"})`,
   permissions: { env: false, net: false, read: true },
   async fn() {
     resetDiscoverCategoryCacheForTest();
@@ -125,7 +125,13 @@ Deno.test({
             filters = url.searchParams;
             // Intentionally ignore the filters so only local per-card proofs
             // can stop missing/incorrect/ranged attributes from rendering.
-            const results = [
+            const combined = [
+              { ...card("afdd"), pagetitle: "Устройство защиты от дугового пробоя XZ-AFD 2P C32 30мА" },
+              { ...card("rcbo"), pagetitle: "Дифференциальный автомат 2P C32" },
+              { ...card("hidden-combined"), options: [...card("hidden-combined").options,
+                { key: "device_type", caption_ru: "Тип устройства", value_ru: "УЗДП" }] },
+            ];
+            const results = onlyCombined ? combined : [
               card("compatible"),
               card("wrong-current", "current", "25"),
               card("current-range", "current", "25–32"),
@@ -133,6 +139,8 @@ Deno.test({
               card("low-capacity", "breaking", "4.5"),
               { ...card("wrong-class"), category: "Аксессуары для автоматов" },
               { ...card("stock-not-proven"), warehouses: [] },
+              ...combined,
+              { ...card("unknown-identity"), pagetitle: "Модуль XZ-4 2P C32" },
             ];
             return json({
               data: { results, pagination: { total: results.length } },
@@ -229,11 +237,18 @@ Deno.test({
       );
       assertEquals(
         products.length,
-        1,
+        onlyCombined ? 0 : 1,
         JSON.stringify({ body: result.body, steps: stored[turn].steps }),
       );
-      assertEquals(products[0].count, 1);
-      assert(String(products[0].markdown).includes("/compatible/"));
+      if (onlyCombined) {
+        assert(result.body.includes("класс обычного автоматического выключателя"));
+        assert(!result.body.includes("https://220volt.kz/catalog/"));
+      } else {
+        assertEquals(products[0].count, 1);
+        assert(String(products[0].markdown).includes("/compatible/"));
+        for (const rejected of ["afdd", "rcbo", "hidden-combined", "unknown-identity"])
+          assert(!String(products[0].markdown).includes(`/${rejected}/`));
+      }
       assertEquals(productsCalls, 1);
       const sentFilters = filters as URLSearchParams | null;
       assert(sentFilters);
@@ -249,8 +264,13 @@ Deno.test({
         stored[turn].steps?.find(({ step }) =>
           step === "v3_circuit_protection_cards_verified"
         )?.meta,
-        { filter_count: 5, candidates: 7, verified: 1, rendered: 1 },
+        { filter_count: 5, candidates: onlyCombined ? 3 : 11, verified: onlyCombined ? 0 : 1, rendered: onlyCombined ? 0 : 1 },
       );
+      const classProof = stored[turn].steps?.find(({ step }) =>
+        step === "v3_circuit_protection_device_class")?.meta as { required_class: string; rejected: { id: string; reason: string }[] };
+      assertEquals(classProof.required_class, "ordinary_circuit_breaker");
+      assert(classProof.rejected.some(({ id, reason }) => id === "afdd" && reason === "combined_protection"));
+      assert(classProof.rejected.some(({ id, reason }) => id === "hidden-combined" && reason === "combined_protection"));
       assertEquals(unexpectedCalls, 0);
     } finally {
       globalThis.fetch = fetch;
