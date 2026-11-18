@@ -103,6 +103,72 @@ Deno.test("a follow-up cannot silently expand the room, feature, budget or utili
   assertEquals(exclude?.cap, 5500);
 });
 
+Deno.test("a bounded purpose list proves the exact application without loosening other filters", () => {
+  const fixture = {
+    ...retail,
+    short_traits: [
+      "Вид светильника: Светильники для ЖКХ",
+      "С датчиком движения: Да",
+    ],
+  };
+  const initial = start();
+  const slot = encodeResidentialFixtureSlot(initial, "Где будет светильник?");
+  const entrance = continueResidentialFixtureSelection(
+    "Можно ЖКХ, для подъезда",
+    slot,
+  );
+  assert(entrance);
+  const supported = {
+    ...fixture,
+    description_excerpt:
+      "Датчик регулирует время включения. Назначение и область применения: - Освещение подъездов и лестничных площадок - Подсветка технических зон Основные преимущества: - Освещение спальни в другой модели.",
+  };
+  assertEquals(proveResidentialFixture(supported, entrance), {
+    ok: true,
+    application: { source: "product_description" },
+    sensor: { source: "catalog_facet" },
+    utility: true,
+  });
+  assertEquals(
+    proveResidentialFixture(supported, {
+      ...entrance,
+      utility: "not_confirmed",
+    }),
+    { ok: false, reason: "utility_consent" },
+  );
+  assertEquals(
+    proveResidentialFixture(supported, { ...entrance, place: "bedroom" }),
+    { ok: false, reason: "purpose" },
+  );
+  assertEquals(
+    proveResidentialFixture({ ...supported, price: 4001 }, entrance),
+    { ok: false, reason: "budget" },
+  );
+  assertEquals(
+    proveResidentialFixture({
+      ...supported,
+      short_traits: ["Вид светильника: ЖКХ", "С датчиком движения: Нет"],
+    }, entrance),
+    { ok: false, reason: "sensor" },
+  );
+  for (
+    const description_excerpt of [
+      "Основные преимущества: - Освещение подъездов.",
+      "Назначение: - Освещение гаражей Возможные доплаты: - Освещение подъездов.",
+      "Назначение: - Освещение технических зон, кроме подъездов.",
+      "Назначение: - Освещение подъездов при условии изменения проектной схемы.",
+      "Назначение: - Освещение подъездов, кроме",
+      "Назначение: - Освещение подъездов. Не предназначен для подъездов.",
+    ]
+  ) {
+    assertEquals(
+      proveResidentialFixture({ ...fixture, description_excerpt }, entrance),
+      { ok: false, reason: "purpose" },
+      description_excerpt,
+    );
+  }
+});
+
 Deno.test("manufacturer SKU beats conflicting retail domestic tag without rejecting unrelated brands or variants", () => {
   const misleadingRetail = {
     ...retail,

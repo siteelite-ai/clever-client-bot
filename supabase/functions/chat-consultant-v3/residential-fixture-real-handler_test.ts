@@ -12,6 +12,7 @@ import "./index.ts";
 
 const offlineEnvGet = Deno.env.get;
 const category = "Светильники";
+const residentialLeaf = "Накладные светильники";
 const customer =
   "Мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов.";
 type Event = Record<string, unknown>;
@@ -54,6 +55,12 @@ const gauss = card("37237", {
     { key: "brend__brend", caption_ru: "Бренд", value_ru: "Gauss" },
   ],
 });
+const commonArea = {
+  content: "Встроенный датчик движения. Назначение и область применения:<br>- Освещение подъездов и лестничных площадок<br>- Подсветка технических зон<br>Основные преимущества: надёжный корпус.",
+  options: [{
+    key: "type", caption_ru: "Вид светильника", value_ru: "Светильники для ЖКХ",
+  }],
+};
 
 Deno.test({
   name:
@@ -66,6 +73,7 @@ Deno.test({
     const sessionId = crypto.randomUUID();
     const stored: { response_events?: Event[]; steps?: Event[] }[] = [];
     const requests: URL[] = [];
+    const browseRequests = () => requests.filter((url) => !url.searchParams.has("query"));
     let turn = 0;
     const unexpected: string[] = [];
     try {
@@ -109,7 +117,9 @@ Deno.test({
           if (url.pathname === "/api/categories") {
             return json({
               data: {
-                results: [{ id: 10, pagetitle: category, children: [] }],
+                results: [{ id: 10, pagetitle: category, children: turn === 0 || turn >= 14
+                  ? [{ id: 11, pagetitle: residentialLeaf, children: [] }]
+                  : [] }],
                 pagination: { total: 1, per_page: 200, page: 1, pages: 1 },
               },
             });
@@ -129,18 +139,54 @@ Deno.test({
           }
           if (url.pathname === "/api/products") {
             requests.push(url);
+            const page = Number(url.searchParams.get("page") ?? 1);
+            const query = url.searchParams.get("query");
+            const pageData = (results: unknown[], total = results.length) =>
+              json({ data: { results, pagination: {
+                total, page, per_page: 50, pages: Math.ceil(total / 50),
+              } } });
+            if (query) {
+              if (turn < 14) return pageData([]);
+              assertEquals(url.searchParams.get("category"), category);
+              assertEquals(page, 1);
+              assertEquals(url.searchParams.get("max_price"), "4000");
+              const onlight = card("42020", { ...commonArea, article: "90348", price: 2614 });
+              if (query === "датчик") {
+                return pageData([
+                  onlight,
+                  card("no-purpose", { ...commonArea, content: "Встроенный датчик движения. Для коридоров." }),
+                  card("contradiction", { ...commonArea, content: "Встроенный датчик движения. Не предназначен для подъездов." }),
+                  card("outside", { ...commonArea, category: "Датчики" }),
+                  card("unknown-class", { ...commonArea, category: undefined }),
+                  card("missing-stock", { ...commonArea, warehouses: [] }),
+                  card("over-cap", { ...commonArea, price: 4010 }),
+                  card("no-motion", { ...commonArea, content: "Предназначен для освещения подъездов." }),
+                  card("already-checked", commonArea),
+                ]);
+              }
+              assertEquals(query, "сенсор");
+              return pageData([onlight, card("sensor-only", { ...commonArea, price: 2910 })]);
+            }
+            if (turn >= 14) {
+              if (url.searchParams.get("category") === residentialLeaf) return pageData([]);
+              return pageData(Array.from({ length: 50 }, (_, i) =>
+                card(page === 1 && i === 0 ? "already-checked" : `browse-${page}-${i}`,
+                  { options: [] })), 605);
+            }
             // Intentionally ignore the cap and include non-matches. A
             // search response is not evidence that the filters worked.
             const good = turn === 8
               ? [card("a"), card("b"), card("c")]
-              : [card("a")];
+              : [card("a", turn === 0 ? { category: residentialLeaf } : {})];
             const other = [
               gauss,
               card("too-expensive", { price: 5100 }),
               card("no-stock", { warehouses: [] }),
               card("wrong-class", { category: "Датчики" }),
+              ...(turn === 0 ? [card("missing-class", { category: undefined })] : []),
               card("acoustic", { content: "Датчик реагирует только на звук." }),
               card("utility", {
+                content: "Назначение и область применения:<br>- Освещение подъездов и лестничных площадок<br>- Подсветка технических зон<br>Основные преимущества:<br>- Освещение спальни в другой модели.",
                 options: [{
                   key: "type",
                   caption_ru: "Вид светильника",
@@ -159,12 +205,24 @@ Deno.test({
                 (_, index) => card(`n${index}`, { options: [] }),
               ),
             ];
-            const page = url.searchParams.get("page") ?? "1";
+            if (turn === 0) {
+              const results = url.searchParams.get("category") === residentialLeaf
+                ? good : first.slice(0, 50);
+              return json({ data: { results,
+                pagination: { total: results.length, per_page: 50, pages: 1, page },
+              } });
+            }
             return json({
               data: {
-                results: page === "1" ? first : good,
-                ...(turn === 1 && page === "2" ? {} : {
-                  pagination: { total: first.length + good.length },
+                results: page === 1 ? first : good,
+                ...(turn === 1 && page === 2 ? {} : {
+                  pagination: {
+                    total: first.length + good.length,
+                    per_page: 50, pages: 2,
+                    ...(turn === 10 ? {} : {
+                      page: turn === 9 && page === 2 ? 1 : page,
+                    }),
+                  },
                 }),
               },
             });
@@ -233,10 +291,13 @@ Deno.test({
         true,
       );
       assert(!first.body.includes("fixture-37237"));
-      assertEquals(requests.map((url) => url.searchParams.get("page") ?? "1"), [
-        "1",
-        "2",
+      assert(!first.body.includes("fixture-wrong-class"));
+      assert(!first.body.includes("fixture-missing-class"));
+      assertEquals(requests.map((url) => [url.searchParams.get("category"), url.searchParams.get("page") ?? "1"]), [
+        [category, "1"],
+        [residentialLeaf, "1"],
       ]);
+      resetDiscoverCategoryCacheForTest();
       assert(first.slots);
       turn++;
       const more = await invoke("Покажи ещё", first.slots);
@@ -257,7 +318,7 @@ Deno.test({
       assertEquals(ack.cards, undefined, ack.body);
       assert(ack.slots);
       assertEquals(
-        requests.length,
+        browseRequests().length,
         6,
         "bare yes cannot start a new catalogue scan",
       );
@@ -283,12 +344,68 @@ Deno.test({
         .token += " ";
       const refused = await invoke("Покажи ещё", forged);
       assertStringIncludes(refused.body, "Не удалось подтвердить условия");
-      assertEquals(requests.length, 12, "unverified context cannot scan");
+      assertEquals(browseRequests().length, 12, "unverified context cannot scan");
       turn++;
       const several = await invoke(customer);
       assertEquals(several.cards?.count, 3, several.body);
       assert(!several.body.includes("Где будет светильник"));
-      assertEquals(requests.length, 14);
+      assertEquals(browseRequests().length, 14);
+      for (const [nextTurn, expectedReason] of [
+        [9, "page_mismatch"],
+        [10, "page_missing"],
+      ] as const) {
+        turn = nextTurn;
+        const uncertain = await invoke(customer);
+        assertEquals(uncertain.cards?.count, 1, "verified cards survive uncertain coverage");
+        assertStringIncludes(uncertain.body, "один вариант");
+        const proof = uncertain.proof as Record<string, unknown>;
+        assertEquals(proof?.catalogue_window_complete, false,
+          `page evidence: ${expectedReason}`);
+        assert((proof?.catalogue_page_evidence as Array<Record<string, unknown>>)
+          ?.some(({ page, issue }) => page === 2 && issue === expectedReason));
+      }
+      assertEquals(browseRequests().length, 18);
+
+      turn = 11;
+      const beforeUseList = await invoke(customer);
+      assert(beforeUseList.slots);
+      assert(!beforeUseList.body.includes("fixture-utility/"));
+      turn = 12;
+      const entry = await invoke("Можно ЖКХ, для подъезда", beforeUseList.slots);
+      assertEquals(entry.cards?.count, 2, entry.body);
+      assertStringIncludes(String(entry.cards?.markdown), "fixture-utility/");
+      assertStringIncludes(String(entry.cards?.markdown), "fixture-37237/");
+      assert(entry.slots);
+      turn = 13;
+      const bedroom = await invoke("Для спальни", entry.slots);
+      assertEquals(bedroom.cards, undefined, bedroom.body);
+      assert(!bedroom.body.includes("fixture-utility/"));
+      resetDiscoverCategoryCacheForTest();
+      turn = 14;
+      const beforeConsent = await invoke(customer);
+      assert(beforeConsent.slots);
+      assertEquals(beforeConsent.cards, undefined, beforeConsent.body);
+      assert(!beforeConsent.body.includes("fixture-42020/"));
+
+      const from = requests.length;
+      turn = 15;
+      const recovered = await invoke("Можно ЖКХ, для подъезда", beforeConsent.slots);
+      assertEquals(recovered.cards?.count, 2, recovered.body);
+      const markdown = String(recovered.cards?.markdown);
+      assertStringIncludes(markdown, "fixture-42020/");
+      assertStringIncludes(markdown, "fixture-sensor-only/");
+      assertEquals(markdown.split("fixture-42020/").length, 2, "one card across queries");
+      for (const id of ["no-purpose", "contradiction", "outside", "unknown-class",
+        "missing-stock", "over-cap", "no-motion", "already-checked"]) {
+        assert(!markdown.includes(`fixture-${id}/`), markdown);
+      }
+      const diagnostic = recovered.proof as Record<string, unknown>;
+      assertEquals(diagnostic?.catalogue_window_complete, false, "text results don't prove coverage");
+      assertEquals(diagnostic?.supplemental_candidate_search, [
+        { query:"датчик", rows:9, verified:1, failed:false },
+        { query:"сенсор", rows:2, verified:1, failed:false },
+      ]);
+      assertEquals(requests.slice(from).length, 7);
       assert(
         requests.every((url) => url.searchParams.get("max_price") === "4000"),
       );

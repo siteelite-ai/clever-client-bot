@@ -8,8 +8,46 @@ import {
   resolveHeadCategoryByLeastSpecializedSibling,
   resolveHeadCategoryByLiveHierarchy,
   resolveLocalCategoryPagetitles,
+  verifyExactCatalogLeaf,
+  verifyExactCatalogScope,
 } from "./discover-category.ts";
 import { isTransientCatalogToolFailure } from "./selection-search-recovery.ts";
+
+Deno.test("exact browse scope never grants leaf proof to a parent or an ambiguous descendant", async () => {
+  const root = "Светильники";
+  const fetchImpl: typeof fetch = () => Promise.resolve(Response.json({
+    data: {
+      results: [
+        { id: 1, pagetitle: root, children: [
+          { id: 2, pagetitle: "Накладные", children: [] },
+          { id: 3, pagetitle: "Прочие", children: [] },
+        ] },
+        { id: 4, pagetitle: "Комплектующие", children: [
+          { id: 5, pagetitle: "Прочие", children: [] },
+        ] },
+      ],
+      pagination: { page: 1, per_page: 200, pages: 1, total: 2 },
+    },
+  }));
+  const deps = { baseUrl: "https://catalog.example.test", apiToken: "test-token", fetchImpl };
+  resetDiscoverCategoryCacheForTest();
+  try {
+    assertEquals(await verifyExactCatalogScope(root, deps), {
+      ok: true,
+      routes: [
+        { id: 1, pagetitle: root, verified_leaf: false },
+        { id: 2, pagetitle: "Накладные", verified_leaf: true },
+      ],
+      complete: false,
+    });
+    const exactLeaf = await verifyExactCatalogLeaf(root, deps);
+    assertEquals("reason" in exactLeaf && exactLeaf.reason, "not_leaf");
+    const ambiguous = await verifyExactCatalogScope("Прочие", deps);
+    assertEquals("reason" in ambiguous && ambiguous.reason, "ambiguous");
+  } finally {
+    resetDiscoverCategoryCacheForTest();
+  }
+});
 
 Deno.test("ordinary discovery rejects malformed first taxonomy page without caching it", async () => {
   const page = {
