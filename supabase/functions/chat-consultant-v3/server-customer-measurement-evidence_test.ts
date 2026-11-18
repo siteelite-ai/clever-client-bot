@@ -108,13 +108,14 @@ function row(
   query: string,
   sessionId = "session-current",
   responseEvents: unknown = [],
+  createdAtMs = Date.now() - 1_000,
 ): LogRow {
   return {
     id,
     session_id: sessionId,
     user_query: query,
     error: null,
-    created_at: new Date(Date.now() - 1_000).toISOString(),
+    created_at: new Date(createdAtMs).toISOString(),
     response_events: responseEvents,
   };
 }
@@ -186,11 +187,14 @@ Deno.test("same-topic follow-up inherits customer numbers from completed server 
 });
 
 Deno.test("repeated follow-ups retain the initial number across a rotated session", async () => {
+  const now = Date.now();
+  // The origin predates the intermediate reply regardless of construction
+  // order or whether the clock advances between fixture factory calls.
   const { client } = serverLogClient(
-    [row("intermediate", "А ещё?")],
+    [row("intermediate", "А ещё?", "session-current", [], now - 1_000)],
     row("origin", "Нужен светильник на 3000 лм", "old-session", [
       boundaryEvent,
-    ]),
+    ], now - 2_000),
   );
   const result = await loadVerifiedCustomerMeasurementEvidence(
     client,
@@ -198,7 +202,7 @@ Deno.test("repeated follow-ups retain the initial number across a rotated sessio
     "current-log",
     "А ещё?",
     false,
-    Date.now(),
+    now,
   );
   assertEquals(result.sourceCount, 1);
   assertEquals(result.priorQueriesNewestFirst, [
