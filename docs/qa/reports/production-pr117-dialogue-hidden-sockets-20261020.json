@@ -1,0 +1,281 @@
+{
+  "suite_file": "customer-audit-20260921-cases.json",
+  "suite_version": 3,
+  "suite_sha256": "01d770e5cc3f5511b527a429e900518b790f7f415aff27af4b3501287ae1e19f",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T12:03:41.932Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 1,
+  "requested_repetitions": {
+    "audit-25-black-hidden-sockets-white-followup": 1
+  },
+  "cases": [
+    {
+      "id": "audit-25-black-hidden-sockets-white-followup",
+      "title": "Цвет розеток меняется в продолжении без потери категории",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_audit-25-black-hidden-sockets-white-followup_base_1792497821937_1",
+          "turns": [
+            {
+              "message": "Есть ли у вас розетки скрытого монтажа черного цвета?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13743,
+              "network_attempts": 1,
+              "log_id": "01c6c5e6-fbed-4161-b285-49b6dfa85ba2",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка с заземлением, защитные шторки, винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-zashhitnyie-shtorki,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 1359,
+                  "stockLine": "Караганда (18 шт)",
+                  "cardText": "- **[Розетка с заземлением, защитные шторки, винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-zashhitnyie-shtorki,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *1 359* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (18 шт)"
+                },
+                {
+                  "title": "Розетка с заземлением, винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 1623,
+                  "stockLine": "Караганда (155 шт)",
+                  "cardText": "- **[Розетка с заземлением, винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *1 623* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (155 шт)"
+                },
+                {
+                  "title": "Розетка без заземления, винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-bez-zazemleniya,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 1048,
+                  "stockLine": "Караганда (46 шт)",
+                  "cardText": "- **[Розетка без заземления, винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-bez-zazemleniya,-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *1 048* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (46 шт)"
+                },
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/",
+                  "price": 2923,
+                  "stockLine": "Караганда (56 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет черный (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-chernyij-%28seriya-florence%29/)**\n  Цена: *2 923* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (56 шт)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Розетки». По обязательным условиям проверяю «Цвет: чёрный»; «Тип монтажа: скрытый».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-90c6ec1b",
+                "mandatory_criteria": [
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "чёрный",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Тип монтажа",
+                    "op": "eq",
+                    "value": "скрытый",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Розетки»: 1820 тов., фасетов 46, листьев 1",
+                  "duration_ms": 1342
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=48; minimum=3; application=0; customer_eq=2",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 183",
+                  "duration_ms": 867
+                }
+              ],
+              "passed": true,
+              "failures": []
+            },
+            {
+              "message": "а есть белые?",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 4605,
+              "network_attempts": 1,
+              "log_id": "3bc0454a-225a-4303-afaa-c0f3c4fe8b3f",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Розетка с заземлением, винтовые контакты, цвет белый (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/",
+                  "price": 1461,
+                  "stockLine": "Караганда (33 шт)",
+                  "cardText": "- **[Розетка с заземлением, винтовые контакты, цвет белый (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-zazemleniem,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/)**\n  Цена: *1 461* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (33 шт)"
+                },
+                {
+                  "title": "Розетка без заземления, винтовые контакты, цвет белый (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-bez-zazemleniya,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/",
+                  "price": 1167,
+                  "stockLine": "Караганда (79 шт)",
+                  "cardText": "- **[Розетка без заземления, винтовые контакты, цвет белый (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-bez-zazemleniya,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/)**\n  Цена: *1 167* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (79 шт)"
+                },
+                {
+                  "title": "Розетка двойная, в сборе, с заземлением винтовые контакты, цвет белый (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/",
+                  "price": 2283,
+                  "stockLine": "Караганда (103 шт)",
+                  "cardText": "- **[Розетка двойная, в сборе, с заземлением винтовые контакты, цвет белый (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-dvojnaya,-v-sbore,-s-zazemleniem-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/)**\n  Цена: *2 283* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (103 шт)"
+                },
+                {
+                  "title": "Розетка с крышкой, с заземлением, винтовые контакты, цвет белый (серия Florence)",
+                  "url": "https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-kryishkoj,-s-zazemleniem,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/",
+                  "price": 1458,
+                  "stockLine": "Караганда (2 шт)",
+                  "cardText": "- **[Розетка с крышкой, с заземлением, винтовые контакты, цвет белый (серия Florence)](https://220volt.kz/catalog/elektroustanovochnyie-izdeliya/rozetki/rozetka-s-kryishkoj,-s-zazemleniem,-vintovyie-kontaktyi,-czvet-belyij-%28seriya-florence%29/)**\n  Цена: *1 458* ₸\n  Бренд: OneKeyElectro\n  Наличие: Караганда (2 шт)"
+                }
+              ],
+              "text": "Для этой задачи проверены обязательные параметры товара: Тип монтажа — скрытый; Цвет — белый. Ниже — варианты, прошедшие эти условия.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-8cafc7bb",
+                "mandatory_criteria": [
+                  {
+                    "key": "Тип монтажа",
+                    "op": "eq",
+                    "value": "скрытый",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "Цвет",
+                    "op": "eq",
+                    "value": "белый",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Розетки»: 1820 тов., фасетов 46, листьев 1",
+                  "duration_ms": 1235
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=48; minimum=3; application=0; customer_eq=2",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 387",
+                  "duration_ms": 1063
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T12:04:00.294Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 1,
+    "recorded_cases": 1,
+    "planned_runs": 1,
+    "recorded_runs": 1,
+    "planned_turns": 2,
+    "recorded_turns": 2
+  },
+  "log_ids": [
+    "01c6c5e6-fbed-4161-b285-49b6dfa85ba2",
+    "3bc0454a-225a-4303-afaa-c0f3c4fe8b3f"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 0,
+    "verified": 0,
+    "unverified": 0
+  },
+  "passed": true
+}

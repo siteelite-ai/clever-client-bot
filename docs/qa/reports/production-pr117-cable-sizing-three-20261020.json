@@ -1,0 +1,651 @@
+{
+  "suite_file": "customer-acceptance-cases-v2.json",
+  "suite_version": 3,
+  "suite_sha256": "6fb6646ba9f5bf8d612e6aa4c707d2954ad351be6a9a2f43b7cf9239a020c7e7",
+  "variations_file": null,
+  "variations_sha256": null,
+  "started_at": "2026-10-20T11:59:13.022Z",
+  "endpoint": "https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3",
+  "strict_full_suite": false,
+  "strict_inventory": null,
+  "product_identity_mode": "url_shape_only_not_sku_verified",
+  "selected_count": 3,
+  "requested_repetitions": {
+    "customer-vvg-exact-cheapest": 1,
+    "customer-vvgng-3x1_5-all": 1,
+    "customer-new-heat-shrink-10mm": 1
+  },
+  "cases": [
+    {
+      "id": "customer-vvg-exact-cheapest",
+      "title": "Точная маркировка ВВГ 2×1,5 и минимальная цена",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvg-exact-cheapest_base_1792497553026_1",
+          "turns": [
+            {
+              "message": "найди кабель ввг 2*1,5 самый дешевый",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 6235,
+              "network_attempts": 1,
+              "log_id": "3ccefb37-2e32-4aac-8632-8bb240f6b3c2",
+              "diagnostic_error": null,
+              "products_count": 1,
+              "unique_products_count": 1,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost",
+                  "verified": true,
+                  "sku": "Ем000024789",
+                  "name": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "facets": {
+                    "Категория": "Кабель ВВГ",
+                    "Бренд": "ВВГ",
+                    "Бронированный": "Нет",
+                    "Код ТН ВЭД": "8544499509",
+                    "Оболочка": "ПВХ пластикат",
+                    "Экранированный": "Нет",
+                    "Наружный диаметр кабеля, мм": "5.33",
+                    "Страна происхождения": "КАЗАХСТАН",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Сечение кабеля, мм2": "1.5",
+                    "Гарантийный срок, лет": "5",
+                    "Производитель": "Harmony Cable",
+                    "Срок службы, мес": "360",
+                    "Код НКТ": "0200180846447",
+                    "Температура монтажа": "-15+50 °C",
+                    "Назначение": "Кабели силовые стационарные до 1кВ",
+                    "Диапазон рабочих температур": "-50+50 °C",
+                    "Количество жил": "2",
+                    "Единица измерения": "м",
+                    "Вес, кг.": "0.112",
+                    "Негорючесть": "Нет",
+                    "Материал проводника": "медь",
+                    "Объем, м3": "0.000023",
+                    "Изоляция": "ПВХ пластикат"
+                  },
+                  "offerPrice": 309,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "description_excerpt": "Кабель ВВГ - кабель силовой с медными токопроводящими жилами, с изоляцией и оболочкой из ПВХ-пластиката без защитных покровов (брони). Предназначен для распределения и передачи электротока в стационарных установках на номинальное переменное напряжение 660 В и 1000 В частоты 50 Гц. Применяется при прокладке в блоках, на специализированных кабельных эстакадах, может использоваться в промышленных помещениях, на электростанциях, в распределительных и осветительных устройствах, а также в обычных жилы"
+                }
+              ],
+              "catalog_minimum_evidence": {
+                "verified": true,
+                "checked_at": "2026-10-20T11:59:23.457Z",
+                "source_url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/2-1.5/",
+                "listed_total": 11,
+                "matching_available": 10,
+                "eligible_products": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг 2*1,5 ГК ГОСТ",
+                    "price": 319,
+                    "unit": "м",
+                    "id": "20111"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 ГК ГОСТ",
+                    "price": 334,
+                    "unit": "м",
+                    "id": "20089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5/",
+                    "title": "Кабель ВВГ нг LS 2*1,5",
+                    "price": 330,
+                    "unit": "м",
+                    "id": "19937"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5/",
+                    "title": "Кабель ВВГ нг 2*1,5",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "19730"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5/",
+                    "title": "Кабель ВВГ 2*1,5",
+                    "price": 316,
+                    "unit": "м",
+                    "id": "19812"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-2*1,5-at/",
+                    "title": "Кабель ВВГ нг 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42015"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-frls-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг FRLS 2*1,5 ГК ГОСТ",
+                    "price": 418,
+                    "unit": "м",
+                    "id": "32381"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-2*1,5-at/",
+                    "title": "Кабель ВВГ нг LS 2*1,5 AT",
+                    "price": 315,
+                    "unit": "м",
+                    "id": "42089"
+                  },
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-lsltx-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ нг LSLTx 2*1,5 ГК ГОСТ",
+                    "price": 342,
+                    "unit": "м",
+                    "id": "34452"
+                  }
+                ],
+                "excluded_out_of_stock": 1,
+                "excluded_other_units": 0,
+                "minimum_price": 309,
+                "winners": [
+                  {
+                    "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                    "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                    "price": 309,
+                    "unit": "м",
+                    "id": "20082"
+                  }
+                ]
+              },
+              "products": [
+                {
+                  "title": "Кабель ВВГ 2*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/",
+                  "price": 309,
+                  "stockLine": "Караганда (9150 м), Алматы (246 м), Шымкент (16 м)",
+                  "cardText": "- **[Кабель ВВГ 2*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-2*1,5-gk-gost/)**\n  Цена: *309* ₸/м\n  Наличие: Караганда (9150 м), Алматы (246 м), Шымкент (16 м)"
+                }
+              ],
+              "text": "Проверяю в каталоге точную маркировку «кабель ввг 2*1,5», цены и единицы продажи; товары с другим составным размером не показываю.",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-92d36121",
+                "mandatory_criteria": [
+                  {
+                    "key": "Точная составная маркировка",
+                    "op": "eq",
+                    "value": "2×1,5",
+                    "evidence": "user_explicit"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 1,
+                  "minimum": 1,
+                  "mode": "single",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "Точная маркировка: цена проверена по полной категории",
+                  "duration_ms": 4522
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-vvgng-3x1_5-all",
+      "title": "Все позиции негорючего кабеля ВВГ 3×1,5",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-vvgng-3x1_5-all_base_1792497563463_1",
+          "turns": [
+            {
+              "message": "какой есть кабель ввг 3*1,5 негорючий покажи все позиции",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 13009,
+              "network_attempts": 1,
+              "log_id": "91a704c5-e034-4956-979a-fedb856fe5fa",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "url_shape_only_not_sku_verified",
+              "product_identity_evidence": [],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5/",
+                  "price": 500,
+                  "stockLine": "Алматы (10883 м), Караганда (1375 м), Астана (16 м)",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5/)**\n  Цена: *500* ₸/м\n  Наличие: Алматы (10883 м), Караганда (1375 м), Астана (16 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг 3*1,5",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5/",
+                  "price": 486,
+                  "stockLine": "Караганда (36705 м), Астана (7797 м), Алматы (802 м)",
+                  "cardText": "- **[Кабель ВВГ нг 3*1,5](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-3*1,5/)**\n  Цена: *486* ₸/м\n  Наличие: Караганда (36705 м), Астана (7797 м), Алматы (802 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5 Тк",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-tk/",
+                  "price": 483,
+                  "stockLine": "Караганда (25867 м), Астана (934 м), Алматы (92 м)",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5 Тк](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-tk/)**\n  Цена: *483* ₸/м\n  Наличие: Караганда (25867 м), Астана (934 м), Алматы (92 м)"
+                },
+                {
+                  "title": "Кабель ВВГ нг LS 3*1,5 ГК ГОСТ",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-gk-gost/",
+                  "price": 493,
+                  "stockLine": "Астана (20710 м), Караганда (6825 м), Актобе (3300 м) и ещё 2 городов",
+                  "cardText": "- **[Кабель ВВГ нг LS 3*1,5 ГК ГОСТ](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/kabel-i-provod/kabel-vvg/kabel-vvg-ng-ls-3*1,5-gk-gost/)**\n  Цена: *493* ₸/м\n  Наличие: Астана (20710 м), Караганда (6825 м), Актобе (3300 м) и ещё 2 городов"
+                }
+              ],
+              "text": "Понял требования: сохраняю точный размер 3×1,5 и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.Ищу товары в разделе «Кабель ВВГ». По обязательным условиям проверяю «Негорючесть: Да».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-6eb63311",
+                "mandatory_criteria": [
+                  {
+                    "key": "Негорючесть",
+                    "op": "eq",
+                    "value": "Да",
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 8,
+                  "minimum": 3,
+                  "mode": "exhaustive",
+                  "explicit": true
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Кабель ВВГ»: 226 тов., фасетов 28, листьев 1",
+                  "duration_ms": 1311
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 230",
+                  "duration_ms": 511
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeats": [
+        {
+          "variant": "base",
+          "run": 1,
+          "session_id": "customer_acceptance_customer-new-heat-shrink-10mm_base_1792497576477_1",
+          "turns": [
+            {
+              "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+              "synthetic_scenario": false,
+              "status": 200,
+              "duration_ms": 12810,
+              "network_attempts": 1,
+              "log_id": "39a09ee0-940d-4c81-85ff-8f80bd028f48",
+              "diagnostic_error": null,
+              "products_count": 4,
+              "unique_products_count": 4,
+              "product_identity_mode": "live_jsonld_product_sku",
+              "product_identity_evidence": [
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000013731",
+                  "name": "Термоусадочная трубка ТТУ 12/6 черная 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.0002",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "чёрный"
+                  },
+                  "offerPrice": 133,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026499",
+                  "name": "Термоусадочная трубка ТТУ 12/6 белая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "белый"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026500",
+                  "name": "Термоусадочная трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Нет",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "жёлтый"
+                  },
+                  "offerPrice": 143,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                },
+                {
+                  "identity": "220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek",
+                  "verified": true,
+                  "sku": "Ем000026502",
+                  "name": "Термоусадочная трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "facets": {
+                    "Категория": "Трубки термоусаживаемые",
+                    "Рабочее напряжение, В": "660",
+                    "Страна происхождения": "КИТАЙ",
+                    "Материал": "полиэтилен",
+                    "Удлинение до разрыва": "≥ 200 %",
+                    "Гарантийный срок, лет": "5",
+                    "Количество в групповой упаковке": "50",
+                    "Рабочая температура": "-55...125 °C",
+                    "Продается только в групповой упаковке": "Да",
+                    "Длина, м": "1",
+                    "Единица измерения": "м",
+                    "Срок службы, лет": "30",
+                    "Вес, кг.": "0.016",
+                    "Ширина, м": "0.012",
+                    "Модель или исполнение": "тонкостенная",
+                    "Объем, м3": "0.00006",
+                    "Внутр диаметр до термоусадки,мм": "12",
+                    "Бренд": "IEK",
+                    "Внутр диаметр после термоусадки, мм": "6",
+                    "Код ТН ВЭД": "3917390008",
+                    "Номинальное поперечное сечение, мм2": "11",
+                    "Коэффициент усадки": "2 к 1",
+                    "Толщина стенки после усадки, мм": "0,7±0,1",
+                    "Монтажная температура": "-10...50 °C",
+                    "Мин температура начала усадки": "70 °C",
+                    "Мин температура полной усадки": "125 °C",
+                    "Диапазон диаметров проводов": "6.2-11",
+                    "Цвет": "зеленый"
+                  },
+                  "offerPrice": 114,
+                  "availability": "https://schema.org/InStock",
+                  "canonicalUrl": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "description_excerpt": "Трубка термоусадочная используется для электрической изоляции, герметизации и маркировки соединений проводов, не содержит галогенов, обладает свойством подавления горения. Принцип действия — изменение своего диаметра путем усадки в два раза.Не поддерживает горениеШирокий диапазон рабочих температурСтойкость к ультрафиолету"
+                }
+              ],
+              "catalog_minimum_evidence": null,
+              "products": [
+                {
+                  "title": "Трубка ТТУ 12/6 черная 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/",
+                  "price": 133,
+                  "stockLine": "Астана (455 м), Актобе (280 м), Караганда (278 м) и ещё 2 городов",
+                  "cardText": "- **[Трубка ТТУ 12/6 черная 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-chernaya-1m-iek/)**\n  Цена: *133* ₸/м\n  Бренд: IEK\n  Наличие: Астана (455 м), Актобе (280 м), Караганда (278 м) и ещё 2 городов"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 белая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Шымкент (294 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 белая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-belaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (294 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 желтая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/",
+                  "price": 143,
+                  "stockLine": "Актобе (161 м), Шымкент (65 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 желтая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zheltaya-1m-iek/)**\n  Цена: *143* ₸/м\n  Бренд: IEK\n  Наличие: Актобе (161 м), Шымкент (65 м)"
+                },
+                {
+                  "title": "Трубка ТТУ 12/6 зеленая 1м ИЭК",
+                  "url": "https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/",
+                  "price": 114,
+                  "stockLine": "Шымкент (58 м)",
+                  "cardText": "- **[Трубка ТТУ 12/6 зеленая 1м ИЭК](https://220volt.kz/catalog/kabeli,-provoda-i-izdeliya-dlya-prokladki-kabelya/izdeliya-dlya-izolyaczii,-krepleniya-i-markirovki/trubki-termousazhivaemyie/trubka-ttu-126-zelenaya-1m-iek/)**\n  Цена: *114* ₸/м\n  Бренд: IEK\n  Наличие: Шымкент (58 м)"
+                }
+              ],
+              "text": "Ищу товары в разделе «Трубки термоусаживаемые». Сверяю заявленные условия с характеристиками каталога. Для размера 10 мм проверяю оба условия совместимости: «Внутр диаметр до термоусадки,мм ≥ 1,2 × 10 мм (запас 20%)» и «Внутр диаметр после термоусадки, мм < 10 мм».",
+              "completed": true,
+              "conversation_boundary": null,
+              "selection_contract": {
+                "hash": "selection-8b832043",
+                "mandatory_criteria": [
+                  {
+                    "key": "vnutr_diametr_do_termousadki_mm__termoқondyrғyғa_deyіngі_іshkі_diametrі__mm",
+                    "op": "min",
+                    "value": 12,
+                    "unit": "мм",
+                    "evidence": "derived_required"
+                  },
+                  {
+                    "key": "vnutr_diametr_posle_termousadki__mm__termoқondyrғydan_keyіngі_іshkі_diam__mm",
+                    "op": "max",
+                    "value": 10,
+                    "unit": "мм",
+                    "exclusive": true,
+                    "evidence": "derived_required"
+                  }
+                ],
+                "result_cardinality": {
+                  "target": 4,
+                  "minimum": 3,
+                  "mode": "selection",
+                  "explicit": false
+                }
+              },
+              "clarification_choice": {
+                "mode": null,
+                "reason": "no valid server-issued pending clarification slot"
+              },
+              "previous_clarification_choice": null,
+              "tool_events": [
+                {
+                  "tool": "discover_category",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "discover_category…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "discover_category",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "категория «Трубки термоусаживаемые»: 415 тов., фасетов 33, листьев 1",
+                  "duration_ms": 2035
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "start",
+                  "status": null,
+                  "summary": "search_catalog…",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "selection_recovery",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "plan=0; initial=38; minimum=3; application=0; customer_eq=0",
+                  "duration_ms": null
+                },
+                {
+                  "tool": "search_catalog",
+                  "phase": "result",
+                  "status": null,
+                  "summary": "найдено 415",
+                  "duration_ms": 700
+                }
+              ],
+              "passed": true,
+              "failures": []
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "finished_at": "2026-10-20T11:59:51.784Z",
+  "completeness": {
+    "complete": true,
+    "planned_cases": 3,
+    "recorded_cases": 3,
+    "planned_runs": 3,
+    "recorded_runs": 3,
+    "planned_turns": 3,
+    "recorded_turns": 3
+  },
+  "log_ids": [
+    "3ccefb37-2e32-4aac-8632-8bb240f6b3c2",
+    "91a704c5-e034-4956-979a-fedb856fe5fa",
+    "39a09ee0-940d-4c81-85ff-8f80bd028f48"
+  ],
+  "product_page_verification": {
+    "unique_urls_checked": 5,
+    "verified": 5,
+    "unverified": 0
+  },
+  "passed": true
+}
