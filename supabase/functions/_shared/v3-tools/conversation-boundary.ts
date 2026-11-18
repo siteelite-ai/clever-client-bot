@@ -298,12 +298,15 @@ export function isReadinessQuestionSupersededByVerifiedSection(
   // sees, including comma-separated introductions such as «Ну, нужны …».
   const frameText = current.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
     .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
-  const frame = frameText.match(INDEPENDENT_SELECTION_FRAME_RE) ??
-    frameText.match(
-      /^(?:(?:а|тогда|пожалуйста|ну)\s+)*нуж(?:ен|на|но|ны)\s+(.+)$/iu,
-    );
+  const bareFrame = frameText.match(
+    /^(?:(?:а|тогда|пожалуйста|ну)\s+)*нуж(?:ен|на|но|ны)\s+(.+)$/iu,
+  );
+  // This separately verified section also accepts the legacy bare «нужны»
+  // frame. Normalize only for the grammatical test, never for a catalog query.
+  const frameBody = independentSelectionRequestBody(frameText) ??
+    (bareFrame ? independentSelectionRequestBody(`Мне нужны ${bareFrame[1]}`) : null);
   if (
-    !frame || DEPENDENT_FRAME_BODY_RE.test(frame[1]) ||
+    !frameBody ||
     SCOPED_DEPENDENCY_RE.test(current) ||
     isAdditionalProductSelectionFollowup(current) ||
     /(?:[.!?;]\s+\p{L}|,\s+а\s+\p{L})/iu.test(current)
