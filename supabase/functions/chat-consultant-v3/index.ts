@@ -557,6 +557,7 @@ import {
   verifiedResidentialFixtureState,
 } from "../_shared/v3-tools/residential-fixture-selection.ts";
 import {
+  encodeStabilizerApplicationSlot,
   isReservedStabilizerApplicationSlot,
   isStabilizerApplicationReply,
   resolveStabilizerApplication,
@@ -28508,6 +28509,8 @@ Deno.serve(async (req) => {
                     settings.volt220_api_token!, turnSignal, send, steps, t0, cache);
                   productsCount = products.length;
                   await persistRecentProductEvidence(supabase, taskSession, products);
+                  send({ type: "slot_update", slots: { pending_clarification:
+                    encodeStabilizerApplicationSlot(stabilizer.application) } });
                 }
               }
               return;
