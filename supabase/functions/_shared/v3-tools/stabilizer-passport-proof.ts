@@ -125,6 +125,14 @@ export function agreesWithStabilizerPassport(
       !!city.trim() && Number.isFinite(qty) && qty > 0
     )
   ) return false;
+  // An exact article may supply missing passport data, but it must not
+  // override an explicitly different power or phase in the live title.
+  const title = normalized(product.pagetitle);
+  const titlePowers = [...title.matchAll(
+    /(?<![\p{L}\p{N}.,])(\d{1,6}(?:[.,]\d{1,3})?)\s*(к\s*)?ва(?!\p{L})/giu,
+  )];
+  if (titlePowers.some((m) => Number(m[1].replace(",", ".")) * (m[2] ? 1000 : 1) !== proof.nominalVa)) return false;
+  if (proof.phases === 1 && /(?<![\p{L}\p{N}])(?:3\s*[-–—]?\s*фаз\p{L}*|трехфаз\p{L}*)/iu.test(title)) return false;
   const traits: Array<[string, string]> = [];
   for (const [key, values] of Object.entries(product.facet_values ?? {})) {
     const caption = product.facet_captions?.[key];

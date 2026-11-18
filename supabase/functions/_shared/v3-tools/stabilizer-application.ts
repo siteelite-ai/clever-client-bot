@@ -28,6 +28,12 @@ const PENDING_FACTS =
   /нагруз|к?\s*в[тaа]|фаз|пуск|резистив|двигател|компрессор|нагревател|свароч|\d\s*(?:в|вольт)(?!\p{L})/iu;
 const INPUT =
   /(?<![\p{L}\p{N}.,+−-])(\d{2,3})\s*(?:в|вольт(?:а|ов)?)(?![\p{L}\p{N}])/giu;
+const MEASURED_MINIMUM =
+  /(?:^|[^\p{L}])(?:минимум|минимальн\p{L}*\s+напряжен\p{L}*|не\s+ниже)\s*[:—–-]?\s*\d{2,3}\s*(?:в|вольт\p{L}*)(?![\p{L}\p{N}])/iu;
+const VOLTAGE_CORRECTION =
+  /^\s*(?:поправка|уточнение|перемерил\p{L}*|перепроверил\p{L}*)\s*[:—–-]?\s*(?:не\s+)?(?=\d{2,3}(?:\s*(?:в|вольт\p{L}*)(?![\p{L}\p{N}])|[^\p{L}\p{N}]|$))/iu;
+const NOMINAL_OR_OUTPUT =
+  /(?:^|[^\p{L}])(?:номинал\p{L}*|на\s+выходе|выходн\p{L}*\s+напряжен\p{L}*)(?!\p{L})/iu;
 const POWER =
   /(?<![\p{L}\p{N}.,+−-])(\d{1,6}(?:[.,]\d{1,3})?)\s*(к\s*)?(ва|вт)(?![\p{L}\p{N}])/giu;
 type LoadKind = "steady" | "resistive" | "motor";
@@ -110,17 +116,56 @@ function one(values: number[]): number | undefined {
   return unique.size === 1 ? values[0] : undefined;
 }
 
-function inputAtLowPoint(raw: string, allowBare: boolean): number | undefined {
-  if (!allowBare && !LOW_INPUT.test(raw)) return undefined;
-  // «Падает с 220 до 170 В» / «измерили: минимум 170 В» are grounded points.
-  const text = raw.match(
-    /(?:до|минимум|не\s+ниже)\s+(\d{2,3}\s*(?:в|вольт\p{L}*))(?!\p{L})/iu,
-  )?.[1] ?? raw;
-  const value = one([...text.matchAll(INPUT)].map((match) => Number(match[1])));
-  return value !== undefined && value >= 60 && value <= 210 ? value : undefined;
+function inputAtLowPoint(
+  raw: string,
+  allowBare: boolean,
+  allowCorrection: boolean,
+): { mentioned: boolean; value?: number } {
+  const clauses = raw.split(/[,.;\n!?](?!\d)/u);
+  const grounded = clauses.filter((clause) =>
+    (LOW_INPUT.test(clause) || (!NOMINAL_OR_OUTPUT.test(clause) &&
+      (MEASURED_MINIMUM.test(clause) ||
+        (allowCorrection && VOLTAGE_CORRECTION.test(clause))))) &&
+    [...clause.matchAll(INPUT)].length > 0
+  );
+  const bare = allowBare
+    ? clauses.filter((clause) =>
+      !NOMINAL_OR_OUTPUT.test(clause) &&
+      /^\s*\d{2,3}\s*(?:в|вольт\p{L}*)(?![\p{L}\p{N}])/iu.test(clause)
+    )
+    : [];
+  const points = grounded.length > 0 ? grounded : bare;
+  if (
+    allowCorrection && VOLTAGE_CORRECTION.test(raw) && UNCERTAIN.test(raw) &&
+    !NOMINAL_OR_OUTPUT.test(raw) && [...raw.matchAll(INPUT)].length > 0
+  ) {
+    return { mentioned: true };
+  }
+  if (!points.length) return { mentioned: false };
+  const values = points.map((clause) => {
+    if (NOMINAL_OR_OUTPUT.test(clause)) return undefined;
+    // «Падает с 220 В до 170 В» describes one measured low point.
+    const readings = [...clause.matchAll(INPUT)].map((match) =>
+      Number(match[1])
+    );
+    const drop = clause.match(
+      /(?:^|[^\p{L}])с\s+(\d{2,3})\s*(?:в|вольт\p{L}*)\s+до\s+(\d{2,3})\s*(?:в|вольт\p{L}*)(?![\p{L}\p{N}])/iu,
+    );
+    return drop && readings.length === 2 &&
+        readings[0] === Number(drop[1]) && readings[1] === Number(drop[2])
+      ? readings[1]
+      : one(readings);
+  });
+  const value = values.every((point): point is number => point !== undefined)
+    ? one(values)
+    : undefined;
+  return {
+    mentioned: true,
+    ...(value !== undefined && value >= 60 && value <= 210 ? { value } : {}),
+  };
 }
 
-function parse(raw: string, prior: State | null): State | null {
+function parse(raw: string, prior: State | null, input?: number): State | null {
   const onePhase = /(?<![\p{L}\p{N}])(?:(?:1|одна)\s*фаз\p{L}*|однофаз\p{L}*)/iu
     .test(raw);
   const threePhase =
@@ -128,7 +173,6 @@ function parse(raw: string, prior: State | null): State | null {
   if (onePhase && threePhase) return null;
   const phase = onePhase === threePhase ? undefined : onePhase ? 1 : 3;
   const facts: State = { ...(phase ? { phases: phase } : {}) };
-  const input = inputAtLowPoint(raw, !!prior && prior.inputV === undefined);
   if (input) facts.inputV = input;
 
   // Demand explicit load context on the first turn: <найди стабилизатор
@@ -188,6 +232,19 @@ function ask(state: State, question: string): Decision {
   };
 }
 
+/** Server-owned continuation after a completed search. Reuse confirmed,
+ * normalized measurements, never assistant prose or client-authored facts. */
+export function encodeStabilizerApplicationSlot(
+  application: StabilizerApplication,
+): Record<string, unknown> {
+  const continuation = ask(
+    { ...application },
+    "Подтверждённые условия подбора стабилизатора сохранены.",
+  );
+  if (continuation.status !== "ask") throw new Error("Invalid stabilizer continuation");
+  return { ...continuation.clarification, status: "pending", slot_id: crypto.randomUUID() };
+}
+
 export function resolveStabilizerApplication(
   message: string,
   verifiedSlot: Record<string, unknown> | null,
@@ -197,7 +254,10 @@ export function resolveStabilizerApplication(
     ? scopedState(verifiedSlot)
     : null;
   if (
-    !prior && (!TARGET.test(raw) || !LOW_INPUT.test(raw) || SPECIAL.test(raw) ||
+    !prior &&
+    (!TARGET.test(raw) ||
+      !(LOW_INPUT.test(raw) || MEASURED_MINIMUM.test(raw)) ||
+      SPECIAL.test(raw) ||
       EXPLICIT_PRODUCT_FILTER.test(raw))
   ) return null;
   if (prior && UNKNOWN.test(raw)) {
@@ -216,23 +276,33 @@ export function resolveStabilizerApplication(
         "Для сварочного аппарата обычный бытовой стабилизатор не подбираю: нужен паспорт аппарата и отдельное подтверждение допуска производителя стабилизатора.",
     };
   }
+  const input = inputAtLowPoint(
+    raw,
+    !!prior && prior.inputV === undefined,
+    !!prior,
+  );
+  const retained = { ...prior };
+  // A new or conflicting input reading retracts the old one. Do not start
+  // passport matching at the stale voltage, even if load and phases are clear.
+  if (input.mentioned && input.value !== prior?.inputV) delete retained.inputV;
   if (UNCERTAIN.test(raw)) {
+    if (input.mentioned) delete retained.inputV;
     return ask(
-      prior ?? {},
+      retained,
       "Укажите одно измеренное минимальное напряжение и фактические параметры нагрузки по паспортам. По приблизительным или противоречивым данным не буду рекомендовать модель.",
     );
   }
-  const observed = parse(raw, prior);
+  const observed = parse(raw, prior, input.value);
   if (!observed) {
     return ask(
-      prior ?? {},
+      retained,
       "Укажите по одному подтверждённому значению для каждого параметра: число фаз, суммарную и, если есть пуск, пиковую нагрузку.",
     );
   }
   const facts = Object.fromEntries(
     Object.entries(observed).filter(([, value]) => value !== undefined),
   );
-  const base = { ...prior };
+  const base = retained;
   const loadChanged =
     (observed.loadVa !== undefined && prior?.loadVa !== undefined &&
       observed.loadVa !== prior.loadVa) ||

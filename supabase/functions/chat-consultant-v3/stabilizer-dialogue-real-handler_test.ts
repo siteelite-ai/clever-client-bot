@@ -3,10 +3,12 @@ import {
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  enableMandatoryReadinessInOfflineFixture,
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+enableMandatoryReadinessInOfflineFixture();
+await import("./index.ts");
 
 const offlineEnvGet = Deno.env.get;
 type Event = Record<string, unknown>;
@@ -78,7 +80,8 @@ Deno.test({
             id: part,
             article,
             pagetitle: `Стабилизатор напряжения HUB ${Number(part)}кВА IEK`,
-            url: `https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/stabilizatoryi/hub-${part}/`,
+            url:
+              `https://220volt.kz/catalog/nizkovoltnoe-oborudovanie/stabilizatoryi/hub-${part}/`,
             vendor: "IEK",
             category: "Стабилизаторы",
             price: 10000,
@@ -215,6 +218,47 @@ Deno.test({
         }],
       });
       assertEquals(catalogRequests.length, 6);
+      // The displayed cards do not erase the server's measured application.
+      // A correction after completion must use 150 V, not the old 170 V.
+      turn++;
+      const afterCards = await invoke(
+        "Поправка: 150 В; нагрузка 1,05 кВА",
+        getSlot(result.events),
+      );
+      const afterCardsProof = stored[turn]?.steps?.find(({ step }) =>
+        step === "v3_stabilizer_passport_search"
+      )?.meta as Record<string, unknown> | undefined;
+      assertEquals(afterCardsProof?.input_v, 150);
+      assertEquals(afterCardsProof?.phases, 1);
+      assertEquals(afterCardsProof?.load_va, 1050);
+      assertEquals(afterCardsProof?.load_kind, "steady");
+      assertEquals(afterCardsProof?.verified_count, 0);
+      assert(!afterCards.events.some(({ type }) => type === "products_block"));
+      turn++;
+      const lostTrust = structuredClone(getSlot(afterCards.events));
+      lostTrust.pending_clarification!.scope.token += " ";
+      const callsBeforeForgedCorrection = catalogRequests.length;
+      const forgedCorrection = await invoke("Поправка: 170 В", lostTrust);
+      assert(forgedCorrection.body.includes("больше не связано"));
+      assertEquals(catalogRequests.length, callsBeforeForgedCorrection);
+      turn++;
+      const correctedStart = getSlot((await invoke(ask, {})).events);
+      turn++;
+      const corrected = await invoke(
+        "Поправка: 150 В; одна фаза, нагрузка 1,05 кВА, без пусковых токов",
+        correctedStart,
+      );
+      const correctedSearch = stored[turn]?.steps?.find(({ step }) =>
+        step === "v3_stabilizer_passport_search"
+      )?.meta as Record<string, unknown> | undefined;
+      assertEquals(correctedSearch?.input_v, 150);
+      assertEquals(correctedSearch?.load_va, 1050);
+      assertEquals(correctedSearch?.verified_count, 0);
+      assert(
+        !corrected.events.some(({ type }) => type === "products_block"),
+        corrected.body,
+      );
+      assert(!corrected.body.includes("/hub-002/"), corrected.body);
       assertEquals(unexpected, []);
     } finally {
       globalThis.fetch = originalFetch;
