@@ -24,6 +24,7 @@ interface CategoryNode {
   pagetitle: string;
   parentId: number | null;
   childrenIds: number[];
+  declaredChildrenCount?: number;
 }
 
 export interface CategoryTreeNode {
@@ -752,7 +753,10 @@ function collectCategories(
       const childrenIds = children
         .map((c) => (typeof c.id === "number" ? c.id : null))
         .filter((x): x is number => x !== null);
-      acc.byId.set(id, { id, pagetitle, parentId, childrenIds });
+      acc.byId.set(id, {
+        id, pagetitle, parentId, childrenIds,
+        ...(Array.isArray(node.children) ? { declaredChildrenCount: children.length } : {}),
+      });
       acc.byPagetitle.set(normalize(pagetitle), id);
     }
     collectCategories(node?.children, id, acc);
@@ -1473,6 +1477,27 @@ export type ExactCatalogLeafVerification =
     message: string;
   };
 
+function exactCatalogTaxonomyFailure(
+  error: unknown,
+): Extract<ExactCatalogLeafVerification, { ok: false }> {
+  if (error instanceof DiscoveryUpstreamError) {
+    return {
+      ok: false,
+      // A taxonomy transport failure can never prove an absent title.
+      error_code: error.errorCode === "category_not_found"
+        ? "transport_5xx"
+        : error.errorCode,
+      message: error.message,
+    };
+  }
+  return {
+    ok: false,
+    error_code: (error as { name?: string })?.name === "AbortError"
+      ? "catalog_timeout" : "transport_5xx",
+    message: (error as Error)?.message ?? "taxonomy fetch failed",
+  };
+}
+
 /**
  * Verify a customer's bare category answer against the same catalog taxonomy
  * used by discovery. An exact leaf identity needs neither facet options nor a
@@ -1522,23 +1547,65 @@ export async function verifyExactCatalogLeaf(
       resolution_method: "exact",
     };
   } catch (error) {
-    if (error instanceof DiscoveryUpstreamError) {
-      return {
-        ok: false,
-        // A taxonomy transport failure can never prove an absent title.
-        error_code: error.errorCode === "category_not_found"
-          ? "transport_5xx"
-          : error.errorCode,
-        message: error.message,
-      };
-    }
-    const isAbort = (error as { name?: string })?.name === "AbortError";
+    return exactCatalogTaxonomyFailure(error);
+  }
+}
+
+export type ExactCatalogScopeVerification =
+  | Exclude<ExactCatalogLeafVerification, { ok: true }>
+  | {
+    ok: true;
+    routes: Array<LeafCategory & { verified_leaf: boolean }>;
+    complete: boolean;
+  };
+
+/** Resolve an exact category for a bounded, separately proof-gated browse.
+ * A parent is not leaf evidence. Enumerate only linked, unique identities;
+ * a missing child list or ambiguous branch cannot prove complete coverage. */
+export async function verifyExactCatalogScope(
+  title: string,
+  deps: DiscoverCategoryDeps,
+): Promise<ExactCatalogScopeVerification> {
+  const key = normalize(title);
+  if (!key) return { ok: false, error_code: "bad_input", message: "category title required" };
+  let tree: CategoriesCache;
+  try {
+    tree = await fetchCategories(deps);
+  } catch (error) {
+    return exactCatalogTaxonomyFailure(error);
+  }
+  const count = tree.identityCounts.get(key) ?? 0;
+  const rootId = tree.byPagetitle.get(key);
+  const root = rootId === undefined ? undefined : tree.byId.get(rootId);
+  if (count !== 1 || !root || !Number.isSafeInteger(root.id) || root.id <= 0) {
     return {
-      ok: false,
-      error_code: isAbort ? "catalog_timeout" : "transport_5xx",
-      message: (error as Error)?.message ?? "taxonomy fetch failed",
+      ok: false, error_code: "category_not_found",
+      reason: count > 1 ? "ambiguous" : "absent",
+      message: `no unambiguous exact catalogue scope for "${title}"`,
     };
   }
+  const routes: Extract<ExactCatalogScopeVerification, { ok: true }>["routes"] = [];
+  const pending = [root];
+  const seen = new Set<number>();
+  let complete = true;
+  for (let i = 0; i < pending.length; i++) {
+    const node = pending[i];
+    if (seen.has(node.id) || !Number.isSafeInteger(node.id) || node.id <= 0 ||
+      tree.identityCounts.get(normalize(node.pagetitle)) !== 1) {
+      complete = false;
+      continue;
+    }
+    seen.add(node.id);
+    const verifiedLeaf = tree.explicitEmptyChildrenIds.has(node.id);
+    routes.push({ id: node.id, pagetitle: node.pagetitle, verified_leaf: verifiedLeaf });
+    if (node.declaredChildrenCount !== node.childrenIds.length) complete = false;
+    for (const id of node.childrenIds) {
+      const child = tree.byId.get(id);
+      if (child?.parentId === node.id) pending.push(child);
+      else complete = false;
+    }
+  }
+  return { ok: true, routes, complete };
 }
 
 export async function executeDiscoverCategory(

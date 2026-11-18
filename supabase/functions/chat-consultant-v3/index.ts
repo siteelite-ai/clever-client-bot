@@ -34,6 +34,7 @@ import {
   executeSearchCatalog,
   expandOptionAlternatives,
   type CatalogClientDeps,
+  type CatalogSinglePageEvidence,
   type SearchCatalogInput,
 } from "../_shared/v3-tools/search-catalog.ts";
 import {
@@ -41,6 +42,7 @@ import {
   type DiscoverCategoryOk,
   executeDiscoverCategory,
   verifyExactCatalogLeaf,
+  verifyExactCatalogScope,
   type Facet,
 } from "../_shared/v3-tools/discover-category.ts";
 import {
@@ -539,6 +541,21 @@ import {
   shouldAnswerGeneralInquiryDirectly,
 } from "../_shared/v3-tools/general-inquiry.ts";
 import { resolveVerifiedEngineeringInquiry } from "../_shared/v3-tools/verified-engineering-inquiry.ts";
+import {
+  VERIFIED_CARDS_RENDER_UNAVAILABLE,
+  verifiedOutputOutcome,
+} from "../_shared/v3-tools/verified-output-outcome.ts";
+import {
+  continueResidentialFixtureSelection,
+  encodeResidentialFixtureSlot,
+  isResidentialFixtureSlot,
+  proveResidentialFixture,
+  RESIDENTIAL_FIXTURE_CATEGORY,
+  residentialFixtureShortfall,
+  startResidentialFixtureSelection,
+  type ResidentialFixtureSelection,
+  verifiedResidentialFixtureState,
+} from "../_shared/v3-tools/residential-fixture-selection.ts";
 import {
   APPLICATION_CARDS_UNVERIFIED,
   APPLICATION_INPUT_CURRENT_FACET,
@@ -1425,6 +1442,10 @@ async function runTool(
     ) as ToolResult;
   }
   if (name === "propose_clarification") {
+    if (isResidentialFixtureSlot(args)) {
+      return { tool: "propose_clarification", ok: false, error_code: "bad_input",
+        message: "This clarification scope is issued only by the server." };
+    }
     return executeProposeClarification(
       args as unknown as ProposeClarificationInput,
     );
@@ -9128,6 +9149,206 @@ async function loadVerifiedSelectionReadinessPending(
     console.error("[v3] selection readiness slot lookup exception", error);
   }
   return { slot: null, lookupFailed: true };
+}
+
+async function selectVerifiedResidentialFixtures(
+  state: ResidentialFixtureSelection,
+  catalogToken: string,
+  signal: AbortSignal,
+  cache: ProductCache,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  // A budget-scoped browse avoids losing products with an empty motion
+  // facet; that facet is verified against each returned card afterwards.
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: catalogToken, signal, timeoutMs: 4500 };
+  const taxonomy = await verifyExactCatalogScope(RESIDENTIAL_FIXTURE_CATEGORY, {
+    ...deps, openrouterApiKey: null,
+  });
+  const routes = taxonomy.ok ? taxonomy.routes : [];
+  const titles = new Set(routes.map(({ pagetitle }) => pagetitle));
+  const pageSize = 50;
+  const pagesLimit = 5;
+  const readPage = async (
+    route: typeof routes[number], page: number, query?: string, readSignal = signal,
+  ) => {
+    const scopedCache: ProductCache = new Map();
+    const evidence: CatalogSinglePageEvidence[] = [];
+    const result = await executeSearchCatalog({
+      mode: query ? "by_query" : "by_filter", category: route.pagetitle,
+      ...(query ? { query } : {}), max_price: state.cap, page, per_page: pageSize,
+    }, {
+      ...deps, signal: readSignal, requireExplicitCategory: !!query || !route.verified_leaf,
+      onSinglePageEvidence: (proof) => evidence.push(proof),
+    }, scopedCache);
+    return result.ok ? { total: result.total, page, coverage: result.candidate_coverage,
+      evidence: evidence.length === 1 ? evidence[0] : null,
+      products: result.results.flatMap(({ id }) => {
+        const card = scopedCache.get(String(id));
+        return card ? [card] : [];
+      }),
+    } : null;
+  };
+  // The catalog filter is not assumed to include descendants. Give verified
+  // routes their own first page before spending the remaining page budget.
+  const groups = await Promise.all(routes.slice(0, pagesLimit).map(async (route) => ({
+    route, pages: [await readPage(route, 1)],
+  })));
+  const extra: Promise<void>[] = [];
+  for (let page = 2; page <= pagesLimit && groups.length + extra.length < pagesLimit; page++) {
+    for (const group of groups) {
+      if (groups.length + extra.length >= pagesLimit) break;
+      const first = group.pages[0];
+      if (!first || page > Math.ceil(first.total / pageSize)) continue;
+      const index = page - 1;
+      extra.push(readPage(group.route, page).then((result) => { group.pages[index] = result; }));
+    }
+  }
+  await Promise.all(extra);
+  const pages = groups.flatMap((group) => group.pages);
+  const products = pages.flatMap((page) => page?.products ?? []);
+  let searched = pages.some((page) => page !== null);
+  const rejected: Record<string, number> = {};
+  const counts = new Map<string, number>();
+  for (const product of products) counts.set(product.id, (counts.get(product.id) ?? 0) + 1);
+  const catalogueWindowComplete = taxonomy.ok && taxonomy.complete &&
+    groups.length === routes.length && products.length === counts.size &&
+    groups.every(({ pages: groupPages }) => {
+      const first = groupPages[0];
+      return !!first && groupPages.every((page) => page?.total === first.total &&
+          page.evidence?.issue === null && page.evidence.requested_page === page.page &&
+          (page.coverage === "complete_query_window" || page.coverage === "partial")) &&
+        first.total === groupPages.reduce((n, page) => n + (page?.products.length ?? 0), 0);
+    });
+  const checkedIds = new Set(counts.keys());
+  const checkedUrls = new Set(products.map(({ url }) => url));
+  const checkCard = (product: ProductFull) => {
+    const proof = proveResidentialFixture(product, state, titles);
+    if (proof.ok) return [{ product, proof }];
+    rejected[proof.reason] = (rejected[proof.reason] ?? 0) + 1;
+    return [];
+  };
+  const exact = products.flatMap((product) => {
+    if (counts.get(product.id) !== 1) {
+      rejected.duplicate = (rejected.duplicate ?? 0) + 1;
+      return [];
+    }
+    return checkCard(product);
+  });
+  const seen = new Set(state.seen);
+  const distinctUnseen = () => {
+    const urls = new Set<string>();
+    return [...exact].sort((a, b) => a.product.price - b.product.price)
+      .filter(({ product }) => {
+        if (urls.has(product.url)) return false;
+        urls.add(product.url);
+        return !seen.has(product.id);
+      });
+  };
+
+  // Text search discovers cards beyond the default category sort window. A
+  // match to either word is only a candidate, never motion or purpose proof.
+  // In particular it cannot replace a previously checked card with a
+  // different snapshot, bypass a contradictory facet, or prove completeness.
+  const rootRoute = routes.find(({ pagetitle }) => pagetitle === RESIDENTIAL_FIXTURE_CATEGORY);
+  const supplemental: Array<{ query: string; rows: number; verified: number; failed: boolean }> = [];
+  let supplementalRows = 0;
+  if (rootRoute && !catalogueWindowComplete && distinctUnseen().length < state.target && !signal.aborted) {
+    const searchSignal = AbortSignal.any([signal, AbortSignal.timeout(3000)]);
+    for (const query of ["датчик", "сенсор"]) {
+      if (searchSignal.aborted || distinctUnseen().length >= state.target) break;
+      const result = await readPage(rootRoute, 1, query, searchSignal);
+      const candidates = result?.products ?? [];
+      const batchCounts = new Map<string, number>();
+      for (const { id } of candidates) batchCounts.set(id, (batchCounts.get(id) ?? 0) + 1);
+      const verified = candidates.flatMap((product) => {
+        if (batchCounts.get(product.id) !== 1) {
+          rejected.duplicate = (rejected.duplicate ?? 0) + 1;
+          return [];
+        }
+        if (checkedIds.has(product.id) || checkedUrls.has(product.url)) return [];
+        // No category fallback from the text query; it can return products
+        // outside the requested class even if the backend accepted the filter.
+        return checkCard(product);
+      });
+      for (const { id, url } of candidates) {
+        checkedIds.add(id);
+        checkedUrls.add(url);
+      }
+      exact.push(...verified);
+      searched ||= result !== null;
+      supplementalRows += candidates.length;
+      supplemental.push({ query, rows: candidates.length, verified: verified.length, failed: result === null });
+    }
+  }
+  const distinct = distinctUnseen();
+  const selected = distinct.slice(0, state.target);
+  for (const { product } of selected) cache.set(product.id, product);
+  const render = selected.length
+    ? executeRenderProducts({
+      product_ids: selected.map(({ product }) => product.id),
+      total_available: distinct.length,
+    }, cache) : null;
+  const shown = render?.ok && render.rendered_count === selected.length
+    ? selected.map(({ product }) => product) : [];
+  const outcome = verifiedOutputOutcome({
+    catalogUnavailable: !searched,
+    selected: selected.length,
+    rendered: shown.length > 0,
+  });
+  steps.push({ step: "v3_residential_fixture_proof", ms: Date.now() - t0,
+    meta: {
+      cap: state.cap, place: state.place ?? null, utility: state.utility, led: state.led,
+      mount: state.mount ?? null, pages_attempted: pages.length,
+      taxonomy_error: taxonomy.ok ? null : taxonomy.error_code,
+      taxonomy_reason: "reason" in taxonomy ? taxonomy.reason : null,
+      taxonomy_routes: routes.length,
+      pages_failed: pages.filter((page) => !page).length,
+      catalogue_window_complete: catalogueWindowComplete,
+      catalogue_page_evidence: groups.flatMap(({ route, pages: groupPages }) => groupPages.map((result, index) => ({
+        category_id: route.id,
+        page: index + 1,
+        raw_rows: result?.evidence?.raw_rows ?? null,
+        issue: !result ? "search_failed" : !result.evidence ? "evidence_missing"
+          : result.evidence.issue ?? (result.total !== groupPages[0]?.total ? "total_changed" : null),
+      }))),
+      supplemental_candidate_search: supplemental,
+      scannable_rows: products.length + supplementalRows, rejected, verified_unseen: distinct.length,
+      shown: shown.length, outcome,
+      proofs: shown.length ? selected.map(({ product, proof }) => ({
+        id: product.id, application: proof.application.source, sensor: proof.sensor.source,
+        manufacturer_reference: proof.application.url ?? proof.sensor.url ?? null,
+      })) : [],
+    },
+  });
+  const fallback = residentialFixtureShortfall(state, shown.length, searched);
+  const answer = outcome === "render_unavailable"
+    ? VERIFIED_CARDS_RENDER_UNAVAILABLE
+    : shown.length >= state.target
+    ? `До ${state.cap} ₸ со встроенным датчиком движения: ${shown.length} подтверждённых вариантов.`
+    : fallback.text;
+  send({ type: "delta", origin: "server", content: answer });
+  if (shown.length && render?.ok) {
+    if (selected.some(({ proof }) => proof.utility)) {
+      send({ type: "delta", origin: "server",
+        content: " Модели ЖКХ включены по вашему согласию: назначение проверено для указанного места установки." });
+    }
+    send({ type: "products_block", markdown: render.markdown, count: shown.length,
+      total_available: distinct.length });
+  }
+  if (searched && outcome !== "render_unavailable" && shown.length < state.target) {
+    send({ type: "delta", origin: "server", content: `\n\n${fallback.question}` });
+  }
+  // Also keep the exact scope after a successful batch. A later «ещё»
+  // cannot discard the budget, purpose or motion proof and use a generic
+  // search from assistant prose. No extra UI chip is emitted.
+  const trackedIds = shown.map(({ id }) => id).filter((id) => /^[a-z0-9_-]{1,24}$/iu.test(id));
+  const next = { ...state, seen: [...new Set([...state.seen, ...trackedIds])].slice(-12) };
+  send({ type: "slot_update", slots: { pending_clarification:
+    encodeResidentialFixtureSlot(next, shown.length < state.target && outcome !== "render_unavailable"
+      ? fallback.question : "Условия подбора сохранены.") } });
+  return shown;
 }
 
 async function loadVerifiedReplacementCutoutPending(
@@ -28101,6 +28322,47 @@ Deno.serve(async (req) => {
                 !Array.isArray(pendingSlot)
                 ? pendingSlot as Record<string, unknown>
                 : null;
+            const initialFixture = independentProductInquiry ? null : startResidentialFixtureSelection(userMessage);
+            const fixtureSlotCandidate = pendingRecord && isResidentialFixtureSlot(pendingRecord)
+              ? pendingRecord : null;
+            const fixtureReply = !initialFixture &&
+              !!continueResidentialFixtureSelection(userMessage, fixtureSlotCandidate);
+            const trustedFixtureReply = fixtureReply
+              ? await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots)
+              : null;
+            const fixtureSelection = initialFixture ??
+              continueResidentialFixtureSelection(userMessage, trustedFixtureReply?.slot ?? null);
+            if (fixtureReply && !fixtureSelection) {
+              send({ type: "slot_update", slots: { pending_clarification: null } });
+              send({ type: "delta", origin: "server", content: "Не удалось подтвердить условия предыдущего подбора. Напишите исходный запрос заново — без сохранённых условий поиск не расширяю." });
+              steps.push({ step: "v3_residential_fixture_unverified_scope", ms: Date.now() - t0 });
+              return;
+            }
+            if (fixtureSelection) {
+              const taskSession = initialFixture && priorHistory.length ? `session_${crypto.randomUUID()}` : sessionId;
+              if (taskSession !== sessionId) {
+                send({ type: "conversation_boundary", mode: "new_task", session_id: taskSession });
+              }
+              const cache: ProductCache = new Map();
+              replacementEgressCache = cache;
+              const found = await selectVerifiedResidentialFixtures(fixtureSelection,
+                settings.volt220_api_token!, turnSignal, cache, send, steps, t0);
+              productsCount = found.length;
+              await persistRecentProductEvidence(supabase, taskSession, found);
+              return;
+            }
+            const ambiguousFixtureReply = /^(?:да|можно|не знаю|какие варианты)[.!?\s]*$/iu.test(userMessage);
+            if (fixtureSlotCandidate && (isNeutralAcknowledgement(userMessage) || ambiguousFixtureReply)) {
+              const previous = await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots);
+              const state = verifiedResidentialFixtureState(previous.slot);
+              const question = state ? residentialFixtureShortfall(state, 0, true).question : "";
+              send({ type: "delta", origin: "server", content: state
+                ? ambiguousFixtureReply ? question : "Пожалуйста! Условия подбора не меняю."
+                : "Не удалось подтвердить условия предыдущего подбора. При необходимости напишите исходный запрос заново." });
+              send({ type: "slot_update", slots: { pending_clarification: state
+                ? encodeResidentialFixtureSlot(state, question) : null } });
+              return;
+            }
             const pendingScope = pendingRecord?.scope;
             const clientSelectionReadinessScope = Boolean(
               pendingScope && typeof pendingScope === "object" &&

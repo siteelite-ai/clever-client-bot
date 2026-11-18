@@ -4,6 +4,7 @@
 import type { CatalogCandidateCoverage, ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
+import { catalogPageIdentityIssue, type CatalogPagination } from "./catalog-page-identity.ts";
 import {
   type CatalogFacetSchemaSnapshot,
   recordSuccessfulCatalogFacetFilter,
@@ -137,6 +138,10 @@ export interface CatalogClientDeps {
   timeoutMs?: number;
   /** Optional turn-level deadline for bounded recovery searches. */
   signal?: AbortSignal;
+  /** Optional server-only evidence; not part of the model tool result. */
+  onSinglePageEvidence?: (evidence: CatalogSinglePageEvidence) => void;
+  /** A browse on a parent category cannot supply missing class evidence. */
+  requireExplicitCategory?: boolean;
   /** Server-only exact-identity outage mode: one physical GET, no retry,
    * compound rewrite, pagination, sorting or category/facet fan-out. */
   singleRequest?: boolean;
@@ -375,8 +380,16 @@ function extractBrand(p: Record<string, unknown>): string | null {
   return null;
 }
 
+export type CatalogSinglePageEvidence = {
+  requested_page: number;
+  raw_rows: number;
+  issue: ReturnType<typeof catalogPageIdentityIssue> | "missing_results" |
+    "invalid_total" | "unexpected_row_count";
+};
+
 type SingleSearchResult =
-  | { ok: true; total: number; results: ProductRef[]; candidate_coverage: CatalogCandidateCoverage }
+  | { ok: true; total: number; results: ProductRef[]; candidate_coverage: CatalogCandidateCoverage;
+      singlePageEvidence?: CatalogSinglePageEvidence }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
 
 /** `total` is the upstream raw pagination count. Filtered product rows cannot
@@ -457,7 +470,7 @@ async function singleSearch(
       return { ok: false, error_code: "bad_input", message: `${res.status}` };
     }
 
-    const json = await res.json() as { data?: { results?: unknown[]; pagination?: { total?: number } } };
+    const json = await res.json() as { data?: { results?: unknown[]; pagination?: CatalogPagination } };
     const hasRawResults = Array.isArray(json?.data?.results);
     const rawResults = hasRawResults ? json.data!.results! : [];
     const reportedTotal = json?.data?.pagination?.total;
@@ -494,7 +507,8 @@ async function singleSearch(
         // category as verified query provenance even when the API omits the
         // redundant category object in the product payload. Preserve this
         // lineage for later class gates instead of treating it as unknown.
-        leaf_category: extractLeafCategory(raw) ?? categoryOverride ?? null,
+        leaf_category: extractLeafCategory(raw) ??
+          (deps.requireExplicitCategory ? null : categoryOverride ?? null),
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       Object.defineProperty(ref, PROOF_RESULT_URL, { value: u });
@@ -509,7 +523,21 @@ async function singleSearch(
       });
       results.push(ref);
     }
-    return { ok: true, total, results, candidate_coverage: candidateCoverage };
+    const requestedPage = input.page ?? 1;
+    const rawCount = rawResults.length;
+    const singlePageEvidence: CatalogSinglePageEvidence | undefined = deps.onSinglePageEvidence
+      ? {
+        requested_page: requestedPage,
+        raw_rows: rawCount,
+        issue: !hasRawResults ? "missing_results"
+          : !Number.isSafeInteger(reportedTotal) || Number(reportedTotal) < 0
+          ? "invalid_total"
+          : catalogPageIdentityIssue(json.data?.pagination, requestedPage, perPage, total) ??
+            (rawCount !== Math.min(perPage, Math.max(0, total - (requestedPage - 1) * perPage))
+              ? "unexpected_row_count" : null),
+      }
+      : undefined;
+    return { ok: true, total, results, candidate_coverage: candidateCoverage, singlePageEvidence };
   } catch (e) {
     const isAbort = controller.signal.aborted || deps.signal?.aborted ||
       (e as { name?: string })?.name === "AbortError";
@@ -845,6 +873,7 @@ export async function executeSearchCatalog(
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
     if (!unresolvedOptionAlternatives) {
       recordExactFilterResult(cache, optionVariants[0], r.results, facetSchemaAtExecution);
+      if (r.singlePageEvidence) deps.onSinglePageEvidence?.(r.singlePageEvidence);
     }
     return {
       tool: "search_catalog",
