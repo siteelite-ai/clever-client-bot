@@ -146,6 +146,7 @@ async function runDialogue({
   rangeDeclaration = "working_load",
   measurementRepairCase = null,
   typedParameters = null,
+  expectedConsultation = [],
 }: {
   label: string;
   messages: string[];
@@ -156,6 +157,11 @@ async function runDialogue({
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
   rangeDeclaration?: "working_load" | "nominal_load";
   typedParameters?: "confirmed" | "forged" | null;
+  expectedConsultation?: Array<{
+    phrase: string;
+    state?: { route: string; lengthM?: number; loadA?: number };
+    handoff?: boolean;
+  }>;
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
   terminalMode?:
@@ -917,6 +923,19 @@ async function runDialogue({
         (pending.scope as { kind?: string }).kind,
         "selection_readiness",
       );
+      const expectedAdvice = expectedConsultation[turn];
+      if (expectedAdvice) {
+        const assistance = (pending.scope as { assistance?: {
+          handoff?: boolean; consultation?: Record<string, unknown>;
+        } }).assistance;
+        assertEquals(assistance?.consultation, expectedAdvice.state);
+        assertEquals(Boolean(assistance?.handoff), Boolean(expectedAdvice.handoff));
+        const answer = publicText(events);
+        assert(answer.includes(expectedAdvice.phrase), answer);
+        assertEquals((answer.match(/\?/gu) ?? []).length, expectedAdvice.handoff ? 0 : 1);
+        assert(!visible.some((event) => event.type === "quick_replies"), JSON.stringify(visible));
+        assertEquals(catalogProductRequests.length, 0);
+      }
       assert(
         row.steps.some(({ step, meta }) =>
           step === "v3_selection_readiness_clarification" &&
@@ -1041,7 +1060,7 @@ async function runDialogue({
     assert(
       ((pending?.scope as { assistance?: { handoff?: boolean } })?.assistance?.handoff ? /менеджер/iu :
         finalAxis === "line_length" ? /(?:длин|метр)/iu :
-        finalAxis === "engineering_specification" ? /(?:марку|сечение)/iu :
+        finalAxis === "engineering_specification" ? /(?:маркировк|марку|сечение|грунт|участок|ток|длина)/iu :
         finalAxis === "specification_lookup_confirmation" ? /(?:маркировке|каталоге)/iu : /(?:ток|ампер|шильдик)/iu)
         .test(String(pending?.question ?? "")),
       `${label}: exact ${finalAxis} question missing: ${
@@ -1384,6 +1403,31 @@ for (const scenario of [
   {label:"source prose specification starts the same verified lookup",messages:["Мне нужен кабель для насоса","В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
   {label:"a marking can still resume lookup after a manager handoff",messages:["Мне нужен кабель для насоса","Марку и сечение не знаю, нужна помощь.","По паспорту: ВВГ 3*1,5"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable",terminalMode:"specification_lookup" as const},
   {label:"supplied PE and all conditions still need only specification, not a summary",messages:["Какой кабель подойдет для прокладки в земле? Прямо в земле; 220 В, 1 фаза; ток 16 А; 3 жилы, одна жила защитная PE; длина линии 25 м."],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
+  {
+    label: "pump consultation stores wet route and measured length before accepting nameplate current and exact marking",
+    messages: ["Мне нужен кабель для насоса", "Часть кабеля будет в воде", "Длина 38 м, автомат на 16 А", "6 А по шильдику",
+      "В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "pump_cable",
+    terminalMode: "specification_lookup" as const,
+    expectedConsultation: [
+      { phrase: "погружён в воду" },
+      { phrase: "длина линии", state: { route: "water" } },
+      { phrase: "ток указан на шильдике", state: { route: "water", lengthM: 38 } },
+      { phrase: "Длина и ток уже есть", state: { route: "water", lengthM: 38, loadA: 6 }, handoff: true },
+    ],
+  },
+  {
+    label: "underground consultation applies route correction, keeps length and hands off without asking twice",
+    messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, длина 25 м",
+      "Нет, без трубы, прямо в грунт", "Марку и сечение не знаю, нужна помощь."],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "underground_cable",
+    expectedConsultation: [
+      { phrase: "прямо в грунте или в защитной трубе" },
+      { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
+      { phrase: "явное разрешение в паспорте", state: { route: "direct", lengthM: 25 } },
+      { phrase: "марку и сечение наугад не рекомендую", state: { route: "direct", lengthM: 25 }, handoff: true },
+    ],
+  },
 ]) Deno.test({
   name:"simple specification prompt real handler: "+scenario.label,
   permissions:{read:true,env:false,net:false},
