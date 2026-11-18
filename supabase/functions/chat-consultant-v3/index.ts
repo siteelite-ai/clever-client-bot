@@ -557,6 +557,16 @@ import {
   verifiedResidentialFixtureState,
 } from "../_shared/v3-tools/residential-fixture-selection.ts";
 import {
+  isReservedStabilizerApplicationSlot,
+  isStabilizerApplicationReply,
+  resolveStabilizerApplication,
+  type StabilizerApplication,
+} from "../_shared/v3-tools/stabilizer-application.ts";
+import {
+  agreesWithStabilizerPassport,
+  qualifyingStabilizerPassports,
+} from "../_shared/v3-tools/stabilizer-passport-proof.ts";
+import {
   APPLICATION_CARDS_UNVERIFIED,
   APPLICATION_INPUT_CURRENT_FACET,
   APPLICATION_LOAD_UNSUPPORTED,
@@ -1442,7 +1452,7 @@ async function runTool(
     ) as ToolResult;
   }
   if (name === "propose_clarification") {
-    if (isResidentialFixtureSlot(args)) {
+    if (isResidentialFixtureSlot(args) || isReservedStabilizerApplicationSlot(args)) {
       return { tool: "propose_clarification", ok: false, error_code: "bad_input",
         message: "This clarification scope is issued only by the server." };
     }
@@ -9349,6 +9359,89 @@ async function selectVerifiedResidentialFixtures(
     encodeResidentialFixtureSlot(next, shown.length < state.target && outcome !== "render_unavailable"
       ? fallback.question : "Условия подбора сохранены.") } });
   return shown;
+}
+
+async function answerVerifiedStabilizerApplication(
+  application: StabilizerApplication,
+  catalogToken: string,
+  signal: AbortSignal,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+  egressCache: ProductCache,
+): Promise<ProductFull[]> {
+  const candidates = qualifyingStabilizerPassports(application);
+  // Each passport is tied to a precise SKU. Use separate request caches so
+  // a conflicting result from another query cannot overwrite its evidence.
+  const lookups = await Promise.all(candidates.slice(0, 9).map(async (proof) => {
+    const cache: ProductCache = new Map();
+    const result = await executeSearchCatalog({
+      mode: "by_article", article: proof.article, per_page: 3,
+    }, {
+      baseUrl: CATALOG_BASE_URL, apiToken: catalogToken, signal, timeoutMs: 4_500,
+      singleRequest: true,
+    }, cache);
+    const exact = result.ok ? result.results.map(({ id }) => cache.get(String(id)))
+      .filter((product): product is ProductFull =>
+        !!product && product.article?.trim().toLowerCase() === proof.article.toLowerCase())
+      : [];
+    // Duplicate or uninspected rows still leave identity/coverage uncertain.
+    const card = result.ok && result.candidate_coverage === "complete_query_window" &&
+        result.total === result.results.length &&
+        exact.length === 1 && agreesWithStabilizerPassport(exact[0], proof, application.inputV)
+      ? exact[0] : null;
+    return { proof, card, catalogOk: result.ok };
+  }));
+  const duplicates = new Set<string>();
+  for (const { card } of lookups) {
+    if (!card) continue;
+    if (egressCache.has(card.id)) duplicates.add(card.id);
+    else egressCache.set(card.id, card);
+  }
+  for (const id of duplicates) egressCache.delete(id);
+  const selected = lookups.filter(({ card }) => !!card && egressCache.has(card.id)).slice(0, 4);
+  const rendered = selected.length
+    ? executeRenderProducts({ product_ids: selected.map(({ card }) => card!.id) }, egressCache)
+    : null;
+  const products = rendered?.ok && rendered.rendered_count === selected.length
+    ? selected.map(({ card }) => card!)
+    : [];
+  steps.push({
+    step: "v3_stabilizer_passport_search", ms: Date.now() - t0,
+    meta: {
+      input_v: application.inputV, phases: application.phases,
+      load_va: application.loadVa, peak_va: application.peakVa,
+      load_kind: application.kind, passport_candidates: candidates.length,
+      catalog_failures: lookups.filter(({ catalogOk }) => !catalogOk).length,
+      catalog_rejected: lookups.filter(({ card, catalogOk }) => !card && catalogOk).length,
+      verified_count: products.length,
+      approved: products.length
+        ? selected.map(({ proof, card }) => ({
+          id: card!.id, revision: proof.revision, page: proof.page, limit_va: proof.provenVa,
+        }))
+        : [],
+    },
+  });
+  if (!products.length || !rendered?.ok) {
+    const unavailable = lookups.length > 0 && lookups.every(({ catalogOk }) => !catalogOk);
+    send({
+      type: "delta", origin: "server",
+      content: unavailable
+        ? "Не удалось проверить наличие стабилизаторов в каталоге. Непроверенные модели не показываю."
+        : `При ${application.inputV} В не удалось подтвердить модель в наличии по рабочему диапазону и допустимой нагрузке. Это не означает, что подходящих моделей нет: у проверенных вариантов может не быть нужных паспортных данных или подтверждённого остатка.`,
+    });
+    return [];
+  }
+  const sources = [...new Set(selected.map(({ proof }) => `[паспорт ${proof.vendor} ${proof.series}, стр. ${proof.page}](${proof.source})`))];
+  send({
+    type: "delta", origin: "server",
+    content: `Проверил наличие и допустимую нагрузку при ${application.inputV} В для однофазной сети: ${application.loadVa} ВА${application.kind === "motor" ? `, до ${application.peakVa} ВА при пуске` : ""}. Источник: ${sources.join(", ")}. Для подключения к вводу дома подбор и схему должен подтвердить электрик.`,
+  });
+  send({
+    type: "products_block", markdown: rendered.markdown,
+    count: products.length, total_available: products.length,
+  });
+  return products;
 }
 
 async function loadVerifiedReplacementCutoutPending(
@@ -28361,6 +28454,62 @@ Deno.serve(async (req) => {
                 : "Не удалось подтвердить условия предыдущего подбора. При необходимости напишите исходный запрос заново." });
               send({ type: "slot_update", slots: { pending_clarification: state
                 ? encodeResidentialFixtureSlot(state, question) : null } });
+              return;
+            }
+            const stabilizerReply = isStabilizerApplicationReply(userMessage, pendingRecord);
+            const stabilizerSlot = stabilizerReply
+              ? await loadVerifiedSelectionReadinessPending(supabase, sessionId, logId, slots)
+              : null;
+            const stabilizer = independentProductInquiry ? null
+              : resolveStabilizerApplication(userMessage, stabilizerSlot?.slot ?? null);
+            if (stabilizerReply && !stabilizerSlot?.slot && !stabilizer) {
+              send({ type: "slot_update", slots: { pending_clarification: null } });
+              send({ type: "delta", origin: "server", content: stabilizerSlot?.lookupFailed
+                ? "Не удалось проверить сохранённые условия. Повторите полный запрос позже."
+                : "Это уточнение больше не связано с текущим подбором. Напишите запрос со всеми параметрами заново." });
+              steps.push({ step: "v3_stabilizer_unverified_slot", ms: Date.now() - t0 });
+              return;
+            }
+            if (stabilizer) {
+              const taskSession = !stabilizerSlot?.slot && priorHistory.length
+                ? `session_${crypto.randomUUID()}`
+                : sessionId;
+              if (taskSession !== sessionId) {
+                send({ type: "conversation_boundary", mode: "new_task", session_id: taskSession });
+              }
+              if (!stabilizerSlot?.slot && pendingRecord) {
+                send({ type: "slot_update", slots: { pending_clarification: null } });
+              }
+              if (stabilizer.status === "ask") {
+                const next = executeProposeClarification(stabilizer.clarification, { allowFreeform: true });
+                if (!next.ok) {
+                  errorMsg = "stabilizer_invalid_clarification";
+                  publicDiagnosticError = "request_unavailable";
+                  send({ type: "delta", origin: "server", content: "Не удалось сохранить уточнение. Напишите запрос со всеми параметрами заново." });
+                  return;
+                }
+                send({ type: "delta", origin: "server", content: stabilizer.clarification.question });
+                emitSideEffects({
+                  ...next, side_effects: next.side_effects?.filter(({ type }) => type !== "quick_replies"),
+                }, send);
+                steps.push({
+                  step: "v3_stabilizer_application_clarification", ms: Date.now() - t0,
+                });
+              } else {
+                send({ type: "slot_update", slots: { pending_clarification: null } });
+                if (stabilizer.status === "stop") {
+                  send({ type: "delta", origin: "server", content: stabilizer.text });
+                  steps.push({ step: "v3_stabilizer_application_handoff", ms: Date.now() - t0,
+                    meta: { reason: stabilizer.reason } });
+                } else {
+                  const cache: ProductCache = new Map();
+                  replacementEgressCache = cache;
+                  const products = await answerVerifiedStabilizerApplication(stabilizer.application,
+                    settings.volt220_api_token!, turnSignal, send, steps, t0, cache);
+                  productsCount = products.length;
+                  await persistRecentProductEvidence(supabase, taskSession, products);
+                }
+              }
               return;
             }
             const pendingScope = pendingRecord?.scope;
