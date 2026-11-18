@@ -4,6 +4,8 @@ import type { ProductCache } from "./types.ts";
 import { classifyExactCompoundMarkingRequest } from "./exact-compound-marking-policy.ts";
 import {
   exactCompoundClassPhrase,
+  exactCompoundTitleRelation,
+  selectCompleteCategoryAssortment,
   selectCompleteCategoryPrice,
   type CompleteCategoryPriceInput,
 } from "./complete-category-price.ts";
@@ -45,8 +47,12 @@ function rawWithUnit(id: string, title: string, price: number, unit: string) {
   return item;
 }
 
-function page(rows: unknown[], total = rows.length, status = 200): Response {
-  return new Response(JSON.stringify({ data: { results: rows, pagination: { total } } }), {
+function page(
+  rows: unknown[], total = rows.length, status = 200,
+  pageNumber = 1, paginationOverrides: Record<string, unknown> = {},
+): Response {
+  const pagination = { page: pageNumber, per_page: 50, pages: Math.ceil(total / 50), total, ...paginationOverrides };
+  return new Response(JSON.stringify({ data: { results: rows, pagination } }), {
     status, headers: { "content-type": "application/json" },
   });
 }
@@ -62,6 +68,57 @@ Deno.test("class phrase is extracted from customer-owned compound, not guessed f
   assert(customerRequest);
   assertEquals(customerRequest.priceDirection, "cheapest");
   assertEquals(exactCompoundClassPhrase(customerRequest), "кабель ввг");
+});
+
+Deno.test("a short exact family may match a bounded product title but cannot widen taxonomy proof", () => {
+  const short = classifyExactCompoundMarkingRequest("покажи все ВВГ 3*1,5");
+  assert(short?.exhaustive);
+  assertEquals(exactCompoundClassPhrase(short), null);
+  assertEquals(exactCompoundTitleRelation("Кабель ВВГ нг 3*1,5 ГОСТ", short), "match");
+  assertEquals(exactCompoundTitleRelation("Кабель АВВГ нг 3*1,5", short), "ambiguous");
+  assertEquals(exactCompoundTitleRelation("Кабель ВВГ 3*1,5 и 3*2,5", short), "ambiguous");
+});
+
+Deno.test("meter choice stays scoped and the complete proof supplies the coil price only with verified length", async () => {
+  const rows = [
+    raw("301", "Кабель ВВГ 3*1,5 ГОСТ IK", 301, [], [{ city: "Караганда", amount: 98 }]),
+    raw("400", "Кабель ВВГ нг 3*1,5", 400),
+    rawWithUnit("38903", "Кабель ВВГ нг 3*1,5 ГК ГОСТ (Бухта 100м)", 46500, "уп."),
+  ];
+  const fetcher = deps(() => Promise.resolve(page(rows)));
+  const mixed = await selectCompleteCategoryPrice(input, fetcher, new Map());
+  assert(mixed.ok);
+  assertEquals(mixed.evidence.unit_examples, [{ unit: "м", price: 301 }, { unit: "уп", price: 46500, coilLengthM: 100 }]);
+  const chosen = classifyExactCompoundMarkingRequest("найди кабель ввг 3*1,5 самый дешевый за метр");
+  assertEquals(chosen?.saleUnit, "м");
+  assertEquals(chosen?.query, "кабель ввг 3*1,5");
+  const selected = await selectCompleteCategoryPrice({ ...input, request: chosen! }, fetcher, new Map());
+  assert(selected.ok);
+  assertEquals(selected.product.id, "301");
+  assertEquals(selected.evidence.unit_examples, undefined);
+});
+
+Deno.test("exhaustive compound assortment checks all pages, accounts for exclusions and retains each valid SKU", async () => {
+  const requested = classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 покажи все позиции");
+  assert(requested?.exhaustive);
+  const matches = Array.from({length: 19}, (_, i) => raw(String(i+1), "Кабель ВВГ 3*1,5", 300+i));
+  const unrelated = Array.from({length: 30}, (_, i) => raw(String(i+101), "Кабель ВВГ 2*1,5", 10));
+  const rows = [...unrelated, ...matches,
+    raw("900", "Кабель ВВГ 3*1,5 неизвестная цена", 0),
+    raw("901", "Кабель ВВГ 3*1,5 нет остатка", 500, [], [{ city:"Астана", amount:0 }]),
+    raw("902", "Кабель ВВГ 3*1,5 неизвестный остаток", 500, [], []),
+  ];
+  const pages: number[] = [];
+  const result = await selectCompleteCategoryAssortment({ ...input, request: requested }, deps(url=>{
+    const p = Number(new URL(String(url)).searchParams.get("page") ?? "1");
+    pages.push(p);
+    return Promise.resolve(page(rows.slice((p-1)*50,p*50), rows.length, 200, p));
+  }),new Map());
+  assert(result.ok);
+  assertEquals(pages, [1,2]);
+  assertEquals(result.products.length,19);
+  assertEquals(result.leafPages, [{ leaf: "Лист 3x1.5", pages_read: 2, declared_rows: 52 }]);
+  assertEquals(result.evidence, { raw_rows:52, unrelated:30, restricted:0, unpriced:1, out_of_stock:1, unverified:1 });
 });
 
 Deno.test("exact parent hierarchy prunes only wholly disjoint marking leaves", async () => {
@@ -184,12 +241,37 @@ Deno.test("a cheapest product omitted from page one still wins after full pagina
   const result = await selectCompleteCategoryPrice(input, deps((url) => {
     const pageNumber = new URL(String(url)).searchParams.get("page") ?? "";
     seenPages.push(pageNumber);
-    return Promise.resolve(page(pageNumber === "1" ? first : [second], 51));
+    return Promise.resolve(page(pageNumber === "1" ? first : [second], 51, 200, Number(pageNumber)));
   }), new Map());
   assert(result.ok);
   assertEquals(result.product.id, "cheap-late");
   assertEquals(result.evidence.raw_rows, 51);
   assertEquals(seenPages, ["1", "2"]);
+});
+
+Deno.test("contradictory page metadata cannot prove an exhaustive assortment or extreme price", async () => {
+  const exhaustive = classifyExactCompoundMarkingRequest("какой есть кабель ВВГ 3*1,5 покажи все позиции");
+  assert(exhaustive?.exhaustive);
+  const first = Array.from({ length: 50 }, (_, i) =>
+    raw(String(i + 1), "Кабель ВВГ 3*1,5", 500 + i));
+  const distinctLast = [raw("51", "Кабель ВВГ 3*1,5", 200)];
+  for (const broken of [{ page: 1 }, { page: undefined }, { pages: 3 }, { per_page: 25 }]) {
+    const catalog = deps((url) => {
+      const requested = Number(new URL(String(url)).searchParams.get("page"));
+      return Promise.resolve(requested === 1
+        ? page(first, 51)
+        : page(distinctLast, 51, 200, 2, broken));
+    });
+    const allCache = new Map();
+    const priceCache = new Map();
+    const all = await selectCompleteCategoryAssortment({ ...input, request: exhaustive }, catalog, allCache);
+    const price = await selectCompleteCategoryPrice(input, catalog, priceCache);
+    assert(!all.ok, JSON.stringify(broken));
+    assert(!price.ok, JSON.stringify(broken));
+    assertEquals(all.reason, "catalog_partial");
+    assertEquals(price.reason, "catalog_partial");
+    assertEquals([allCache.size, priceCache.size], [0, 0]);
+  }
 });
 
 Deno.test("complete-price proof scans every page of a 226-row category before selecting", async () => {
@@ -201,7 +283,7 @@ Deno.test("complete-price proof scans every page of a 226-row category before se
     const pageNumber = Number(new URL(String(url)).searchParams.get("page"));
     seenPages.push(pageNumber);
     const start = (pageNumber - 1) * 50;
-    return Promise.resolve(page(rows.slice(start, start + 50), rows.length));
+    return Promise.resolve(page(rows.slice(start, start + 50), rows.length, 200, pageNumber));
   }), new Map());
   assert(result.ok);
   assertEquals(result.product.id, "226");
@@ -302,10 +384,10 @@ Deno.test("model-picked, unrelated or narrower scope is rejected before paid cat
 Deno.test("page failure, changed total, missing rows and duplicate IDs fail closed", async () => {
   const first = Array.from({ length: 50 }, (_, index) => raw(String(index), `Кабель ВВГ 3*1,5 ${index}`, 400 + index));
   for (const second of [
-    page([], 51, 503),
-    page([raw("50", "Кабель ВВГ 3*1,5", 301)], 52),
-    page([], 51),
-    page([first[0]], 51),
+    page([], 51, 503, 2),
+    page([raw("50", "Кабель ВВГ 3*1,5", 301)], 52, 200, 2),
+    page([], 51, 200, 2),
+    page([first[0]], 51, 200, 2),
   ]) {
     const cache: ProductCache = new Map();
     const result = await selectCompleteCategoryPrice(input, deps((url) =>

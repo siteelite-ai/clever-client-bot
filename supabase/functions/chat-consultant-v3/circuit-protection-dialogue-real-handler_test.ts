@@ -5,10 +5,12 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { resetDiscoverCategoryCacheForTest } from "../_shared/v3-tools/discover-category.ts";
 import {
+  enableMandatoryReadinessInOfflineFixture,
   offlineHandler,
   restoreOfflineModuleSetup,
 } from "./model-no-search-integration-fixture.ts";
-import "./index.ts";
+enableMandatoryReadinessInOfflineFixture();
+await import("./index.ts");
 
 const offlineEnvGet = Deno.env.get;
 const category = "Автоматические выключатели";
@@ -238,6 +240,11 @@ Deno.test({
       for (const [key, , value] of schema) {
         assertEquals(sentFilters.getAll(`options[${key}][]`), [value]);
       }
+      const searchProof = stored[turn].steps?.find(({ step }) =>
+        step === "v3_circuit_protection_search"
+      )?.meta as { criteria: { key: string; value: unknown }[]; options: Record<string, string[]> };
+      assertEquals(searchProof.criteria.map(({ value }) => value), [32, 2, "C", 6, 230]);
+      assertEquals(searchProof.options, Object.fromEntries(schema.map(([key, , value]) => [key, [value]])));
       assertEquals(
         stored[turn].steps?.find(({ step }) =>
           step === "v3_circuit_protection_cards_verified"

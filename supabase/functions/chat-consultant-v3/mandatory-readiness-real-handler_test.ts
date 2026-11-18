@@ -104,6 +104,7 @@ async function scenario(
     | "subject_single"
     | "subject_other"
     | "subject_literal",
+  excludedModelIds?: string[],
 ) {
   const lugMode = mode === "lug";
   const subjectMode = mode.startsWith("subject");
@@ -117,6 +118,9 @@ async function scenario(
     ...(mode === "subject_single"
       ? []
       : [{ value_ru: siblingClass, products_count: 1 }]),
+    ...(excludedModelIds ? [
+      "коронка", "зенкер", "развёртка", "фреза", "долото", "зубило", "метчик", "плашка",
+    ].map(value_ru => ({ value_ru, products_count: 1 })) : []),
   ];
   const scenarioLeaf = lugMode ? lugLeaf : subjectMode
     ? mode === "subject_other"
@@ -396,7 +400,7 @@ async function scenario(
           compatible_classifications: subjectMode && mode !== "subject_literal"
             ? Array(mode === "subject_oversized" && turn === 1 ? 7 : 1).fill("f1v0")
             : [],
-          excluded_classifications: [],
+          excluded_classifications: turn === 1 ? excludedModelIds ?? [] : [],
           required_facet_values: known && !empty
             ? (schema.properties.required_facet_values.items.enum ?? [])
             : [],
@@ -784,6 +788,46 @@ Deno.test({
     assert(s.logs[1].steps.some(s => s.step === "v3_derived_reasoning_array_bound_rejected" && s.meta?.reason === "maxItems"));
     assert(!s.requests[1].some(u => new URL(u).pathname === "/api/products"));
     assert(!protocol(s.turns[1]).some(e => e.type === "products_block"));
+  },
+});
+
+Deno.test({
+  name: "strict HTTP: complete nine-item live exclusion set does not block confirmed selection",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    const ids = Array.from({ length: 9 }, (_, i) => `f1v${i + 1}`);
+    const s = await scenario("subject", ids);
+    const steps = s.logs[1].steps;
+    assert(!steps.some(s => s.step === "v3_derived_reasoning_array_bound_rejected"), JSON.stringify(steps));
+    assertEquals(s.declarationCalls, [1, 1]);
+    const declaration = steps.find(s => s.step === "v3_derived_selection_reasoning_requested");
+    assertEquals((declaration?.meta?.excluded_classifications as unknown[])?.length, 9);
+    assertEquals(declaration?.meta?.mandatory_excluded_classifications, []);
+    const blocks = protocol(s.turns[1]).filter(e => e.type === "products_block");
+    assertEquals(blocks.reduce((n, e) => n + Number(e.count), 0), 1, JSON.stringify(steps));
+    const cards = blocks.map(e => e.markdown).join("\n");
+    assert(cards.includes("/fixture-1/"), cards);
+    assert(!cards.includes("/fixture-2/") && !cards.includes("/fixture-3/"), cards);
+  },
+});
+
+Deno.test({
+  name: "strict HTTP: too many or unknown live exclusion IDs still reject before search",
+  permissions: { read: true, env: false, net: false },
+  async fn() {
+    for (const [ids, rejection] of [
+      [Array(11).fill("f1v1"), "v3_derived_reasoning_array_bound_rejected"],
+      [Array.from({ length: 9 }, (_, i) => i === 0 ? "f1v99" : `f1v${i + 1}`),
+        "v3_derived_reasoning_string_constraint_rejected"],
+    ] as const) {
+      const s = await scenario("subject", ids);
+      assertEquals(s.declarationCalls, [1, 1]);
+      assert(s.logs[1].steps.some(({ step, meta }) =>
+        step === rejection && meta?.path === "excluded_classifications" + (rejection.includes("string") ? ".*" : "")),
+      JSON.stringify(s.logs[1].steps));
+      assert(!s.requests[1].some(u => new URL(u).pathname === "/api/products"));
+      assert(!protocol(s.turns[1]).some(e => e.type === "products_block"));
+    }
   },
 });
 Deno.test({

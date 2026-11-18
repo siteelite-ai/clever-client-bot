@@ -105,3 +105,30 @@ Deno.test("changing the supply after partial project input invalidates previous 
   assert(result?.status === "ready");
   assertEquals(result.criteria[4].value, 400);
 });
+
+Deno.test("circuit dialogue is not limited to 7 kW or a particular nominal", () => {
+  for (const [load, supply, specification, current, poles, volts] of [
+    ["9 кВт", "400 В, три фазы", "По проекту C16, 3P, 10 кА", 16, 3, 400],
+    ["5 кВт", "220 В, одна фаза", "Электрик подтвердил B25, 2P, 6 кА", 25, 2, 220],
+  ] as const) {
+    const power = pending(`Нужен автомат для отдельной линии с нагрузкой ${load}`, "circuit_supply");
+    const project = pending(supply, "circuit_project", power);
+    const result = resolveCircuitProtection(specification, project);
+    assert(result?.status === "ready", JSON.stringify(result));
+    assertEquals(result.criteria[0].value, current);
+    assertEquals(result.criteria[1].value, poles);
+    assertEquals(result.criteria[4].value, volts);
+  }
+});
+
+Deno.test("an explicit project rating does not discharge a missing supply and cannot fabricate missing poles", () => {
+  const supply = pending("Нужен автомат для квартиры на 7 кВт. По проекту C32, 2P, 6 кА", "circuit_supply");
+  const line = pending("230 В, одна фаза", "circuit_line", supply);
+  const result = resolveCircuitProtection("Ввод квартиры", line);
+  assert(result?.status === "ready", JSON.stringify(result));
+  assertEquals(result.criteria.map(({ value }) => value), [32, 2, "C", 6, 230]);
+  const project = pending("Нужен автомат для отдельной линии на 7 кВт, одна фаза 230 В", "circuit_project");
+  const incomplete = pending("По проекту C32, 6 кА", "circuit_project", project);
+  assert(incomplete.question.includes("число полюсов"));
+  assertEquals(resolveCircuitProtection("Не знаю", incomplete)?.status, "stop");
+});
