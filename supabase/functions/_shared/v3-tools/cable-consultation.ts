@@ -10,15 +10,15 @@ export type CableConsultationState = {
 type Profile = "pump_cable" | "underground_cable";
 type Stage = "route" | "length" | "load" | "handoff";
 const CURRENT =
-  /(?<![\p{L}\p{N}.,-])(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:а|ампер(?:а|ов)?)(?![\p{L}\p{N}])/giu;
+  /(?<![\p{L}\p{N}.,+−–—-])([+−-]?\d{1,4}(?:[.,]\d{1,2})?)\s*(?:а|ампер(?:а|ов)?)(?![\p{L}\p{N}])/giu;
 const AMBIGUOUS =
-  /(?<!\p{L})(?:или|либо|примерно|около|порядка|наверно\p{L}*|кажется|не\s+уверен\p{L}*)(?!\p{L})|\d\s*[-–—]\s*\d|(?:[<>≈]|(?<!\p{L})до\s+)\s*\d/iu;
+  /(?<!\p{L})(?:или|либо|примерно|около|порядка|наверно\p{L}*|кажется|возможно|может\s+быть|если|не\s+уверен\p{L}*)(?!\p{L})|\d\s*[-–—]\s*\d|(?:[<>≈]|(?<!\p{L})до\s+)\s*\d/iu;
 const MISSING_SPECIFICATION =
   /не\s+знаю|неизвестн\p{L}*|нет\s+(?:маркировк\p{L}*|проект\p{L}*|паспорт\p{L}*)|нужна\s+помощь/iu;
 const SEPARATE_SELECTION =
   /^\s*(?:новая\s+тема|новый\s+вопрос|(?:(?:найд|подбер|подоб|покаж|предлож|посовет|нуж|хоч)\p{L}*\s+)?(?:розетк|удлинител|ламп|светильник|прожектор|автомат|стабилизатор|труб|муфт|наконечник)\p{L}*|(?:найд|подбер|подоб|покаж|предлож|посовет)\p{L}*\s+[^,.]*\b\d+\s*[xх×*])/iu;
 
-function routeIn(profile: Profile, text: string): Route | undefined {
+function routeIn(profile: Profile, text: string): Route[] {
   // Remove a negated phrase before testing the positive alternative. A bare
   // «в земле» does not establish whether there is a conduit.
   const routeText = text.replace(
@@ -33,7 +33,10 @@ function routeIn(profile: Profile, text: string): Route | undefined {
       .test(
         routeText.replace(/не\s+(?:будет\s+)?в\s+воде/giu, ""),
       );
-    return water === dry ? undefined : water ? "water" : "dry";
+    return [
+      ...(water ? ["water" as const] : []),
+      ...(dry ? ["dry" as const] : []),
+    ];
   }
   const direct =
     /(?:прямо|напрямую|непосредственно)\s+в\s+(?:грунт\p{L}*|земл\p{L}*)|(?:в\s+(?:грунт\p{L}*|земл\p{L}*)[^,.!?;]{0,18})?без\s+(?:защитной\s+)?труб\p{L}*/iu
@@ -46,58 +49,101 @@ function routeIn(profile: Profile, text: string): Route | undefined {
   const duct =
     /(?:в\s+(?:защитной\s+)?труб\p{L}*|в\s+(?:гофр\p{L}*|канал\p{L}*)|в\s+пнд|^пнд[.!]?\s*$)/iu
       .test(routeText);
-  return direct === duct ? undefined : direct ? "direct" : "duct";
+  return [
+    ...(direct ? ["direct" as const] : []),
+    ...(duct ? ["duct" as const] : []),
+  ];
 }
 
-function singleValue(text: string, re: RegExp): number | undefined {
-  const values = [
-    ...new Set(
-      [...text.matchAll(re)].map((m) => Number(m[1].replace(",", "."))),
-    ),
-  ];
-  return values.length === 1 && values[0] > 0 ? values[0] : undefined;
+function independentClauses(text: string): string[] {
+  return text.split(/(?:\.(?!\d)|(?<!\d)\.|[;!\n]+)/u).flatMap((sentence) => {
+    const groups: string[] = [];
+    for (const raw of sentence.split(/(?:,(?!\d)|(?<!\d),)/u)) {
+      const clause = raw.trim();
+      if (!clause) continue;
+      const previous = groups.at(-1);
+      // A comma before «или» does not turn the first alternative into a fact.
+      const dependent = /^(?:или|либо|а\s+может)(?!\p{L})/iu.test(clause) ||
+        /^(?:кажется|наверно\p{L}*|возможно|не\s+уверен\p{L}*)$/iu.test(
+          clause,
+        ) ||
+        (previous !== undefined && /^если(?!\p{L})/iu.test(previous) &&
+          !previous.includes(","));
+      if (previous && dependent) groups[groups.length - 1] += `, ${clause}`;
+      else groups.push(clause);
+    }
+    return groups;
+  });
 }
 
 function facts(
   profile: Profile,
   text: string,
   answeringLoad = false,
-): CableConsultationState {
+): {
+  confirmed: CableConsultationState;
+  uncertain: Set<keyof CableConsultationState>;
+} {
   // Statements after a question are usable, but a candidate phrased as a
   // question («а если в трубе?») is not a declared change of route.
-  text = text.replace(/[^.!?\n]*[?？]/gu, "");
-  if (AMBIGUOUS.test(text)) return {};
+  text = text.replace(/[^.;!?\n]*[?？]/gu, "");
   const clean = text.replace(
     /(?<!\p{L})не\s+\d+(?:[.,]\d+)?\s*(?:м|а|метр\p{L}*|ампер\p{L}*)(?![\p{L}\p{N}²])/giu,
     "",
   );
-  const route = routeIn(profile, clean);
-  const lengths = cableRouteLengthObservations(clean);
-  const exactLengths = [
-    ...new Set(
-      lengths.filter(({ bounded }) => !bounded).map(({ lower }) => lower),
-    ),
-  ];
-  const lengthM =
-    exactLengths.length === 1 && exactLengths[0] > 0 && exactLengths[0] < 1e4
-      ? exactLengths[0]
-      : undefined;
   const loadContext =
     /шильдик|номинальн\p{L}*|расч[её]тн\p{L}*|рабоч\p{L}*\s+ток|(?<!\p{L})ток\s*[:—–-]?\s*\d/iu;
   const excludedCurrent =
     /автомат|предохранител|пусков\p{L}*\s+ток|при\s+пуске/iu;
-  const loadClauses = clean.split(/(?:[,;.!\n](?!\d)|\s+и\s+)/u).filter((
-    clause,
-  ) =>
-    !excludedCurrent.test(clause) && (loadContext.test(clause) ||
-      (answeringLoad &&
-        /^\s*\d{1,4}(?:[.,]\d{1,2})?\s*(?:а|ампер\p{L}*)\s*$/iu.test(clause)))
-  );
-  const loadA = singleValue(loadClauses.join("; "), CURRENT);
+  const uncertain = new Set<keyof CableConsultationState>();
+  const routes = new Set<Route>(),
+    lengths = new Set<number>(),
+    loads = new Set<number>();
+  for (const clause of independentClauses(clean)) {
+    const ambiguous = AMBIGUOUS.test(clause);
+    for (const route of routeIn(profile, clause)) {
+      if (ambiguous) uncertain.add("route");
+      else routes.add(route);
+    }
+    for (const { lower, bounded } of cableRouteLengthObservations(clause)) {
+      if (ambiguous || bounded || lower <= 0 || lower >= 1e4) {
+        uncertain.add("lengthM");
+      } else lengths.add(lower);
+    }
+    for (const owner of clause.split(/\s+и\s+/u)) {
+      if (
+        excludedCurrent.test(owner) || !(loadContext.test(owner) ||
+          (answeringLoad &&
+            /^\s*\d{1,4}(?:[.,]\d{1,2})?\s*(?:а|ампер\p{L}*)\s*$/iu.test(
+              owner,
+            )))
+      ) continue;
+      for (const reading of owner.matchAll(CURRENT)) {
+        const value = Number(reading[1].replace(",", ".").replace("−", "-"));
+        if (ambiguous || value <= 0 || value >= 1e4) uncertain.add("loadA");
+        else loads.add(value);
+      }
+    }
+  }
+  function one<T>(
+    key: keyof CableConsultationState,
+    values: Set<T>,
+  ): T | undefined {
+    if (values.size > 1) uncertain.add(key);
+    return !uncertain.has(key) && values.size === 1
+      ? [...values][0]
+      : undefined;
+  }
+  const route = one("route", routes);
+  const lengthM = one("lengthM", lengths);
+  const loadA = one("loadA", loads);
   return {
-    ...(route ? { route } : {}),
-    ...(lengthM ? { lengthM } : {}),
-    ...(loadA ? { loadA } : {}),
+    confirmed: {
+      ...(route ? { route } : {}),
+      ...(lengthM ? { lengthM } : {}),
+      ...(loadA ? { loadA } : {}),
+    },
+    uncertain,
   };
 }
 
@@ -116,10 +162,11 @@ export function isCableConsultationReply(
   if (!known || !text || text.length > 350 || SEPARATE_SELECTION.test(text)) {
     return false;
   }
+  const observed = facts(known, text, true);
   return MISSING_SPECIFICATION.test(text) ||
-    Object.keys(facts(known, text, true)).length > 0 ||
+    Object.keys(observed.confirmed).length > 0 || observed.uncertain.size > 0 ||
     ((AMBIGUOUS.test(text) || /[?？]\s*$/u.test(text)) &&
-      (routeIn(known, text) !== undefined ||
+      (routeIn(known, text).length > 0 ||
         /(?:труб|грунт|земл|вод|метр|ампер|\d\s*[ма](?!\p{L}))/iu.test(text)));
 }
 
@@ -128,7 +175,7 @@ export function cableConsultation(input: {
   message: string;
   prior?: CableConsultationState;
   continuation: boolean;
-}): { state: CableConsultationState; stage: Stage; text: string } | null {
+}): { state: CableConsultationState; stage: Stage; text: string; specificationUnavailable?: boolean } | null {
   const profile = asProfile(input.profile);
   if (!profile) return null;
   const oldRoute = input.prior?.route;
@@ -161,23 +208,13 @@ export function cableConsultation(input: {
       delete state.route;
     }
   }
-  Object.assign(state, observed);
+  for (const key of observed.uncertain) delete state[key];
+  Object.assign(state, observed.confirmed);
   const handoff = (text: string) => ({
     state,
     stage: "handoff" as const,
     text,
   });
-  if (
-    input.continuation && MISSING_SPECIFICATION.test(input.message) &&
-    !Object.keys(observed).length
-  ) {
-    return handoff(
-      profile === "pump_cable"
-        ? "Если маркировки нет, для разговора с менеджером подготовьте модель или фото шильдика насоса и длину кабельной линии. Для участка в воде нужен паспортный допуск на погружение. Марку и сечение без этих данных не подтверждаю."
-        : "Без маркировки менеджеру пригодятся длина линии, данные нагрузки и способ прокладки. Для прямой укладки в грунт нужно проверить допуск по паспорту кабеля; марку и сечение наугад не рекомендую.",
-    );
-  }
-  const ambiguous = input.continuation && AMBIGUOUS.test(input.message);
   const routeNote: Record<Route, string> = {
     water:
       "Для участка в воде проверяют, допускает ли паспорт конкретного кабеля длительное погружение.",
@@ -188,7 +225,19 @@ export function cableConsultation(input: {
     duct:
       "Подземная труба меняет условия прокладки, но сама по себе не подтверждает пригодность кабеля.",
   };
-  if (!state.route || ambiguous && routeIn(profile, input.message)) {
+  if (
+    input.continuation && MISSING_SPECIFICATION.test(input.message) &&
+    !Object.keys(observed.confirmed).length && !observed.uncertain.size
+  ) {
+    // A missing specification is a terminal assistance choice, not a reason
+    // to ask it again or to replace the already confirmed route/measurements.
+    const note = state.route ? `${routeNote[state.route]} ` : "";
+    return {
+      ...handoff(`${note}Без маркировки менеджеру пригодится паспорт оборудования или проект линии. Указанные условия сохранены; марку и сечение наугад не рекомендую.`),
+      specificationUnavailable: true,
+    };
+  }
+  if (!state.route) {
     return {
       state,
       stage: "route",

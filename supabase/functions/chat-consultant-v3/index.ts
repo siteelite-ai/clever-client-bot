@@ -28650,6 +28650,17 @@ Deno.serve(async (req) => {
                 })
               ? proposedSpecificationQuery
               : null;
+            if (specificationLookupQuery) {
+              steps.push({
+                step: "v3_specification_lookup_requested",
+                ms: Date.now() - t0,
+                meta: {
+                  verified_scope: true,
+                  query_compiled: true,
+                  installation_suitability_confirmed: false,
+                },
+              });
+            }
             // A broad slot is deliberately absent from boundary classification.
             // Otherwise the existing "server-scoped clarification" shortcut turns
             // even a complete unrelated request into a Gallant continuation.
@@ -29653,6 +29664,15 @@ Deno.serve(async (req) => {
                 { progressive: scopedSelectionRequest.scoped || Boolean(connectionRefinement) },
               ));
             if (readinessClarification?.scope?.assistance?.version === 1 && readinessClarification.facet_key === "engineering_specification") {
+              steps.push({
+                step: "v3_cable_consultation_state",
+                ms: Date.now() - t0,
+                meta: {
+                  profile: readinessClarification.profile,
+                  handoff: Boolean(readinessClarification.scope.assistance.handoff),
+                  consultation: readinessClarification.scope.assistance.consultation ?? {},
+                },
+              });
               const phone = await lookupProductManagerPhone(supabase);
               if (phone) readinessClarification.scope.assistance.manager_phone = phone;
               readinessClarification.question += phone

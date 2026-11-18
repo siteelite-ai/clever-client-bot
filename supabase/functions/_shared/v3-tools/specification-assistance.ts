@@ -109,7 +109,7 @@ export function resolveSpecificationAssistance(
   });
   if (!advice) return null;
   const handoff = advice.stage === "handoff";
-  const lookupOffer = !active || handoff
+  const lookupOffer = !active || (handoff && !advice.specificationUnavailable)
     ? "\n\nЕсли есть маркировка из паспорта или проекта, напишите её — проверю наличие и цену."
     : "";
   return {

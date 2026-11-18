@@ -325,8 +325,32 @@ Deno.test("unknown specification becomes a manager handoff, not the same unanswe
     const prompt = resolveSpecificationAssistance({ message, verifiedSlot: issued(), newTask: false, enabled: true })!;
     assert(!/Укажите|например|\?/u.test(prompt.question), prompt.question);
     assert(/менеджер/iu.test(prompt.question));
+    assert(!prompt.question.includes("Если есть маркировка"));
     assertEquals(prompt.options, []);
     // Keep the verified scope so a later real marking can still be supplied.
     assertEquals(prompt.scope?.token, pump);
+  }
+});
+
+Deno.test("missing marking handoff keeps known route and measurements without requesting them again", () => {
+  for (const [request, consultation, note, excluded] of [
+    [pump, { route: "water", lengthM: 38, loadA: 6 }, "Для участка в воде", "Для сухого участка"],
+    [earth, { route: "duct", lengthM: 25 }, "Подземная труба", "Для прямой укладки"],
+    [earth, { route: "direct", lengthM: 42, loadA: 12 }, "Для прямой укладки", "Подземная труба"],
+  ] as const) {
+    const slot = issued(request);
+    slot.scope!.assistance!.consultation = { ...consultation };
+    const prompt = resolveSpecificationAssistance({
+      message: "Марку и сечение не знаю, нужна помощь.",
+      verifiedSlot: slot, newTask: false, enabled: true,
+    })!;
+    assertEquals(prompt.scope?.assistance?.consultation, consultation);
+    assert(prompt.question.includes(note));
+    assert(!prompt.question.includes(excluded));
+    assert(!/\?|Если есть маркировка|Какова длина|Какой.*ток/u.test(prompt.question));
+    assertEquals(specificationCatalogQuery({
+      message: "По паспорту: КГ 4*2,5", verifiedSlot: { ...slot, scope: prompt.scope },
+      newTask: false, enabled: true,
+    }), "Найди кабель КГ 4*2,5");
   }
 });

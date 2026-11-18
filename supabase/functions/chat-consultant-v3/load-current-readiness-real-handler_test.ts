@@ -159,7 +159,8 @@ async function runDialogue({
   typedParameters?: "confirmed" | "forged" | null;
   expectedConsultation?: Array<{
     phrase: string;
-    state?: { route: string; lengthM?: number; loadA?: number };
+    excludes?: string[];
+    state?: { route?: string; lengthM?: number; loadA?: number };
     handoff?: boolean;
   }>;
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
@@ -705,6 +706,11 @@ async function runDialogue({
           const markdown=String(cards[0].markdown);
           assert(markdown.includes("vvg-good"),markdown);assert(!markdown.includes("wrong-size"),markdown);
           assertEquals(row.final_products_count,1);
+          assert(row.steps.some(({ step, meta }) =>
+            step === "v3_specification_lookup_requested" &&
+            meta?.verified_scope === true &&
+            meta?.installation_suitability_confirmed === false
+          ));
           assert(visible.some(event=>event.type==="conversation_boundary" && event.mode==="new_task"));
           assert(!visible.some(event=>event.type==="quick_replies"));
         } else if (terminalMode === "motor_selection" || terminalMode === "motor_measurement_repair" || terminalMode === "motor_voltage_conjunction") {
@@ -930,8 +936,14 @@ async function runDialogue({
         } }).assistance;
         assertEquals(assistance?.consultation, expectedAdvice.state);
         assertEquals(Boolean(assistance?.handoff), Boolean(expectedAdvice.handoff));
+        const stateLog = row.steps.find(({step}) => step === "v3_cable_consultation_state");
+        assertEquals(stateLog?.meta?.consultation, expectedAdvice.state ?? {});
+        assertEquals(stateLog?.meta?.handoff, Boolean(expectedAdvice.handoff));
         const answer = publicText(events);
         assert(answer.includes(expectedAdvice.phrase), answer);
+        for (const excluded of expectedAdvice.excludes ?? []) {
+          assert(!answer.includes(excluded), answer);
+        }
         assertEquals((answer.match(/\?/gu) ?? []).length, expectedAdvice.handoff ? 0 : 1);
         assert(!visible.some((event) => event.type === "quick_replies"), JSON.stringify(visible));
         assertEquals(catalogProductRequests.length, 0);
@@ -1417,6 +1429,40 @@ for (const scenario of [
     ],
   },
   {
+    label: "client 22 wet pump keeps all archived inputs through missing marking and later resumes exact lookup",
+    messages: [
+      "Мне нужен кабель для насоса",
+      "Часть кабеля будет в воде, длина 38 м, 6 А по шильдику насоса",
+      "Марку и сечение не знаю, нужна помощь.",
+      "В проекте указан ВВГ 3*1,5. Проверь наличие и цену.",
+    ],
+    expectedFacets: Array(3).fill("engineering_specification"),
+    expectedProfile: "pump_cable",
+    terminalMode: "specification_lookup" as const,
+    expectedConsultation: [
+      { phrase: "погружён в воду" },
+      { phrase: "Длина и ток уже есть", state: { route: "water", lengthM: 38, loadA: 6 }, handoff: true },
+      {
+        phrase: "менеджеру пригодится паспорт оборудования или проект линии",
+        excludes: ["Для сухого участка", "Если есть маркировка", "длина линии", "ток указан на шильдике"],
+        state: { route: "water", lengthM: 38, loadA: 6 },
+        handoff: true,
+      },
+    ],
+  },
+  {
+    label: "client 22 handoff uses the confirmed conduit and does not request the unavailable marking again",
+    messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, длина 25 м",
+      "Марку и сечение не знаю, нужна помощь."],
+    expectedFacets: Array(3).fill("engineering_specification"), expectedProfile: "underground_cable",
+    expectedConsultation: [
+      { phrase: "прямо в грунте или в защитной трубе" },
+      { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
+      { phrase: "Подземная труба", excludes: ["Для прямой укладки", "Если есть маркировка"],
+        state: { route: "duct", lengthM: 25 }, handoff: true },
+    ],
+  },
+  {
     label: "underground consultation applies route correction, keeps length and hands off without asking twice",
     messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, длина 25 м",
       "Нет, без трубы, прямо в грунт", "Марку и сечение не знаю, нужна помощь."],
@@ -1426,6 +1472,32 @@ for (const scenario of [
       { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
       { phrase: "явное разрешение в паспорте", state: { route: "direct", lengthM: 25 } },
       { phrase: "марку и сечение наугад не рекомендую", state: { route: "direct", lengthM: 25 }, handoff: true },
+    ],
+  },
+  {
+    label: "pump consultation keeps known facts from mixed confidence replies and later looks up the exact marking",
+    messages: ["Мне нужен кабель для насоса", "Марку не знаю, часть кабеля в воде, длина примерно 30 м",
+      "Длина 32 м, ток по шильдику около 6 А", "По шильдику 6 А",
+      "В проекте указан ВВГ 3*1,5. Проверь наличие и цену."],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "pump_cable",
+    terminalMode: "specification_lookup" as const,
+    expectedConsultation: [
+      { phrase: "погружён в воду" },
+      { phrase: "длина линии", state: { route: "water" } },
+      { phrase: "ток указан на шильдике", state: { route: "water", lengthM: 32 } },
+      { phrase: "Длина и ток уже есть", state: { route: "water", lengthM: 32, loadA: 6 }, handoff: true },
+    ],
+  },
+  {
+    label: "underground consultation withdraws a disputed route without losing confirmed line length",
+    messages: ["Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, расчётный ток около 16 А, длина 25 м",
+      "Теперь не уверен: в трубе, или прямо в грунт", "Прямо в грунт, расчётный ток 16 А"],
+    expectedFacets: Array(4).fill("engineering_specification"), expectedProfile: "underground_cable",
+    expectedConsultation: [
+      { phrase: "прямо в грунте или в защитной трубе" },
+      { phrase: "расчётный ток линии", state: { route: "duct", lengthM: 25 } },
+      { phrase: "прямо в грунте или в защитной трубе", state: { lengthM: 25 } },
+      { phrase: "Длина и ток уже есть", state: { route: "direct", lengthM: 25, loadA: 16 }, handoff: true },
     ],
   },
 ]) Deno.test({
