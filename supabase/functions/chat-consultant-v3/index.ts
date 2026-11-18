@@ -721,9 +721,12 @@ import {
 } from "../_shared/v3-tools/semantic-compound-facet-proof.ts";
 import {
   exactCompoundClassPhrase,
+  exactCompoundTitleRelation,
+  selectCompleteCategoryAssortment,
   selectCompleteCategoryPrice,
 } from "../_shared/v3-tools/complete-category-price.ts";
 import {
+  exactCompoundUnitPriceBreakdown,
   exactCompoundSaleUnitChoices,
   exactCompoundUnitScopeNotice,
 } from "../_shared/v3-tools/exact-compound-sale-unit-choice.ts";
@@ -7456,26 +7459,22 @@ async function selectVerifiedExactCompoundProducts(
   registerPriceProof: (certificate: PriceExtremeCertificate) => boolean,
 ): Promise<ProductFull[]> {
   const started = Date.now();
+  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken, signal: ctx.turnSignal };
+  const classPhrase = exactCompoundClassPhrase(request);
+  const discoverExactCategory = () => classPhrase
+    ? executeDiscoverCategory({ noun: classPhrase }, {
+      ...catalogDeps,
+      openrouterApiKey: null,
+      forceFreshTaxonomy: true,
+      requireExactPagetitle: true,
+      timeoutMs: 5_000,
+    })
+    : Promise.resolve(null);
   if (request.priceDirection) {
     // A by_query response (including sort_cheapest) is only a bounded search
     // window, not proof of a catalog-wide minimum or maximum. Keep this route
     // separate from ordinary/exhaustive exact-compound selection.
-    const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
-    const classPhrase = exactCompoundClassPhrase(request);
-    const discovery = classPhrase
-      ? await executeDiscoverCategory(
-        { noun: classPhrase },
-        {
-          ...catalogDeps,
-          openrouterApiKey: ctx.openrouterKey,
-          forceFreshTaxonomy: true,
-          requireExactPagetitle: true,
-          // Taxonomy and options each have a bounded request budget; reserve
-          // time for the independent 18 s raw-price proof and SSE completion.
-          timeoutMs: 5_000,
-        },
-      )
-      : null;
+    const discovery = await discoverExactCategory();
     if (discovery?.ok) {
       setActiveCatalogFacetSchema(ctx.cache, discovery.facets);
     }
@@ -7576,7 +7575,10 @@ async function selectVerifiedExactCompoundProducts(
       });
       return [];
     }
-    if (proof.evidence.incomparable_unit_count > 0) {
+    const unitBreakdown = request.saleUnit ? null : exactCompoundUnitPriceBreakdown(proof.evidence.unit_examples ?? []);
+    if (unitBreakdown) {
+      send({ type: "delta", origin: "server", content: `\n\n${unitBreakdown}` });
+    } else if (proof.evidence.incomparable_unit_count > 0 && !request.saleUnit) {
       send({
         type: "delta",
         origin: "server",
@@ -7614,7 +7616,7 @@ async function selectVerifiedExactCompoundProducts(
         })),
       },
     });
-    if (proof.evidence.incomparable_unit_count > 0) {
+    if (proof.evidence.incomparable_unit_count > 0 && !request.saleUnit && !unitBreakdown) {
       const alternatives = exactCompoundSaleUnitChoices(
         request,
         proof.evidence.unit_options,
@@ -7639,6 +7641,61 @@ async function selectVerifiedExactCompoundProducts(
       },
     });
     return [winner];
+  }
+
+  if (request.exhaustive) {
+    const discovery = await discoverExactCategory();
+    const full = discovery?.ok
+      ? await selectCompleteCategoryAssortment({ request, discovery }, catalogDeps, ctx.cache)
+      : null;
+    const fallback = full?.ok ? null : await executeSearchCatalog({
+      mode: "by_query", query: request.query, per_page: 50,
+    }, catalogDeps, ctx.cache);
+    const fallbackRejected = { repeated: 0, unmatched_title: 0, no_stock_proof: 0, no_unit_proof: 0 };
+    const products = full?.ok ? full.products : (fallback?.ok ? fallback.results : []).flatMap((item, i, results) => {
+      if (results.findIndex(({ id }) => id === item.id) !== i) { fallbackRejected.repeated++; return []; }
+      const product = ctx.cache.get(item.id);
+      if (!product || exactCompoundTitleRelation(product.pagetitle, request) !== "match") {
+        fallbackRejected.unmatched_title++; return [];
+      }
+      if (product.warehouse_evidence !== "positive" || !product.warehouses?.length) { fallbackRejected.no_stock_proof++; return []; }
+      if (!product.unit || !/^[\p{L}\p{N}][\p{L}\p{N}./% -]{0,11}$/u.test(product.unit.trim())) {
+        fallbackRejected.no_unit_proof++; return [];
+      }
+      return [product];
+    });
+    const rendered = products.length ? executeRenderProducts({
+      product_ids: products.map(({ id }) => id), total_available: products.length,
+    }, ctx.cache) : null;
+    const catalogComplete = Boolean(full?.ok && full.evidence.unverified === 0);
+    const visible = rendered?.ok ? rendered.rendered_count : 0;
+    steps.push({ step: "v3_exact_compound_assortment_coverage", ms: Date.now() - t0,
+      meta: { scope: full?.ok ? "exact_category" : "bounded_query",
+        category_complete: catalogComplete,
+        category_failure: full && !full.ok ? full.reason : !discovery?.ok ? "discovery_unverified" : null,
+        category_pages: full?.ok ? full.leafPages : null,
+        checked: full?.ok ? full.evidence.raw_rows : fallback?.ok ? fallback.results.length : 0,
+        search_total: fallback?.ok ? fallback.total : null,
+        query_coverage: fallback?.ok ? fallback.candidate_coverage : null,
+        filtered_before_product_checks: fallback?.ok && fallback.candidate_coverage === "complete_query_window"
+          ? fallback.total - fallback.results.length : null,
+        exclusions: full?.ok ? full.evidence : fallbackRejected,
+        verified: products.length, rendered: visible, hidden_by_display_limit: products.length - visible } });
+    const scopeText = catalogComplete
+      ? "Проверил все страницы разделов точной категории, где могла быть эта маркировка."
+      : "Полноту каталога по этой маркировке подтвердить не удалось.";
+    if (!rendered?.ok) {
+      send({ type: "delta", origin: "server", content: `${scopeText} В проверенной выдаче не подтверждены позиции с точной маркировкой, ценой и остатком.` });
+      return [];
+    }
+    const unitText = new Set(products.map(({ unit }) => unit)).size > 1
+      ? " Цены указаны за единицу продажи каждой карточки." : "";
+    send({ type: "delta", origin: "server", content: `${scopeText} Показываю ${visible} из ${products.length} подтверждённых позиций с точной маркировкой и наличием.${unitText}` });
+    const plan = extendSelectionCriteriaPlan(null, [{ key: "Точная составная маркировка", op: "eq",
+      value: `${request.first}×${String(request.second).replace(".", ",")}`, level: "A", evidence: "user_explicit" }], "guarded_search");
+    send({ type: "products_block", markdown: rendered.markdown, count: visible, total_available: products.length,
+      selection_contract: { hash: plan.hash, mandatory_criteria: [...plan.mandatory_criteria] } });
+    return rendered.rendered_ids.map((id) => ctx.cache.get(id)!);
   }
 
   let effectiveQuery = request.query;
