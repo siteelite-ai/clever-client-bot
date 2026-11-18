@@ -2,6 +2,11 @@ import {
   type SelectionReadinessClarification,
   specificationAssistanceProfile,
 } from "./selection-readiness.ts";
+import {
+  cableConsultation,
+  type CableConsultationState,
+  isCableConsultationReply,
+} from "./cable-consultation.ts";
 const LIMIT = 4000;
 
 /** Syntax of a customer-owned cable specification, NOT engineering approval.
@@ -41,6 +46,20 @@ interface SpecificationInput {
   enabled: boolean;
 }
 
+/** A recognized description can continue a verified specification prompt
+ * without turning an engineering question into a stock search. */
+export function isVerifiedSpecificationConsultationReply(
+  message: string,
+  slot: Record<string, unknown> | null,
+): boolean {
+  if (slot?.facet_key !== "engineering_specification") return false;
+  const scope = slot.scope as { kind?: unknown; token?: unknown; assistance?: { version?: unknown } } | undefined;
+  if (scope?.kind !== "selection_readiness" || scope.assistance?.version !== 1 ||
+    typeof scope.token !== "string" || scope.token.length > LIMIT) return false;
+  const profile = specificationAssistanceProfile(scope.token);
+  return !!profile && isCableConsultationReply(profile, message);
+}
+
 /** Only a bare answer to the immediately verified specification prompt can
  * become an ordinary marking lookup. Never infer installation suitability. */
 export function specificationCatalogQuery(
@@ -65,8 +84,8 @@ export function specificationCatalogQuery(
   return specification ? `Найди кабель ${specification}` : null;
 }
 
-/** One free-text question, no status/confirmation chips, condition collection
- * or summary. Legacy issued assistance slots migrate to this prompt too. */
+/** One concrete free-text question per turn, no copying or unverified
+ * engineering product recommendations. Legacy slots retain exact lookup. */
 export function resolveSpecificationAssistance(
   input: SpecificationInput,
 ): SelectionReadinessClarification | null {
@@ -75,7 +94,7 @@ export function resolveSpecificationAssistance(
   const scope = slot?.scope as {
     kind?: unknown;
     token?: unknown;
-    assistance?: { version?: unknown };
+    assistance?: { version?: unknown; consultation?: CableConsultationState };
   } | undefined;
   const active = scope?.kind === "selection_readiness" &&
     scope.assistance?.version === 1 &&
@@ -84,18 +103,28 @@ export function resolveSpecificationAssistance(
   const original = active ? scope!.token as string : input.message;
   const profile = specificationAssistanceProfile(original);
   if (!profile) return null;
-  const handoff = active && /(?:не\s+знаю|неизвестн\p{L}*|нет\s+(?:маркировк\p{L}*|проект\p{L}*|паспорт\p{L}*)|нужна\s+помощь)/iu.test(input.message);
+  const advice = cableConsultation({
+    profile, message: input.message, prior: active ? scope?.assistance?.consultation : undefined,
+    continuation: Boolean(active),
+  });
+  if (!advice) return null;
+  const handoff = advice.stage === "handoff";
+  const lookupOffer = !active || (handoff && !advice.specificationUnavailable)
+    ? "\n\nЕсли есть маркировка из паспорта или проекта, напишите её — проверю наличие и цену."
+    : "";
   return {
     profile,
-    question: handoff
-      ? "Без маркировки из паспорта или проекта я не могу подтвердить подходящий кабель. С выбором марки и сечения поможет менеджер."
-      : "Укажите, пожалуйста, марку, число жил и сечение кабеля из паспорта или проекта, например «ВВГ 3*1,5». Проверю наличие и цены по маркировке, но не расчёт сечения для подключения.",
+    question: advice.text + lookupOffer,
     facet_key: "engineering_specification",
     options: [],
     scope: {
       kind: "selection_readiness",
       token: original,
-      assistance: { version: 1, ...(handoff ? { handoff: true } : {}) },
+      assistance: {
+        version: 1,
+        ...(handoff ? { handoff: true } : {}),
+        ...(Object.keys(advice.state).length ? { consultation: advice.state } : {}),
+      },
     },
   };
 }

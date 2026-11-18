@@ -346,6 +346,24 @@ const floodlightReadinessSlots = {
 };
 const verified = { serverIssuedScopeVerified: true };
 
+Deno.test("verified specification assistance resets only for an independent unambiguous application change", () => {
+  const requests = ["Мне нужен кабель для насоса", "Какой кабель подойдет для прокладки в земле?"];
+  const slot = (token: string) => ({pending_clarification: {
+    status: "pending", slot_id: "issued-application", facet_key: "engineering_specification",
+    scope: {kind: "selection_readiness", token, assistance: {version: 1}},
+  }});
+  for (const [previous, current] of [[requests[0], requests[1]], [requests[1], requests[0]]]) {
+    assertEquals(classifyPendingSelectionReadinessNewTaskLocally(current, slot(previous), verified),
+      {mode: "new_task", confidence: 1, reason: "local_verified_readiness_application_changed"});
+    assertEquals(classifyPendingSelectionReadinessNewTaskLocally(current, slot(previous)), null);
+  }
+  for (const message of [
+    "В трубе ПНД, длина 25 м", "Подбери для прокладки в земле",
+    "Какой кабель подойдёт для этого насоса?", "Найди другой кабель для насоса",
+    "Мне нужен кабель для насоса, часть трассы в земле",
+  ]) assertEquals(classifyPendingSelectionReadinessNewTaskLocally(message, slot(requests[1]), verified), null, message);
+});
+
 Deno.test("verified same-section choice outranks only a weak readiness new-task precheck", () => {
   const scope = {
     kind: "named_series_section" as const,
