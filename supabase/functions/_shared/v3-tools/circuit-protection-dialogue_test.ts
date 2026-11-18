@@ -55,6 +55,9 @@ Deno.test("circuit protection keeps new tasks and direct nominal orders out of m
       "Автомат 25 А для квартиры",
       "Покажи светильник на 12 В",
       "Светильник на 12 В",
+      "Ищу кабель для подземной линии",
+      "Нам нужны датчики на 12 В для линии",
+      "Мне нужен распределительный щит для линии",
     ]
   ) assertEquals(resolveCircuitProtection(text, prior), null, text);
 });

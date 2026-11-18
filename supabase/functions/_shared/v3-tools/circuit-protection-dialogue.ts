@@ -2,6 +2,7 @@ import { type Criterion, normalizeKey } from "./criteria-gate.ts";
 import type { Facet } from "./discover-category.ts";
 import {
   hasExplicitNewTaskPreface,
+  independentSelectionRequestBody,
   stripExplicitNewTaskPreface,
 } from "./request-preface.ts";
 import type { ProductFull } from "./types.ts";
@@ -260,7 +261,7 @@ export function isCircuitProtectionReply(
   const raw = message.trim();
   if (
     !isCircuitProtectionSlot(verifiedSlot) || !raw || raw.length > 500 ||
-    FRESH_REQUEST.test(raw) || hasExplicitNewTaskPreface(raw)
+    FRESH_REQUEST.test(raw) || independentSelectionRequestBody(raw) !== null || hasExplicitNewTaskPreface(raw)
   ) return false;
   if (UNKNOWN.test(raw)) return true;
   if (
