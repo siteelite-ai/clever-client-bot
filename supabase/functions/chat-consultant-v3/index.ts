@@ -255,7 +255,8 @@ import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-
 import { compileToolStringConstraints } from "../_shared/v3-tools/tool-string-constraints.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
-import {compileCustomerOperatingPointDomains, productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
+import {compileCustomerOperatingPointDomains, productProvesOperatingPointDomain, singleUncoveredCatalogOperatingPoint, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
+import { compileMotorProtectionPoleProof, productProvesMotorProtectionPoles } from "../_shared/v3-tools/motor-protection-poles.ts";
 import {
   verifiedDestinationAreaCoversSoleMeasurement,
   verifiedRenderedDestinationContextUnchanged,
@@ -11386,13 +11387,15 @@ async function runExpertLoop(
   // server-compiled relation is rechecked at catalog I/O and card egress.
   let certifiedMeasuredPointRange: MeasuredPointRangeCertificate | null = null;
   let certifiedOperatingPointDomains:OperatingPointDomain[]=[];
+  let motorProtectionPoleProof: ReturnType<typeof compileMotorProtectionPoleProof> = { status: "not_applicable" };
   let certifiedMeasuredConjunctionComplete = false;
   ctx.verifyMeasuredPointRangeRenderIds = (ids) =>
     ids.every((id) =>
       (!certifiedMeasuredPointRange || productProvesMeasuredPointRangeRelation(
         ctx.cache.get(id),
         certifiedMeasuredPointRange!,
-      )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain))
+      )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain)) &&
+      productProvesMotorProtectionPoles(ctx.cache.get(id), motorProtectionPoleProof)
     ) && filterAreaLightingIds(ids, "render").length === ids.length &&
     (!applicationLoad || applicationCardsPass(ids));
   let derivedStructuredSearchResult:
@@ -12526,16 +12529,23 @@ async function runExpertLoop(
     }
     const operatingPointSafe=pointRangeSafe.filter(product=>certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(product,domain)));
     if(operatingPointSafe.length<pointRangeSafe.length)steps.push({step:"v3_operating_point_domain_card_proof_rejected",ms:now(),meta:{before:pointRangeSafe.length,after:operatingPointSafe.length,facets:certifiedOperatingPointDomains.map(d=>d.facetKey)}});
+    const motorPoleSafe = operatingPointSafe.filter((product) =>
+      productProvesMotorProtectionPoles(product, motorProtectionPoleProof)
+    );
+    if (motorPoleSafe.length < operatingPointSafe.length) {
+      steps.push({ step: "v3_motor_protection_poles_card_proof_rejected", ms: now(),
+        meta: { before: operatingPointSafe.length, after: motorPoleSafe.length } });
+    }
     const classPriority = preferCustomerGroundedLiveClassification(
       areaLightingFit
         ? (() => {
           const eligible = new Set(filterAreaLightingIds(
-            operatingPointSafe.map(({ id }) => id),
+            motorPoleSafe.map(({ id }) => id),
             "final_cards",
           ));
-          return operatingPointSafe.filter(({ id }) => eligible.has(id));
+          return motorPoleSafe.filter(({ id }) => eligible.has(id));
         })()
-        : operatingPointSafe,
+        : motorPoleSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -14324,6 +14334,48 @@ async function runExpertLoop(
           }
           const focusContext = currentMeasurementRepairContext as ReturnType<typeof buildMeasurementRepairContext> | null;
           const failedObligation = focusContext?.failedObligation;
+          // No model retry can supply a missing working-voltage value in a
+          // unique live catalog facet. Keep the proven setting range, report
+          // the exact missing evidence and avoid an unscoped private search.
+          // Do not use this branch for ambiguous inputs or unsupported roles.
+          const uncoveredCatalogPoint =
+            repairReason === "product_measurement" &&
+              focusContext?.reason === "unresolved_customer_operating_point" &&
+              customerInputsAccepted && certifiedMeasuredPointRange &&
+              !replacementIntent && !presearchPairDecision.reference
+              ? singleUncoveredCatalogOperatingPoint(
+                verifiedCustomerMeasurementEvidence, lastDiscover?.facets ?? [],
+              )
+              : null;
+          if (uncoveredCatalogPoint && certifiedMeasuredPointRange) {
+            const { point, unit } = uncoveredCatalogPoint;
+            const recordUnit = unit === "кв" ? "кВ" : "В";
+            const current = certifiedMeasuredPointRange.value;
+            const notice = `Учёл питание ${point} ${recordUnit} и рабочий ток ${current} А. В каталоге есть диапазоны уставки, включающие ${current} А, но доступные характеристики не подтверждают рабочее напряжение ${point} ${recordUnit}. Поэтому не показываю неподтверждённые варианты. Если подбираете защиту для конкретного двигателя, сверьте рабочий ток и напряжение по шильдику; менеджеру поможет точная модель или паспорт.`;
+            send({ type: "delta", content: notice, origin: "server" });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({
+              step: "v3_catalog_operating_point_not_proven", ms: now(),
+              meta: {
+                point, unit, customer_load_a: current,
+                range_facet: certifiedMeasuredPointRange.facetKey,
+                accepted_range_count: certifiedMeasuredPointRange.acceptedValues.length,
+                correction_skipped: true,
+              },
+            });
+            recordClosureRetryOutcome(false, "catalog_operating_point_not_proven");
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+          if (motorProtectionPoleProof.status === "unverified") {
+            const reason = motorProtectionPoleProof.reason;
+            const notice = reason === "ambiguous_input"
+              ? "В условиях есть разные данные о числе фаз или полюсов. Уточните питание двигателя и требования к автомату по паспорту или проекту."
+              : "Трёхфазное питание учёл, но в каталоге не удалось подтвердить трёхполюсное исполнение для таких устройств. Неподтверждённые варианты не показываю.";
+            send({ type: "delta", content: notice, origin: "server" });
+            finalText += `${finalText ? "\n\n" : ""}${notice}`;
+            steps.push({ step: "v3_motor_protection_poles_unverified", ms: now(), meta: { reason } });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
           const repairBase = repairReason === "product_measurement" &&
               structuredMeasurementMode && failedObligation && declaration && declarationCall
             ? declarationCall
@@ -15009,6 +15061,10 @@ async function runExpertLoop(
           const derivedMandatoryCriteria = [
             ...scopedDerivedMandatory.criteria,
             ...certifiedPointCriterion,
+            ...(motorProtectionPoleProof.status === "verified" ? [{
+              key: motorProtectionPoleProof.caption, op: "eq" as const, value: "3",
+              level: "A" as const, evidence: "derived_required" as const,
+            }] : []),
           ];
           // A model may mention protection in a provisional B-level class,
           // while the frozen A-level plan still contains no such guard. The
@@ -15061,6 +15117,9 @@ async function runExpertLoop(
             derivedFacetProjection.options[
               certifiedMeasuredPointRange.facetKey
             ] = [...certifiedMeasuredPointRange.acceptedValues];
+          }
+          if (motorProtectionPoleProof.status === "verified") {
+            derivedFacetProjection.options[motorProtectionPoleProof.key] = [...motorProtectionPoleProof.values];
           }
           // The generic exact matcher is intentionally permissive for many
           // human labels. An environmental OR is stricter: intersect with the
@@ -20505,6 +20564,17 @@ async function runExpertLoop(
             },
           });
         }
+        if (tc.name === "search_catalog" && gateShortCircuit === null &&
+          motorProtectionPoleProof.status === "verified" &&
+          (runArgs.mode === "by_filter" || runArgs.mode === "by_query")) {
+          const opts = runArgs.options && typeof runArgs.options === "object"
+            ? runArgs.options as Record<string, string[]> : {};
+          runArgs.options = overlayMandatoryFacetOptions({
+            [motorProtectionPoleProof.key]: motorProtectionPoleProof.values,
+          }, opts);
+          steps.push({ step: "v3_motor_protection_poles_search_enforced", ms: now(),
+            meta: { facet: motorProtectionPoleProof.key, phases: 3 } });
+        }
         if (
           tc.name === "search_catalog" && gateShortCircuit === null &&
           certifiedMeasuredPointRange
@@ -22839,6 +22909,7 @@ async function runExpertLoop(
               lastDiscover = null;
               certifiedMeasuredPointRange = null;
               certifiedOperatingPointDomains=[];
+              motorProtectionPoleProof = { status: "not_applicable" };
               certifiedMeasuredConjunctionComplete = false;
               setActiveCatalogFacetSchema(ctx.cache, []);
             }
@@ -22851,6 +22922,9 @@ async function runExpertLoop(
             certifiedOperatingPointDomains=[];
             certifiedMeasuredConjunctionComplete = false;
             lastDiscover = result as unknown as DiscoverCategoryOk;
+            motorProtectionPoleProof = compileMotorProtectionPoleProof(
+              verifiedCustomerMeasurementEvidence, lastDiscover.category?.pagetitle ?? "", lastDiscover.facets,
+            );
             setActiveCatalogFacetSchema(ctx.cache, lastDiscover.facets);
             const loadCurrent = extractNominalLoadCurrent(userMessage);
             if (loadCurrent !== null) {

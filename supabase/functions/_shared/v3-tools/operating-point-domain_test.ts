@@ -6,6 +6,7 @@ import {
   compileCustomerOperatingPointDomains,
   productProvesOperatingPointDomain,
   resolveCustomerOperatingPointDomains,
+  singleUncoveredCatalogOperatingPoint,
 } from "./operating-point-domain.ts";
 import { compileMeasuredPointRangeRelation } from "./measured-point-range-relation.ts";
 import { compileMeasuredRequirementConjunction } from "./measured-requirement-conjunction.ts";
@@ -33,6 +34,48 @@ const certificate = compileMeasuredPointRangeRelation({
   point: { value: 6, unit: "А", source: "customer_load" },
   facets: [setting],
 })!;
+
+Deno.test("catalog gap is distinct from changing a customer's supply or mistaking insulation for working voltage", () => {
+  const raw =
+    "Нужен автомат защиты двигателя\n\n---\n\n220 В, 3 фазы\n\n---\n\nПрямой пуск\n\n---\n\n30 А";
+  assertEquals(singleUncoveredCatalogOperatingPoint(raw, [voltage]), {
+    point: 220,
+    unit: "в",
+  });
+  const clearlyCovered = {
+    ...voltage,
+    values: [...voltage.values, { value: "185-245" }],
+  };
+  assertEquals(
+    singleUncoveredCatalogOperatingPoint(raw, [clearlyCovered]),
+    null,
+  );
+  const insulation = {
+    ...voltage,
+    key: "insulation",
+    caption: "Номинальное напряжение изоляции, В",
+  };
+  assertEquals(singleUncoveredCatalogOperatingPoint(raw, [insulation]), null);
+  assertEquals(
+    singleUncoveredCatalogOperatingPoint(raw + "\n\n380 В, 3 фазы", [voltage]),
+    null,
+  );
+  assertEquals(
+    singleUncoveredCatalogOperatingPoint("питание не ниже 220 В", [voltage]),
+    null,
+  );
+  assertEquals(
+    singleUncoveredCatalogOperatingPoint(raw, [{ ...voltage, values: [] }]),
+    null,
+  );
+  assertEquals(
+    singleUncoveredCatalogOperatingPoint(raw, [voltage, {
+      ...voltage,
+      key: "other",
+    }]),
+    null,
+  );
+});
 
 Deno.test("standalone voltage-phase replies preserve supply role across completed customer turns", () => {
   const dialogue =
