@@ -51,8 +51,15 @@ function catalogProduct(id: number) {
   };
 }
 
+// All mock DB reads return the same approval, including final revalidation.
+const approvalReferenceMs = Date.now();
+
 function approvedRow(id: number) {
   const item = catalogProduct(id);
+  // These are invented offline rows. Give each a bounded relative validity
+  // window instead of a calendar date that eventually invalidates the test.
+  const now = approvalReferenceMs;
+  const day = 24 * 60 * 60 * 1_000;
   return {
     product_id: String(id),
     article: item.article,
@@ -61,11 +68,11 @@ function approvedRow(id: number) {
     source_url: "https://manufacturer.example/specification.pdf",
     document_version: "rev-1",
     document_page: 2,
-    verified_at: "2026-10-18T12:00:00.000Z",
-    valid_until: "2026-11-18T12:00:00.000Z",
+    verified_at: new Date(now - 2 * day).toISOString(),
+    valid_until: new Date(now + 29 * day).toISOString(),
     revoked_at: null,
     approval_status: "approved",
-    approved_at: "2026-10-19T12:00:00.000Z",
+    approved_at: new Date(now - day).toISOString(),
     approved_by: "fixture-reviewer",
     cutout_shape: "round",
     cutout_kind: id === 1 ? "exact" : "range",
