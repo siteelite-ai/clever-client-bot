@@ -1,6 +1,7 @@
 import { isAdditionalProductSelectionFollowup } from "./recent-product-evidence.ts";
 import { isIndependentExactProductInquiry } from "./independent-product-inquiry.ts";
 import { hasExplicitNewTaskPreface } from "./request-preface.ts";
+import { uniqueSpecificationAssistanceProfile } from "./selection-readiness.ts";
 import { compoundAttributeSelectionBoundary, isCompoundAttributeSelectionFollowup, isShortAttributeSelectionFollowup } from "./active-selection-scope.ts";
 
 export type ConversationMessage = {
@@ -211,6 +212,18 @@ export function classifyPendingSelectionReadinessNewTaskLocally(
   // the issued product class: `Подбери для стационарной прокладки ...` is not
   // a self-contained request, even if its purpose differs lexically.
   if (DEPENDENT_FRAME_BODY_RE.test(body)) return null;
+  // The same product noun can belong to different verified applications.
+  // A full independent request with one newly registered application must
+  // not inherit another application's route/current/length. Bare refinements,
+  // references and mixed-application requests remain subject to the gates above.
+  const assistance = scopeRecord.assistance as {version?: unknown} | undefined;
+  if (pendingRecord.facet_key === "engineering_specification" && assistance?.version === 1) {
+    const previousApplication = uniqueSpecificationAssistanceProfile(original);
+    const requestedApplication = uniqueSpecificationAssistanceProfile(current);
+    if (previousApplication && requestedApplication && previousApplication !== requestedApplication) {
+      return {mode: "new_task", confidence: 1, reason: "local_verified_readiness_application_changed"};
+    }
+  }
   const currentAnchors = [...new Set(scopedAnchorWords(body))];
   const originalAnchors = [...new Set(scopedAnchorWords(original))];
   if (currentAnchors.length === 0 || originalAnchors.length === 0) return null;

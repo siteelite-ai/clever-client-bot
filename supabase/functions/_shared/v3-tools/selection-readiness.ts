@@ -1123,6 +1123,13 @@ export function specificationAssistanceProfile(message: string): string | null {
   return PROFILES.find(profile => profile.specification_assistance && profile.applies.test(message))?.id ?? null;
 }
 
+/** Only unambiguous registered applications may prove a topic change.
+ * A pump line with an underground section may legitimately mention both. */
+export function uniqueSpecificationAssistanceProfile(message: string): string | null {
+  const matches = PROFILES.filter(profile => profile.specification_assistance && profile.applies.test(message));
+  return matches.length === 1 ? matches[0].id : null;
+}
+
 function readinessRequirementFacet(profile: ReadinessProfile, index: number): string {
   return profile.freeform_facets?.[index] ?? profile.follow_ups?.find(follow => follow.requirement_index === index)?.facet_key ??
     (index === profile.primary_requirement_index ? profile.facet_key : `selection_requirement_${index}`);

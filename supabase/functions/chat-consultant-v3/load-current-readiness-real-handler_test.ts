@@ -151,7 +151,7 @@ async function runDialogue({
   label: string;
   messages: string[];
   expectedFacets: string[];
-  expectedProfile: string;
+  expectedProfile: string | string[];
   expectedFinalOptions?: number;
   useLiveVoltageSchema?:boolean;
   livePrimaryTypeEvidence?: "owned" | "missing" | "accessory";
@@ -162,6 +162,7 @@ async function runDialogue({
     excludes?: string[];
     state?: { route?: string; lengthM?: number; loadA?: number };
     handoff?: boolean;
+    scopeToken?: string;
   }>;
   measurementRepairCase?: "omit_unproven" | "keep_unproven" | "overflow" | "malformed" | "unresolved" | "catalog_current" | "grounded_current" | null;
   /** Last turn answers PE, refers to a card, or enters measured selection. */
@@ -931,6 +932,10 @@ async function runDialogue({
       );
       const expectedAdvice = expectedConsultation[turn];
       if (expectedAdvice) {
+        if (expectedAdvice.scopeToken) {
+          assertEquals((pending.scope as {token?: string}).token, expectedAdvice.scopeToken);
+          if (turn > 0) assert(visible.some(event => event.type === "conversation_boundary" && event.mode === "new_task"));
+        }
         const assistance = (pending.scope as { assistance?: {
           handoff?: boolean; consultation?: Record<string, unknown>;
         } }).assistance;
@@ -951,7 +956,7 @@ async function runDialogue({
       assert(
         row.steps.some(({ step, meta }) =>
           step === "v3_selection_readiness_clarification" &&
-          meta?.profile === expectedProfile &&
+          meta?.profile === (Array.isArray(expectedProfile) ? expectedProfile[turn] : expectedProfile) &&
           meta?.facet_key === expectedFacets[turn]
         ),
         `${label}: readiness step missing: ${JSON.stringify(row.steps)}`,
@@ -1408,6 +1413,20 @@ Deno.test({
 });
 
 for (const scenario of [
+  {
+    label: "independent application switch clears pump facts for ground and clears ground facts for a pump",
+    messages: ["Мне нужен кабель для насоса", "Часть кабеля в воде, длина 38 м, ток по шильдику 6 А",
+      "Какой кабель подойдет для прокладки в земле?", "В трубе ПНД, длина 25 м", "Мне нужен кабель для насоса"],
+    expectedFacets: Array(5).fill("engineering_specification"),
+    expectedProfile: ["pump_cable", "pump_cable", "underground_cable", "underground_cable", "pump_cable"],
+    expectedConsultation: [
+      {phrase: "погружён в воду"},
+      {phrase: "Длина и ток уже есть", state: {route: "water", lengthM: 38, loadA: 6}, handoff: true},
+      {phrase: "прямо в грунте или в защитной трубе", scopeToken: "Какой кабель подойдет для прокладки в земле?"},
+      {phrase: "расчётный ток линии", state: {route: "duct", lengthM: 25}},
+      {phrase: "погружён в воду", scopeToken: "Мне нужен кабель для насоса"},
+    ],
+  },
   {label:"pump specification prompt",messages:["Мне нужен кабель для насоса"],expectedFacets:["engineering_specification"],expectedProfile:"pump_cable"},
   {label:"unknown specification does not start condition collection",messages:["Мне нужен кабель для насоса","Не знаю"],expectedFacets:["engineering_specification","engineering_specification"],expectedProfile:"pump_cable"},
   {label:"underground specification prompt",messages:["Какой кабель подойдет для прокладки в земле?"],expectedFacets:["engineering_specification"],expectedProfile:"underground_cable"},
