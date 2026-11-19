@@ -1014,10 +1014,9 @@ async function runDialogue({
           externalRequests > 0,
           `${label}: a resolved PE answer must advance beyond readiness`,
         );
-        assert(
-          staleCacheReads > 0,
-          `${label}: stale server cache row was not exercised`,
-        );
+        assertEquals(staleCacheReads, 0, `${label}: an authenticated answer must not read the stale product cache`);
+        assert(logs.at(-1)?.steps.some(s => s.step === "v3_dialogue_turn_state" &&
+          s.meta?.kind === "pending_answer" && s.meta?.requires_rendered_cards === false));
       } else {
         assertEquals(
           externalRequests,

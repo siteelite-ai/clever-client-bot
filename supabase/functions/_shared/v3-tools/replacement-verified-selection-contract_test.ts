@@ -102,9 +102,9 @@ function withApprovedRoundCutout(
       source_url: "https://manufacturer.example/specification.html",
       document_version: "rev-1",
       document_page: null,
-      verified_at: "2026-10-18T12:00:00.000Z",
-      valid_until: "2026-11-18T12:00:00.000Z",
-      approved_at: "2026-10-19T12:00:00.000Z",
+      verified_at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+      valid_until: new Date(Date.now() + 86_400_000).toISOString(),
+      approved_at: new Date(Date.now() - 86_400_000).toISOString(),
       approved_by: "reviewer-1",
     },
     technical: {
@@ -308,6 +308,13 @@ Deno.test("approved inclusive cut-out range supports the exact opening, not a di
     }),
     null,
   );
+});
+
+Deno.test("expired approval still cannot certify an otherwise matching range candidate", () => {
+  const ranged = withApprovedRoundCutout(product("expired", { diameter: "12" }), 90, 110);
+  ranged.verified_manufacturer_facts!.provenance.valid_until = new Date(Date.now() - 1_000).toISOString();
+  assertEquals(guardedStructuralSelectionContract({ profile: profile(), candidates: [ranged],
+    customerCutoutMm: 90, budgetCap: null, requested }), null);
 });
 
 Deno.test("approved opaque socket uses the same guarded proof in shortlist and final contract", () => {

@@ -71,9 +71,9 @@ test("direct preflight enforces budget and technical axes without source-brand m
     "utf8",
   );
   const dispatcher = source.slice(
-    source.indexOf("} else if (replacementSourceRequest) {"),
+    source.indexOf('} else if (action === "replacement" && replacementSourceRequest) {'),
     source.indexOf("} else {\n              const out = await runExpertLoop(",
-      source.indexOf("} else if (replacementSourceRequest) {")),
+      source.indexOf('} else if (action === "replacement" && replacementSourceRequest) {')),
   );
   assert.match(dispatcher, /coversBudgetCap:\s*extractBudgetCap\(replacementSourceRequest\) !== null/u);
 

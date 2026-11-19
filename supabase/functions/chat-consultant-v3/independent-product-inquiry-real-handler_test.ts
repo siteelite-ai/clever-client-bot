@@ -34,6 +34,7 @@ type Options = {
   unit?: string | null;
   candidates?: "sibling" | "ambiguous";
   message?: string;
+  productTitle?: string;
 };
 
 async function runCase(options: Options = {}) {
@@ -116,7 +117,7 @@ async function runCase(options: Options = {}) {
           const unit = options.unit === undefined ? "шт" : options.unit;
           const current = {
             id: 31088,
-            pagetitle: `Элемент питания NBT-CR2025-BP${
+            pagetitle: options.productTitle ?? `Элемент питания NBT-CR2025-BP${
               options.candidates === "sibling" ? "50" : "5"
             } Navigator`,
             article: "94764",
@@ -349,7 +350,7 @@ Deno.test({
   permissions: { read: true, env: false, net: false },
   async fn() {
     const result = await runCase({
-      message: "У этого NBT-CR2025-BP5 цена за штуку или за упаковку?",
+      message: "У этого цена за штуку или за упаковку?",
       history: true,
     });
     assert(
@@ -358,10 +359,30 @@ Deno.test({
       ),
     );
     assertEquals(result.catalogUrls.length, 0);
-    assertEquals(result.modelCalls, 0);
+    assert(result.modelCalls <= 1, "at most a boundary classification; no factual answer without old-batch proof");
     assertEquals(
       result.events.filter(({ type }) => type === "products_block").length,
       0,
     );
   },
 });
+
+for (const [message, productTitle] of [
+  ["Для какой площади может подойти этот светильник Светильник ДПБ MDPB 02-18 18W 6500K MODE?", "Светильник ДПБ MDPB 02-18 18W 6500K MODE"],
+  ["Светильник ДБО 3001 4Вт IP20 ИЭК подойдет ли этот светильник для улицы?", "Светильник ДБО 3001 4Вт IP20 ИЭК"],
+  ["Светильник LED ДПБ MDPB 3224 24W Crystal MODE этот светильник для светодиодных ламп подходит?", "Светильник LED ДПБ MDPB 3224 24W Crystal MODE"],
+  ["У этого NBT-CR2025-BP5 цена за штуку или упаковку?", "Элемент питания NBT-CR2025-BP5 Navigator"],
+] as const) {
+  Deno.test({ name: `HTTP: local determiner with a complete identity uses fresh lookup: ${productTitle}`,
+    permissions: { read: true, env: false, net: false }, async fn() {
+      const result = await runCase({ message, productTitle, history: true, oldLog: "unavailable", pending: "readiness" });
+      assertEquals(result.logReads.length, 0, "a failed old context cannot gate a new identity");
+      assert(result.catalogUrls.some(path => path.includes("/products?")));
+      assertEquals(result.steps.find(s => s.step === "v3_conversation_boundary")?.meta?.mode, "new_task");
+      assert(result.steps.some(s => s.step === "v3_exact_product_inquiry_answered" ||
+        s.step === "v3_independent_item_source_lookup" && s.meta?.verified === true), JSON.stringify(result.steps));
+      assert(!result.steps.some(s => /unverified_rendered_selection_context_rejected|recent_product_evidence_unproven_context_stopped/u.test(s.step)));
+      assertEquals(result.steps.find(s => s.step === "v3_dialogue_action_plan")?.meta?.operation, "item_facts");
+    },
+  });
+}

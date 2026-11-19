@@ -16,6 +16,12 @@ Deno.test("explicit item questions are independent across models, articles and p
       "Кабель ABC-123-45: цена указана за метр или упаковку?",
       "Светильник ZETA-907: какое напряжение указано в карточке?",
       "Артикул 1234567: цена указана за штуку или коробку?",
+      "У этого NBT-CR2025-BP5 цена за штуку или упаковку?",
+      "У данной NBT-CR2025-BP5 цена за штуку или упаковку?",
+      "У указанной NBT-CR2025-BP5 цена за штуку или упаковку?",
+      "Для какой площади освещения может подойти этот светильник Светильник светодиодный накладной ДПБ MDPB 02-18 18W 6500K MODE?",
+      "Светильник светодиодный ДБО 3001 4Вт 4000К IP20 311мм пластик ИЭК подойдет ли этот светильник для освещения придомовой территории?",
+      "Светильник LED накладной ДПБ MDPB 3224 24W Crystal 6500K MODE этот светильник для светодиодных ламп подходит?",
     ]
   ) assertEquals(isIndependentExactProductInquiry(query), true, query);
 });
@@ -31,12 +37,11 @@ Deno.test("a standalone exact-item question never requires old-card evidence", (
 Deno.test("repeated code does not erase a real previous-item reference or comparison", () => {
   for (
     const query of [
-      "У этого NBT-CR2025-BP5 цена за штуку или упаковку?",
-      "У данной NBT-CR2025-BP5 цена за штуку или упаковку?",
-      "У указанной NBT-CR2025-BP5 цена за штуку или упаковку?",
       "А у него цена за штуку?",
       "Почему этот ABC-123 дешевле?",
       "Сравни эти ABC-123 и XYZ-456",
+      "У ранее показанного ABC-123 цена за штуку?",
+      "Какой из этих ABC-123 дешевле?",
       "Предложи аналог NBT-CR2025-BP5",
       "А есть серебристые?",
       "6А",
@@ -46,7 +51,7 @@ Deno.test("repeated code does not erase a real previous-item reference or compar
   ) assertEquals(isIndependentExactProductInquiry(query), false, query);
   assertEquals(
     isEvidenceOnlyFollowup(
-      "У этого NBT-CR2025-BP5 цена за штуку или упаковку?",
+      "У этого цена за штуку или упаковку?",
     ),
     true,
   );

@@ -18,6 +18,9 @@ await import("./index.ts");
 const leaf = "Светильники";
 const sourceTitle =
   "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102";
+// Fresh synthetic approval, immutable across initial and final DB reads.
+// Changing timestamps on every read would correctly invalidate its digest.
+const fixtureNow = Date.now();
 const traits = [
   ["kind", "Вид светильника", "даунлайт"],
   ["mount", "Способ монтажа", "встраиваемый"],
@@ -61,11 +64,11 @@ function approvedRow(id: number) {
     source_url: "https://manufacturer.example/specification.pdf",
     document_version: "rev-1",
     document_page: 2,
-    verified_at: "2026-10-18T12:00:00.000Z",
-    valid_until: "2026-11-18T12:00:00.000Z",
+    verified_at: new Date(fixtureNow - 2 * 86_400_000).toISOString(),
+    valid_until: new Date(fixtureNow + 86_400_000).toISOString(),
     revoked_at: null,
     approval_status: "approved",
-    approved_at: "2026-10-19T12:00:00.000Z",
+    approved_at: new Date(fixtureNow - 86_400_000).toISOString(),
     approved_by: "fixture-reviewer",
     cutout_shape: "round",
     cutout_kind: id === 1 ? "exact" : "range",
