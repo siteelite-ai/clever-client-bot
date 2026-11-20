@@ -16,7 +16,7 @@ import {
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
-import { compileAcceptedApplicationProof, acceptedApplicationCardIssue } from "../_shared/v3-tools/accepted-application-proof.ts";
+import { compileAcceptedApplicationProof, createAcceptedApplicationCardVerifier } from "../_shared/v3-tools/accepted-application-proof.ts";
 import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
 import {
   integrationSecretBundleForV3,
@@ -10208,13 +10208,14 @@ async function runExpertLoop(
   let independentAreaCoverageLogged = false;
   let acceptedApplicationObligations: ReturnType<typeof compileAcceptedApplicationProof> = [];
   let acceptedApplicationObligationsBound = false;
+  let acceptedApplicationVerifier = createAcceptedApplicationCardVerifier([]);
   const applicationProofRejectedIds = new Set<string>();
   const applicationProofPassedIds = new Set<string>();
   const filterAcceptedApplicationIds = (ids: string[], phase: string): string[] => {
     if (!acceptedApplicationObligations.length) return ids;
     const rejected: Record<string, number> = {};
     const verified = ids.filter(id => {
-      const issue = acceptedApplicationCardIssue(ctx.cache.get(id), acceptedApplicationObligations);
+      const issue = acceptedApplicationVerifier.check(ctx.cache.get(id));
       if (!issue) {
         applicationProofPassedIds.add(id);
         applicationProofRejectedIds.delete(id);
@@ -10224,7 +10225,7 @@ async function runExpertLoop(
       applicationProofPassedIds.delete(id);
       rejected[issue] = (rejected[issue] ?? 0) + 1;return false;
     });
-    if(ids.length)steps.push({step:"v3_customer_application_card_proof",ms:now(),meta:{phase,examined:ids.length,verified:verified.length,rejected}});
+    if(ids.length)steps.push({step:"v3_customer_application_card_proof",ms:now(),meta:{phase,examined:ids.length,verified:verified.length,rejected,proof_memo:acceptedApplicationVerifier.stats()}});
     return verified;
   };
   const filterAreaLightingIds = (ids: string[], phase: string): string[] => {
@@ -11977,6 +11978,7 @@ async function runExpertLoop(
       customerInputsAccepted = true;
       if(!acceptedApplicationObligationsBound){
         acceptedApplicationObligations=compileAcceptedApplicationProof(args,userMessage,lastDiscover?.facets??[]);
+        acceptedApplicationVerifier=createAcceptedApplicationCardVerifier(acceptedApplicationObligations);
         acceptedApplicationObligationsBound=true;
         if(acceptedApplicationObligations.length)steps.push({step:"v3_customer_application_obligations_bound",ms:now(),meta:{
           source:"validated_customer_inputs",model_cannot_erase:true,
