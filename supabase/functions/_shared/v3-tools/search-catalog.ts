@@ -5,6 +5,7 @@ import type { CatalogCandidateCoverage, ProductCache, ProductRef, SearchCatalogO
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 import { catalogPageIdentityIssue, type CatalogPagination } from "./catalog-page-identity.ts";
+import { observeSelectionExecution, type SelectionExecutionTrace } from "./selection-execution-trace.ts";
 import {
   type CatalogFacetSchemaSnapshot,
   recordSuccessfulCatalogFacetFilter,
@@ -145,6 +146,8 @@ export interface CatalogClientDeps {
   /** Server-only exact-identity outage mode: one physical GET, no retry,
    * compound rewrite, pagination, sorting or category/facet fan-out. */
   singleRequest?: boolean;
+  /** Closed-preview diagnostics only; never included in model/tool payloads. */
+  executionTrace?: SelectionExecutionTrace;
 }
 
 export interface SearchCatalogInput {
@@ -449,6 +452,9 @@ async function singleSearch(
     if (deps.signal?.aborted) {
       return { ok: false, error_code: "catalog_timeout", message: "catalog search deadline exceeded" };
     }
+    observeSelectionExecution(deps.executionTrace, "catalog_request", {
+      per_page: perPage, page: input.page ?? 1, cache: cache.size,
+    });
     const res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
@@ -457,6 +463,7 @@ async function singleSearch(
         : controller.signal,
     });
 
+    observeSelectionExecution(deps.executionTrace, "catalog_headers", { status: res.status });
     if (!res.ok) {
       await res.body?.cancel();
       if (res.status === 429) return { ok: false, error_code: "rate_limited", message: `429 from catalog` };
@@ -473,6 +480,7 @@ async function singleSearch(
     const json = await res.json() as { data?: { results?: unknown[]; pagination?: CatalogPagination } };
     const hasRawResults = Array.isArray(json?.data?.results);
     const rawResults = hasRawResults ? json.data!.results! : [];
+    observeSelectionExecution(deps.executionTrace, "catalog_json", { rows: rawResults.length });
     const reportedTotal = json?.data?.pagination?.total;
     const total = Number(reportedTotal ?? rawResults.length) || 0;
     const candidateCoverage = hasRawResults
@@ -480,7 +488,11 @@ async function singleSearch(
       : "unknown";
 
     const results: ProductRef[] = [];
+    let examinedRows = 0;
     for (const raw of rawResults as Array<Record<string, unknown>>) {
+      if (examinedRows % 16 === 0) observeSelectionExecution(deps.executionTrace,
+        "catalog_normalizing", { examined: examinedRows, rows: rawResults.length, cache: cache.size });
+      examinedRows++;
       if (isRestrictedCatalogProduct(raw)) continue;
       const price = Number(raw.price);
       if (!Number.isFinite(price) || price <= 0) continue;
@@ -523,6 +535,9 @@ async function singleSearch(
       });
       results.push(ref);
     }
+    observeSelectionExecution(deps.executionTrace, "catalog_normalized", {
+      examined: examinedRows, rows: results.length, cache: cache.size,
+    });
     const requestedPage = input.page ?? 1;
     const rawCount = rawResults.length;
     const singlePageEvidence: CatalogSinglePageEvidence | undefined = deps.onSinglePageEvidence
@@ -793,6 +808,7 @@ export async function executeSearchCatalog(
   deps: CatalogClientDeps,
   cache: ProductCache,
 ): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  observeSelectionExecution(deps.executionTrace, "catalog_plan_start", { cache: cache.size });
   const facetSchemaAtExecution = snapshotActiveCatalogFacetSchema(cache);
   // Валидация режима.
   if (input.mode === "by_article" && !input.article) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_article requires article" };
@@ -858,6 +874,9 @@ export async function executeSearchCatalog(
   }
 
   const optionVariants = input.mode === "by_filter" ? expandOptionAlternatives(input) : [input];
+  observeSelectionExecution(deps.executionTrace, "catalog_plan_ready", {
+    categories: categories.length, alternatives: optionVariants.length,
+  });
   if (optionVariants.length > 1) warnings.push(`option_alternatives_fanout:${optionVariants.length}`);
   // An oversized OR facet falls back to a single aggregate request. The
   // upstream endpoint has not reliably implemented that OR, so even a fully

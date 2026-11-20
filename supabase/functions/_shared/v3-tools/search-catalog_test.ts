@@ -1,6 +1,32 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { executeSearchCatalog, isRestrictedCatalogProduct } from "./search-catalog.ts";
 import type { ProductCache } from "./types.ts";
+import { createSelectionExecutionTrace } from "./selection-execution-trace.ts";
+
+Deno.test("catalog checkpoints preserve result/cache and cannot leak input or fail selection", async () => {
+  const run = async (trace?: (phase: string, counts?: Readonly<Record<string, number>>) => void) => {
+    const cache: ProductCache = new Map();
+    const result = await executeSearchCatalog({ mode: "by_query", query: "PRIVATE_CUSTOMER_QUERY" }, {
+      baseUrl: "https://catalog.test", apiToken: "PRIVATE_TOKEN", executionTrace: trace,
+      fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ data: {
+        results: [{ id: "PRIVATE_SKU", pagetitle: "PRIVATE_PRODUCT_TITLE", price: 100,
+          url: "https://220volt.kz/catalog/a/b/private-product/" }], pagination: { total: 1 },
+      } }), { headers: { "content-type": "application/json" } })),
+    }, cache);
+    return { result, cache: [...cache] };
+  };
+  const records: string[] = [];
+  const trace = createSelectionExecutionTrace({ scope: "closure_preview",
+    logId: "97ae18f1-a964-498c-9baf-83343c822b3c", write: record => records.push(record) });
+  const plain = await run();
+  assertEquals(await run(trace), plain);
+  assertEquals(await run(() => { throw new Error("sink failed"); }), plain);
+  assertEquals(records.map(r => JSON.parse(r).phase), [
+    "catalog_plan_start", "catalog_plan_ready", "catalog_request", "catalog_headers",
+    "catalog_json", "catalog_normalizing", "catalog_normalized",
+  ]);
+  assertEquals(records.join("").includes("PRIVATE_"), false);
+});
 
 Deno.test("incomplete by-filter input exposes a structured recovery code", async () => {
   let fetched = false;

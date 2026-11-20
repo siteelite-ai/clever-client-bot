@@ -15,6 +15,7 @@ import {
   runWithDeadline,
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
+import { createSelectionExecutionTrace, type SelectionExecutionTrace } from "../_shared/v3-tools/selection-execution-trace.ts";
 import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
 import { compileAcceptedApplicationProof, createAcceptedApplicationCardVerifier } from "../_shared/v3-tools/accepted-application-proof.ts";
 import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
@@ -1316,6 +1317,8 @@ async function loadSettings(
 // ─── Tool dispatch ──────────────────────────────────────────────────────────
 
 interface ToolContext {
+  /** Bootstrap-scoped durable checkpoints, independent of terminal SQL logs. */
+  executionTrace?: SelectionExecutionTrace;
   cache: ProductCache;
   supabase: SupabaseClient;
   /** Shared request deadline; optional for isolated tool tests. */
@@ -1356,6 +1359,18 @@ function authorizeJargonCatalogCandidate(
     JSON.stringify(guarded.args) === JSON.stringify(candidate);
 }
 
+function traceCatalogDispatch(ctx: ToolContext, input: SearchCatalogInput): void {
+  if (!ctx.executionTrace) return;
+  const values = Object.values(input.options ?? {});
+  ctx.executionTrace("search_dispatch", {
+    options: values.length,
+    option_values: values.reduce((count, row) => count + (Array.isArray(row) ? row.length : 0), 0),
+    categories: input.category_in?.length ?? (input.category ? 1 : 0),
+    per_page: input.per_page ?? 10,
+    cache: ctx.cache.size,
+  });
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
@@ -1374,14 +1389,20 @@ async function runTool(
       Object.assign(args, guarded.args);
     }
   }
-  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken, executionTrace: ctx.executionTrace };
   if (name === "search_catalog") {
+    traceCatalogDispatch(ctx, args as unknown as SearchCatalogInput);
     let result = await executeSearchCatalog(
       args as unknown as SearchCatalogInput,
       catalogDeps,
       ctx.cache,
     );
-    if (result.ok && ctx.filterSelectionCandidates) result = ctx.filterSelectionCandidates(result);
+    ctx.executionTrace?.("catalog_returned", { rows: result.ok ? result.results.length : 0, cache: ctx.cache.size });
+    if (result.ok && ctx.filterSelectionCandidates) {
+      ctx.executionTrace?.("candidate_filter_start", { rows: result.results.length });
+      result = ctx.filterSelectionCandidates(result);
+      ctx.executionTrace?.("candidate_filter_done", { rows: result.results.length });
+    }
     ctx.observeCatalogToolResult?.(result);
     return result;
   }
@@ -10045,6 +10066,7 @@ async function runExpertLoop(
   const applicationProofPassedIds = new Set<string>();
   const filterAcceptedApplicationIds = (ids: string[], phase: string): string[] => {
     if (!acceptedApplicationObligations.length) return ids;
+    ctx.executionTrace?.("application_proof_start", { examined: ids.length, obligations: acceptedApplicationObligations.length });
     const rejected: Record<string, number> = {};
     const verified = ids.filter(id => {
       const issue = acceptedApplicationVerifier.check(ctx.cache.get(id));
@@ -10058,6 +10080,7 @@ async function runExpertLoop(
       rejected[issue] = (rejected[issue] ?? 0) + 1;return false;
     });
     if(ids.length)steps.push({step:"v3_customer_application_card_proof",ms:now(),meta:{phase,examined:ids.length,verified:verified.length,rejected,proof_memo:acceptedApplicationVerifier.stats()}});
+    ctx.executionTrace?.("application_proof_done", { examined: ids.length, verified: verified.length });
     return verified;
   };
   const filterAreaLightingIds = (ids: string[], phase: string): string[] => {
@@ -10137,8 +10160,15 @@ async function runExpertLoop(
       }
       args[0] = guarded.args as unknown as SearchCatalogInput;
     }
+    traceCatalogDispatch(ctx, args[0]);
+    args[1] = { ...args[1], executionTrace: ctx.executionTrace };
     let result = await executeSearchCatalog(...args);
-    if (result.ok && ctx.filterSelectionCandidates) result = ctx.filterSelectionCandidates(result);
+    ctx.executionTrace?.("catalog_returned", { rows: result.ok ? result.results.length : 0, cache: ctx.cache.size });
+    if (result.ok && ctx.filterSelectionCandidates) {
+      ctx.executionTrace?.("candidate_filter_start", { rows: result.results.length });
+      result = ctx.filterSelectionCandidates(result);
+      ctx.executionTrace?.("candidate_filter_done", { rows: result.results.length });
+    }
     ctx.observeCatalogToolResult?.({ ...result, tool: "search_catalog" });
     return result;
   };
@@ -11810,6 +11840,7 @@ async function runExpertLoop(
         acceptedApplicationObligations=compileAcceptedApplicationProof(args,userMessage,lastDiscover?.facets??[]);
         acceptedApplicationVerifier=createAcceptedApplicationCardVerifier(acceptedApplicationObligations);
         acceptedApplicationObligationsBound=true;
+        ctx.executionTrace?.("readiness_bound", { obligations: acceptedApplicationObligations.length });
         if(acceptedApplicationObligations.length)steps.push({step:"v3_customer_application_obligations_bound",ms:now(),meta:{
           source:"validated_customer_inputs",model_cannot_erase:true,
           obligations:acceptedApplicationObligations.map(({parameter,quote,alternatives,protection,unresolved})=>({parameter,quote,alternative_count:alternatives.length,protection:protection?.status??"not_applicable",unresolved})),
@@ -29462,6 +29493,7 @@ Deno.serve(async (req) => {
 
             const cache: ProductCache = new Map();
             const ctx: ToolContext = {
+              executionTrace: createSelectionExecutionTrace({ scope: CLOSURE_TEST_MARKER, logId }),
               cache,
               supabase,
               turnSignal,
