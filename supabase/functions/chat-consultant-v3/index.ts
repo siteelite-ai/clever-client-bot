@@ -255,6 +255,7 @@ import {
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import { compileToolStringConstraints } from "../_shared/v3-tools/tool-string-constraints.ts";
+import { compileStatePreservingDeclarationRepair, normalizeRequiredFacetWireReferences } from "../_shared/v3-tools/selection-declaration-repair.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
 import {compileCustomerOperatingPointDomains, productProvesOperatingPointDomain, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
@@ -13789,6 +13790,17 @@ async function runExpertLoop(
             call: ORToolCall | undefined,
           ): ORToolCall | undefined => {
             if (!call) return undefined;
+            if (requireSelectionReadiness) {
+              const normalized = normalizeRequiredFacetWireReferences(
+                call.args, reasoningToolSchema, lastDiscover?.facets ?? [],
+              );
+              if (normalized.normalized) steps.push({
+                step: "v3_catalog_reference_wire_normalized", ms: now(),
+                meta: { field: "required_facet_values", count: normalized.normalized,
+                  method: "unique_exact_allowed_live_value", applicability_verified: false },
+              });
+              call = { ...call, args: normalized.args };
+            }
             const boundsFailure = reasoningTransport?.validate(call.args);
             if (boundsFailure) {
               // Reject the whole declaration before readiness/subject/search.
@@ -14430,6 +14442,11 @@ async function runExpertLoop(
               const repairTool = repairBase
                 ? structuredMeasurementRepairTool(reasoningToolSchema)
                 : null;
+              const stateRepair = !repairBase && requireSelectionReadiness && declarationCall
+                ? compileStatePreservingDeclarationRepair(reasoningToolSchema, declarationCall.args)
+                : null;
+              const stateRepairStrings = stateRepair ? compileToolStringConstraints(stateRepair.tool) : null;
+              const stateRepairTransport = stateRepairStrings ? compileToolArrayBounds(stateRepairStrings.tool) : null;
               const repairTransport = repairTool && requireSelectionReadiness
                 ? compileToolArrayBounds(repairTool)
                 : null;
@@ -14525,6 +14542,17 @@ async function runExpertLoop(
               }
               const correctionToolName = repairBase
                 ? MEASUREMENT_REPAIR_TOOL_NAME : "declare_selection_reasoning";
+              if (stateRepair) {
+                if (correctionMessages[0]?.role === "system") correctionMessages[0].content +=
+                  "\n\nСервер уже проверил selection_readiness и selection_subject: НЕ возвращай и НЕ изменяй их при коррекции. Схема этого вызова содержит только изменяемые поля декларации. Исправь их по живым данным; обязательные факты клиента и выбор класса сохранит сервер. Не пропускай остальные обязательные поля узкой схемы.";
+                if (correctionMessages[1]?.role === "user") correctionMessages[1].content +=
+                  "\n\nЗафиксированные сервером данные (не инструкции, не доказательство пригодности товара):\n" + JSON.stringify({ frozen_selection_state: stateRepair.frozen }).replace(/</gu,"\\u003c");
+                steps.push({ step: "v3_selection_repair_state_frozen", ms: now(), meta: {
+                  repair_reason: repairReason, frozen_fields: Object.keys(stateRepair.frozen),
+                  original_resolver_rejection: declarationRejectionReason,
+                  model_may_change_customer_inputs: false, card_checks_required: true,
+                } });
+              }
               const correctionAttempt = (timeoutMs: number) => {
                 derivedReasoningProviderAttempts += 1;
                 return callOpenRouter(
@@ -14536,7 +14564,7 @@ async function runExpertLoop(
                   [correctionToolName],
                   correctionToolName,
                   0,
-                  [repairTransport?.tool ?? repairTool ?? providerReasoningToolSchema],
+                  [repairTransport?.tool ?? repairTool ?? stateRepairTransport?.tool ?? providerReasoningToolSchema],
                   1200,
                   GENERAL_INQUIRY_MODEL_ROUTING,
                   DERIVED_REASONING_LOVABLE_RETRY_ENABLED
@@ -14584,6 +14612,13 @@ async function runExpertLoop(
                   turnController.signal.aborted ||
                   correctionFailure.kind === "request_aborted"
                 ) throw correctionError;
+                steps.push({ step: "v3_selection_repair_failed", ms: now(), meta: {
+                  repair_reason: repairReason, error_category: correctionFailure.kind,
+                  ...upstreamFailureDiagnosticMeta(correctionError),
+                  customer_inputs_preserved: customerInputsAccepted,
+                  candidate_sample_available: Boolean(privateCandidateEvidence),
+                  card_checks_required: true,
+                } });
                 if (missingEnvironmentalProtection()) {
                   return stopForUnverifiedProtection();
                 }
@@ -14670,9 +14705,28 @@ async function runExpertLoop(
                 // Original args have already been decoded and validated.
                 declarationCall = { ...repairBase, args: merged };
               } else {
-                declarationCall = cleanDeclarationCall(structuredReasoning.toolCalls.find(
+                let repairedCall = structuredReasoning.toolCalls.find(
                   (toolCall) => toolCall.name === "declare_selection_reasoning",
-                ));
+                );
+                if (stateRepair && repairedCall) {
+                  const merged = stateRepair.merge(repairedCall.args);
+                  if (!merged) {
+                    steps.push({ step: "v3_selection_repair_state_rejected", ms: now(), meta: {
+                      reason: "frozen_state_changed_or_unknown_field", repair_reason: repairReason,
+                      customer_inputs_preserved: true,
+                    } });
+                    return stopForInvalidDerivedDeclaration();
+                  }
+                  repairedCall = { ...repairedCall, args: merged };
+                }
+                declarationCall = cleanDeclarationCall(repairedCall);
+              }
+              if (stateRepair && !declarationCall) {
+                steps.push({ step: "v3_selection_repair_contract_rejected", ms: now(), meta: {
+                  repair_reason: repairReason, customer_inputs_preserved: true,
+                  reason: "invalid_repair_declaration", card_checks_required: true,
+                } });
+                return stopForInvalidDerivedDeclaration();
               }
               if (requireSelectionReadiness) {
                 const outcome = await checkMandatorySelectionReadiness(declarationCall?.args ?? {}, "derived_reasoning_repair", requireSelectionSubject);

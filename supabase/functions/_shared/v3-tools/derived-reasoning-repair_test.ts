@@ -191,7 +191,7 @@ Deno.test("a failed invalid-declaration retry is logged and fails closed without
   );
   const catchStart = source.indexOf("} catch (correctionError) {");
   const catchEnd = source.indexOf(
-    "declarationCall = cleanDeclarationCall(",
+    "if (repairBase) {",
     catchStart,
   );
   assertEquals(catchStart >= 0 && catchEnd > catchStart, true);
@@ -217,12 +217,14 @@ Deno.test("a failed invalid-declaration retry is logged and fails closed without
     retryFailureBranch,
     "return stopForInvalidDerivedDeclaration();",
   );
-  // The same terminal is used when the retry returns an unusable declaration;
-  // both paths emit one honest notice and never expose unverified cards.
+  // Both legacy paths and the two new frozen-state/repair-wire rejection
+  // paths must use the same fail-closed terminal, never expose cards.
   assertEquals(
     source.match(/return stopForInvalidDerivedDeclaration\(\);/gu)?.length,
-    2,
+    4,
   );
+  assertStringIncludes(source, 'step: "v3_selection_repair_state_rejected"');
+  assertStringIncludes(source, 'step: "v3_selection_repair_contract_rejected"');
 });
 
 Deno.test("valid declarations keep the existing environment, pair and measurement priority", () => {
@@ -555,7 +557,7 @@ Deno.test("transport retry is confined to product-measurement correction and the
       '"derived_reasoning",',
       "[correctionToolName],",
       "correctionToolName,",
-      "[repairTransport?.tool ?? repairTool ?? providerReasoningToolSchema],",
+      "[repairTransport?.tool ?? repairTool ?? stateRepairTransport?.tool ?? providerReasoningToolSchema],",
       "GENERAL_INQUIRY_MODEL_ROUTING,",
     ]
   ) {
@@ -563,11 +565,14 @@ Deno.test("transport retry is confined to product-measurement correction and the
   }
   // One transport attempt function closes over the same selected schema on
   // retry. Focused measurement repair defers and validates its own bounds;
-  // all other correction routes retain the primary wire contract.
+  // other correction routes either retain the primary wire or omit already
+  // confirmed customer state and merge it back before the original guards.
   assertStringIncludes(source, "reasoningTransport?.tool ?? reasoningToolSchema");
   assertStringIncludes(source, "reasoningTransport?.validate(call.args)");
   assertStringIncludes(source, "compileToolArrayBounds(repairTool)");
   assertStringIncludes(source, "repairTransport?.validate(validated.args)");
+  assertStringIncludes(source, "stateRepair.merge(repairedCall.args)");
+  assertStringIncludes(source, "declarationCall = cleanDeclarationCall(repairedCall)");
   assertStringIncludes(source, "validateMeasurementRepairResponse(structuredReasoning.toolCalls.map(call => {");
   assertStringIncludes(source, "const decoded = decodeMeasurementCall(call);");
   assertEquals(
