@@ -92,6 +92,10 @@ function withApprovedRoundCutout(
   min: number,
   max: number,
 ): ProductFull {
+  // A fresh synthetic approval window, not an extension of real catalogue
+  // evidence. Keep the runtime expiry guard and all assertions enabled.
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1_000;
   const facts: VerifiedManufacturerFacts = {
     binding: {
       product_id: candidate.id,
@@ -124,6 +128,19 @@ function withApprovedRoundCutout(
   };
   return { ...candidate, verified_manufacturer_facts: facts };
 }
+
+Deno.test("an expired synthetic approval still cannot enter the final structural contract", () => {
+  const candidate = withApprovedRoundCutout(product("expired", { diameter: "12" }), 90, 110);
+  candidate.verified_manufacturer_facts!.provenance.valid_until =
+    new Date(Date.now() - 1_000).toISOString();
+  assertEquals(guardedStructuralSelectionContract({
+    profile: profile(),
+    candidates: [candidate],
+    customerCutoutMm: 90,
+    budgetCap: null,
+    requested,
+  }), null);
+});
 
 Deno.test("guarded contract is common verified source/candidate proof, not a generic-diameter promise", () => {
   const sourceProfile = profile();

@@ -54,8 +54,15 @@ function catalogProduct(id: number) {
   };
 }
 
+// All mock DB reads return the same approval, including final revalidation.
+const approvalReferenceMs = Date.now();
+
 function approvedRow(id: number) {
   const item = catalogProduct(id);
+  // These are invented offline rows. Give each a bounded relative validity
+  // window instead of a calendar date that eventually invalidates the test.
+  const now = approvalReferenceMs;
+  const day = 24 * 60 * 60 * 1_000;
   return {
     product_id: String(id),
     article: item.article,
