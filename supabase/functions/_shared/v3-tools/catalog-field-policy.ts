@@ -7,7 +7,7 @@
  * The policy is category-neutral. It classifies schema roles, not products,
  * brands or values.
  */
-export function isAdministrativeCatalogField(
+function classifyAdministrativeCatalogField(
   field: { key?: unknown; caption?: unknown },
 ): boolean {
   const key = String(field?.key ?? "")
@@ -58,4 +58,30 @@ export function isAdministrativeCatalogField(
   ) return true;
 
   return false;
+}
+
+// A category repeats the same schema key/caption on every product and in
+// several evidence projections. The classification is a pure policy over
+// those two strings, not product values. Keep its predicates unchanged and
+// avoid normalizing/testing the identical schema thousands of times.
+const schemaRoleMemo = new Map<string, boolean>();
+export function isAdministrativeCatalogField(
+  field: { key?: unknown; caption?: unknown },
+): boolean {
+  const key = String(field?.key ?? "");
+  const caption = String(field?.caption ?? "");
+  // Bound retained schema text and entries, without changing long-input
+  // behavior. Such inputs still pass through the exact original policy.
+  if (key.length > 512 || caption.length > 512) {
+    return classifyAdministrativeCatalogField({ key, caption });
+  }
+  const signature = JSON.stringify([key, caption]);
+  const cached = schemaRoleMemo.get(signature);
+  if (cached !== undefined) return cached;
+  const decision = classifyAdministrativeCatalogField({ key, caption });
+  schemaRoleMemo.set(signature, decision);
+  if (schemaRoleMemo.size > 512) {
+    schemaRoleMemo.delete(schemaRoleMemo.keys().next().value!);
+  }
+  return decision;
 }
