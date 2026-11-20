@@ -3,6 +3,40 @@ import { executeSearchCatalog, isRestrictedCatalogProduct } from "./search-catal
 import type { ProductCache } from "./types.ts";
 import { createSelectionExecutionTrace } from "./selection-execution-trace.ts";
 
+Deno.test("exact filtered cursor reads one page even for an unmaterialized total or 429", async () => {
+  for (const status of [200, 429]) {
+    const urls: string[] = [];
+    const result = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf", page: 2,
+      per_page: 50, max_price: 2000, options: { axis: ["owned"] } }, {
+      baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true,
+      fetchImpl: url => { urls.push(String(url)); return Promise.resolve(new Response(JSON.stringify({ data: {
+        results: [], pagination: { page: 2, per_page: 50, pages: 4, total: 200 },
+      } }), { status, headers: { "content-type": "application/json" } })); },
+    }, new Map());
+    assertEquals(urls.length, 1);
+    assertEquals(new URL(urls[0]).searchParams.get("page"), "2");
+    assertEquals(new URL(urls[0]).searchParams.get("max_price"), "2000");
+    assertEquals(new URL(urls[0]).searchParams.get("options[axis][]"), "owned");
+    assertEquals(result.ok, status === 200);
+  }
+});
+Deno.test("exact filtered cursor cannot hide sorting, OR or cross-category expansion", async () => {
+  for (const patch of [{ sort_cheapest: true }, { category_in: ["Other"] },
+    { options: { axis: ["a", "b"] } }, { page: 1.5 }, { per_page: 200 }, { query: "term" }]) {
+    let calls = 0;
+    const result = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf", ...patch }, {
+      baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true,
+      fetchImpl: () => { calls++; throw new Error("No request may escape invalid cursor input"); },
+    }, new Map());
+    assertEquals(calls, 0); assertEquals(result.ok, false);
+  }
+  const conflict = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf" }, {
+    baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true, singleRequest: true,
+    fetchImpl: () => { throw new Error("Conflicting server contracts cannot override the identity-only scope"); },
+  }, new Map());
+  assertEquals(conflict.ok, false);
+});
+
 Deno.test("catalog checkpoints preserve result/cache and cannot leak input or fail selection", async () => {
   const run = async (trace?: (phase: string, counts?: Readonly<Record<string, number>>) => void) => {
     const cache: ProductCache = new Map();

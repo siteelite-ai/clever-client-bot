@@ -148,6 +148,9 @@ export interface CatalogClientDeps {
   singleRequest?: boolean;
   /** Closed-preview diagnostics only; never included in model/tool payloads. */
   executionTrace?: SelectionExecutionTrace;
+  /** Server-owned cursor traversal: one exact filtered page, no implicit
+   * materialization/OR/category fan-out, sorting or retry. Not a model field. */
+  exactFilteredPage?: boolean;
 }
 
 export interface SearchCatalogInput {
@@ -822,6 +825,24 @@ export async function executeSearchCatalog(
     }
   } else if (input.mode !== "by_article" && input.mode !== "by_pagetitle" && input.mode !== "by_query") {
     return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
+  }
+
+  if (deps.exactFilteredPage) {
+    const categories = [...new Set([input.category, ...(input.category_in ?? [])].filter(Boolean))];
+    if (deps.singleRequest || input.mode !== "by_filter" || categories.length !== 1 || input.query || input.article || input.pagetitle ||
+      input.sort_cheapest || input.sort_expensive || input.anchor_leaf_category ||
+      !Number.isSafeInteger(input.page ?? 1) || (input.page ?? 1) < 1 ||
+      !Number.isSafeInteger(input.per_page ?? 10) || (input.per_page ?? 10) < 1 || (input.per_page ?? 10) > 50 ||
+      Object.values(input.options ?? {}).some(values => !Array.isArray(values) || values.length !== 1)) return {
+      tool: "search_catalog", ok: false, error_code: "bad_input", message: "exact page requires one bounded filtered category without fan-out or sorting",
+    };
+    observeSelectionExecution(deps.executionTrace, "catalog_plan_ready", { categories: 1, alternatives: 1 });
+    const result = await singleSearch(input, deps, cache, categories[0]);
+    if (!result.ok) return { ...result, tool: "search_catalog" };
+    recordExactFilterResult(cache, input, result.results, facetSchemaAtExecution);
+    if (result.singlePageEvidence) deps.onSinglePageEvidence?.(result.singlePageEvidence);
+    return { tool: "search_catalog", ok: true, mode: input.mode, total: result.total,
+      results: result.results, candidate_coverage: result.candidate_coverage };
   }
 
   if (deps.singleRequest) {

@@ -5,11 +5,11 @@ const PHASES = new Set([
   "readiness_bound", "search_dispatch", "catalog_request", "catalog_headers",
   "catalog_json", "catalog_normalizing", "catalog_normalized", "catalog_returned",
   "candidate_filter_start", "candidate_filter_done", "application_proof_start",
-  "application_proof_done", "catalog_plan_start", "catalog_plan_ready",
+  "application_proof_done", "catalog_plan_start", "catalog_plan_ready", "application_recovery_admission",
 ]);
 const COUNTS = new Set([
   "rows", "cache", "options", "option_values", "categories", "per_page", "page",
-  "status", "obligations", "verified", "examined", "alternatives",
+  "status", "obligations", "verified", "examined", "alternatives", "subject_proved", "lexical_required",
 ]);
 export type SelectionExecutionTrace = (
   phase: string, counts?: Readonly<Record<string, number>>,
