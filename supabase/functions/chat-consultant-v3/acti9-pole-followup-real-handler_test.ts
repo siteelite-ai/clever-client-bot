@@ -783,8 +783,9 @@ const acti9FlowTest = (scenario: Acti9Scenario) => ({
         assert(!markdown.includes(fixtureProducts[3].url), markdown);
         if (priorRenderedEvidence) {
           assert(
-            steps[2].some(({ step }) =>
-              step === "v3_recent_product_evidence_recovered"
+            steps[2].some(({ step, meta }) =>
+              step === "v3_dialogue_turn_state" && meta?.kind === "pending_answer" &&
+              meta?.requires_rendered_cards === false
             ),
             JSON.stringify({ events, steps: steps[2] }),
           );

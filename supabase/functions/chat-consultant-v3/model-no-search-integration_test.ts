@@ -464,7 +464,7 @@ Deno.test({
     );
     assert(
       retainedReasoning >= 0 && groundedBrowse > retainedReasoning,
-      "model reasoning must remain available internally before grounded recovery even when its prose is not shown",
+      "model reasoning must remain available internally before grounded recovery even when its prose is not shown: " + JSON.stringify(result.steps),
     );
     assert(visibleText.includes("не подтверж"), JSON.stringify({
       visibleText,

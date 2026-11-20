@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "acceptance": "offline_control_flow_and_card_proof_only_not_live_catalog_acceptance",
+  "runtime_network": "denied",
+  "runtime_environment": "denied",
+  "credentials": "synthetic",
+  "rules": [
+    {"id":"new_task", "required":"clear old task conditions; no dependency on previous cards", "test":"supabase/functions/chat-consultant-v3/new-topic-cable-after-chandelier-real-handler_test.ts"},
+    {"id":"exact_item_inquiry", "required":"fresh exact catalog identity; no inherited suitability claim", "test":"supabase/functions/chat-consultant-v3/independent-product-inquiry-real-handler_test.ts"},
+    {"id":"pending_answer", "required":"authenticate latest question, retain current task and use answer", "test":"supabase/functions/chat-consultant-v3/mandatory-readiness-real-handler_test.ts"},
+    {"id":"condition_replacement", "required":"replace only the supplied axis; retain other customer conditions", "test":"supabase/functions/chat-consultant-v3/appearance-provenance-real-handler_test.ts"},
+    {"id":"ready_to_search", "required":"a ready verified task obtains a bounded candidate search without a second routing call", "test":"supabase/functions/chat-consultant-v3/selection-execution-replay_test.ts"},
+    {"id":"card_evidence", "required":"candidate retrieval never waives the immutable per-card requirements", "test":"supabase/functions/_shared/v3-tools/final-card-facet-gate_test.ts"},
+    {"id":"conflicting_routes", "required":"one action per turn with deterministic precedence and logged conflicts", "test":"supabase/functions/_shared/v3-tools/dialogue-action-plan_test.ts"},
+    {"id":"environmental_proof", "required":"unknown protection does not become a proven fit", "test":"supabase/functions/chat-consultant-v3/environmental-protection-integration_test.ts"},
+    {"id":"transport_failure", "required":"provider or catalog failure is not represented as absent products", "test":"supabase/functions/chat-consultant-v3/catalog-outage-direct-route-integration_test.ts"},
+    {"id":"repair_state_ownership", "required":"reasoning correction cannot rewrite or drop accepted customer inputs and subject; invalid repairs do not masquerade as missing user input", "test":"supabase/functions/_shared/v3-tools/selection-declaration-repair_test.ts"},
+    {"id":"repair_execution_and_outage", "required":"only exact unique live references normalize; repairs and provider errors retain strict geometry/protection proof and a bounded model-call budget", "test":"supabase/functions/chat-consultant-v3/selection-execution-replay_test.ts"},
+    {"id":"accepted_application_proof", "required":"confirmed application/environment obligations survive empty repaired criteria and require same-card proof independently of READY or retrieval success", "test":"supabase/functions/_shared/v3-tools/accepted-application-proof_test.ts"}
+  ],
+  "recorded_failure_sources": [
+    {"kind":"compact_measurement_projection", "log":"f76e028d-f48a-4f1d-95b9-ebcf3c08ebcf", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"ready_application_without_executable_search", "log":"ccf4aa3f-f748-4fb9-943c-c291ba622cf0", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"repair_enum_failure_after_accepted_input", "log":"845d049a-d48f-4df2-af62-6c21caa647eb", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"correction_completion_envelope_failure_after_geometry_input", "log":"c1841663-bd47-4bd2-af9b-f67c969f3a9d", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"application_erased_despite_successful_repair_and_retrieval", "log":"13c8fc3b-7c01-4cfd-9dd9-4b099e6eb548", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"required_reference_enum_failure_in_narrow_repair", "log":"fb245845-e65e-4036-90af-edb669b726a6", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"}
+  ],
+  "release_policy": "offline pass is necessary, not sufficient; no automatic merge, deployment or paid requests"
+}

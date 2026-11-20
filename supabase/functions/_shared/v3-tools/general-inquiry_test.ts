@@ -400,8 +400,8 @@ Deno.test("store-policy handler is KB-first and precedes tool-free inquiry and c
   const source = Deno.readTextFileSync(
     new URL("../../chat-consultant-v3/index.ts", import.meta.url),
   );
-  const policyStart = source.indexOf("} else if (storePolicyInquiry) {");
-  const generalStart = source.indexOf("} else if (generalInquiryDirect) {", policyStart);
+  const policyStart = source.indexOf('} else if (action === "store_policy") {');
+  const generalStart = source.indexOf('} else if (action === "general_inquiry") {', policyStart);
   assert(policyStart > 0);
   assert(generalStart > policyStart);
   const branch = source.slice(policyStart, generalStart);

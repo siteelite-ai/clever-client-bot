@@ -19,6 +19,10 @@ export interface ProposeClarificationInput {
     token: string;
     /** Server-proven taxonomy context for the next dialogue turn. */
     resolved_category?: string;
+    /** Versioned customer-task snapshot; never catalog product evidence. */
+    customer_turns?: string[];
+    context_overflow?: true;
+    answer_axis?: { key: string; label: string; unit: string };
     /** Server-issued, non-calculating specification/handoff workflow. */
     assistance?: { version: 1; handoff?: boolean; manager_phone?: string; summary?: string; deferred_facets?: string[] };
   };

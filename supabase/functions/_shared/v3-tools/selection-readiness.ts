@@ -1,5 +1,9 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
 import {
+  clarificationAnswerAxis, MAX_TASK_CHARS, MAX_TASK_TURNS,
+  projectVerifiedReadinessAnswer, readReadinessTaskTurns,
+} from "./dialogue-turn-state.ts";
+import {
   OUTDOOR_AREA_FLOODLIGHT,
   PARKING_AREA_FLOODLIGHT,
 } from "./area-lighting-fit.ts";
@@ -117,12 +121,16 @@ export function resolveServerIssuedSelectionReadinessPending(
 export function selectionReadinessScope(
   token: string,
   context: { resolved_category?: string } = {},
-): { kind: string; token: string; resolved_category?: string } {
+): NonNullable<ProposeClarificationInput["scope"]> {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
+  const turns = String(token ?? "").trim().split(CUSTOMER_TURN_BOUNDARY).filter(Boolean);
+  const valid = turns.length > 0 && turns.length <= MAX_TASK_TURNS &&
+    turns.join(CUSTOMER_TURN_BOUNDARY).length <= MAX_TASK_CHARS;
   return {
     kind: SELECTION_READINESS_SCOPE,
     token: String(token ?? "").trim().slice(0, 500),
+    ...(valid ? { customer_turns: turns } : { context_overflow: true as const }),
     ...(resolvedCategory ? { resolved_category: resolvedCategory } : {}),
   };
 }
@@ -200,6 +208,10 @@ export function verifiedReadinessReplayInput(
     scope: {
       kind: SELECTION_READINESS_SCOPE,
       token: scoped.token,
+      ...(Array.isArray(scoped.customer_turns) ? { customer_turns: scoped.customer_turns as string[] } : {}),
+      ...(scoped.context_overflow === true ? { context_overflow: true as const } : {}),
+      ...(scoped.answer_axis && typeof scoped.answer_axis === "object"
+        ? { answer_axis: scoped.answer_axis as { key: string; label: string; unit: string } } : {}),
       ...(typeof scoped.resolved_category === "string"
         ? { resolved_category: scoped.resolved_category }
         : {}),
@@ -904,7 +916,7 @@ const PROFILES: ReadinessProfile[] = [
     applies:
       /автомат\p{L}*[^.!?\n]{0,80}(?:квартир\p{L}*|квартир\p{L}*[^.!?\n]{0,80}автомат\p{L}*)/iu,
     required: [
-      /(?:[1234]\s*[pрп](?=$|[^\p{L}\p{N}])|(?:одно|двух|трех|трёх|четырех|четырёх)полюс\p{L}*|[1234]\s*полюс\p{L}*|(?:одно|трех|трёх)фаз\p{L}*)/iu,
+      /(?:[1234]\s*[pрп](?=$|[^\p{L}\p{N}])|(?:одно|двух|трех|трёх|четырех|четырёх)полюс\p{L}*|[1234]\s*полюс\p{L}*|(?:количество|число)\s+полюсов\s*:\s*[1-4](?=$|[^\p{L}\p{N}])|(?:одно|трех|трёх)фаз\p{L}*)/iu,
       /(?:характерист\p{L}*|крив\p{L}*|тип\p{L}*)\s*[:–-]?\s*[bcdвсд](?=$|[^\p{L}\p{N}])|(?<![\p{L}\p{N}])[bcdвсд]\d{1,3}(?=$|[^\p{L}\p{N}])/iu,
     ],
     primary_requirement_index: 0,
@@ -1230,7 +1242,15 @@ export function selectReadinessClarification(
     // as an exact chip. The terminal free-text slot is explicit and server
     // verified, so a terse customer answer still retains the original task.
     options: followUp?.options ?? (useOpening ? profile.options : []),
-    scope: selectionReadinessScope(current),
+    scope: {
+      ...selectionReadinessScope(current),
+      answer_axis: clarificationAnswerAxis(
+        followUp?.facet_key ?? (useOpening ? profile.facet_key : profile.freeform_facets?.[nextFreeform] ?? `selection_requirement_${nextFreeform}`),
+        followUp ? profile.missing_labels[followUp.requirement_index]
+          : profile.missing_labels[useOpening ? profile.primary_requirement_index : nextFreeform],
+        followUp?.options ?? (useOpening ? profile.options : []),
+      ),
+    },
   };
 }
 
@@ -1242,7 +1262,7 @@ export function resolveSelectionReadinessRequest(
   currentMessage: string,
   slots: Record<string, unknown>,
   options: { newTaskBoundary?: boolean; verifiedIssuedSlot?: boolean } = {},
-): { message: string; scoped: boolean } {
+): { message: string; scoped: boolean; contextUnavailable?: true } {
   const current = String(currentMessage ?? "").trim();
   if (options.newTaskBoundary) {
     return { message: current, scoped: false };
@@ -1262,12 +1282,14 @@ export function resolveSelectionReadinessRequest(
   ) {
     return { message: current, scoped: false };
   }
-  const original = record.token.trim().slice(0, 500);
+  const turns = readReadinessTaskTurns(record as Record<string, unknown>);
+  if (!turns) return { message: current, scoped: false, contextUnavailable: true };
+  const original = turns ? joinCustomerTurns(turns) : "";
   if (!original || !current) return { message: current, scoped: false };
   // A bare abbreviation can match several live count axes (e.g. poles and
   // package quantity). Only the exact answer to the verified question may
   // carry the engineering meaning into subsequent clarification turns.
-  const optionSlot = pending as { facet_key?: unknown; options?: unknown };
+  const optionSlot = pending as { facet_key?: unknown; options?: unknown; scope?: unknown };
   const poleCount = optionSlot.facet_key === "pole_count"
     ? current.match(POLE_COUNT_CHIP)?.[1] : undefined;
   const exactIssuedOption = options.verifiedIssuedSlot && poleCount &&
@@ -1278,9 +1300,13 @@ export function resolveSelectionReadinessRequest(
     );
   const answer = exactIssuedOption
     ? `Количество полюсов: ${poleCount}`
+    : options.verifiedIssuedSlot
+    ? projectVerifiedReadinessAnswer(current, optionSlot)
     : current;
+  const message = joinCustomerTurns([original, `Уточнение клиента: ${answer}`]);
+  if (message.length > MAX_TASK_CHARS) return { message: current, scoped: false, contextUnavailable: true };
   return {
-    message: joinCustomerTurns([original, `Уточнение клиента: ${answer}`]),
+    message,
     scoped: true,
   };
 }

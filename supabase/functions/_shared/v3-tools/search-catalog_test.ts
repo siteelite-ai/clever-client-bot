@@ -1,6 +1,67 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { executeSearchCatalog, isRestrictedCatalogProduct } from "./search-catalog.ts";
 import type { ProductCache } from "./types.ts";
+import { createSelectionExecutionTrace } from "./selection-execution-trace.ts";
+
+Deno.test("exact filtered cursor reads one page even for an unmaterialized total or 429", async () => {
+  for (const status of [200, 429]) for (const query of ["", "owned query"]) {
+    const urls: string[] = [];
+    const result = await executeSearchCatalog({ mode: query ? "by_query" : "by_filter", ...(query ? { query } : {}), category: "Verified leaf", page: 2,
+      per_page: 50, max_price: 2000, options: { axis: ["owned"] } }, {
+      baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true,
+      fetchImpl: url => { urls.push(String(url)); return Promise.resolve(new Response(JSON.stringify({ data: {
+        results: [], pagination: { page: 2, per_page: 50, pages: 4, total: 200 },
+      } }), { status, headers: { "content-type": "application/json" } })); },
+    }, new Map());
+    assertEquals(urls.length, 1);
+    assertEquals(new URL(urls[0]).searchParams.get("page"), "2");
+    assertEquals(new URL(urls[0]).searchParams.get("max_price"), "2000");
+    assertEquals(new URL(urls[0]).searchParams.get("options[axis][]"), "owned");
+    assertEquals(new URL(urls[0]).searchParams.get("query"), query || null);
+    assertEquals(result.ok, status === 200);
+  }
+});
+Deno.test("exact filtered cursor cannot hide sorting, OR or cross-category expansion", async () => {
+  for (const patch of [{ sort_cheapest: true }, { category_in: ["Other"] },
+    { options: { axis: ["a", "b"] } }, { page: 1.5 }, { per_page: 200 }, { query: "term" }]) {
+    let calls = 0;
+    const result = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf", ...patch }, {
+      baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true,
+      fetchImpl: () => { calls++; throw new Error("No request may escape invalid cursor input"); },
+    }, new Map());
+    assertEquals(calls, 0); assertEquals(result.ok, false);
+  }
+  const conflict = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf" }, {
+    baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true, singleRequest: true,
+    fetchImpl: () => { throw new Error("Conflicting server contracts cannot override the identity-only scope"); },
+  }, new Map());
+  assertEquals(conflict.ok, false);
+});
+
+Deno.test("catalog checkpoints preserve result/cache and cannot leak input or fail selection", async () => {
+  const run = async (trace?: (phase: string, counts?: Readonly<Record<string, number>>) => void) => {
+    const cache: ProductCache = new Map();
+    const result = await executeSearchCatalog({ mode: "by_query", query: "PRIVATE_CUSTOMER_QUERY" }, {
+      baseUrl: "https://catalog.test", apiToken: "PRIVATE_TOKEN", executionTrace: trace,
+      fetchImpl: () => Promise.resolve(new Response(JSON.stringify({ data: {
+        results: [{ id: "PRIVATE_SKU", pagetitle: "PRIVATE_PRODUCT_TITLE", price: 100,
+          url: "https://220volt.kz/catalog/a/b/private-product/" }], pagination: { total: 1 },
+      } }), { headers: { "content-type": "application/json" } })),
+    }, cache);
+    return { result, cache: [...cache] };
+  };
+  const records: string[] = [];
+  const trace = createSelectionExecutionTrace({ scope: "closure_preview",
+    logId: "97ae18f1-a964-498c-9baf-83343c822b3c", write: record => records.push(record) });
+  const plain = await run();
+  assertEquals(await run(trace), plain);
+  assertEquals(await run(() => { throw new Error("sink failed"); }), plain);
+  assertEquals(records.map(r => JSON.parse(r).phase), [
+    "catalog_plan_start", "catalog_plan_ready", "catalog_request", "catalog_headers",
+    "catalog_json", "catalog_normalizing", "catalog_normalized",
+  ]);
+  assertEquals(records.join("").includes("PRIVATE_"), false);
+});
 
 Deno.test("incomplete by-filter input exposes a structured recovery code", async () => {
   let fetched = false;

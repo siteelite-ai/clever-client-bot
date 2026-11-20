@@ -577,6 +577,14 @@ async function runDialogue({
                 ? { ...args, required_facet_values: Array.from({ length: 9 }, (_, i) => `facet-${i}`) }
                 : { product_requirements: args.product_requirements });
             }
+            // The general declaration repair no longer asks the model to
+            // repeat server-confirmed inputs. Follow its actual wire schema;
+            // all the assertions on 6 A, voltage, search and per-card range
+            // proof below remain unchanged.
+            if (isCorrection && !("selection_readiness" in properties)) {
+              const { selection_readiness: _frozen, ...repairArgs } = args;
+              return toolReply("declare_selection_reasoning", repairArgs);
+            }
             return toolReply("declare_selection_reasoning", args);
           }
           if (body.tool_choice?.function?.name === "propose_candidates") {
@@ -1014,10 +1022,9 @@ async function runDialogue({
           externalRequests > 0,
           `${label}: a resolved PE answer must advance beyond readiness`,
         );
-        assert(
-          staleCacheReads > 0,
-          `${label}: stale server cache row was not exercised`,
-        );
+        assertEquals(staleCacheReads, 0, `${label}: an authenticated answer must not read the stale product cache`);
+        assert(logs.at(-1)?.steps.some(s => s.step === "v3_dialogue_turn_state" &&
+          s.meta?.kind === "pending_answer" && s.meta?.requires_rendered_cards === false));
       } else {
         assertEquals(
           externalRequests,
