@@ -10040,12 +10040,20 @@ async function runExpertLoop(
   let independentAreaCoverageLogged = false;
   let acceptedApplicationObligations: ReturnType<typeof compileAcceptedApplicationProof> = [];
   let acceptedApplicationObligationsBound = false;
+  const applicationProofRejectedIds = new Set<string>();
+  const applicationProofPassedIds = new Set<string>();
   const filterAcceptedApplicationIds = (ids: string[], phase: string): string[] => {
     if (!acceptedApplicationObligations.length) return ids;
     const rejected: Record<string, number> = {};
     const verified = ids.filter(id => {
       const issue = acceptedApplicationCardIssue(ctx.cache.get(id), acceptedApplicationObligations);
-      if (!issue) return true;
+      if (!issue) {
+        applicationProofPassedIds.add(id);
+        applicationProofRejectedIds.delete(id);
+        return true;
+      }
+      applicationProofRejectedIds.add(id);
+      applicationProofPassedIds.delete(id);
       rejected[issue] = (rejected[issue] ?? 0) + 1;return false;
     });
     if(ids.length)steps.push({step:"v3_customer_application_card_proof",ms:now(),meta:{phase,examined:ids.length,verified:verified.length,rejected}});
@@ -11539,6 +11547,26 @@ async function runExpertLoop(
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
   let catalogLookupCompleted = false;
+  let applicationProofNoticeSent = false;
+  const hasOnlyUnprovedApplicationCandidates = () =>
+    acceptedApplicationObligations.length > 0 &&
+    applicationProofRejectedIds.size > 0 && applicationProofPassedIds.size === 0 &&
+    productsRendered === 0 && catalogLookupCompleted;
+  const appendApplicationProofEmpty = (): boolean => {
+    if (!hasOnlyUnprovedApplicationCandidates()) return false;
+    if (applicationProofNoticeSent) return true;
+    const protection = acceptedApplicationObligations.some(({ protection }) => protection);
+    const notice = `В просмотренных карточках не удалось подтвердить назначение для указанных вами условий применения${protection ? " и необходимые характеристики защиты" : ""}. Неподтверждённые варианты не показываю. Это не означает, что подходящих товаров нет в каталоге. Уточните подбор у менеджера.`;
+    send({ type: "delta", origin: "server", content: `\n\n${notice}` });
+    finalText += `\n\n${notice}`;
+    applicationProofNoticeSent = true;
+    steps.push({ step: "v3_customer_application_unverified_notice", ms: now(), meta: {
+      examined_unique: applicationProofRejectedIds.size,
+      verified_unique: applicationProofPassedIds.size,
+      scope: "inspected_cards_not_catalog_absence",
+    } });
+    return true;
+  };
   const appendAreaLightingEmpty = (): boolean => {
     if (!areaLightingFit || areaLightingNoticeSent || productsRendered ||
       !catalogLookupCompleted) return false;
@@ -16377,6 +16405,13 @@ async function runExpertLoop(
               meta: { fragment_index: step },
             });
           }
+          if (hasOnlyUnprovedApplicationCandidates()) {
+            // An empty proof-qualified pool is not a catalog-empty receipt.
+            // Keep model prose private until the shared terminal notice can
+            // distinguish unverified use from actual absence or an outage.
+            outText = "";
+            steps.push({ step: "v3_customer_application_final_text_deferred", ms: now(), meta: { fragment_index: step } });
+          }
           outText = safeVisibleAppearanceProse(outText);
           if (outText.trim()) {
             if (!isFirstTurn) {
@@ -16657,7 +16692,7 @@ async function runExpertLoop(
           ms: now(),
           meta: { reason: "ok", step_count: step + 1 },
         });
-        appendAreaLightingEmpty();
+        if (!appendApplicationProofEmpty()) appendAreaLightingEmpty();
         return { finalText, productsRendered, shownProductIds: [...shownIds] };
       }
 
@@ -27384,6 +27419,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       intentMode === "select" &&
       catalogLookupCompleted &&
+      !hasOnlyUnprovedApplicationCandidates() &&
       !finalText.trim() &&
       !turnController.signal.aborted
     ) {
@@ -27472,6 +27508,7 @@ async function runExpertLoop(
       },
     });
     if (
+      !appendApplicationProofEmpty() &&
       !appendAreaLightingEmpty() &&
       shouldAppendCatalogEmpty({
         products_rendered: productsRendered,

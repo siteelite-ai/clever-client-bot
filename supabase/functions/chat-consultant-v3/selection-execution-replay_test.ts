@@ -73,8 +73,8 @@ for(const repairKind of ['exact-live-value','initial-invalid-value','unknown-val
   },
 });
 
-for(const room of ['моечная','кулинарная мастерская'])Deno.test({
-  name:`source-owned application survives empty repaired criteria and checks each card: ${room}`,
+for(const room of ['моечная','кулинарная мастерская'])for(const allUnknown of [false,true])Deno.test({
+  name:`source-owned application survives empty repaired criteria and checks each card: ${room}, ${allUnknown?'no proved cards':'proved card available'}`,
   permissions:{read:true,net:false,env:false},
   async fn(){
     const env=Deno.env.get;Deno.env.get=offlineGet;
@@ -92,7 +92,7 @@ for(const room of ['моечная','кулинарная мастерская']
             product(805,`Светильник для ${purpose}`,category,[]),
             product(806,'Светильник не для моечной IP65',category,[['ip','IP','IP65']]),
           ]:[]),
-        ],
+        ].filter(p=>!allUnknown||p.id!==803),
         messages:['Подбери светильник для помещения',room],
         model(body,turn){
           if(body.tool_choice?.function?.name==='declare_selection_reasoning'){
@@ -108,12 +108,25 @@ for(const room of ['моечная','кулинарная мастерская']
             }
             return tool(args);
           }
-          return replayJson({choices:[{finish_reason:'stop',message:{content:JSON.stringify({candidates:[{pagetitle:category,confidence:1}],mode:'continuation',confidence:1,reason:'issued answer'}),tool_calls:[]}}]});
+          if(body.tool_choice?.function?.name==='propose_candidates')return replayJson({choices:[{finish_reason:'tool_calls',message:{content:null,tool_calls:[{id:'replay-lexical',type:'function',function:{name:'propose_candidates',arguments:JSON.stringify({candidates:['неизвестный термин']})}}]}}]});
+          const system=body.messages?.find((m:ReplayObject)=>m.role==='system')?.content??'';
+          return replayJson({choices:[{finish_reason:'stop',message:{content:system.includes('CATEGORY MATCHER')
+            ? JSON.stringify({candidates:[{pagetitle:category,confidence:1}]})
+            : 'Подходящих товаров в каталоге нет.',tool_calls:[]}}]});
         },
       });
       const turn=result.turns[1],steps=turn.steps as ReplayObject[];
       assert(steps.some(s=>s.step==='v3_customer_application_obligations_bound'),JSON.stringify(steps));
       assert(result.outbound.some(r=>r.turn===1&&new URL(r.url).pathname==='/api/products'));
+      if(allUnknown){
+        assertEquals(turn.cards.length,0);
+        assert(!turn.text.includes('Подходящих товаров в каталоге нет.'),JSON.stringify({text:turn.text,steps}));
+        assert(/не\s+удалось\s+подтвердить|неподтвержд|не\s+подтверди/iu.test(turn.text),JSON.stringify({text:turn.text,steps}));
+        assert(steps.some(s=>s.step==='v3_customer_application_unverified_notice'&&s.meta.scope==='inspected_cards_not_catalog_absence'),JSON.stringify(steps));
+        assert(!steps.some(s=>s.step==='v3_jargon_recovery_technical_notice'),'A valid lexical helper response is not an outage');
+        return;
+      }
+      assert(!steps.some(s=>s.step==='v3_customer_application_unverified_notice'),'A later proved card must resolve the unverified-candidate state');
       assert(JSON.stringify(turn.cards).includes('fixture-803/'),JSON.stringify(steps));
       for(const id of [801,802,804,805,806])assert(!JSON.stringify(turn.cards).includes(`fixture-${id}/`),'READY/repaired criteria cannot bypass same-card application/environment proof');
       assert(steps.some(s=>s.step==='v3_customer_application_card_proof'&&s.meta.verified===1),JSON.stringify(steps));
