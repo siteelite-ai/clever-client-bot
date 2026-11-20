@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "acceptance": "offline_control_flow_and_card_proof_only_not_live_catalog_acceptance",
+  "runtime_network": "denied",
+  "runtime_environment": "denied",
+  "credentials": "synthetic",
+  "rules": [
+    {"id":"new_task", "required":"clear old task conditions; no dependency on previous cards", "test":"supabase/functions/chat-consultant-v3/new-topic-cable-after-chandelier-real-handler_test.ts"},
+    {"id":"exact_item_inquiry", "required":"fresh exact catalog identity; no inherited suitability claim", "test":"supabase/functions/chat-consultant-v3/independent-product-inquiry-real-handler_test.ts"},
+    {"id":"pending_answer", "required":"authenticate latest question, retain current task and use answer", "test":"supabase/functions/chat-consultant-v3/mandatory-readiness-real-handler_test.ts"},
+    {"id":"condition_replacement", "required":"replace only the supplied axis; retain other customer conditions", "test":"supabase/functions/chat-consultant-v3/appearance-provenance-real-handler_test.ts"},
+    {"id":"ready_to_search", "required":"a ready verified task obtains a bounded candidate search without a second routing call", "test":"supabase/functions/chat-consultant-v3/selection-execution-replay_test.ts"},
+    {"id":"card_evidence", "required":"candidate retrieval never waives the immutable per-card requirements", "test":"supabase/functions/_shared/v3-tools/final-card-facet-gate_test.ts"},
+    {"id":"conflicting_routes", "required":"one action per turn with deterministic precedence and logged conflicts", "test":"supabase/functions/_shared/v3-tools/dialogue-action-plan_test.ts"},
+    {"id":"environmental_proof", "required":"unknown protection does not become a proven fit", "test":"supabase/functions/chat-consultant-v3/environmental-protection-integration_test.ts"},
+    {"id":"transport_failure", "required":"provider or catalog failure is not represented as absent products", "test":"supabase/functions/chat-consultant-v3/catalog-outage-direct-route-integration_test.ts"}
+  ],
+  "recorded_failure_sources": [
+    {"kind":"compact_measurement_projection", "log":"f76e028d-f48a-4f1d-95b9-ebcf3c08ebcf", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"},
+    {"kind":"ready_application_without_executable_search", "log":"ccf4aa3f-f748-4fb9-943c-c291ba622cf0", "fidelity":"reconstructed_response_shape_not_a_raw_provider_recording"}
+  ],
+  "release_policy": "offline pass is necessary, not sufficient; no automatic merge, deployment or paid requests"
+}

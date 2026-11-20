@@ -15,6 +15,8 @@ import {
   runWithDeadline,
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
+import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
+import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
 import {
   integrationSecretBundleForV3,
   integrationSecretModeForBundle,
@@ -9982,6 +9984,7 @@ async function runExpertLoop(
   rawCurrentUserMessage = userMessage,
   verifiedReadinessChoiceFacet: string | null = null,
   serverVerifiedPriorCriteria: readonly Criterion[] = [],
+  verifiedCurrentCustomerEvidence = rawCurrentUserMessage,
 ): Promise<
   { finalText: string; productsRendered: number; shownProductIds: string[] }
 > {
@@ -10021,7 +10024,7 @@ async function runExpertLoop(
   const requestedConnection = CABLE_LUG_REQUEST.test(userMessage)
     ? compileCableLugConnection(userMessage) : null;
   const areaLightingFit = compileAreaLightingFit(
-    rawCurrentUserMessage,
+    verifiedCurrentCustomerEvidence,
     serverVerifiedPriorQueriesNewestFirst,
     userMessage,
   );
@@ -10032,6 +10035,7 @@ async function runExpertLoop(
     ? "\n\nДля этого подбора сервер отдельно проверяет площадь освещения и высоту установки по характеристикам каталога. Выполни поиск по типу товара и проверяемым условиям клиента. Не превращай площадь участка или высоту установки в габариты изделия. Не выводи порог мощности, освещённости или светового потока только из этих двух чисел. IP подтверждает защиту корпуса, а не освещение заданной площади."
     : "";
   let areaLightingSearchInspectedCards = false;
+  let independentAreaCoverageLogged = false;
   const filterAreaLightingIds = (ids: string[], phase: string): string[] => {
     if (!areaLightingFit) return ids;
     const rejected: Record<string, number> = {};
@@ -11604,6 +11608,16 @@ async function runExpertLoop(
     | "unknown"
     | null = null;
   ctx.observeCatalogToolResult = (result) => {
+    if (result.tool === "search_catalog" || result.tool === "jargon_recover_catalog") {
+      steps.push({ step: "v3_catalog_candidate_pool", ms: now(), meta: {
+        tool: result.tool, ok: result.ok,
+        candidates: result.ok ? result.results.length : 0,
+        total: result.ok ? result.total : null,
+        coverage: result.ok && result.tool === "search_catalog" ? result.candidate_coverage ?? "unknown" : "unknown",
+        error_code: result.ok ? null : result.error_code,
+        card_verification_required: true,
+      } });
+    }
     if (result.tool === "search_catalog") {
       const observed = result.ok
         ? (result as SearchCatalogOk).candidate_coverage ?? "unknown"
@@ -14045,6 +14059,33 @@ async function runExpertLoop(
                   }, diagnosticStage ? diagnostic => { coverageDiagnostic = diagnostic; } : undefined)
                   : false,
             };
+            // The installed final-card guard owns both geometry obligations.
+            // A second model projection must not block retrieval of cards
+            // which that same strict guard can verify. Unrelated quantities
+            // and model-invented thresholds remain unproved and fail closed.
+            const guardedGeometry = areaLightingFit?.area && areaLightingFit.height &&
+              areaLightingFit.area.min === areaLightingFit.area.max &&
+              areaLightingFit.height.min === areaLightingFit.height.max &&
+              independentGuardCoversMeasurements({
+                customerEvidence: verifiedCustomerMeasurementEvidence,
+                modelEvidence: declaration.measurementEvidence,
+                coveredQuantities: [
+                  { value: areaLightingFit.area.max, unit: "м²" },
+                  { value: areaLightingFit.height.max, unit: "м" },
+                ],
+                requiredFacetValues: declaration.requiredFacetValues,
+                facets: lastDiscover?.facets ?? [],
+              });
+            if (guardedGeometry) {
+              gapInput.independentCardProofCoversRequiredMeasurement = true;
+              if (!independentAreaCoverageLogged) {
+                steps.push({ step: "v3_independent_measurement_card_guard", ms: now(), meta: {
+                  guard: "area_lighting_fit", obligations: ["coverage_at_mounting_height", "mounting_height"],
+                  retrieval_only: true, card_checks_required: true,
+                } });
+                independentAreaCoverageLogged = true;
+              }
+            }
             // Atomic declarations are a conjunction. One scalar or the
             // current-range gate cannot license an unrelated property. Keep
             // every independently compiled criterion for retrieval AND final
@@ -15325,8 +15366,18 @@ async function runExpertLoop(
               meta: { dropped: browseLeafProof.dropped },
             });
           }
+          const readyCandidateRetrieval = !directSearchBase && !modelSearchAbsentBrowse
+            ? compileReadyCandidateRetrieval({
+              ready: requireSelectionReadiness && customerInputsAccepted,
+              intent: intentMode,
+              category: lastDiscover.category.pagetitle,
+              leaves: lastDiscover.leaf_categories.map(({ pagetitle }) => pagetitle),
+              replacement: replacementIntent || replacementEgressGuarded,
+              seriesRequiresGrounding: seriesTurnRequiresGrounding,
+              broadAssortment: broadAssortmentRequest || preExcludedProductUrlSet.size > 0,
+            }) : null;
           const directSearchCandidate = directSearchBase ??
-            modelSearchAbsentBrowse?.args ?? null;
+            modelSearchAbsentBrowse?.args ?? readyCandidateRetrieval;
           const directSearchGuard = directSearchCandidate
             ? guardSearchFilters(
               directSearchCandidate,
@@ -15399,6 +15450,10 @@ async function runExpertLoop(
           }
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
+            if (readyCandidateRetrieval) steps.push({ step: "v3_ready_candidate_retrieval_planned", ms: now(), meta: {
+              category: lastDiscover.category.pagetitle, card_checks_required: true,
+              criteria: reconciledCriteria, source: "verified_live_category_and_ready_inputs",
+            } });
             if (modelSearchAbsentBrowse) {
               modelSearchAbsentBrowseCallId = derivedStructuredSearchCallId;
               modelSearchAbsentBrowseAttempt = modelSearchAbsentBrowse;
@@ -15422,7 +15477,7 @@ async function runExpertLoop(
               Object.keys(directSearchOptions).length > 0 ||
               effectiveDeclaredMeasurementScope === "system_total" ||
               Boolean(declaration.retrievalQuery) ||
-              Boolean(modelSearchAbsentBrowse);
+              Boolean(modelSearchAbsentBrowse) || Boolean(readyCandidateRetrieval);
             derivedStructuredSearchDiscovery = lastDiscover;
             structuredSearchSource = "derived_reasoning";
             resp.toolCalls = [{
@@ -26594,6 +26649,16 @@ async function runExpertLoop(
         ...terminalPendingSelectionState,
         has_search_attempt: true,
       }));
+    if (productsRendered === 0 && semanticBackedSearch && !terminalSemanticFinalizationRequired) {
+      steps.push({ step: "v3_candidate_finalization_not_entered", ms: now(), meta: {
+        candidates: semanticBackedSearch.ids.length,
+        has_target: Boolean(terminalSelectionTarget), has_discovery: Boolean(terminalDiscover),
+        has_search_attempt: catalogSearchAttempted, replacement: replacementIntent,
+        series_requires_grounding: seriesTurnRequiresGrounding,
+        compatibility_relations: terminalPendingSelectionState.compatibility_relation_count,
+        compatibility_required: terminalPendingSelectionState.compatibility_required,
+      } });
+    }
 
     // Ordinary selections can end after a successful semantic search without
     // the model issuing render_products. Recover the FIRST non-empty pool,
@@ -30177,6 +30242,7 @@ Deno.serve(async (req) => {
                 userMessage,
                 null,
                 !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
+                dialogueTurn.currentCustomerEvidence,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds
@@ -30947,6 +31013,7 @@ Deno.serve(async (req) => {
                     typeof verifiedReadinessState.slot?.facet_key === "string"
                   ? verifiedReadinessState.slot.facet_key : null,
                 !startsNewTask ? activeRenderedProof?.mandatoryCriteria ?? [] : [],
+                dialogueTurn.currentCustomerEvidence,
               );
               productsCount = out.productsRendered;
               const shownProducts = out.shownProductIds

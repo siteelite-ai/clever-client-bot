@@ -4,6 +4,8 @@ import { canonicalMeasurementUnit } from "./criteria-reasoning.ts";
 export interface DialogueTurnState {
   kind: "new_request" | "pending_answer" | "rendered_evidence" | "continuation";
   request: string;
+  /** Current customer facts with only a server-issued dimension label added. */
+  currentCustomerEvidence: string;
   /** Customer conditions from an authenticated server question, NOT SKU facts. */
   priorCustomerTurns: string[];
   requiresRenderedCards: boolean;
@@ -40,7 +42,7 @@ export function compileDialogueTurnState(input: {
   verifiedPendingSlot: Record<string, unknown> | null;
   scopedRequest: { message: string; scoped: boolean };
 }): DialogueTurnState {
-  const base = { request: input.current, priorCustomerTurns: [] as string[] };
+  const base = { request: input.current, currentCustomerEvidence: input.current, priorCustomerTurns: [] as string[] };
   if (input.newTask) {
     return { ...base, kind: "new_request", requiresRenderedCards: false };
   }
@@ -62,6 +64,7 @@ export function compileDialogueTurnState(input: {
       return {
         kind: "pending_answer",
         request: input.scopedRequest.message,
+        currentCustomerEvidence: projectVerifiedReadinessAnswer(input.current, slot),
         priorCustomerTurns: turns,
         requiresRenderedCards: false,
       };
