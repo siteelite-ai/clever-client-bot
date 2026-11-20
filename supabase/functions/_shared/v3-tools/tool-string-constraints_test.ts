@@ -15,6 +15,20 @@ const facets = Array.from({ length: 30 }, (_, index) => ({
   values: [],
 }));
 
+Deno.test('a narrow correction may retain only bounded server opaque IDs while local enum validation stays mandatory',()=>{
+  const ids=Array.from({length:12},(_,i)=>`f0v${i}`);
+  const canonical={function:{parameters:{type:'object',properties:{required_facet_values:{type:'array',items:{type:'string',enum:ids}},other:{type:'string',enum:Array.from({length:12},(_,i)=>`public_catalog_label_${i}`)}}}}};
+  const primary=compileToolStringConstraints(canonical);
+  assert(!('enum' in primary.tool.function.parameters.properties.required_facet_values.items));
+  const repair=compileToolStringConstraints(canonical,{retainOpaqueIdEnumPaths:['required_facet_values.*','other']});
+  assertEquals(repair.tool.function.parameters.properties.required_facet_values.items.enum,ids);
+  assert(!('enum' in repair.tool.function.parameters.properties.other));
+  assertEquals(repair.validate({required_facet_values:['f99v99']}),{path:'required_facet_values.*',reason:'enum'});
+  assertEquals(repair.validate({required_facet_values:['f0v4']}),null);
+  const tooMany={function:{parameters:{type:'string',enum:Array.from({length:161},(_,i)=>`f${Math.floor(i/40)}v${i%40}`)}}};
+  assert(!('enum' in compileToolStringConstraints(tooMany,{retainOpaqueIdEnumPaths:['']}).tool.function.parameters));
+});
+
 Deno.test("compact declaration defers live enum and lengths, retaining required fields, types and short decisions", () => {
   const canonical = buildDerivedSelectionReasoningToolSchema(
     facets,

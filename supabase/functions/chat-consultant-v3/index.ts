@@ -16,6 +16,7 @@ import {
 } from "../_shared/v3-tools/turn-deadline.ts";
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
+import { compileAcceptedApplicationProof, acceptedApplicationCardIssue } from "../_shared/v3-tools/accepted-application-proof.ts";
 import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
 import {
   integrationSecretBundleForV3,
@@ -255,7 +256,7 @@ import {
 import { compileToolArrayBounds } from "../_shared/v3-tools/tool-array-bounds.ts";
 import { compileToolRequiredArrayHead } from "../_shared/v3-tools/tool-required-array-head.ts";
 import { compileToolStringConstraints } from "../_shared/v3-tools/tool-string-constraints.ts";
-import { compileStatePreservingDeclarationRepair, normalizeRequiredFacetWireReferences } from "../_shared/v3-tools/selection-declaration-repair.ts";
+import { compileStatePreservingDeclarationRepair, normalizeRequiredFacetWireReferences, requiredFacetWireDiagnostics } from "../_shared/v3-tools/selection-declaration-repair.ts";
 import { compileMeasuredRequirementConjunction, type MeasuredConjunctionDiagnostic } from "../_shared/v3-tools/measured-requirement-conjunction.ts";
 import { buildMeasurementRepairContext, MEASUREMENT_REPAIR_FOCUS_POLICY } from "../_shared/v3-tools/measurement-repair-context.ts";
 import {compileCustomerOperatingPointDomains, productProvesOperatingPointDomain, singleUncoveredCatalogOperatingPoint, type OperatingPointDomain} from "../_shared/v3-tools/operating-point-domain.ts";
@@ -10205,6 +10206,19 @@ async function runExpertLoop(
     : "";
   let areaLightingSearchInspectedCards = false;
   let independentAreaCoverageLogged = false;
+  let acceptedApplicationObligations: ReturnType<typeof compileAcceptedApplicationProof> = [];
+  let acceptedApplicationObligationsBound = false;
+  const filterAcceptedApplicationIds = (ids: string[], phase: string): string[] => {
+    if (!acceptedApplicationObligations.length) return ids;
+    const rejected: Record<string, number> = {};
+    const verified = ids.filter(id => {
+      const issue = acceptedApplicationCardIssue(ctx.cache.get(id), acceptedApplicationObligations);
+      if (!issue) return true;
+      rejected[issue] = (rejected[issue] ?? 0) + 1;return false;
+    });
+    if(ids.length)steps.push({step:"v3_customer_application_card_proof",ms:now(),meta:{phase,examined:ids.length,verified:verified.length,rejected}});
+    return verified;
+  };
   const filterAreaLightingIds = (ids: string[], phase: string): string[] => {
     if (!areaLightingFit) return ids;
     const rejected: Record<string, number> = {};
@@ -10260,6 +10274,15 @@ async function runExpertLoop(
       steps.push({ step: "v3_application_card_facet_proof", ms: now(),
         meta: { examined: base.results.length, verified: results.length } });
       return { ...base, results };
+    };
+  }
+  {
+    const previousGate = ctx.filterSelectionCandidates;
+    ctx.filterSelectionCandidates = result => {
+      const base = previousGate?.(result) ?? result;
+      if(!acceptedApplicationObligations.length)return base;
+      const eligible = new Set(filterAcceptedApplicationIds(base.results.map(({id})=>id),"search"));
+      return {...base,results:base.results.filter(({id})=>eligible.has(id))};
     };
   }
   const observedSearchCatalog = async (
@@ -10711,6 +10734,8 @@ async function runExpertLoop(
     const renderedProducts = [...ctx.cache.values()].filter((product) =>
       event.markdown.includes(`](${product.url})`)
     );
+    if(acceptedApplicationObligations.length&&(renderedProducts.length!==event.count||
+      filterAcceptedApplicationIds(renderedProducts.map(({id})=>id),"egress").length!==renderedProducts.length))return "";
     if (applicationLoad && (renderedProducts.length !== event.count ||
       !applicationCardsPass(renderedProducts.map(({ id }) => id)))) return "";
     if (areaLightingFit) {
@@ -11582,6 +11607,7 @@ async function runExpertLoop(
       )) && certifiedOperatingPointDomains.every(domain=>productProvesOperatingPointDomain(ctx.cache.get(id),domain)) &&
       productProvesMotorProtectionPoles(ctx.cache.get(id), motorProtectionPoleProof)
     ) && filterAreaLightingIds(ids, "render").length === ids.length &&
+    filterAcceptedApplicationIds(ids,"render").length === ids.length &&
     (!applicationLoad || applicationCardsPass(ids));
   let derivedStructuredSearchResult:
     | (SearchCatalogOk & { tool: "search_catalog" })
@@ -11921,6 +11947,14 @@ async function runExpertLoop(
     }});
     if (decision.status === "ready") {
       customerInputsAccepted = true;
+      if(!acceptedApplicationObligationsBound){
+        acceptedApplicationObligations=compileAcceptedApplicationProof(args,userMessage,lastDiscover?.facets??[]);
+        acceptedApplicationObligationsBound=true;
+        if(acceptedApplicationObligations.length)steps.push({step:"v3_customer_application_obligations_bound",ms:now(),meta:{
+          source:"validated_customer_inputs",model_cannot_erase:true,
+          obligations:acceptedApplicationObligations.map(({parameter,quote,alternatives,protection,unresolved})=>({parameter,quote,alternative_count:alternatives.length,protection:protection?.status??"not_applicable",unresolved})),
+        }});
+      }
       if (!requireSubject) return null;
       const subject = resolveSelectionSubject(args.selection_subject, {
         request: userMessage, category: lastDiscover?.category?.pagetitle,
@@ -12731,16 +12765,18 @@ async function runExpertLoop(
       steps.push({ step: "v3_motor_protection_poles_card_proof_rejected", ms: now(),
         meta: { before: operatingPointSafe.length, after: motorPoleSafe.length } });
     }
+    const applicationEligible = new Set(filterAcceptedApplicationIds(motorPoleSafe.map(({id})=>id),"final_cards"));
+    const applicationSafe = motorPoleSafe.filter(({id})=>applicationEligible.has(id));
     const classPriority = preferCustomerGroundedLiveClassification(
       areaLightingFit
         ? (() => {
           const eligible = new Set(filterAreaLightingIds(
-            motorPoleSafe.map(({ id }) => id),
+            applicationSafe.map(({ id }) => id),
             "final_cards",
           ));
-          return motorPoleSafe.filter(({ id }) => eligible.has(id));
+          return applicationSafe.filter(({ id }) => eligible.has(id));
         })()
-        : motorPoleSafe,
+        : applicationSafe,
       customerExactClassificationCriteria,
       customerApplicationAlternatives,
       derivedExcludedClassificationCriteria,
@@ -14006,7 +14042,8 @@ async function runExpertLoop(
               steps.push({
                 step: "v3_derived_reasoning_string_constraint_rejected",
                 ms: now(),
-                meta: stringFailure,
+                meta: {...stringFailure,...(stringFailure.path==='required_facet_values.*'
+                  ? {references:requiredFacetWireDiagnostics(call.args,reasoningToolSchema)}:{})},
               });
               return undefined;
             }
@@ -14686,7 +14723,9 @@ async function runExpertLoop(
               const stateRepair = !repairBase && requireSelectionReadiness && acceptedDeclarationState
                 ? compileStatePreservingDeclarationRepair(reasoningToolSchema, acceptedDeclarationState)
                 : null;
-              const stateRepairStrings = stateRepair ? compileToolStringConstraints(stateRepair.tool) : null;
+              const stateRepairStrings = stateRepair ? compileToolStringConstraints(stateRepair.tool,{
+                retainOpaqueIdEnumPaths:["required_facet_values.*"],
+              }) : null;
               const stateRepairTransport = stateRepairStrings ? compileToolArrayBounds(stateRepairStrings.tool) : null;
               const repairTransport = repairTool && requireSelectionReadiness
                 ? compileToolArrayBounds(repairTool)
@@ -14722,6 +14761,17 @@ async function runExpertLoop(
                     },
                   }).replace(/</gu, "\\u003c"),
                 }]
+                : stateRepair ? [{
+                  role:"system",
+                  // A reduced tool cannot inherit the primary first/rest or
+                  // mandatory-readiness output instructions. Rebuild product
+                  // reasoning policy without those frozen-field contracts;
+                  // keep the same verified input/catalog data and all guards.
+                  content: sharedReasoningPolicy + "\n\n" + buildDerivedSelectionReasoningMessages(
+                    userMessage,lastDiscover.category?.pagetitle??"",lastDiscover.facets??[],presearchPairedObjectReference,
+                    {requireReadiness:false,requireSubject:false},
+                  )[0].content + areaLightingPolicy,
+                },{...derivedMessages[1]}]
                 : derivedMessages.map((message) => ({ ...message }));
               if (repairReason === "product_measurement" && structuredMeasurementMode && focusContext) {
                 const repairContext = focusContext;
@@ -14791,6 +14841,8 @@ async function runExpertLoop(
                 steps.push({ step: "v3_selection_repair_state_frozen", ms: now(), meta: {
                   repair_reason: repairReason, frozen_fields: Object.keys(stateRepair.frozen),
                   original_resolver_rejection: declarationRejectionReason,
+                  correction_wire:"state_preserving_reference_enum_v1",
+                  required_reference_enum_count:requiredFacetWireDiagnostics({},stateRepair.tool).allowed_count,
                   model_may_change_customer_inputs: false, card_checks_required: true,
                 } });
               }

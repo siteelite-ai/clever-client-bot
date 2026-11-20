@@ -1,8 +1,17 @@
 import {assert,assertEquals} from "https://deno.land/std@0.224.0/assert/mod.ts";
-import {compileStatePreservingDeclarationRepair,normalizeRequiredFacetWireReferences} from "./selection-declaration-repair.ts";
+import {compileStatePreservingDeclarationRepair,normalizeRequiredFacetWireReferences,requiredFacetWireDiagnostics} from "./selection-declaration-repair.ts";
 
 const tool={function:{parameters:{type:'object',properties:{reasoning:{type:'string'},selection_readiness:{type:'object'},selection_subject:{type:'object'},required_facet_values:{type:'array',items:{type:'string',enum:['f0v0','f0v1','f1v0']}}},required:['reasoning','selection_readiness','selection_subject','required_facet_values'],additionalProperties:false}}};
 const base={selection_readiness:{decision:'ready',critical_inputs:[{parameter:'Ток',customer_quote:'6А',question:''}]},selection_subject:{customer_phrase:'автомат',catalog_classification_id:''},reasoning:'old'};
+
+Deno.test('wire diagnostics distinguish invalid references without logging arbitrary literal data',()=>{
+  const secret='private-customer-text-that-must-not-be-logged';
+  const d=requiredFacetWireDiagnostics({required_facet_values:['f0v1','f99v99',secret,{value:secret}]},tool);
+  assertEquals(d.allowed_count,3);assertEquals(d.received_count,4);
+  assertEquals(d.samples.map(v=>v.allowed),[true,false,false,false]);
+  assertEquals(d.samples.map(v=>v.reference),['f0v1','f99v99',null,null]);
+  assert(!JSON.stringify(d).includes(secret));
+});
 
 Deno.test('declaration repair omits confirmed state from the wire and merges an independent deep copy',()=>{
   const original=structuredClone(base),repair=compileStatePreservingDeclarationRepair(tool,base)!;

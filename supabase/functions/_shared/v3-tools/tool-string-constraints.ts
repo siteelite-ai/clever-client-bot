@@ -21,7 +21,11 @@ const record = (value: unknown): value is Schema =>
 const MAX_WIRE_ENUM_VALUES = 8;
 const MAX_WIRE_ENUM_VALUE_LENGTH = 24;
 
-export function compileToolStringConstraints<T extends Tool>(canonical: T): {
+export function compileToolStringConstraints<T extends Tool>(canonical: T, options: {
+  /** Correction-only flat opaque IDs, never catalog prose or arbitrary keys.
+   * A bounded enum on this much smaller wire prevents inventing references. */
+  retainOpaqueIdEnumPaths?: readonly string[];
+} = {}): {
   tool: T;
   deferredCount: number;
   validate: (args: unknown) => ToolStringConstraintFailure | null;
@@ -40,12 +44,14 @@ export function compileToolStringConstraints<T extends Tool>(canonical: T): {
         if (!values.every((value) => typeof value === "string")) {
           throw new Error("invalid_tool_string_enum");
         }
-        if (
+        const retained = options.retainOpaqueIdEnumPaths?.includes(path.join('.')) &&
+          values.length <= 160 && values.every(value => /^f\d{1,2}v\d{1,2}$/u.test(String(value)));
+        if (retained ||
           values.length > MAX_WIRE_ENUM_VALUES ||
           values.some((value) => value.length > MAX_WIRE_ENUM_VALUE_LENGTH)
         ) {
           constraint.values = new Set(values);
-          delete schema.enum;
+          if (!retained) delete schema.enum;
         }
       }
       for (
