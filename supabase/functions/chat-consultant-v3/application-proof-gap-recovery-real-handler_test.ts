@@ -6,12 +6,14 @@ const offlineGet = Deno.env.get;
 await import("./index.ts");
 restoreOfflineModuleSetup();
 
-for (const room of ["моечная", "кулинарная мастерская"]) for (const outcome of ["proved", "unproved", "outage", "wrong_page", "duplicate_page", "later_budget", "later_class", "partial_outage", "unrenderable_page"]) Deno.test({
-  name: `known class with application proof gap retrieves another exact page instead of translating the room: ${room}, ${outcome}`,
+for (const room of ["моечная", "кулинарная мастерская"]) for (const outcome of ["proved", "unproved", "outage", "wrong_page", "duplicate_page", "later_budget", "later_class", "partial_outage", "unrenderable_page"]) for (const shape of outcome === "proved" ? ["filter", "query", "unknown_pagination", "query_unknown", "zero_total"] : ["filter"]) Deno.test({
+  name: `known class with application proof gap retrieves another exact page instead of translating the room: ${room}, ${outcome}, ${shape}`,
   permissions: { read: true, net: false, env: false }, async fn() {
     const env = Deno.env.get; Deno.env.get = offlineGet;
     try {
       const category = "Светильники", queryPages: number[] = [], helperCalls: string[] = [];
+      const ownedQuery = shape.startsWith("query") ? "светильник" : "";
+      const missingPagination = shape.includes("unknown") || shape === "zero_total";
       const product = (id: number, purpose = false, ip = "IP65") => ({ id,
         pagetitle: purpose ? `Светильник для ${room} ${ip}` : `Светильник обычный ${id} ${ip}`,
         category, url: `https://220volt.kz/catalog/a/b/fixture-${id}/`, price: 1500,
@@ -37,10 +39,12 @@ for (const room of ["моечная", "кулинарная мастерская
           // Reconstructed live shape, not a recording: broad category returns
           // cards, lexical/title probes return no candidates.
           const browse = url.searchParams.get("category") === category &&
-            !url.searchParams.has("query") && !url.searchParams.has("pagetitle");
+            (!url.searchParams.has("query") || !!ownedQuery && url.searchParams.get("query") === ownedQuery) &&
+            !url.searchParams.has("pagetitle");
           if (browse) queryPages.push(page);
           if (browse && page > 1) {
             assertEquals(url.searchParams.get("max_price"), "2000", "Candidate recovery cannot erase the budget");
+            if (ownedQuery) assertEquals(url.searchParams.get("query"), ownedQuery, "The current query must not be erased or translated");
             if (outcome === "outage") return replayJson({}, 503);
             if (outcome === "partial_outage" && page === 3) return replayJson({}, 503);
           }
@@ -48,14 +52,14 @@ for (const room of ["моечная", "кулинарная мастерская
             ? rows.slice(0, perPage) : rows.slice((page - 1) * perPage, page * perPage) : [];
           return replayJson({ data: { results: outcome === "unrenderable_page" && page === 2
             ? candidates.map(product => ({ ...product, url: "" })) : candidates,
-            pagination: { page: outcome === "wrong_page" && page > 1 ? 1 : page,
+            pagination: missingPagination ? shape === "zero_total" ? { total: 0 } : {} : { page: outcome === "wrong_page" && page > 1 ? 1 : page,
               pages: browse ? rows.length / perPage : 1, per_page: perPage, total: browse ? rows.length : 0 } } });
         },
         model(body, turn) {
           const name = body.tool_choice?.function?.name;
           if (name === "declare_selection_reasoning") {
             const schema = body.tools[0].function.parameters;
-            const args: ReplayObject = { reasoning: "", measurement_scope: "not_applicable", retrieval_query: "",
+            const args: ReplayObject = { reasoning: "", measurement_scope: "not_applicable", retrieval_query: ownedQuery,
               compatible_classifications: [], excluded_classifications: [], required_facet_values: [], explicit_customer_classifications: [],
               ...(schema.properties.selection_subject ? { selection_subject: { customer_phrase: "светильник", catalog_classification_id: "" } } : {}) };
             if (schema.properties.selection_readiness) args.selection_readiness = {
@@ -77,7 +81,7 @@ for (const room of ["моечная", "кулинарная мастерская
         },
       });
       const second = result.turns[1], steps = second.steps as ReplayObject[];
-      assertEquals(queryPages, extended ? [1, 2, 3] : [1, 2]);
+      assertEquals(queryPages, extended || missingPagination ? [1, 2, 3] : [1, 2]);
       assertEquals(helperCalls, [], "An established product class is not an untranslated room name");
       if (outcome === "proved" || outcome === "wrong_page" || extended) {
         assert(second.cards.length > 0, JSON.stringify({ queryPages, helperCalls, steps }));

@@ -4,9 +4,9 @@ import type { ProductCache } from "./types.ts";
 import { createSelectionExecutionTrace } from "./selection-execution-trace.ts";
 
 Deno.test("exact filtered cursor reads one page even for an unmaterialized total or 429", async () => {
-  for (const status of [200, 429]) {
+  for (const status of [200, 429]) for (const query of ["", "owned query"]) {
     const urls: string[] = [];
-    const result = await executeSearchCatalog({ mode: "by_filter", category: "Verified leaf", page: 2,
+    const result = await executeSearchCatalog({ mode: query ? "by_query" : "by_filter", ...(query ? { query } : {}), category: "Verified leaf", page: 2,
       per_page: 50, max_price: 2000, options: { axis: ["owned"] } }, {
       baseUrl: "https://catalog.test", apiToken: "test", exactFilteredPage: true,
       fetchImpl: url => { urls.push(String(url)); return Promise.resolve(new Response(JSON.stringify({ data: {
@@ -17,6 +17,7 @@ Deno.test("exact filtered cursor reads one page even for an unmaterialized total
     assertEquals(new URL(urls[0]).searchParams.get("page"), "2");
     assertEquals(new URL(urls[0]).searchParams.get("max_price"), "2000");
     assertEquals(new URL(urls[0]).searchParams.get("options[axis][]"), "owned");
+    assertEquals(new URL(urls[0]).searchParams.get("query"), query || null);
     assertEquals(result.ok, status === 200);
   }
 });
