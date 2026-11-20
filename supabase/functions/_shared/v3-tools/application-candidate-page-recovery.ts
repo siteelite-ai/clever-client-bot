@@ -23,9 +23,12 @@ export const APPLICATION_PAGE_ADMISSION = {
 } as const;
 type Reason = keyof typeof APPLICATION_PAGE_ADMISSION;
 export function applicationCandidatePageDecision(input: ApplicationCandidatePageInput): {
-  reason: Reason; reasonCode: number; pages: SearchCatalogInput[] | null;
+  reason: Reason; reasonCode: number; pages: SearchCatalogInput[] | null; knownApplicationGap: boolean;
 } {
-  const deny = (reason: Reason) => ({ reason, reasonCode: APPLICATION_PAGE_ADMISSION[reason], pages: null });
+  // Semantic state is owned by accepted inputs and current card evidence.
+  // An unsupported cursor/sort/fan-out does not make a known noun unknown.
+  const knownApplicationGap = input.ready && input.applicationGap && input.subjectProved && !input.lexicalRequirement;
+  const deny = (reason: Reason) => ({ reason, reasonCode: APPLICATION_PAGE_ADMISSION[reason], pages: null, knownApplicationGap });
   const request = input.search;
   if (!input.ready) return deny("not_ready");
   if (!input.applicationGap) return deny("no_application_gap");
@@ -49,7 +52,7 @@ export function applicationCandidatePageDecision(input: ApplicationCandidatePage
   const requests = Array.from({ length: Math.max(0, pages - 1) }, (_, i) => ({
     ...structuredClone(request), page: i + 2,
   }));
-  return { reason: "allowed", reasonCode: 0, pages: requests };
+  return { reason: "allowed", reasonCode: 0, pages: requests, knownApplicationGap };
 }
 export function compileApplicationCandidatePageRecovery(input: ApplicationCandidatePageInput): SearchCatalogInput[] | null {
   return applicationCandidatePageDecision(input).pages;

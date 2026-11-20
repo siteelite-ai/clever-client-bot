@@ -43,3 +43,18 @@ Deno.test("every admission denial reports a fixed structural reason without copy
     assertEquals(Number.isInteger(decision.reasonCode) && decision.reasonCode > 0, true);
   }
 });
+Deno.test("known application-gap state is independent of whether a physical page action is available", () => {
+  for (const search of [
+    { ...input.search, sort_cheapest: true },
+    { ...input.search, category_in: ["Another leaf"] },
+    { ...input.search, page: 2 },
+  ]) {
+    const decision = applicationCandidatePageDecision({ ...input, search });
+    assertEquals(decision.pages, null);
+    assertEquals("knownApplicationGap" in decision && decision.knownApplicationGap, true);
+  }
+  for (const patch of [{ ready: false }, { applicationGap: false }, { subjectProved: false }, { lexicalRequirement: true }]) {
+    const decision = applicationCandidatePageDecision({ ...input, ...patch });
+    assertEquals("knownApplicationGap" in decision && decision.knownApplicationGap, false);
+  }
+});
