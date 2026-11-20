@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { classifyOutdoorPoeIntent } from "../../supabase/functions/_shared/v3-tools/outdoor-poe-policy.ts";
 import { resolveUnavailableProductReference } from "../../supabase/functions/_shared/v3-tools/unavailable-product-reference.ts";
+import { planDialogueAction } from "../../supabase/functions/_shared/v3-tools/dialogue-action-plan.ts";
 
 const firstTurn =
   "Я нашёл дешёвый кабель для камеры на охраняемой парковке: Кабель витая пара U/UTP кат. 5 CCA 4 пары, GENERICA. Подойдёт или нет?";
@@ -31,11 +32,15 @@ test("user-grounded PoE explanation takes precedence over missing-card fallback"
   const explanation = source.indexOf('step: "v3_outdoor_poe_explanation"');
   const missingCards = source.indexOf('step: "v3_unavailable_product_reference"');
   const selection = source.indexOf(
-    'outdoorPoeIntent === "selection" && outdoorPoeDirectAdmitted',
+    'action === "poe_selection"',
   );
   assert.ok(assessment > -1 && explanation > -1 && missingCards > -1);
   assert.ok(assessment < missingCards && explanation < missingCards);
   assert.ok(selection > missingCards, "product selection remains catalog-grounded");
+  for (const action of ["poe_assessment", "poe_explanation"]) {
+    assert.equal(planDialogueAction({ newTask: false, independentItemInquiry: false,
+      capabilities: { [action]: true, unavailable_reference: true } }).action, action);
+  }
 });
 
 test("unrelated deictic requests keep the missing-card safety boundary", () => {

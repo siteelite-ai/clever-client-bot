@@ -1,4 +1,9 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
+import { cableRouteLengthObservations } from "./cable-route-length.ts";
+import {
+  clarificationAnswerAxis, MAX_TASK_CHARS, MAX_TASK_TURNS,
+  projectVerifiedReadinessAnswer, readReadinessTaskTurns,
+} from "./dialogue-turn-state.ts";
 import {
   OUTDOOR_AREA_FLOODLIGHT,
   PARKING_AREA_FLOODLIGHT,
@@ -117,12 +122,16 @@ export function resolveServerIssuedSelectionReadinessPending(
 export function selectionReadinessScope(
   token: string,
   context: { resolved_category?: string } = {},
-): { kind: string; token: string; resolved_category?: string } {
+): NonNullable<ProposeClarificationInput["scope"]> {
   const resolvedCategory = String(context.resolved_category ?? "").trim()
     .slice(0, 200);
+  const turns = String(token ?? "").trim().split(CUSTOMER_TURN_BOUNDARY).filter(Boolean);
+  const valid = turns.length > 0 && turns.length <= MAX_TASK_TURNS &&
+    turns.join(CUSTOMER_TURN_BOUNDARY).length <= MAX_TASK_CHARS;
   return {
     kind: SELECTION_READINESS_SCOPE,
     token: String(token ?? "").trim().slice(0, 500),
+    ...(valid ? { customer_turns: turns } : { context_overflow: true as const }),
     ...(resolvedCategory ? { resolved_category: resolvedCategory } : {}),
   };
 }
@@ -200,12 +209,16 @@ export function verifiedReadinessReplayInput(
     scope: {
       kind: SELECTION_READINESS_SCOPE,
       token: scoped.token,
+      ...(Array.isArray(scoped.customer_turns) ? { customer_turns: scoped.customer_turns as string[] } : {}),
+      ...(scoped.context_overflow === true ? { context_overflow: true as const } : {}),
+      ...(scoped.answer_axis && typeof scoped.answer_axis === "object"
+        ? { answer_axis: scoped.answer_axis as { key: string; label: string; unit: string } } : {}),
       ...(typeof scoped.resolved_category === "string"
         ? { resolved_category: scoped.resolved_category }
         : {}),
       ...(scoped.assistance && typeof scoped.assistance === "object" &&
           (scoped.assistance as { version?: unknown }).version === 1
-        ? { assistance: scoped.assistance as { version: 1; summary?: string; deferred_facets?: string[] } }
+        ? { assistance: scoped.assistance as NonNullable<ProposeClarificationInput["scope"]>["assistance"] }
         : {}),
     },
   };
@@ -428,20 +441,10 @@ function hasUndergroundCoreCount(evidence: string): boolean {
  * height/diameter, a unit from another turn or one endpoint of an invalid
  * interval. Existing issued distance bands remain planning inputs only. */
 function hasCableRouteLength(evidence: string): boolean {
-  const lengths = /(?<![\p{L}\p{N}.,+\-−–—])([+−-]?\d+(?:[.,]\d+)?)(?:\s*[-–—]\s*([+−-]?\d+(?:[.,]\d+)?))?\s*м(?:етр\p{L}*)?(?![\p{L}\p{N}²³])/giu;
   let known = false;
   for (const turn of evidence.split(CUSTOMER_TURN_BOUNDARY)) {
     if (/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*)[^,;.!?\n]{0,45}(?:не\s+знаю|неизвест\p{L}*|нет\s+данных|не\s+определ\p{L}*)/iu.test(turn)) known = false;
-    for (const match of turn.matchAll(lengths)) {
-      const prefix = turn.slice(0, match.index).split(/[,;!?\n]/u).at(-1)!
-        .replace(/^\s*Уточнение клиента:\s*/iu, "").trim();
-      const routeLabel = [...prefix.matchAll(/(?:длин\p{L}*|расстоян\p{L}*|лини\p{L}*|кабел\p{L}*)/giu)].at(-1);
-      const otherLabel = [...prefix.matchAll(/(?:высот\p{L}*|глубин\p{L}*|диаметр\p{L}*|ширин\p{L}*|толщин\p{L}*)/giu)].at(-1);
-      const owned = /^(?:(?:до|более|около|примерно)\s*)?$/iu.test(prefix) ||
-        Boolean(routeLabel && (!otherLabel || routeLabel.index! > otherLabel.index!));
-      if (!owned) continue;
-      const lower = Number(match[1].replace(",", ".").replace("−", "-"));
-      const upper = match[2] ? Number(match[2].replace(",", ".").replace("−", "-")) : lower;
+    for (const {lower, upper} of cableRouteLengthObservations(turn)) {
       // The latest owned declaration wins, including an invalid correction.
       known = Number.isFinite(lower) && Number.isFinite(upper) &&
         lower > 0 && upper >= lower;
@@ -767,7 +770,7 @@ const PROFILES: ReadinessProfile[] = [
   {
     id: "pump_cable",
     specification_assistance: true,
-    applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
+    applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*|для\s+(?:\p{L}+\s+){0,2}насос\p{L}*[^.!?\n]{0,40}кабел\p{L}*/iu,
     required: [
       hasNominalLoadCurrent,
       hasCableRouteLength,
@@ -825,7 +828,7 @@ const PROFILES: ReadinessProfile[] = [
     id: "underground_cable",
     specification_assistance: true,
     applies:
-      /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}земл\p{L}*/iu,
+      /кабел\p{L}*[^.!?\n]{0,80}(?:земл\p{L}*|подзем\p{L}*|грунт\p{L}*|транше\p{L}*)|проклад\p{L}*[^.!?\n]{0,40}(?:земл\p{L}*|грунт\p{L}*|транше\p{L}*)/iu,
     required: [
       /(?:труб\p{L}*|пнд|брон\p{L}*|(?:непосредственно|прямо)\s+в\s+земл)/iu,
       /\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])/iu,
@@ -892,7 +895,7 @@ const PROFILES: ReadinessProfile[] = [
       },
     ],
     question:
-      "Для выбора автомата двигателя нужны номинальный рабочий ток по шильдику, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
+      "Для выбора автомата двигателя нужны номинальный рабочий ток по шильдику, напряжение и число фаз, а также условия пуска. Какое питание у двигателя? Если варианта нет в списке, напишите напряжение и число фаз.",
     facet_key: "supply_phase",
     options: [
       { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
@@ -904,7 +907,7 @@ const PROFILES: ReadinessProfile[] = [
     applies:
       /автомат\p{L}*[^.!?\n]{0,80}(?:квартир\p{L}*|квартир\p{L}*[^.!?\n]{0,80}автомат\p{L}*)/iu,
     required: [
-      /(?:[1234]\s*[pрп](?=$|[^\p{L}\p{N}])|(?:одно|двух|трех|трёх|четырех|четырёх)полюс\p{L}*|[1234]\s*полюс\p{L}*|(?:одно|трех|трёх)фаз\p{L}*)/iu,
+      /(?:[1234]\s*[pрп](?=$|[^\p{L}\p{N}])|(?:одно|двух|трех|трёх|четырех|четырёх)полюс\p{L}*|[1234]\s*полюс\p{L}*|(?:количество|число)\s+полюсов\s*:\s*[1-4](?=$|[^\p{L}\p{N}])|(?:одно|трех|трёх)фаз\p{L}*)/iu,
       /(?:характерист\p{L}*|крив\p{L}*|тип\p{L}*)\s*[:–-]?\s*[bcdвсд](?=$|[^\p{L}\p{N}])|(?<![\p{L}\p{N}])[bcdвсд]\d{1,3}(?=$|[^\p{L}\p{N}])/iu,
     ],
     primary_requirement_index: 0,
@@ -1132,6 +1135,13 @@ export function specificationAssistanceProfile(message: string): string | null {
   return PROFILES.find(profile => profile.specification_assistance && profile.applies.test(message))?.id ?? null;
 }
 
+/** Only unambiguous registered applications may prove a topic change.
+ * A pump line with an underground section may legitimately mention both. */
+export function uniqueSpecificationAssistanceProfile(message: string): string | null {
+  const matches = PROFILES.filter(profile => profile.specification_assistance && profile.applies.test(message));
+  return matches.length === 1 ? matches[0].id : null;
+}
+
 function readinessRequirementFacet(profile: ReadinessProfile, index: number): string {
   return profile.freeform_facets?.[index] ?? profile.follow_ups?.find(follow => follow.requirement_index === index)?.facet_key ??
     (index === profile.primary_requirement_index ? profile.facet_key : `selection_requirement_${index}`);
@@ -1230,7 +1240,15 @@ export function selectReadinessClarification(
     // as an exact chip. The terminal free-text slot is explicit and server
     // verified, so a terse customer answer still retains the original task.
     options: followUp?.options ?? (useOpening ? profile.options : []),
-    scope: selectionReadinessScope(current),
+    scope: {
+      ...selectionReadinessScope(current),
+      answer_axis: clarificationAnswerAxis(
+        followUp?.facet_key ?? (useOpening ? profile.facet_key : profile.freeform_facets?.[nextFreeform] ?? `selection_requirement_${nextFreeform}`),
+        followUp ? profile.missing_labels[followUp.requirement_index]
+          : profile.missing_labels[useOpening ? profile.primary_requirement_index : nextFreeform],
+        followUp?.options ?? (useOpening ? profile.options : []),
+      ),
+    },
   };
 }
 
@@ -1242,7 +1260,7 @@ export function resolveSelectionReadinessRequest(
   currentMessage: string,
   slots: Record<string, unknown>,
   options: { newTaskBoundary?: boolean; verifiedIssuedSlot?: boolean } = {},
-): { message: string; scoped: boolean } {
+): { message: string; scoped: boolean; contextUnavailable?: true } {
   const current = String(currentMessage ?? "").trim();
   if (options.newTaskBoundary) {
     return { message: current, scoped: false };
@@ -1262,12 +1280,14 @@ export function resolveSelectionReadinessRequest(
   ) {
     return { message: current, scoped: false };
   }
-  const original = record.token.trim().slice(0, 500);
+  const turns = readReadinessTaskTurns(record as Record<string, unknown>);
+  if (!turns) return { message: current, scoped: false, contextUnavailable: true };
+  const original = turns ? joinCustomerTurns(turns) : "";
   if (!original || !current) return { message: current, scoped: false };
   // A bare abbreviation can match several live count axes (e.g. poles and
   // package quantity). Only the exact answer to the verified question may
   // carry the engineering meaning into subsequent clarification turns.
-  const optionSlot = pending as { facet_key?: unknown; options?: unknown };
+  const optionSlot = pending as { facet_key?: unknown; options?: unknown; scope?: unknown };
   const poleCount = optionSlot.facet_key === "pole_count"
     ? current.match(POLE_COUNT_CHIP)?.[1] : undefined;
   const exactIssuedOption = options.verifiedIssuedSlot && poleCount &&
@@ -1278,9 +1298,13 @@ export function resolveSelectionReadinessRequest(
     );
   const answer = exactIssuedOption
     ? `Количество полюсов: ${poleCount}`
+    : options.verifiedIssuedSlot
+    ? projectVerifiedReadinessAnswer(current, optionSlot)
     : current;
+  const message = joinCustomerTurns([original, `Уточнение клиента: ${answer}`]);
+  if (message.length > MAX_TASK_CHARS) return { message: current, scoped: false, contextUnavailable: true };
   return {
-    message: joinCustomerTurns([original, `Уточнение клиента: ${answer}`]),
+    message,
     scoped: true,
   };
 }

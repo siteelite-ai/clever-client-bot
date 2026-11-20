@@ -58,8 +58,8 @@ test('active scope lookup is server-owned despite stale client slots and routes 
     'the stale-slot error branch must not intercept a verified active scope');
 
   const scopedRoute = between(
-    '} else if (sameSectionScope && !startsNewTask) {',
-    '} else if (broadAssortmentRequest) {',
+    '} else if (action === "active_selection" && sameSectionScope && !startsNewTask) {',
+    '} else if (action === "assortment") {',
   );
   assert.match(scopedRoute, /runExpertLoop\(/);
   assert.match(scopedRoute, /effectiveSlots/);
@@ -90,9 +90,9 @@ test('active scope lookup is server-owned despite stale client slots and routes 
     'the scoped expert route must not reopen broad-assortment clarification',
   );
 
-  const broadPosition = source.indexOf('} else if (broadAssortmentRequest) {',
+  const broadPosition = source.indexOf('} else if (action === "assortment") {',
     source.indexOf(scopedRoute));
-  const directPosition = source.indexOf('} else if (exactProductInquiryDirectAdmitted) {',
+  const directPosition = source.indexOf('} else if (action === "exact_item") {',
     broadPosition);
   assert.ok(broadPosition > source.indexOf(scopedRoute));
   assert.ok(directPosition > broadPosition);
@@ -149,8 +149,8 @@ test('a verified free-form readiness answer suppresses only a nominal class chan
     'an independent second task must be determined from customer syntax, not browser state');
   assert.match(source, /const activeScopeExplicitBoundary = compoundTaskSwitch \|\| Boolean\(specificationLookupQuery\) \|\| activeScopeEntityChanged \|\|\s*activeScopeClassChanged/,
     'compound and specification boundaries must not suppress entity or class changes');
-  assert.match(source, /const activeRenderedRead = startsNewTask\s*\? \{proof:null,lookupFailed:false\}\s*: preflightRenderedSelection/,
-    'a new task must discard even an earlier preflight batch');
+  assert.match(source, /const activeRenderedRead = startsNewTask \|\| dialogueTurn\.kind === "pending_answer"\s*\? \{proof:null,lookupFailed:false\}\s*: preflightRenderedSelection/,
+    'a new task and an authenticated pending answer must not depend on an earlier batch');
   const sameSection = between(
     'const sameSectionScope =',
     'const readinessQuestionSuperseded =',
@@ -196,8 +196,8 @@ test('generic freeform assortment fallback verifies a live leaf, keeps compound 
   assert.match(decision, /verifiedFreeformScope/);
 
   const routes = between(
-    'if (verifiedBroadChoice && !startsNewTask) {',
-    '} else if (isMetaSelfQuestion(userMessage)) {',
+    'if (action === "catalog_choice" && verifiedBroadChoice && !startsNewTask) {',
+    '} else if (action === "meta") {',
   );
   const failurePosition = routes.indexOf('v3_broad_assortment_freeform_unverified');
   const constrainedPosition = routes.indexOf('v3_broad_assortment_constrained_chip_expert_route');

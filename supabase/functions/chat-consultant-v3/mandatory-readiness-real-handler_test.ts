@@ -105,7 +105,12 @@ async function scenario(
     | "subject_other"
     | "subject_literal",
   excludedModelIds?: string[],
+  custom?: { initial: string; target: string; leaf: string; question: string; answer: string; parameter: string },
 ) {
+  const customerValue = custom?.answer ?? "Бетон";
+  const askedQuestion = custom?.question ?? question;
+  const target = custom?.target ?? "монтажные крепления";
+  const parameter = custom?.parameter ?? "Материал основания";
   const lugMode = mode === "lug";
   const subjectMode = mode.startsWith("subject");
   const subjectPhrase = mode === "subject_other" ? "фиксатор" : mode === "subject_short_head" ? "бур" : "сверло",
@@ -126,7 +131,7 @@ async function scenario(
     ? mode === "subject_other"
       ? "Материалы для фиксации"
       : "Материалы для сверления"
-    : leaf;
+    : custom?.leaf ?? leaf;
   const scenarioProducts = lugMode ? lugProducts : subjectMode
     ? products.map((p, i) => ({
       ...p,
@@ -144,7 +149,10 @@ async function scenario(
         value_ru: i === 2 ? "10" : "8",
       }],
     }))
-    : products;
+    : custom ? products.map((p, i) => ({ ...p, category: scenarioLeaf,
+      pagetitle: `${target} ${i === 2 ? "Несовместимый" : customerValue} Fixture ${p.id}`,
+      options: [{ key: "base_material", caption_ru: parameter, value_ru: i === 2 ? "Несовместимый" : customerValue }],
+    })) : products;
   const previousFetch = globalThis.fetch,
     previousEnv = Deno.env.get,
     previousInterval = globalThis.setInterval;
@@ -251,9 +259,9 @@ async function scenario(
               ] : [
                 {
                   key: "base_material",
-                  caption_ru: "Материал основания",
+                  caption_ru: parameter,
                   type: "string",
-                  values: [{ value_ru: "Бетон", products_count: 3 }],
+                  values: [{ value_ru: customerValue, products_count: 2 }, ...(custom ? [{ value_ru: "Несовместимый", products_count: 1 }] : [])],
                 },
                 ...(subjectMode && subjectChoices.length
                   ? [{
@@ -356,7 +364,7 @@ async function scenario(
                   ? subjectClass : mode === "subject_missing_id"
                   ? "сверло для стены" : subjectMode
                   ? subjectPhrase
-                  : "монтажные крепления",
+                  : target,
                 catalog_classification_id:
                   subjectMode && !["subject_literal", "subject_missing_id"].includes(mode) ? "f1v0" : "",
               },
@@ -369,9 +377,9 @@ async function scenario(
                   ? "ready"
                   : "needs_input",
                 critical_inputs: empty ? [] : [{
-                  parameter: mode === "label_ready" ? "Материал стены" : "Материал основания",
-                  customer_quote: mode === "label_ready" ? "стены" : known ? "Бетон" : "",
-                  question: known ? "" : question,
+                  parameter: mode === "label_ready" ? "Материал стены" : parameter,
+                  customer_quote: mode === "label_ready" ? "стены" : known ? customerValue : "",
+                  question: known ? "" : askedQuestion,
                   impact:
                     "От материала основания зависит физическая совместимость крепления.",
                 }],
@@ -387,14 +395,14 @@ async function scenario(
                   ? subjectClass
                   : subjectPhrase
               } для стены; Материал основания: Бетон указан клиентом. Диаметр изделия — 8 мм.`
-              : "Подбираю монтажные крепления для стены; Материал основания: Бетон указан клиентом."
+              : `Подбираю ${target}; ${parameter}: ${customerValue} указан клиентом.`
             : "",
           retrieval_query: known || mode === "replacement"
             ? subjectMode
               ? turn >= 1 && mode !== "subject_literal"
                 ? subjectClass
                 : subjectPhrase
-              : "монтажные крепления"
+              : target
             : "",
           measurement_scope: subjectMode ? "per_product" : "not_applicable",
           compatible_classifications: subjectMode && mode !== "subject_literal"
@@ -402,7 +410,7 @@ async function scenario(
             : [],
           excluded_classifications: turn === 1 ? excludedModelIds ?? [] : [],
           required_facet_values: known && !empty
-            ? (schema.properties.required_facet_values.items.enum ?? [])
+            ? (schema.properties.required_facet_values.items.enum ?? []).slice(0, custom ? 1 : undefined)
             : [],
           explicit_customer_classifications: [],
         };
@@ -464,7 +472,7 @@ async function scenario(
         ? `Подбери ${subjectPhrase} для стены. Бетон, диаметр ${subjectPhrase} 8 мм`
         : mode === "specified"
         ? `${initial}. Бетон`
-        : initial,
+        : custom?.initial ?? initial,
     ];
     if (
       [
@@ -490,7 +498,7 @@ async function scenario(
           ? "покажи"
           : subjectMode
           ? subjectClass
-          : "Бетон",
+          : customerValue,
       );
     }
     if (mode === "subject_rendered_parameters") messages.push("Бетон, диаметр 8 мм");
@@ -553,6 +561,30 @@ async function scenario(
     globalThis.fetch = previousFetch;
     Deno.env.get = previousEnv;
   }
+}
+
+for (const fixture of [
+  { initial: "Подбери светильник для бани", target: "светильник", leaf: "Светильники",
+    question: "Для какого помещения нужен светильник: парилка или моечная?", answer: "моечная", parameter: "Помещение" },
+  { initial: "Подбери монтажные крепления для стены", target: "монтажные крепления", leaf: "Монтажные крепления",
+    question: "Какая поверхность стены: кирпичная или бетонная?", answer: "Кирпичная", parameter: "Поверхность" },
+] as const) {
+  Deno.test({ name: `HTTP: pending text answer starts fresh proven selection without prior cards: ${fixture.leaf}`,
+    permissions: { read: true, env: false, net: false }, async fn() {
+      const r = await scenario("roundtrip", undefined, fixture);
+      const trace = JSON.stringify(r.logs[1]?.steps);
+      assertEquals(protocol(r.turns[0]).filter(e => e.type === "products_block").length, 0);
+      assertEquals(pending(r.turns[0])?.question, fixture.question);
+      assert(r.logs[1].steps.some(s => s.step === "v3_dialogue_turn_state" && s.meta?.kind === "pending_answer" && s.meta?.requires_rendered_cards === false), trace);
+      assert(!r.logs[1].steps.some(s => /recent_product_evidence_unproven_context_stopped|unverified_rendered_selection_context_rejected/u.test(s.step)), trace);
+      assert(r.requests[1].some(path => new URL(path).pathname === "/api/products"), trace);
+      const cards = protocol(r.turns[1]).filter(e => e.type === "products_block");
+      assert(cards.length > 0, trace);
+      assertEquals(cards.map(e => Number(e.count)).reduce((a, b) => a + b, 0), 2, trace);
+      assert(!JSON.stringify(cards).includes("Несовместимый"), JSON.stringify(cards));
+      assert(JSON.stringify(cards).toLocaleLowerCase("ru").includes(fixture.answer.toLocaleLowerCase("ru")));
+    },
+  });
 }
 
 Deno.test({

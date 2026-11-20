@@ -1,11 +1,21 @@
 import { detectUserIntentMode } from "./intent-mode.ts";
 import { extractReplacementLookupKeys } from "./replacement-preflight.ts";
 
-// A reference to an earlier item, comparison or replacement still needs its
-// server-owned context, even when the customer repeats a model code. Identity
-// wording alone is never permission to discard such dependencies.
+// A comparison, ranking or explicit reference to an earlier batch depends on
+// that batch. A local determiner ("этот светильник MODEL-123") does not: the
+// code is independent lookup input, never proof of that item's properties.
 const PRIOR_CONTEXT =
-  /(?<![\p{L}\p{N}])(?:этот|эта|это|эти|этого|этой|этому|этим|этими|этих|эту|тот|та|те|того|той|тех|они|их|его|е[её]|него|не[её]|них|так(?:ой|ая|ие|ого|их|ую|ое|ому|им|ими)|данн\p{L}*|указанн\p{L}*|названн\p{L}*|перв\p{L}*|втор\p{L}*|трет\p{L}*|последн\p{L}*|предыдущ\p{L}*|прежн\p{L}*|показанн\p{L}*|предложенн\p{L}*|выше|ниже|ранее|сравн\p{L}*|аналог\p{L}*|вместо|замен\p{L}*)(?![\p{L}\p{N}])|чем\s+отлича\p{L}*|разниц\p{L}*\s+(?:с|между)/iu;
+  /(?<![\p{L}\p{N}])(?:они|их|его|е[её]|него|не[её]|них|перв\p{L}*|втор\p{L}*|трет\p{L}*|последн\p{L}*|предыдущ\p{L}*|прежн\p{L}*|показанн\p{L}*|предложенн\p{L}*|выше|ниже|ранее|сравн\p{L}*|аналог\p{L}*|вместо|замен\p{L}*|дешевле|дороже|лучше|хуже|так(?:ой|ая|ие|ого|их|ую|ое|ому|им|ими))(?![\p{L}\p{N}])|чем\s+отлича\p{L}*|разниц\p{L}*\s+(?:с|между)|(?:из|среди)\s+(?:этих|тех|них)/iu;
+
+/** A spaced model identifier is the same lookup input as a compact one.
+ * Uppercase label + long numeric suffix is identity syntax, not a quantity.
+ * When present it takes precedence over incidental short specification codes. */
+export function independentItemLookupKeys(message: string) {
+  const existing = extractReplacementLookupKeys(message);
+  const spaced = [...message.matchAll(/(?<![\p{L}\p{N}])[A-ZА-ЯЁ]{2,12}\s+\d{3,6}(?:[-/.]\d+)*(?![\p{L}\p{N}])/gu)]
+    .map(match => match[0].replace(/\s+/gu, " "));
+  return { ...existing, modelCodes: spaced.length ? [...new Set(spaced)] : existing.modelCodes };
+}
 
 /** Routing evidence only: an independently named factual question must reach
  * fresh identity lookup instead of requiring an unrelated previous batch.
@@ -17,7 +27,7 @@ export function isIndependentExactProductInquiry(message: string): boolean {
     !text || text.length > 2_000 || detectUserIntentMode(text) !== "inquire" ||
     PRIOR_CONTEXT.test(text)
   ) return false;
-  const keys = extractReplacementLookupKeys(text);
+  const keys = independentItemLookupKeys(text);
   return keys.modelCodes.length > 0 || keys.articles.some((article) => {
     // A bare quantity with a unit is not a newly named article. A labelled
     // article is allowed; downstream catalogue equality remains mandatory.
