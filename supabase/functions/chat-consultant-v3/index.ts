@@ -17,7 +17,7 @@ import {
 import { readSettingsRowWithRetry } from "../_shared/v3-tools/bounded-settings-read.ts";
 import { createSelectionExecutionTrace, type SelectionExecutionTrace } from "../_shared/v3-tools/selection-execution-trace.ts";
 import { compileReadyCandidateRetrieval } from "../_shared/v3-tools/selection-retrieval-plan.ts";
-import { compileApplicationCandidatePageRecovery } from "../_shared/v3-tools/application-candidate-page-recovery.ts";
+import { applicationCandidatePageDecision } from "../_shared/v3-tools/application-candidate-page-recovery.ts";
 import { compileAcceptedApplicationProof, createAcceptedApplicationCardVerifier } from "../_shared/v3-tools/accepted-application-proof.ts";
 import { independentGuardCoversMeasurements } from "../_shared/v3-tools/independent-measurement-coverage.ts";
 import {
@@ -12112,26 +12112,38 @@ async function runExpertLoop(
     const subjectProved = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, rejectedProducts).passed_ids.length > 0;
     const lexicalRequirement = Boolean(requiredCatalogAlias || declaredAliasQuery ||
       semanticCompoundEvidenceRequired || namedSeriesToken || replacementIntent || seriesTurnRequiresGrounding);
-    const pages = compileApplicationCandidatePageRecovery({
+    const verifiedCategories = [lastDiscover.category.pagetitle, ...lastDiscover.leaf_categories.map(({ pagetitle }) => pagetitle)];
+    const decision = applicationCandidatePageDecision({
       search: input, ready: SELECTION_READINESS_REQUIRED && customerInputsAccepted && intentMode === "select",
       applicationGap: rejectedProducts.length > 0 && applicationProofPassedIds.size === 0,
       subjectProved,
       lexicalRequirement,
-      verifiedLeaf: lastDiscover.leaf_categories.length === 1
-        ? lastDiscover.leaf_categories[0].pagetitle
-        : lastDiscover.leaf_categories.length === 0 ? lastDiscover.category.pagetitle : "",
+      verifiedCategories,
       rawTotal: raw.total, rawCoverage: raw.candidate_coverage,
     });
+    const pages = decision.pages;
     ctx.executionTrace?.("application_recovery_admission", {
       status: pages ? 1 : 0, subject_proved: subjectProved ? 1 : 0,
       lexical_required: lexicalRequirement ? 1 : 0, alternatives: pages?.length ?? 0,
+      reason_code: decision.reasonCode,
+      mode_code: ({ by_article: 1, by_pagetitle: 2, by_query: 3, by_filter: 4 })[input.mode] ?? 0,
+      coverage_code: raw.candidate_coverage === "complete_query_window" ? 1 : raw.candidate_coverage === "partial" ? 2 : 0,
+      reported_total: Number.isSafeInteger(raw.total) && raw.total >= 0 ? raw.total : 0,
     });
+    steps.push({ step: "v3_application_candidate_page_admission", ms: now(), meta: {
+      reason: decision.reason, reason_code: decision.reasonCode, planned_pages: pages?.length ?? 0,
+      subject_proved: subjectProved, lexical_required: lexicalRequirement,
+    } });
     if (!pages) return filtered;
     // Once the class is established, an outage or unproved later card cannot
     // turn this same request into an unknown-name translation problem.
     applicationCandidateWindowSettled = true;
     const seen = new Set(raw.results.map(product => product.id));
     const applicationCandidates = new Map<string, ProductRef>();
+    const requestedCategory = input.category ?? input.category_in?.[0] ?? "";
+    const requireOwnLeaf = lastDiscover.leaf_categories.length > 0 &&
+      !lastDiscover.leaf_categories.some(({ pagetitle }) => pagetitle === requestedCategory);
+    let windowCoverageUnknown = raw.candidate_coverage === undefined || raw.candidate_coverage === "unknown";
     let output = filtered;
     for (const page of pages) {
       let identity: CatalogSinglePageEvidence | undefined;
@@ -12139,6 +12151,7 @@ async function runExpertLoop(
         baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken, signal: ctx.turnSignal,
         executionTrace: ctx.executionTrace,
         exactFilteredPage: true,
+        requireExplicitCategory: requireOwnLeaf,
         onSinglePageEvidence: evidence => { identity = evidence; },
       }, ctx.cache);
       if (!next.ok) {
@@ -12158,13 +12171,14 @@ async function runExpertLoop(
       const stablePage = !!identity && !identity.issue && identity.requested_page === page.page &&
         next.total === raw.total && new Set(next.results.map(product => product.id)).size === next.results.length &&
         newIds.size === next.results.length;
+      windowCoverageUnknown ||= !stablePage;
       for (const product of next.results) seen.add(product.id);
       // Reapply the SAME conjunction to every fresh card, never a bypass for
       // missing application, IP, class, range or connection proof.
-      const candidates = stablePage ? next : { ...next, candidate_coverage: "unknown" as const };
+      const candidates = windowCoverageUnknown ? { ...next, candidate_coverage: "unknown" as const } : next;
       const checked = verifyCandidates(candidates);
       for (const product of checked.results) applicationCandidates.set(product.id, product);
-      output = { ...checked, results: [...applicationCandidates.values()] };
+      output = { ...checked, total: raw.total, results: [...applicationCandidates.values()] };
       steps.push({ step: "v3_application_candidate_page_recovery", ms: now(), meta: {
         source: "known_class_application_proof_gap", page: page.page,
         examined: next.results.length, verified: checked.results.length,
@@ -12173,17 +12187,19 @@ async function runExpertLoop(
         page_identity_verified: stablePage,
         coverage: "bounded_query_window_not_catalog_absence",
       } });
-      // Page counters/overlap establish traversal coverage, not a card's own
-      // suitability. Keep independently proved fresh cards, but do not keep
-      // paging an unreliable cursor or turn it into a catalog-absence claim.
+      // Page counters describe coverage, not a card's own suitability. Fresh
+      // IDs allow only this bounded continuation, never a complete-catalog
+      // claim. Empty physical pages or repeated materialized IDs stop it.
       // An application-eligible card may still fail price/class/compatibility
       // at final verification. Inspect the bounded window rather than let
       // that first partial match hide a later fully suitable alternative.
-      if (!stablePage) break;
+      if ((identity?.raw_rows ?? next.results.length) === 0 ||
+        next.results.length > 0 && newIds.size === 0) break;
     }
     steps.push({ step: "v3_application_recovery_state", ms: now(), meta: {
       known_subject: true, lexical_recovery_applicable: false, inspected_unique: seen.size,
-      verified: output.results.length, further_candidates_may_exist: raw.total > seen.size,
+      verified: output.results.length, final_card_checks_required: true,
+      further_candidates_may_exist: windowCoverageUnknown || raw.total > seen.size,
     } });
     return output;
   };

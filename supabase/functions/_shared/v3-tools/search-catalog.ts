@@ -829,7 +829,11 @@ export async function executeSearchCatalog(
 
   if (deps.exactFilteredPage) {
     const categories = [...new Set([input.category, ...(input.category_in ?? [])].filter(Boolean))];
-    if (deps.singleRequest || input.mode !== "by_filter" || categories.length !== 1 || input.query || input.article || input.pagetitle ||
+    const candidateMode = input.mode === "by_filter" || input.mode === "by_query";
+    const identityConflict = !!input.article || !!input.pagetitle ||
+      input.mode === "by_filter" && !!input.query ||
+      input.mode === "by_query" && (typeof input.query !== "string" || !input.query.trim());
+    if (deps.singleRequest || !candidateMode || categories.length !== 1 || identityConflict ||
       input.sort_cheapest || input.sort_expensive || input.anchor_leaf_category ||
       !Number.isSafeInteger(input.page ?? 1) || (input.page ?? 1) < 1 ||
       !Number.isSafeInteger(input.per_page ?? 10) || (input.per_page ?? 10) < 1 || (input.per_page ?? 10) > 50 ||
