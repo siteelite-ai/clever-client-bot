@@ -10,7 +10,7 @@ const PHASES = new Set([
 const COUNTS = new Set([
   "rows", "cache", "options", "option_values", "categories", "per_page", "page",
   "status", "obligations", "verified", "examined", "alternatives", "subject_proved", "lexical_required",
-  "reason_code", "mode_code", "coverage_code", "reported_total",
+  "reason_code", "mode_code", "coverage_code", "reported_total", "known_application_gap",
 ]);
 export type SelectionExecutionTrace = (
   phase: string, counts?: Readonly<Record<string, number>>,

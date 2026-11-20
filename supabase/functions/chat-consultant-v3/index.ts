@@ -11597,6 +11597,7 @@ async function runExpertLoop(
   let catalogSearchAttempted = false;
   let catalogLookupCompleted = false;
   let applicationProofNoticeSent = false;
+  let applicationSubjectResolved = false;
   let applicationCandidateWindowSettled = false;
   const hasOnlyUnprovedApplicationCandidates = () =>
     acceptedApplicationObligations.length > 0 &&
@@ -11931,7 +11932,7 @@ async function runExpertLoop(
   // the customer's qualifier itself must survive until cards are rendered.
   let requiredCatalogAlias: string | null = null;
   ctx.lexicalRecoveryIsApplicationGap = () =>
-    applicationCandidateWindowSettled && productsRendered === 0 &&
+    applicationSubjectResolved && productsRendered === 0 &&
     !requiredCatalogAlias && !declaredAliasQuery && !semanticCompoundEvidenceRequired && !namedSeriesToken;
   ctx.recoverApplicationCandidatePage = async (input, raw, filtered) => {
     const verifyCandidates = ctx.filterSelectionCandidates;
@@ -11952,16 +11953,19 @@ async function runExpertLoop(
       rawTotal: raw.total, rawCoverage: raw.candidate_coverage,
     });
     const pages = decision.pages;
+    applicationSubjectResolved ||= decision.knownApplicationGap;
     ctx.executionTrace?.("application_recovery_admission", {
       status: pages ? 1 : 0, subject_proved: subjectProved ? 1 : 0,
       lexical_required: lexicalRequirement ? 1 : 0, alternatives: pages?.length ?? 0,
       reason_code: decision.reasonCode,
+      known_application_gap: decision.knownApplicationGap ? 1 : 0,
       mode_code: ({ by_article: 1, by_pagetitle: 2, by_query: 3, by_filter: 4 })[input.mode] ?? 0,
       coverage_code: raw.candidate_coverage === "complete_query_window" ? 1 : raw.candidate_coverage === "partial" ? 2 : 0,
       reported_total: Number.isSafeInteger(raw.total) && raw.total >= 0 ? raw.total : 0,
     });
     steps.push({ step: "v3_application_candidate_page_admission", ms: now(), meta: {
       reason: decision.reason, reason_code: decision.reasonCode, planned_pages: pages?.length ?? 0,
+      known_application_gap: decision.knownApplicationGap,
       subject_proved: subjectProved, lexical_required: lexicalRequirement,
     } });
     if (!pages) return filtered;
